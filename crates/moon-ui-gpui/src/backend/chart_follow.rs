@@ -26,7 +26,7 @@ impl Backend {
             store
                 .core(*core)
                 .and_then(|data| data.core_config.as_ref())
-                .map(|config| config.charts_stay_on_top)
+                .map(|config| config.view.charts_stay_on_top)
         }))
     }
 }

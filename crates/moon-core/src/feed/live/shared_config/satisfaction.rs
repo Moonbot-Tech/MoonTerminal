@@ -51,6 +51,7 @@ pub(super) fn rejection_within_mask(
         special,
         telegram,
         ignore_strat_sell_price,
+        view,
     } = touched;
     let mut areas = Vec::new();
     if auto_buy && expected.auto_buy != actual.auto_buy {
@@ -90,6 +91,9 @@ pub(super) fn rejection_within_mask(
         && expected.manual.ignore_strat_sell_price != actual.manual.ignore_strat_sell_price
     {
         areas.push(CoreConfigArea::Manual);
+    }
+    if view && expected.view != actual.view {
+        areas.push(CoreConfigArea::View);
     }
     (!areas.is_empty()).then_some(CoreConfigRejection::Areas(areas))
 }

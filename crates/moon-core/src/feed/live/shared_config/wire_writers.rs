@@ -32,6 +32,7 @@ pub(in crate::feed::live) fn apply_core_config(
         special,
         telegram,
         ignore_strat_sell_price,
+        view,
     } = touched;
     if auto_buy {
         apply_auto_buy(cfg, &wanted.auto_buy);
@@ -68,6 +69,9 @@ pub(in crate::feed::live) fn apply_core_config(
     }
     if ignore_strat_sell_price {
         cfg.trading.ignore_strat_sell_price = wanted.manual.ignore_strat_sell_price;
+    }
+    if view {
+        apply_view(cfg, &wanted.view);
     }
 }
 
@@ -119,9 +123,9 @@ fn apply_gestures(cfg: &mut SharedConfig, g: &GestureSettings) {
 
 /// Apply the rest of Moonbot's General page — the rows the compact popup does not draw.
 ///
-/// Six fields of `trading` plus `signals.load_deep_history`, which is the one field of this area
-/// outside `trading` and cannot collide with [`apply_signals`]: that applier owns six other fields
-/// of the same section and none of them is this one.
+/// Fourteen fields of `trading` plus `signals.load_deep_history`, which is the one field of this
+/// area outside `trading` and cannot collide with [`apply_signals`]: that applier owns six other
+/// fields of the same section and none of them is this one.
 fn apply_order_rules(cfg: &mut SharedConfig, r: &OrderRulesSettings) {
     cfg.signals.load_deep_history = r.analyze_on_start;
     let t = &mut cfg.trading;
@@ -131,6 +135,16 @@ fn apply_order_rules(cfg: &mut SharedConfig, r: &OrderRulesSettings) {
     t.cancel_buy_on_sell_fill = r.cancel_buy_on_sell_fill;
     t.dont_buy_new_coins = r.dont_buy_new_coins;
     t.deltas_by_trades = r.deltas_by_trades;
+    t.sell_auto_move = r.sell_auto_move;
+    t.dont_buy_delisted = r.dont_buy_delisted;
+    t.manual_mode = r.manual_mode;
+    t.use_manual_balance = r.use_manual_balance;
+    t.fixed_trade_balance = r.fixed_trade_balance;
+    t.play_with = r.play_with;
+    t.x_ask = r.x_ask;
+    t.use_current_ask = r.use_current_ask;
+    t.panic_if_price_drop = r.stop_loss_on;
+    t.price_drop_level = r.stop_loss_pct;
 }
 
 /// Apply the General tab to the exit rules, iceberg flags and the blacklist's delta filter in
@@ -158,20 +172,28 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
     t.exclude_black_list_delta = g.exclude_blacklisted_from_deltas;
 }
 
-/// Apply Moonbot's "Специальные" page to `trading` and its `send_shots_config` and
-/// `orders_control` sub-records.
+/// Apply Moonbot's "Специальные" page to `trading`, its `send_shots_config`, `orders_control` and
+/// `moonbot_config` sub-records, and `auto_start_2.show_old_listing`.
 ///
-/// Thirty-six fields across `trading`, its `send_shots_config` and its `orders_control`:
-/// everything else in that section — including its `unknown_tail`, the exits [`apply_general`] owns
-/// and the leverage block [`apply_leverage`] owns — travels back untouched.
+/// Forty-two fields across those records: everything else in that section — including its
+/// `unknown_tail`, the exits [`apply_general`] owns, the leverage block [`apply_leverage`] owns and
+/// the rest of `auto_start_2`, which [`apply_auto_start`] writes field by field — travels back
+/// untouched.
 ///
-/// `orders_control.sign_orders` is NOT among them on purpose: the wire's own doc marks it a mirror
-/// of `ClientSettingsCommand::sign_orders`, so it travels on the compact channel too, and writing it
-/// from here would set two routes fighting over one field. Its neighbours `min_price`, `max_time`
-/// and `h_pos_control` are absent for the plainer reason that no row of this page draws them — see
-/// `core_expert::pages::special`, which states what that costs.
+/// `orders_control.sign_orders` IS written here. The wire mirrors it on the compact channel, but
+/// the core's compact handler does not apply that copy (moonproto 9b616b9, `docs/ui.md`), so this
+/// is its only writer. The four `orders_control` fields left out — `active`, `min_price`,
+/// `max_time`, `h_pos_control` — are legacy mirrors of a watcher-table row that the watchdog API
+/// now owns; writing them would change nothing the core acts on.
 fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
+    cfg.trading.auto_start_2.show_old_listing = s.show_old_listing;
+    let mb = &mut cfg.trading.moonbot_config;
+    mb.auto_margin_borrow = s.auto_margin_borrow;
+    mb.auto_margin_transfer = s.auto_margin_transfer;
     let t = &mut cfg.trading;
+    t.free_position_check = s.free_position_check;
+    t.binance_connection = s.binance_connection;
+    t.use_hl_fast_ioc = s.use_hl_fast_ioc;
     t.log_level = s.log_level;
     t.auto_delete_logs = s.auto_delete_logs;
     t.chart_clean_up_time = s.chart_clean_up_time;
@@ -198,7 +220,7 @@ fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
     oc.liq_control = s.liq_control;
     oc.ignore_replacing_bug = s.ignore_replacing_bug;
     oc.ignore_protection = s.ignore_protection;
-    oc.active = s.orders_control_active;
+    oc.sign_orders = s.sign_orders;
     oc.h_pos_report = s.h_pos_report;
     oc.h_pos_auto_sell = s.h_pos_auto_sell;
     let shots = &mut t.send_shots_config;
@@ -212,10 +234,12 @@ fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
     shots.price_scale = s.price_scale;
 }
 
-/// Apply Moonbot's Telegram page to `signals` and the one `trading` flag beside it.
+/// Apply Moonbot's Telegram page to `signals`, the `trading` fields beside it and two of
+/// `trading.moonbot_config`.
 ///
-/// Six fields: everything else in both sections — including their `unknown_tail`s, the alert sounds
-/// [`apply_signals`] owns and the message filter [`apply_auto_buy`] owns — travels back untouched.
+/// Fifteen fields: everything else in those sections — including their `unknown_tail`s, the alert
+/// sounds [`apply_signals`] owns, the message filter [`apply_auto_buy`] owns and the margin pair
+/// [`apply_special`] owns in the same `moonbot_config` — travels back untouched.
 fn apply_telegram(cfg: &mut SharedConfig, t: &TelegramSettings) {
     let sig = &mut cfg.signals;
     sig.pump_channel = t.pump_channel.clone();
@@ -223,7 +247,18 @@ fn apply_telegram(cfg: &mut SharedConfig, t: &TelegramSettings) {
     sig.multi_channels = t.multi_channels;
     sig.more_then_1_channel = t.more_then_1_channel;
     sig.listen_moon_channel = t.listen_moon_channel;
-    cfg.trading.use_moon_bl = t.use_moon_bl;
+    let mb = &mut cfg.trading.moonbot_config;
+    mb.silent = t.silent;
+    mb.group_delay = t.group_delay;
+    let tr = &mut cfg.trading;
+    tr.use_moon_bl = t.use_moon_bl;
+    tr.tm_send_only_share = t.tm_send_only_share;
+    tr.tm_panic_sell_closed = t.tm_panic_sell_closed;
+    tr.tm_cancel_closed = t.tm_cancel_closed;
+    tr.tm_cancel_buy_on_fill = t.tm_cancel_buy_on_fill;
+    tr.tm_send_first_sell = t.tm_send_first_sell;
+    tr.tm_sell_if_master_not_filled = t.tm_sell_if_master_not_filled;
+    tr.tm_max_order = t.tm_max_order;
 }
 
 /// Apply Moonbot's autobuy page to `signals`, its `signal_config` sub-record and two `trading`
@@ -409,4 +444,134 @@ fn apply_btc_blink(cfg: &mut SharedConfig, blink: &BtcBlinkSettings) {
     b.blink_btc_delta_up = blink.blink_btc_delta_up;
     b.alarm_btc = blink.alarm_btc;
     b.alarm_type = blink.alarm_type;
+}
+
+/// Apply Moonbot's own appearance — `feed::ViewSettings` — across `signals`, `trading` and its
+/// display sub-records, `visual` and its sub-records, `theme` and `ui`.
+///
+/// Only the scalar fields the projection names: the candle palettes, the drawing tools, the
+/// report's column arrays, the market table's column arrays, the INI sections and every
+/// `unknown_tail` travel back untouched, as do the fields [`apply_interface`] owns in the same
+/// sections — `visual.show_filters.scale_tool` among them, beside this area's six other
+/// `show_filters` flags.
+fn apply_view(cfg: &mut SharedConfig, v: &ViewSettings) {
+    cfg.signals.show_cross = v.show_cross;
+    cfg.signals.base_vol_ind_type = v.base_vol_ind_type;
+    cfg.signals.base_vol_n = v.base_vol_n;
+    cfg.trading.price_range = v.price_range;
+    cfg.trading.x9_mode = v.x9_mode;
+    cfg.trading.draw_all_buy = v.draw_all_buy;
+    cfg.trading.show_order_comment = v.show_order_comment;
+    cfg.trading.multi_orders.show_orders_num = v.show_orders_num;
+    cfg.trading.multi_orders.done_opacity = v.done_opacity;
+    cfg.trading.alert_config.keep_time = v.alert_keep_time;
+    cfg.trading.alert_config.sound_kind = v.alert_sound;
+    cfg.trading.alert_config.repeat_count = v.alert_repeat;
+    cfg.trading.report_config.active_type = v.report_active_type;
+    cfg.trading.report_config.rep_emulator_orders = v.report_emulator;
+    cfg.trading.report_config.stretch = v.report_stretch;
+    cfg.trading.report_config.only_2_orders = v.report_only_2_orders;
+    cfg.trading.report_config.use_leverage = v.report_use_leverage;
+    cfg.trading.report_config.max_lines = v.report_max_lines;
+    cfg.trading.report_config.pos_direction = v.report_direction;
+    cfg.trading.report_config.store_liq = v.report_store_liq;
+    cfg.trading.report_config.store_fund = v.report_store_fund;
+    cfg.trading.report_config.by_close_date = v.report_by_close_date;
+    cfg.trading.spot_config.show_trades = v.spot_show_trades;
+    cfg.trading.spot_config.show_book = v.spot_show_book;
+    cfg.trading.spot_config.book_len = v.spot_book_len;
+    cfg.trading.spot_config.show_market_avg = v.show_market_avg;
+    cfg.trading.spot_config.show_min_max = v.show_min_max;
+    cfg.trading.spot_config.show_avg_price = v.show_avg_price;
+    cfg.trading.spot_config.spot_btc = v.spot_btc;
+    cfg.trading.spot_config.shift_spot = v.shift_spot;
+    cfg.trading.spot_config.show_mark_price = v.show_mark_price;
+    cfg.trading.spot_config.show_liq = v.show_liq;
+    cfg.trading.spot_config.huge_liq = v.huge_liq;
+    cfg.trading.spot_config.show_open_int = v.show_open_int;
+    cfg.trading.spot_config.show_avg_price_line = v.show_avg_price_line;
+    cfg.trading.cashback_settings.sep = v.cashback_sep;
+    cfg.trading.cashback_settings.max_days = v.cashback_period;
+    cfg.trading.cashback_settings.instant_bnb = v.cashback_instant_bnb;
+    cfg.trading.transfer_config.show_total = v.transfer_show_total;
+    cfg.trading.transfer_config.hide_zero = v.transfer_hide_zero;
+    cfg.trading.arb_view_config.show_absolute = v.arb_show_absolute;
+    cfg.trading.arb_view_config.show_numbers = v.arb_show_numbers;
+    cfg.trading.arb_view_config.show_lines = v.arb_show_lines;
+    cfg.trading.arb_view_config.show_percent = v.arb_show_percent;
+    cfg.trading.arb_view_config.show_right = v.arb_show_right;
+    cfg.visual.show_red_green_lines = v.show_red_green_lines;
+    cfg.visual.show_red_green_dots = v.show_red_green_dots;
+    cfg.visual.auto_close_charts = v.auto_close_charts;
+    cfg.visual.chart_watch_multi_frames = v.chart_watch_multi_frames;
+    cfg.visual.chart_history_len = v.chart_history_len;
+    cfg.visual.show_vert_volume = v.show_vert_volume;
+    cfg.visual.vert_vol_time_frame = v.vert_vol_time_frame;
+    cfg.visual.vert_vol_opacity = v.vert_vol_opacity;
+    cfg.visual.vert_vol_height = v.vert_vol_height;
+    cfg.visual.vert_vol_kind = v.vert_vol_kind;
+    cfg.visual.vert_vol_ind_pos = v.vert_vol_ind_pos;
+    cfg.visual.v_tool_show = v.v_tool_show;
+    cfg.visual.v_tool_time = v.v_tool_time;
+    cfg.visual.v_tool_time_index = v.v_tool_time_index;
+    cfg.visual.v_tool_opacity = v.v_tool_opacity;
+    cfg.visual.hv_show = v.hv_show;
+    cfg.visual.hv_width = v.hv_width;
+    cfg.visual.hv_time_frame_ind = v.hv_time_frame_ind;
+    cfg.visual.hv_price_frame = v.hv_price_frame;
+    cfg.visual.hv_opacity = v.hv_opacity;
+    cfg.visual.hv_disp_vol = v.hv_disp_vol;
+    cfg.visual.hv_kind = v.hv_kind;
+    cfg.visual.charts_auto_shift = v.charts_auto_shift;
+    cfg.visual.draw_cur_price = v.draw_cur_price;
+    cfg.visual.scale_plus_index = v.scale_plus_index;
+    cfg.visual.vo_sort_kind = v.vo_sort_kind;
+    cfg.visual.vo_older_first = v.vo_older_first;
+    cfg.visual.vo_sort_by_market = v.vo_sort_by_market;
+    cfg.visual.show_strat_numbers = v.show_strat_numbers;
+    cfg.visual.hide_ny_elka = v.hide_ny_elka;
+    cfg.visual.spy_hide_mode = v.spy_hide_mode;
+    cfg.visual.chart_candles_style = v.chart_candles_style;
+    cfg.visual.chart_candles_tick_opacity = v.chart_candles_tick_opacity;
+    cfg.visual.chart_candles_neutral_ticks = v.chart_candles_neutral_ticks;
+    cfg.visual.chart_candles_outline_width = v.chart_candles_outline_width;
+    cfg.visual.chart_candles_tick_wicks = v.chart_candles_tick_wicks;
+    cfg.visual.ai_card_provider = v.ai_card_provider;
+    cfg.visual.ai_card_model = v.ai_card_model.clone();
+    cfg.visual.ai_card_prompt = v.ai_card_prompt.clone();
+    cfg.visual.custom_draw_config.f_show = v.draw_show;
+    cfg.visual.custom_draw_config.f_opacity = v.draw_opacity;
+    cfg.visual.show_filters.need_show = v.filters_show;
+    cfg.visual.show_filters.filters = v.filters_strategies;
+    cfg.visual.show_filters.sessions = v.filters_sessions;
+    cfg.visual.show_filters.hide_zero = v.filters_hide_zero;
+    cfg.visual.show_filters.m_shot_area = v.filters_moonshot;
+    cfg.visual.show_filters.scroll_filters = v.filters_scroll;
+    cfg.visual.show_filters.show_detects = v.filters_detects;
+    cfg.visual.charts_settings.auto_arrange = v.monitor_auto_arrange;
+    cfg.visual.charts_settings.visible = v.monitor_visible;
+    cfg.visual.charts_settings.wide = v.monitor_wide;
+    cfg.visual.charts_settings.stay_on_top = v.charts_stay_on_top;
+    cfg.visual.charts_settings.max_charts = v.monitor_max_charts;
+    cfg.visual.charts_settings.refresh = v.monitor_refresh;
+    cfg.visual.heatmap_config.show = v.heatmap_show;
+    cfg.visual.heatmap_config.use_q = v.heatmap_use_q;
+    cfg.visual.heatmap_config.height = v.heatmap_height;
+    cfg.visual.heatmap_config.cpu = v.heatmap_cpu;
+    cfg.visual.heatmap_config.trades = v.heatmap_trades;
+    cfg.visual.heatmap_config.app_latency = v.heatmap_app_latency;
+    cfg.visual.heatmap_config.draw_latency = v.heatmap_draw_latency;
+    cfg.visual.news_form_config.stay_on_top = v.news_stay_on_top;
+    cfg.visual.news_form_config.exact_time = v.news_exact_time;
+    cfg.visual.news_form_config.font_size = v.news_font_size;
+    cfg.visual.news_form_config.update_orig = v.news_translate;
+    cfg.visual.news_form_config.sound = v.news_sound;
+    cfg.visual.news_form_config.theme = v.news_theme;
+    cfg.visual.news_form_config.coin_card_font_size = v.news_coin_card_font;
+    cfg.visual.news_form_config.full_tags = v.news_full_tags;
+    cfg.visual.news_form_config.feed_mode = v.news_feed_mode;
+    cfg.theme.current_style = v.current_style;
+    cfg.ui.coins_sort_order = v.coins_sort_order;
+    cfg.ui.markets_table_config.sort_col = v.markets_sort_col;
+    cfg.ui.main_button_index_1 = v.main_button;
 }

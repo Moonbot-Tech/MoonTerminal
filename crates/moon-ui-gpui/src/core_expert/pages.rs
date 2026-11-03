@@ -20,9 +20,11 @@ mod interface;
 mod login;
 mod special;
 mod telegram;
+mod view;
 
 pub(super) use hotkeys::HotkeysSub;
 pub(super) use special::SpecialSection;
+pub(super) use view::ViewSection;
 
 use gpui::*;
 use moon_ui::MoonPalette;
@@ -54,6 +56,7 @@ pub(super) struct PageCtx<'a> {
     pub(super) hotkeys_sub: HotkeysSub,
     /// Which of the Special page's four collapsible sections is open, for the same reason.
     pub(super) special_section: SpecialSection,
+    pub(super) view_section: ViewSection,
     /// Which row of the Telegram page's channel box is picked, for the same reason.
     pub(super) selected_channel: Option<usize>,
     /// Coin highlighted on the General blacklist, when a reveal is showing.
@@ -85,8 +88,13 @@ pub(super) fn field_specs(
         ExpertTab::Login => login::field_specs(draft),
         ExpertTab::AutoBuy => autobuy::field_specs(draft),
         ExpertTab::AutoStart => autostart::field_specs(draft),
-        ExpertTab::Interface => interface::field_specs(draft),
+        ExpertTab::Interface => {
+            let mut specs = interface::field_specs(draft);
+            specs.extend(view::field_specs(draft));
+            specs
+        }
         ExpertTab::Special => special::field_specs(draft),
+        ExpertTab::Telegram => telegram::field_specs(draft),
         _ => Vec::new(),
     }
 }
@@ -107,7 +115,11 @@ pub(super) fn slider_specs(
         ExpertTab::General => general::slider_specs(draft),
         ExpertTab::AutoBuy => autobuy::slider_specs(draft),
         ExpertTab::AutoStart => autostart::slider_specs(draft),
-        ExpertTab::Interface => interface::slider_specs(draft),
+        ExpertTab::Interface => {
+            let mut specs = interface::slider_specs(draft);
+            specs.extend(view::slider_specs(draft));
+            specs
+        }
         ExpertTab::Special => special::slider_specs(draft),
         _ => Vec::new(),
     }
@@ -157,7 +169,15 @@ pub(super) fn page(
             p,
             cx,
         )),
-        ExpertTab::Interface => Some(interface::body(view, store, draft, p, cx)),
+        // Moonbot's appearance block sits under its Interface page, on the same tab.
+        ExpertTab::Interface => Some(
+            moon_ui::v_flex()
+                .w_full()
+                .gap(crate::design::ui_px(cx, 12.0))
+                .child(interface::body(view, store, draft, p, cx))
+                .child(view::body(view, store, draft, ctx.view_section, p, cx))
+                .into_any_element(),
+        ),
         ExpertTab::Hotkeys => Some(hotkeys::body(view, ctx.hotkeys_sub, draft, p, cx)),
         ExpertTab::Special => Some(special::body(
             view,

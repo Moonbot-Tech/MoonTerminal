@@ -1,29 +1,30 @@
-//! Moonbot's "Основные" page, row for row.
+//! Moonbot's "Основные" page, row for row — plus the default entry size and price.
 //!
-//! Sixteen of its controls are live, because the terminal both projects and may write them: take
-//! profit and its level, the trailing stop and its level, V-Stop's level and enable flag, the coin
-//! blacklist with its text and its delta filter, the trailing addition, the partial-fill sell, the
-//! buy auto-cancel, the cancel-after-Sell switch, the fresh-coin hold, the trades-into-deltas
-//! switch, and the startup analysis above the two columns.
+//! Its controls are live where the terminal both projects and may write them: take profit and its
+//! level, the trailing stop and its level, V-Stop's level and enable flag, the coin blacklist with
+//! its text and its delta filter, the trailing addition, the partial-fill sell, the buy
+//! auto-cancel, the cancel-after-Sell switch, the sell placed under the wall, the fresh-coin and
+//! delisting holds, the trades-into-deltas switch, and the startup analysis and manual mode above
+//! the two columns.
+//!
+//! The "default entry" group is not on Moonbot's settings page at all: Moonbot sets the entry share,
+//! the fixed amount and the buy price from its MAIN window. On a core that runs without that window
+//! — a Linux server — the core still sizes and prices every entry that nothing else did (a Telegram
+//! or clipboard autobuy) from these fields, so this page is the one place left to set them.
 //!
 //! They are TWO areas, not one: `GeneralSettings` is what both faces of the gear draw and
-//! `OrderRulesSettings` is the seven only this one does — see the latter's own doc for why a page
+//! `OrderRulesSettings` is what only this one does — see the latter's own doc for why a page
 //! splits there.
 //!
-//! Five controls are left. Three are dead for ONE reason — the field is in the safe-share section
-//! but outside this page's two projected areas, so there is nothing to seed the row from and
-//! nothing OK could carry: the stop-loss pair (`trading.panic_if_price_drop` /
-//! `trading.price_drop_level`) and "поставить sell под стенку". The other two are the Copy/Paste
-//! buttons, and their reason is different and stated where they are drawn.
-//!
-//! The stop-loss pair carries the wire's "Mirrors `ClientSettingsCommand::…`" note, and that note
-//! is NOT what holds it back: five of the fields this page already writes carry it too —
+//! The stop-loss pair (`trading.panic_if_price_drop` / `trading.price_drop_level`) is live too, in
+//! the expert-only area: the compact popup draws no stop-loss row. It carries the wire's "Mirrors
+//! `ClientSettingsCommand::…`" note, as do five fields this page already wrote before it —
 //! `trailing_stop`, `g_take_profit`, `vol_drop_level`, `coins_black_list_text`,
-//! `use_coins_black_list`. The note says the compact channel carries the same field, not that this
-//! one may not.
+//! `use_coins_black_list`; the note says the compact channel (the toolbar's SL) carries the same
+//! field, not that this one may not.
 //!
-//! The disabled rows still print their captions in Moonbot's wording, with an em dash where the
-//! value would be: a row that showed `0.00%` would state a setting this terminal has not read.
+//! The two controls left disabled are the Copy/Paste buttons, and their reason is stated where they
+//! are drawn.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -37,18 +38,17 @@ use crate::design::{self, moon_alpha};
 use crate::shell::editors::EditorStore;
 use crate::shell::{
     BlacklistReveal, TAKE_PROFIT_BOUNDS, TRAILING_BOUNDS, VSTOP_BOUNDS,
-    coin_blacklist_remove_button,
+    coin_blacklist_remove_button, parse_num,
 };
 
 use super::super::CoreExpertView;
-use super::super::widgets::{action, caption, columns, field, flag, group, hint, rows, slider};
+use super::super::widgets::{
+    action, caption, columns, field, flag, group, hint, num, radio_live, rows, slider,
+};
 
-/// Bounds of the one dead slider left on this page, which counts down from zero.
-///
-/// It bounds a CONTROL that writes nothing, so the range only has to resemble Moonbot's. Declared
-/// with a value of `0`, which the range reads as "no effect" — the least eventful thing a thumb can
-/// say about a row whose real value this terminal has not read.
-const DEAD_DROP_PCT: (f32, f32, f32) = (-10.0, 0.0, 0.1);
+/// Stop-loss distance in per cent, counting down from zero. The reference states no range, so the
+/// track bounds the control only and reaches as deep as the V-Stop track beside it.
+const STOP_LOSS_PCT: (f32, f32, f32) = (-50.0, 0.0, 0.1);
 
 /// Trailing addition, as a percentage added per per cent of price move.
 ///
@@ -66,6 +66,23 @@ const PARTIAL_PCT: (f32, f32, f32) = (0.0, 100.0, 1.0);
 const AUTO_CANCEL: (f32, f32, f32) = (0.0, 209.0, 1.0);
 /// Fresh-coin hold in plain minutes, up to a day.
 const FRESH_MINUTES: (f32, f32, f32) = (0.0, 1440.0, 1.0);
+/// Default entry as thousandths of the balance: the 1..=1000 Moonbot's own control allows, which
+/// the wire's reference states.
+const PLAY_WITH: (f32, f32, f32) = (1.0, 1000.0, 1.0);
+/// Buy-price offset in the wire's HALF-per-cent steps: -20 % to +50 %. The reference states no
+/// range for this field, so the track bounds the control only, like every other slider here —
+/// Moonbot's own presets set +3, +7 and +12 %.
+const BUY_OFFSET: (f32, f32, f32) = (-40.0, 100.0, 1.0);
+
+/// The buy-price offset as a signed per cent, from its half-per-cent steps: 7 prints as `+3.5`.
+fn buy_offset_text(x_ask: i32) -> String {
+    format!("{:+}", f64::from(x_ask) / 2.0)
+}
+
+/// The default entry share as a per cent of the balance, from its thousandths: 333 prints as `33.3`.
+fn play_with_text(play_with: i32) -> String {
+    format!("{}", f64::from(play_with) / 10.0)
+}
 
 /// The auto-cancel delay in words, from the scale `OrderRulesSettings::auto_cancel_delay` decodes.
 ///
@@ -83,25 +100,33 @@ fn auto_cancel_text(rules: &OrderRulesSettings) -> String {
     t!(key, v = amount.to_string()).to_string()
 }
 
-/// Value shown where Moonbot prints a number this terminal has not read.
-const NO_VALUE: &str = "—";
-
 /// See [`super::field_specs`].
 #[allow(clippy::type_complexity)]
 pub(super) fn field_specs(
     draft: &CoreConfig,
 ) -> Vec<(&'static str, String, fn(&mut CoreConfig, &str))> {
-    vec![(
-        "exp-gen-bl-text",
-        draft.general.blacklist_text.clone(),
-        (|d, t| d.general.blacklist_text = t.to_string()) as fn(&mut CoreConfig, &str),
-    )]
+    vec![
+        (
+            "exp-gen-bl-text",
+            draft.general.blacklist_text.clone(),
+            (|d, t| d.general.blacklist_text = t.to_string()) as fn(&mut CoreConfig, &str),
+        ),
+        (
+            "exp-gen-fixed-balance",
+            // The shortest text that round-trips, so the box parses back exactly what it shows.
+            format!("{}", draft.order_rules.fixed_trade_balance),
+            |d, t| {
+                // A negative amount is refused rather than clamped: it is not an order size, and a
+                // clamp would leave the typed text on screen while OK carried a different number.
+                if let Some(v) = parse_num(t).filter(|v| *v >= 0.0) {
+                    d.order_rules.fixed_trade_balance = v;
+                }
+            },
+        ),
+    ]
 }
 
 /// See [`super::slider_specs`].
-///
-/// The dead rows are declared alongside the live ones because `MoonSlider` cannot draw without a
-/// state; theirs stages nothing.
 #[allow(clippy::type_complexity)]
 pub(super) fn slider_specs(
     draft: &CoreConfig,
@@ -114,9 +139,17 @@ pub(super) fn slider_specs(
 )> {
     let g = &draft.general;
     let r = &draft.order_rules;
-    let dead = (|_: &mut CoreConfig, _: f32| {}) as fn(&mut CoreConfig, f32);
     vec![
-        ("exp-gen-sl", DEAD_DROP_PCT, 0.0, dead, None),
+        (
+            "exp-gen-sl",
+            STOP_LOSS_PCT,
+            r.stop_loss_pct,
+            // Rounded to the track's step: 0.1 has no exact `f32`, and the core compares what it
+            // echoes against what was sent.
+            (|d, v| d.order_rules.stop_loss_pct = (v * 10.0).round() / 10.0)
+                as fn(&mut CoreConfig, f32),
+            None,
+        ),
         (
             "exp-gen-trailing",
             TRAILING_BOUNDS,
@@ -172,6 +205,20 @@ pub(super) fn slider_specs(
             FRESH_MINUTES,
             r.dont_buy_new_coins as f32,
             |d, v| d.order_rules.dont_buy_new_coins = v.round() as i32,
+            None,
+        ),
+        (
+            "exp-gen-play-with",
+            PLAY_WITH,
+            r.play_with as f32,
+            |d, v| d.order_rules.play_with = v.round() as i32,
+            None,
+        ),
+        (
+            "exp-gen-buy-offset",
+            BUY_OFFSET,
+            r.x_ask as f32,
+            |d, v| d.order_rules.x_ask = v.round() as i32,
             None,
         ),
     ]
@@ -310,13 +357,17 @@ pub(super) fn body(
         rows(cx)
             .child(flag(
                 "exp-gen-sl-on",
-                t!("core_expert.gen_stop_loss", v = NO_VALUE).to_string(),
-                false,
-                false,
+                t!(
+                    "core_expert.gen_stop_loss",
+                    v = format!("{:.1}", r.stop_loss_pct)
+                )
+                .to_string(),
+                r.stop_loss_on,
+                true,
                 view,
-                |_, _| {},
+                |d, on| d.order_rules.stop_loss_on = on,
             ))
-            .children(slider(store, "exp-gen-sl", false))
+            .children(slider(store, "exp-gen-sl", true))
             .child(flag(
                 "exp-gen-trailing-on",
                 t!(
@@ -406,11 +457,67 @@ pub(super) fn body(
         .child(flag(
             "exp-gen-wall",
             t!("core_expert.gen_sell_under_wall").to_string(),
-            false,
-            false,
+            r.sell_auto_move,
+            true,
             view,
-            |_, _| {},
+            |d, on| d.order_rules.sell_auto_move = on,
         ));
+
+    // --- The default entry: Moonbot's main-window controls, see the module doc ----------------
+    let entry = group(
+        "exp-gen-entry",
+        t!("core_expert.gen_entry_frame").to_string(),
+    )
+    .child(
+        rows(cx)
+            .child(hint(t!("core_expert.gen_entry_hint").to_string(), p, cx))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(flag(
+                        "exp-gen-fixed-on",
+                        t!("core_expert.gen_fixed_balance").to_string(),
+                        r.use_manual_balance,
+                        true,
+                        view,
+                        |d, on| d.order_rules.use_manual_balance = on,
+                    ))
+                    .children(num(store, "exp-gen-fixed-balance", 96.0, true, cx)),
+            )
+            // Dimmed rather than disabled while the fixed amount is on: the core ignores the share
+            // then, but the value is still the core's and still editable for when it is switched
+            // back.
+            .child(caption(
+                t!("core_expert.gen_play_with", v = play_with_text(r.play_with)).to_string(),
+                !r.use_manual_balance,
+                p,
+                cx,
+            ))
+            .children(slider(store, "exp-gen-play-with", true))
+            .child(caption(
+                t!("core_expert.gen_buy_offset", v = buy_offset_text(r.x_ask)).to_string(),
+                true,
+                p,
+                cx,
+            ))
+            .children(slider(store, "exp-gen-buy-offset", true))
+            .child(radio_live(
+                "exp-gen-ask-current",
+                t!("core_expert.gen_ask_current").to_string(),
+                r.use_current_ask,
+                view,
+                |d| d.order_rules.use_current_ask = true,
+            ))
+            .child(radio_live(
+                "exp-gen-ask-30s",
+                t!("core_expert.gen_ask_30s").to_string(),
+                !r.use_current_ask,
+                view,
+                |d| d.order_rules.use_current_ask = false,
+            )),
+    );
 
     // Moonbot's clipboard transfer of its own settings, drawn dead because nothing here implements
     // it yet — NOT because it cannot be. The window holds the whole snapshot, and moonproto exports
@@ -476,6 +583,14 @@ pub(super) fn body(
                 ))
                 .children(slider(store, "exp-gen-bl-fresh", true))
                 .child(flag(
+                    "exp-gen-bl-delisted",
+                    t!("core_expert.gen_dont_buy_delisted").to_string(),
+                    r.dont_buy_delisted,
+                    true,
+                    view,
+                    |d, on| d.order_rules.dont_buy_delisted = on,
+                ))
+                .child(flag(
                     "exp-gen-deltas-trades",
                     t!("core_expert.gen_deltas_use_trades").to_string(),
                     r.deltas_by_trades,
@@ -509,6 +624,14 @@ pub(super) fn body(
                     true,
                     view,
                     |d, on| d.order_rules.analyze_on_start = on,
+                ))
+                .child(flag(
+                    "exp-gen-manual-mode",
+                    t!("core_expert.gen_manual_mode").to_string(),
+                    r.manual_mode,
+                    true,
+                    view,
+                    |d, on| d.order_rules.manual_mode = on,
                 )),
         )
         .child(columns(
@@ -517,6 +640,7 @@ pub(super) fn body(
                 .gap(design::ui_px(cx, 10.0))
                 .child(stops)
                 .child(order_handling)
+                .child(entry)
                 .child(transfer),
             risks,
             cx,

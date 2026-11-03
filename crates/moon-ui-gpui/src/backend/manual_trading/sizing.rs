@@ -139,7 +139,7 @@ impl Backend {
             .core(core)
             .filter(|data| !data.core_config_stale)
             .and_then(|data| data.core_config.as_ref())
-            .map(|config| config.auto_margin_borrow);
+            .map(|config| config.special.auto_margin_borrow);
         let label = self.session.market_source().market_label(core, market);
         if manual_quote_mismatch(kind, account, &label.quote, borrowing) {
             return Err(rust_i18n::t!(

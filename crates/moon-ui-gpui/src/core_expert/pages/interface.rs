@@ -14,8 +14,8 @@
 //!
 //! What is left disabled is disabled for a reason that can be named per row, and no longer for the
 //! want of one. Four checkbox rows have no field in the snapshot at all — the two windows Moonbot
-//! opens on start, closing to the tray, encrypting its reports — and neither do the style picker,
-//! the Pixel Size track, the background image or the price panel. Nor do the two buttons: "Colors
+//! opens on start, closing to the tray, encrypting its reports — and neither do the Pixel Size
+//! track, the background image or the price panel. Nor do the two buttons: "Colors
 //! Setup" opens a dialog of its own and "Reset Reports form" acts on Moonbot's report window, and
 //! an action is not a setting to carry.
 //!
@@ -23,6 +23,7 @@
 //! SellPrice ручной стратегии" and "Открывать выбранные вручную монеты в FullScreen". Which fields
 //! those are, and why each cannot be written from here, is named once in `moon_core`'s
 //! `apply_interface` rather than repeated here.
+//! The style picker is live over `theme.current_style`, drawn by `super::view` with its area.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -418,11 +419,16 @@ pub(super) fn body(
                             .gap(gap)
                             .child(caption(
                                 t!("core_expert.int_style").to_string(),
-                                false,
+                                true,
                                 p,
                                 cx,
                             ))
-                            .child(dropdown("exp-int-style", NO_VALUE.to_string(), false, cx)),
+                            .child(super::view::style_selector(
+                                "exp-int-style",
+                                draft,
+                                view,
+                                cx,
+                            )),
                     )
                     .child(
                         v_flex()

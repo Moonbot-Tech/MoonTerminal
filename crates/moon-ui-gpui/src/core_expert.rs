@@ -153,6 +153,8 @@ pub struct CoreExpertView {
     hotkeys_sub: pages::HotkeysSub,
     /// Open section of the Special page, which Moonbot splits into four collapsible blocks.
     special_section: pages::SpecialSection,
+    /// Open section of Moonbot's appearance block under the Interface page.
+    view_section: pages::ViewSection,
     /// Row picked in the Telegram page's channel box, as an index into the list that page draws.
     ///
     /// Belongs to the WINDOW for the same reason the open Special section does: a page is rebuilt
@@ -333,6 +335,7 @@ impl CoreExpertView {
             tab: ExpertTab::default(),
             hotkeys_sub: pages::HotkeysSub::default(),
             special_section: pages::SpecialSection::default(),
+            view_section: pages::ViewSection::default(),
             selected_channel: None,
             draft: None,
             base: None,

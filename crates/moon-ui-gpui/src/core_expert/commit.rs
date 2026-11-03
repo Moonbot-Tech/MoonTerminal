@@ -204,6 +204,18 @@ impl CoreExpertView {
         }
     }
 
+    /// Open one section of Moonbot's appearance block, closing the one that was open — the rule
+    /// [`Self::set_special_section`] follows, for the same reason.
+    pub(super) fn set_view_section(&mut self, section: pages::ViewSection, cx: &mut Context<Self>) {
+        if self.view_section == section {
+            return;
+        }
+        self.view_section = section;
+        // The blur `set_special_section` explains: the closed section's controls stop being drawn.
+        self.needs_blur |= !self.editors.is_empty();
+        cx.notify();
+    }
+
     /// Open one of the Special page's sections, closing the one that was open.
     ///
     /// Moonbot shows one at a time; clicking the open one leaves it open rather than collapsing to

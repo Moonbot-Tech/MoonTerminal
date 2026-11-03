@@ -16,8 +16,8 @@ pub use core_settings::{
     CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, FieldValue, GeneralSettings,
     GestureSettings, InterfaceSettings, LeverageSettings, ManualSettings, MoveRow,
     OrderRulesSettings, ProbeBases, ProfitState, SignalsSettings, SpecialSettings,
-    TelegramSettings, day_fraction_to_minutes, differing_fields, fav_markets_has, fav_markets_list,
-    fav_markets_set, index_of, minutes_to_day_fraction,
+    TelegramSettings, ViewSettings, day_fraction_to_minutes, differing_fields, fav_markets_has,
+    fav_markets_list, fav_markets_set, index_of, minutes_to_day_fraction,
 };
 pub use core_status::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreEndpoint, CoreIdentityFacts, CoreInitStep,

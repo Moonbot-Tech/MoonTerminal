@@ -16,6 +16,7 @@ const COVERED: &[(&str, &str)] = &[
     ("telegram", "TelegramSettings"),
     ("auto_buy", "AutoBuySettings"),
     ("interface", "InterfaceSettings"),
+    ("view", "ViewSettings"),
 ];
 
 /// Sources declaring the covered sections after the configuration model is split.
@@ -24,6 +25,7 @@ const SOURCES: &[&str] = &[
     include_str!("../order_rules.rs"),
     include_str!("../special.rs"),
     include_str!("../interface.rs"),
+    include_str!("../view.rs"),
 ];
 
 /// The `pub` fields of one struct as the source spells them.
@@ -125,6 +127,7 @@ fn every_entry_masks_exactly_its_own_area() {
             CoreConfigArea::Telegram => FieldMask::EMPTY.with_telegram(),
             CoreConfigArea::AutoBuy => FieldMask::EMPTY.with_auto_buy(),
             CoreConfigArea::Interface => FieldMask::EMPTY.with_interface(),
+            CoreConfigArea::View => FieldMask::EMPTY.with_view(),
             other => panic!("{} claims area {other:?}", field.key),
         };
         assert_eq!(field.mask, expected, "{} masks the wrong area", field.key);

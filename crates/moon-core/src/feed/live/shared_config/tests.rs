@@ -11,37 +11,97 @@ use crate::feed::{AutoStartSettings, CoreConfig, CoreConfigEditEvent, CoreConfig
 const TEST_CORE: u64 = 1;
 
 /// Omitting the borrowing projection falsely refuses margin orders; copying it back from a
-/// settings draft would silently disable the core's borrowing during an unrelated edit.
+/// settings draft would silently disable the core's borrowing during an unrelated edit. Only the
+/// Special page — the one surface that draws the row — may write it.
 #[test]
-fn manual_quote_guard_borrowing_projection_is_read_only() {
+fn manual_quote_guard_borrowing_is_written_only_by_the_special_page() {
     let mut wire = SharedConfig::default();
     wire.trading.moonbot_config.auto_margin_borrow = true;
     let mut draft = core_config_from_proto(&wire);
-    assert!(draft.auto_margin_borrow);
-    draft.auto_margin_borrow = false;
+    assert!(draft.special.auto_margin_borrow);
+    draft.special.auto_margin_borrow = false;
     draft.general.take_profit_pct = 4.5;
     let mut sent = wire.clone();
     apply_core_config(&mut sent, &draft, FieldMask::RENDERED_SECTIONS);
     assert_eq!(sent.trading.g_take_profit, 4.5);
     assert!(sent.trading.moonbot_config.auto_margin_borrow);
+    apply_core_config(&mut sent, &draft, FieldMask::EMPTY.with_special());
+    assert!(!sent.trading.moonbot_config.auto_margin_borrow);
     wire.trading.moonbot_config.auto_margin_borrow = false;
-    assert!(!core_config_from_proto(&wire).auto_margin_borrow);
+    assert!(!core_config_from_proto(&wire).special.auto_margin_borrow);
 }
 
 /// The chart-window checkbox decides whether detached charts rise with the main window (#850):
 /// the projection must carry it with MoonBot's default of on, and an unrelated settings edit must
-/// never write the terminal's copy back over the core's.
+/// never write the terminal's copy back over the core's. Only the expert window's appearance area
+/// — the one surface that draws the row — may write it.
 #[test]
-fn charts_stay_on_top_projection_is_read_only_and_defaults_on() {
+fn charts_stay_on_top_defaults_on_and_is_written_only_by_the_view_area() {
     let mut wire = SharedConfig::default();
     let mut draft = core_config_from_proto(&wire);
-    assert!(draft.charts_stay_on_top);
-    draft.charts_stay_on_top = false;
+    assert!(draft.view.charts_stay_on_top);
+    draft.view.charts_stay_on_top = false;
     let mut sent = wire.clone();
     apply_core_config(&mut sent, &draft, FieldMask::RENDERED_SECTIONS);
     assert!(sent.visual.charts_settings.stay_on_top);
+    apply_core_config(&mut sent, &draft, FieldMask::EMPTY.with_view());
+    assert!(!sent.visual.charts_settings.stay_on_top);
     wire.visual.charts_settings.stay_on_top = false;
-    assert!(!core_config_from_proto(&wire).charts_stay_on_top);
+    assert!(!core_config_from_proto(&wire).view.charts_stay_on_top);
+}
+
+/// Every appearance field must reach the wire under the view mask and come back: the write
+/// rebuilds the whole snapshot, so a field the projection reads but the applier forgets is a field
+/// the next OK reverts — and with over a hundred of them, only a sweep of the table catches one.
+#[test]
+fn every_view_field_round_trips_through_the_projection() {
+    let base = core_config_from_proto(&SharedConfig::default());
+    let mut wanted = base.clone();
+    for field in crate::feed::CORE_FIELDS {
+        if field.area == crate::feed::CoreConfigArea::View {
+            field.perturb(&mut wanted);
+        }
+    }
+    for field in crate::feed::CORE_FIELDS {
+        if field.area == crate::feed::CoreConfigArea::View {
+            assert!(
+                field.differs(&base, &wanted),
+                "{} did not move, so this test cannot see it",
+                field.key
+            );
+        }
+    }
+
+    let mut written = SharedConfig::default();
+    apply_core_config(&mut written, &wanted, FieldMask::EMPTY.with_view());
+
+    let echoed = core_config_from_proto(&written);
+    for field in crate::feed::CORE_FIELDS {
+        if field.area == crate::feed::CoreConfigArea::View {
+            assert!(
+                !field.differs(&echoed, &wanted),
+                "{} was not written or not read back",
+                field.key
+            );
+        }
+    }
+}
+
+/// The compact popup draws none of Moonbot's appearance, so its mask must carry none of it.
+#[test]
+fn an_unnamed_view_is_not_written() {
+    let mut wanted = core_config_from_proto(&SharedConfig::default());
+    wanted.view.show_vert_volume = !wanted.view.show_vert_volume;
+    wanted.view.current_style = 4;
+    wanted.view.ai_card_model = "x".to_string();
+
+    let mut written = SharedConfig::default();
+    apply_core_config(&mut written, &wanted, FieldMask::RENDERED_SECTIONS);
+
+    assert_eq!(
+        core_config_from_proto(&written).view,
+        core_config_from_proto(&SharedConfig::default()).view
+    );
 }
 
 /// Build a write out of a base config's own projection, changed by `mutate`.
@@ -713,7 +773,17 @@ fn telegram_base() -> SharedConfig {
     cfg.signals.multi_channels = !cfg.signals.multi_channels;
     cfg.signals.more_then_1_channel = !cfg.signals.more_then_1_channel;
     cfg.signals.listen_moon_channel = !cfg.signals.listen_moon_channel;
-    cfg.trading.use_moon_bl = !cfg.trading.use_moon_bl;
+    let t = &mut cfg.trading;
+    t.use_moon_bl = !t.use_moon_bl;
+    t.moonbot_config.silent = !t.moonbot_config.silent;
+    t.moonbot_config.group_delay = 4321;
+    t.tm_send_only_share = !t.tm_send_only_share;
+    t.tm_panic_sell_closed = !t.tm_panic_sell_closed;
+    t.tm_cancel_closed = !t.tm_cancel_closed;
+    t.tm_cancel_buy_on_fill = !t.tm_cancel_buy_on_fill;
+    t.tm_send_first_sell = !t.tm_send_first_sell;
+    t.tm_sell_if_master_not_filled = !t.tm_sell_if_master_not_filled;
+    t.tm_max_order = 777.5;
     cfg
 }
 
@@ -815,6 +885,12 @@ fn special_base() -> SharedConfig {
     t.sell_x2_level = 73;
     t.no_trades_markets_text = "BTC\nETH".to_string();
     t.multi_commands = !t.multi_commands;
+    t.free_position_check = !t.free_position_check;
+    t.binance_connection = 2;
+    t.use_hl_fast_ioc = !t.use_hl_fast_ioc;
+    t.auto_start_2.show_old_listing = !t.auto_start_2.show_old_listing;
+    t.moonbot_config.auto_margin_borrow = !t.moonbot_config.auto_margin_borrow;
+    t.moonbot_config.auto_margin_transfer = !t.moonbot_config.auto_margin_transfer;
     let shots = &mut t.send_shots_config;
     shots.may_send = !shots.may_send;
     shots.profit_abs = 12;
@@ -830,12 +906,12 @@ fn special_base() -> SharedConfig {
     oc.liq_control = !oc.liq_control;
     oc.ignore_replacing_bug = !oc.ignore_replacing_bug;
     oc.ignore_protection = 1;
-    oc.active = !oc.active;
+    oc.sign_orders = !oc.sign_orders;
     oc.h_pos_report = !oc.h_pos_report;
     oc.h_pos_auto_sell = !oc.h_pos_auto_sell;
-    // Off the default too, so the assertion that this page never writes it can actually fail.
-    oc.sign_orders = !oc.sign_orders;
-    // The three more this page must never write, off their defaults for the same reason.
+    // The four legacy watcher-row mirrors this page must never write, off their defaults so the
+    // assertion that it leaves them alone can actually fail.
+    oc.active = !oc.active;
     oc.h_pos_control = !oc.h_pos_control;
     oc.min_price = 0.25;
     oc.max_time = 900;
@@ -907,12 +983,11 @@ fn a_special_edit_leaves_the_other_trading_pages_alone() {
     assert_eq!(sent.trading.auto_start.auto_stop_loss, 99.0);
     assert!(sent.trading.buy_on_enter);
     assert_eq!(sent.trading.unknown_tail, vec![3, 3]);
-    // The four fields of that sub-record this page must never write: `sign_orders` mirrors the
-    // compact channel and two routes writing one field would fight; the other three have no row on
-    // the page at all.
+    // The four fields of that sub-record this page must never write: legacy mirrors of a watcher
+    // row, which the watchdog API owns now.
     let sent_oc = &sent.trading.orders_control;
     let base_oc = &base.trading.orders_control;
-    assert_eq!(sent_oc.sign_orders, base_oc.sign_orders);
+    assert_eq!(sent_oc.active, base_oc.active);
     assert_eq!(sent_oc.h_pos_control, base_oc.h_pos_control);
     assert_eq!(sent_oc.min_price, base_oc.min_price);
     assert_eq!(sent_oc.max_time, base_oc.max_time);
@@ -1122,6 +1197,16 @@ fn the_order_rules_area_round_trips() {
     t.cancel_buy_on_sell_fill = !t.cancel_buy_on_sell_fill;
     t.dont_buy_new_coins = 123;
     t.deltas_by_trades = !t.deltas_by_trades;
+    t.sell_auto_move = !t.sell_auto_move;
+    t.dont_buy_delisted = !t.dont_buy_delisted;
+    t.manual_mode = !t.manual_mode;
+    t.use_manual_balance = !t.use_manual_balance;
+    t.fixed_trade_balance = 25.5;
+    t.play_with = 333;
+    t.x_ask = -7;
+    t.use_current_ask = !t.use_current_ask;
+    t.panic_if_price_drop = !t.panic_if_price_drop;
+    t.price_drop_level = -3.5;
     base.signals.load_deep_history = !base.signals.load_deep_history;
 
     let projected = core_config_from_proto(&base);
@@ -1155,6 +1240,9 @@ fn the_order_rules_area_round_trips() {
         written.signals.load_deep_history,
         base.signals.load_deep_history
     );
+    assert_eq!(written.trading.fixed_trade_balance, 25.5);
+    assert_eq!(written.trading.play_with, 333);
+    assert_eq!(written.trading.x_ask, -7);
 }
 
 /// The compact popup draws the exits and the blacklist and NOT the seven rows beside them, so its

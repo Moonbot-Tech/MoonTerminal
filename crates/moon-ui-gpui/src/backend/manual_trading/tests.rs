@@ -45,7 +45,7 @@ fn manual_quote_guard_compares_only_known_spot_currencies() {
 fn manual_quote_guard_covers_every_order_opening_route() {
     let sizing = include_str!("sizing.rs");
     assert!(sizing.contains(".filter(|data| !data.core_config_stale)"));
-    assert!(sizing.contains(".map(|config| config.auto_margin_borrow)"));
+    assert!(sizing.contains(".map(|config| config.special.auto_margin_borrow)"));
     let guard = sizing.find("if manual_quote_mismatch(").unwrap();
     let resolve = sizing.find("Ok(self.resolve_manual_order_terms(").unwrap();
     assert!(

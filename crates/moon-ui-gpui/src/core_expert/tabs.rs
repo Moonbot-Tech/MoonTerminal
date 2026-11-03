@@ -152,7 +152,9 @@ impl ExpertTab {
         Some(match area {
             CoreConfigArea::General | CoreConfigArea::OrderRules => Self::General,
             CoreConfigArea::AutoStart | CoreConfigArea::BtcBlink => Self::AutoStart,
-            CoreConfigArea::Interface | CoreConfigArea::Signals => Self::Interface,
+            CoreConfigArea::Interface | CoreConfigArea::Signals | CoreConfigArea::View => {
+                Self::Interface
+            }
             CoreConfigArea::AutoBuy => Self::AutoBuy,
             CoreConfigArea::Telegram => Self::Telegram,
             CoreConfigArea::Special => Self::Special,

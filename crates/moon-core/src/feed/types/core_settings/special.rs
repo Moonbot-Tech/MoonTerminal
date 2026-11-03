@@ -3,7 +3,8 @@
 /// Moonbot's "Специальные" page: the engine's own switches, its logging and its screenshot rules.
 ///
 /// An area is a PAGE — see [`crate::feed::InterfaceSettings`]. This one is `trading` with its
-/// `send_shots_config` and `orders_control` sub-records.
+/// `send_shots_config`, `orders_control` and `moonbot_config` sub-records, plus the one field of
+/// `auto_start_2` Moonbot draws on this page.
 ///
 /// Moonbot's page has about twice this many controls, and the expert window draws all of them
 /// disabled where they are not here. The reasons are stated on the page itself, row by row; the
@@ -48,8 +49,8 @@ pub struct SpecialSettings {
     /// `trading.futures_rules`: Moonbot's "Quantitative Rules" — the futures position-mode checks.
     ///
     /// Its control is `cbFuturesRules`, which is the wire's own name for the field; caption and name
-    /// disagree only in wording. Unlike `free_position_check`, which this page still draws dead, the
-    /// caption carries no negation — ticked means on, and no direction is left to guess. That it can
+    /// disagree only in wording. Unlike [`Self::free_position_check`], the caption carries no
+    /// negation — ticked means on, and no direction is left to guess. That it can
     /// turn a live safety check off is what Moonbot's own checkbox does too, and mirroring that
     /// dialog is this window's whole contract.
     pub futures_rules: bool,
@@ -77,13 +78,60 @@ pub struct SpecialSettings {
     /// Turning the box off does set zero, so the level is lost that way; Moonbot's own dialog can
     /// express no more than that either.
     pub ignore_protection: i32,
-    /// `trading.orders_control.active`: watch this bot's ORDERS — Moonbot's "Следить за ордерами
-    /// этого бота", the one switch in its worker-bot block.
+    /// `trading.orders_control.sign_orders`: mark this bot's buy orders as its own so a watcher can
+    /// tell them apart — Moonbot's "Следить за ордерами этого бота", the one switch in its
+    /// worker-bot block. It also lets the worker ping a watcher, once one is configured.
     ///
-    /// Its neighbour `orders_control.h_pos_control` ("hanging-position detection") is deliberately
-    /// NOT here: no row on that page carries its caption, and binding one checkbox to two flags
-    /// would turn a feature on and off that the trader never named.
-    pub orders_control_active: bool,
+    /// The wire also mirrors this flag on the compact `ClientSettingsCommand`, but the core's
+    /// compact handler does not apply it (moonproto `docs/ui.md`, 9b616b9), so the safe-share
+    /// snapshot is its ONE writer and this area may carry it without two routes fighting.
+    ///
+    /// The row used to write `orders_control.active` instead, which moonproto now documents as a
+    /// legacy mirror of a watcher-table row: ticking it armed nothing (#1172). That field and its
+    /// three siblings (`min_price`, `max_time`, `h_pos_control`) are the watchdog API's business
+    /// now (`client.watchdogs()`), so none of them is projected here.
+    pub sign_orders: bool,
+    /// `trading.free_position_check`: Moonbot's "Не проверять лимиты позиции" (`cbFreePositionCheck`).
+    ///
+    /// Ticked means `true`. Moonbot's hint for the row ("лимит позиции 5k. С этой опцией можно
+    /// ставить лонг на 5k и шорт на 5k вместе") and moonproto's reference — full amounts rather than
+    /// free funds, and in one-way mode a limit checked by the ORDER's direction — describe the same
+    /// effect, so the negative caption and the positive name no longer leave the direction to a
+    /// guess.
+    ///
+    /// moonproto mirrors it on the compact `ClientSettingsCommand` too, which the terminal neither
+    /// projects nor sends for this field, so the safe-share snapshot is its only writer here.
+    pub free_position_check: bool,
+    /// `trading.auto_start_2.show_old_listing`: Moonbot's "Old coins as New Listing"
+    /// (`cbGateOldListing`) — on Gate, keep a market that has prices and volume even when it sits in
+    /// the exchange's unavailable or delisted list.
+    ///
+    /// In this area rather than AutoStart's although the wire files it under `auto_start_2`: the
+    /// row is on the Special page, and an area is what a surface DRAWS. `apply_auto_start` writes
+    /// `auto_start_2` field by field and never this one, so the two cannot collide.
+    pub show_old_listing: bool,
+    /// `trading.binance_connection`: the REST connection method, 0..=3 for Moonbot's "Original"
+    /// and "Method 2" to "Method 4". Named for Binance but used by other engines too; the core
+    /// switches it by itself when authentication keeps failing, so a value can change under an
+    /// open page.
+    pub binance_connection: i32,
+    /// `trading.use_hl_fast_ioc`: Hyperliquid's paid-priority IOC for eligible taker orders —
+    /// Moonbot's "Быстрые IOC (платно)". The priority fee is burned from staked HYPE.
+    ///
+    /// A TAIL field of the `trading` section, like
+    /// [`crate::feed::OrderRulesSettings::deltas_by_trades`]: a core built before it sends a shorter
+    /// block and moonproto fills `false`, so ticking it there never echoes and the write exhausts its
+    /// retries. Left untouched it costs nothing — the value sent is the value read.
+    pub use_hl_fast_ioc: bool,
+    /// `trading.moonbot_config.auto_margin_borrow`: borrow the asset for an eligible short on a
+    /// margin-capable engine (Binance margin). Not leverage on futures.
+    ///
+    /// Also read outside this page: a spot account that may borrow can fund another quote, so the
+    /// manual-order guard must not refuse it on quote currency alone.
+    pub auto_margin_borrow: bool,
+    /// `trading.moonbot_config.auto_margin_transfer`: within that borrowing, move collateral from
+    /// spot to margin (and back if the borrow fails).
+    pub auto_margin_transfer: bool,
     /// `trading.orders_control.h_pos_report` and `trading.orders_control.h_pos_auto_sell`: what the
     /// WATCHING bot does about a hanging position — report it, and sell it.
     pub h_pos_report: bool,
@@ -159,7 +207,13 @@ impl PartialEq for SpecialSettings {
             liq_control,
             ignore_replacing_bug,
             ignore_protection,
-            orders_control_active,
+            sign_orders,
+            free_position_check,
+            show_old_listing,
+            binance_connection,
+            use_hl_fast_ioc,
+            auto_margin_borrow,
+            auto_margin_transfer,
             h_pos_report,
             h_pos_auto_sell,
             h_pos_black_list_text,
@@ -200,7 +254,13 @@ impl PartialEq for SpecialSettings {
             && *liq_control == other.liq_control
             && *ignore_replacing_bug == other.ignore_replacing_bug
             && *ignore_protection == other.ignore_protection
-            && *orders_control_active == other.orders_control_active
+            && *sign_orders == other.sign_orders
+            && *free_position_check == other.free_position_check
+            && *show_old_listing == other.show_old_listing
+            && *binance_connection == other.binance_connection
+            && *use_hl_fast_ioc == other.use_hl_fast_ioc
+            && *auto_margin_borrow == other.auto_margin_borrow
+            && *auto_margin_transfer == other.auto_margin_transfer
             && *h_pos_report == other.h_pos_report
             && *h_pos_auto_sell == other.h_pos_auto_sell
             && *h_pos_black_list_text == other.h_pos_black_list_text
@@ -218,16 +278,22 @@ impl PartialEq for SpecialSettings {
 
 /// Moonbot's "Телеграм" page: which channels a signal may come from, and the rules over them.
 ///
-/// An area is a PAGE — see [`crate::feed::InterfaceSettings`]. This one is `signals` plus the one `trading` flag
-/// Moonbot files under the same tab, and it does not overlap [`AutoBuySettings`]: that page owns
-/// how a message is PARSED, this one owns where messages come from.
+/// An area is a PAGE — see [`crate::feed::InterfaceSettings`]. This one is `signals`, the
+/// `trading` fields this page draws (the cloud blacklist and the Trust Management commands) and two
+/// of `trading.moonbot_config`, and it does not overlap [`AutoBuySettings`]: that page owns how a
+/// message is PARSED, this one owns where messages come from and what the core sends.
 ///
 /// Moonbot's own dialog shows one channel box. The wire keeps a primary channel and a list of
 /// additional ones, so this block keeps them apart and the page shows the primary first. Adding a
 /// channel appends to [`Self::pump_channels`] and removing takes from it; the primary is shown but
 /// not removable here, because which of the additional channels would take its place is a rule the
 /// protocol does not state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// It also carries what the core SENDS to Telegram — its quiet mode, its batching delay and the
+/// Trust Management commands a master bot forwards to its slaves. Moonbot spreads those across
+/// other dialogs and its chat commands (`silent`, `SetGroupDelay`); on a core without that window
+/// this page is the one place they can be set, and the Telegram page is where a trader looks.
+#[derive(Debug, Clone)]
 pub struct TelegramSettings {
     /// `signals.pump_channel`: the primary signal channel.
     pub pump_channel: String,
@@ -241,6 +307,79 @@ pub struct TelegramSettings {
     pub listen_moon_channel: bool,
     /// `trading.use_moon_bl`: use the Moonbot-curated cloud blacklist.
     pub use_moon_bl: bool,
+    /// `trading.moonbot_config.silent`: stop the ordinary trade and signal messages and images
+    /// while service messages still go out — the state Moonbot's `silent` / `talk` chat commands
+    /// switch. Trading and local sounds are unaffected.
+    pub silent: bool,
+    /// `trading.moonbot_config.group_delay`: milliseconds over which outgoing messages are batched.
+    /// The core's own command clamps it to 1000..=5000, and a shared bot uses at least 3500.
+    pub group_delay: i32,
+    /// `trading.tm_send_only_share`: forward to Telegram only on an explicit Share instead of every
+    /// new order, while auto-posting is on. The UDP forwarding switch is separate.
+    ///
+    /// Captioned from moonproto's reference, not from Moonbot's dialog: the nearest Moonbot line,
+    /// "Отправлять только сигналы на покупку или полный набор команд Доверительного Управления",
+    /// reads as a choice of command set rather than of WHEN to send, and a row bound on a
+    /// resemblance is the mistake this window refuses elsewhere.
+    pub tm_send_only_share: bool,
+    /// `trading.tm_panic_sell_closed`: when the master's sell completes, send its slaves a
+    /// PanicSell for that market.
+    pub tm_panic_sell_closed: bool,
+    /// `trading.tm_cancel_closed`: when the master's sell completes, send its slaves a CancelBuy.
+    pub tm_cancel_closed: bool,
+    /// `trading.tm_cancel_buy_on_fill`: five seconds after the master's buy fills, send its slaves
+    /// a CancelBuy.
+    pub tm_cancel_buy_on_fill: bool,
+    /// `trading.tm_send_first_sell`: forward the master's first sell price right after its buy, so
+    /// the slaves do not use their own strategy's.
+    pub tm_send_first_sell: bool,
+    /// `trading.tm_sell_if_master_not_filled`: send a Panic Sell when the master cancels its buy
+    /// unfilled or fails to place it.
+    pub tm_sell_if_master_not_filled: bool,
+    /// `trading.tm_max_order`: the master's reference order value. The share forwarded to slaves is
+    /// the real buy over this, clamped to 1..=100 %; zero or less forwards 100 %. It does not cap
+    /// the master's own order.
+    pub tm_max_order: f64,
+}
+
+/// Hand-written for the reason [`SpecialSettings`]'s is: `tm_max_order` comes off the wire as
+/// `f64`, and a core holding a non-finite one must still compare equal to itself.
+impl PartialEq for TelegramSettings {
+    fn eq(&self, other: &Self) -> bool {
+        // Destructured for the reason [`crate::feed::GeneralSettings`]'s is.
+        let Self {
+            pump_channel,
+            pump_channels,
+            multi_channels,
+            more_then_1_channel,
+            listen_moon_channel,
+            use_moon_bl,
+            silent,
+            group_delay,
+            tm_send_only_share,
+            tm_panic_sell_closed,
+            tm_cancel_closed,
+            tm_cancel_buy_on_fill,
+            tm_send_first_sell,
+            tm_sell_if_master_not_filled,
+            tm_max_order,
+        } = self;
+        tm_max_order.total_cmp(&other.tm_max_order).is_eq()
+            && *pump_channel == other.pump_channel
+            && *pump_channels == other.pump_channels
+            && *multi_channels == other.multi_channels
+            && *more_then_1_channel == other.more_then_1_channel
+            && *listen_moon_channel == other.listen_moon_channel
+            && *use_moon_bl == other.use_moon_bl
+            && *silent == other.silent
+            && *group_delay == other.group_delay
+            && *tm_send_only_share == other.tm_send_only_share
+            && *tm_panic_sell_closed == other.tm_panic_sell_closed
+            && *tm_cancel_closed == other.tm_cancel_closed
+            && *tm_cancel_buy_on_fill == other.tm_cancel_buy_on_fill
+            && *tm_send_first_sell == other.tm_send_first_sell
+            && *tm_sell_if_master_not_filled == other.tm_sell_if_master_not_filled
+    }
 }
 
 /// Moonbot's "АвтоПокупка" page: where a buy signal may come from, and which messages count.

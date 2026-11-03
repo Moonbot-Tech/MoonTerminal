@@ -2,8 +2,8 @@
 //!
 //! Four collapsible sections, exactly as that dialog splits them: the engine, Remote, System and
 //! the hang watchdog. `moon_core::feed::SpecialSettings` carries what is live — the engine's own
-//! switches, its logging and its screenshot rules, out of `trading` and its `send_shots_config`
-//! sub-record.
+//! switches, its logging and its screenshot rules, out of `trading` and its `send_shots_config`,
+//! `orders_control` and `moonbot_config` sub-records, plus `auto_start_2.show_old_listing`.
 //!
 //! What stays disabled, and why. The Remote block's own identity — the bot token, its PIN and the
 //! UDP password, and the control VDS address the watchdog below it carries — is outside the
@@ -12,53 +12,32 @@
 //! have my own bot ID" names the identity, and "Слать отчёты о сделках" switches the reporting that
 //! identity does, neither of which the snapshot carries.
 //!
-//! Seven more rows, in the engine and System blocks, have no field in the snapshot at all: Custom
-//! IP and Auto DNS, Extended Debug Mode, the two exports, accepting beta versions, and "Old coins as
-//! New Listing" — whose control is named `cbGateOldListing`, for one venue's quirk, where the
-//! section's nearest free field is the autostart block's `show_old_listing`. A name that close is
-//! not a name that matches, so that row stays dead rather than being bound on a resemblance.
+//! Six more rows, in the engine and System blocks, have no field in the snapshot at all: Custom IP
+//! and Auto DNS, Extended Debug Mode, the two exports, and accepting beta versions.
 //!
 //! The iceberg pair belongs to `GeneralSettings`, which the compact popup edits: one wire field
 //! belongs to one area, or a write from either surface would put the other's frozen copy back.
 //!
-//! And two rows are held back by this window rather than by the wire: see "No trades on markets"
-//! below, and "Не проверять лимиты позиции" next.
+//! And one row is held back by this window rather than by the wire: see "No trades on markets"
+//! below.
 //!
-//! That row IS `trading.free_position_check`: Moonbot's own checkbox for it is named
-//! `cbFreePositionCheck`, and its hint describes position limits ("лимит позиции 5k. С этой опцией
-//! можно ставить лонг на 5k и шорт на 5k вместе"), not the orphaned-position cleanup the wire's doc
-//! claims. Three things still stand between that row and being live, and only the first blocks it
-//! today; the third is plain work.
+//! Three rows were dead until moonproto shipped a reference for every shared setting (9b616b9), and
+//! each is live now on what that reference settled rather than on a resemblance:
+//! "Не проверять лимиты позиции" is `free_position_check`, ticked meaning `true` — the reference
+//! and Moonbot's hint describe the same effect; "Old coins as New Listing" (`cbGateOldListing`) is
+//! `auto_start_2.show_old_listing`, which the reference now calls a Gate market-list option; and the
+//! connection selector is `binance_connection`. `moon_core::feed::SpecialSettings` carries the
+//! reasoning per field.
 //!
-//! The DIRECTION. The caption is negative ("НЕ проверять") and
-//! the field name is positive, so which way the box maps onto the flag is a guess — and the wrong
-//! guess silently stops a position-limit check for a trader who asked for one. Moonbot's own
-//! warning ("с включенной галкой возможны потери ордеров") and the wire's default of `false` both
-//! point at ticked-means-true, but pointing is not the same as knowing. One look at Moonbot with
-//! the box ticked settles it.
-//!
-//! And the field is MIRRORED: `absorb_client_settings_raw` lists it, so it is a two-route field
-//! like `sign_orders` below. That does not veto it — nine mirrored fields this window already
-//! writes are in the same table — but it does put the row under the hazard
-//! `feed::live::client_settings` states beside its one-way gate: a compact write issued while a
-//! safe-share packet is unechoed can revert what the two channels share.
-//!
-//! Third, `free_position_check` is not in `SpecialSettings` at all, so the projection and its
-//! applier have to gain it. That part is only work.
-//!
-//! Four fields of the `trading.orders_control` block behind these rows stay out.
-//!
-//! `sign_orders` is marked on the wire as a mirror of `ClientSettingsCommand::sign_orders`, so it
-//! travels on the compact channel too and writing it here would set two routes fighting over one
-//! field. `min_price` and `max_time` are this core's OWN watchdog thresholds — the snapshot carries
-//! no follower list, so the "Price, %" and "Time, s" columns Moonbot shows in its table are a
-//! watcher's view of other bots, not these — and no row of the worker-bot block sets them here.
-//!
-//! And `h_pos_control` ("hanging-position detection"), which has no caption of its own: the single
-//! switch in the worker-bot block says "следить за ОРДЕРАМИ", which is `orders_control.active`, and
-//! binding one checkbox to two flags would turn a feature on and off that nobody named. The cost is
-//! stated rather than hidden: "Report to Telegram" and "AutoSell" below it act only while hanging-
-//! position detection is on in the core, and this page cannot set it.
+//! In the hang watchdog, "Следить за ордерами этого бота" writes `orders_control.sign_orders` — the
+//! flag that marks this bot's orders for a watcher. It used to write `orders_control.active`, which
+//! the reference documents as a legacy mirror of a watcher-table row, so ticking it armed nothing
+//! (#1172). The compact channel carries a copy of `sign_orders` that the core does not apply, so
+//! this snapshot is its one writer. `active`, `min_price`, `max_time` and `h_pos_control` stay out:
+//! all four are legacy mirrors the watchdog API (`client.watchdogs()`) now owns, and the watcher's
+//! address and its bot table belong to that API too (#1173). The cost is stated rather than hidden:
+//! "Report to Telegram" and "AutoSell" act only while position control is on in the core, and this
+//! page cannot set it.
 //!
 //! The follower table at the bottom is drawn as an empty frame with its columns: the terminal has
 //! no rows to put in it, and inventing any would state a fleet this window has not read.
@@ -75,8 +54,8 @@ use crate::shell::parse_num;
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, caption, dropdown, field, flag_dead, flag_live, hint, link, list_box, num, slider,
-    text_block,
+    action, caption, choice_live, dropdown, field, flag_dead, flag_live, hint, link, list_box, num,
+    slider, text_block,
 };
 
 /// The writes of the rows this page draws but the snapshot does not carry.
@@ -124,6 +103,39 @@ const DEAD_MINUTES: (f32, f32, f32) = (0.0, 240.0, 1.0);
 
 /// Value shown where Moonbot prints a number this terminal has not read.
 const NO_VALUE: &str = "—";
+
+/// Highest REST connection method the wire documents: 0 is Moonbot's "Original", 1..=3 its
+/// "Method 2" to "Method 4".
+const CONNECTION_METHODS: u8 = 3;
+
+/// The connection selector's items, in Moonbot's order.
+///
+/// Built per render rather than held: four short labels, and the selector only borrows them.
+fn connection_options() -> Vec<(u8, SharedString, SharedString)> {
+    (0..=CONNECTION_METHODS)
+        .map(|ordinal| {
+            let label = if ordinal == 0 {
+                t!("core_expert.sp_connection_original").to_string()
+            } else {
+                t!("core_expert.sp_connection_method", n = ordinal + 1).to_string()
+            };
+            (
+                ordinal,
+                SharedString::from(format!("exp-sp-connection-{ordinal}")),
+                SharedString::from(label),
+            )
+        })
+        .collect()
+}
+
+/// The core's connection method as the selector's ordinal.
+///
+/// A value no item names — a negative, or one past `u8` — shows as `#255` rather than being
+/// clamped onto a real method: `choice_live` prints an unknown ordinal raw, and staging nothing
+/// until an item is picked keeps the core's own value on the wire.
+fn connection_ordinal(value: i32) -> u8 {
+    u8::try_from(value).unwrap_or(u8::MAX)
+}
 
 /// Moonbot's four sections on this page, in its own order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -362,10 +374,12 @@ pub(super) fn body(
                                 "core_expert.sp_iceberg_buys",
                                 view,
                             ))
-                            .child(flag_dead(
+                            .child(flag_live(
                                 "exp-sp-no-pos-limit",
                                 "core_expert.sp_no_position_limit",
+                                sp.free_position_check,
                                 view,
+                                |d, on| d.special.free_position_check = on,
                             ))
                             .child(
                                 h_flex()
@@ -426,6 +440,14 @@ pub(super) fn body(
                                 sp.use_websocket_api,
                                 view,
                                 |d, on| d.special.use_websocket_api = on,
+                            ))
+                            // Moonbot's own neighbour of the WebSocket row (`cbHLFastIOC`).
+                            .child(flag_live(
+                                "exp-sp-hl-fast-ioc",
+                                "core_expert.sp_hl_fast_ioc",
+                                sp.use_hl_fast_ioc,
+                                view,
+                                |d, on| d.special.use_hl_fast_ioc = on,
                             )),
                     )
                     .child(
@@ -466,10 +488,26 @@ pub(super) fn body(
                                 view,
                                 |d, on| d.special.auto_reduce_order = on,
                             ))
-                            .child(flag_dead(
+                            .child(flag_live(
                                 "exp-sp-old-coins",
                                 "core_expert.sp_old_as_new",
+                                sp.show_old_listing,
                                 view,
+                                |d, on| d.special.show_old_listing = on,
+                            ))
+                            .child(flag_live(
+                                "exp-sp-margin-borrow",
+                                "core_expert.sp_margin_borrow",
+                                sp.auto_margin_borrow,
+                                view,
+                                |d, on| d.special.auto_margin_borrow = on,
+                            ))
+                            .child(flag_live(
+                                "exp-sp-margin-transfer",
+                                "core_expert.sp_margin_transfer",
+                                sp.auto_margin_transfer,
+                                view,
+                                |d, on| d.special.auto_margin_transfer = on,
                             )),
                     )
                     .child(
@@ -571,11 +609,14 @@ pub(super) fn body(
                         v_flex()
                             .gap(design::ui_px(cx, 2.0))
                             .child(hint(t!("core_expert.sp_connection").to_string(), p, cx))
-                            .child(dropdown(
+                            .child(choice_live(
                                 "exp-sp-connection",
-                                NO_VALUE.to_string(),
-                                false,
+                                &connection_options(),
+                                connection_ordinal(sp.binance_connection),
+                                true,
+                                view,
                                 cx,
+                                |d, v| d.special.binance_connection = i32::from(v),
                             )),
                     )
                     .child(
@@ -968,9 +1009,9 @@ pub(super) fn body(
                     .child(flag_live(
                         "exp-sp-watch-orders",
                         "core_expert.sp_watch_orders",
-                        sp.orders_control_active,
+                        sp.sign_orders,
                         view,
-                        |d, on| d.special.orders_control_active = on,
+                        |d, on| d.special.sign_orders = on,
                     ))
                     .child(caption("Control VDS IP".to_string(), false, p, cx))
                     .children(num(store, "exp-sp-vds-ip", 128.0, false, cx))

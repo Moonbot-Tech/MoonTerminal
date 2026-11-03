@@ -341,6 +341,7 @@ impl CoreExpertView {
             profit,
             hotkeys_sub: self.hotkeys_sub,
             special_section: self.special_section,
+            view_section: self.view_section,
             selected_channel: self.selected_channel,
             bl_reveal,
         };

@@ -24,7 +24,7 @@ use crate::feed::{
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
     CoreConfigRejection, CoreHotkeyAction, CoreHotkeyLayout, CoreStratButtons, GeneralSettings,
     GestureSettings, InterfaceSettings, LeverageSettings, ManualSettings, OrderRulesSettings,
-    SignalsSettings, SpecialSettings, TelegramSettings, day_fraction_to_minutes,
+    SignalsSettings, SpecialSettings, TelegramSettings, ViewSettings, day_fraction_to_minutes,
     minutes_to_day_fraction,
 };
 
