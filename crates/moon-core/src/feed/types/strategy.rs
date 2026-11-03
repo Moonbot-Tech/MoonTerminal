@@ -32,6 +32,10 @@ pub enum EngineActionKind {
         to: WalletKind,
     },
     ReloadOrderBook,
+    /// The core's full strategy list was asked for and adopted in place of this client's
+    /// (moonproto `request_snapshot`, MoonBot 7.72 L7 and later). The terminal does not send this
+    /// request yet; the variant exists so the projection of moonproto's kinds stays total.
+    RequestStrategiesSnapshot,
 }
 
 /// Result of an asynchronous Engine action on the core.

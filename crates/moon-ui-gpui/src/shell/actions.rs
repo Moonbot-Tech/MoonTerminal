@@ -594,6 +594,9 @@ fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
         )
         .to_string(),
         K::ReloadOrderBook => t!("shell.engine_action.reload_order_book").to_string(),
+        K::RequestStrategiesSnapshot => {
+            t!("shell.engine_action.request_strategies_snapshot").to_string()
+        }
     }
 }
 

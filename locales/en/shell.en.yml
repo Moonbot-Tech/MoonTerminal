@@ -495,6 +495,7 @@ shell.engine_action.ma_on: "MA mode: on"
 shell.engine_action.ma_off: "MA mode: off"
 shell.engine_action.transfer: "Transfer %{qty} %{asset}: %{from} → %{to}"
 shell.engine_action.reload_order_book: "Order book reload"
+shell.engine_action.request_strategies_snapshot: "Strategy list reload from the core"
 
 # --- Result toasts for a coin-menu strategy-blacklist edit (the menu has no window of its own) ---
 shell.strat_edit_sent: "Blacklist edit for %{coin} sent"

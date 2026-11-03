@@ -47,6 +47,7 @@ pub(in crate::feed::live) fn engine_action_result(
             to: wallet_kind_from_proto(*to),
         },
         K::ReloadOrderBook => EngineActionKind::ReloadOrderBook,
+        K::RequestStrategiesSnapshot => EngineActionKind::RequestStrategiesSnapshot,
     };
     EngineActionResult {
         kind,
