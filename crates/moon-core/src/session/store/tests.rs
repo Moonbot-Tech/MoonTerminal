@@ -1265,6 +1265,68 @@ fn telegram_receipts_advance_the_revision_and_the_freshness_latch() {
     );
 }
 
+/// The observer snapshot's epoch must move exactly when its row ids stop being current, and a
+/// request in flight must settle as lost then — otherwise the expert window would send an edit with
+/// a previous session's ids, or wait forever on an answer that cannot come.
+///
+/// Mutations caught: bumping the epoch on every receipt (the window would drop the user's edit on
+/// every push), never bumping it on a stale link (old ids survive a reconnect), and leaving
+/// `pending` set across a disconnect (the banner hangs).
+#[test]
+fn watchdog_epoch_moves_with_the_session_and_settles_lost_requests() {
+    use crate::feed::{
+        CoreServiceResult, CoreWatchdogState, ServiceAction, ServiceDomain, ServiceVerdict,
+    };
+    let mut core = CoreData::new();
+    let snapshot = std::sync::Arc::new(CoreWatchdogState {
+        revision: 4,
+        available: true,
+        ..Default::default()
+    });
+    core.apply(FeedMsg::Watchdog(Some(snapshot.clone())));
+    let epoch = core.watchdog_epoch;
+    assert!(core.watchdog_fresh);
+    core.apply(FeedMsg::Watchdog(Some(snapshot.clone())));
+    assert_eq!(core.watchdog_epoch, epoch, "a receipt is not a new session");
+
+    core.apply(FeedMsg::ServiceRequest {
+        action: ServiceAction::WatchdogApply,
+        sent: Ok(11),
+    });
+    // Someone else's acknowledgement updates nothing the banner reads.
+    let rev = core.watchdog_rev;
+    core.apply(FeedMsg::ServiceResult(CoreServiceResult {
+        domain: ServiceDomain::Watchdog,
+        request_id: Some(99),
+        applied: true,
+        error: String::new(),
+    }));
+    assert_eq!(core.watchdog_rev, rev);
+    assert!(core.service.watchdog.pending.is_some());
+
+    core.apply(FeedMsg::Status(ConnStatus::Disconnected));
+    assert!(!core.watchdog_fresh);
+    assert_eq!(core.watchdog_epoch, epoch + 1);
+    assert_eq!(
+        core.service.watchdog.outcome,
+        Some((ServiceAction::WatchdogApply, ServiceVerdict::Lost))
+    );
+    assert!(core.watchdog.is_some(), "a stale snapshot stays on screen");
+    let rev = core.watchdog_rev;
+    core.apply(FeedMsg::Status(ConnStatus::Connecting));
+    core.apply(FeedMsg::WatchdogStale);
+    assert_eq!(core.watchdog_epoch, epoch + 1, "one outage is one epoch");
+    assert_eq!(core.watchdog_rev, rev);
+
+    core.apply(FeedMsg::Watchdog(Some(snapshot)));
+    core.begin_connection_attempt();
+    assert!(
+        core.watchdog.is_none(),
+        "a replacement core starts with none"
+    );
+    assert_eq!(core.watchdog_epoch, epoch + 2);
+}
+
 /// The folder tree follows the same rule as the diagnostics beside it, and for the same reason: a
 /// replacement feed may point at a MoonBot that cannot hold an empty folder at all. Carrying
 /// `supported` forward would leave the window promising a persistence the new core does not offer.

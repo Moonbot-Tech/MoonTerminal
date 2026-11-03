@@ -901,6 +901,8 @@ fn special_base() -> SharedConfig {
     shots.time_scale = 15;
     shots.price_scale = 16;
     let t = &mut cfg.trading;
+    // The observer settings the watchdog API owns (#1173), off their defaults so the assertion
+    // that this page leaves them alone can actually fail.
     t.h_pos_black_list_text = "BNB, USDC".to_string();
     let oc = &mut t.orders_control;
     oc.liq_control = !oc.liq_control;
@@ -909,8 +911,7 @@ fn special_base() -> SharedConfig {
     oc.sign_orders = !oc.sign_orders;
     oc.h_pos_report = !oc.h_pos_report;
     oc.h_pos_auto_sell = !oc.h_pos_auto_sell;
-    // The four legacy watcher-row mirrors this page must never write, off their defaults so the
-    // assertion that it leaves them alone can actually fail.
+    // The four legacy watcher-row mirrors this page must never write either.
     oc.active = !oc.active;
     oc.h_pos_control = !oc.h_pos_control;
     oc.min_price = 0.25;
@@ -991,6 +992,34 @@ fn a_special_edit_leaves_the_other_trading_pages_alone() {
     assert_eq!(sent_oc.h_pos_control, base_oc.h_pos_control);
     assert_eq!(sent_oc.min_price, base_oc.min_price);
     assert_eq!(sent_oc.max_time, base_oc.max_time);
+}
+
+/// The observer settings travel back exactly as the core holds them, whatever the staged page
+/// says: the watchdog API is their one writer (#1173).
+///
+/// Mutation: write any of the four from the projection again. An OK on an unrelated Special row
+/// would then carry the page's frozen copy over a value the observer block just applied.
+#[test]
+fn a_special_edit_never_writes_the_observer_settings() {
+    let mut base = special_base();
+    base.trading.h_pos_black_list_text = "SOL".to_string();
+    let mut wanted = core_config_from_proto(&base);
+    wanted.special.max_orders = 42;
+    // The core changed its observer settings after the page was staged.
+    base.trading.h_pos_black_list_text = "SOL, XRP".to_string();
+    base.trading.orders_control.sign_orders = !base.trading.orders_control.sign_orders;
+
+    let mut sequence = SharedConfigSequence::new();
+    sequence.enqueue(wanted, FieldMask::EMPTY.with_special());
+    let sent = next_config(&mut sequence, &base);
+
+    assert_eq!(sent.trading.max_orders, 42);
+    assert_eq!(sent.trading.h_pos_black_list_text, "SOL, XRP");
+    let sent_oc = &sent.trading.orders_control;
+    let base_oc = &base.trading.orders_control;
+    assert_eq!(sent_oc.sign_orders, base_oc.sign_orders);
+    assert_eq!(sent_oc.h_pos_report, base_oc.h_pos_report);
+    assert_eq!(sent_oc.h_pos_auto_sell, base_oc.h_pos_auto_sell);
 }
 
 /// The mask decides, not the projection: the compact popup's mask must not carry this page.

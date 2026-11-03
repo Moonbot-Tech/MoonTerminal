@@ -901,6 +901,9 @@ pub enum CoreCmd {
     /// goals are editing right now, and one arm delegating to `feed/live/telegram.rs` keeps the
     /// textual footprint there to a few lines.
     Telegram(TelegramCmd),
+    /// One action on the core's observers ("Защита от зависаний"). See [`WatchdogCmd`]; nested
+    /// for the reason [`Self::Telegram`] is, with the handler in `feed/live/watchdog.rs`.
+    Watchdog(WatchdogCmd),
 }
 
 /// Complete market-role assignment published independently of the bounded command backlog.

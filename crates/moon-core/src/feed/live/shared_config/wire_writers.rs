@@ -175,16 +175,19 @@ fn apply_general(cfg: &mut SharedConfig, g: &GeneralSettings) {
 /// Apply Moonbot's "Специальные" page to `trading`, its `send_shots_config`, `orders_control` and
 /// `moonbot_config` sub-records, and `auto_start_2.show_old_listing`.
 ///
-/// Forty-two fields across those records: everything else in that section — including its
+/// Thirty-eight fields across those records: everything else in that section — including its
 /// `unknown_tail`, the exits [`apply_general`] owns, the leverage block [`apply_leverage`] owns and
 /// the rest of `auto_start_2`, which [`apply_auto_start`] writes field by field — travels back
 /// untouched.
 ///
-/// `orders_control.sign_orders` IS written here. The wire mirrors it on the compact channel, but
-/// the core's compact handler does not apply that copy (moonproto 9b616b9, `docs/ui.md`), so this
-/// is its only writer. The four `orders_control` fields left out — `active`, `min_price`,
-/// `max_time`, `h_pos_control` — are legacy mirrors of a watcher-table row that the watchdog API
-/// now owns; writing them would change nothing the core acts on.
+/// Nothing of the hang watchdog is written here (#1173). `orders_control.sign_orders`,
+/// `h_pos_report`, `h_pos_auto_sell` and `trading.h_pos_black_list_text` are the settings the
+/// core's observer API carries as `sign_orders` / `report` / `auto_sell` / `blacklist`, and the
+/// expert window edits them through that API (`client.watchdogs()`), so a second writer here would
+/// let an OK on any Special row put back a value the observer block just changed. Left alone, the
+/// packet carries what the core holds at build time — the rule [`apply_general`] follows for the
+/// coin blacklist. `active`, `min_price`, `max_time` and `h_pos_control` are legacy mirrors of an
+/// observer row and are not written either.
 fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
     cfg.trading.auto_start_2.show_old_listing = s.show_old_listing;
     let mb = &mut cfg.trading.moonbot_config;
@@ -215,14 +218,10 @@ fn apply_special(cfg: &mut SharedConfig, s: &SpecialSettings) {
     t.sell_x2_level = s.sell_x2_level;
     t.no_trades_markets_text = s.no_trades_markets_text.clone();
     t.multi_commands = s.multi_commands;
-    t.h_pos_black_list_text = s.h_pos_black_list_text.clone();
     let oc = &mut t.orders_control;
     oc.liq_control = s.liq_control;
     oc.ignore_replacing_bug = s.ignore_replacing_bug;
     oc.ignore_protection = s.ignore_protection;
-    oc.sign_orders = s.sign_orders;
-    oc.h_pos_report = s.h_pos_report;
-    oc.h_pos_auto_sell = s.h_pos_auto_sell;
     let shots = &mut t.send_shots_config;
     shots.may_send = s.send_shots;
     shots.profit_abs = s.profit_abs;

@@ -53,6 +53,7 @@ mod render;
 mod sidebar;
 mod sync;
 mod tabs;
+mod watchdog;
 mod widgets;
 
 use std::time::Instant;
@@ -246,6 +247,8 @@ pub struct CoreExpertView {
     emptied: std::collections::HashSet<&'static str>,
     /// Coin revealed on the General page blacklist. Set by an exact-core open.
     bl_highlight: Option<crate::shell::CoinHighlight>,
+    /// The Special page's hang-watchdog block: its own edit and requests, outside the page OK sends.
+    watchdog: watchdog::WatchdogBlock,
     focus: FocusHandle,
 }
 
@@ -357,6 +360,7 @@ impl CoreExpertView {
             mixed: MixedScope::default(),
             emptied: std::collections::HashSet::new(),
             bl_highlight: None,
+            watchdog: watchdog::WatchdogBlock::default(),
             focus: cx.focus_handle(),
         };
         match bind {
