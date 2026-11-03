@@ -49,7 +49,9 @@ mod commit;
 mod cores;
 mod mixed;
 mod pages;
+mod remote;
 mod render;
+mod service;
 mod sidebar;
 mod sync;
 mod tabs;
@@ -249,6 +251,8 @@ pub struct CoreExpertView {
     bl_highlight: Option<crate::shell::CoinHighlight>,
     /// The Special page's hang-watchdog block: its own edit and requests, outside the page OK sends.
     watchdog: watchdog::WatchdogBlock,
+    /// The Special page's Remote block: the outgoing bot and channel, also outside the page OK sends.
+    remote: remote::RemoteBlock,
     focus: FocusHandle,
 }
 
@@ -361,6 +365,7 @@ impl CoreExpertView {
             emptied: std::collections::HashSet::new(),
             bl_highlight: None,
             watchdog: watchdog::WatchdogBlock::default(),
+            remote: remote::RemoteBlock::default(),
             focus: cx.focus_handle(),
         };
         match bind {

@@ -317,7 +317,8 @@ pub struct CoreData {
     /// edit built on an earlier epoch carries row ids the core no longer knows and is dropped.
     pub watchdog_epoch: u64,
     /// The newest tracked service-settings request per block and how the previous one ended,
-    /// observed through `watchdog_rev` (and, once #1174 lands, a Telegram counter beside it).
+    /// observed through `watchdog_rev` for the observers and `telegram_service_rev` for the
+    /// outgoing bot.
     pub service: crate::feed::ServiceTracks,
     /// The core's folder tree, empty folders included, observed through `folders_rev`.
     ///
@@ -462,6 +463,11 @@ pub struct CoreData {
     pub telegram_rev: u64,
     /// False until a real snapshot arrives, and again from the moment contact is lost.
     pub telegram_fresh: bool,
+    /// Bumped whenever `service.telegram` changes — an outgoing-bot request registered, answered or
+    /// lost. Separate from `telegram_rev` on purpose: that one is the Settings window's "sent,
+    /// waiting" receipt, cleared by any new SNAPSHOT. The snapshot an acknowledgement carries still
+    /// moves it, as any pushed snapshot does; the request's own bookkeeping does not.
+    pub telegram_service_rev: u64,
     /// Advances when the reported folder tree actually differs.
     pub folders_rev: u64,
     /// Advances when the polled startup snapshot reports different PROGRESS, per
@@ -635,6 +641,7 @@ impl CoreData {
             problems_rev: 0,
             telegram_rev: 0,
             telegram_fresh: false,
+            telegram_service_rev: 0,
             watchdog: None,
             watchdog_fresh: false,
             watchdog_rev: 0,
@@ -1033,6 +1040,9 @@ impl CoreData {
                 // The same latch for the observers, for the same reason; it moves their epoch and
                 // settles their pending requests only on the first such message.
                 if !matches!(self.status, ConnStatus::Ready) {
+                    if self.service.telegram.note_lost() {
+                        self.telegram_service_rev = self.telegram_service_rev.wrapping_add(1);
+                    }
                     self.forget_watchdog(false);
                 }
             }
@@ -1396,6 +1406,10 @@ impl CoreData {
             }
             FeedMsg::TelegramStale => {
                 // The snapshot is KEPT so the panel can render it muted; only its freshness dies.
+                // An outgoing-bot request in flight dies with the link: nothing replays it.
+                if self.service.telegram.note_lost() {
+                    self.telegram_service_rev = self.telegram_service_rev.wrapping_add(1);
+                }
                 self.telegram_fresh = false;
                 self.telegram_rev = self.telegram_rev.wrapping_add(1);
             }
@@ -1414,13 +1428,14 @@ impl CoreData {
                 self.forget_watchdog(false);
             }
             FeedMsg::ServiceRequest { action, sent } => {
-                if self.service.get_mut(action.domain()).note_sent(action, sent) {
-                    self.watchdog_rev = self.watchdog_rev.wrapping_add(1);
+                let domain = action.domain();
+                if self.service.get_mut(domain).note_sent(action, sent) {
+                    self.bump_service_rev(domain);
                 }
             }
             FeedMsg::ServiceResult(result) => {
                 if self.service.get_mut(result.domain).note_result(&result) {
-                    self.watchdog_rev = self.watchdog_rev.wrapping_add(1);
+                    self.bump_service_rev(result.domain);
                 }
             }
             FeedMsg::Folders(folders) => {
@@ -1611,8 +1626,21 @@ impl CoreData {
         }
     }
 
+    /// Repaint whatever surface reads the track of `domain`: the observer block on `watchdog_rev`,
+    /// the Remote block on `telegram_service_rev`.
+    fn bump_service_rev(&mut self, domain: crate::feed::ServiceDomain) {
+        match domain {
+            crate::feed::ServiceDomain::Watchdog => {
+                self.watchdog_rev = self.watchdog_rev.wrapping_add(1);
+            }
+            crate::feed::ServiceDomain::Telegram => {
+                self.telegram_service_rev = self.telegram_service_rev.wrapping_add(1);
+            }
+        }
+    }
+
     /// The observer snapshot stops describing the current session: muted — or dropped when
-    /// `drop_snapshot` — its epoch over, and every pending service request settled as lost.
+    /// `drop_snapshot` — its epoch over, and a pending observer request settled as lost.
     ///
     /// Idempotent, so every non-Ready status may call it: a backoff of Connecting messages moves
     /// the epoch and the revision only on the first one.
@@ -1625,7 +1653,7 @@ impl CoreData {
         // stale, and a replacement feed passes through a non-Ready status first, so counting the
         // drop as well would move the epoch twice for one session change.
         let ended = self.watchdog_fresh;
-        let mut changed = self.service.note_lost();
+        let mut changed = self.service.watchdog.note_lost();
         if ended {
             self.watchdog_epoch = self.watchdog_epoch.wrapping_add(1);
             self.watchdog_fresh = false;

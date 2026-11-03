@@ -1,4 +1,5 @@
-//! Moon-core-owned mirror of the core's built-in Telegram reader state.
+//! Moon-core-owned mirror of the core's built-in Telegram reader state and its outgoing bot
+//! (own-bot switch, token presence, channel binding and PIN).
 //!
 //! Field-for-field the same shape as moonproto's `TelegramState` family, but with no moonproto
 //! import and no serde: the UI crate has no moonproto dependency, and these types never hit the
@@ -6,7 +7,7 @@
 //! layer stays transport-agnostic like the rest of `feed::types`.
 //!
 //! Debug on the state, service and auth-details structs is hand-written and omits account data, QR
-//! tokens and proxy secrets. A derived `Debug` would put them into any `{:?}`.
+//! tokens, proxy secrets and the channel PIN. A derived `Debug` would put them into any `{:?}`.
 
 use std::fmt;
 
@@ -38,6 +39,18 @@ pub struct CoreTelegramState {
     pub client_error: Option<String>,
     /// Absent when disabled or disconnected from the service.
     pub service: Option<CoreTelegramService>,
+    /// The core accepts the outgoing-bot and channel actions (MoonBot 7.72 L6 with service
+    /// settings). False on an older core, whose snapshot simply lacks the fields below.
+    pub settings_supported: bool,
+    /// Outgoing messages go through the trader's own bot rather than MoonBot's shared one.
+    pub own_bot: bool,
+    /// A token for the own bot is saved. The token itself never comes back.
+    pub token_set: bool,
+    /// The channel the outgoing bot is bound to, once a PIN was sent there.
+    pub channel_id: Option<i64>,
+    pub channel_name: Option<String>,
+    /// The PIN to send into the channel to bind it. Sensitive: never in `Debug`, never logged.
+    pub channel_pin: Option<String>,
 }
 
 impl fmt::Debug for CoreTelegramState {
@@ -46,6 +59,7 @@ impl fmt::Debug for CoreTelegramState {
             .field("enabled", &self.enabled)
             .field("service_online", &self.service_online)
             .field("state_supported", &self.state_supported)
+            .field("settings_supported", &self.settings_supported)
             .finish_non_exhaustive()
     }
 }
@@ -192,15 +206,42 @@ pub enum TelegramCmd {
     },
     ResendCode,
     Logout,
+    /// Route outgoing messages through the trader's own bot (`own_bot`), and replace its token when
+    /// `token` is `Some`. `None` keeps the saved token; `Some("")` clears it.
+    SetOutgoingBot {
+        own_bot: bool,
+        token: Option<String>,
+    },
+    /// Have the core generate the PIN that binds a channel; it arrives in the snapshot.
+    GenerateChannelPin,
+    /// Unbind the channel the outgoing bot posts to.
+    ResetChannel,
 }
 
 impl TelegramCmd {
+    /// The service action whose acknowledgement answers this command, or `None` for the reader
+    /// and login intents, which are observed through the snapshot alone.
+    ///
+    /// The tracked ones are also LIVE actions (`feed::live::stale`): a channel reset or a token
+    /// replaced minutes after the click, once a lost link came back, is not what was asked for.
+    pub fn tracked_action(&self) -> Option<super::ServiceAction> {
+        match self {
+            Self::SetOutgoingBot { .. } => Some(super::ServiceAction::TelegramOutgoingBot),
+            Self::GenerateChannelPin => Some(super::ServiceAction::TelegramChannelPin),
+            Self::ResetChannel => Some(super::ServiceAction::TelegramResetChannel),
+            _ => None,
+        }
+    }
+
     /// Snake_case MoonProto `MoonTelegram` method this command maps to.
     ///
     /// Stable and payload-free so a log line can name the action without printing the secret the
     /// variant carries.
     pub fn name(&self) -> &'static str {
         match self {
+            Self::SetOutgoingBot { .. } => "set_outgoing_bot",
+            Self::GenerateChannelPin => "generate_channel_pin",
+            Self::ResetChannel => "reset_channel",
             Self::Refresh => "refresh",
             Self::SetEnabled(_) => "set_enabled",
             Self::SetProxy(_) => "set_proxy",

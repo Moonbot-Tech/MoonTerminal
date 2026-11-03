@@ -120,8 +120,10 @@ pub(super) fn is_live_action(cmd: &CoreCmd) -> bool {
         | CoreCmd::ChartAlertDelete { .. }
         | CoreCmd::SetChartText { .. }
         | CoreCmd::TestProblem { .. }
-        | CoreCmd::RefreshProblems
-        | CoreCmd::Telegram(_) => false,
+        | CoreCmd::RefreshProblems => false,
+        // The reader and login intents are desired state the next snapshot answers; the outgoing-bot
+        // and channel actions are one-shot changes a late delivery would make at the wrong moment.
+        CoreCmd::Telegram(cmd) => cmd.tracked_action().is_some(),
     }
 }
 

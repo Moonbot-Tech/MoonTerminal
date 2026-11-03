@@ -210,3 +210,17 @@ fn resend_state_requires_both_a_next_method_and_a_deadline() {
         assert!(matches!(resend_state(&ready, NOW), ResendState::Ready));
     }
 }
+
+/// The channel PIN binds a channel to the core's bot; a `{:?}` in any log line must not print it.
+///
+/// Mutation: derive `Debug` on `CoreTelegramState`. The PIN would then reach every log that formats
+/// a snapshot.
+#[test]
+fn debug_never_prints_the_channel_pin() {
+    let state = CoreTelegramState {
+        settings_supported: true,
+        channel_pin: Some("PRIVATE-PIN-4711".to_string()),
+        ..Default::default()
+    };
+    assert!(!format!("{state:?}").contains("PRIVATE-PIN-4711"));
+}

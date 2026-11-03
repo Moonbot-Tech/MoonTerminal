@@ -1,12 +1,9 @@
 use moon_core::feed::{
-    ServiceAction, ServiceTrack, ServiceVerdict, WatchdogEditError, WatchdogEntryEdit,
-    WatchdogSettingsEdit,
+    ServiceAction, ServiceVerdict, WatchdogEditError, WatchdogEntryEdit, WatchdogSettingsEdit,
 };
 
 use super::super::pages::watchdog_ids as ids;
-use super::{
-    Awaiting, Verdict, WatchdogBlock, invalid_row, stage_input, verdict, verdict_takes_edit,
-};
+use super::{WatchdogBlock, invalid_row, stage_input, verdict_takes_edit};
 
 fn edit_with_row() -> WatchdogSettingsEdit {
     WatchdogSettingsEdit {
@@ -127,37 +124,4 @@ fn a_local_refusal_names_its_row() {
         invalid_row(&WatchdogEditError::NewRowCredentials { index: 2 }),
         Some(2)
     );
-}
-
-/// The banner reports only what THIS window sent, and waits while its request is open.
-///
-/// Mutation: draw the track's outcome unconditionally. Opening the window would then greet the
-/// trader with a verdict on a request from an earlier session, or from another terminal.
-#[test]
-fn the_banner_reports_only_this_windows_requests() {
-    let mut track = ServiceTrack::default();
-    track.note_sent(ServiceAction::WatchdogApply, Ok(1));
-    track.note_result(&moon_core::feed::CoreServiceResult {
-        domain: moon_core::feed::ServiceDomain::Watchdog,
-        request_id: Some(1),
-        applied: true,
-        error: String::new(),
-    });
-    let mut block = WatchdogBlock::default();
-    assert!(verdict(&block, &track).is_none());
-    block.sent_here = true;
-    block.awaiting = Some(Awaiting {
-        action: ServiceAction::WatchdogRemove,
-        sent_before: track.sent,
-        removed: Some("core-1".to_string()),
-    });
-    assert!(matches!(verdict(&block, &track), Some(Verdict::Waiting)));
-    block.awaiting = None;
-    assert!(matches!(
-        verdict(&block, &track),
-        Some(Verdict::Settled(
-            ServiceAction::WatchdogApply,
-            ServiceVerdict::Applied
-        ))
-    ));
 }

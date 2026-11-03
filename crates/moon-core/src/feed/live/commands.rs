@@ -438,9 +438,9 @@ pub(super) fn drain_commands(
     let mut drained = 0usize;
     loop {
         // A live action that waited out a lost connection is dropped here, never delivered late.
-        // An observer action dropped this way is reported, so its banner stops waiting.
+        // A tracked service action dropped this way is reported, so its banner stops waiting.
         let mut on_drop = |cmd: &CoreCmd, reason: super::stale::Stale| {
-            if let Some(msg) = super::watchdog::dropped(cmd, reason.text()) {
+            if let Some(msg) = super::service::dropped(cmd, reason.text()) {
                 let _ = tx.send(msg);
             }
         };
@@ -1291,7 +1291,12 @@ pub(super) fn drain_commands(
                     crate::feed::core_label(server.id)
                 );
             }
-            Ok(CoreCmd::Telegram(cmd)) => telegram::handle(client, server.id, cmd),
+            Ok(CoreCmd::Telegram(cmd)) => {
+                // An outgoing-bot or channel action reports its request id, as an observer one does.
+                if let Some(msg) = telegram::handle(client, server.id, cmd) {
+                    let _ = tx.send(msg);
+                }
+            }
             Ok(CoreCmd::Watchdog(cmd)) => {
                 // Sent on the feed channel the moment the request is queued: its acknowledgement
                 // cannot exist before that, and travels the same channel later, so the store

@@ -361,7 +361,8 @@ pub enum FeedMsg {
     Watchdog(Option<std::sync::Arc<CoreWatchdogState>>),
     /// The retained observer snapshot belongs to a connection that dropped: keep it on screen,
     /// muted, but treat nothing in it — row ids above all — as actionable until a new one
-    /// arrives. Also settles every pending service request as lost.
+    /// arrives. Also settles a pending observer request as lost (`TelegramStale` does the same for
+    /// the outgoing-bot requests).
     WatchdogStale,
     /// A tracked service-settings request left this terminal as `Ok(request_id)`, or could not
     /// (`Err` carries a technical token for the log). Sent by the feed BEFORE any answer to it can

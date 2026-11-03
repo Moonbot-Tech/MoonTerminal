@@ -21,16 +21,17 @@ use moon_ui::{
 use rust_i18n::t;
 
 use moon_core::feed::{
-    CoreWatchdogEntry, CoreWatchdogState, ServiceAction, ServiceTrack, ServiceVerdict,
-    WATCHDOG_MIN_CREDENTIAL_CHARS, WatchdogEditError, WatchdogEntryEdit, WatchdogSettingsEdit,
-    WatchdogStatus,
+    CoreWatchdogEntry, CoreWatchdogState, ServiceTrack, WATCHDOG_MIN_CREDENTIAL_CHARS,
+    WatchdogEditError, WatchdogEntryEdit, WatchdogSettingsEdit, WatchdogStatus,
 };
 
 use crate::design;
 
 use super::super::super::CoreExpertView;
-use super::super::super::watchdog::{Verdict, WatchdogBlock, verdict};
+use super::super::super::service::verdict;
+use super::super::super::watchdog::WatchdogBlock;
 use super::super::super::widgets::{caption, hint, text_block};
+use super::service::verdict_alert;
 
 /// Ids of the block's editors. The page owns its ids, as every page here does, so they carry its
 /// prefix; the window builds the editors under them (`CoreExpertView::build_watchdog_inputs`).
@@ -227,7 +228,7 @@ fn notices(wd: &WatchdogCtx<'_>, p: MoonPalette, cx: &App) -> Vec<AnyElement> {
                 .into_any_element(),
         ),
         Some(_) if !wd.live => out.push(
-            MoonAlert::warning("exp-sp-wd-stale", t!("core_expert.wd_stale").to_string())
+            MoonAlert::warning("exp-sp-wd-stale", t!("core_expert.svc_stale").to_string())
                 .into_any_element(),
         ),
         Some(s) => {
@@ -261,55 +262,23 @@ fn notices(wd: &WatchdogCtx<'_>, p: MoonPalette, cx: &App) -> Vec<AnyElement> {
     }
     if wd.block.queue_failed {
         out.push(
-            MoonAlert::error("exp-sp-wd-queue", t!("core_expert.wd_not_sent").to_string())
-                .into_any_element(),
+            MoonAlert::error(
+                "exp-sp-wd-queue",
+                t!("core_expert.svc_not_sent").to_string(),
+            )
+            .into_any_element(),
         );
     }
     if let Some(error) = &wd.block.invalid {
         out.push(MoonAlert::error("exp-sp-wd-invalid", invalid_text(error)).into_any_element());
     }
-    if let Some(v) = wd.track.and_then(|track| verdict(wd.block, track)) {
-        out.push(verdict_alert(&v));
+    if let Some(v) = wd
+        .track
+        .and_then(|track| verdict(wd.block.sent_here, wd.block.awaiting.is_some(), track))
+    {
+        out.push(verdict_alert("exp-sp-wd-verdict", &v));
     }
     out
-}
-
-/// The banner for this window's last request.
-fn verdict_alert(v: &Verdict<'_>) -> AnyElement {
-    const ID: &str = "exp-sp-wd-verdict";
-    match v {
-        Verdict::Waiting => MoonAlert::info(ID, t!("core_expert.wd_waiting").to_string()),
-        Verdict::Settled(action, ServiceVerdict::Applied) => {
-            MoonAlert::success(ID, applied_text(*action))
-        }
-        Verdict::Settled(_, ServiceVerdict::AppliedNotSaved(error)) => MoonAlert::warning(
-            ID,
-            t!("core_expert.wd_not_saved", error = error.as_str()).to_string(),
-        ),
-        Verdict::Settled(_, ServiceVerdict::Refused(error)) if error.is_empty() => {
-            MoonAlert::error(ID, t!("core_expert.wd_refused_plain").to_string())
-        }
-        Verdict::Settled(_, ServiceVerdict::Refused(error)) => MoonAlert::error(
-            ID,
-            t!("core_expert.wd_refused", error = error.as_str()).to_string(),
-        ),
-        Verdict::Settled(_, ServiceVerdict::NotSent(_)) => {
-            MoonAlert::error(ID, t!("core_expert.wd_not_sent").to_string())
-        }
-        Verdict::Settled(_, ServiceVerdict::Lost) => {
-            MoonAlert::warning(ID, t!("core_expert.wd_lost").to_string())
-        }
-    }
-    .into_any_element()
-}
-
-/// What a confirmed action did, in the words that fit it.
-fn applied_text(action: ServiceAction) -> String {
-    match action {
-        ServiceAction::WatchdogApply => t!("core_expert.wd_applied").to_string(),
-        ServiceAction::WatchdogRemove => t!("core_expert.wd_removed").to_string(),
-        ServiceAction::WatchdogCancelBuys => t!("core_expert.wd_cancel_accepted").to_string(),
-    }
 }
 
 /// A local refusal, naming the row as the table numbers it.

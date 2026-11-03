@@ -5,12 +5,13 @@
 //! switches, its logging and its screenshot rules, out of `trading` and its `send_shots_config`,
 //! `orders_control` and `moonbot_config` sub-records, plus `auto_start_2.show_old_listing`.
 //!
-//! What stays disabled, and why. The Remote block's own identity — the bot token, its PIN and the
-//! UDP password — is outside the safe-share subset altogether (#1174 moves the bot to the service
-//! API, as the watchdog below already is), which is why what IS live inside Remote is only the screenshot
-//! rules and the multi-command switch — and why the two checkboxes beside them stay dead too: "I
-//! have my own bot ID" names the identity, and "Слать отчёты о сделках" switches the reporting that
-//! identity does, neither of which the snapshot carries.
+//! What stays disabled, and why. The Remote block's own identity is outside the safe-share subset
+//! altogether. Its channel binding and outgoing bot — `Generate PIN code`, `Reset channel`,
+//! `My Channel`, `I have my own bot ID` and the token — are live on the core's service API instead
+//! (#1174, see [`remote`]), with buttons of their own that OK does not carry. What neither the
+//! snapshot nor that API carries stays dead: `Add @TMoonBot to your channel` (an action of Moonbot's
+//! own machine), `This bot name`, `Слать отчёты о сделках` with its interval selector, and the UDP
+//! command port and password.
 //!
 //! Six more rows, in the engine and System blocks, have no field in the snapshot at all: Custom IP
 //! and Auto DNS, Extended Debug Mode, the two exports, and accepting beta versions.
@@ -35,6 +36,8 @@
 //! an Apply of its own, and OK does not carry it. See [`watchdog`] for the section and
 //! `core_expert::watchdog` for the window's side of it.
 
+pub(super) mod remote;
+mod service;
 pub(super) mod watchdog;
 
 use gpui::*;
@@ -188,8 +191,6 @@ pub(super) fn field_specs(
             sp.no_trades_markets_text.clone(),
             |d, t| d.special.no_trades_markets_text = t.to_string(),
         ),
-        ("exp-sp-bot-token", String::new(), DEAD_TEXT),
-        ("exp-sp-pin", String::new(), DEAD_TEXT),
         ("exp-sp-bot-name", String::new(), DEAD_TEXT),
         ("exp-sp-profit-usd", sp.profit_abs.to_string(), |d, t| {
             if let Some(v) = stage_count(t, 0) {
@@ -327,13 +328,16 @@ fn header(
 
 /// Build the page.
 ///
-/// `wd` is the hang watchdog's own context, read by the window only while that section is open.
+/// `wd` and `rm` are the hang watchdog's and the Remote block's own contexts, read by the window
+/// only while that section is open.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn body(
     view: &Entity<CoreExpertView>,
     store: &EditorStore,
     draft: &CoreConfig,
     open: SpecialSection,
     wd: Option<&watchdog::WatchdogCtx<'_>>,
+    rm: Option<&remote::RemoteCtx<'_>>,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -679,31 +683,21 @@ pub(super) fn body(
         v_flex()
             .w_full()
             .gap(gap)
+            .children(rm.map(|rm| remote::notices(rm, p, cx)).unwrap_or_default())
             .child(
                 h_flex()
                     .w_full()
                     .items_start()
                     .gap(design::ui_px(cx, 10.0))
+                    // Not in the protocol: Moonbot's button opens Telegram on its own machine.
                     .child(action(
                         "exp-sp-add-bot",
                         "Add @TMoonBot to your channel".to_string(),
                         false,
                     ))
-                    .child(action(
-                        "exp-sp-gen-pin",
-                        "Generate PIN code".to_string(),
-                        false,
-                    ))
-                    .child(action(
-                        "exp-sp-reset-channel",
-                        "Reset channel".to_string(),
-                        false,
-                    ))
-                    .child(
-                        v_flex()
-                            .gap(design::ui_px(cx, 2.0))
-                            .child(hint(t!("core_expert.sp_my_channel").to_string(), p, cx))
-                            .child(caption(NO_VALUE.to_string(), false, p, cx)),
+                    .children(
+                        rm.map(|rm| remote::channel_actions(view, rm, p, cx))
+                            .unwrap_or_default(),
                     ),
             )
             .child(
@@ -715,13 +709,7 @@ pub(super) fn body(
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .gap(design::ui_px(cx, 2.0))
-                            .child(flag_dead(
-                                "exp-sp-own-bot",
-                                "core_expert.sp_own_bot_id",
-                                view,
-                            ))
-                            .children(field(store, "exp-sp-bot-token", false)),
+                            .children(rm.map(|rm| remote::own_bot(view, rm, cx))),
                     )
                     .child(
                         v_flex()
@@ -729,7 +717,7 @@ pub(super) fn body(
                             .min_w_0()
                             .gap(design::ui_px(cx, 2.0))
                             .child(hint(t!("core_expert.sp_type_pin").to_string(), p, cx))
-                            .children(field(store, "exp-sp-pin", false)),
+                            .children(rm.map(|rm| remote::pin(rm, p, cx))),
                     )
                     .child(
                         v_flex()

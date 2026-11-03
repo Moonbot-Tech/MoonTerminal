@@ -1097,10 +1097,14 @@ impl SessionManager {
         })
     }
 
-    /// Send one intent for the core's built-in Telegram reader.
+    /// Send one intent for the core's built-in Telegram reader or its outgoing bot.
     ///
-    /// A successful send means queued, never completed. The core answers with a new snapshot
-    /// through `SettingsEvent::TelegramUpdated`; there are no per-action result tickets.
+    /// A successful send means queued, never completed. The reader and login intents are answered
+    /// with a new snapshot (`SettingsEvent::TelegramUpdated`) and carry no result ticket. The
+    /// outgoing-bot and channel actions (`SetOutgoingBot`, `GenerateChannelPin`, `ResetChannel`)
+    /// are tracked like the observer actions: the feed reports their request id and the core's
+    /// verdict on `CoreData::service.telegram`, and they are dropped rather than delivered late
+    /// across a lost link.
     ///
     /// Args:
     ///     core: Core to command.
