@@ -495,6 +495,7 @@ shell.engine_action.ma_on: "Modo MA: ligado"
 shell.engine_action.ma_off: "Modo MA: desligado"
 shell.engine_action.transfer: "Transferir %{qty} %{asset}: %{from} → %{to}"
 shell.engine_action.reload_order_book: "Recarregar o livro de ofertas"
+shell.engine_action.request_strategies_snapshot: "Recarregar estratégias do núcleo"
 
 # --- Result toasts for a coin-menu strategy-blacklist edit (the menu has no window of its own) ---
 shell.strat_edit_sent: "Edição da lista negra de %{coin} enviada"

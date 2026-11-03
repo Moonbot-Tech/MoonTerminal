@@ -9,6 +9,12 @@
 //! Moonbot's built-in Telegram client — its switch, its proxy button, its status and "выйти" — is
 //! dead, and always will be: the safe-share subset carries no part of it, the same reason the whole
 //! Login page is dead. "Отправлять статистику на сервер" is dead for the same reason.
+//!
+//! Below the two columns sits what the core SENDS: its quiet mode and batching delay, and the
+//! Trust Management commands a master bot forwards to its slaves. Moonbot keeps those in other
+//! dialogs and in its chat commands; on a core without that window they are settable only here.
+//! The five command captions are Moonbot's own; the Share-only row is captioned from moonproto's
+//! reference — see `moon_core::feed::TelegramSettings::tm_send_only_share` for why.
 
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
@@ -18,12 +24,159 @@ use moon_core::feed::{CoreConfig, TelegramSettings};
 
 use crate::design;
 use crate::shell::editors::{CoreDraftHost, EditorStore};
+use crate::shell::parse_num;
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, action_live, caption, columns, field, flag, flag_described, group, list_box_select,
-    rows, text_block,
+    action, action_live, caption, columns, field, flag, flag_described, flag_live, group, hint,
+    list_box_select, num, rows, text_block,
 };
+
+/// See [`super::field_specs`].
+///
+/// Both numbers are refused rather than clamped when out of range, the rule the Special page's
+/// boxes follow: a clamp would leave the typed text on screen while OK carried another number.
+#[allow(clippy::type_complexity)]
+pub(super) fn field_specs(
+    draft: &CoreConfig,
+) -> Vec<(&'static str, String, fn(&mut CoreConfig, &str))> {
+    let t = &draft.telegram;
+    vec![
+        (
+            "exp-tlg-group-delay",
+            t.group_delay.to_string(),
+            (|d, text| {
+                // Whole milliseconds, never negative. The core's own command clamps to
+                // 1000..=5000; a stored value outside that is still the core's to hold, so the box
+                // bounds only what is not a delay at all.
+                if let Some(v) = parse_num(text)
+                    .map(f64::round)
+                    .filter(|v| (0.0..=f64::from(i32::MAX)).contains(v))
+                {
+                    d.telegram.group_delay = v as i32;
+                }
+            }) as fn(&mut CoreConfig, &str),
+        ),
+        (
+            "exp-tlg-tm-max-order",
+            // The shortest text that round-trips, so the box parses back exactly what it shows.
+            format!("{}", t.tm_max_order),
+            |d, text| {
+                // Zero is meaningful (forward 100 %); a negative is refused as no order value.
+                if let Some(v) = parse_num(text).filter(|v| *v >= 0.0) {
+                    d.telegram.tm_max_order = v;
+                }
+            },
+        ),
+    ]
+}
+
+/// The core's outgoing-message settings and its Trust Management commands, drawn under the
+/// channel columns.
+fn sending(
+    view: &Entity<CoreExpertView>,
+    store: &EditorStore,
+    t: &TelegramSettings,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let reports = group(
+        "exp-tlg-reports",
+        t!("core_expert.tlg_reports_frame").to_string(),
+    )
+    .child(
+        rows(cx)
+            .child(flag_live(
+                "exp-tlg-silent",
+                "core_expert.tlg_silent",
+                t.silent,
+                view,
+                |d, on| d.telegram.silent = on,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(caption(
+                        t!("core_expert.tlg_group_delay").to_string(),
+                        true,
+                        p,
+                        cx,
+                    ))
+                    .children(num(store, "exp-tlg-group-delay", 72.0, true, cx)),
+            )
+            .child(hint(
+                t!("core_expert.tlg_group_delay_hint").to_string(),
+                p,
+                cx,
+            )),
+    );
+    let trust = group("exp-tlg-tm", t!("core_expert.tlg_tm_frame").to_string()).child(
+        rows(cx)
+            .child(flag_live(
+                "exp-tlg-tm-share",
+                "core_expert.tlg_tm_only_share",
+                t.tm_send_only_share,
+                view,
+                |d, on| d.telegram.tm_send_only_share = on,
+            ))
+            .child(flag_live(
+                "exp-tlg-tm-panic-sold",
+                "core_expert.tlg_tm_panic_on_sell",
+                t.tm_panic_sell_closed,
+                view,
+                |d, on| d.telegram.tm_panic_sell_closed = on,
+            ))
+            .child(flag_live(
+                "exp-tlg-tm-cancel-sold",
+                "core_expert.tlg_tm_cancel_on_sell",
+                t.tm_cancel_closed,
+                view,
+                |d, on| d.telegram.tm_cancel_closed = on,
+            ))
+            .child(flag_live(
+                "exp-tlg-tm-cancel-filled",
+                "core_expert.tlg_tm_cancel_on_fill",
+                t.tm_cancel_buy_on_fill,
+                view,
+                |d, on| d.telegram.tm_cancel_buy_on_fill = on,
+            ))
+            .child(flag_live(
+                "exp-tlg-tm-first-sell",
+                "core_expert.tlg_tm_first_sell",
+                t.tm_send_first_sell,
+                view,
+                |d, on| d.telegram.tm_send_first_sell = on,
+            ))
+            .child(flag_live(
+                "exp-tlg-tm-panic-unfilled",
+                "core_expert.tlg_tm_panic_unfilled",
+                t.tm_sell_if_master_not_filled,
+                view,
+                |d, on| d.telegram.tm_sell_if_master_not_filled = on,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(caption(
+                        t!("core_expert.tlg_tm_max_order").to_string(),
+                        true,
+                        p,
+                        cx,
+                    ))
+                    .children(num(store, "exp-tlg-tm-max-order", 96.0, true, cx)),
+            )
+            .child(hint(
+                t!("core_expert.tlg_tm_max_order_hint").to_string(),
+                p,
+                cx,
+            )),
+    );
+    columns(reports, trust, cx)
+}
 
 /// See [`super::scratch_specs`].
 ///
@@ -351,5 +504,6 @@ pub(super) fn body(
                 )),
         )
         .child(columns(left, right, cx))
+        .child(sending(view, store, t, p, cx))
         .into_any_element()
 }

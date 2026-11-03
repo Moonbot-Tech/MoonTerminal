@@ -62,6 +62,8 @@ pub enum CoreConfigArea {
     /// The part of the General page only the expert window draws — see [`crate::feed::OrderRulesSettings`].
     OrderRules,
     Signals,
+    /// Moonbot's own appearance beyond its Interface page — see [`crate::feed::ViewSettings`].
+    View,
 }
 
 /// What a shared-config echo disagreed with the terminal about, restricted to the fields THIS edit

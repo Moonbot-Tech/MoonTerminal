@@ -1916,7 +1916,7 @@ fn core_settings_writes_go_through_the_guard_or_the_shared_send() {
 fn expert_pages_own_their_control_ids() {
     // Every page and the prefix its ids carry. A new page is a line here, which is the point: the
     // prefix is what keeps two pages' ids apart in one store.
-    const PAGES: [(&str, &str); 8] = [
+    const PAGES: [(&str, &str); 9] = [
         ("general", "exp-gen-"),
         ("login", "exp-log-"),
         ("telegram", "exp-tlg-"),
@@ -1925,6 +1925,8 @@ fn expert_pages_own_their_control_ids() {
         ("interface", "exp-int-"),
         ("hotkeys", "exp-hk-"),
         ("special", "exp-sp-"),
+        // Moonbot's appearance block, drawn under the Interface page on the same tab.
+        ("view", "exp-view-"),
     ];
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))

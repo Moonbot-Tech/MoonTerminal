@@ -32,13 +32,6 @@ use crate::feed::FieldMask;
 /// stable address that survives the UI being rearranged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreConfig {
-    /// Read-only `trading.moonbot_config.auto_margin_borrow`: a spot account may fund another
-    /// quote by borrowing, so the terminal must not refuse it solely on quote currency.
-    pub auto_margin_borrow: bool,
-    /// Read-only `visual.charts_settings.stay_on_top`: MoonBot's "Charts windows on top of other
-    /// windows" checkbox (default on). The terminal reads it to decide whether a group's detached
-    /// chart windows rise with the group's main window; it never writes it back.
-    pub charts_stay_on_top: bool,
     /// `trading.auto_start` and `trading.auto_start_2`.
     pub auto_start: AutoStartSettings,
     /// `visual.blink_config`.
@@ -62,6 +55,12 @@ pub struct CoreConfig {
     pub special: SpecialSettings,
     /// Moonbot's Hotkeys page: the mouse gestures that place and move orders.
     pub gestures: GestureSettings,
+    /// Moonbot's own chart and window appearance beyond its Interface page — see [`ViewSettings`].
+    ///
+    /// Also read outside the expert window: `view.charts_stay_on_top` (MoonBot's "Charts windows on
+    /// top of other windows", default on) decides whether a group's detached chart windows rise with
+    /// the group's main window.
+    pub view: ViewSettings,
     /// `trading.fav_markets` — the markets the trader marked, as the core spells them.
     ///
     /// A bare field rather than a section of its own, exactly like the manual block's one writable
@@ -83,6 +82,7 @@ mod layout;
 mod order_rules;
 mod signals_general;
 mod special;
+mod view;
 
 pub use edit_model::*;
 pub use interface::*;
@@ -90,6 +90,7 @@ pub use layout::*;
 pub use order_rules::*;
 pub use signals_general::*;
 pub use special::*;
+pub use view::*;
 
 /// Report profit counters from moonproto `TProfitStateCommand`, shown as the "now" lines beside the
 /// AutoStart loss caps.

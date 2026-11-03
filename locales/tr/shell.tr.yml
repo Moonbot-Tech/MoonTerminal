@@ -495,6 +495,7 @@ shell.engine_action.ma_on: "MA: açık"
 shell.engine_action.ma_off: "MA: kapalı"
 shell.engine_action.transfer: "Aktarım %{qty} %{asset}: %{from} → %{to}"
 shell.engine_action.reload_order_book: "Emir defteri yenileme"
+shell.engine_action.request_strategies_snapshot: "Stratejileri çekirdekten yeniden yükleme"
 
 # --- Result toasts for a coin-menu strategy-blacklist edit (the menu has no window of its own) ---
 shell.strat_edit_sent: "%{coin} için kara liste düzenlemesi gönderildi"

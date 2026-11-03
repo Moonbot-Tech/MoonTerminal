@@ -5,12 +5,13 @@
 /// A SEPARATE area from [`crate::feed::GeneralSettings`] although it is the same Moonbot page, and the reason is
 /// the rule an area exists to serve: a surface may write only what it DREW. The compact popup draws
 /// the exits and the blacklist and nothing else, so a mask naming its page must not carry these
-/// seven — its OK would stamp them back from a frozen draft over whatever Moonbot changed
+/// rows — its OK would stamp them back from a frozen draft over whatever Moonbot changed
 /// meanwhile. The expert window draws the whole page and names both areas.
 ///
-/// So the boundary here is which surface draws a row, not what the row means, which is why two of
-/// the seven are not order rules at all: the fresh-coin hold sits in Moonbot's risk frame and the
-/// startup analysis across the top of the page. It is the one place this module's "an area is a
+/// So the boundary here is which surface draws a row, not what the row means, which is why several
+/// of them are not order rules at all: the fresh-coin and delisting holds sit in Moonbot's risk
+/// frame, the startup analysis and the manual mode across the top of the page, and the default
+/// entry size and price in a group of their own. It is the one place this module's "an area is a
 /// PAGE" model bends, and it bends towards the rule the model is FOR.
 #[derive(Debug, Clone)]
 pub struct OrderRulesSettings {
@@ -67,6 +68,51 @@ pub struct OrderRulesSettings {
     /// The one field of this area outside `trading`. Moonbot draws this switch across the top of
     /// its "Основные" page, above the two columns.
     pub analyze_on_start: bool,
+    /// `trading.sell_auto_move`: place the FIRST sell where the book's liquidity says, rather than
+    /// at the bare target — Moonbot's "Ставить sell ордер под стенку" (`Fit sell order in best
+    /// place in the order book`). In scalp mode it searches above the minimum scalp target. It
+    /// does not keep moving a standing sell.
+    pub sell_auto_move: bool,
+    /// `trading.dont_buy_delisted`: refuse an ordinary signal buy on a market the core has marked
+    /// as being delisted. Moonbot's "НЕ покупать delisted", drawn beside the fresh-coin hold.
+    pub dont_buy_delisted: bool,
+    /// `trading.manual_mode`: the core takes no entry on its own — signals and detects stop
+    /// buying — while manual orders and the management of open positions carry on. Not the
+    /// emulator.
+    pub manual_mode: bool,
+    /// `trading.use_manual_balance`: size a default entry by [`Self::fixed_trade_balance`] rather
+    /// than by [`Self::play_with`].
+    ///
+    /// "Default" is the whole scope of the three sizing fields: a strategy with its own order size
+    /// keeps it, and this terminal's manual orders carry an explicit size of their own. What they
+    /// size is an entry nothing else sized — a Telegram or clipboard autobuy, above all — and on a
+    /// core without Moonbot's window this page is the only place left to set them.
+    pub use_manual_balance: bool,
+    /// `trading.fixed_trade_balance`: the fixed default entry, in the account's trading currency
+    /// (USDT for BTC/USDT), not multiplied by leverage on this path.
+    pub fixed_trade_balance: f64,
+    /// `trading.play_with`: the default entry as THOUSANDTHS of the trading balance, multiplied by
+    /// leverage on futures. Moonbot's own control runs 1..=1000; ignored while
+    /// [`Self::use_manual_balance`] is on.
+    pub play_with: i32,
+    /// `trading.x_ask`: the global buy-price offset in HALF-per-cent steps — 6 is +3 %, -4 is -2 %
+    /// — applied to the ask [`Self::use_current_ask`] picks. A strategy or an explicit order price
+    /// overrides it.
+    pub x_ask: i32,
+    /// `trading.use_current_ask`: price an ordinary buy from the current ask rather than from the
+    /// ask of about thirty seconds earlier — Moonbot's pair of radio buttons over one flag.
+    pub use_current_ask: bool,
+    /// `trading.panic_if_price_drop`: the global stop-loss is on for orders that follow the global
+    /// settings — Moonbot's "Стоп-лосс" row. A strategy or an already edited order keeps its own.
+    ///
+    /// Here, in the expert-only area, rather than beside the exits in `GeneralSettings`: the compact
+    /// popup does not draw a stop-loss row, so its mask must not carry one. The toolbar's SL edits
+    /// the same pair over the compact channel; the wire marks both a mirror of
+    /// `ClientSettingsCommand`, as it marks the take profit and trailing this page already writes.
+    pub stop_loss_on: bool,
+    /// `trading.price_drop_level`: the global stop-loss distance in per cent, normally negative.
+    /// A long stops at entry × (1 + value/100), a short at entry ÷ (1 + value/100).
+    pub stop_loss_pct: f32,
 }
 
 /// One row of Moonbot's Move grid — the four the "same hotkeys" switch governs.
@@ -201,8 +247,8 @@ impl OrderRulesSettings {
     }
 }
 
-/// Hand-written for the reason [`crate::feed::GeneralSettings`]'s is: `trailing_float` comes off the wire as
-/// `f64`.
+/// Hand-written for the reason [`crate::feed::GeneralSettings`]'s is: `trailing_float`,
+/// `fixed_trade_balance` and `stop_loss_pct` come off the wire as floats.
 impl PartialEq for OrderRulesSettings {
     fn eq(&self, other: &Self) -> bool {
         // Destructured for the reason [`crate::feed::GeneralSettings`]'s is.
@@ -214,14 +260,36 @@ impl PartialEq for OrderRulesSettings {
             dont_buy_new_coins,
             deltas_by_trades,
             analyze_on_start,
+            sell_auto_move,
+            dont_buy_delisted,
+            manual_mode,
+            use_manual_balance,
+            fixed_trade_balance,
+            play_with,
+            x_ask,
+            use_current_ask,
+            stop_loss_on,
+            stop_loss_pct,
         } = self;
         trailing_float.total_cmp(&other.trailing_float).is_eq()
+            && stop_loss_pct.total_cmp(&other.stop_loss_pct).is_eq()
+            && *stop_loss_on == other.stop_loss_on
+            && fixed_trade_balance
+                .total_cmp(&other.fixed_trade_balance)
+                .is_eq()
             && *auto_sell_partial == other.auto_sell_partial
             && *auto_cancel_buy_order == other.auto_cancel_buy_order
             && *cancel_buy_on_sell_fill == other.cancel_buy_on_sell_fill
             && *dont_buy_new_coins == other.dont_buy_new_coins
             && *deltas_by_trades == other.deltas_by_trades
             && *analyze_on_start == other.analyze_on_start
+            && *sell_auto_move == other.sell_auto_move
+            && *dont_buy_delisted == other.dont_buy_delisted
+            && *manual_mode == other.manual_mode
+            && *use_manual_balance == other.use_manual_balance
+            && *play_with == other.play_with
+            && *x_ask == other.x_ask
+            && *use_current_ask == other.use_current_ask
     }
 }
 

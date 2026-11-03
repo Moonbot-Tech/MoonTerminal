@@ -43,6 +43,9 @@ pub struct FieldMask {
     /// applies a manual strategy's own sell price or the global TP/S the toolbar edits. Everything
     /// else in the manual block is read-only here — see the module doc.
     pub(super) ignore_strat_sell_price: bool,
+    /// Moonbot's own appearance beyond its Interface page, across `signals`, `trading`, `visual`,
+    /// `theme` and `ui`. Only the expert window draws it.
+    pub(super) view: bool,
 }
 
 impl FieldMask {
@@ -60,6 +63,7 @@ impl FieldMask {
         special: false,
         telegram: false,
         ignore_strat_sell_price: false,
+        view: false,
     };
 
     /// The five sections the COMPACT gear popup renders, and nothing else.
@@ -92,6 +96,8 @@ impl FieldMask {
         // NOT the Telegram page: the compact popup does not draw it.
         telegram: false,
         ignore_strat_sell_price: false,
+        // NOT Moonbot's appearance: the compact popup does not draw it.
+        view: false,
     };
 
     /// Whether this mask names the `general` section.
@@ -194,6 +200,12 @@ impl FieldMask {
         self
     }
 
+    /// Name Moonbot's own appearance beyond its Interface page — see `feed::ViewSettings`.
+    pub const fn with_view(mut self) -> Self {
+        self.view = true;
+        self
+    }
+
     /// Name the core's "ignore a manual strategy's own sell price" flag.
     pub fn with_ignore_strat_sell_price(mut self) -> Self {
         self.ignore_strat_sell_price = true;
@@ -215,6 +227,7 @@ impl FieldMask {
             special: self.special || other.special,
             telegram: self.telegram || other.telegram,
             ignore_strat_sell_price: self.ignore_strat_sell_price || other.ignore_strat_sell_price,
+            view: self.view || other.view,
         }
     }
 }

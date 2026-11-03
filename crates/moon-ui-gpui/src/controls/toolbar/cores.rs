@@ -133,7 +133,9 @@ fn area_caption(area: CoreConfigArea) -> String {
         // an OK that failed on both does not print the name twice.
         CoreConfigArea::General | CoreConfigArea::OrderRules => "toolbar.core_config_area_general",
         CoreConfigArea::Gestures => "toolbar.core_config_area_gestures",
-        CoreConfigArea::Interface => "toolbar.core_config_area_interface",
+        // Moonbot's appearance beyond its Interface page is drawn on that same tab, so a rejection
+        // names the page the trader edited, as the General pair above does.
+        CoreConfigArea::Interface | CoreConfigArea::View => "toolbar.core_config_area_interface",
         CoreConfigArea::Leverage => "toolbar.core_config_area_leverage",
         CoreConfigArea::Manual => "toolbar.core_config_area_manual",
         CoreConfigArea::Signals => "toolbar.core_config_area_signals",
