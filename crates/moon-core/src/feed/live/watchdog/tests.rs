@@ -29,24 +29,3 @@ fn untouched_credentials_stay_absent_on_the_wire() {
     assert_eq!(wire["entries"][1]["api_secret"], "new-secret");
     assert_eq!(wire["entries"][1]["id"], "");
 }
-
-/// The request id arrives as a decimal string; the full `u64` range must survive the trip.
-///
-/// Mutation: parse as `i64`. A request id above `i64::MAX` — half of all random ids — would then
-/// never settle its banner.
-#[test]
-fn request_ids_parse_across_the_whole_u64_range() {
-    let raw = serde_json::json!({
-        "domain": "watchdog",
-        "action": "apply",
-        "request_id": u64::MAX.to_string(),
-        "applied": true,
-        "error": "",
-        "state": { "revision": 1 }
-    });
-    let result: ServiceSettingsResult = serde_json::from_value(raw).expect("valid result");
-    let projected = service_result_from_proto(&result);
-    assert_eq!(projected.request_id, Some(u64::MAX));
-    assert_eq!(projected.domain, ServiceDomain::Watchdog);
-    assert!(projected.applied);
-}

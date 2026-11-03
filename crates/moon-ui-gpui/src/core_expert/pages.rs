@@ -24,6 +24,7 @@ mod view;
 
 pub(super) use hotkeys::HotkeysSub;
 pub(super) use special::SpecialSection;
+pub(super) use special::remote::RemoteCtx;
 pub(super) use special::watchdog::WatchdogCtx;
 pub(super) use special::watchdog::ids as watchdog_ids;
 pub(super) use view::ViewSection;
@@ -65,6 +66,8 @@ pub(super) struct PageCtx<'a> {
     pub(super) bl_reveal: Option<crate::shell::BlacklistReveal<'a>>,
     /// The hang watchdog's context, present while the Special page has that section open.
     pub(super) watchdog: Option<WatchdogCtx<'a>>,
+    /// The Remote block's outgoing-bot context, present while that section is open.
+    pub(super) remote: Option<RemoteCtx<'a>>,
 }
 
 /// Ids of the page's text boxes that hold a value on its way somewhere else rather than a setting.
@@ -189,6 +192,7 @@ pub(super) fn page(
             draft,
             ctx.special_section,
             ctx.watchdog.as_ref(),
+            ctx.remote.as_ref(),
             p,
             cx,
         )),

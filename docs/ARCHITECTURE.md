@@ -1003,6 +1003,21 @@ the panel reads this through `settings_sig`; panels do not subscribe. Outbound:
 
 `telegram_rev` is an acknowledgement counter, not a content one: MoonProto sends an event on every snapshot,
 including an unchanged reply, and the "Sent, waiting for the core…" banner is cleared by this counter.
+A Telegram-domain `ServiceSettingsApplied` is read as a snapshot receipt too: MoonProto folds the state
+it carries into the retained snapshot without a `TelegramUpdated` of its own.
+
+The outgoing bot (#1174) — `TelegramCmd::SetOutgoingBot` / `GenerateChannelPin` / `ResetChannel`, the
+Remote block of the expert window's Special page — is not observed that way. Each is a tracked service
+action: the feed reports the request id it left as (`FeedMsg::ServiceRequest`) and the core's
+acknowledgement (`FeedMsg::ServiceResult`, `feed/live/service.rs`), both settled on
+`CoreData.service.telegram` and repainted through `telegram_service_rev`. The request's own
+bookkeeping does not move `telegram_rev`; only the snapshot its acknowledgement carries does, exactly
+as any pushed snapshot clears the Settings tab's banner. The block's controls are disabled while one
+of its requests waits. The three are live actions
+(`feed/live/stale.rs`): dropped, and reported dropped, rather than delivered after a lost link, and a
+`TelegramStale` or a non-Ready status settles one in flight as lost. The hang watchdog's observer
+actions (`feed/live/watchdog.rs`, #1173) share the same tracking on `CoreData.service.watchdog`. The
+token is write-only and the channel PIN never reaches `Debug` or a log line.
 `telegram_fresh` and `FeedMsg::TelegramStale`: `ConnStatus::Ready` does not mean the snapshot is fresh —
 a reconnect in the loop immediately yields `Ready`, so `live = Ready && telegram_fresh`; a stale
 snapshot is drawn muted, actions are off, there is no QR.

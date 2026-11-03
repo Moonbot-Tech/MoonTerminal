@@ -1327,6 +1327,51 @@ fn watchdog_epoch_moves_with_the_session_and_settles_lost_requests() {
     assert_eq!(core.watchdog_epoch, epoch + 2);
 }
 
+/// An outgoing-bot request moves its own revision — neither the observer block's nor the Settings
+/// window's reader receipt — and a lost link settles it as lost.
+///
+/// Mutations caught: bumping `watchdog_rev` for a Telegram acknowledgement (the Remote banner would
+/// never repaint), bumping `telegram_rev` (the Settings tab's "sent, waiting" for a reader intent
+/// would clear on a Remote request), and leaving it pending across `TelegramStale` (the banner
+/// hangs).
+#[test]
+fn outgoing_bot_requests_live_on_their_own_revision() {
+    use crate::feed::{CoreServiceResult, ServiceAction, ServiceDomain, ServiceVerdict};
+    let mut core = CoreData::new();
+    let (tg, svc, wd) = (
+        core.telegram_rev,
+        core.telegram_service_rev,
+        core.watchdog_rev,
+    );
+    core.apply(FeedMsg::ServiceRequest {
+        action: ServiceAction::TelegramChannelPin,
+        sent: Ok(5),
+    });
+    assert_eq!(core.telegram_service_rev, svc + 1);
+    assert_eq!(core.telegram_rev, tg);
+    assert_eq!(core.watchdog_rev, wd);
+    core.apply(FeedMsg::ServiceResult(CoreServiceResult {
+        domain: ServiceDomain::Telegram,
+        request_id: Some(5),
+        applied: true,
+        error: String::new(),
+    }));
+    assert_eq!(
+        core.service.telegram.outcome,
+        Some((ServiceAction::TelegramChannelPin, ServiceVerdict::Applied))
+    );
+    core.apply(FeedMsg::ServiceRequest {
+        action: ServiceAction::TelegramResetChannel,
+        sent: Ok(6),
+    });
+    core.apply(FeedMsg::TelegramStale);
+    assert_eq!(
+        core.service.telegram.outcome,
+        Some((ServiceAction::TelegramResetChannel, ServiceVerdict::Lost))
+    );
+    assert!(core.service.watchdog.outcome.is_none());
+}
+
 /// The folder tree follows the same rule as the diagnostics beside it, and for the same reason: a
 /// replacement feed may point at a MoonBot that cannot hold an empty folder at all. Carrying
 /// `supported` forward would leave the window promising a persistence the new core does not offer.

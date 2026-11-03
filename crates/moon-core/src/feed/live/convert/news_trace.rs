@@ -183,6 +183,12 @@ pub(in crate::feed::live) fn telegram_from_proto(state: &TelegramState) -> CoreT
         setup_error: state.setup_error.clone(),
         client_error: state.client_error.clone(),
         service: state.service.as_ref().map(telegram_service_from_proto),
+        settings_supported: state.settings_supported,
+        own_bot: state.own_bot,
+        token_set: state.token_set,
+        channel_id: state.channel_id,
+        channel_name: state.channel_name.clone(),
+        channel_pin: state.channel_pin.clone(),
     }
 }
 

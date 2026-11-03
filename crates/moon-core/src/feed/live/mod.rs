@@ -42,6 +42,7 @@ mod identity_refresh;
 mod market_role;
 mod ping_clock;
 mod report_sync;
+mod service;
 mod shared_config;
 mod stale;
 mod startup_watchdog;
@@ -1814,7 +1815,7 @@ pub(super) fn run(
         let mut service_sent = true;
         for ev in &events {
             if let Event::Settings(SettingsEvent::ServiceSettingsApplied(result)) = ev {
-                let msg = FeedMsg::ServiceResult(watchdog::service_result_from_proto(result));
+                let msg = FeedMsg::ServiceResult(service::result_from_proto(result));
                 if tx.send(msg).is_err() {
                     service_sent = false;
                     break;

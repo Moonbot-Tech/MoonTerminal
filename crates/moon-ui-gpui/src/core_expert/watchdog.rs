@@ -23,8 +23,8 @@ use gpui::*;
 use moon_ui::{MoonDataTableState, MoonInputEvent, MoonInputState};
 
 use moon_core::feed::{
-    ConnStatus, CoreWatchdogState, ServiceAction, ServiceTrack, ServiceVerdict, WatchdogCmd,
-    WatchdogEditError, WatchdogEntryEdit, WatchdogSettingsEdit,
+    ConnStatus, CoreWatchdogState, ServiceAction, ServiceVerdict, WatchdogCmd, WatchdogEditError,
+    WatchdogEntryEdit, WatchdogSettingsEdit,
 };
 use moon_core::session::CoreId;
 
@@ -32,19 +32,8 @@ use crate::Backend;
 use crate::shell::parse_num;
 
 use super::pages::{SpecialSection, watchdog_ids as ids};
+use super::service::{Awaiting, verdict_applied};
 use super::{CoreExpertView, ExpertTab};
-
-/// A request this window queued and is waiting on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Awaiting {
-    pub(super) action: ServiceAction,
-    /// The track's registered-request count when the request was queued; see
-    /// `ServiceTrack::settled_since`.
-    pub(super) sent_before: u64,
-    /// The saved row a Remove asked the core to delete. It leaves the edit only once the core
-    /// confirms: a refused or lost Remove leaves the row on the core, and the table must show it.
-    pub(super) removed: Option<String>,
-}
 
 /// The window's state for the observer block of its anchor core.
 #[derive(Default)]
@@ -221,11 +210,7 @@ fn saved_row_id(edit: Option<&WatchdogSettingsEdit>, row: Option<usize>) -> Opti
 /// core returned — "applied but not saved" included: moonproto says to rebuild from that state
 /// before retrying, so new rows keep the ids the core gave them.
 pub(super) fn verdict_takes_edit(action: ServiceAction, verdict: &ServiceVerdict) -> bool {
-    action == ServiceAction::WatchdogApply
-        && matches!(
-            verdict,
-            ServiceVerdict::Applied | ServiceVerdict::AppliedNotSaved(_)
-        )
+    action == ServiceAction::WatchdogApply && verdict_applied(verdict)
 }
 
 impl CoreExpertView {
@@ -277,10 +262,7 @@ impl CoreExpertView {
         {
             self.watchdog.awaiting = None;
             if let Some((ServiceAction::WatchdogRemove, verdict)) = &entry.service.watchdog.outcome
-                && matches!(
-                    verdict,
-                    ServiceVerdict::Applied | ServiceVerdict::AppliedNotSaved(_)
-                )
+                && verdict_applied(verdict)
                 && let Some(id) = awaiting.removed.as_deref()
             {
                 self.watchdog.forget_removed(id, entry.watchdog.as_deref());
@@ -591,28 +573,6 @@ pub(super) fn invalid_row(error: &WatchdogEditError) -> Option<usize> {
         | WatchdogEditError::Price { index }
         | WatchdogEditError::Time { index } => Some(*index),
     }
-}
-
-/// What the banner above the block says about this window's last request, if anything.
-pub(super) enum Verdict<'a> {
-    /// Queued and not answered yet.
-    Waiting,
-    /// The core's (or the link's) answer.
-    Settled(ServiceAction, &'a ServiceVerdict),
-}
-
-/// The verdict to draw, or `None` when this window sent nothing worth reporting.
-pub(super) fn verdict<'a>(block: &WatchdogBlock, track: &'a ServiceTrack) -> Option<Verdict<'a>> {
-    if !block.sent_here {
-        return None;
-    }
-    if block.awaiting.is_some() {
-        return Some(Verdict::Waiting);
-    }
-    track
-        .outcome
-        .as_ref()
-        .map(|(action, verdict)| Verdict::Settled(*action, verdict))
 }
 
 #[cfg(test)]

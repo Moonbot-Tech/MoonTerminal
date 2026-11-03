@@ -241,6 +241,13 @@ impl CoreExpertView {
         } else {
             self.release_watchdog_inputs();
         }
+        // The Remote block's outgoing bot asks the core the same way, and its token box goes with
+        // the section: a typed secret does not outlive the block it was typed into.
+        if section == pages::SpecialSection::Remote {
+            self.remote_opened(cx);
+        } else {
+            self.release_remote_inputs();
+        }
         cx.notify();
     }
 
@@ -284,8 +291,12 @@ impl CoreExpertView {
         self.emptied.clear();
         self.selected_channel = None;
         self.release_watchdog_inputs();
+        self.release_remote_inputs();
         if tab == ExpertTab::Special && self.special_section == pages::SpecialSection::Watchdog {
             self.watchdog_opened(cx);
+        }
+        if tab == ExpertTab::Special && self.special_section == pages::SpecialSection::Remote {
+            self.remote_opened(cx);
         }
         cx.notify();
     }

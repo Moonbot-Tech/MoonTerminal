@@ -173,11 +173,15 @@ fn settled_since_waits_for_the_request_to_be_registered() {
 #[test]
 fn a_lost_link_settles_the_pending_request_and_nothing_else() {
     let mut tracks = ServiceTracks::default();
-    assert!(!tracks.note_lost());
+    assert!(!tracks.watchdog.note_lost());
     tracks
         .watchdog
         .note_sent(ServiceAction::WatchdogCancelBuys, Ok(3));
-    assert!(tracks.note_lost());
+    assert!(tracks.watchdog.note_lost());
+    assert!(
+        !tracks.telegram.note_lost(),
+        "one block's loss settles only its own track"
+    );
     assert_eq!(
         tracks.watchdog.outcome,
         Some((ServiceAction::WatchdogCancelBuys, ServiceVerdict::Lost))

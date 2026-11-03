@@ -86,6 +86,31 @@ fn watchdog_mutations_are_live_and_refresh_is_not() {
     assert!(is_live_action(&CoreCmd::Watchdog(WatchdogCmd::CancelBuys)));
 }
 
+/// The outgoing-bot and channel actions wait out no outage; the reader and login intents may.
+///
+/// Mutation: keep every Telegram command as state. A channel reset pressed during an outage would
+/// then unbind the channel whenever the core came back.
+#[test]
+fn telegram_service_actions_are_live_and_reader_intents_are_not() {
+    use crate::feed::TelegramCmd;
+    assert!(!is_live_action(&CoreCmd::Telegram(TelegramCmd::Refresh)));
+    assert!(!is_live_action(&CoreCmd::Telegram(
+        TelegramCmd::SetEnabled(true)
+    )));
+    assert!(is_live_action(&CoreCmd::Telegram(
+        TelegramCmd::ResetChannel
+    )));
+    assert!(is_live_action(&CoreCmd::Telegram(
+        TelegramCmd::GenerateChannelPin
+    )));
+    assert!(is_live_action(&CoreCmd::Telegram(
+        TelegramCmd::SetOutgoingBot {
+            own_bot: true,
+            token: None,
+        }
+    )));
+}
+
 /// A dropped live action is reported, so a surface waiting on its answer can stop waiting.
 ///
 /// Mutation: drop without calling the hook. The expert window's Apply banner then waits for an

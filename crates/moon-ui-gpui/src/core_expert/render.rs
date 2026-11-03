@@ -50,6 +50,7 @@ impl Render for CoreExpertView {
         // built below in this same frame.
         self.build_editors(window, cx);
         self.build_watchdog_inputs(window, cx);
+        self.build_remote_inputs(window, cx);
         // Built before the tree: it needs `window` and `&mut cx`, which the builder chain below
         // cannot lend it while it is also reading `cx` for its own scaled metrics.
         let tab_strip = self.tab_strip(window, cx);
@@ -355,6 +356,24 @@ impl CoreExpertView {
                     selected_cores: self.roster.selected(&self.selection).count(),
                 }
             });
+        // The Remote block's outgoing bot reads the anchor's Telegram snapshot, on the same terms.
+        let remote = (self.tab == ExpertTab::Special
+            && self.special_section == pages::SpecialSection::Remote)
+            .then_some(self.seeded())
+            .flatten()
+            .map(|core| {
+                let entry = self.backend.read(cx).session.store().core(core);
+                pages::RemoteCtx {
+                    block: &self.remote,
+                    snapshot: entry.and_then(|d| d.telegram.as_deref()),
+                    fresh: entry.is_some_and(|d| {
+                        d.status == moon_core::feed::ConnStatus::Ready && d.telegram_fresh
+                    }),
+                    track: entry.map(|d| &d.service.telegram),
+                    core_name: self.roster.name(core).cloned(),
+                    selected_cores: self.roster.selected(&self.selection).count(),
+                }
+            });
         let ctx = pages::PageCtx {
             backend: &self.backend,
             seeded: self.seeded(),
@@ -365,6 +384,7 @@ impl CoreExpertView {
             selected_channel: self.selected_channel,
             bl_reveal,
             watchdog,
+            remote,
         };
         let page = self
             .draft

@@ -1,20 +1,20 @@
-//! The core's observers ("Защита от зависаний") over moonproto's service-settings API, and the
-//! acknowledgements every service-settings action is answered with.
+//! The core's observers ("Защита от зависаний") over moonproto's service-settings API. What every
+//! service action shares — the acknowledgement, the dropped-request report — is in
+//! `feed::live::service`.
 //!
 //! Outbound: each [`WatchdogCmd`] maps onto one `MoonWatchDogs` method. A successful call means
 //! queued locally — the core's verdict arrives as `ServiceSettingsApplied`, matched by request id.
-//! Inbound: the retained snapshot and the acknowledgements are projected into moonproto-free types.
+//! Inbound: the retained snapshot is projected into moonproto-free types.
 //! Log lines name the method and the request id, never a credential.
 
 use moonproto::MoonClient;
 use moonproto::state::{
-    ServiceSettingsResult, ServiceSettingsState, WatchDogEdit, WatchDogEntry, WatchDogSettings,
-    WatchDogState, WatchDogStatus,
+    WatchDogEdit, WatchDogEntry, WatchDogSettings, WatchDogState, WatchDogStatus,
 };
 
 use crate::feed::{
-    CoreServiceResult, CoreWatchdogEntry, CoreWatchdogState, FeedMsg, ServiceDomain, WatchdogCmd,
-    WatchdogEntryEdit, WatchdogSettingsEdit, WatchdogStatus,
+    CoreWatchdogEntry, CoreWatchdogState, FeedMsg, WatchdogCmd, WatchdogEntryEdit,
+    WatchdogSettingsEdit, WatchdogStatus,
 };
 use crate::session::CoreId;
 
@@ -55,25 +55,6 @@ pub(super) fn handle(client: &MoonClient, core: CoreId, cmd: WatchdogCmd) -> Opt
         }
     };
     action.map(|action| FeedMsg::ServiceRequest { action, sent })
-}
-
-/// The `ServiceRequest` reporting that a tracked observer action was dropped unsent — the stale
-/// gate's word for a command that waited out a lost link.
-///
-/// Args:
-///     cmd: The dropped command.
-///     reason: Why it was dropped, as the log states it.
-///
-/// Returns:
-///     The message, or `None` for any command nobody waits on.
-pub(super) fn dropped(cmd: &crate::feed::CoreCmd, reason: &str) -> Option<FeedMsg> {
-    let crate::feed::CoreCmd::Watchdog(cmd) = cmd else {
-        return None;
-    };
-    cmd.tracked_action().map(|action| FeedMsg::ServiceRequest {
-        action,
-        sent: Err(format!("dropped: {reason}")),
-    })
 }
 
 /// Project moonproto's observer snapshot.
@@ -149,22 +130,6 @@ fn entry_to_proto(e: WatchdogEntryEdit) -> WatchDogEdit {
         ip: e.ip,
         price: e.price,
         time: e.time,
-    }
-}
-
-/// Project one acknowledgement, for any service block.
-///
-/// The request id travels as a decimal string (moonproto compares it with the id's string form);
-/// one this build cannot read answers nothing this terminal waits on.
-pub(super) fn service_result_from_proto(result: &ServiceSettingsResult) -> CoreServiceResult {
-    CoreServiceResult {
-        domain: match result.state {
-            ServiceSettingsState::Watchdog(_) => ServiceDomain::Watchdog,
-            ServiceSettingsState::Telegram(_) => ServiceDomain::Telegram,
-        },
-        request_id: result.request_id.trim().parse().ok(),
-        applied: result.applied,
-        error: result.error.clone(),
     }
 }
 

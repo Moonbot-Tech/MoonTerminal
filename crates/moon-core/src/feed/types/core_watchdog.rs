@@ -324,14 +324,17 @@ pub enum ServiceDomain {
 }
 
 /// What this terminal asked a service block to do, for the banner that reports the answer.
-///
-/// Telegram's outgoing-bot actions (#1174) join here when they are wired; the store already routes
-/// their acknowledgements by domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceAction {
     WatchdogApply,
     WatchdogRemove,
     WatchdogCancelBuys,
+    /// `MoonTelegram::set_outgoing_bot` — own-bot switch and token.
+    TelegramOutgoingBot,
+    /// `MoonTelegram::generate_channel_pin`.
+    TelegramChannelPin,
+    /// `MoonTelegram::reset_channel`.
+    TelegramResetChannel,
 }
 
 impl ServiceAction {
@@ -340,6 +343,9 @@ impl ServiceAction {
         match self {
             Self::WatchdogApply | Self::WatchdogRemove | Self::WatchdogCancelBuys => {
                 ServiceDomain::Watchdog
+            }
+            Self::TelegramOutgoingBot | Self::TelegramChannelPin | Self::TelegramResetChannel => {
+                ServiceDomain::Telegram
             }
         }
     }
@@ -488,15 +494,6 @@ impl ServiceTracks {
             ServiceDomain::Watchdog => &mut self.watchdog,
             ServiceDomain::Telegram => &mut self.telegram,
         }
-    }
-
-    /// The link went down: settle every block's pending request as lost.
-    ///
-    /// Returns:
-    ///     Whether any track changed.
-    pub fn note_lost(&mut self) -> bool {
-        let watchdog = self.watchdog.note_lost();
-        self.telegram.note_lost() | watchdog
     }
 }
 
