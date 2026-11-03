@@ -91,16 +91,15 @@ an ad-hoc signature by default and `codesign --verify --deep --strict`.
 
 This is **a local dev bundle, not what goes to Releases**: it is built for the machine's own
 architecture, with bundle id `pro.moonbot.terminal` and `LSMinimumSystemVersion 13.0`. The distribution is made by CI —
-`.github/scripts/make-dmg.sh` in the `macOS .dmg (universal)` job: a universal binary (`arm64` +
-`x86_64`, glued with `lipo`), bundle id `com.moonbot.moonterminal`, minimum macOS 11. The
-slices themselves are compiled earlier, in the matrix job `macOS slice (arm64|x86_64)`, and arrive at
-packaging as artifacts: the runner arrives with 40 GiB of free disk, and two `--release` builds in one
-job once left no room for `hdiutil` itself. Before the build each slice also runs
-`.github/scripts/free-macos-disk.sh` — it removes extra Xcode and simulators, freeing ~100 GiB. The
-data directory is ONE for both bundles: `paths.rs` holds `APP_ID` as a baked-in constant
-`com.moonbot.moonterminal` and does not read `CFBundleIdentifier` — only the identity
-of the bundle itself diverges, which Keychain and Launch Services see. Nobody repeats a universal build
-locally — that is a run of the release workflow.
+`.github/scripts/make-dmg.sh` in the `macOS .dmg (Apple silicon)` job: an Apple-silicon-only
+`arm64` binary, bundle id `com.moonbot.moonterminal`, minimum macOS 11. The binary is compiled
+earlier in the `macOS slice (arm64)` job and arrives at packaging as an artifact. The Intel slice
+was dropped because its cross-build does not fit the runner's memory. Before the build, the arm64
+job also runs `.github/scripts/free-macos-disk.sh` to remove extra Xcode and simulators. The data
+directory is ONE for both bundles: `paths.rs` holds `APP_ID` as a baked-in constant
+`com.moonbot.moonterminal` and does not read `CFBundleIdentifier` — only the identity of the bundle
+itself diverges, which Keychain and Launch Services see. The local bundle script does not reproduce
+the release packaging.
 
 ### Fresh Mac Live Smoke
 

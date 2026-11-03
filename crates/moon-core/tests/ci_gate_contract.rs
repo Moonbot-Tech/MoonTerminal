@@ -681,10 +681,9 @@ fn the_lockfile_contracts_three_steps_run_in_order_in_every_compiling_job() {
 }
 
 /// Breakage guarded: a release whose terminal jobs each refresh MoonUI to "master" on their own.
-/// A MoonUI push landing mid-run then ships the .exe and the .dmg — even the two slices `lipo`
-/// joins into one universal binary — against different MoonUI revisions, and re-running one job
-/// later picks yet another. `validate` must resolve master once and every terminal job must
-/// refresh to exactly that revision.
+/// A MoonUI push landing mid-run then ships the .exe and the .dmg against different MoonUI
+/// revisions, and re-running one job later picks yet another. `validate` must resolve master once
+/// and every terminal job must refresh to exactly that revision.
 #[test]
 fn a_release_builds_every_terminal_job_against_one_moonui_revision() {
     let text = release_workflow_text();
@@ -901,51 +900,48 @@ fn the_macos_deployment_floor_matches_the_bundle_it_ships() {
         make_dmg_text().contains(&format!(
             "<key>LSMinimumSystemVersion</key><string>{floor}</string>"
         )),
-        "make-dmg.sh must stamp the bundle with the floor the slices were compiled against ({floor})"
+        "make-dmg.sh must stamp the bundle with the floor the arm64 binary was compiled against ({floor})"
     );
 }
 
-/// The macOS slices travel between jobs as artifacts, so three places must agree: what the matrix
-/// calls each architecture, the artifact name the packaging job asks for, and the file names
-/// `make-dmg.sh` joins. Nothing else catches a rename — the workflow stays valid YAML and the
-/// break appears only on a tagged release, at `lipo`, with the tag already public.
+/// The arm64 binary travels between jobs as an artifact, so the matrix target, artifact name,
+/// staging path and packaging script must agree. Reintroducing an Intel target or joining slices
+/// would also violate the Apple-silicon-only release contract without otherwise invalidating YAML.
 #[test]
-fn the_macos_slices_reach_the_packaging_job_under_the_names_it_reads() {
+fn the_macos_arm64_binary_reaches_packaging_under_the_name_it_reads() {
     let text = release_workflow_text();
     let script = make_dmg_text();
     let slice = job_body(&text, "macos-slice").expect("release.yml must keep the slice job");
     let packaging = job_body(&text, "macos").expect("release.yml must keep the packaging job");
+    let has = |body: &[&str], want: &str| body.iter().any(|line| line.trim() == want);
 
-    for arch in ["arm64", "x86_64"] {
-        assert!(
-            slice
-                .iter()
-                .any(|line| line.trim().trim_start_matches("- ") == format!("arch: {arch}")),
-            "the matrix must build a `{arch}` slice"
-        );
-        assert!(
-            script.contains(&format!("stage/moonterminal-{arch}")),
-            "make-dmg.sh must read the `{arch}` slice from `stage/`"
-        );
-    }
     assert!(
-        slice
-            .iter()
-            .any(|line| line.trim() == "name: macos-slice-${{ matrix.arch }}")
-            && slice
-                .iter()
-                .any(|line| line.trim() == "path: stage/moonterminal-${{ matrix.arch }}"),
-        "each slice must upload the file make-dmg.sh reads, under a per-arch artifact name"
+        has(&slice, "- arch: arm64") && has(&slice, "target: aarch64-apple-darwin"),
+        "the macOS matrix must build only the Apple silicon target"
     );
     assert!(
-        packaging
-            .iter()
-            .any(|line| line.trim() == "pattern: macos-slice-*")
+        !slice.iter().any(|line| line.contains("x86_64")),
+        "the release must not build an Intel macOS slice"
+    );
+    assert!(
+        script.contains("stage/moonterminal-arm64")
+            && !script.contains("stage/moonterminal-x86_64")
+            && !script.contains("lipo -create"),
+        "make-dmg.sh must package the staged arm64 binary directly, without an Intel slice or lipo join"
+    );
+    assert!(
+        has(&slice, "name: macos-slice-${{ matrix.arch }}")
+            && has(&slice, "path: stage/moonterminal-${{ matrix.arch }}"),
+        "the arm64 build must upload the file make-dmg.sh reads under its per-arch artifact name"
+    );
+    assert!(
+        has(&packaging, "pattern: macos-slice-*")
+            && has(&packaging, "merge-multiple: true")
+            && has(&packaging, "path: stage")
             && packaging
                 .iter()
-                .any(|line| line.trim() == "merge-multiple: true")
-            && packaging.iter().any(|line| line.trim() == "path: stage"),
-        "the packaging job must download every slice into the `stage/` layout make-dmg.sh expects"
+                .any(|line| line.trim() == "test -f stage/moonterminal-arm64 ||"),
+        "packaging must download and require the arm64 artifact in the layout make-dmg.sh expects"
     );
 }
 

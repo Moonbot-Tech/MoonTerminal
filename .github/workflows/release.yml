@@ -21,8 +21,8 @@ name: release
 #
 # ONE revision per run: `validate` reads MoonUI master once and every terminal job refreshes to it
 # with `--precise`. Each job refreshing to "master" on its own would let a MoonUI push landing
-# mid-run ship the .exe and the .dmg — even the two slices of one universal binary — against
-# different MoonUI revisions, and a re-run of one job days later against yet another.
+# mid-run ship the .exe and the .dmg against different MoonUI revisions, and a re-run of one job
+# days later against yet another.
 #
 # Be honest about what that buys: the release compiles the MoonUI master of the moment THIS run
 # started, which can be newer than the master build.yml validated for the tagged commit. The
@@ -39,9 +39,7 @@ name: release
 #
 # What restores: the cache key includes the job id, so the `windows` job below shares a
 # key with build.yml's `windows` and warm-starts from what `main` wrote. The `macos-slice`
-# legs do not — build.yml's macOS job is `macos-probe` — so each architecture of the
-# universal binary compiles cold. They always did; only the pointless write is gone, and
-# since the split the two colds run in parallel rather than back to back.
+# job does not — build.yml's macOS job is `macos-probe` — so the arm64 build compiles cold.
 on:
   push:
     tags: ["v*"]
@@ -138,45 +136,15 @@ jobs:
     name: macOS slice (${{ matrix.arch }})
     needs: validate
     runs-on: macos-15
-    # One slice per job, so neither ever holds two `--release` trees and each starts on a fresh
-    # disk. They used to be built in sequence in the packaging job, which had to delete the first
-    # target dir mid-flight to make room for the second and still ran out at `hdiutil`: the image
-    # arrives with 40 GiB free, and two release trees plus the registry do not fit in that.
-    #
-    # Both slices are cross-built on this arm64 runner. The macOS SDK carries both architectures,
-    # so `--target x86_64-apple-darwin` links natively — no Intel runner involved, which also keeps
-    # the release off the ageing `macos-13` image.
-    #
-    # What that costs: the Intel slice is compiled but never EXECUTED here (an arm64 runner has no
-    # Rosetta by default), so CI proves it links, not that it runs. Intel acceptance is a live
-    # machine. Splitting the job does not change that, and it does not change WHAT is compiled —
-    # only where. The two jobs now compile in parallel, so the wall clock is the slower slice
-    # rather than their sum.
+    # Build separately so packaging starts without a release build tree on its runner.
+    # Apple silicon only: the Intel slice was dropped because its cross-build does not fit the runner's memory.
     strategy:
-      # A red arch must not cancel its sibling: the release is lost either way, and knowing whether
-      # the break is Intel-only or common to both is what the next attempt is planned from. The
-      # sibling's compile is already paid for by the time the first one fails.
-      fail-fast: false
       matrix:
         include:
           - arch: arm64
             target: aarch64-apple-darwin
-            lto: "fat"
-            codegen_units: "1"
-          # The Intel slice's fat-LTO, single-unit codegen of `moonterminal` kills rustc with
-          # SIGBUS on this runner after ~55 min, reproducibly; thin LTO over parallel units
-          # keeps the cross-build inside the runner's memory.
-          - arch: x86_64
-            target: x86_64-apple-darwin
-            lto: "thin"
-            codegen_units: "16"
     env:
-      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto }}
-      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ matrix.codegen_units }}
-      # Both slices name the same floor as the LSMinimumSystemVersion `make-dmg.sh` hardcodes in
-      # the packaging job. Left at the default the Intel slice would claim 10.12 while the bundle
-      # says 11.0 — the two halves of that pair now live in different jobs, so changing one means
-      # changing the other by hand.
+      # Keep the compiler floor in agreement with LSMinimumSystemVersion in make-dmg.sh.
       MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v7
@@ -193,8 +161,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
-          # rust-cache keys on the job id, which both legs share. Naming the target keeps them
-          # apart, so turning saving on later cannot make one arch restore the other's tree.
           key: ${{ matrix.target }}
       # The lockfile contract — see the header and build.yml.
       - name: Verify the committed lockfile agrees with the manifests
@@ -209,48 +175,39 @@ jobs:
         run: |
           mkdir -p stage
           mv target/${{ matrix.target }}/release/moonterminal stage/moonterminal-${{ matrix.arch }}
-      # The name make-dmg.sh reads, so the packaging job can download both slices into `stage/`
-      # unchanged. Upload strips the executable bit; `make-dmg.sh` chmods the joined binary, which
-      # is the one that ships.
+      # The name make-dmg.sh reads, so packaging downloads the arm64 binary into `stage/` unchanged.
+      # Upload strips the executable bit; make-dmg.sh chmods the bundled copy that ships.
       - uses: actions/upload-artifact@v7
         with:
           name: macos-slice-${{ matrix.arch }}
           path: stage/moonterminal-${{ matrix.arch }}
           if-no-files-found: error
-          # Artifacts are immutable, so a re-run of a leg that already uploaded would 409 without
-          # this. Deliberately NO shortened retention: re-running just the packaging job is the
-          # cheap recovery from a flaked `hdiutil`, and an expired slice would take it away.
+          # Artifacts are immutable, so a re-run that already uploaded would 409 without this.
+          # Keep the artifact available for a packaging-only re-run after a flaked `hdiutil`.
           overwrite: true
 
   macos:
-    name: macOS .dmg (universal)
+    name: macOS .dmg (Apple silicon)
     needs: [validate, macos-slice]
     runs-on: macos-15
-    # Ships ONE universal binary covering both Macs, not two downloads: the slices built above are
-    # `lipo`-joined by make-dmg.sh into a single MoonTerminal.app.
-    #
-    # This job compiles nothing, so `hdiutil` images the bundle on a disk holding two binaries and
-    # a checkout instead of one that just finished two Rust builds.
+    # Packages the arm64 binary built above into MoonTerminal.app and a distributable .dmg.
+    # This job compiles nothing, so `hdiutil` runs without a Rust build tree on the same disk.
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
-      # `merge-multiple` puts both slices side by side in `stage/`, which is exactly the layout
-      # make-dmg.sh expects (`stage/moonterminal-arm64`, `stage/moonterminal-x86_64`).
+      # `merge-multiple` puts the arm64 binary at `stage/moonterminal-arm64`, as make-dmg.sh expects.
       - uses: actions/download-artifact@v8
         with:
           pattern: macos-slice-*
           merge-multiple: true
           path: stage
-      # `download-artifact` treats "no artifact matched the pattern" as a warning, and the next
-      # thing to notice would be `lipo` complaining about a missing file. Name the real problem.
-      - name: Check both slices arrived
+      # `download-artifact` only warns when no artifact matches; fail here with the real problem.
+      - name: Check the arm64 build arrived
         run: |
-          for arch in arm64 x86_64; do
-            test -f "stage/moonterminal-$arch" ||
-              { echo "the macos-slice-$arch artifact is missing" >&2; exit 1; }
-          done
+          test -f stage/moonterminal-arm64 ||
+            { echo "the macos-slice-arm64 artifact is missing" >&2; exit 1; }
       - name: Package .app + .dmg
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
@@ -346,10 +303,9 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
-      # By name, not "everything": a bare download would also pull the two intermediate macOS
-      # slices onto this runner. They could never have been PUBLISHED — `files:` below is an
-      # explicit list — but downloading them is pure transfer, and naming what this job consumes
-      # keeps the release's inputs readable.
+      # By name, not "everything": a bare download would also pull the intermediate macOS build
+      # artifact onto this runner. It could never be PUBLISHED — `files:` below is an explicit
+      # list — but naming what this job consumes keeps the release's inputs readable.
       - uses: actions/download-artifact@v8
         with:
           name: windows
