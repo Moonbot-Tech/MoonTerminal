@@ -205,6 +205,21 @@ impl MarketDataSource {
         Some((provider, client.snapshot_revision().unwrap_or(0)))
     }
 
+    /// Cheap revision of one consumer core's own account snapshot.
+    ///
+    /// Unlike [`Self::snapshot_revision`] and [`Self::market_revisions`], this deliberately does
+    /// not follow provider deduplication: PnL and Session belong to the consumer core, whose reset
+    /// or balance update need not move the shared provider's market-data revisions.
+    ///
+    /// Args:
+    ///     core: Consumer core whose own client is read.
+    ///
+    /// Returns:
+    ///     The client's monotonic snapshot revision, or `None` while no client is installed.
+    pub fn account_revision(&self, core: CoreId) -> Option<u64> {
+        self.core_client(core)?.snapshot_revision()
+    }
+
     /// Cheap per-market wake revision for a consumer core.
     ///
     /// This is terminal-owned causality, not a MoonProto storage policy:
@@ -776,6 +791,7 @@ impl MarketDataSource {
                     .position_type
                     .is_known()
                     .then(|| pos.position_type.is_isolated());
+                out.base_currency = snapshot.server_info().base_currency_name.clone();
                 // Reported whenever it is a number at all; whether a ZERO is worth printing is the
                 // caption's call, not this readout's. It is not the "traded to break even" it looks
                 // like: the core leaves this counter at zero on part of its venues.

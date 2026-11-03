@@ -228,6 +228,21 @@ impl ChartDataState {
         !self.historical && self.trade_replay.is_none()
     }
 
+    /// Whether a live caption needs the admitted cores' PnL or Session figures.
+    ///
+    /// Both the sibling reads and their wake signature share this gate: unrelated market captions
+    /// keep their existing single-core cost, and a frozen replay reads no live account figures.
+    pub(super) fn wants_admitted_money(&self) -> bool {
+        self.draws_live_market()
+            && self.chart_labels.any_drawn(|f| {
+                matches!(
+                    f,
+                    moon_core::config::ChartLabelField::SessionPnl
+                        | moon_core::config::ChartLabelField::SessionProfit
+                )
+            })
+    }
+
     /// Mark this engine a historical viewer, mirroring the engine's own flag.
     ///
     /// Args:
@@ -364,6 +379,29 @@ impl ChartDataState {
             // `market.rs` deliberately mixes a SUBSET by hand; this one wants the lot, so it asks
             // for the lot rather than re-listing the fields and drifting from them.
             sig = mix_sig(sig, revs.combined_signature());
+        }
+        if self.wants_admitted_money() {
+            // A sibling's account figures move on the sibling's revision, not the owner's. Fold in
+            // the admitted IDs too: widening or narrowing the existing set must wake the same read
+            // even when no provider has published a snapshot yet.
+            for ix in 0..container.pane_count() {
+                let Some((core, _)) = container.target_ref(ix) else {
+                    continue;
+                };
+                let Some(cores) = self
+                    .trade_history_cores
+                    .as_ref()
+                    .filter(|cores| cores.owner == core && cores.admitted.len() > 1)
+                else {
+                    continue;
+                };
+                for admitted in &cores.admitted {
+                    sig = mix_sig(sig, *admitted);
+                    if let Some(revision) = source.account_revision(*admitted) {
+                        sig = mix_sig(sig, revision);
+                    }
+                }
+            }
         }
         // Only this chart's own cache replies wake it.
         let cache_done = self.render.borrow().panes.iter().fold(0u64, |acc, pr| {

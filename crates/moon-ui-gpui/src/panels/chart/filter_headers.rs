@@ -63,6 +63,41 @@ fn strategy_reveal_target<'a>(
 }
 
 impl ChartPanel {
+    /// Place pointing-hand zones over filter headers, reusing the filter-line tooltip for a full
+    /// widened-core name that the caption had to truncate.
+    pub(super) fn filter_header_cursor_zones(&self) -> Vec<Stateful<Div>> {
+        let mut out = Vec::new();
+        let Some((origin, _, zoom)) = self.chart_origin_logical() else {
+            return out;
+        };
+        for pane in 0..self.chart.pane_count() {
+            for (ix, (rect, core_name)) in
+                self.chart.filter_header_draws(pane).into_iter().enumerate()
+            {
+                let [x, y, w, h] = rect;
+                if w <= 0.0 || h <= 0.0 {
+                    continue;
+                }
+                out.push(
+                    div()
+                        .id(SharedString::from(format!(
+                            "chart-filter-header-{pane}-{ix}"
+                        )))
+                        .absolute()
+                        .left(px((x - origin.0) / zoom))
+                        .top(px((y - origin.1) / zoom))
+                        .w(px(w / zoom))
+                        .h(px(h / zoom))
+                        .cursor(CursorStyle::PointingHand)
+                        .when_some(core_name, |zone, name| {
+                            zone.tooltip(crate::panels::common::text_tooltip_value(name))
+                        }),
+                );
+            }
+        }
+        out
+    }
+
     /// Consume a header press before chart gestures; coordinates arrive in slot device pixels.
     pub(super) fn try_toggle_strategy_filters(
         &mut self,

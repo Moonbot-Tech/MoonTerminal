@@ -3,7 +3,9 @@
 use std::time::{Duration, Instant};
 
 use moon_core::config::{SpanAnchor as LabelAnchor, VolumeSpanKey};
-use moon_core::market::{LiqSpanReadout, PriceLineUpdate, VolumeAt, VolumeSpan, VolumeSpanReadout};
+use moon_core::market::{
+    LiqSpanReadout, MarketFiguresReadout, PriceLineUpdate, VolumeAt, VolumeSpan, VolumeSpanReadout,
+};
 
 use super::orders::refresh_orderbook_label_notionals;
 use super::*;
@@ -2107,6 +2109,7 @@ impl ChartDataState {
             && st
                 .chart_labels
                 .any_drawn(|f| f == LabelField::SessionProfit);
+        let wants_admitted_money = self.wants_admitted_money();
         // Its own gate rather than a share of the one above: this readout walks the retained trade
         // buckets and the 5-minute candle ring, so a chart that prints a spread and no window
         // figure must not pay for that walk on every market revision.
@@ -2166,7 +2169,29 @@ impl ChartDataState {
             let figures = target
                 .as_ref()
                 .filter(|_| wants_figures)
-                .and_then(|(core, market)| source.market_figures(*core, market, wants_session));
+                .and_then(|(core, market)| {
+                    let owner = source.market_figures(*core, market, wants_session);
+                    let widened = self.trade_history_cores.as_ref().filter(|cores| {
+                        wants_admitted_money && cores.owner == *core && cores.admitted.len() > 1
+                    });
+                    let Some(cores) = widened else {
+                        return owner;
+                    };
+                    let mut owner = owner.unwrap_or_default();
+                    if owner.base_currency.is_none() {
+                        owner.base_currency = source.traded_quote(*core);
+                    }
+                    Some(sum_admitted_session_figures(
+                        owner,
+                        cores
+                            .admitted
+                            .iter()
+                            .filter(|admitted| **admitted != *core)
+                            .filter_map(|admitted| {
+                                source.market_figures(*admitted, market, wants_session)
+                            }),
+                    ))
+                });
             // Same clock as the volume captions below: `market_windows` walks retained buckets,
             // and a busy coin revises several times a second. Hold the last readout inside the
             // period; a new market reads immediately.
@@ -2325,6 +2350,44 @@ impl ChartDataState {
         self.view_dirty = false;
         self.last_volume_prepared_rev = volume_revision;
     }
+}
+
+/// Sum the two account-money caption figures over admitted cores in the owner's base currency.
+///
+/// `core_pnl` remains in that base currency, while `session` has already been valued in USDT by
+/// `market_figures`; both still require a matching base so a coin-margined core is never mixed into
+/// a stablecoin owner's total. A missing figure contributes nothing rather than becoming zero.
+///
+/// Args:
+///     owner: The pane's own readout, whose other figures and base currency are preserved.
+///     admitted: Readouts from the other cores in the existing admitted-history set.
+///
+/// Returns:
+///     The owner readout with only `core_pnl` and `session` replaced by their compatible sums.
+fn sum_admitted_session_figures(
+    mut owner: MarketFiguresReadout,
+    admitted: impl IntoIterator<Item = MarketFiguresReadout>,
+) -> MarketFiguresReadout {
+    let mut core_pnl = owner.core_pnl;
+    let mut session = owner.session;
+    for other in admitted {
+        let same_unit = match (&owner.base_currency, &other.base_currency) {
+            (Some(owner), Some(other)) => owner.trim().eq_ignore_ascii_case(other.trim()),
+            _ => false,
+        };
+        if !same_unit {
+            continue;
+        }
+        if let Some(value) = other.core_pnl {
+            core_pnl = Some(core_pnl.unwrap_or(0.0) + value);
+        }
+        if let Some(value) = other.session {
+            session = Some(session.unwrap_or(0.0) + value);
+        }
+    }
+    owner.core_pnl = core_pnl;
+    owner.session = session;
+    owner
 }
 
 #[cfg(test)]

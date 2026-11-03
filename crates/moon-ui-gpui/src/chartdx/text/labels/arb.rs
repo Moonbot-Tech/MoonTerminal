@@ -171,17 +171,33 @@ fn plain_column_line(
     }
 }
 
-/// The collapse control's title and, when folded, the number of lines the column would emit.
+/// Build the collapse control's fixed head and the core-name segment that may be truncated.
 /// Geist Mono lacks the triangular carets, so the control uses supported ASCII markers.
-fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> String {
+/// A widened chart names the one core whose filters these are after the title and count; its corner
+/// name describes the whole admitted set and cannot identify them. An ordinary chart keeps the
+/// exact single-string caption it had before the widened state named its core.
+fn filter_header(
+    row: &moon_core::config::ChartLabelRow,
+    lines: &[String],
+    core_name: &str,
+) -> (String, String) {
     let title = crate::controls::row_title(row)
         .unwrap_or_else(|| t!("chart_labels.field.strategy_filters").to_string());
-    if row.collapsed {
-        let count = lines.iter().filter(|line| !line.is_empty()).count();
-        format!("> {title} \u{b7} {count}")
-    } else {
-        format!("v {title}")
+    let marker = if row.collapsed { ">" } else { "v" };
+    if core_name.is_empty() {
+        let text = if row.collapsed {
+            let count = lines.iter().filter(|line| !line.is_empty()).count();
+            format!("{marker} {title} \u{b7} {count}")
+        } else {
+            format!("{marker} {title}")
+        };
+        return (String::new(), text);
     }
+    let count = lines.iter().filter(|line| !line.is_empty()).count();
+    (
+        format!("{marker} {title} \u{b7} {count}"),
+        format!(" \u{b7} {core_name}"),
+    )
 }
 
 /// Build the strategy-filter column with its control immediately before the skip reasons.
@@ -198,6 +214,7 @@ fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> St
 ///     row_ix: Label row the column belongs to.
 ///     row: The module, including whether it is folded.
 ///     lines: Skip reasons as the core spelled them.
+///     core_name: Own core to name while the pane's history is widened, or empty.
 ///     first: First real line of the scrolled window.
 pub(super) fn push_filter_rows(
     out: &mut Vec<LabelText>,
@@ -205,13 +222,15 @@ pub(super) fn push_filter_rows(
     row_ix: usize,
     row: &moon_core::config::ChartLabelRow,
     lines: &[String],
+    core_name: &str,
     first: u32,
 ) {
+    let (prefix, text) = filter_header(row, lines, core_name);
     out.push(LabelText {
         row: row_ix,
         part: FILTER_HEADER_PART,
-        text: filter_header(row, lines),
-        prefix: String::new(),
+        text,
+        prefix,
         sign: None,
         reachable: false,
         venue: None,

@@ -3,6 +3,13 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+/// Which caption segments the fitting rule is allowed to truncate.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(super) enum FitRule {
+    Caption,
+    FilterHeader,
+}
+
 /// Borrowed inputs that determine the exact fit or wrap result.
 #[derive(Clone, Copy)]
 pub(super) struct FitInput<'a> {
@@ -11,6 +18,7 @@ pub(super) struct FitInput<'a> {
     pub budget: f32,
     pub size: f32,
     pub wraps: bool,
+    pub rule: FitRule,
 }
 
 /// Owned key and result; comparing the key makes hash collisions harmless.
@@ -20,6 +28,7 @@ struct Entry {
     budget: u32,
     size: u32,
     wraps: bool,
+    rule: FitRule,
     lines: Vec<(String, f32)>,
 }
 
@@ -31,6 +40,7 @@ impl Entry {
             && self.budget == input.budget.to_bits()
             && self.size == input.size.to_bits()
             && self.wraps == input.wraps
+            && self.rule == input.rule
     }
 }
 
@@ -69,6 +79,7 @@ impl FitMemo {
             input.budget.to_bits(),
             input.size.to_bits(),
             input.wraps,
+            input.rule,
         )
             .hash(&mut hash);
         let key = hash.finish();
@@ -96,7 +107,12 @@ impl FitMemo {
                 width,
             )
         } else {
-            vec![crate::design::fit_text(&glued, input.budget, width)]
+            vec![match input.rule {
+                FitRule::Caption => crate::design::fit_text(&glued, input.budget, width),
+                FitRule::FilterHeader => {
+                    super::fit::fit_filter_header(input.prefix, input.text, input.budget, width)
+                }
+            }]
         };
         self.cur.insert(
             key,
@@ -106,6 +122,7 @@ impl FitMemo {
                 budget: input.budget.to_bits(),
                 size: input.size.to_bits(),
                 wraps: input.wraps,
+                rule: input.rule,
                 lines: lines.clone(),
             },
         );

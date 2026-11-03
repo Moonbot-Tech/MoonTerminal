@@ -90,9 +90,15 @@ pub(crate) fn preview_row(
             let base = part.resolved_style();
             let mut lines = Vec::new();
             match part.field {
-                ChartLabelField::StrategyFilters => {
-                    push_filter_rows(&mut lines, &mut Vec::new(), 0, row, &inputs.filter_lines, 0)
-                }
+                ChartLabelField::StrategyFilters => push_filter_rows(
+                    &mut lines,
+                    &mut Vec::new(),
+                    0,
+                    row,
+                    &inputs.filter_lines,
+                    &inputs.filter_core_name,
+                    0,
+                ),
                 _ => push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base, 0),
             }
             out.extend(lines.into_iter().map(|line| PreviewCaption {
@@ -186,6 +192,7 @@ fn sample_inputs() -> LabelInputs {
             "EMA_01 (EMA) : EMA filter not passed".to_string(),
             "HOOK_01 (MoonHook) : Daily vol. doesnt match".to_string(),
         ],
+        filter_core_name: String::new(),
         // The editor previews every field on ONE sample, the trade captions included: a reader
         // configuring the trade window's module has to see what it will print, and a preview that
         // left them blank would read as a module that prints nothing.
@@ -246,6 +253,7 @@ fn sample_inputs() -> LabelInputs {
             liq_price: Some(41_120.0),
             leverage_x: Some(10),
             isolated: Some(true),
+            base_currency: Some("USDT".into()),
             core_pnl: Some(-12.40),
             session: Some(48.15),
             coin_balance: Some(0.42),

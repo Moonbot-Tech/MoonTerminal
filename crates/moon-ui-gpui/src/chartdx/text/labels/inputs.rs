@@ -28,6 +28,11 @@ pub(in crate::chartdx) struct LabelInputs {
     /// Empty until the chart has asked for them and the core has answered. Compared by value in
     /// the caption cache, so a new snapshot re-formats the column and an identical repeat does not.
     pub filter_lines: Vec<String>,
+    /// Own core named by the strategy-filter header while this pane owns a widened history set.
+    ///
+    /// Empty in the ordinary per-core state, where the chart already identifies that core. Kept
+    /// apart from `core_name`, whose widened form names the exchange and the admitted-core count.
+    pub filter_core_name: String,
     /// What the CLOSED TRADE this chart was handed was: the strategy that opened it, the line it
     /// fired on, why it closed. `None` on every live chart — the trade-detail window is the only
     /// one that is handed a trade, and the captions reading this print nothing anywhere else.

@@ -12,6 +12,7 @@ fn input() -> FitInput<'static> {
         text: "a long synthetic caption",
         budget: 70.0,
         size: 12.0,
+        rule: super::FitRule::Caption,
         wraps: false,
     }
 }
@@ -62,6 +63,10 @@ fn each_key_input_misses() {
         },
         FitInput {
             wraps: true,
+            ..original
+        },
+        FitInput {
+            rule: super::FitRule::FilterHeader,
             ..original
         },
         FitInput {
@@ -121,6 +126,7 @@ fn memo_result_equals_direct_fit_text() {
                             budget,
                             wraps,
                             size: 12.0,
+                            rule: super::FitRule::Caption,
                         };
                         let glued = format!("{prefix}{text}");
                         let measure = |text: &str| text.chars().count() as f32 * 7.0;
@@ -205,6 +211,7 @@ fn caption_fit_wrap_bench() {
                     text,
                     budget: 105.0,
                     size: 12.0,
+                    rule: super::FitRule::Caption,
                     wraps: ix < 10,
                 },
                 |text, _| measure(text),

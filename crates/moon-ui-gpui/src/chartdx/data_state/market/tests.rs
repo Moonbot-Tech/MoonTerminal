@@ -861,3 +861,116 @@ fn patch_bound_keeps_wide_row_and_wider_tail() {
         "a wider tail must raise the bound"
     );
 }
+
+/// One synthetic account readout in a named base currency.
+fn money(
+    base_currency: &str,
+    core_pnl: Option<f64>,
+    session: Option<f64>,
+) -> moon_core::market::MarketFiguresReadout {
+    moon_core::market::MarketFiguresReadout {
+        base_currency: Some(base_currency.into()),
+        core_pnl,
+        session,
+        ..Default::default()
+    }
+}
+
+/// Dropping any compatible contribution would make the all-cores captions understate the total.
+#[test]
+fn admitted_money_sums_several_cores() {
+    let total = super::sum_admitted_session_figures(
+        money("USDT", Some(10.25), Some(1.5)),
+        [
+            money("USDT", Some(-0.25), Some(2.0)),
+            money("USDT", Some(2.0), None),
+        ],
+    );
+    assert_eq!(total.core_pnl, Some(12.0));
+    assert_eq!(total.session, Some(3.5));
+}
+
+/// Treating an unpublished figure as zero would invent a Session value and could hide PnL.
+#[test]
+fn admitted_money_skips_a_core_without_the_figure() {
+    let total = super::sum_admitted_session_figures(
+        money("USDT", None, None),
+        [
+            money("USDT", Some(4.0), None),
+            money("USDT", None, Some(2.5)),
+        ],
+    );
+    assert_eq!(total.core_pnl, Some(4.0));
+    assert_eq!(total.session, Some(2.5));
+
+    let absent =
+        super::sum_admitted_session_figures(money("USDT", None, None), [money("USDT", None, None)]);
+    assert_eq!(absent.core_pnl, None);
+    assert_eq!(absent.session, None);
+}
+
+/// A coin-margined core must not contribute BTC-denominated PnL to a USDT owner's caption.
+#[test]
+fn admitted_money_excludes_a_mixed_unit_core() {
+    let total = super::sum_admitted_session_figures(
+        money("USDT", Some(10.0), Some(1.0)),
+        [
+            money("BTC", Some(100.0), Some(100.0)),
+            money("usdt", Some(2.0), Some(3.0)),
+        ],
+    );
+    assert_eq!(total.core_pnl, Some(12.0));
+    assert_eq!(total.session, Some(4.0));
+}
+
+/// With no admitted suffix, aggregation must leave every single-core figure exactly as it was.
+#[test]
+fn non_widened_money_readout_is_unchanged() {
+    let owner = moon_core::market::MarketFiguresReadout {
+        bid: Some(42.0),
+        ..money("USDT", Some(5.0), Some(-2.0))
+    };
+    let total = super::sum_admitted_session_figures(owner.clone(), []);
+    assert_eq!(total, owner);
+}
+
+/// Omitting admitted revisions would strand totals on a quiet owner, while including them for
+/// unrelated captions would charge every chart for sibling locks it cannot display.
+#[test]
+fn admitted_set_moves_the_signature_only_for_money_captions() {
+    use moon_core::config::{
+        ChartLabelField, ChartLabelRow, ChartLabelsCfg, ChartTheme, LabelAlign, LabelZone,
+    };
+    use moon_core::market::{MarketDataSource, MarketStore};
+    use std::rc::Rc;
+
+    let mut engine = crate::chartdx::ChartEngine::new(0.0, ChartTheme::default());
+    engine.open(1, "XALPHAUSDT");
+    let source = MarketDataSource::new(MarketStore::shared(0.0));
+    let mut data = engine.data.borrow_mut();
+    data.chart_labels = Rc::new(ChartLabelsCfg::empty());
+    let ordinary_narrow = data.source_market_signature(&source);
+    data.trade_history_cores = Some(Rc::new(
+        crate::chartdx::trade_history_sync::TradeHistoryCores {
+            owner: 1,
+            admitted: vec![1, 2],
+        },
+    ));
+    assert_eq!(ordinary_narrow, data.source_market_signature(&source));
+
+    let mut money_cfg = ChartLabelsCfg::empty();
+    money_cfg.rows[0] = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    money_cfg.rows[0].push_part(ChartLabelField::SessionPnl);
+    data.chart_labels = Rc::new(money_cfg);
+    let money_wide = data.source_market_signature(&source);
+    data.trade_history_cores = None;
+    let money_narrow = data.source_market_signature(&source);
+    assert_ne!(money_wide, money_narrow);
+    data.trade_history_cores = Some(Rc::new(
+        crate::chartdx::trade_history_sync::TradeHistoryCores {
+            owner: 1,
+            admitted: vec![1, 2],
+        },
+    ));
+    assert_eq!(money_wide, data.source_market_signature(&source));
+}
