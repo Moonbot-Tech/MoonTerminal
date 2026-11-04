@@ -277,7 +277,7 @@ fn capture(
     // callbacks have passed while the substituted caption reached the screen, and the burnt-in
     // header must describe the frame that was actually photographed.
     let inputs = panel.read(cx).shot_inputs(backend.read(cx));
-    let when_ms = chrono::Utc::now().timestamp_millis();
+    let when_ms = moon_core::util::now_unix_ms_i64();
     super::capture_windows(native, rect, &inputs, when_ms)
 }
 

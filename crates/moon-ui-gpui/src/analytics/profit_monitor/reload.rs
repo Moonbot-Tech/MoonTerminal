@@ -16,7 +16,7 @@ impl ProfitMonitorView {
             loop {
                 executor
                     .timer(duration_until_wall_clock_boundary(
-                        SystemTime::now(),
+                        moon_core::util::time::now(),
                         CONTEXT_REFRESH_MS,
                     ))
                     .await;
@@ -116,7 +116,8 @@ impl ProfitMonitorView {
     pub(super) fn start_clock_refresh(&mut self, cx: &mut Context<Self>) {
         self.clock_timer_generation = self.clock_timer_generation.wrapping_add(1);
         let generation = self.clock_timer_generation;
-        let Some(wait) = duration_until_period_refresh(self.period, self.zone, SystemTime::now())
+        let Some(wait) =
+            duration_until_period_refresh(self.period, self.zone, moon_core::util::time::now())
         else {
             return;
         };

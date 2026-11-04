@@ -42,7 +42,6 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;

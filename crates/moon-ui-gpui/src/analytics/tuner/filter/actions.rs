@@ -866,7 +866,7 @@ impl AnalyticsView {
     /// Returns:
     ///     The Comment field name and its updated selected-zone value.
     pub(in crate::analytics::tuner) fn analyzer_comment(&self) -> (String, String) {
-        let now = std::time::SystemTime::now()
+        let now = moon_core::util::time::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);

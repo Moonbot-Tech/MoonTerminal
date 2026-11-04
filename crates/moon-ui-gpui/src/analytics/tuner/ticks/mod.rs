@@ -93,7 +93,7 @@ impl AnalyticsView {
         // The order is settled before the data is viewed: both live in `ticks`, and the sort
         // cache needs the mutable half. It is the SHOWN rows: with the switch on, only the
         // sample the variants run on.
-        let now_ms = chrono::Utc::now().timestamp_millis();
+        let now_ms = moon_core::util::now_unix_ms_i64();
         let min_tail_s = tail::effective_s();
         let admission = tail::Admission::at(min_tail_s, now_ms);
         let drawn = rows::order_for(&mut self.ticks, min_tail_s, now_ms).len();

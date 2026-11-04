@@ -123,7 +123,7 @@ impl MonitorClockView {
             loop {
                 executor
                     .timer(duration_until_wall_clock_boundary(
-                        SystemTime::now(),
+                        moon_core::util::time::now(),
                         SECOND_MS,
                     ))
                     .await;

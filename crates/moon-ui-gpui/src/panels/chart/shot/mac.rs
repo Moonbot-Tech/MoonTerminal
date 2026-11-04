@@ -225,7 +225,7 @@ impl Shot {
                 pixels: receiver,
                 rect,
                 inputs: self.panel.read(cx).shot_inputs(self.backend.read(cx)),
-                when_ms: chrono::Utc::now().timestamp_millis(),
+                when_ms: moon_core::util::now_unix_ms_i64(),
             })
         })();
         if let Some(pending) = request {

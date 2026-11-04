@@ -1501,7 +1501,7 @@ pub(super) fn replay_row_with(
         window.close_ms,
         row.held,
         super::tail::current_s(),
-        chrono::Utc::now().timestamp_millis(),
+        moon_core::util::now_unix_ms_i64(),
     );
     let (exit_held, entry_held) = held_sides(&covered, &window, row.deal.buy_ms, short_allowed);
     if ticks.is_empty() || !exit_held {

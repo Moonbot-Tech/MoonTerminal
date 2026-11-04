@@ -982,7 +982,7 @@ fn legacy_volume_is_quote(exchange: &str, kind_min: u32) -> bool {
 }
 
 fn now_unix_ms() -> i64 {
-    std::time::SystemTime::now()
+    crate::util::time::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
 }
