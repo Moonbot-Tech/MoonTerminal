@@ -2,9 +2,22 @@
 use moon_core::config::{HVOL_TF_MAX_S, HvolSide};
 
 use super::{
-    PRICE_FRAME_PCTS, WIDTHS, nearest, price_frame_label, side_of, whole_percent_label,
-    window_choices,
+    CANDLE_VOLUME_ALPHAS, CANDLE_VOLUME_HEIGHTS, PRICE_FRAME_PCTS, WIDTHS, nearest,
+    price_frame_label, side_of, whole_percent_label, window_choices,
 };
+
+/// Only the two requested preset cells move to 20%, while stored legacy values still resolve to
+/// the nearest available cell without being rewritten.
+///
+/// Breakage: changing a neighbour, restoring 18% or 22%, or migrating the stored value would alter
+/// more than the two buttons requested by the user.
+#[test]
+fn volume_presets_round_only_the_two_legacy_cells() {
+    assert_eq!(CANDLE_VOLUME_HEIGHTS, [0.05, 0.10, 0.20, 0.25, 0.35, 0.45]);
+    assert_eq!(CANDLE_VOLUME_ALPHAS, [0.0, 0.15, 0.20, 0.30, 0.50, 1.0]);
+    assert_eq!(nearest(&CANDLE_VOLUME_HEIGHTS, 0.18), 2);
+    assert_eq!(nearest(&CANDLE_VOLUME_ALPHAS, 0.22), 2);
+}
 
 /// The window dropdown offers `Auto`, every listed window and `Max`, in that order and nothing
 /// else.
