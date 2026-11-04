@@ -42,7 +42,7 @@ pub fn pin_clock(at_ms: i64) {
 /// For a reading of "now" that is shown, or compared with what the application stores. Direct
 /// `SystemTime::now()` remains where it cannot matter or must not move: readings compared only with
 /// each other (how long the Strategies window was closed, the Assets render cadence), a file's age,
-/// a random seed, and a key's expiry from a live core.
+/// a random seed, a key's expiry from a live core, and the moment a licence was accepted.
 pub fn now() -> SystemTime {
     shifted(SystemTime::now(), CLOCK_SHIFT_MS.load(Ordering::Relaxed))
 }
