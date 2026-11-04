@@ -59,6 +59,7 @@ pub(crate) mod row_selection;
 mod scale;
 mod strips;
 pub(crate) mod toolbar;
+pub(crate) mod trigger_fit;
 
 mod venue_label;
 pub(crate) mod wrap_fit;

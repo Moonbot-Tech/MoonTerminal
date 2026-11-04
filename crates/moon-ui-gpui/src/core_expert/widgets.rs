@@ -682,14 +682,14 @@ pub(super) fn sound_cell(
         .items_center()
         .gap(design::ui_px(cx, 4.0))
         .child(
-            MoonDropdown::new(id)
-                .label(label)
-                .trigger_caret(true)
-                .trigger_variant(design::mixed_trigger_variant(mixed))
-                .trigger_size(MoonButtonSize::density(cx))
-                .trigger_width_scaled(94.0)
-                .fit_menu_width(128.0, 560.0)
-                .items(items),
+            crate::panels::common::sound_dropdown(
+                id,
+                label,
+                crate::panels::common::SOUND_TRIGGER_MIN_W,
+                cx,
+            )
+            .trigger_variant(design::mixed_trigger_variant(mixed))
+            .items(items),
         )
         .child(crate::panels::common::sound_preview_button(
             SharedString::from(format!("{id}-play")),

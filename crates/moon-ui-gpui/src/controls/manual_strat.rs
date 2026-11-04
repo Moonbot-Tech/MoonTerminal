@@ -393,7 +393,7 @@ pub fn manual_strategy_controls(
             crate::chrome::terminal_chrome::header_gear_popover(
                 "ms-slots",
                 MoonPopoverPlacement::BottomStart,
-                SLOT_SETTINGS_W,
+                settings::settings_width(SLOT_SETTINGS_W, core, backend.read(cx), cx),
                 slots_open,
                 content,
                 MoonButton::new("ms-slots-gear")

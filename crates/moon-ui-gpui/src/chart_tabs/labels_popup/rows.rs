@@ -15,7 +15,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::{
-    FIELD_W, GAP_STEPS, GAP_W, LabelsPopupHost, MICRO_W, NAME_W, ROW_GAP, ZONE_W, fit_row_name,
+    FIELD_W, GAP_STEPS, GAP_W, LabelsPopupHost, MICRO_W, NAME_W, ROW_GAP, fit_row_name,
     name_budget, write_cfg,
 };
 use crate::controls::row_display_name;
@@ -128,13 +128,7 @@ fn row_line<T: LabelsPopupHost>(
             })
             .render()
     };
-    let zone_dd = MoonDropdown::new(SharedString::from(format!("cl-zone-{ix}")))
-        .label(t!(row.zone.locale_key()).to_string())
-        .trigger_caret(true)
-        .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::density(cx))
-        .trigger_width_scaled(ZONE_W)
-        .fit_menu_width(168.0, 560.0)
+    let zone_dd = zone_dropdown(ix, t!(row.zone.locale_key()).to_string(), cx)
         .items(zone_items(entity, cfg, ix));
     // Where in the band the module sits. Three visible states rather than one cycling button: the
     // current edge has to be readable at a glance, and a cycler answers "what is it now" only from
@@ -301,6 +295,18 @@ pub(super) fn add_row_dropdown<T: LabelsPopupHost>(
         .fit_menu_width(190.0, 560.0)
         .disabled(cfg.first_free_row().is_none())
         .items(items)
+}
+
+/// The band trigger of line `ix`, at the one width the longest band name needs.
+pub(super) fn zone_dropdown(ix: usize, label: String, cx: &App) -> MoonDropdown {
+    let w = super::zone_w(cx);
+    MoonDropdown::new(SharedString::from(format!("cl-zone-{ix}")))
+        .label(label)
+        .trigger_caret(true)
+        .trigger_variant(MoonButtonVariant::Soft)
+        .trigger_size(MoonButtonSize::density(cx))
+        .fit_trigger_width(w, w)
+        .fit_menu_width(168.0, 560.0)
 }
 
 /// Band choices, the plot's family first and the control strip's after a separator.

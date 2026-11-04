@@ -43,6 +43,10 @@ const SLOT_COL_W: f32 = 42.0;
 const STRATEGY_COL_W: f32 = 164.0;
 /// Trigger width of the hook picker beside it.
 const HOOK_COL_W: f32 = 130.0;
+/// Widest the strategy column grows to for a long name; past it the name ellipsizes.
+const STRATEGY_COL_MAX_W: f32 = 260.0;
+/// Widest the hook column grows to for a long name; past it the name ellipsizes.
+const HOOK_COL_MAX_W: f32 = 200.0;
 /// Width of the hotkey column, showing the terminal binding this slot answers to.
 ///
 /// Wide enough for the longest binding it can print, `CTRL-ALT-1`: a column that truncates the
@@ -52,6 +56,72 @@ const HOTKEY_COL_W: f32 = 78.0;
 const MENU_MIN_W: f32 = 260.0;
 /// Menu height cap, so ten strategies do not push the popup past the window.
 const MENU_MAX_H: f32 = 220.0;
+
+/// Design widths of the strategy and hook columns: the longest name the ten slots show, between
+/// each column's floor and cap, so every row's pickers line up and no closed picker cuts a name
+/// the row has room for.
+///
+/// Args:
+///     core: Core whose slots are shown.
+///     b: Application state read for the slots and their hooks.
+///     cx: Application context supplying the theme's text metrics.
+///
+/// Returns:
+///     `(strategy column, hook column)` in design units.
+fn column_widths(core: CoreId, b: &Backend, cx: &App) -> (f32, f32) {
+    let slots = b.strat_slots(core).unwrap_or_default();
+    let strategies = b
+        .session
+        .store()
+        .core(core)
+        .map(|data| data.strategies.as_slice())
+        .unwrap_or_default();
+    let none = t!("header.ms_slot_unassigned").to_string();
+    let no_hook = t!("header.ms_hook_none").to_string();
+    let mut names = vec![none];
+    let mut hooks = vec![no_hook];
+    for slot in slots.iter().take(MANUAL_STRAT_SLOTS) {
+        let assigned = slot.strategy.trim().to_string();
+        if let Some(sid) = manual_strategy_id(strategies, &assigned) {
+            let hook = b.strategy_hook_shown(core, sid);
+            if !hook.is_empty() {
+                hooks.push(hook);
+            }
+        }
+        if !assigned.is_empty() {
+            names.push(assigned);
+        }
+    }
+    let size = moon_ui::MoonButtonSize::density(cx);
+    let fit = |labels: &[String], floor: f32, cap: f32| {
+        crate::controls::trigger_fit::widest_design(
+            cx,
+            labels.iter().map(String::as_str),
+            size,
+            floor,
+        )
+        .min(cap)
+    };
+    (
+        fit(&names, STRATEGY_COL_W, STRATEGY_COL_MAX_W),
+        fit(&hooks, HOOK_COL_W, HOOK_COL_MAX_W),
+    )
+}
+
+/// Content width of the popup: `base` plus whatever the two picker columns grew past their floors.
+///
+/// Args:
+///     base: The popup's content width with both columns at their floors.
+///     core: Core whose slots are shown.
+///     b: Application state read for the slots.
+///     cx: Application context supplying the theme's text metrics.
+///
+/// Returns:
+///     The content width, in the same font-scaled units as `base`.
+pub(super) fn settings_width(base: f32, core: CoreId, b: &Backend, cx: &App) -> f32 {
+    let (strategy, hook) = column_widths(core, b, cx);
+    base + (strategy - STRATEGY_COL_W) + (hook - HOOK_COL_W)
+}
 
 /// Build the popup's content: ten slot rows, the two exit rules, and the two actions.
 ///
@@ -98,6 +168,7 @@ pub(super) fn slot_settings_content(
     // strategy name ten times on each repaint the popup is open for.
     let slot_names = super::slot_strategy_names(&manuals);
     let hooks = b.hook_strategy_names(core);
+    let (strategy_w, hook_w) = column_widths(core, b, cx);
     let gap = design::ui_px(cx, 6.0);
 
     let mut rows = v_flex().gap(gap).w_full();
@@ -150,7 +221,14 @@ pub(super) fn slot_settings_content(
                 // the two pairs: the left one is the slot's own manual strategy, the right one the
                 // hook that strategy defers to. Position is what tells the two buttons apart, so
                 // neither needs a colour of its own.
-                .child(strategy_picker(core, slot, &assigned, &slot_names, backend))
+                .child(strategy_picker(
+                    core,
+                    slot,
+                    &assigned,
+                    &slot_names,
+                    strategy_w,
+                    backend,
+                ))
                 .child(goto_button(
                     SharedString::from(format!("ms-slot-goto-{slot}")),
                     t!("coin_menu.strategy_goto").to_string(),
@@ -168,6 +246,7 @@ pub(super) fn slot_settings_content(
                     sid.filter(|_| hook_writable),
                     &hook_now,
                     &hooks,
+                    hook_w,
                     backend,
                 ))
                 // The hook is a strategy of its own, with its own parameters to edit — and the one
@@ -385,6 +464,7 @@ fn goto_button(
 ///     slot: Zero-based quick-select slot.
 ///     assigned: Strategy name currently stored for the slot; empty for none.
 ///     names: Distinct Manual-strategy names this slot can be assigned, in snapshot order.
+///     width: Design width of the strategy column, shared by every row.
 ///     backend: Application state the selection is written to.
 ///
 /// Returns:
@@ -394,6 +474,7 @@ fn strategy_picker(
     slot: usize,
     assigned: &str,
     names: &[String],
+    width: f32,
     backend: &Entity<Backend>,
 ) -> AnyElement {
     let none_label = t!("header.ms_slot_unassigned").to_string();
@@ -429,15 +510,17 @@ fn strategy_picker(
                 }),
         );
     }
+    let shown = if assigned.is_empty() {
+        none_label
+    } else {
+        assigned.to_string()
+    };
     MoonDropdown::new(SharedString::from(format!("ms-slot-strat-{slot}")))
-        .label(if assigned.is_empty() {
-            none_label
-        } else {
-            assigned.to_string()
-        })
+        .trigger_tooltip(shown.clone())
+        .label(shown)
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_width_scaled(STRATEGY_COL_W)
+        .fit_trigger_width(width, width)
         .fit_menu_width(MENU_MIN_W, 560.0)
         .menu_max_height_ui(MENU_MAX_H)
         .items(items)
@@ -457,6 +540,7 @@ fn strategy_picker(
 ///          cannot be written to it — both leave the picker disabled.
 ///     current: Hook that strategy holds right now, unconfirmed edits included; empty for none.
 ///     hooks: MoonHook strategy names this core offers.
+///     width: Design width of the hook column, shared by every row.
 ///     backend: Application state that sends the field edit.
 ///
 /// Returns:
@@ -467,6 +551,7 @@ fn hook_picker(
     sid: Option<u64>,
     current: &str,
     hooks: &[String],
+    width: f32,
     backend: &Entity<Backend>,
 ) -> AnyElement {
     let mut items = Vec::with_capacity(hooks.len() + 1);
@@ -498,12 +583,14 @@ fn hook_picker(
                 }),
         );
     }
+    let shown = if current.is_empty() {
+        t!("header.ms_hook_none").to_string()
+    } else {
+        current.to_string()
+    };
     MoonDropdown::new(SharedString::from(format!("ms-slot-hook-{slot}")))
-        .label(if current.is_empty() {
-            t!("header.ms_hook_none").to_string()
-        } else {
-            current.to_string()
-        })
+        .trigger_tooltip(shown.clone())
+        .label(shown)
         .trigger_caret(true)
         // Amber wherever a hook is set, matching the quick-select button's own mark. The two answer
         // different questions for the length of a core round trip — this control shows what was
@@ -514,7 +601,7 @@ fn hook_picker(
         } else {
             MoonButtonVariant::Amber
         })
-        .trigger_width_scaled(HOOK_COL_W)
+        .fit_trigger_width(width, width)
         .fit_menu_width(MENU_MIN_W, 560.0)
         .menu_max_height_ui(MENU_MAX_H)
         .disabled(sid.is_none())

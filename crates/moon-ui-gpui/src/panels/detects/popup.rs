@@ -26,12 +26,21 @@ use crate::panels::{
     POPUP_GROUP_INSET, RadioMark, popup_close_button, popup_group, popup_title, radio_items,
 };
 
-/// Popup width in logical pixels: three large-slot columns (76-pixel dropdown plus three 20-pixel
-/// toggles), with room for gaps, borders, and padding.
+/// Popup width floor in logical pixels; the slot grid widens it when its fields need more.
 ///
 /// This is the CONTENT width handed to `MoonPopover::content_width_ui`; the popover adds its own
 /// padding and border around it.
 const POPUP_W: f32 = 560.0;
+/// Floor of a slot's field trigger, in design units.
+const SLOT_FIELD_MIN_W: f32 = 76.0;
+/// Micro toggles after a large slot's field, each 20 wide with a 2-pixel gap before it.
+const SLOT_TOGGLES_W: f32 = 3.0 * (20.0 + 2.0);
+/// Gap between two slot cells on a grid row.
+const SLOT_GAP: f32 = 6.0;
+/// Horizontal padding of the mock card around the grid (left 12, right 8).
+const GRID_PAD_X: f32 = 20.0;
+/// Margin that keeps the last toggle off the card's right border.
+const GRID_SLACK: f32 = 8.0;
 
 /// Size tabs as `(size code, localization key)` pairs.
 const TABS: [(u8, &str); 3] = [
@@ -47,8 +56,35 @@ const CHARTS: [(DetectChart, &str); 3] = [
     (DetectChart::Line, "detects.cfg.chart_line"),
 ];
 
+/// Design width every slot's field trigger draws at: the longest field name in the active
+/// language, so no closed slot cuts its word and the grid columns stay straight.
+fn slot_field_w(cx: &App) -> f32 {
+    let labels: Vec<String> = DetectField::ALL
+        .iter()
+        .map(|f| t!(field_key(*f)).to_string())
+        .collect();
+    crate::controls::trigger_fit::widest_design(
+        cx,
+        labels.iter().map(String::as_str),
+        MoonButtonSize::density(cx),
+        SLOT_FIELD_MIN_W,
+    )
+}
+
+/// Popup content width in `ui` design units, derived from the widest three-slot grid row.
+///
+/// The field triggers fit through the font channel and the rest of the row through `ui`, so the
+/// trigger is converted by its own rendered width rather than added as a design number.
+pub(super) fn popup_w(cx: &App) -> f32 {
+    let ui_scale = (design::ui_value(cx, 100.0) / 100.0).max(f32::EPSILON);
+    let size = MoonButtonSize::density(cx);
+    let field = slot_field_w(cx) * crate::controls::trigger_fit::design_scale(cx, size) / ui_scale;
+    let row = 3.0 * (field + SLOT_TOGGLES_W) + 2.0 * SLOT_GAP;
+    POPUP_W.max((row + GRID_PAD_X + GRID_SLACK + POPUP_GROUP_INSET).ceil())
+}
+
 /// Returns the localization key for a slot-field label.
-fn field_key(f: DetectField) -> &'static str {
+pub(super) fn field_key(f: DetectField) -> &'static str {
     match f {
         DetectField::None => "detects.field.none",
         DetectField::Coin => "detects.field.coin",
@@ -129,7 +165,7 @@ pub(super) fn toolbar(
     let body = this.popup_open.then(|| content(this, cfg, p, cx));
     let mut popover = MoonPopover::new("detects-view-popover")
         .placement(MoonPopoverPlacement::BottomStart)
-        .content_width_ui(POPUP_W)
+        .content_width_ui(popup_w(cx))
         .close_on_content_click(false)
         // A `MoonDropdown` menu inside this popover paints in its OWN deferred layer, outside
         // this popover's box, and `on_mouse_down_out` is bounds-based and runs in the CAPTURE
@@ -220,6 +256,18 @@ fn slot_toggle(
         .render()
 }
 
+/// A slot's field trigger, at the one width the longest field name needs.
+pub(super) fn slot_dropdown(id: SharedString, label: String, cx: &App) -> MoonDropdown {
+    let w = slot_field_w(cx);
+    MoonDropdown::new(id)
+        .label(label)
+        .trigger_caret(true)
+        .trigger_variant(MoonButtonVariant::Soft)
+        .trigger_size(MoonButtonSize::density(cx))
+        .fit_trigger_width(w, w)
+        .fit_menu_width(130.0, 560.0)
+}
+
 /// Builds a slot cell with a field dropdown and tightly adjacent toggles.
 ///
 /// A `MoonDropdown` nested in `MoonPopover` is safe since fork fix `0f3ace9`, which keeps deferred
@@ -253,17 +301,24 @@ fn slot_cell(
             });
         },
     );
-    let dropdown = MoonDropdown::new(SharedString::from(format!("det-slot-{tab}-{slot_ix}")))
-        .label(t!(field_key(slot.field)).to_string())
-        .trigger_caret(true)
-        .trigger_variant(MoonButtonVariant::Soft)
-        .trigger_size(MoonButtonSize::density(cx))
-        .trigger_width_scaled(76.0)
-        .fit_menu_width(130.0, 560.0)
-        .items(items);
+    let dropdown = slot_dropdown(
+        SharedString::from(format!("det-slot-{tab}-{slot_ix}")),
+        t!(field_key(slot.field)).to_string(),
+        cx,
+    )
+    .items(items);
 
     // Keep buttons adjacent to the field with no spacers, packing the cell to the left.
-    let mut row = h_flex().items_center().gap(px(2.0)).child(dropdown);
+    let mut row = h_flex()
+        .items_center()
+        .gap(px(2.0))
+        .debug_selector(move || format!("det-slot-cell-{tab}-{slot_ix}"))
+        .child(
+            div()
+                .flex_none()
+                .debug_selector(move || format!("det-slot-trigger-{tab}-{slot_ix}"))
+                .child(dropdown),
+        );
     let chart_on = scfg.chart != DetectChart::None;
     if tab != DETECT_SIZE_MINI && chart_on {
         row = row.child(slot_toggle(
@@ -513,7 +568,7 @@ fn content(
     let mut grid = v_flex().w_full().gap(design::ui_px(cx, 8.0));
     let mut ix = 0usize;
     while ix < n {
-        let mut row = h_flex().w_full().gap(design::ui_px(cx, 6.0));
+        let mut row = h_flex().w_full().gap(design::ui_px(cx, SLOT_GAP));
         for col in 0..cols {
             let i = ix + col;
             let cell = div().flex_1().min_w(px(0.0));
@@ -531,6 +586,7 @@ fn content(
     // `MoonPopover` paints `shell_high` itself — keeping the old token would have flattened the
     // card into its own background and left it as a bare 1px outline.
     let grid_card = div()
+        .debug_selector(|| "det-grid-card".into())
         .relative()
         .w_full()
         .rounded(design::ui_px(cx, 6.0))
@@ -544,7 +600,7 @@ fn content(
             p.blue,
             3.0,
             20.0,
-            POPUP_W - POPUP_GROUP_INSET,
+            popup_w(cx) - POPUP_GROUP_INSET,
             cx,
         ))
         .child(

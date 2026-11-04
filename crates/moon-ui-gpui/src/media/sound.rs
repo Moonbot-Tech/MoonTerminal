@@ -109,6 +109,12 @@ pub(crate) fn mb_sound_name(ordinal: i32) -> Option<String> {
 /// texts that tell the user how to name a file.
 pub(crate) const FIRST_USER_ORDINAL: i32 = Catalog::FIRST_USER_ORDINAL;
 
+/// Names of the sounds built into every install, Moonbot's own eighteen.
+#[cfg(test)]
+pub(crate) fn builtin_names() -> &'static [&'static str] {
+    embedded::MB_SOUNDS
+}
+
 /// The ordinal table as `(ordinal, stem, label)`, for the core-settings sound pickers.
 pub(crate) fn ordinals() -> Vec<(i32, String, String)> {
     with_catalog(|c| {

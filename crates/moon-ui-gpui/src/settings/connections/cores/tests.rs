@@ -659,3 +659,40 @@ fn the_core_list_columns_fit_without_overlap(cx: &mut gpui::TestAppContext) {
         }
     }
 }
+
+/// Reverting the card's field column to a literal width must fail: every accounting choice,
+/// every language, both font steps, shows whole at the column's width.
+#[gpui::test]
+fn accounting_choices_show_whole_in_the_field_column(cx: &mut gpui::TestAppContext) {
+    use moon_ui::{MoonButtonSize, MoonDropdown};
+
+    crate::controls::trigger_fit::probe::every_locale(
+        cx,
+        |_, cx| {
+            let mut col = div().flex().flex_col();
+            for (ix, m) in TotalMode::ALL.into_iter().enumerate() {
+                let w = super::field_col_w(cx);
+                col = col.child(
+                    div()
+                        .flex_none()
+                        .debug_selector(move || format!("total-{ix}"))
+                        .child(
+                            MoonDropdown::new(gpui::SharedString::from(format!(
+                                "probe-total-{ix}"
+                            )))
+                            .label(super::total_label(m))
+                            .trigger_caret(true)
+                            .trigger_size(MoonButtonSize::density(cx))
+                            .fit_trigger_width(w, w),
+                        ),
+                );
+            }
+            col.into_any_element()
+        },
+        |frame| {
+            for (ix, m) in TotalMode::ALL.into_iter().enumerate() {
+                frame.assert_holds(&format!("total-{ix}"), &super::total_label(m));
+            }
+        },
+    );
+}

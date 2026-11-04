@@ -15,8 +15,8 @@ use moon_core::config::{
 };
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonHotkeyInput,
-    MoonInput, MoonMenuItem, MoonPalette, MoonText, MoonWindowExt, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonHotkeyInput, MoonInput,
+    MoonMenuItem, MoonPalette, MoonText, MoonWindowExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -431,11 +431,7 @@ impl SettingsView {
 
     /// A row editor's dropdown at the key column's width.
     fn row_dropdown(id: String, label: impl Into<SharedString>, cx: &App) -> MoonDropdown {
-        MoonDropdown::new(SharedString::from(id))
-            .label(label)
-            .trigger_caret(true)
-            .trigger_size(MoonButtonSize::density(cx))
-            .trigger_width(design::ui_value(cx, EDITOR_W))
+        page::editor_dropdown(id, label, cx)
     }
 
     /// The part count of `Split N` (Moonbot `Hotkeys.SplitParts`), under the `Split Order X` key.

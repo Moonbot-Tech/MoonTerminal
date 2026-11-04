@@ -21,10 +21,63 @@ const NAME_MIN_W: f32 = 120.0;
 /// Width of the Где работает column when the body has room; narrower bodies shrink it, the
 /// caption truncated with its full text in a tooltip.
 const SCOPE_W: f32 = 76.0;
-/// Width of the Клавиша column: `MoonHotkeyInput` keeps a minimum of 176 of its own.
+/// Floor of the Клавиша column: `MoonHotkeyInput` keeps a minimum of 176 of its own.
 pub(super) const KEY_W: f32 = 184.0;
-/// Logical width of an editor inside the key cell.
+/// Logical width of an editor inside the key cell, at the column's floor.
 pub(super) const EDITOR_W: f32 = 176.0;
+
+/// Rendered width of a dropdown editor in the key cell: [`EDITOR_W`], or the longest move kind
+/// (`Последний выставленный`) when that is wider, so the chosen phrase never leaves its button.
+///
+/// One width for every editor in the column, so a gesture row and a move row line up.
+///
+/// Args:
+///     cx: Application context supplying the theme's text metrics.
+///
+/// Returns:
+///     The editor width in rendered pixels.
+pub(super) fn editor_w(cx: &App) -> f32 {
+    let kinds: Vec<String> = moon_core::config::MoveKind::ALL
+        .iter()
+        .map(|k| {
+            let key = k.locale_key();
+            rust_i18n::t!(&key).to_string()
+        })
+        .collect();
+    let widest = crate::controls::trigger_fit::widest_px(
+        cx,
+        kinds.iter().map(String::as_str),
+        moon_ui::MoonButtonSize::density(cx),
+        0.0,
+    );
+    design::ui_value(cx, EDITOR_W).max(widest.ceil())
+}
+
+/// A dropdown editor of the key cell, at the column's one editor width.
+///
+/// Args:
+///     id: Element id of the dropdown.
+///     label: The chosen choice's label.
+///     cx: Application context supplying the theme's text metrics.
+///
+/// Returns:
+///     The dropdown, without items.
+pub(super) fn editor_dropdown(
+    id: String,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> moon_ui::MoonDropdown {
+    moon_ui::MoonDropdown::new(SharedString::from(id))
+        .label(label)
+        .trigger_caret(true)
+        .trigger_size(moon_ui::MoonButtonSize::density(cx))
+        .trigger_width(editor_w(cx))
+}
+
+/// Rendered width of the Клавиша column: its editor plus the cell's own margin.
+pub(super) fn key_w(cx: &App) -> Pixels {
+    px(editor_w(cx) + design::ui_value(cx, KEY_W - EDITOR_W))
+}
 /// Width of the last column, which holds "+ жест".
 const ACTION_W: f32 = 64.0;
 /// Gap between the columns.
@@ -283,7 +336,7 @@ pub(super) fn table(rows: Vec<HkRow>, mouse: bool, empty: String, cx: &App) -> A
                 t!("hotkeys.col.key").to_string()
             })
             .flex_none()
-            .w(design::ui_px(cx, KEY_W)),
+            .w(key_w(cx)),
         )
         .child(
             head(t!("hotkeys.col.problem").to_string())
@@ -432,7 +485,7 @@ fn table_row(row: HkRow, cx: &App) -> AnyElement {
         .child(
             v_flex()
                 .flex_none()
-                .w(design::ui_px(cx, KEY_W))
+                .w(key_w(cx))
                 .gap(design::ui_px(cx, 4.0))
                 .children(editors),
         )

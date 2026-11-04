@@ -559,6 +559,27 @@ pub(crate) struct CardInputs<'a> {
 
 /// Width of the card's text fields and pickers, unscaled.
 const FIELD_W: f32 = 200.0;
+/// Room a `trigger_caret_end` chevron takes beyond the caret glyph the fit measures, unscaled.
+const CHEVRON_SLACK_W: f32 = 12.0;
+
+/// Design width of the card's field column: [`FIELD_W`], or wider when a fixed choice of the
+/// accounting picker needs it (`Otomatik (hesaba göre)`), so no fixed word is ever ellipsized.
+///
+/// Args:
+///     cx: Application context supplying the theme's text metrics.
+///
+/// Returns:
+///     The column width in design units.
+pub(crate) fn field_col_w(cx: &App) -> f32 {
+    let labels: Vec<String> = TotalMode::ALL.into_iter().map(total_label).collect();
+    let natural = crate::controls::trigger_fit::widest_design(
+        cx,
+        labels.iter().map(String::as_str),
+        MoonButtonSize::density(cx),
+        0.0,
+    );
+    FIELD_W.max(natural + CHEVRON_SLACK_W)
+}
 
 /// A disclosure header of the card: caret, title, muted summary.
 fn disclosure(
@@ -608,6 +629,7 @@ fn disclosure(
 
 /// A dropdown over `items`, with `label` on the trigger.
 fn dropdown(id: &'static str, label: String, items: Vec<MoonMenuItem>, cx: &App) -> AnyElement {
+    let label_tip = label.clone();
     MoonDropdown::new(id)
         .label(label)
         .trigger_caret(true)
@@ -615,7 +637,10 @@ fn dropdown(id: &'static str, label: String, items: Vec<MoonMenuItem>, cx: &App)
         .trigger_caret_end(true)
         .trigger_variant(MoonButtonVariant::Neutral)
         .trigger_size(MoonButtonSize::density(cx))
-        .trigger_width_scaled(FIELD_W)
+        // Grows to the chosen label — a fixed choice whole, a group name up to the field column
+        // and ellipsized past it, the whole name in the tooltip.
+        .trigger_tooltip(label_tip)
+        .fit_trigger_width(FIELD_W, field_col_w(cx))
         .fit_menu_width(0.0, f32::INFINITY)
         .items(items)
         .into_any_element()
@@ -1161,7 +1186,13 @@ pub(crate) fn card_min_w(cx: &App) -> f32 {
         design::ui_text_width_zoomed(cx, &t!("conn.card.paste"), design::BODY_TEXT, 400.0, false)
             + 2.0 * design::ui_value(cx, design::CONTROL_TIER.control_metrics().pad_x)
             + 2.0;
-    design::ui_value(cx, 2.0 * 14.0 + CARD_LABEL_W + 16.0 + FIELD_W + 6.0) + 2.0 + paste
+    let key_row =
+        design::ui_value(cx, 2.0 * 14.0 + CARD_LABEL_W + 16.0 + FIELD_W + 6.0) + 2.0 + paste;
+    let size = MoonButtonSize::density(cx);
+    let picker_row = design::ui_value(cx, 2.0 * 14.0 + CARD_LABEL_W + 16.0)
+        + field_col_w(cx) * crate::controls::trigger_fit::design_scale(cx, size)
+        + 2.0;
+    key_row.max(picker_row)
 }
 
 /// Side by side when the card at its minimum fits beside the list: the list takes its share of

@@ -46,7 +46,7 @@ const MICRO_COUNT: f32 = 9.0;
 pub(super) const NAME_W: f32 = 150.0;
 /// Width the "add" trigger borrows from the caption catalogue's own column.
 pub(super) const FIELD_W: f32 = 104.0;
-/// Width of the band dropdown's trigger. Sized on the longest localized band name.
+/// Floor of the band dropdown's trigger; [`zone_w`] widens it to the longest band name.
 pub(super) const ZONE_W: f32 = 104.0;
 /// Width of the gap trigger, which only ever shows a small number.
 pub(super) const GAP_W: f32 = 34.0;
@@ -73,9 +73,35 @@ const ROW_SLACK: f32 = 10.0;
 /// box the first time a dropdown got wider: two numbers that have to agree, and only one of them
 /// changed. Font-scaled, because the line is.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    let line =
-        MICRO_COUNT * MICRO_W + NAME_W + ZONE_W + GAP_W + (MICRO_COUNT + 2.0) * ROW_GAP + ROW_SLACK;
-    px(design::font_w(cx, line) + popup_group_inset_px(cx))
+    let line = MICRO_COUNT * MICRO_W + NAME_W + GAP_W + (MICRO_COUNT + 2.0) * ROW_GAP + ROW_SLACK;
+    px(design::font_w(cx, line) + zone_px(cx) + popup_group_inset_px(cx))
+}
+
+/// The band names in the active language, the band trigger's whole vocabulary.
+fn zone_labels() -> Vec<String> {
+    moon_core::config::LabelZone::ALL
+        .iter()
+        .map(|z| rust_i18n::t!(z.locale_key()).to_string())
+        .collect()
+}
+
+/// Design width every band trigger draws at: the longest band name, never below [`ZONE_W`].
+///
+/// One width for every line, so the controls after it stay in columns down the list.
+pub(super) fn zone_w(cx: &App) -> f32 {
+    let labels = zone_labels();
+    crate::controls::trigger_fit::widest_design(
+        cx,
+        labels.iter().map(String::as_str),
+        moon_ui::MoonButtonSize::density(cx),
+        ZONE_W,
+    )
+}
+
+/// Rendered width of the band trigger at [`zone_w`], which [`content_width`] budgets for.
+fn zone_px(cx: &App) -> f32 {
+    zone_w(cx)
+        * crate::controls::trigger_fit::design_scale(cx, moon_ui::MoonButtonSize::density(cx))
 }
 
 /// Rendered width the name button leaves to its own TEXT, once its padding is taken out.

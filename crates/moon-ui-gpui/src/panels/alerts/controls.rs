@@ -476,12 +476,8 @@ impl AlertsPanel {
                 crate::media::sound::play(&name);
             },
         );
-        MoonDropdown::new("alerts-sound")
-            .label(label)
-            .trigger_caret(true)
+        crate::panels::common::sound_dropdown("alerts-sound", label.to_string(), 120.0, cx)
             .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::density(cx))
-            .trigger_width_scaled(120.0)
             .fit_menu_width(150.0, 560.0)
             .items(items)
     }

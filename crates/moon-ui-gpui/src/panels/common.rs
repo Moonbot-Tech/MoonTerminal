@@ -159,6 +159,40 @@ pub(crate) fn count_badge(n: usize, color: u32) -> impl IntoElement {
         .render()
 }
 
+/// Floor of a sound picker's closed trigger, in design units.
+pub(crate) const SOUND_TRIGGER_MIN_W: f32 = 94.0;
+/// Cap of a sound picker's closed trigger, in design units: wider than every built-in name, so
+/// only a user's own long file name is ellipsized — and the tooltip then carries it whole.
+pub(crate) const SOUND_TRIGGER_MAX_W: f32 = 180.0;
+
+/// A sound picker's closed trigger: grows to the chosen sound's name, caret included.
+///
+/// Every sound picker in the application is built from this, so the core-settings, warning,
+/// expert and figure pickers cannot drift apart again. The caller adds its variant and items.
+///
+/// Args:
+///     id: Stable element identity.
+///     label: The chosen sound's name as the menu lists it.
+///     min_w: Design-unit floor for this surface's column.
+///     cx: Application context used for the density tier.
+///
+/// Returns:
+///     The dropdown, without items.
+pub(crate) fn sound_dropdown(
+    id: impl Into<SharedString>,
+    label: String,
+    min_w: f32,
+    cx: &App,
+) -> moon_ui::MoonDropdown {
+    moon_ui::MoonDropdown::new(id)
+        .trigger_tooltip(label.clone())
+        .label(label)
+        .trigger_caret(true)
+        .trigger_size(moon_ui::MoonButtonSize::density(cx))
+        .fit_trigger_width(min_w, SOUND_TRIGGER_MAX_W.max(min_w))
+        .fit_menu_width(128.0, 560.0)
+}
+
 /// The square ▶ that plays whatever a sound picker currently holds.
 ///
 /// Shared rather than redrawn per surface: it appeared beside the core-warning sound picker first,

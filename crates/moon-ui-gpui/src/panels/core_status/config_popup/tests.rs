@@ -9,14 +9,15 @@ use crate::panels::core_status::config_popup::WarnCfgMetrics;
 fn ui_scale_controls_set_the_horizontal_extent() {
     let metrics = WarnCfgMetrics::resolve(1.5, 1.0, 9.0, 11.0, 39.0);
 
-    // 636 is the independently specified base row width (eight columns plus seven gaps), and the
+    // 676 is the independently specified base row width (eight columns plus seven gaps; the sound column
+    // is wide enough for every built-in sound name), and the
     // popover adds 16px of slack before the same UI-or-font scale is applied.
     assert!(
-        (metrics.row_w() - 954.0).abs() < 0.01,
-        "the UI-dominant row must be 636 * 1.5 px, not font-width-sized"
+        (metrics.row_w() - 1014.0).abs() < 0.01,
+        "the UI-dominant row must be 676 * 1.5 px, not font-width-sized"
     );
     assert!(
-        (metrics.content_w() - 978.0).abs() < 0.01,
+        (metrics.content_w() - 1038.0).abs() < 0.01,
         "the popover content must retain its independently specified 16px scaled slack"
     );
 }
@@ -28,15 +29,15 @@ fn font_deltas_keep_the_control_band_as_tall_as_the_action_dropdown() {
     let cases = [
         // (font-width scale, caption px, body px, Action height, row px, content px, caption band,
         //  control band). These are derived from the published font-slider contract, not from the
-        //  metrics implementation: 636px row plus 16px slack at delta 0, then font-width scaling.
-        (1.0, 9.0, 11.0, 26.0, 636.0, 652.0, 12.0, 28.0),
+        //  metrics implementation: 676px row plus 16px slack at delta 0, then font-width scaling.
+        (1.0, 9.0, 11.0, 26.0, 676.0, 692.0, 12.0, 28.0),
         (
             13.0 / 11.0,
             11.0,
             13.0,
             28.0,
-            751.63635,
-            770.5455,
+            798.9091,
+            817.8182,
             14.3,
             28.0,
         ),
@@ -45,8 +46,8 @@ fn font_deltas_keep_the_control_band_as_tall_as_the_action_dropdown() {
             15.0,
             17.0,
             32.0,
-            982.9091,
-            1007.63635,
+            1044.7273,
+            1069.4545,
             19.5,
             32.0,
         ),

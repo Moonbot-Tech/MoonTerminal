@@ -770,11 +770,14 @@ impl SettingsView {
                         // is in; another chat filled meanwhile would be refilled over by it.
                         MoonDropdown::new(id("chat-pick"))
                             .disabled(self.notify_ed(side).sending.is_some())
+                            // A chat title is the user's own: it grows into the row and past
+                            // that ellipsizes, the whole title in the tooltip.
+                            .trigger_tooltip(super::access::chat_title(telegram, chat))
                             .label(super::access::chat_title(telegram, chat))
                             .trigger_caret(true)
                             .trigger_variant(MoonButtonVariant::Neutral)
                             .trigger_size(MoonButtonSize::density(cx))
-                            .trigger_width_scaled(200.0)
+                            .fit_trigger_width(200.0, 360.0)
                             .fit_menu_width(240.0, 560.0)
                             .items(items),
                     ),
