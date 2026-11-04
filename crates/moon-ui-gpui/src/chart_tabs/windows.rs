@@ -264,11 +264,18 @@ impl ChartTabs {
             display_uuid: crate::window::windowing::display_identity(display_id, cx)
                 .or(geom.display_uuid),
         };
+        let title = {
+            let (backend, group, bucket) =
+                (self.backend.clone(), self.group.clone(), bucket.clone());
+            move |cx: &App| {
+                format!(
+                    "MoonTerminal — {}",
+                    chart_pane_label(&backend, &group, n, &bucket, cx)
+                )
+            }
+        };
         let mut opts = crate::window::windowing::detached_chart_window_options(
-            format!(
-                "MoonTerminal — {}",
-                chart_pane_label(&self.backend, &self.group, n, &bucket, cx)
-            ),
+            title(cx),
             crate::window::windowing::window_bounds_for(geom.maximized, geom.fullscreen, bounds),
             display_id,
         );
@@ -302,6 +309,8 @@ impl ChartTabs {
             cx.new(|cx| Root::new(host, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
         });
         if let Ok(handle) = opened {
+            // Independent, not owned: `detached_chart_window_options`.
+            crate::window::titles::track(handle.into(), false, title, cx);
             let group = self.group.clone();
             self.backend.update(cx, |b, _| {
                 b.detached_chart_windows.push((group, handle));

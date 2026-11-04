@@ -180,8 +180,9 @@ fn open_window(
                 owner_display,
                 cx,
             );
+            let title = |_: &App| t!("profit_monitor.window_title").to_string();
             let options = crate::window::windowing::profit_monitor_window_options(
-                t!("profit_monitor.window_title").to_string(),
+                title(cx),
                 crate::window::windowing::restored_window_bounds(
                     saved,
                     crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
@@ -206,6 +207,8 @@ fn open_window(
                 backend.profit_monitor_window = opened.as_ref().ok().copied();
             });
             if let Ok(handle) = opened {
+                // Independent, not owned: `profit_monitor_window_options`.
+                crate::window::titles::track(handle.into(), false, title, cx);
                 mark_open(&backend, cx);
                 if request.activate {
                     crate::window::windowing::activate_new_window(handle.into(), cx);

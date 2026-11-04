@@ -21,6 +21,9 @@
 //! these are built the first time the popup is opened (`detect::seed_empty_detect`) and live on the
 //! stack from then on, so a re-render does not throw away an open menu.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, SharedString, Styled,
     Window, div, rgb,
@@ -130,6 +133,9 @@ fn slot_index(slot: EmptySlot) -> usize {
 #[derive(Clone)]
 pub(crate) struct PlaceSelects {
     selects: Vec<(EmptyBlock, Entity<MoonSelectState<Placement>>)>,
+    /// The locale the dropdowns' captions were last filled in. Shared, so the clone that refills
+    /// them leaves every other clone knowing it; see [`PlaceSelects::follow_locale`].
+    captioned_in: Rc<RefCell<String>>,
 }
 
 impl PlaceSelects {
@@ -148,11 +154,9 @@ impl PlaceSelects {
     ) -> Self {
         let mut selects = Vec::with_capacity(EmptyBlock::COUNT);
         for block in EmptyBlock::ALL {
-            let items: Vec<MoonSelectItem<Placement>> = Placement::all()
-                .map(|placement| MoonSelectItem::new(placement, t!(placement.label()).to_string()))
-                .collect();
             let chosen = IndexPath::new(Placement::of(block, screen, places).index());
-            let state = cx.new(|cx| MoonSelectState::new(items, Some(chosen), window, cx));
+            let state =
+                cx.new(|cx| MoonSelectState::new(placement_items(), Some(chosen), window, cx));
             cx.subscribe(
                 &state,
                 move |this, _state, event: &MoonSelectEvent<Placement>, cx| {
@@ -166,10 +170,14 @@ impl PlaceSelects {
             .detach();
             selects.push((block, state));
         }
-        Self { selects }
+        Self {
+            selects,
+            captioned_in: Rc::new(RefCell::new(rust_i18n::locale().to_string())),
+        }
     }
 
-    /// Put the dropdowns back on an arrangement that was changed from somewhere other than them.
+    /// Put the dropdowns back on an arrangement that was changed from somewhere other than them,
+    /// in the language the interface speaks now.
     ///
     /// Another group window can edit the shared layout while this popup is open, and the brand's
     /// switch can be flipped by a reset. Setting the value does NOT report a confirmation back —
@@ -180,9 +188,14 @@ impl PlaceSelects {
     ///     places: Where each block is anchored now.
     ///     cx: Any application context.
     pub(super) fn show(&self, screen: &EmptyScreen, places: EmptyPlaces, cx: &mut App) {
+        let recaption = self.follow_locale();
         for (block, state) in &self.selects {
             let placement = Placement::of(*block, screen, places);
             state.update(cx, |state, cx| {
+                // `set_items` keeps the selection and reports no confirmation.
+                if recaption {
+                    state.set_items(placement_items(), cx);
+                }
                 if state.selected_value() != Some(&placement)
                     && state.set_selected_value(&placement)
                 {
@@ -191,6 +204,31 @@ impl PlaceSelects {
             });
         }
     }
+
+    /// Whether the interface language moved since the captions were filled; records the new one.
+    ///
+    /// A select copies its captions in when it is built, and these are built once and kept on the
+    /// stack, so a language saved in Settings after the popup was first opened would otherwise
+    /// leave them in the old one. The LOCALE is compared, not a caption: two languages can name
+    /// the shown entry alike (Russian and Ukrainian both say «По центру») while the other nine
+    /// differ. [`PlaceSelects::show`] runs on every frame of the empty screen, so this is one
+    /// string comparison per frame and a refill once per switch.
+    fn follow_locale(&self) -> bool {
+        let current = rust_i18n::locale();
+        let mut captioned_in = self.captioned_in.borrow_mut();
+        if *captioned_in == *current {
+            return false;
+        }
+        *captioned_in = current.to_string();
+        true
+    }
+}
+
+/// The ten entries of one dropdown, captioned in the current locale.
+fn placement_items() -> Vec<MoonSelectItem<Placement>> {
+    Placement::all()
+        .map(|placement| MoonSelectItem::new(placement, t!(placement.label()).to_string()))
+        .collect()
 }
 
 /// The popup's placement section: a heading with the way back, and one row per block.
