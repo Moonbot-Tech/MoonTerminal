@@ -30,8 +30,12 @@ pub(super) const UI_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.50..=2.00;
 ///
 /// The width is passed once and reaches both the trigger box and the menu: written out per row,
 /// those two drift, and the menu ends up narrower or wider than the control that opened it.
+///
+/// `id` is `<row id>:field`, naming the select after the row it fills: without one every select of
+/// the page carries MoonSelect's default id and none can be told apart by its element path.
 fn select_control<T: Clone + PartialEq + 'static>(
     state: &Entity<moon_ui::MoonSelectState<T>>,
+    id: &'static str,
     width: f32,
     cx: &App,
 ) -> AnyElement {
@@ -39,6 +43,7 @@ fn select_control<T: Clone + PartialEq + 'static>(
         .w(design::ui_px(cx, width))
         .child(
             MoonSelect::new(state)
+                .id(id)
                 .trigger_size(MoonButtonSize::density(cx))
                 .menu_width(design::font_w(cx, width)),
         )
@@ -441,11 +446,11 @@ impl SettingsView {
         let restore = idle_restore(self.idle_last_secs.get());
         let ui = &self.general_ui;
         let controls = GeneralControls {
-            language: select_control(&self.lang, 220.0, cx),
+            language: select_control(&self.lang, "general-language:field", 220.0, cx),
             // Which rate converts quote money to USDT, for Report and Analytics.
-            valuation: select_control(&self.valuation, 260.0, cx),
+            valuation: select_control(&self.valuation, "general-valuation:field", 260.0, cx),
             // Whether a pan on one chart pauses every chart or only itself (#688).
-            live_scope: select_control(&self.live_scope, 260.0, cx),
+            live_scope: select_control(&self.live_scope, "general-live-scope:field", 260.0, cx),
             tab_per_core: self
                 .draft_checkbox(cx, "split", split, |p, v| {
                     if p.charts_split_by_core != v {

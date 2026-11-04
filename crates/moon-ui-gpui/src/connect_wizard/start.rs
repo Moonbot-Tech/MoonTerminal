@@ -94,6 +94,7 @@ impl ConnectWizardView {
             .child(picker(
                 t!("connect_wizard.start.language").to_string(),
                 MoonSelect::new(&self.language)
+                    .id("cw-start-language")
                     .disabled(in_settings)
                     .menu_width(design::font_w(cx, 170.0))
                     .into_any_element(),
@@ -102,6 +103,7 @@ impl ConnectWizardView {
             .child(picker(
                 t!("connect_wizard.start.theme").to_string(),
                 MoonSelect::new(&self.theme)
+                    .id("cw-start-theme")
                     .disabled(in_settings)
                     .menu_width(design::font_w(cx, 170.0))
                     .into_any_element(),

@@ -492,7 +492,7 @@ impl SettingsView {
             |key: &str, st: &Entity<MoonColorPickerState>, alpha: &Entity<MoonSliderState>| {
                 color_line(
                     color_row(&t!(key), st, p, cx).into_any_element(),
-                    Some(slider_ctl(alpha, &pct, cx)),
+                    Some(slider_ctl(format!("iface-alpha-{key}"), alpha, &pct, cx)),
                     cx,
                 )
             };
@@ -506,7 +506,7 @@ impl SettingsView {
                 )
                 .text_color(rgba_from(p.text_soft, 1.0))
                 .into_any_element(),
-                Some(slider_ctl(st, f, cx)),
+                Some(slider_ctl(format!("iface-slider-{key}"), st, f, cx)),
                 cx,
             )
         };
@@ -629,7 +629,13 @@ impl SettingsView {
         let parts = AppearanceParts {
             cards: self.theme_cards(mode, cx),
             experimental,
-            zoom: slider_ctl_w(&self.ui_zoom, &super::general::zoom_text, ZOOM_TRACK_W, cx),
+            zoom: slider_ctl_w(
+                "iface-zoom:field",
+                &self.ui_zoom,
+                &super::general::zoom_text,
+                ZOOM_TRACK_W,
+                cx,
+            ),
             set_note: t!(set_note_key(mode)).to_string(),
             groups: self.color_groups(cx),
             preview: chart_preview(&theme, cx),
@@ -799,17 +805,22 @@ const SLIDER_TRACK_W: f32 = 110.0;
 const ZOOM_TRACK_W: f32 = 220.0;
 
 /// A compact slider for a colour-group row: the track and its value in the mono face.
+///
+/// `id` names the slider. Left to the slider's default, every slider of a page was one element
+/// path; `<row id>:field` names it after the row it fills.
 pub(super) fn slider_ctl(
+    id: impl Into<SharedString>,
     st: &Entity<MoonSliderState>,
     format: &dyn Fn(f32) -> String,
     cx: &App,
 ) -> AnyElement {
-    slider_ctl_w(st, format, SLIDER_TRACK_W, cx)
+    slider_ctl_w(id, st, format, SLIDER_TRACK_W, cx)
 }
 
 /// [`slider_ctl`] with a `track_w` (unscaled) track. The value is left-aligned in its fixed
 /// box, right beside the track, so values of stacked rows line up and none drifts away.
 pub(super) fn slider_ctl_w(
+    id: impl Into<SharedString>,
     st: &Entity<MoonSliderState>,
     format: &dyn Fn(f32) -> String,
     track_w: f32,
@@ -823,9 +834,11 @@ pub(super) fn slider_ctl_w(
         .gap(design::ui_px(cx, 8.0))
         .items_center()
         .child(
-            div()
-                .w(design::ui_px(cx, track_w))
-                .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0))),
+            div().w(design::ui_px(cx, track_w)).child(
+                MoonSlider::new(st)
+                    .id(id)
+                    .height(design::ui_value(cx, 22.0)),
+            ),
         )
         .child(
             div()

@@ -708,11 +708,14 @@ impl SettingsView {
     fn cores_selects(&self, act: &CoreAct, cx: &App) -> AnyElement {
         let width = design::ui_px(cx, SELECT_W);
         let menu_w = design::font_w(cx, SELECT_W);
+        // `<row id>:field` names a row's control after the row it fills; without an id of its own
+        // a select keeps MoonSelect's default, which every other select on the page shares.
         let market = div()
             .w_full()
             .max_w(width)
             .child(
                 MoonSelect::new(&self.mode)
+                    .id("conn-market-src:field")
                     .trigger_size(MoonButtonSize::density(cx))
                     .menu_width(menu_w),
             )
@@ -722,6 +725,7 @@ impl SettingsView {
             .max_w(width)
             .child(
                 MoonSelect::new(&self.core_sort)
+                    .id("conn-core-sort:field")
                     .trigger_size(MoonButtonSize::density(cx))
                     .menu_width(menu_w),
             )

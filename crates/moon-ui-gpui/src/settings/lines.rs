@@ -741,7 +741,7 @@ impl SettingsView {
             card_row(
                 "lines-card-width",
                 t!("lines.col.width").to_string(),
-                slider_ctl(&ed.thickness, &px1, cx),
+                slider_ctl("lines-card-width:field", &ed.thickness, &px1, cx),
                 cx,
             ),
             card_row(
@@ -768,7 +768,12 @@ impl SettingsView {
                     .gap(design::ui_px(cx, 10.0))
                     .items_center()
                     .child(picker(&ed.pending_color))
-                    .child(slider_ctl(&ed.pending_alpha, &pct, cx))
+                    .child(slider_ctl(
+                        "lines-card-pending:field",
+                        &ed.pending_alpha,
+                        &pct,
+                        cx,
+                    ))
                     .into_any_element(),
                 cx,
             ));
@@ -804,13 +809,18 @@ impl SettingsView {
             rows.push(card_row(
                 "lines-card-cross-size",
                 capitalized(&t!("lines.cross_size")),
-                slider_ctl(&ed.marker_size, &px1, cx),
+                slider_ctl("lines-card-cross-size:field", &ed.marker_size, &px1, cx),
                 cx,
             ));
             rows.push(card_row(
                 "lines-card-cross-width",
                 capitalized(&t!("lines.cross_thickness")),
-                slider_ctl(&ed.marker_thickness, &px1, cx),
+                slider_ctl(
+                    "lines-card-cross-width:field",
+                    &ed.marker_thickness,
+                    &px1,
+                    cx,
+                ),
                 cx,
             ));
             rows.push(card_row(
@@ -825,7 +835,12 @@ impl SettingsView {
                         move |o| line_style(o, idx).knots,
                         move |o, v| line_style_mut(o, idx).knots = v,
                     ))
-                    .child(slider_ctl(&ed.knot_size, &px1, cx))
+                    .child(slider_ctl(
+                        "lines-card-knots:field",
+                        &ed.knot_size,
+                        &px1,
+                        cx,
+                    ))
                     .into_any_element(),
                 cx,
             ));
@@ -883,14 +898,14 @@ impl SettingsView {
                         )
                         .label(t!("lines.dashed").to_string()),
                     )
-                    .child(slider_ctl(&l.path_thickness, &px1, cx)),
+                    .child(slider_ctl("lines-path-width", &l.path_thickness, &px1, cx)),
             )
             .child(
                 h_flex()
                     .gap(design::ui_px(cx, 10.0))
                     .items_center()
                     .child(div().child(t!("lines.path_alpha").to_string()))
-                    .child(slider_ctl(&l.path_alpha, &pct, cx)),
+                    .child(slider_ctl("lines-path-alpha", &l.path_alpha, &pct, cx)),
             )
             .into_any_element()
     }
@@ -936,8 +951,18 @@ impl SettingsView {
             .to_string(),
             table: lines_table(&orders, idx, on_select, cx),
             card,
-            active_alpha: slider_ctl(&self.lines.active_alpha, &pct, cx),
-            closed_alpha: slider_ctl(&self.lines.closed_alpha, &pct, cx),
+            active_alpha: slider_ctl(
+                "lines-active-alpha:field",
+                &self.lines.active_alpha,
+                &pct,
+                cx,
+            ),
+            closed_alpha: slider_ctl(
+                "lines-closed-alpha:field",
+                &self.lines.closed_alpha,
+                &pct,
+                cx,
+            ),
             max_closed: num_input(
                 "lines-max-closed-input",
                 &self.lines_ui.max_closed_orders,
