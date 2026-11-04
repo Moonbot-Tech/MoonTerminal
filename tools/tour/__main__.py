@@ -49,12 +49,14 @@ def _bootstrap() -> None:
 
 _bootstrap()
 
-from . import knowledge, paths, render as render_mod  # noqa: E402
-from .content import load as load_content  # noqa: E402
-from .errors import TourError  # noqa: E402
-from .emit import write as write_page  # noqa: E402
-from .locales import load as load_locales  # noqa: E402
-from .theme import load as load_theme, resolve as resolve_theme  # noqa: E402
+from . import knowledge, paths
+from . import render as render_mod
+from .content import load as load_content
+from .emit import write as write_page
+from .errors import TourError
+from .locales import load as load_locales
+from .theme import load as load_theme
+from .theme import resolve as resolve_theme
 
 
 def build(theme_path: Path | None, upstream: bool) -> tuple[str, knowledge.KnowledgeBundle, str]:

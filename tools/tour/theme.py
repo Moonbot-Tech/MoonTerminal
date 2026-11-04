@@ -12,9 +12,10 @@ with no provenance at all. A snapshot with a recorded upstream SHA is not
 
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+import tomllib
 
 from . import paths
 from .errors import ThemeError
