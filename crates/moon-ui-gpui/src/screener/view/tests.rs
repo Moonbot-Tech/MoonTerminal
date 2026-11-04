@@ -1,7 +1,7 @@
 //! Filtering regressions independent of the displayed market spelling.
 
 use super::super::table::tests::sort_entries;
-use super::{Entry, matches_coin_filter};
+use super::{Entry, matches_coin_filter, normalize_coin_filter};
 use moon_core::market::ScreenerRow;
 
 /// Cached-only control handlers would miss market-only feed updates until another backend event.
@@ -73,6 +73,86 @@ fn empty_filter_keeps_all() {
         coin_uc: "BETA".into(),
     };
     assert!(matches_coin_filter(&entry, ""));
+}
+
+/// Trimming before mode detection would retain substring coins and lose contract-tail semantics.
+#[test]
+fn trailing_space_selects_exact_ticker_or_contract_tail_in_either_search_string() {
+    let entries = super::entries_for(
+        ["WAG", "GMWAGMI", "WAGMI", "1000WAG", "WAG_0925", "WAG_RP"]
+            .into_iter()
+            .map(|coin| {
+                ScreenerRow {
+                    market: format!("USDT-{coin}"),
+                    coin: coin.to_string(),
+                    ..Default::default()
+                }
+                .into()
+            })
+            .chain(std::iter::once(
+                ScreenerRow {
+                    market: "WAG_1225".into(),
+                    coin: "OTHER".into(),
+                    ..Default::default()
+                }
+                .into(),
+            ))
+            .collect(),
+        &Default::default(),
+    );
+    let selected = |raw: &str| {
+        let query = normalize_coin_filter(raw);
+        entries
+            .iter()
+            .filter(|entry| matches_coin_filter(entry, &query))
+            .map(|entry| entry.row.coin.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        selected("wag"),
+        [
+            "WAG", "GMWAGMI", "WAGMI", "1000WAG", "WAG_0925", "WAG_RP", "OTHER"
+        ]
+    );
+    assert_eq!(selected("wAg "), ["WAG", "WAG_0925", "WAG_RP", "OTHER"]);
+    assert_eq!(selected(" WAG"), selected("WAG"));
+    assert!(selected("WA G").is_empty());
+    assert_eq!(
+        selected("USDT-"),
+        ["WAG", "GMWAGMI", "WAGMI", "1000WAG", "WAG_0925", "WAG_RP"]
+    );
+    assert!(selected("USDT- ").is_empty());
+    for raw in ["", " ", "   ", "\t"] {
+        assert_eq!(selected(raw).len(), entries.len());
+    }
+}
+
+/// Folding after trimming would turn Russian-layout exact IO into a substring that admits BIO.
+#[test]
+fn russian_layout_preserves_exact_mode() {
+    let entries = super::entries_for(
+        ["IO", "BIO", "IO_0925"]
+            .into_iter()
+            .map(|coin| {
+                ScreenerRow {
+                    market: format!("{coin}USDT"),
+                    coin: coin.into(),
+                    ..Default::default()
+                }
+                .into()
+            })
+            .collect(),
+        &Default::default(),
+    );
+    let query = normalize_coin_filter("шщ ");
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches_coin_filter(entry, &query))
+            .map(|entry| entry.row.coin.as_str())
+            .collect::<Vec<_>>(),
+        ["IO", "IO_0925"]
+    );
 }
 
 /// Scale probe of one market rebuild's pure part — search forms, the coin count and the sort —
