@@ -422,6 +422,25 @@ pub fn deleted_heads() -> Vec<HeadRow> {
         .unwrap_or_default()
 }
 
+/// Returns one core's live strategies with their checkbox state, for a synthetic core reporting
+/// what the record holds. Ordered by name, so a run lists them the same way twice.
+pub fn live_heads(core_uid: u64) -> Vec<(HeadRow, bool)> {
+    let Some(conn) = super::open_reader() else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT {HEAD_COLS}, checked FROM strategies
+         WHERE core_uid=?1 AND deleted=0 ORDER BY name"
+    )) else {
+        return Vec::new();
+    };
+    stmt.query_map([core_uid as i64], |r| {
+        Ok((head_from_row(r)?, r.get::<_, i64>(7)? != 0))
+    })
+    .map(|rows| rows.flatten().collect())
+    .unwrap_or_default()
+}
+
 /// Returns display strings for the latest strategy version's fields, used to restore a deleted
 /// strategy with `RestoreStrategy`, or `None` if no version exists or its data is unavailable,
 /// unreadable, or invalid.

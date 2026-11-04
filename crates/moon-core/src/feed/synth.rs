@@ -12,6 +12,8 @@
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+mod recorded;
+
 use super::news::{NEWS_RING_CAP, NewsItem, NewsSnapshot};
 use super::{
     ConnStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, Level, MarketDirty, MarketDirtyFlags,
@@ -133,6 +135,9 @@ pub(crate) fn run(
     let _ = tx.send(FeedMsg::StrategiesRunning(!env_flag(
         "MOON_SYNTH_TRADING_OFF",
     )));
+    if env_flag("MOON_SYNTH_CORE_STATE") {
+        recorded::send_core_state(server.uid, tx);
+    }
 
     // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
     //
