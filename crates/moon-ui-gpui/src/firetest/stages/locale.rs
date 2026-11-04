@@ -39,7 +39,8 @@ pub(in crate::firetest) fn verify_then_restore(
 
 impl Runtime {
     /// Switch the interface locale through the same live path as `Settings::apply_settings`:
-    /// update rust-i18n's global locale and call `refresh_windows()`. English switches to Russian;
+    /// update rust-i18n's global locale, rename the native window titles and call
+    /// `refresh_windows()`. English switches to Russian;
     /// any other locale switches to English. The original and target are recorded for verification
     /// and restoration.
     pub(in crate::firetest) fn request_locale_switch(
@@ -56,6 +57,7 @@ impl Runtime {
         self.locale_switch = Some((original, target));
         backend.config.language = target;
         rust_i18n::set_locale(target.code());
+        crate::window::titles::follow_locale(cx);
         cx.refresh_windows();
         cx.notify();
         firetest_info(&format!(
@@ -106,6 +108,7 @@ impl Runtime {
         if let Some((original, _)) = self.locale_switch.take() {
             backend.config.language = original;
             rust_i18n::set_locale(original.code());
+            crate::window::titles::follow_locale(cx);
             cx.refresh_windows();
             cx.notify();
         }

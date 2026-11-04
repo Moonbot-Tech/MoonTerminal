@@ -540,6 +540,7 @@ impl Backend {
         candidate.save()?;
         self.config = candidate;
         rust_i18n::set_locale(self.config.language.code());
+        crate::window::titles::follow_locale(cx);
         crate::install_moon_theme_for_config(&self.config, cx);
         cx.notify();
         cx.refresh_windows();

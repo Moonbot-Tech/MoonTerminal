@@ -358,6 +358,18 @@ const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
     ("conn.core_sort.added_newest", CoreSortMode::AddedNewest),
 ];
 
+/// Dropdown items for one label table, captioned in the CURRENT locale.
+///
+/// A select copies its captions into its own state, so they do not follow a later locale switch
+/// the way a `t!` call in `render` does: [`SettingsView::relabel_selects`] builds them again when
+/// a save changes the language.
+fn localized_items<T: Copy>(labels: &[(&str, T)]) -> Vec<MoonSelectItem<T>> {
+    labels
+        .iter()
+        .map(|(key, value)| MoonSelectItem::new(*value, t!(*key).to_string()))
+        .collect()
+}
+
 /// Footer status represented by an i18n key or a ready-to-display message.
 ///
 /// Keys are resolved during rendering so changing languages cannot leave a cached status in the
@@ -577,10 +589,7 @@ impl SettingsView {
         // Interface theme. Unlike every other selector here it is consumed LIVE from the draft:
         // the palette is installed on change and rolls back with the draft if Settings closes
         // unsaved, which is what makes picking a theme feel like previewing one.
-        let theme_mode_items = THEME_MODE_LABELS
-            .iter()
-            .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
-            .collect::<Vec<_>>();
+        let theme_mode_items = localized_items(&THEME_MODE_LABELS);
         let theme_mode_idx = THEME_MODE_LABELS
             .iter()
             .position(|(_, m)| *m == cur_theme_mode)
@@ -656,10 +665,7 @@ impl SettingsView {
         // Quote-money conversion. It lives here rather than on the Report or Analytics toolbars
         // because it is an expert setting almost nobody should touch: the default answers "what was
         // this trade worth when it closed", which is the right question for nearly every user.
-        let valuation_items = VALUATION_LABELS
-            .iter()
-            .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
-            .collect::<Vec<_>>();
+        let valuation_items = localized_items(&VALUATION_LABELS);
         let valuation_idx = VALUATION_LABELS
             .iter()
             .position(|(_, m)| *m == cur_valuation)
@@ -690,10 +696,7 @@ impl SettingsView {
 
         // Live scope (#688). Consumed live from the draft by every chart, like the book-zone pan,
         // and rolled back with the draft if Settings closes unsaved.
-        let live_scope_items = LIVE_SCOPE_LABELS
-            .iter()
-            .map(|(key, scope)| MoonSelectItem::new(*scope, t!(*key).to_string()))
-            .collect::<Vec<_>>();
+        let live_scope_items = localized_items(&LIVE_SCOPE_LABELS);
         let live_scope_idx = LIVE_SCOPE_LABELS
             .iter()
             .position(|(_, s)| *s == cur_live_scope)
@@ -723,10 +726,7 @@ impl SettingsView {
         .detach();
 
         // Build the data-source dropdown, ported from egui's ComboBox.
-        let mode_items = MODE_LABELS
-            .iter()
-            .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
-            .collect::<Vec<_>>();
+        let mode_items = localized_items(&MODE_LABELS);
         let mode_idx = MODE_LABELS
             .iter()
             .position(|(_, m)| *m == cur_mode)
@@ -750,10 +750,7 @@ impl SettingsView {
         .detach();
 
         // One order mode controls every core list.
-        let core_sort_items = CORE_SORT_LABELS
-            .iter()
-            .map(|(key, mode)| MoonSelectItem::new(*mode, t!(*key).to_string()))
-            .collect::<Vec<_>>();
+        let core_sort_items = localized_items(&CORE_SORT_LABELS);
         let core_sort_idx = CORE_SORT_LABELS
             .iter()
             .position(|(_, m)| *m == cur_core_sort)
@@ -1436,8 +1433,9 @@ pub fn open_on_tab(
         owner_display,
         cx,
     );
+    let title = |_: &App| t!("settings.window_title").to_string();
     let mut opts = crate::window::windowing::tool_window_options(
-        t!("settings.window_title").to_string(),
+        title(cx),
         crate::window::windowing::restored_window_bounds(
             saved,
             crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
@@ -1454,6 +1452,7 @@ pub fn open_on_tab(
     }) {
         Ok(handle) => {
             backend.update(cx, |b, _| b.settings_window = Some(handle));
+            crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
             crate::window::windowing::activate_new_window(handle.into(), cx);
         }
         Err(_) => {

@@ -327,6 +327,34 @@ impl SettingsView {
         save_outcome(&security, write)
     }
 
+    /// Caption the localized dropdowns again after a save switched the interface language.
+    ///
+    /// Their captions are copied into each select's state when the window opens, while the row
+    /// labels beside them go through `t!` on every render, so without this the window shows a
+    /// translated label over a value still in the old language until it is reopened. `set_items`
+    /// keeps the selected value and emits nothing, so the draft is not touched.
+    fn relabel_selects(&mut self, cx: &mut Context<Self>) {
+        use super::{
+            CORE_SORT_LABELS, LIVE_SCOPE_LABELS, MODE_LABELS, THEME_MODE_LABELS, VALUATION_LABELS,
+            localized_items,
+        };
+        self.theme_mode.update(cx, |state, cx| {
+            state.set_items(localized_items(&THEME_MODE_LABELS), cx)
+        });
+        self.valuation.update(cx, |state, cx| {
+            state.set_items(localized_items(&VALUATION_LABELS), cx)
+        });
+        self.live_scope.update(cx, |state, cx| {
+            state.set_items(localized_items(&LIVE_SCOPE_LABELS), cx)
+        });
+        self.mode.update(cx, |state, cx| {
+            state.set_items(localized_items(&MODE_LABELS), cx)
+        });
+        self.core_sort.update(cx, |state, cx| {
+            state.set_items(localized_items(&CORE_SORT_LABELS), cx)
+        });
+    }
+
     /// Apply saved settings at the narrowest required boundary.
     ///
     /// Presentation, logging, and market-mode changes apply live. Structural server or group
@@ -339,6 +367,8 @@ impl SettingsView {
         let sort_changed = before.core_sort != after.core_sort;
         if lang_changed {
             rust_i18n::set_locale(after.language.code());
+            crate::window::titles::follow_locale(cx);
+            self.relabel_selects(cx);
         }
         self.backend.update(cx, |b, bcx| {
             b.reconcile_telegram(&before.telegram);

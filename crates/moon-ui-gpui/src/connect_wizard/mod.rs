@@ -494,8 +494,9 @@ pub(crate) fn open(
         size(px(DEFAULT_SIZE.0 * zoom), px(DEFAULT_SIZE.1 * zoom)),
         cx,
     );
+    let title = |_: &App| t!("connect_wizard.window_title").to_string();
     let mut opts = crate::window::windowing::tool_window_options(
-        t!("connect_wizard.window_title").to_string(),
+        title(cx),
         WindowBounds::Windowed(bounds),
         Some(size(px(MIN_SIZE.0 * zoom), px(MIN_SIZE.1 * zoom))),
         owner,
@@ -518,6 +519,7 @@ pub(crate) fn open(
     match created {
         Ok(handle) => {
             backend.update(cx, |bk, _| bk.connect_wizard_window = Some(handle));
+            crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
             crate::window::windowing::activate_new_window(handle.into(), cx);
         }
         Err(error) => log::warn!("connect wizard could not be opened: {error:#}"),

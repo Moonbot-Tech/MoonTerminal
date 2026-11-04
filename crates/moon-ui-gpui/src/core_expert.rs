@@ -557,8 +557,9 @@ fn open_bound(
         owner_display,
         cx,
     );
+    let title = |_: &App| t!("core_expert.window_title").to_string();
     let mut opts = crate::window::windowing::tool_window_options(
-        t!("core_expert.window_title").to_string(),
+        title(cx),
         crate::window::windowing::restored_window_bounds(
             saved,
             crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
@@ -582,6 +583,7 @@ fn open_bound(
     match created {
         Ok(handle) => {
             backend.update(cx, |bk, _| bk.core_expert_window = Some(handle));
+            crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
             crate::window::windowing::activate_new_window(handle.into(), cx);
         }
         Err(error) => {

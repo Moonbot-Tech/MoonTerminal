@@ -695,11 +695,15 @@ pub fn spawn(
     // lookup always answers `None`, and a spec carried over from a Mac must survive that.
     spec.display_uuid =
         crate::window::windowing::display_identity(display_id, app).or(spec.display_uuid);
-    let opts = crate::window::windowing::detached_panel_window_options(
+    let panel_name = spec.panel.clone();
+    let title = move |_: &App| {
         format!(
             "{} — MoonTerminal",
-            crate::persistence::panel_meta::panel_title(&spec.panel)
-        ),
+            crate::persistence::panel_meta::panel_title(&panel_name)
+        )
+    };
+    let opts = crate::window::windowing::detached_panel_window_options(
+        title(app),
         crate::window::windowing::window_bounds_for(spec.maximized, spec.fullscreen, bounds),
         display_id,
         owner,
@@ -753,6 +757,7 @@ pub fn spawn(
     record.update(app, |b, _| {
         b.detached_panel_windows.insert(key, handle);
     });
+    crate::window::titles::track(handle.into(), owner.is_some(), title, app);
     Ok(handle)
 }
 

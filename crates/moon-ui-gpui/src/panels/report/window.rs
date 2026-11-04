@@ -250,8 +250,9 @@ pub fn open_scoped(
         px((REPORT_WINDOW_MIN_W * zoom).min(f32::from(bounds.size.width))),
         px((REPORT_WINDOW_MIN_H * zoom).min(f32::from(bounds.size.height))),
     );
+    let title = |_: &App| crate::persistence::panel_meta::panel_title("Report").to_string();
     let mut options = crate::window::windowing::tool_window_options(
-        crate::persistence::panel_meta::panel_title("Report").to_string(),
+        title(cx),
         crate::window::windowing::restored_window_bounds(saved, bounds),
         Some(min_size),
         owner,
@@ -276,6 +277,7 @@ pub fn open_scoped(
         backend.update(cx, |backend, _| {
             backend.report_window = Some(handle);
         });
+        crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
         crate::window::windowing::activate_new_window(handle.into(), cx);
     }
 }
