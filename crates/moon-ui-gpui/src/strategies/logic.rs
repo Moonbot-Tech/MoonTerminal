@@ -482,7 +482,7 @@ pub(super) fn pending_field_value(
     let pending = pending?;
     pending_changed_fields(pending, row, std::slice::from_ref(f))
         .contains(&f.name.to_lowercase())
-        .then(|| resolved_field(&pending.fields, f))
+        .then(|| displayed_field(row, &pending.fields, f))
 }
 
 /// Fields this open edit actually changed, compared through `field_value` on BOTH sides.
@@ -499,16 +499,32 @@ pub(super) fn pending_changed_fields(
 ) -> HashSet<String> {
     fields
         .iter()
-        .filter(|f| resolved_field(&pending.fields, f) != field_value(row, f))
+        .filter(|f| displayed_field(row, &pending.fields, f) != field_value(row, f))
         .map(|f| f.name.to_lowercase())
         .collect()
 }
 
 /// Return a named strategy field value or its schema default.
-/// A numeric edit field with neither value nor default displays `0`; Moonbot cores omit fields equal
-/// to their defaults, and an empty numeric input would otherwise be ambiguous.
 pub(super) fn field_value(row: &StrategyRow, f: &SchemaField) -> String {
-    resolved_field(&row.fields, f)
+    displayed_field(row, &row.fields, f)
+}
+
+/// Resolve a field for display from either a confirmed or pending snapshot.
+/// A numeric edit field with neither value nor default displays `0`; Moonbot cores omit fields equal
+/// to their defaults, and an empty numeric input would otherwise be ambiguous. An internal-only
+/// kind's `SignalType` displays the unknown-kind fallback without rewriting the stored field.
+fn displayed_field(row: &StrategyRow, fields: &[(String, String)], f: &SchemaField) -> String {
+    let value = resolved_field(fields, f);
+    if moon_core::feed::strategy_kind_is_hidden(row.kind_ordinal)
+        && f.name.eq_ignore_ascii_case("SignalType")
+    {
+        let hidden_name = value.trim().eq_ignore_ascii_case("ChartWall")
+            || value.trim().eq_ignore_ascii_case("Chart Wall");
+        if hidden_name || value == resolved_field(&row.fields, f) {
+            return "Unknown".to_string();
+        }
+    }
+    value
 }
 
 /// Shared normalisation behind [`field_value`]: resolve a field from an explicit name/value list,

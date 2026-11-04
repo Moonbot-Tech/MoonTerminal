@@ -814,6 +814,53 @@ fn named_row(id: u64, name: &str, folder_path: &str) -> StrategyRow {
     }
 }
 
+/// Returning the raw `SignalType` for ordinal 19 exposes ChartWall in the closed dropdown and in
+/// persisted version views; changing the stored field itself would break the saved strategy.
+#[test]
+fn hidden_kind_signal_type_displays_unknown_without_rewriting_the_field() {
+    let mut row = named_row(1, "UNIT_01", "");
+    row.kind = "Unknown".to_string();
+    row.kind_ordinal = 19;
+    row.fields = vec![
+        ("SignalType".to_string(), "ChartWall".to_string()),
+        ("CustomValue".to_string(), "ChartWall".to_string()),
+    ];
+    let field = |name: &str| moon_core::feed::SchemaField {
+        name: name.to_string(),
+        type_name: "String".to_string(),
+        ui: moon_core::feed::SchemaFieldUi::Combo,
+        picklist: Vec::new(),
+        default: None,
+    };
+
+    let signal = field("SignalType");
+    assert_eq!(super::field_value(&row, &signal), "Unknown");
+    assert_eq!(super::field_value(&row, &field("CustomValue")), "ChartWall");
+    assert_eq!(row.fields[0].1, "ChartWall");
+
+    let pending = moon_core::feed::StrategyEditRow {
+        id: row.id,
+        phase: moon_core::feed::StrategyEditPhase::Pending,
+        submitted_at_ms: 0,
+        fields: row.fields.clone(),
+    };
+    assert!(
+        super::pending_changed_fields(&pending, &row, std::slice::from_ref(&signal)).is_empty(),
+        "an unchanged raw value must not look different from its display label"
+    );
+    assert_eq!(
+        super::pending_field_value(Some(&pending), &row, &signal),
+        None
+    );
+
+    let mut changed = pending;
+    changed.fields[0].1 = "MoonShot".to_string();
+    assert_eq!(
+        super::pending_field_value(Some(&changed), &row, &signal).as_deref(),
+        Some("MoonShot")
+    );
+}
+
 /// Builds a store holding one core whose live rows are exactly `rows`.
 fn store_with(core: CoreId, rows: Vec<StrategyRow>) -> CoreStore {
     let mut store = CoreStore::default();

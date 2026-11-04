@@ -262,6 +262,22 @@ fn chart_wall_text_roundtrips_unchanged_but_cannot_be_pasted() {
     assert_eq!(resolve_clipboard(Some(&clip), None, &[]), None);
     assert!(paste_plan(&clip, &[], &HashSet::new()).is_empty());
 
+    let spoofed = ClipItem {
+        kind_ordinal: 6,
+        kind: "Chart Wall".to_string(),
+        ..clip[0].clone()
+    };
+    let named_only = ClipItem {
+        kind: "ChartWall".to_string(),
+        fields: vec![("SignalType".to_string(), "MoonShot".to_string())],
+        ..spoofed.clone()
+    };
+    for item in [spoofed, named_only] {
+        let text = clip_to_text(std::slice::from_ref(&item));
+        assert_eq!(resolve_clipboard(None, Some(&text), &[]), None);
+        assert!(paste_plan(&[item], &[], &HashSet::new()).is_empty());
+    }
+
     let hidden_row = StrategyRow {
         id: 9,
         name: "UNIT_01".to_string(),
