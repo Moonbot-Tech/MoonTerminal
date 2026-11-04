@@ -308,3 +308,47 @@ fn the_hotkeys_page_fits_the_body(cx: &mut gpui::TestAppContext) {
         },
     );
 }
+
+/// Reverting the key column to a literal width must fail: every move kind, every language, both
+/// font steps, shows whole on its editor, and the editor stays inside the Клавиша column.
+#[gpui::test]
+fn move_kinds_show_whole_inside_the_key_column(cx: &mut gpui::TestAppContext) {
+    use gpui::{InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _};
+    use moon_core::config::MoveKind;
+
+    crate::controls::trigger_fit::probe::every_locale(
+        cx,
+        |_, cx| {
+            let mut col = div().flex().flex_col();
+            for (ix, kind) in MoveKind::ALL.iter().enumerate() {
+                let key = kind.locale_key();
+                let label = rust_i18n::t!(&key).to_string();
+                col = col.child(
+                    div()
+                        .flex_none()
+                        .w(super::key_w(cx))
+                        .debug_selector(move || format!("key-{ix}"))
+                        .child(
+                            div()
+                                .flex_none()
+                                .debug_selector(move || format!("move-{ix}"))
+                                .child(super::editor_dropdown(
+                                    format!("probe-move-{ix}"),
+                                    label,
+                                    cx,
+                                )),
+                        ),
+                );
+            }
+            col.into_any_element()
+        },
+        |frame| {
+            for (ix, kind) in MoveKind::ALL.iter().enumerate() {
+                let key = kind.locale_key();
+                let label = rust_i18n::t!(&key).to_string();
+                frame.assert_holds(&format!("move-{ix}"), &label);
+                frame.assert_inside(&format!("move-{ix}"), &format!("key-{ix}"));
+            }
+        },
+    );
+}

@@ -288,6 +288,11 @@ fn coin_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         .into_any_element()
 }
 
+/// Floor of the figure-row strategy trigger, in design units.
+const STRATEGY_TRIGGER_MIN_W: f32 = 96.0;
+/// Cap of the figure-row strategy trigger: the Strategy column's default width less its padding.
+const STRATEGY_TRIGGER_MAX_W: f32 = 150.0;
+
 /// The strategy assignment dropdown, offering this core's `Alerts` strategies plus the unassigned
 /// placeholder. Assignment re-upserts an armed figure's blob with the strategy ID at offset 32.
 fn strategy_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
@@ -313,11 +318,14 @@ fn strategy_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         },
     );
     MoonDropdown::new(SharedString::from(format!("al-strat-{core}-{id}")))
+        // A strategy name is the user's own, so it has no longest value: it grows to the column's
+        // default width and ellipsizes past it, the whole name in the tooltip.
+        .trigger_tooltip(row.strategy.clone())
         .label(row.strategy.clone())
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonSize::Sm.into())
-        .trigger_width_scaled(150.0)
+        .fit_trigger_width(STRATEGY_TRIGGER_MIN_W, STRATEGY_TRIGGER_MAX_W)
         .fit_menu_width(220.0, 560.0)
         .items(items)
         .into_any_element()

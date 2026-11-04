@@ -94,3 +94,37 @@ fn should_notify_matches_step() {
         step.step(3, 3000.0) != GateStep::Idle
     );
 }
+
+/// Reverting the sound picker to a fixed 94-wide box must fail: every built-in sound, every
+/// language, both font steps, shows whole on the shared sound trigger.
+#[gpui::test]
+fn sound_names_show_whole_on_the_sound_trigger(cx: &mut gpui::TestAppContext) {
+    use gpui::{InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _};
+
+    let names = crate::media::sound::builtin_names();
+    crate::controls::trigger_fit::probe::every_locale(
+        cx,
+        move |_, cx| {
+            let mut col = gpui::div().flex().flex_col();
+            for (ix, name) in names.iter().enumerate() {
+                col = col.child(
+                    gpui::div()
+                        .flex_none()
+                        .debug_selector(move || format!("snd-{ix}"))
+                        .child(super::sound_dropdown(
+                            format!("probe-snd-{ix}"),
+                            name.to_string(),
+                            super::SOUND_TRIGGER_MIN_W,
+                            cx,
+                        )),
+                );
+            }
+            col.into_any_element()
+        },
+        |frame| {
+            for (ix, name) in names.iter().enumerate() {
+                frame.assert_holds(&format!("snd-{ix}"), name);
+            }
+        },
+    );
+}

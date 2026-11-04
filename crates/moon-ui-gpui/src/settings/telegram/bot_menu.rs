@@ -30,6 +30,12 @@ use super::SettingsView;
 use super::access::ChatsOf;
 use crate::design;
 
+/// Floor of a bot-menu choice trigger, in design units.
+pub(super) const BOT_MENU_TRIGGER_MIN_W: f32 = 140.0;
+/// Cap of a bot-menu choice trigger: above every shipped language's longest choice, so a fixed
+/// choice is never ellipsized.
+pub(super) const BOT_MENU_TRIGGER_MAX_W: f32 = 300.0;
+
 /// One side's tree and the button order last pushed into it.
 pub(in crate::settings) struct BotMenuEd {
     tree: Entity<MoonTreeState>,
@@ -361,7 +367,7 @@ impl SettingsView {
                         .trigger_caret(true)
                         .trigger_variant(MoonButtonVariant::Neutral)
                         .trigger_size(MoonButtonSize::density(cx))
-                        .trigger_width_scaled(140.0)
+                        .fit_trigger_width(BOT_MENU_TRIGGER_MIN_W, BOT_MENU_TRIGGER_MAX_W)
                         .fit_menu_width(160.0, 560.0)
                         .items(items),
                 )

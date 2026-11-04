@@ -9,8 +9,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement,
+    h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -31,7 +31,10 @@ const NAME_W: f32 = 138.0;
 const ON_W: f32 = 30.0;
 const CHART_W: f32 = 34.0;
 const PARAM_W: f32 = 66.0;
-const SOUND_W: f32 = 128.0;
+/// Sound column: the picker at its widest built-in name (`ComeGetSome`), the 4-unit gap and the ▶.
+const SOUND_W: f32 = 168.0;
+/// Rendered room the ▶ and its gap take out of [`SOUND_W`]; the picker is capped at the rest.
+const SOUND_PLAY_W: f32 = 34.0;
 const COL_GAP: f32 = 6.0;
 /// Design-reference caption-row and control-row heights, so every column's caption and control line
 /// up on the same two baselines down the whole table (the checkboxes, steppers and the sound row all
@@ -674,14 +677,18 @@ impl CoreStatusView {
             .items_center()
             .gap(m.w(4.0))
             .child(
-                MoonDropdown::new(SharedString::from(format!("cs-warn-{id}-snd")))
-                    .label(label)
-                    .trigger_caret(true)
-                    .trigger_variant(MoonButtonVariant::Soft)
-                    .trigger_size(MoonButtonSize::density(cx))
-                    .trigger_width_scaled(94.0)
-                    .fit_menu_width(128.0, 560.0)
-                    .items(items),
+                crate::panels::common::sound_dropdown(
+                    SharedString::from(format!("cs-warn-{id}-snd")),
+                    label,
+                    crate::panels::common::SOUND_TRIGGER_MIN_W,
+                    cx,
+                )
+                .trigger_variant(MoonButtonVariant::Soft)
+                .fit_trigger_width(
+                    crate::panels::common::SOUND_TRIGGER_MIN_W,
+                    SOUND_W - SOUND_PLAY_W,
+                )
+                .items(items),
             )
             // The square preview, shared with the core-settings alert pickers so the two sound
             // controls in the application cannot drift apart. Its side IS the control band, so it

@@ -165,3 +165,33 @@ fn the_messages_columns_fit_the_body(cx: &mut gpui::TestAppContext) {
         },
     );
 }
+
+/// Every report view and basis choice, every language, both font steps, fits under the bot-menu
+/// trigger's cap, so a fixed choice is never ellipsized.
+#[gpui::test]
+fn report_choices_fit_under_the_trigger_cap(cx: &mut gpui::TestAppContext) {
+    use gpui::IntoElement as _;
+    use moon_core::config::telegram_menu::{ReportBasis, ReportView};
+
+    crate::controls::trigger_fit::probe::every_locale(
+        cx,
+        |_, _| gpui::Empty.into_any_element(),
+        |frame| {
+            let at = frame.at.clone();
+            frame.measure(|app| {
+                let size = moon_ui::MoonButtonSize::density(app);
+                let cap = super::BOT_MENU_TRIGGER_MAX_W
+                    * crate::controls::trigger_fit::design_scale(app, size);
+                let labels: Vec<String> = ReportView::ALL
+                    .into_iter()
+                    .map(super::view_caption)
+                    .chain(ReportBasis::ALL.into_iter().map(super::basis_caption))
+                    .collect();
+                for label in &labels {
+                    let need = crate::controls::trigger_fit::natural_px(app, label, size);
+                    assert!(need <= cap, "{label:?} {need} > cap {cap}: {at}");
+                }
+            });
+        },
+    );
+}

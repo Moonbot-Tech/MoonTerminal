@@ -599,3 +599,55 @@ fn rail_color_lifts_the_core_colour_against_the_card_ground() {
         "the frozen colour is painted unlifted"
     );
 }
+
+/// Reverting the slot field to a fixed 76-wide box, or the popup to a literal width, must fail:
+/// every field name, every language, both font steps, shows whole and three large slots with
+/// their toggles still fit the popup's grid card.
+#[gpui::test]
+fn slot_fields_show_their_whole_name_and_the_grid_fits_the_popup(cx: &mut gpui::TestAppContext) {
+    use gpui::{InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _};
+    use moon_core::config::DetectField;
+
+    crate::controls::trigger_fit::probe::every_locale(
+        cx,
+        |_, cx| {
+            let mut row = gpui::div().flex();
+            for (ix, f) in DetectField::ALL.iter().enumerate() {
+                let label = t!(super::popup::field_key(*f)).to_string();
+                row = row.child(
+                    gpui::div()
+                        .flex_none()
+                        .debug_selector(move || format!("slot-{ix}"))
+                        .child(super::popup::slot_dropdown(
+                            format!("probe-slot-{ix}").into(),
+                            label,
+                            cx,
+                        )),
+                );
+            }
+            row.into_any_element()
+        },
+        |frame| {
+            let mut widest = 0.0f32;
+            for (ix, f) in DetectField::ALL.iter().enumerate() {
+                let label = t!(super::popup::field_key(*f)).to_string();
+                let sel = format!("slot-{ix}");
+                frame.assert_holds(&sel, &label);
+                widest = widest.max(f32::from(frame.bounds(&sel).size.width));
+            }
+            let (popup, row) = frame.measure(|app| {
+                let ui = |v: f32| crate::design::ui_value(app, v);
+                let popup = ui(super::popup::popup_w(app) - crate::panels::POPUP_GROUP_INSET);
+                // Three cells of field plus three 20-wide toggles with 2-pixel gaps, two 6-pixel
+                // cell gaps, and the card's 12 + 8 padding.
+                let row = 3.0 * (widest + ui(66.0)) + ui(12.0) + 12.0 + ui(8.0);
+                (popup, row)
+            });
+            assert!(
+                row <= popup + 0.5,
+                "slot grid {row} overflows popup {popup}: {}",
+                frame.at
+            );
+        },
+    );
+}
