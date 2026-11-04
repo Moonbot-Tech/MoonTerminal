@@ -245,3 +245,81 @@ fn prune_coin_selection_drops_markets_outside_the_new_scope() {
         HashSet::from([(7, "BTCUSDT".to_string()), (7, "ETHUSDT".to_string())])
     );
 }
+
+/// Every settings tooltip on both chart toolbars must reuse its popup's title key.
+///
+/// Breakage: reintroducing a separate `*.tip` key lets the hover wording drift from the window
+/// title in one or more locales.
+#[test]
+fn chart_settings_tooltips_reuse_popup_title_keys() {
+    let cases = [
+        (
+            "chart-layout-settings",
+            "detached-layout-settings",
+            "chart.layout.title",
+        ),
+        (
+            "chart-candle-settings",
+            "detached-candle-settings",
+            "chart.candles.title",
+        ),
+        (
+            "chart-graphics-settings",
+            "detached-graphics-settings",
+            "chart.graphics.title",
+        ),
+        (
+            "chart-history-settings",
+            "detached-history-settings",
+            "chart.history.title",
+        ),
+        (
+            "chart-labels-settings",
+            "detached-labels-settings",
+            "chart_labels.title",
+        ),
+    ];
+    for (docked_id, detached_id, title_key) in cases {
+        for (source, button_id) in [
+            (include_str!("strip.rs"), docked_id),
+            (include_str!("detached_host/render.rs"), detached_id),
+        ] {
+            let button = source
+                .split(button_id)
+                .nth(1)
+                .and_then(|tail| tail.split(".on_click").next())
+                .unwrap_or_else(|| panic!("missing chart toolbar button {button_id}"));
+            assert!(
+                button.contains(&format!("t!(\"{title_key}\")")),
+                "{button_id} must use {title_key} for its tooltip"
+            );
+        }
+    }
+}
+
+/// Closing the layout popup must commit its name through the same host path as Enter and blur.
+///
+/// Breakage: removing the close-settlement call, bypassing the shared subscription on either host,
+/// or dropping the non-empty guard would respectively lose a typed name or erase a stored one.
+#[test]
+fn layout_close_commits_custom_name_on_both_hosts() {
+    let common = include_str!("common.rs");
+    let settle = common
+        .split("fn settle_closed_popup(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn release_layout_field_focus(").next())
+        .expect("layout popup close settlement must exist");
+    assert!(settle.contains("self.commit_layout_popup(cx);"));
+    assert!(settle.contains("self.commit_rename_input(cx);"));
+
+    for host in [include_str!("mod.rs"), include_str!("detached_host/mod.rs")] {
+        assert!(host.contains("subscribe_rename_commit(&custom_name_input, cx);"));
+    }
+    for rename in [
+        include_str!("custom.rs"),
+        include_str!("detached_host/mod.rs"),
+    ] {
+        assert!(rename.contains("let name = name.trim().to_string();"));
+        assert!(rename.contains("if name.is_empty()"));
+    }
+}

@@ -463,6 +463,8 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn popup_is_custom(&self, cx: &App) -> bool;
     /// Seed the custom-tab name field; a no-op when the target is not custom.
     fn seed_rename_input(&self, window: &mut Window, cx: &mut Context<Self>);
+    /// Rename the target custom tab, preserving the existing trimmed non-empty semantics.
+    fn commit_custom_name(&mut self, name: String, cx: &mut Context<Self>);
     /// Apply a value to the target stack(s), dispatching to Main/active stack or the window panel.
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>);
     /// This popup's layout values as they stand right now, for the ⧉ row to perform. The two
@@ -541,14 +543,13 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
 
     /// Settle what a popup owes as it leaves the screen.
     ///
-    /// Only ⚙ owes anything: its layout fields are committed on the way out rather than per
-    /// keystroke, so a popup displaced by a press on a neighbouring button has to commit here —
-    /// exactly as it does when dismissed by a click on the chart. The Custom-tab NAME field is not
-    /// part of that: it commits from its own `Blur`/Enter subscription, which is gated on the ⚙
-    /// popup still being the one showing, so a name typed and never confirmed is dropped on every
-    /// close path. That predates the slot and is left as it was. The graphics popup's book-width
-    /// field is not settled here either: every in-range edit is applied as it is typed, and a
-    /// displaced popup's focus is released on the host's next render (`sync_book_width_field`).
+    /// Only ⚙ owes anything: its layout fields and custom-tab name are committed on the way out
+    /// rather than per keystroke, so a popup displaced by a press on a neighbouring button has to
+    /// commit here — exactly as it does when dismissed by a click on the chart. The name uses the
+    /// same host path as its `Blur`/Enter subscription, but cannot be gated on the popup still
+    /// showing because the slot has already closed. The graphics popup's book-width field is not
+    /// settled here: every in-range edit is applied as it is typed, and a displaced popup's focus
+    /// is released on the host's next render (`sync_book_width_field`).
     /// An OUT-of-range number still in the field when another popup displaces it is dropped —
     /// only the popup's own close funnel clamps one, and this path has no graphics host to ask.
     ///
@@ -558,6 +559,7 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     fn settle_closed_popup(&mut self, popup: ChartPopup, cx: &mut Context<Self>) {
         if popup == ChartPopup::Layout {
             self.commit_layout_popup(cx);
+            self.commit_rename_input(cx);
         }
     }
 
@@ -592,7 +594,7 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
     /// inside the popup is none of those; it flips the controlled flag, which `render` later turns
     /// into `set_open` + `sync_open_focus` with no report at all. A release hung off the report
     /// alone would leave the ✕ as the one exit that still strands the focus. What the popup owes
-    /// the DATA — committing the size fields — travels the other way, through
+    /// the DATA — committing the layout fields and custom name — travels the other way, through
     /// [`Self::settle_closed_popup`], because that one needs no window and every displacement path
     /// reaches it.
     ///
@@ -900,6 +902,15 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
             cx,
         );
     }
+
+    /// Commit the custom-tab name field when it is shown, leaving non-custom targets untouched.
+    fn commit_rename_input(&mut self, cx: &mut Context<Self>) {
+        if !self.popup_is_custom(cx) {
+            return;
+        }
+        let name = self.rename_input().read(cx).value().to_string();
+        self.commit_custom_name(name, cx);
+    }
 }
 
 /// Commit the ⚙ popup's fields when one of them loses focus or takes Enter.
@@ -915,6 +926,21 @@ pub(super) fn subscribe_layout_commit<T: LayoutPopupHost>(
             && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
         {
             this.commit_layout_popup(cx);
+        }
+    })
+    .detach();
+}
+
+/// Commit the custom-tab name when its field loses focus or takes Enter.
+pub(super) fn subscribe_rename_commit<T: LayoutPopupHost>(
+    input: &Entity<MoonInputState>,
+    cx: &mut Context<T>,
+) {
+    cx.subscribe(input, |this, _input, ev: &MoonInputEvent, cx| {
+        if this.popup_shows(ChartPopup::Layout)
+            && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
+        {
+            this.commit_rename_input(cx);
         }
     })
     .detach();
@@ -959,7 +985,7 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
                 if open {
                     this.seed_layout_popup_inputs(window, cx);
                 }
-                // Closing COMMITS the size field; `settle_closed_popup` owns that, so every way out
+                // Closing COMMITS the fields; `settle_closed_popup` owns that, so every way out
                 // of this popup — ✕, outside click, Escape, the gear, or a press on a neighbouring
                 // button that displaces it — commits exactly once. The keyboard travels through
                 // `close_layout_popup` instead, and only AFTER the popover has had its say about

@@ -473,8 +473,8 @@ where
         move |_, _w, app: &mut App| on_apply_all(app),
     );
 
-    // Name field only for custom tabs (`rename_input = Some`). The caller owns the input subscription
-    // that commits on Blur or Enter.
+    // Name field only for custom tabs (`rename_input = Some`). The caller commits it on Blur,
+    // Enter, and every popup close path.
     let rename_row = rename_input.map(|input| {
         h_flex()
             .gap(design::ui_px(cx, 6.0))

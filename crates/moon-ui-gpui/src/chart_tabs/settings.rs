@@ -446,6 +446,9 @@ impl LayoutPopupHost for ChartTabs {
                 .update(cx, |input, c| input.set_value(name, window, c));
         }
     }
+    fn commit_custom_name(&mut self, name: String, cx: &mut Context<Self>) {
+        self.rename_active_custom(name, cx);
+    }
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>) {
         match self.active.clone() {
             Tab::Main => self.main.update(cx, |s, c| set_stack_setting!(s, c, v)),

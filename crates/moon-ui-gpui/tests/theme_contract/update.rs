@@ -141,41 +141,59 @@ fn update_process_modes_dispatch_before_gpui_and_quit_through_app() {
 #[test]
 fn update_button_and_divider_share_the_pre_ticker_header_cluster() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
+    let slot = code_only(&read_src("chrome/terminal_chrome/update_button.rs"));
     let spacer = chrome.find("terminal-header-spacer-drag").unwrap();
-    let button = chrome.find("terminal-update-tooltip").unwrap();
+    let button = chrome
+        .find("update_button::update_cluster(&updater, p, cx)")
+        .unwrap();
     let ticker = chrome
         .find("design::ticker_visible(cx, chrome_width)")
         .unwrap();
+    let cluster = braced_body(&slot, "fn cluster(");
     assert!(
         spacer < button
             && button < ticker
-            && chrome[spacer..ticker].contains("update_state.visible().then")
-            && chrome[button..ticker].contains("design::chrome_divider(cx, p)"),
+            && slot.contains("let label = update_button_label(&state)?;")
+            && cluster.contains("update_button(label, state, tooltip, on_click)")
+            && cluster.contains("design::chrome_divider(cx, p)"),
         "the coupled update button/divider must stay after the drag spacer and before ticker"
     );
 }
 
-/// `chrome/terminal_chrome.rs:header` must reserve accent chrome for `Available` and pass that
-/// state-specific variant into the update button. Replacing the `Available(_)` branch's accent
-/// with `Panel` makes a newly available update look like ordinary header chrome and easy to miss.
+/// The manual-strategy row must budget the update cluster at its CURRENT label (#1191): without
+/// it the names grow under `Обновить до v…` at every window width.
+#[test]
+fn manual_strategy_fit_reserves_the_update_cluster() {
+    let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
+    let manual = code_only(&read_src("controls/manual_strat.rs"));
+    assert!(
+        chrome.contains("update_button::update_cluster_reserve_w(cx, &updater.read(cx).state())")
+            && chrome.contains("update_reserve_w,")
+            && manual.contains("+ update_reserve_w"),
+        "the strategy fit ladder must include the update button's current width"
+    );
+}
+
+/// `chrome/terminal_chrome/update_button.rs:update_button` must reserve accent chrome for
+/// `Available` and pass that state-specific variant into the update button. Replacing the
+/// `Available(_)` branch's accent with `Panel` makes a newly available update look like ordinary
+/// header chrome and easy to miss.
 #[test]
 fn available_updates_keep_an_accented_button_while_other_states_stay_panel() {
-    let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
-    let header = braced_body(&chrome, "pub fn header(");
-    let variant = header
-        .split_once(
-            "let variant = if matches!(update_state, crate::update::UpdateState::Available(_)) {",
-        )
-        .expect("header update cluster must select a variant by update state")
+    let slot = code_only(&read_src("chrome/terminal_chrome/update_button.rs"));
+    let body = braced_body(&slot, "fn update_button(");
+    let variant = body
+        .split_once("let variant = if matches!(state, UpdateState::Available(_)) {")
+        .expect("update button must select a variant by update state")
         .1
-        .split_once("let busy = update_state.busy();")
-        .expect("variant selection must finish before update busy state")
+        .split_once("div()")
+        .expect("variant selection must finish before the button is built")
         .0;
     let (available, non_available) = variant
         .split_once("} else {")
         .expect("available and non-available states must choose separately");
     let button = chain_between(
-        header,
+        body,
         "MoonButton::new(\"terminal-update\")",
         ".render(),",
         "update button",

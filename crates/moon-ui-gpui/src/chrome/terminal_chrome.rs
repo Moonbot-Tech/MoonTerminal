@@ -21,6 +21,8 @@ use moon_core::util::fmt;
 use crate::shell::Shell;
 use crate::{Backend, design};
 
+mod update_button;
+
 /// The header gear's trigger, built once for both faces it can open.
 ///
 /// The two branches that use it are structurally different — one is a `MoonPopover`'s trigger, the
@@ -128,6 +130,9 @@ pub fn header(
     // — "this core's manual strategies" — and every caller decides for itself whether it has a
     // core to speak for. It cannot answer `None` on its own: it resolves through
     // `Backend::active_trade_core`, whose Overview fallback returns the group's FIRST core.
+    // The update button stands right of the strategy row, so the row stops at its CURRENT
+    // label's left edge instead of growing under it (#1191); zero while no version is offered.
+    let update_reserve_w = update_button::update_cluster_reserve_w(cx, &updater.read(cx).state());
     let manual = (!overview)
         .then(|| {
             crate::controls::manual_strategy_controls(
@@ -137,12 +142,12 @@ pub fn header(
                 strat_slot_menu,
                 strat_slots_open,
                 chrome_width,
+                update_reserve_w,
                 p,
                 cx,
             )
         })
         .flatten();
-    let update_state = updater.read(cx).state();
     h_flex()
         .w_full()
         // Keep the drawn chrome on the same tier-derived height as the window drag overlay at all
@@ -299,72 +304,9 @@ pub fn header(
                 .flex(),
         )
         // The updater is a separate pre-ticker cluster: its coupled divider appears only with the
-        // button, preserving the right-edge ticker offset and leaving no empty separator.
-        .children(update_state.visible().then(|| {
-            let version = update_state
-                .version()
-                .map(|version| version.to_string())
-                .unwrap_or_default();
-            let label = if update_state.busy() {
-                t!("update.installing").to_string()
-            } else if matches!(update_state, crate::update::UpdateState::Failed { .. }) {
-                t!("update.retry").to_string()
-            } else if matches!(update_state, crate::update::UpdateState::Opened(_)) {
-                t!("update.opened").to_string()
-            } else {
-                t!("update.available", version = version).to_string()
-            };
-            let tooltip = match &update_state {
-                crate::update::UpdateState::Failed { message, .. } => {
-                    t!("update.failed", error = message).to_string()
-                }
-                crate::update::UpdateState::Opened(_) => t!("update.opened_tooltip").to_string(),
-                _ if cfg!(target_os = "macos") => t!("update.tooltip_image").to_string(),
-                _ => t!("update.tooltip").to_string(),
-            };
-            // An offered update is the only call to action this header ever grows, and it appears
-            // on a window whose every other control is `Panel` — so neutral panel chrome is
-            // exactly what a user scanning the row does not stop on.
-            //
-            // `Green` rather than the `Blue` primary variant, and the reason is contrast, not
-            // taste. Every tinted MoonUI variant paints its LABEL in the accent colour over a
-            // ~10% wash of it, so the label's legibility is the palette token's own contrast
-            // against this header. In the light theme `Blue` resolves to `p.accent` `#009DFF`
-            // (`button.rs:866`, `tokens.rs:190`) — about 2.5:1 on `shell_high`, far under the
-            // 4.5:1 floor, and this label is 10px `Micro`. `Amber` `#B97824` is no better at
-            // ~3.6:1. `Green` is the one accent MoonUI gave a light-specific foreground,
-            // `green_text` `#0E6E45` (`tokens.rs:186`, `success_fg` at `button.rs:868`), which
-            // clears the floor at roughly 6:1 while staying the accent in the dark theme. It is
-            // also the right semantic: something good is available, not something wrong.
-            //
-            // Every other state keeps `Panel` deliberately. Installing/Restarting already read as
-            // busy through `loading(busy)`, and Failed already reads through its retry label —
-            // accenting those would advertise an action that is either underway or just refused.
-            let variant = if matches!(update_state, crate::update::UpdateState::Available(_)) {
-                MoonButtonVariant::Green
-            } else {
-                MoonButtonVariant::Panel
-            };
-            let busy = update_state.busy();
-            let updater = updater.clone();
-            design::chrome_section(cx)
-                .child(
-                    div()
-                        .id("terminal-update-tooltip")
-                        .tooltip(crate::panels::common::text_tooltip(tooltip))
-                        .child(
-                            MoonButton::new("terminal-update")
-                                .label(label)
-                                .variant(variant)
-                                .loading(busy)
-                                .on_click(move |_, _window, cx| {
-                                    crate::update::UpdateController::start_install(&updater, cx);
-                                })
-                                .render(),
-                        ),
-                )
-                .child(design::chrome_divider(cx, p))
-        }))
+        // button, preserving the right-edge ticker offset and leaving no empty separator. Its width
+        // is already inside the manual-strategy row's reservation above (`update_reserve_w`).
+        .children(update_button::update_cluster(&updater, p, cx))
         // Ambient readouts are right-aligned: rate ticker, then the clock, then the window controls.
         .child(
             design::chrome_section(cx)

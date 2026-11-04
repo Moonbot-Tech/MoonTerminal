@@ -376,18 +376,7 @@ impl DetachedChartHost {
         super::graphics_popup::subscribe_book_width(&book_width_input, window, cx);
         // Custom-tab name input commits renaming on Blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
-        cx.subscribe(
-            &custom_name_input,
-            |this, input, ev: &MoonInputEvent, cx| {
-                if this.popup_shows(ChartPopup::Layout)
-                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
-                {
-                    let name = input.read(cx).value().to_string();
-                    this.rename_custom(name, cx);
-                }
-            },
-        )
-        .detach();
+        super::common::subscribe_rename_commit(&custom_name_input, cx);
         let coin_input = cx.new(|cx| MoonInputState::new(window, cx));
         // Transliterate Russian keyboard layout to Latin directly in the field, matching `chart_tabs::new`.
         cx.subscribe_in(
@@ -952,6 +941,9 @@ impl LayoutPopupHost for DetachedChartHost {
             self.custom_name_input
                 .update(cx, |input, c| input.set_value(name, window, c));
         }
+    }
+    fn commit_custom_name(&mut self, name: String, cx: &mut Context<Self>) {
+        self.rename_custom(name, cx);
     }
     fn set_on_stacks(&mut self, v: StackSetting, cx: &mut Context<Self>) {
         self.panel.update(cx, |s, c| set_stack_setting!(s, c, v));

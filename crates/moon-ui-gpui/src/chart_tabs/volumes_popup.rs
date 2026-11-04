@@ -55,14 +55,10 @@ const WIDTHS: [f32; 7] = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4];
 /// The lower end sits above `moon_chart::volume_bars`'s drawable minimum, while the upper end is
 /// its maximum. These are offered sizes, not the clamp, and the clamp stays that module's business
 /// alone.
-const CANDLE_VOLUME_HEIGHTS: [f32; 6] = [0.05, 0.10, 0.18, 0.25, 0.35, 0.45];
+const CANDLE_VOLUME_HEIGHTS: [f32; 6] = [0.05, 0.10, 0.20, 0.25, 0.35, 0.45];
 
 /// Selectable bottom-volume opacities.
-///
-/// Carries BOTH `0.30` and `0.22`: the first is the shipped default, the second is what the LIGHT
-/// theme used to force before this value became per tab. A migrated light-mode user therefore lands
-/// on an exact segment instead of the nearest one.
-const CANDLE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.22, 0.30, 0.50, 1.0];
+const CANDLE_VOLUME_ALPHAS: [f32; 6] = [0.0, 0.15, 0.20, 0.30, 0.50, 1.0];
 
 /// Segment widths, in rendered pixels. Each column is as wide as its widest row and no wider,
 /// and every other row in it divides that width among its own segments.
@@ -122,7 +118,7 @@ fn price_frame_label(pct: f32) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// Label a 0..1 fraction as a whole number of percent, without the sign: `18`, `100`. The unit
+/// Label a 0..1 fraction as a whole number of percent, without the sign: `20`, `100`. The unit
 /// is in the row's caption, like [`price_frame_label`]; `graphics_popup::percent_label` keeps the
 /// sign for the rows whose captions do not name it.
 fn whole_percent_label(v: f32) -> String {

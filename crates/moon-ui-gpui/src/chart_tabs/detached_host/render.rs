@@ -283,7 +283,7 @@ impl Render for DetachedChartHost {
                                     .leading_icon(MoonButtonIconSlot::new(
                                         "icons/chart-candlestick.svg",
                                     ))
-                                    .tooltip(t!("chart.candles.tip").to_string())
+                                    .tooltip(t!("chart.candles.title").to_string())
                                     .size(MoonSize::Xs)
                                     .variant(if candle_popup_open {
                                         MoonButtonVariant::Blue
@@ -301,7 +301,7 @@ impl Render for DetachedChartHost {
                                 "detached-chart-graphics",
                                 MoonButton::new("detached-graphics-settings")
                                     .leading_icon(MoonButtonIconSlot::new("icons/palette.svg"))
-                                    .tooltip(t!("chart.graphics.tip").to_string())
+                                    .tooltip(t!("chart.graphics.title").to_string())
                                     .size(MoonSize::Xs)
                                     .variant(if graphics_popup_open {
                                         MoonButtonVariant::Blue
@@ -319,7 +319,7 @@ impl Render for DetachedChartHost {
                                 "detached-chart-history",
                                 MoonButton::new("detached-history-settings")
                                     .leading_icon(MoonButtonIconSlot::new("icons/book-open.svg"))
-                                    .tooltip(t!("chart.history.tip").to_string())
+                                    .tooltip(t!("chart.history.title").to_string())
                                     .size(MoonSize::Xs)
                                     .variant(if history_popup_open {
                                         MoonButtonVariant::Blue
@@ -336,7 +336,7 @@ impl Render for DetachedChartHost {
                                 "detached-chart-labels",
                                 MoonButton::new("detached-labels-settings")
                                     .leading_icon(MoonButtonIconSlot::new("icons/chart-labels.svg"))
-                                    .tooltip(t!("chart_labels.tip").to_string())
+                                    .tooltip(t!("chart_labels.title").to_string())
                                     .size(MoonSize::Xs)
                                     .variant(if labels_popup_open {
                                         MoonButtonVariant::Blue
@@ -369,7 +369,7 @@ impl Render for DetachedChartHost {
                                 "detached-chart-layout",
                                 crate::panels::common::popup_gear_trigger_dense(
                                     "detached-layout-settings",
-                                    t!("chart.layout.tip").to_string(),
+                                    t!("chart.layout.title").to_string(),
                                     popup_open,
                                 ),
                                 t!("chart.apply_all_tabs_windows").to_string(),
