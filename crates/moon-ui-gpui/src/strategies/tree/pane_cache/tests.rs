@@ -289,6 +289,34 @@ fn the_move_buttons_take_their_enablement_from_the_pane_cache() {
     assert!(include_str!("../pane_cache.rs").contains("self.move_availability("));
 }
 
+/// Removing the hidden-kind predicate from `kinds_present` exposes the internal ChartWall type in
+/// the tree's type filter even though saved rows of that kind must continue to load.
+#[test]
+fn the_kind_filter_omits_hidden_chart_wall_rows() {
+    use moon_core::feed::StrategyRow;
+    use moon_core::session::CoreStore;
+
+    let row = |id, kind_ordinal, kind: &str| StrategyRow {
+        id,
+        name: format!("UNIT_{id}"),
+        kind: kind.to_string(),
+        kind_ordinal,
+        folder_path: String::new(),
+        checked: false,
+        is_short: false,
+        fields: Vec::new(),
+    };
+    let mut store = CoreStore::default();
+    store.ensure(7);
+    store.core_mut(7).unwrap().strategies = vec![row(1, 19, "Unknown"), row(2, 2, "Drops")];
+    let cores = vec![(7, "CORE_A".to_string())];
+
+    assert_eq!(
+        super::kinds_present(&cores, &store),
+        vec![(2, "Drops".to_string())]
+    );
+}
+
 /// The buttons name N once there is something to act on and fall back to the plain verb at zero,
 /// where they are disabled anyway.
 #[test]

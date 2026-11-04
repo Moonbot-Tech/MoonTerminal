@@ -119,3 +119,31 @@ fn folder_delete_empties_the_folder_before_removing_it() {
         .expect("empty folder on a versioned-tree core still goes by omission");
     assert!(strategies < omission);
 }
+
+/// Dropping the hidden-kind filter from `create_kind_list` puts ChartWall back in the create menu;
+/// dropping the existing MoonShot reorder would separately regress the menu's primary choice.
+#[test]
+fn create_kind_list_hides_chart_wall_and_keeps_moonshot_first() {
+    let kind = |ordinal, name: &str| moon_core::feed::SchemaKind {
+        ordinal,
+        name: name.to_string(),
+        sections: Vec::new(),
+    };
+    let schema = moon_core::feed::StrategySchemaModel {
+        kinds: vec![
+            kind(2, "Drops"),
+            kind(19, "Unknown"),
+            kind(20, "MoonHook"),
+            kind(6, "MoonShot"),
+        ],
+    };
+
+    assert_eq!(
+        super::create_kind_list(&schema),
+        vec![
+            (6, "MoonShot".to_string()),
+            (2, "Drops".to_string()),
+            (20, "MoonHook".to_string()),
+        ]
+    );
+}

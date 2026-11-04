@@ -46,7 +46,21 @@ fn kinds() -> Vec<SchemaKind> {
             name: "Drops".into(),
             sections: vec![],
         },
+        SchemaKind {
+            ordinal: 19,
+            name: "ChartWall".into(),
+            sections: vec![],
+        },
     ]
+}
+
+/// A MoonBot message that names the hidden kind must not create it, alone or beside a valid row.
+#[test]
+fn chart_wall_moonbot_exports_are_rejected_atomically() {
+    let hidden = HOOK.replace("SignalType=MoonHook", "SignalType=ChartWall");
+    assert_eq!(parse(&hidden, &kinds()), None);
+    assert_eq!(parse(&format!("{HOOK}\n{hidden}"), &kinds()), None);
+    assert_eq!(resolve_clipboard(None, Some(&hidden), &kinds()), None);
 }
 
 /// Literal values must survive external parsing rather than taking the internal unescape path.

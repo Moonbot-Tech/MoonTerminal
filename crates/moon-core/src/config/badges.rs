@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::paths;
 use super::write_file_atomic;
+use crate::feed::strategy_kind_is_hidden;
 
 /// `0xRRGGBB` → sRGB `[u8;3]`.
 const fn c(hex: u32) -> [u8; 3] {
@@ -120,7 +121,7 @@ pub struct BadgesConfig {
     pub custom_colors: Vec<[u8; 3]>,
 }
 
-/// Default 24 kinds: `(ordinal, name, code, dark_color, light_color)`. Colors come from
+/// Default public kinds: `(ordinal, name, code, dark_color, light_color)`. Colors come from
 /// the `MoonTone` families (see the badge swatch). Kept here as the single source of truth —
 /// written to `badges.json` on first launch and edited in Settings thereafter.
 #[rustfmt::skip]
@@ -139,7 +140,6 @@ const DEFAULTS: &[(u8, &str, &str, u32, u32)] = &[
     (21, "Activity",      "ACT", 0xFFB347, 0xB97800),
     // Order book / structure — Info (blue)
     (3,  "Walls",         "WAL", 0x7FC9FF, 0x126CBF),
-    (19, "Chart Wall",    "CHW", 0x7FC9FF, 0x126CBF),
     (18, "Spread",        "SPR", 0x7FC9FF, 0x126CBF),
     // Risk — Danger (red)
     (15, "Liquidations",  "LIQ", 0xFF4A4A, 0xD92D3A),
@@ -179,13 +179,20 @@ impl Default for BadgesConfig {
 }
 
 impl BadgesConfig {
+    /// Remove internal-only strategy kinds while preserving every public row and user edit.
+    fn without_hidden_kinds(mut self) -> Self {
+        self.entries
+            .retain(|entry| !strategy_kind_is_hidden(entry.ordinal));
+        self
+    }
+
     /// Reads `badges.json`. A corrupt file yields the default; a missing file creates and saves
     /// the default so the user has something to edit manually, as in `OrdersStyleSet::load`.
     pub fn load() -> Self {
         let path = paths::badges_path();
         match std::fs::read_to_string(&path) {
             Ok(s) => match serde_json::from_str::<BadgesConfig>(&s) {
-                Ok(cfg) => cfg,
+                Ok(cfg) => cfg.without_hidden_kinds(),
                 Err(e) => {
                     log::warn!("badges.json битый ({e}) — беру дефолт");
                     Self::default()
@@ -238,7 +245,7 @@ impl BadgesConfig {
         v.get("entries")?.as_array()?;
         let mut parsed: Self = serde_json::from_str(text).ok()?;
         parsed.custom_colors = current.custom_colors.clone();
-        Some(parsed)
+        Some(parsed.without_hidden_kinds())
     }
 
     /// Entry by ordinal (first match).

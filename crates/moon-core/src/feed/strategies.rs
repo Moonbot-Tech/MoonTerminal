@@ -668,6 +668,15 @@ pub(super) fn format_adjustment_log(changes: &[StrategyFieldChange]) -> String {
     format!(" {text}")
 }
 
+/// Return the display name for one schema kind without changing its wire ordinal or definition.
+fn schema_kind_name(ordinal: u8, core_name: &str) -> String {
+    if strategy_kind_is_hidden(ordinal) {
+        strat_kind_name(ordinal).to_string()
+    } else {
+        core_name.to_string()
+    }
+}
+
 /// Builds a decoupled model from moonproto `StrategySchema`: each kind contains its editor
 /// sections and their fields (name/type/widget kind/picklist/default).
 pub(super) fn build_schema_model(schema: &StrategySchema) -> StrategySchemaModel {
@@ -711,7 +720,7 @@ pub(super) fn build_schema_model(schema: &StrategySchema) -> StrategySchemaModel
                 .collect();
             SchemaKind {
                 ordinal: k.ordinal(),
-                name: k.name.clone(),
+                name: schema_kind_name(k.ordinal(), &k.name),
                 sections,
             }
         })
@@ -863,6 +872,13 @@ pub(super) fn detect_strat_name(s: Option<&StrategySnapshot>) -> String {
     }
 }
 
+/// Whether a core strategy kind is internal-only and must not be offered as a user choice.
+///
+/// The ordinal remains in schemas and saved snapshots; this gates only creation, paste, and filters.
+pub fn strategy_kind_is_hidden(ordinal: u8) -> bool {
+    ordinal == moonproto::StrategyKind::CHART_WALL.ordinal()
+}
+
 /// Returns the Moonbot strategy type (kind) for a `StrategyKind` ordinal.
 pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
     match ordinal {
@@ -885,7 +901,7 @@ pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
         16 => "TopMarket",
         17 => "EMA",
         18 => "Spread",
-        19 => "Chart Wall",
+        19 => "Unknown",
         20 => "MoonHook",
         21 => "Activity",
         22 => "Alerts",

@@ -770,3 +770,39 @@ fn a_dump_keeps_the_delphi_signed_strategy_id() {
     );
     assert_eq!(small.strategy_id, 42);
 }
+
+/// Relabelling the hidden kind must leave its saved ordinal and field payload intact; replacing
+/// `Unknown` with the core's display name again would reintroduce ChartWall in reports and orders.
+#[test]
+fn chart_wall_keeps_saved_data_but_uses_the_unknown_kind_label() {
+    let snapshot = snap(
+        false,
+        StrategyKind::CHART_WALL,
+        "folder",
+        &[
+            ("StrategyName", FieldValue::String("UNIT_01".into())),
+            ("SignalType", FieldValue::String("ChartWall".into())),
+            ("CustomValue", FieldValue::Double(17.25)),
+        ],
+    );
+    let dump = strat_db_dump(&snapshot, &std::collections::HashMap::new(), false);
+
+    assert!(strategy_kind_is_hidden(snapshot.kind().ordinal()));
+    assert!(!strategy_kind_is_hidden(StrategyKind::DROPS.ordinal()));
+    assert_eq!(dump.kind_ordinal, StrategyKind::CHART_WALL.ordinal());
+    assert_eq!(dump.kind, "Unknown");
+    let serialized = serde_json::to_string(&dump.fields).expect("saved fields serialize");
+    let parsed: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&serialized).expect("saved fields parse");
+    assert_eq!(parsed, dump.fields);
+    assert_eq!(parsed["SignalType"], "ChartWall");
+}
+
+/// Using the core's schema name directly for ordinal 19 would bypass the unknown-kind fallback in
+/// schema-backed type controls, even though every public kind must keep its authoritative name.
+#[test]
+fn schema_kind_names_hide_only_chart_wall() {
+    assert_eq!(schema_kind_name(19, "ChartWall"), "Unknown");
+    assert_eq!(schema_kind_name(6, "MoonShot"), "MoonShot");
+    assert_eq!(schema_kind_name(2, "DropsDetection"), "DropsDetection");
+}
