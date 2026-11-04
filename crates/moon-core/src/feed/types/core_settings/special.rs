@@ -9,8 +9,9 @@
 /// Moonbot's page has about twice this many controls, and the expert window draws all of them
 /// disabled where they are not here. The reasons are stated on the page itself, row by row; the
 /// ones that concern this block are: the Remote block carries a bot token and a UDP password, which
-/// safe-share excludes outright; a few rows have no wire field at all; and the iceberg pair belongs
-/// to [`crate::feed::GeneralSettings`], which the compact popup edits — one wire field belongs to one area.
+/// safe-share excludes outright; and a few rows have no wire field at all. The iceberg pair is not
+/// here either, but it is not disabled: it stays in [`crate::feed::GeneralSettings`] — one wire field
+/// belongs to one area — and the page draws it live from there.
 ///
 /// The hang watchdog is not here at all (#1173). Its four safe-share fields —
 /// `orders_control.sign_orders`, `h_pos_report`, `h_pos_auto_sell` and

@@ -16,8 +16,13 @@
 //! Six more rows, in the engine and System blocks, have no field in the snapshot at all: Custom IP
 //! and Auto DNS, Extended Debug Mode, the two exports, and accepting beta versions.
 //!
-//! The iceberg pair belongs to `GeneralSettings`, which the compact popup edits: one wire field
-//! belongs to one area, or a write from either surface would put the other's frozen copy back.
+//! The iceberg pair is live too, although its fields belong to `GeneralSettings`, which the compact
+//! popup edits as well. Both faces of the gear may write one area: this window lays only its staged
+//! fields over each core's latest snapshot, so it never sends a frozen copy, and the expert
+//! preference closes the popup, discarding its draft. The one way both stand open is the blacklist
+//! reveal, which opens this window on a core other than the popup's; the popup's OK still sends its
+//! whole General area, so that overlap is the one every live row of the General page here already
+//! has, and these two rows add no new kind of it.
 //!
 //! And one row is held back by this window rather than by the wire: see "No trades on markets"
 //! below.
@@ -359,10 +364,12 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(flag_dead(
+                            .child(flag_live(
                                 "exp-sp-iceberg-buys",
                                 "core_expert.sp_iceberg_buys",
+                                draft.general.buy_iceberg,
                                 view,
+                                |d, on| d.general.buy_iceberg = on,
                             ))
                             .child(flag_live(
                                 "exp-sp-no-pos-limit",
@@ -445,10 +452,12 @@ pub(super) fn body(
                             .flex_1()
                             .min_w_0()
                             .gap(gap)
-                            .child(flag_dead(
+                            .child(flag_live(
                                 "exp-sp-iceberg-sells",
                                 "core_expert.sp_iceberg_sells",
+                                draft.general.sell_iceberg,
                                 view,
+                                |d, on| d.general.sell_iceberg = on,
                             ))
                             .child(flag_live(
                                 "exp-sp-book-ticker",
