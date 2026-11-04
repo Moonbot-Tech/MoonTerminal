@@ -193,7 +193,11 @@ pub(super) fn toolbar(
 }
 
 /// Builds a slider row with a left caption and a right value label.
+///
+/// `id` names the slider: left to the slider's default, the four rows of this popup were one
+/// element path apiece, indistinguishable from outside.
 fn slider_row(
+    id: &'static str,
     caption: String,
     slider: &Entity<moon_ui::MoonSliderState>,
     value_label: String,
@@ -212,7 +216,11 @@ fn slider_row(
                 .text_color(rgb(p.text))
                 .child(caption),
         )
-        .child(div().flex_1().child(MoonSlider::new(slider).height(16.0)))
+        .child(
+            div()
+                .flex_1()
+                .child(MoonSlider::new(slider).id(id).height(16.0)),
+        )
         .child(
             div()
                 .w(design::ui_px(cx, 34.0))
@@ -482,6 +490,7 @@ fn content(
 
     // Card dimensions and chart type.
     let w_row = slider_row(
+        "detects-frame-w",
         t!("detects.cfg.width").to_string(),
         &this.w_slider,
         format!("{}", scfg.w),
@@ -489,6 +498,7 @@ fn content(
         cx,
     );
     let h_row = slider_row(
+        "detects-frame-h",
         t!("detects.cfg.height").to_string(),
         &this.h_slider,
         format!("{}", scfg.h),
@@ -547,6 +557,7 @@ fn content(
                 .child(t!("detects.cfg.rail_hint").to_string()),
         );
     let rail_row = slider_row(
+        "detects-rail-w",
         t!("detects.cfg.rail_w").to_string(),
         &this.rail_slider,
         format!("{}", scfg.rail_w_clamped()),
@@ -554,6 +565,7 @@ fn content(
         cx,
     );
     let grad_row = slider_row(
+        "detects-rail-grad",
         t!("detects.cfg.rail_grad").to_string(),
         &this.grad_slider,
         format!("{}", scfg.rail_grad_clamped()),

@@ -206,7 +206,9 @@ fn colour_labels_wrap_inside_their_card(cx: &mut gpui::TestAppContext) {
                     let label = rust_i18n::t!(key).to_string();
                     let mut row = Some(color_line(
                         crate::settings::color_row(&label, &picker, p, cx).into_any_element(),
-                        with_slider.then(|| slider_ctl(&slider, &|v| format!("{v:.0}%"), cx)),
+                        with_slider.then(|| {
+                            slider_ctl("probe-slider", &slider, &|v| format!("{v:.0}%"), cx)
+                        }),
                         cx,
                     ));
                     let parts = AppearanceParts {
@@ -335,7 +337,12 @@ fn a_group_slider_follows_its_label(cx: &mut gpui::TestAppContext) {
                             Some(
                                 gpui::div()
                                     .debug_selector(|| "probe-slider".into())
-                                    .child(slider_ctl(&slider, &|v| format!("{v:.0}%"), cx))
+                                    .child(slider_ctl(
+                                        "probe-slider",
+                                        &slider,
+                                        &|v| format!("{v:.0}%"),
+                                        cx,
+                                    ))
                                     .into_any_element(),
                             ),
                             cx,

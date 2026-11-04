@@ -321,6 +321,7 @@ impl ConnectWizardView {
                 .child(
                     div().w(design::font_w_px(cx, 260.0)).child(
                         MoonSelect::new(&self.exchange)
+                            .id("cw-keys-exchange")
                             .placeholder(t!("connect_wizard.keys.pick").to_string())
                             .menu_width(design::font_w(cx, 260.0)),
                     ),

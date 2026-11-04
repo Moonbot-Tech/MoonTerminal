@@ -339,6 +339,8 @@ fn slider_track_max_w(scale_w: f32, slider_h: f32) -> f32 {
 /// dragging an interface-scale slider would not move the control under the pointer.
 ///
 /// Args:
+///     id: The slider's element id, `<row id>:field` — left to the slider's default, every slider
+///         of a page was one element path.
 ///     st: Slider state whose current value is displayed.
 ///     range: Inclusive endpoints displayed below the slider track.
 ///     format: Field-specific formatter shared by both endpoints and the current value.
@@ -347,6 +349,7 @@ fn slider_track_max_w(scale_w: f32, slider_h: f32) -> f32 {
 /// Returns:
 ///     The field.
 pub(super) fn slider_field(
+    id: &'static str,
     st: &Entity<MoonSliderState>,
     range: RangeInclusive<f32>,
     format: impl Fn(f32) -> String,
@@ -377,7 +380,7 @@ pub(super) fn slider_field(
                 .flex_1()
                 .min_w(px(scale_w))
                 .max_w(px(track_max))
-                .child(MoonSlider::new(st).height(slider_h))
+                .child(MoonSlider::new(st).id(id).height(slider_h))
                 .child(
                     h_flex()
                         .w_full()

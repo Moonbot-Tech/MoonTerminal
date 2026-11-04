@@ -316,7 +316,10 @@ fn row(
             // The trigger box and the menu take the same width from one place: written out twice
             // they drift, and the menu opens narrower or wider than the control that opened it.
             div().w(design::font_w_px(cx, SELECT_WIDTH)).child(
+                // Named after the block's switch: left to MoonSelect's default id, the five
+                // dropdowns of this popup were one element path, indistinguishable from outside.
                 MoonSelect::new(state)
+                    .id(format!("main-empty-place-{}", switch_of(block).id))
                     .in_popover()
                     .trigger_size(MoonButtonSize::density(cx))
                     .menu_width(design::font_w(cx, SELECT_WIDTH)),
