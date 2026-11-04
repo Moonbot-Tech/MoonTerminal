@@ -102,7 +102,6 @@ fn repeated_snapshot_restore_guards_summary_and_strategy_render_invalidations() 
     assert_eq!(summary.matches("self.summary_derived = None;").count(), 1);
     assert_eq!(summary.matches("self.summary_ui.retain_picks(").count(), 1);
     assert!(summary.contains("self.data.restore(&read.data);"));
-    assert!(summary.contains("self.data_as_of = Some(hit.as_of);"));
     assert!(summary.contains("self.data_dirty = !hit.fresh;"));
     assert!(after_changed.contains("self.restore_snapshot_metadata("));
 
@@ -196,9 +195,9 @@ fn restoring_split_then_empty_cannot_retain_comparable_money() {
     ));
 }
 
-/// Expired retained rows must require refresh and an age label whether their LRU entry survived.
+/// Expired retained rows must require refresh whether their LRU entry survived.
 #[test]
-fn retained_expired_snapshot_is_labelled_on_both_hit_and_miss() {
+fn retained_expired_snapshot_requires_refresh_on_both_hit_and_miss() {
     let source = include_str!("../snapshots.rs");
     let restore = method(source, "fn restore_or_join_snapshot(");
     let hit = restore
@@ -209,12 +208,11 @@ fn retained_expired_snapshot_is_labelled_on_both_hit_and_miss() {
         .split_once("} else if !initial")
         .expect("retained cache miss branch");
     assert!(hit.contains("if fresh || initial {"));
-    assert!(hit.contains("self.mark_snapshot_stale(request.tab, as_of);"));
+    assert!(hit.contains("self.mark_snapshot_stale(request.tab);"));
     assert!(miss.contains("retained_snapshot_needs_refresh("));
     assert!(miss.contains("let Some(as_of) = self.snapshot_as_of[request.tab.snapshot_index()]"));
-    assert!(miss.contains("self.mark_snapshot_stale(request.tab, as_of);"));
+    assert!(miss.contains("self.mark_snapshot_stale(request.tab);"));
     let stale = method(source, "fn mark_snapshot_stale(");
-    assert!(stale.contains("self.cached_refreshing[tab.snapshot_index()] = Some(as_of);"));
     for dirty in [
         "self.data_dirty = true",
         "self.strategy_dirty = true",
@@ -276,18 +274,18 @@ fn retained_cache_miss_refreshes_changed_publications_before_the_age_limit() {
     }
 }
 
-/// Visiting another tab cannot overwrite the retained page's freshness provenance or age label.
+/// Visiting another tab cannot overwrite the retained page's freshness provenance or add a notice.
 #[test]
-fn snapshot_markers_and_rendered_age_are_owned_by_each_page() {
+fn snapshot_markers_are_owned_by_each_page_without_rendered_refresh_state() {
     let snapshot = include_str!("../snapshots.rs");
     let restore = method(snapshot, "fn restore_snapshot_hit(");
-    assert!(restore.contains("self.cached_refreshing[tab.snapshot_index()] ="));
     assert!(restore.contains("self.snapshot_as_of[tab.snapshot_index()] = Some(hit.as_of);"));
     assert!(
         restore.contains("self.snapshot_keys[tab.snapshot_index()] = Some(request.key.clone());")
     );
     let render = method(include_str!("../render.rs"), "fn render(");
-    assert!(render.contains("self.cached_refreshing[self.tab.snapshot_index()]"));
+    assert!(!render.contains("cached_refreshing"));
+    assert!(render.contains("an-integrity-banner"));
     let view = include_str!("../mod.rs")
         .split_once("pub struct AnalyticsView")
         .expect("view state")
@@ -296,7 +294,6 @@ fn snapshot_markers_and_rendered_age_are_owned_by_each_page() {
         .split_once("impl crate::controls")
         .map_or(view, |(state, _)| state);
     for field in [
-        "cached_refreshing: [Option<i64>; 3]",
         "snapshot_as_of: [Option<i64>; 3]",
         "snapshot_keys: [Option<cache::CacheKey>; 3]",
     ] {

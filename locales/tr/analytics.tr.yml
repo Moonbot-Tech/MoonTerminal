@@ -1065,7 +1065,6 @@ analytics.sum.empty.body_none: "Bu dönemde henüz kapanmış işlem yok. Çekir
 analytics.sum.empty.show_year: "365 günü göster"
 analytics.sum.empty.reset: "Filtreleri sıfırla"
 analytics.sum.error.retry: "Yeniden dene"
-analytics.sum.catchup: "Yeni işlemler yükleniyor. Ekrandaki rakamlar %{time} itibarıyladır ve kendiliğinden güncellenir."
 analytics.auto.col: "Oto"
 analytics.auto.col_tip: "Her strateji için kayıtlı listeleri ve geçerli seçim ayarlarıyla otomatik coin seçimi. Sıralama: önce doğrulanmış bulgular, sonra boyuta göre doğrulanmamışlar."
 analytics.auto.chip_bl: "KL %{n}"

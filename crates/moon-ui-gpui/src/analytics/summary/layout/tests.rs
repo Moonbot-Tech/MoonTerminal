@@ -1000,7 +1000,6 @@ fn cores_card_fits_every_language_theme_and_width(cx: &mut gpui::TestAppContext)
 #[derive(Clone, Copy, Debug)]
 enum PageFace {
     Data,
-    CatchUp,
     Loading,
     Empty,
     Error,
@@ -1014,7 +1013,7 @@ fn page(face: PageFace, width: f32) -> Rc<dyn Fn(MoonPalette, &gpui::App) -> Any
     use super::super::side::{TradesActs, insights_el, period_caption, trades_el};
     use super::super::state::{CoreFilter, SummaryUi, TradeSide};
     use super::super::states::{
-        DataBlocks, StateActs, catchup_banner_el, data_page_el, empty_el, error_el, skeleton_el,
+        DataBlocks, StateActs, data_page_el, empty_el, error_el, skeleton_el,
     };
     let data = chart_summary();
     let trades = Rc::new(side_trades());
@@ -1044,13 +1043,11 @@ fn page(face: PageFace, width: f32) -> Rc<dyn Fn(MoonPalette, &gpui::App) -> Any
                 p,
                 cx,
             ),
-            PageFace::Data | PageFace::CatchUp => {
+            PageFace::Data => {
                 let derived = super::super::derived::derive_for_test(data.clone(), p);
                 let ui = SummaryUi::default();
                 let rows = core_rows(&data.core_days, CoreFilter::All, false);
                 let blocks = DataBlocks {
-                    banner: matches!(face, PageFace::CatchUp)
-                        .then(|| catchup_banner_el("12:04".to_string())),
                     kpi: kpi_band_el(&band(true), cols, p, cx),
                     chart: profit_chart_el(
                         &ProfitChartModel::new(&derived, &ui, chrono_tz::UTC, None, p),
@@ -1107,11 +1104,11 @@ fn page(face: PageFace, width: f32) -> Rc<dyn Fn(MoonPalette, &gpui::App) -> Any
     })
 }
 
-/// Every Summary face composes without overlap: on the data page the banner, KPI band, main row
+/// Every Summary face composes without overlap: on the data page the KPI band, main row
 /// and cores card stack in order inside the tab, the chart sits beside the side column when wide
 /// and above it below 1100, the side cards pair at 900 and stack at 600, and the KPI band follows
 /// its 4 / 2x2 / 1 layout; the empty and error buttons are never narrower than their labels and
-/// the banner keeps its text inside — in every theme, language and zoom.
+/// no catch-up notice shifts the figures — in every theme, language and zoom.
 fn assert_summary_tab_blocks_never_overlap(cx: &mut gpui::TestAppContext, face: PageFace) {
     probe(
         cx,
@@ -1121,16 +1118,14 @@ fn assert_summary_tab_blocks_never_overlap(cx: &mut gpui::TestAppContext, face: 
             let at = at.as_str();
             let col = bounds(visual, "probe-col", at);
             match face {
-                PageFace::Data | PageFace::CatchUp => {
+                PageFace::Data => {
                     let page = bounds(visual, "sum-page", at);
                     assert!(inside(page, col), "page escaped the tab ({at})");
-                    let mut stack = Vec::new();
-                    if matches!(face, PageFace::CatchUp) {
-                        stack.push(("banner", bounds(visual, "sum-banner", at)));
-                    }
-                    stack.push(("kpi", bounds(visual, "sum-page-kpi", at)));
-                    stack.push(("main", bounds(visual, "sum-main", at)));
-                    stack.push(("cores", bounds(visual, "sum-page-cores", at)));
+                    let stack = [
+                        ("kpi", bounds(visual, "sum-page-kpi", at)),
+                        ("main", bounds(visual, "sum-main", at)),
+                        ("cores", bounds(visual, "sum-page-cores", at)),
+                    ];
                     for (k, (name, b)) in stack.iter().enumerate() {
                         assert!(inside(*b, page), "{name} escaped the page ({at})");
                         if k > 0 {
@@ -1218,10 +1213,16 @@ fn assert_summary_tab_blocks_never_overlap(cx: &mut gpui::TestAppContext, face: 
                             "KPI not stacked ({at})"
                         ),
                     }
-                    if matches!(face, PageFace::CatchUp) {
-                        let banner = bounds(visual, "sum-banner", at);
-                        assert!(inside(banner, page), "banner escaped ({at})");
-                    }
+                    assert!(
+                        visual.debug_bounds("sum-banner").is_none(),
+                        "catch-up notice rendered ({at})"
+                    );
+                    let kpi = bounds(visual, "sum-page-kpi", at);
+                    let padding = visual.update(|_, cx| design::ui_px(cx, 10.0));
+                    assert!(
+                        (kpi.origin.y - page.origin.y - padding).abs() <= px(0.5),
+                        "space reserved above the KPI band ({at})"
+                    );
                 }
                 PageFace::Loading => {
                     let sk = bounds(visual, "sum-skeleton", at);
@@ -1278,14 +1279,6 @@ fn assert_summary_tab_blocks_never_overlap(cx: &mut gpui::TestAppContext, face: 
 #[gpui::test]
 fn summary_tab_data_never_overlaps_every_language_theme_and_width(cx: &mut gpui::TestAppContext) {
     assert_summary_tab_blocks_never_overlap(cx, PageFace::Data);
-}
-
-/// A catch-up banner must not overlap the data page in any presentation.
-#[gpui::test]
-fn summary_tab_catch_up_never_overlaps_every_language_theme_and_width(
-    cx: &mut gpui::TestAppContext,
-) {
-    assert_summary_tab_blocks_never_overlap(cx, PageFace::CatchUp);
 }
 
 /// Loading captions must stay inside their skeleton in every presentation.

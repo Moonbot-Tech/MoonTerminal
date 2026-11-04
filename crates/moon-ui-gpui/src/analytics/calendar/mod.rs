@@ -825,9 +825,6 @@ impl AnalyticsView {
                 // transient outcome with a scheduled correction left may keep the visible cells.
                 let preserve_transient = !matches!(this.cal_days, ProfitLoadState::Loading)
                     && this.keep_on_catch_up(after_report, period_outcome, report_req);
-                if !preserve_transient {
-                    this.cached_refreshing[super::Tab::Calendar.snapshot_index()] = None;
-                }
                 let read_failed = apply_calendar_results(
                     &mut this.cal_days,
                     &mut this.cal_prev,

@@ -141,7 +141,7 @@ impl AnalyticsView {
         self.cancel_prefetch();
     }
 
-    /// Reuse an exact hit, or restore an age-labelled snapshot while its replacement is read.
+    /// Reuse an exact hit, or restore a retained snapshot while its replacement is read.
     ///
     /// The return value means no foreground query is needed: a fresh hit or a matching prefetch
     /// already owns the request. Partial read errors are never represented by a cache entry.
@@ -181,8 +181,7 @@ impl AnalyticsView {
             } else {
                 // Retaining a settled allocation must not turn an expired cache lookup into
                 // a clean tab entry. Keep its own publication time rather than copying older rows.
-                let as_of = self.snapshot_as_of[request.tab.snapshot_index()].unwrap_or(hit.as_of);
-                self.mark_snapshot_stale(request.tab, as_of);
+                self.mark_snapshot_stale(request.tab);
             }
             if fresh {
                 return true;
@@ -197,14 +196,13 @@ impl AnalyticsView {
             )
         {
             // Oversized or evicted pages still have a retained allocation and a bounded age.
-            self.mark_snapshot_stale(request.tab, as_of);
+            self.mark_snapshot_stale(request.tab);
         }
         self.join_prefetch(&request.key)
     }
 
     /// Mark retained figures stale independently of whether their LRU entry still exists.
-    fn mark_snapshot_stale(&mut self, tab: Tab, as_of: i64) {
-        self.cached_refreshing[tab.snapshot_index()] = Some(as_of);
+    fn mark_snapshot_stale(&mut self, tab: Tab) {
         match tab {
             Tab::Summary => self.data_dirty = true,
             Tab::Strategies => self.strategy_dirty = true,
@@ -215,14 +213,12 @@ impl AnalyticsView {
     /// Remove figures whose meaning or non-generation money-read certification changed.
     fn retire_snapshot(&mut self, tab: Tab) {
         let index = tab.snapshot_index();
-        self.cached_refreshing[index] = None;
         self.snapshot_as_of[index] = None;
         self.snapshot_keys[index] = None;
         match tab {
             Tab::Summary => {
                 self.data = ProfitLoadState::default();
                 self.summary_derived = None;
-                self.summary_catching_up = false;
                 self.data_dirty = true;
             }
             Tab::Strategies => {
@@ -245,7 +241,6 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) {
         let tab = request.tab;
-        self.cached_refreshing[tab.snapshot_index()] = (!hit.fresh).then_some(hit.as_of);
         self.snapshot_as_of[tab.snapshot_index()] = Some(hit.as_of);
         self.snapshot_keys[tab.snapshot_index()] = Some(request.key.clone());
         match hit.result {
@@ -260,8 +255,6 @@ impl AnalyticsView {
                 self.data_period = self.period;
                 self.data_range = range;
                 self.data.restore(&read.data);
-                self.data_as_of = Some(hit.as_of);
-                self.summary_catching_up = !hit.fresh;
                 self.data_dirty = !hit.fresh;
                 if snapshot_changed {
                     self.summary_derived = None;
