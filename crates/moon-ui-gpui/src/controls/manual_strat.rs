@@ -137,6 +137,8 @@ type StratButtonSlot = (usize, String, Option<u64>, String, String);
 ///
 /// `chrome_width` feeds the priority-ordered narrow-window clip (`fit::resolve_strat_fit`) that
 /// governs the ten quick-select buttons and the parameter summary this cluster adds.
+/// `update_reserve_w` is the width of the header's update cluster at its current label (`0.0`
+/// while no update is offered): the buttons stop at its left edge rather than run under it.
 ///
 /// The buttons are drawn only while manual-strategy mode is ENABLED: with MS off they select
 /// nothing a new order would use, and their width is what makes the rest of the row shift every
@@ -154,6 +156,7 @@ pub fn manual_strategy_controls(
     slot_menu: Option<(CoreId, usize)>,
     slots_open: bool,
     chrome_width: f32,
+    update_reserve_w: f32,
     p: MoonPalette,
     cx: &App,
 ) -> Option<AnyElement> {
@@ -267,6 +270,7 @@ pub fn manual_strategy_controls(
         // The gear is permanent chrome in this cluster, so it belongs in the base like the toggle
         // and the pill: budgeting the row without it proves a fit at a width the row then overflows.
         let base = header_other_sections_w
+            + update_reserve_w
             + ms_toggle_w
             + design::ui_value(cx, design::CHROME_GAP) * 3.0
             + design::ui_value(cx, SLOT_GEAR_W)
