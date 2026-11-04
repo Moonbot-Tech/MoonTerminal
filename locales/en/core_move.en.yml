@@ -1,21 +1,30 @@
 # A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.card_button: "Move to VPS…"
+core_move.card_button: "Move to a Linux server…"
 core_move.save_first: "Save the core first: a move needs its saved key and history."
 
 # --- Outcomes ---
-core_move.lost: "The move stopped without a word: its thread ended."
+core_move.lost: "The move broke off without an answer."
 core_move.switched: "This terminal now connects to the new core."
-core_move.switch_failed: "The new core runs at %{address}, but this terminal could not switch to it: %{reason}. Set that address on the core in Connections."
-core_move.probe_failed: "Could not read the server's key: %{reason}"
 core_move.failed: "The move failed: %{reason}"
-core_move.failed_removed: "The move failed: %{reason}. The new core was never started and is removed from the server."
-core_move.failed_left: "The move failed: %{reason}. The new core in %{dir} was never started and could not be removed: %{remove}"
-core_move.failed_started: "The move failed: %{reason}. The new core stays in %{dir}, and the old core may be stopped: check both before trading."
-core_move.failed_old_stopped: "The move failed: %{reason}. The old core is stopped, and the new one is installed in %{dir} but not started: start one of them before trading."
 core_move.logged_in: "Logged in as %{user}."
 core_move.old_stopped_by_hand: "The old core is stopped."
+core_move.remove_failed: "The new core could not be removed from the server: %{reason}"
+core_move.outcome.old_runs: "The old core works as before — trading was not interrupted."
+core_move.outcome.not_started: "The new core was never started."
+core_move.outcome.new_removed: "The new core was never started, and we removed it from the server."
+core_move.outcome.new_left: "The new core was never started, but removing it from the server failed — it is left in folder %{dir}."
+core_move.outcome.old_stopped_head: "Trading is stopped: the old core is down and the new one not started."
+core_move.outcome.old_stopped_body: "The new core is installed in folder %{dir}. Start one of the cores before trading."
+core_move.outcome.started_head: "Check both cores before trading."
+core_move.outcome.started_body: "The old core may be stopped, and the new one is left in folder %{dir} — whether it runs is unknown."
+core_move.outcome.lost_head: "The move broke off without an answer."
+core_move.outcome.lost_body: "It is unknown at which step it stopped. Check both cores before trading."
+core_move.outcome.not_switched_head: "The new core runs at %{address}, but the terminal did not switch to it."
+core_move.outcome.not_switched_body: "Enter the address %{address} for the core under Connections."
+core_move.outcome.probe_head: "Could not reach the server."
+core_move.outcome.probe_body: "Nothing was sent to the server. Check the address and port and try again."
 
 # --- Progress lines ---
 core_move.step.snapshot: "Settings taken from the core: %{size} MB, exchange %{exchange}."

@@ -1,21 +1,30 @@
 # A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.card_button: "Chuyển sang VPS…"
+core_move.card_button: "Chuyển sang máy chủ Linux…"
 core_move.save_first: "Hãy lưu lõi trước: việc chuyển cần khóa đã lưu và lịch sử của nó."
 
 # --- Outcomes ---
-core_move.lost: "Việc chuyển dừng mà không có phản hồi: luồng của nó đã kết thúc."
+core_move.lost: "Việc chuyển bị ngắt mà không có phản hồi."
 core_move.switched: "Terminal này giờ kết nối tới lõi mới."
-core_move.switch_failed: "Lõi mới chạy tại %{address}, nhưng terminal này không chuyển sang được: %{reason}. Hãy đặt địa chỉ đó cho lõi trong mục Kết nối."
-core_move.probe_failed: "Không đọc được khóa của máy chủ: %{reason}"
 core_move.failed: "Việc chuyển thất bại: %{reason}"
-core_move.failed_removed: "Việc chuyển thất bại: %{reason}. Lõi mới chưa từng chạy và đã được gỡ khỏi máy chủ."
-core_move.failed_left: "Việc chuyển thất bại: %{reason}. Lõi mới trong %{dir} chưa từng chạy và không gỡ được: %{remove}"
-core_move.failed_started: "Việc chuyển thất bại: %{reason}. Lõi mới vẫn ở %{dir}, còn lõi cũ có thể đã dừng: hãy kiểm tra cả hai trước khi giao dịch."
-core_move.failed_old_stopped: "Việc chuyển thất bại: %{reason}. Lõi cũ đã dừng, còn lõi mới đã cài trong %{dir} nhưng chưa chạy: hãy chạy một trong hai trước khi giao dịch."
 core_move.logged_in: "Đã đăng nhập với %{user}."
 core_move.old_stopped_by_hand: "Lõi cũ đã dừng."
+core_move.remove_failed: "Không xóa được lõi mới khỏi máy chủ: %{reason}"
+core_move.outcome.old_runs: "Lõi cũ vẫn chạy như trước — giao dịch không bị gián đoạn."
+core_move.outcome.not_started: "Lõi mới chưa từng được khởi động."
+core_move.outcome.new_removed: "Lõi mới chưa từng được khởi động, chúng tôi đã xóa nó khỏi máy chủ."
+core_move.outcome.new_left: "Lõi mới chưa từng được khởi động, nhưng không xóa được khỏi máy chủ — nó còn trong thư mục %{dir}."
+core_move.outcome.old_stopped_head: "Giao dịch đang dừng: lõi cũ đã dừng, lõi mới chưa khởi động."
+core_move.outcome.old_stopped_body: "Lõi mới đã được cài vào thư mục %{dir}. Hãy khởi động một trong hai lõi trước khi giao dịch."
+core_move.outcome.started_head: "Hãy kiểm tra cả hai lõi trước khi giao dịch."
+core_move.outcome.started_body: "Lõi cũ có thể đã dừng, còn lõi mới ở trong thư mục %{dir} — không rõ nó có chạy không."
+core_move.outcome.lost_head: "Việc chuyển bị ngắt mà không có phản hồi."
+core_move.outcome.lost_body: "Không rõ nó dừng ở bước nào. Hãy kiểm tra cả hai lõi trước khi giao dịch."
+core_move.outcome.not_switched_head: "Lõi mới đang chạy tại %{address}, nhưng terminal chưa chuyển sang nó."
+core_move.outcome.not_switched_body: "Hãy nhập địa chỉ %{address} cho lõi trong mục Kết nối."
+core_move.outcome.probe_head: "Không kết nối được với máy chủ."
+core_move.outcome.probe_body: "Chưa có gì được gửi tới máy chủ. Hãy kiểm tra địa chỉ và cổng rồi thử lại."
 
 # --- Progress lines ---
 core_move.step.snapshot: "Đã lấy cài đặt từ lõi: %{size} MB, sàn %{exchange}."

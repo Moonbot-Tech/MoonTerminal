@@ -6,15 +6,17 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonCheckbox, MoonPalette, MoonSelectableCard, MoonSpinner, h_flex, rgba_from,
-    v_flex,
+    MoonAlert, MoonButton, MoonCheckbox, MoonPalette, MoonSelectableCard, MoonSpinner, h_flex,
+    rgba_from, v_flex,
 };
 use rust_i18n::t;
 
 use super::ConnectWizardView;
 use super::render::{Screen, note};
-use crate::backend::core_move::{Command, MoveForm, MovePhase};
+use crate::backend::core_move::{Command, FailOutcome, MoveForm, MovePhase};
 use crate::design;
+
+mod steps;
 
 impl ConnectWizardView {
     pub(super) fn move_screen(&mut self, cx: &mut Context<Self>) -> Screen {
@@ -207,6 +209,7 @@ impl ConnectWizardView {
         self.backend
             .update(cx, |b, bcx| b.core_move_forget(uid, bcx));
         self.move_at_server = false;
+        self.move_log_open = false;
         cx.notify();
     }
 
@@ -218,6 +221,14 @@ impl ConnectWizardView {
             .core_moves
             .get(uid)
             .is_some_and(|job| job.answering);
+        let rows = self
+            .backend
+            .read(cx)
+            .core_moves
+            .get(uid)
+            .map(|job| job.steps.clone())
+            .unwrap_or_default();
+        let rows = rows.rows();
         let spinner = |text: String, cx: &App| {
             h_flex()
                 .items_center()
@@ -278,78 +289,43 @@ impl ConnectWizardView {
             }
             MovePhase::Running => Screen::new(t!("connect_wizard.move.running_title"))
                 .sub(t!("connect_wizard.move.running_sub"))
-                .child(spinner(t!("connect_wizard.move.running").to_string(), cx))
+                .child(steps::checklist(rows, cx))
                 .with_log(),
-            MovePhase::Refused { open_deals } => {
+            MovePhase::Refused => {
                 let mut screen = Screen::new(t!("connect_wizard.move.refused_title"))
                     .sub(t!("connect_wizard.move.refused_sub"))
-                    .child(note(
-                        match open_deals {
-                            Some(n) => t!("connect_wizard.move.refused_deals", n = n),
-                            None => t!("connect_wizard.move.refused_unknown"),
-                        },
-                        cx,
-                    ))
-                    .child(answer_help(cx))
+                    .child(steps::checklist(rows, cx))
+                    .child(answer_help())
                     .with_log();
                 if !answering {
                     screen = screen
-                        .left(self.answer_button(
-                            uid,
-                            "cw-move-cancel",
-                            "connect_wizard.move.cancel",
-                            Command::Cancel,
-                            false,
-                            cx,
-                        ))
-                        .right(self.answer_button(
-                            uid,
-                            "cw-move-retry",
-                            "connect_wizard.check_again",
-                            Command::Retry,
-                            false,
-                            cx,
-                        ))
-                        .right(self.answer_button(
-                            uid,
-                            "cw-move-wait",
-                            "connect_wizard.move.wait",
-                            Command::WaitForStop,
-                            true,
-                            cx,
-                        ));
+                        .left(self.answer_button(uid, Answer::Cancel, cx))
+                        .right(self.answer_button(uid, Answer::CheckNow, cx))
+                        .right(self.answer_button(uid, Answer::Wait, cx));
                 }
                 screen
             }
             MovePhase::Waiting => {
                 let mut screen = Screen::new(t!("connect_wizard.move.waiting_title"))
                     .sub(t!("connect_wizard.move.waiting_sub"))
-                    .child(spinner(t!("connect_wizard.move.waiting").to_string(), cx))
+                    .child(steps::checklist(rows, cx))
                     .with_log();
                 if !answering {
                     screen = screen
-                        .left(self.answer_button(
-                            uid,
-                            "cw-move-cancel",
-                            "connect_wizard.move.cancel",
-                            Command::Cancel,
-                            false,
-                            cx,
-                        ))
-                        .right(self.answer_button(
-                            uid,
-                            "cw-move-retry",
-                            "connect_wizard.check_again",
-                            Command::Retry,
-                            true,
-                            cx,
-                        ));
+                        .left(self.answer_button(uid, Answer::Cancel, cx))
+                        .right(self.answer_button(uid, Answer::CheckNowPrimary, cx));
                 }
                 screen
             }
             MovePhase::Done { address } => Screen::new(t!("connect_wizard.move.done_title"))
-                .sub(t!("connect_wizard.move.done_sub"))
-                .child(self.done_body(uid, Some(address), None, cx))
+                .child(
+                    MoonAlert::success(
+                        "cw-move-done",
+                        t!("connect_wizard.move.done_body").to_string(),
+                    )
+                    .title(t!("connect_wizard.move.done_head", address = address).to_string()),
+                )
+                .child(steps::checklist(rows, cx))
                 .left(
                     MoonButton::new("cw-move-again")
                         .size(design::CONTROL_TIER)
@@ -372,36 +348,48 @@ impl ConnectWizardView {
                         .render(),
                 )
                 .with_log(),
-            MovePhase::Failed { reason } => Screen::new(t!("connect_wizard.move.failed_title"))
-                .child(
-                    div()
-                        .text_color(rgba_from(MoonPalette::active(cx).red_text, 1.0))
-                        .child(reason),
-                )
-                .left(self.move_start_over_button(uid, cx))
-                .with_log(),
+            MovePhase::Failed { reason, outcome } => {
+                let (head, body) = failure_text(&outcome);
+                let mut screen = Screen::new(t!("connect_wizard.move.failed_title"))
+                    .child(MoonAlert::error("cw-move-failed", body).title(head));
+                // A move that never began has no steps to show; its reason stands alone.
+                screen = if outcome == FailOutcome::Probe {
+                    screen.child(
+                        div()
+                            .text_color(rgba_from(MoonPalette::active(cx).red_text, 1.0))
+                            .child(reason),
+                    )
+                } else {
+                    screen.child(steps::checklist(rows, cx))
+                };
+                screen
+                    .left(self.move_start_over_button(uid, cx))
+                    .right(
+                        MoonButton::new("cw-move-try-again")
+                            .primary()
+                            .size(design::CONTROL_TIER)
+                            .label(t!("connect_wizard.move.try_again").to_string())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.move_start_over(uid, cx);
+                                this.move_at_server = true;
+                            }))
+                            .render(),
+                    )
+                    .with_log()
+            }
             MovePhase::Cancelled => Screen::new(t!("connect_wizard.move.cancelled_title"))
                 .sub(t!("connect_wizard.move.cancelled_sub"))
+                .child(steps::checklist(rows, cx))
                 .left(self.move_start_over_button(uid, cx))
                 .with_log(),
         }
     }
 
     /// One answer to a move that waits on its old core.
-    fn answer_button(
-        &self,
-        uid: u64,
-        id: &'static str,
-        label: &'static str,
-        command: Command,
-        primary: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let button = MoonButton::new(id)
-            .size(design::CONTROL_TIER)
-            .label(t!(label).to_string())
-            .on_click(cx.listener(move |this, _, _, cx| this.move_answer(uid, command, cx)));
-        if primary { button.primary() } else { button }
+    fn answer_button(&self, uid: u64, answer: Answer, cx: &mut Context<Self>) -> AnyElement {
+        let command = answer.command();
+        answer_button_look(answer)
+            .on_click(cx.listener(move |this, _, _, cx| this.move_answer(uid, command, cx)))
             .render()
             .into_any_element()
     }
@@ -447,13 +435,97 @@ fn what_moves(cx: &App) -> impl IntoElement {
         .child(note(t!("connect_wizard.move.old_kept"), cx))
 }
 
-/// What each answer to a refusing old core does.
-fn answer_help(cx: &App) -> impl IntoElement {
-    v_flex()
-        .gap(design::ui_px(cx, 4.0))
-        .child(note(t!("connect_wizard.move.retry_help"), cx))
-        .child(note(t!("connect_wizard.move.wait_help"), cx))
-        .child(note(t!("connect_wizard.move.cancel_help"), cx))
+/// The answers to an old core that refuses to stop, as the footer offers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Answer {
+    /// Give the move up; drawn as a danger button.
+    Cancel,
+    /// Ask the old core again.
+    CheckNow,
+    /// Ask the old core again, as the screen's main button (while waiting in the background).
+    CheckNowPrimary,
+    /// Go on by itself once the old core is down; the refused screen's main button.
+    Wait,
+}
+
+impl Answer {
+    /// The move's command this answer sends.
+    fn command(self) -> Command {
+        match self {
+            Answer::Cancel => Command::Cancel,
+            Answer::CheckNow | Answer::CheckNowPrimary => Command::Retry,
+            Answer::Wait => Command::WaitForStop,
+        }
+    }
+}
+
+/// An answer's button without its click: its id, label and look.
+pub(super) fn answer_button_look(answer: Answer) -> MoonButton {
+    let (id, label) = match answer {
+        Answer::Cancel => ("cw-move-cancel", t!("connect_wizard.move.cancel")),
+        Answer::CheckNow | Answer::CheckNowPrimary => {
+            ("cw-move-retry", t!("connect_wizard.move.check_now"))
+        }
+        Answer::Wait => ("cw-move-wait", t!("connect_wizard.move.wait")),
+    };
+    let button = MoonButton::new(id)
+        .size(design::CONTROL_TIER)
+        .label(label.to_string());
+    match answer {
+        Answer::Cancel => button.danger(),
+        Answer::CheckNowPrimary | Answer::Wait => button.primary(),
+        Answer::CheckNow => button,
+    }
+}
+
+/// What a failed move did to trading, in plain words: the headline and the sentence under it.
+pub(super) fn failure_text(outcome: &FailOutcome) -> (String, String) {
+    let old_runs = || t!("core_move.outcome.old_runs").to_string();
+    match outcome {
+        FailOutcome::Probe => (
+            t!("core_move.outcome.probe_head").to_string(),
+            t!("core_move.outcome.probe_body").to_string(),
+        ),
+        FailOutcome::OldRuns => (old_runs(), t!("core_move.outcome.not_started").to_string()),
+        FailOutcome::NewRemoved => (old_runs(), t!("core_move.outcome.new_removed").to_string()),
+        FailOutcome::NewLeft { dir } => (
+            old_runs(),
+            t!("core_move.outcome.new_left", dir = dir).to_string(),
+        ),
+        FailOutcome::OldStopped { dir } => (
+            t!("core_move.outcome.old_stopped_head").to_string(),
+            t!("core_move.outcome.old_stopped_body", dir = dir).to_string(),
+        ),
+        FailOutcome::Started { dir } => (
+            t!("core_move.outcome.started_head").to_string(),
+            t!("core_move.outcome.started_body", dir = dir).to_string(),
+        ),
+        FailOutcome::Lost => (
+            t!("core_move.outcome.lost_head").to_string(),
+            t!("core_move.outcome.lost_body").to_string(),
+        ),
+        FailOutcome::NotSwitched { address } => (
+            t!("core_move.outcome.not_switched_head", address = address).to_string(),
+            t!("core_move.outcome.not_switched_body", address = address).to_string(),
+        ),
+    }
+}
+
+/// What each answer to a refusing old core does, in an amber block.
+pub(super) fn answer_help() -> impl IntoElement {
+    let lines = [
+        t!("connect_wizard.move.wait_help").to_string(),
+        t!("connect_wizard.move.retry_help").to_string(),
+        t!("connect_wizard.move.cancel_help").to_string(),
+    ]
+    .join("\n");
+    div()
+        .debug_selector(|| "cw-move-choices".into())
+        .w_full()
+        .child(
+            MoonAlert::warning("cw-move-choices", lines)
+                .title(t!("connect_wizard.move.choices_title").to_string()),
+        )
 }
 
 /// The instance folder offered for a core named `name`: `mb` and its letters and digits.

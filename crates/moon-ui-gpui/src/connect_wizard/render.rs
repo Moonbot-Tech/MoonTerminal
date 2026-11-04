@@ -2,7 +2,7 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonPalette, MoonSteps, MoonWindowFrame, h_flex, rgba_from, v_flex};
+use moon_ui::{MoonDisclosure, MoonPalette, MoonSteps, MoonWindowFrame, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
 
 use super::{Branch, ConnectWizardView};
@@ -123,7 +123,31 @@ impl Render for ConnectWizardView {
                     .child(error.clone()),
             );
         }
-        if !lines.is_empty() {
+        // The move's raw log is for whoever needs the technical detail: folded by default.
+        let folded_log = self.branch == Some(Branch::Move);
+        if !lines.is_empty() && folded_log {
+            let open = self.move_log_open;
+            main = main.child(
+                h_flex()
+                    .id("cw-move-log-toggle")
+                    .items_center()
+                    .gap(design::ui_px(cx, 6.0))
+                    .cursor_pointer()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(p.accent, 1.0))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.move_log_open = !this.move_log_open;
+                        cx.notify();
+                    }))
+                    .child(
+                        MoonDisclosure::glyph(open)
+                            .size(design::DISCLOSURE_GLYPH)
+                            .color(p.accent),
+                    )
+                    .child(t!("connect_wizard.move.details").to_string()),
+            );
+        }
+        if !lines.is_empty() && (!folded_log || self.move_log_open) {
             main = main.child(StationProgress {
                 status: None,
                 lines,
@@ -261,7 +285,12 @@ pub(super) fn buttons(cx: &App) -> Div {
 }
 
 /// The footer: going back on the left, going on on the right.
-fn footer(left: Vec<AnyElement>, right: Vec<AnyElement>, p: MoonPalette, cx: &App) -> Div {
+pub(super) fn footer(
+    left: Vec<AnyElement>,
+    right: Vec<AnyElement>,
+    p: MoonPalette,
+    cx: &App,
+) -> Div {
     h_flex()
         .flex_none()
         .w_full()

@@ -1,19 +1,21 @@
 //! The threads of a move: the host-key probe, and the move itself.
 
+use std::cell::Cell;
 use std::net::Ipv4Addr;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use moon_core::core_move::old_core::StopAnswer;
 use moon_remote::core_move::plan::{KeySource, Plan, Request};
-use moon_remote::core_move::{self, MoveStep};
+use moon_remote::core_move::{self, MoveStep, MoveWarning};
 use moon_remote::core_new;
 use moon_remote::script::Privilege;
 use moon_remote::setup::{self, FirstAccess};
 use moon_remote::ssh::{Conn, Target};
 use rust_i18n::t;
 
-use super::{Event, text};
+use super::steps::{StepEvent, StepId, StepNote, StepState};
+use super::{Event, FailOutcome, text};
 use crate::backend::core_new::state_text;
 
 /// How often a move that waits on its old core looks whether it went down.
@@ -66,11 +68,63 @@ pub(super) fn probe(target: Target, tx: &mpsc::Sender<Event>) {
             target: key.target,
             fingerprint: key.fingerprint,
         },
-        Err(e) => {
-            Event::Failed(t!("core_move.probe_failed", reason = format!("{e:#}")).to_string())
-        }
+        Err(e) => Event::Failed {
+            reason: format!("{e:#}"),
+            outcome: FailOutcome::Probe,
+            step: None,
+        },
     };
     let _ = tx.send(event);
+}
+
+/// The move's six steps as its thread reports them, with the facts their detail lines need.
+struct Progress<'a> {
+    tx: &'a mpsc::Sender<Event>,
+    start: Instant,
+    /// The step under way: a failure is reported there.
+    current: Cell<StepId>,
+    /// The old core's strategy count, once read.
+    strategies: Cell<Option<usize>>,
+    /// Whether the settings archive carries the report database.
+    history: Cell<bool>,
+    /// Whether the new core's strategies went unconfirmed.
+    strategies_unconfirmed: Cell<bool>,
+}
+
+impl<'a> Progress<'a> {
+    fn new(tx: &'a mpsc::Sender<Event>) -> Self {
+        Self {
+            tx,
+            start: Instant::now(),
+            current: Cell::new(StepId::Settings),
+            strategies: Cell::new(None),
+            history: Cell::new(false),
+            strategies_unconfirmed: Cell::new(false),
+        }
+    }
+
+    /// Put step `id` into `state` with `note`.
+    fn mark(&self, id: StepId, state: StepState, note: StepNote) {
+        if state == StepState::Running {
+            self.current.set(id);
+        }
+        let event = StepEvent::Mark { id, state, note };
+        let _ = self.tx.send(Event::Step(event, self.start.elapsed()));
+    }
+
+    /// Report `step` as a log line and note what the step rows need from it.
+    fn saw(&self, step: &MoveStep) {
+        match step {
+            MoveStep::OldStrategies { strategies, .. } => self.strategies.set(Some(*strategies)),
+            MoveStep::Composed { report_db, .. } => self.history.set(report_db.is_some()),
+            MoveStep::Warning(MoveWarning::StrategiesNotConfirmed, _) => {
+                self.strategies_unconfirmed.set(true)
+            }
+            MoveStep::Removed => self.mark(StepId::Install, StepState::Done, StepNote::Removed),
+            _ => {}
+        }
+        let _ = self.tx.send(Event::Line(text::step(step)));
+    }
 }
 
 /// Run the move of core `uid` and report its end.
@@ -80,34 +134,34 @@ pub(super) fn run(
     tx: &mpsc::Sender<Event>,
     answers: &mpsc::Receiver<Command>,
 ) {
-    let mut say = |step: MoveStep| {
-        let _ = tx.send(Event::Line(text::step(&step)));
-    };
+    let progress = Progress::new(tx);
+    let mut say = |step: MoveStep| progress.saw(&step);
     let mut stage = Stage::Nothing;
-    let event = match run_move(uid, &form, tx, answers, &mut say, &mut stage) {
+    let event = match run_move(uid, &form, tx, answers, &progress, &mut say, &mut stage) {
         Ok(event) => event,
         Err(e) => {
             let reason = format!("{e:#}");
-            Event::Failed(match stage {
-                Stage::Nothing => t!("core_move.failed", reason = reason).to_string(),
+            let step = Some(progress.current.get());
+            let outcome = match stage {
+                Stage::Nothing => FailOutcome::OldRuns,
                 // Never started, the new core is of no use to anyone: it goes again.
                 Stage::Installed(dir) => match remove(&form, &dir, &mut say) {
-                    Ok(()) => t!("core_move.failed_removed", reason = reason).to_string(),
-                    Err(e) => t!(
-                        "core_move.failed_left",
-                        reason = reason,
-                        dir = dir,
-                        remove = format!("{e:#}")
-                    )
-                    .to_string(),
+                    Ok(()) => FailOutcome::NewRemoved,
+                    Err(e) => {
+                        let _ = tx.send(Event::Line(
+                            t!("core_move.remove_failed", reason = format!("{e:#}")).to_string(),
+                        ));
+                        FailOutcome::NewLeft { dir }
+                    }
                 },
-                Stage::OldStopped(dir) => {
-                    t!("core_move.failed_old_stopped", reason = reason, dir = dir).to_string()
-                }
-                Stage::Started(dir) => {
-                    t!("core_move.failed_started", reason = reason, dir = dir).to_string()
-                }
-            })
+                Stage::OldStopped(dir) => FailOutcome::OldStopped { dir },
+                Stage::Started(dir) => FailOutcome::Started { dir },
+            };
+            Event::Failed {
+                reason,
+                outcome,
+                step,
+            }
         }
     };
     let _ = tx.send(event);
@@ -119,12 +173,18 @@ fn run_move(
     form: &MoveForm,
     tx: &mpsc::Sender<Event>,
     answers: &mpsc::Receiver<Command>,
+    progress: &Progress,
     say: &mut dyn FnMut(MoveStep),
     stage: &mut Stage,
 ) -> anyhow::Result<Event> {
     let send = |event: Event| {
         let _ = tx.send(event);
     };
+    progress.mark(
+        StepId::Settings,
+        StepState::Running,
+        StepNote::TakingSettings,
+    );
     let (conn, privilege) = setup::provider_login(&form.target, &form.first, &form.pin)?;
     send(Event::Line(
         t!("core_move.logged_in", user = conn.user()).to_string(),
@@ -145,7 +205,24 @@ fn run_move(
         plan.has_old_core(),
         "the old core's address is not known, so the move cannot stop it"
     );
+    progress.mark(
+        StepId::Settings,
+        StepState::Done,
+        StepNote::SettingsTaken {
+            strategies: progress.strategies.get(),
+            history: progress.history.get(),
+        },
+    );
+    progress.mark(StepId::Server, StepState::Running, StepNote::CheckingServer);
     core_move::check(&conn, &privilege, form.proto_port, say)?;
+    progress.mark(
+        StepId::Server,
+        StepState::Done,
+        StepNote::ServerFits {
+            port: form.proto_port,
+        },
+    );
+    progress.mark(StepId::Install, StepState::Running, StepNote::Installing);
     let installed = core_move::install(
         &conn,
         &privilege,
@@ -161,14 +238,25 @@ fn run_move(
     )?;
     let dir = installed.dir;
     *stage = Stage::Installed(dir.clone());
+    progress.mark(
+        StepId::Install,
+        StepState::Done,
+        StepNote::Installed { dir: dir.clone() },
+    );
     // The stop may wait for hours: no session is held open over it.
     drop(conn);
     'stop: loop {
         // Read again before every request: the old core kept trading meanwhile.
+        progress.mark(StepId::StopOld, StepState::Running, StepNote::Stopping);
         plan.refresh_strategies(say);
         let StopAnswer::Refused { open_deals } = plan.stop_old(say)? else {
             break;
         };
+        progress.mark(
+            StepId::StopOld,
+            StepState::Hold,
+            StepNote::Refused { open_deals },
+        );
         // An answer still queued belongs to an earlier question and is dropped — except a
         // cancel, which stands whenever it came.
         while let Ok(stale) = answers.try_recv() {
@@ -222,12 +310,24 @@ fn run_move(
         }
     }
     *stage = Stage::OldStopped(dir.clone());
+    progress.mark(StepId::StopOld, StepState::Done, StepNote::OldStopped);
+    progress.mark(StepId::StartNew, StepState::Running, StepNote::Starting);
     let (conn, privilege) = setup::provider_login(&form.target, &form.first, &form.pin)?;
     *stage = Stage::Started(dir.clone());
     core_move::start(&conn, &privilege, &dir, say)?;
-    settle(&conn, &privilege, &dir, &send);
+    let logged_in = settle(&conn, &privilege, &dir, &send);
     plan.carry_strategies(say)?;
     core_move::finish(&conn, &privilege, &dir, say)?;
+    progress.mark(
+        StepId::StartNew,
+        StepState::Done,
+        StepNote::Started {
+            logged_in,
+            strategies: !progress.strategies_unconfirmed.get(),
+        },
+    );
+    // The backend points this terminal and the station at the new core and ticks this step.
+    progress.mark(StepId::Switch, StepState::Running, StepNote::Switching);
     Ok(Event::Started {
         address: format!("{}:{}", form.public_ip, form.proto_port),
     })
@@ -236,7 +336,9 @@ fn run_move(
 /// Wait until the new core is logged in and listens (`mb --status`) before its strategies are
 /// carried and this terminal switches to it: a core still logging in skips MoonProto commands.
 /// Only reported: the old core is down, so the move goes on whatever the new one says.
-fn settle(conn: &Conn, privilege: &Privilege, dir: &str, send: &dyn Fn(Event)) {
+///
+/// Returns whether the new core logged in and listens.
+fn settle(conn: &Conn, privilege: &Privilege, dir: &str, send: &dyn Fn(Event)) -> bool {
     // Every change of state is a line: the wait may take minutes, and the move shows nothing else.
     let mut last = None;
     let mut seen = |status: &core_new::CoreStatus| {
@@ -247,18 +349,25 @@ fn settle(conn: &Conn, privilege: &Privilege, dir: &str, send: &dyn Fn(Event)) {
             ));
         }
     };
-    let line =
+    let (line, logged_in) =
         match core_new::wait_settled(conn, privilege, dir, core_new::SETTLE_TIMEOUT, &mut seen) {
-            Ok(status) if status.connectable() => t!("core_move.settled").to_string(),
-            Ok(status) => t!(
-                "core_move.not_settled",
-                state = state_text(&status.state),
-                detail = &status.login_error
-            )
-            .to_string(),
-            Err(e) => t!("core_move.status_unread", reason = format!("{e:#}")).to_string(),
+            Ok(status) if status.connectable() => (t!("core_move.settled").to_string(), true),
+            Ok(status) => (
+                t!(
+                    "core_move.not_settled",
+                    state = state_text(&status.state),
+                    detail = &status.login_error
+                )
+                .to_string(),
+                false,
+            ),
+            Err(e) => (
+                t!("core_move.status_unread", reason = format!("{e:#}")).to_string(),
+                false,
+            ),
         };
     send(Event::Line(line));
+    logged_in
 }
 
 /// Take the new core out of the server again, over a fresh login.

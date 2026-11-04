@@ -1,21 +1,30 @@
 # A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.card_button: "Перенести на VPS…"
+core_move.card_button: "Перенести на Linux-сервер…"
 core_move.save_first: "Сначала сохраните ядро: переносу нужны его сохранённый ключ и история."
 
 # --- Outcomes ---
-core_move.lost: "Перенос оборвался без ответа: его поток завершился."
+core_move.lost: "Перенос оборвался без ответа."
 core_move.switched: "Терминал теперь подключается к новому ядру."
-core_move.switch_failed: "Новое ядро работает на %{address}, но терминал не смог переключиться: %{reason}. Укажите этот адрес у ядра в разделе «Подключения»."
-core_move.probe_failed: "Не удалось прочитать ключ сервера: %{reason}"
 core_move.failed: "Перенос не удался: %{reason}"
-core_move.failed_removed: "Перенос не удался: %{reason}. Новое ядро не запускалось и удалено с сервера."
-core_move.failed_left: "Перенос не удался: %{reason}. Новое ядро в %{dir} не запускалось, удалить его не вышло: %{remove}"
-core_move.failed_started: "Перенос не удался: %{reason}. Новое ядро осталось в %{dir}, а старое может быть остановлено: проверьте оба, прежде чем торговать."
-core_move.failed_old_stopped: "Перенос не удался: %{reason}. Старое ядро остановлено, а новое установлено в %{dir}, но не запущено: запустите одно из них, прежде чем торговать."
 core_move.logged_in: "Вход выполнен: %{user}."
 core_move.old_stopped_by_hand: "Старое ядро остановлено."
+core_move.remove_failed: "Не удалось удалить новое ядро с сервера: %{reason}"
+core_move.outcome.old_runs: "Старое ядро работает как раньше — торговля не прерывалась."
+core_move.outcome.not_started: "Новое ядро не запускалось."
+core_move.outcome.new_removed: "Новое ядро не запускалось, мы удалили его с сервера."
+core_move.outcome.new_left: "Новое ядро не запускалось, но удалить его с сервера не вышло — оно осталось в папке %{dir}."
+core_move.outcome.old_stopped_head: "Торговля стоит: старое ядро остановлено, новое не запущено."
+core_move.outcome.old_stopped_body: "Новое ядро установлено в папку %{dir}. Запустите одно из ядер, прежде чем торговать."
+core_move.outcome.started_head: "Проверьте оба ядра, прежде чем торговать."
+core_move.outcome.started_body: "Старое ядро может быть остановлено, а новое осталось в папке %{dir} — работает ли оно, неизвестно."
+core_move.outcome.lost_head: "Перенос оборвался без ответа."
+core_move.outcome.lost_body: "Неизвестно, на каком шаге он остановился. Проверьте оба ядра, прежде чем торговать."
+core_move.outcome.not_switched_head: "Новое ядро работает на %{address}, но терминал не переключился на него."
+core_move.outcome.not_switched_body: "Укажите адрес %{address} у ядра в разделе «Подключения»."
+core_move.outcome.probe_head: "Не удалось связаться с сервером."
+core_move.outcome.probe_body: "На сервер ничего не отправлялось. Проверьте адрес и порт и попробуйте снова."
 
 # --- Progress lines ---
 core_move.step.snapshot: "Настройки взяты с ядра: %{size} МБ, биржа %{exchange}."
