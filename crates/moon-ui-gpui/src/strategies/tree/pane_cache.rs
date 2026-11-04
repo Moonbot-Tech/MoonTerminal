@@ -338,7 +338,9 @@ fn kinds_present(cores: &[(CoreId, String)], store: &CoreStore) -> Vec<(u8, Stri
     for (c, _) in cores {
         if let Some(cd) = store.core(*c) {
             for r in &cd.strategies {
-                map.entry(r.kind_ordinal).or_insert_with(|| r.kind.clone());
+                if !moon_core::feed::strategy_kind_is_hidden(r.kind_ordinal) {
+                    map.entry(r.kind_ordinal).or_insert_with(|| r.kind.clone());
+                }
             }
         }
     }

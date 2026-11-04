@@ -256,6 +256,24 @@ fn tree_op_name_input(
     )
 }
 
+/// List public strategy kinds for the create menu, with MoonShot first and core order otherwise.
+fn create_kind_list(schema: &moon_core::feed::StrategySchemaModel) -> Vec<(u8, String)> {
+    let mut kinds: Vec<(u8, String)> = schema
+        .kinds
+        .iter()
+        .filter(|kind| !moon_core::feed::strategy_kind_is_hidden(kind.ordinal))
+        .map(|kind| (kind.ordinal, kind.name.clone()))
+        .collect();
+    if let Some(position) = kinds
+        .iter()
+        .position(|(_, name)| name.eq_ignore_ascii_case("MoonShot"))
+    {
+        let moonshot = kinds.remove(position);
+        kinds.insert(0, moonshot);
+    }
+    kinds
+}
+
 /// Build the tree-op dialog body for the current `TreeOp`.
 ///
 /// Create, folder, and rename fields share one width contract: the card is font-scaled and
@@ -289,28 +307,14 @@ fn op_dialog_body(
         TreeOp::CreateStrategy {
             core, target, kind, ..
         } => {
-            let mut kinds: Vec<(u8, String)> = backend
+            let kinds: Vec<(u8, String)> = backend
                 .read(cx)
                 .session
                 .store()
                 .core(core)
                 .and_then(|cd| cd.schema.as_ref())
-                .map(|s| {
-                    s.kinds
-                        .iter()
-                        .map(|k| (k.ordinal, k.name.clone()))
-                        .collect()
-                })
+                .map(create_kind_list)
                 .unwrap_or_default();
-            // Put MoonShot first because it is the most commonly used kind; retain schema order
-            // for the rest to reduce navigation through a long menu.
-            if let Some(pos) = kinds
-                .iter()
-                .position(|(_, n)| n.eq_ignore_ascii_case("MoonShot"))
-            {
-                let k = kinds.remove(pos);
-                kinds.insert(0, k);
-            }
             let kind_name = kind
                 .and_then(|k| kinds.iter().find(|(o, _)| *o == k))
                 .map(|(_, n)| n.clone())

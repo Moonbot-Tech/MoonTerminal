@@ -217,8 +217,8 @@ pub struct SchemaSection {
 #[derive(Debug, Clone)]
 pub struct SchemaKind {
     pub ordinal: u8,
-    /// Kind name from the core schema, authoritative over hard-coded `strat_kind_name` and consumed
-    /// by strategy creation and kind/filter UI.
+    /// Kind name from the core schema, except that an internal-only kind uses the shared `Unknown`
+    /// label. Consumed by strategy creation and kind/filter UI.
     #[allow(dead_code)]
     pub name: String,
     pub sections: Vec<SchemaSection>,

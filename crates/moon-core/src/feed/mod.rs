@@ -30,7 +30,7 @@ pub use live::{FieldMask, percentage_stop_price, percentage_take_price};
 pub use mode_advice::{SiblingOutcome, suggest_alternate_mode};
 pub use news::{NewsItem, NewsSnapshot};
 pub use report_traces::{ArchivedLineKind, ArchivedOrderTrace, ReportTracesOutcome};
-pub use strategies::field_text_is_valid;
+pub use strategies::{field_text_is_valid, strategy_kind_is_hidden};
 pub use types::*;
 
 use std::sync::atomic::{AtomicBool, Ordering};

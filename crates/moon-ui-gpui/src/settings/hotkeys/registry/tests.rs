@@ -364,3 +364,49 @@ fn toggle_live_is_a_local_application_wide_chart_row() {
     assert_eq!(HotkeysConfig::default().key(KeySlot::ToggleLive), "space");
     assert!(!slots_the_pull_writes().contains(&KeySlot::ToggleLive));
 }
+
+/// Renaming either a drawing hotkey string or its figure-menu counterpart independently makes the
+/// same tool carry two names; keeping both hotkey lines equal also removes a duplicate grey line.
+#[test]
+fn drawing_hotkeys_use_the_figure_menu_name_in_every_locale() {
+    let tools = [
+        (KeySlot::DrawHline, "alerts.fig.hline"),
+        (KeySlot::DrawHorizontalRay, "alerts.fig.horizontal_ray"),
+        (KeySlot::DrawSegment, "alerts.fig.line"),
+        (KeySlot::DrawTriangle, "alerts.fig.triangle"),
+        (KeySlot::DrawChannel, "alerts.fig.channel"),
+    ];
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for (slot, menu_key) in tools {
+            let row = slots()
+                .find(|row| row.key() == Some(slot))
+                .expect("drawing hotkey row");
+            let menu = rust_i18n::t!(menu_key).to_string();
+            assert_eq!(row.name(), menu, "{} {slot:?} command", language.code());
+            assert_eq!(row.title(), menu, "{} {slot:?} title", language.code());
+            assert_eq!(
+                row.moonbot_name(),
+                None,
+                "{} {slot:?} repeats its leading line",
+                language.code()
+            );
+        }
+
+        let sells = slots()
+            .find(|row| row.key() == Some(KeySlot::SellsToRect))
+            .expect("sells-to-zone hotkey row");
+        assert_eq!(
+            sells.name(),
+            rust_i18n::t!("chart.fig.sells_zone").to_string(),
+            "{} sells-to-zone command",
+            language.code()
+        );
+        assert_eq!(
+            sells.moonbot_name().as_deref(),
+            Some("Sells to rectangle"),
+            "{} lost the informative MoonBot alias",
+            language.code()
+        );
+    }
+}

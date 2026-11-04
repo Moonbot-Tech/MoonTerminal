@@ -26,22 +26,38 @@ pub fn clipboard_matches_internal(internal: Option<&[ClipItem]>, text: Option<&s
     })
 }
 
+/// Whether clipboard data identifies the hidden kind by ordinal, display name, or `SignalType`.
+fn clip_item_is_hidden(item: &ClipItem) -> bool {
+    let hidden_name = |value: &str| {
+        let value = value.trim();
+        value.eq_ignore_ascii_case("ChartWall") || value.eq_ignore_ascii_case("Chart Wall")
+    };
+    moon_core::feed::strategy_kind_is_hidden(item.kind_ordinal)
+        || hidden_name(&item.kind)
+        || item
+            .fields
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("SignalType") && hidden_name(value))
+}
+
 /// Resolve current clipboard text, retaining placement anchors only for an unchanged local copy.
-/// MoonBot exports need the destination schema to resolve their textual SignalType.
+/// MoonBot exports need the destination schema to resolve their textual SignalType. Internal-only
+/// kinds never resolve into a create request, including from an existing in-app copy.
 pub fn resolve_clipboard(
     internal: Option<&[ClipItem]>,
     text: Option<&str>,
     kinds: &[SchemaKind],
 ) -> Option<Vec<ClipItem>> {
-    let Some(text) = text else {
-        return internal
+    let items = match text {
+        None => internal
             .filter(|items| !items.is_empty())
-            .map(<[_]>::to_vec);
+            .map(<[_]>::to_vec),
+        Some(text) if clipboard_matches_internal(internal, Some(text)) => {
+            internal.map(<[_]>::to_vec)
+        }
+        Some(text) => clip_from_text(text).or_else(|| moonbot_text::parse(text, kinds)),
     };
-    if clipboard_matches_internal(internal, Some(text)) {
-        return internal.map(<[_]>::to_vec);
-    }
-    clip_from_text(text).or_else(|| moonbot_text::parse(text, kinds))
+    items.filter(|items| items.iter().all(|item| !clip_item_is_hidden(item)))
 }
 
 /// Field name through which moonproto stores `StrategySnapshot::strategy_name`.
@@ -340,6 +356,9 @@ pub fn paste_plan(
     target: &[String],
     taken_names: &HashSet<String>,
 ) -> Vec<NewStrategy> {
+    if clip.iter().any(clip_item_is_hidden) {
+        return Vec::new();
+    }
     let mut taken = taken_names.clone();
     let mut out = Vec::with_capacity(clip.len());
     for item in clip {
@@ -1055,7 +1074,7 @@ pub fn cut_carry_plan(
                 });
             }
         }
-        if clip.is_empty() {
+        if clip.is_empty() || clip.iter().any(clip_item_is_hidden) {
             continue;
         }
         out.push(CutCarry {

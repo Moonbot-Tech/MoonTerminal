@@ -238,6 +238,67 @@ fn clip_text_roundtrip() {
     assert_eq!(clip_from_text("случайный текст"), None);
 }
 
+/// Hiding ChartWall must not rewrite a saved strategy's text payload or ordinal, but every paste
+/// entry point must refuse to create another one, including an unchanged in-app clipboard.
+#[test]
+fn chart_wall_text_roundtrips_unchanged_but_cannot_be_pasted() {
+    let clip = vec![ClipItem {
+        kind_ordinal: 19,
+        kind: "Unknown".to_string(),
+        name: "UNIT_01".to_string(),
+        rel_path: split_path("folder"),
+        fields: vec![
+            (STRATEGY_NAME_FIELD.to_string(), "UNIT_01".to_string()),
+            ("SignalType".to_string(), "ChartWall".to_string()),
+            ("CustomValue".to_string(), "17.25".to_string()),
+        ],
+        src: None,
+    }];
+    let text = clip_to_text(&clip);
+    assert_eq!(clip_from_text(&text), Some(clip.clone()));
+
+    assert_eq!(resolve_clipboard(None, Some(&text), &[]), None);
+    assert_eq!(resolve_clipboard(Some(&clip), Some(&text), &[]), None);
+    assert_eq!(resolve_clipboard(Some(&clip), None, &[]), None);
+    assert!(paste_plan(&clip, &[], &HashSet::new()).is_empty());
+
+    let spoofed = ClipItem {
+        kind_ordinal: 6,
+        kind: "Chart Wall".to_string(),
+        ..clip[0].clone()
+    };
+    let named_only = ClipItem {
+        kind: "ChartWall".to_string(),
+        fields: vec![("SignalType".to_string(), "MoonShot".to_string())],
+        ..spoofed.clone()
+    };
+    for item in [spoofed, named_only] {
+        let text = clip_to_text(std::slice::from_ref(&item));
+        assert_eq!(resolve_clipboard(None, Some(&text), &[]), None);
+        assert!(paste_plan(&[item], &[], &HashSet::new()).is_empty());
+    }
+
+    let hidden_row = StrategyRow {
+        id: 9,
+        name: "UNIT_01".to_string(),
+        kind: "Unknown".to_string(),
+        kind_ordinal: 19,
+        folder_path: String::new(),
+        checked: false,
+        is_short: false,
+        fields: Vec::new(),
+    };
+    let cut = CutOrigin {
+        rows: vec![(7, 9)],
+        folders: Vec::new(),
+    };
+    let source = vec![hidden_row];
+    assert!(
+        cut_carry_plan(&[(7, source.as_slice())], &cut, 8).is_empty(),
+        "a rejected cross-core copy must not schedule retirement of the source"
+    );
+}
+
 /// The text clipboard must NOT carry a source id across terminals.
 ///
 /// Plausible edit this catches: `src` is added to `clip_to_text` for symmetry, and a strategy

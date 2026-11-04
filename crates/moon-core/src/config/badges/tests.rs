@@ -53,3 +53,37 @@ fn parse_share_requires_an_entries_array_before_deserializing_badges() {
         );
     }
 }
+
+/// Removing the load/paste cleanup would resurrect ChartWall and CHW from an existing badges file;
+/// retaining the whole file instead would discard unrelated custom names, codes, and colours.
+#[test]
+fn hidden_badge_is_dropped_on_load_and_paste_without_touching_public_edits() {
+    let hidden = BadgeEntry {
+        ordinal: 19,
+        name: "Chart Wall".into(),
+        code: "CHW".into(),
+        color_dark: [1, 2, 3],
+        ..BadgeEntry::default()
+    };
+    let public = BadgeEntry {
+        ordinal: 2,
+        name: "Edited Drops".into(),
+        code: "DRX".into(),
+        active: false,
+        color_dark: [21, 22, 23],
+        ..BadgeEntry::default()
+    };
+    let current = BadgesConfig {
+        entries: vec![hidden.clone(), public.clone()],
+        custom_colors: vec![[31, 32, 33]],
+    };
+
+    let loaded = current.clone().without_hidden_kinds();
+    assert_eq!(loaded.entries, vec![public.clone()]);
+    assert!(BadgesConfig::default().entry(19).is_none());
+
+    let shared = serde_json::to_string(&current).expect("badge fixture serializes");
+    let parsed = BadgesConfig::parse_share(&shared, &current).expect("badge file parses");
+    assert_eq!(parsed.entries, vec![public]);
+    assert_eq!(parsed.custom_colors, current.custom_colors);
+}

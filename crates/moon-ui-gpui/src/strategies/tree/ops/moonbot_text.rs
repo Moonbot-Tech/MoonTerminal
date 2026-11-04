@@ -48,6 +48,7 @@ pub(super) fn parse(text: &str, kinds: &[SchemaKind]) -> Option<Vec<ClipItem>> {
             let signal = value("SignalType")?.trim();
             let kind = kinds
                 .iter()
+                .filter(|kind| !moon_core::feed::strategy_kind_is_hidden(kind.ordinal))
                 .find(|kind| kind.name.eq_ignore_ascii_case(signal))
                 .or_else(|| {
                     // MoonBot's text export names its Drops kind DropsDetection.
