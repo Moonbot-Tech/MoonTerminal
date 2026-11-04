@@ -57,7 +57,7 @@ pub struct ScreenerView {
     /// at all" (the original connect-a-core advice still applies) from "sessions exist but no
     /// rows survived filtering" (a different, non-actionable empty sentence).
     sessions_total: usize,
-    /// Case-insensitive market or coin substring filter.
+    /// Case-insensitive market or coin filter; a trailing space selects an exact ticker.
     coin_input: Entity<MoonInputState>,
     /// Minimum 24-hour volume filter, accepting `k` and `m` suffixes.
     dvol_input: Entity<MoonInputState>,
@@ -294,7 +294,7 @@ impl ScreenerView {
 
     /// Filter a prepared publication using the live preset and controls without cloning rows.
     fn filter_cached(&mut self, cx: &mut Context<Self>) {
-        let coin = self.coin_input.read(cx).value().trim().to_uppercase();
+        let coin = normalize_coin_filter(&self.coin_input.read(cx).value());
         let min_vol = parse_vol(self.dvol_input.read(cx).value().trim());
         let b = self.backend.read(cx);
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
@@ -645,7 +645,7 @@ impl ScreenerView {
     }
 
     /// Build the bottom bar with Moonbot-style source, Market, and Vol. controls on the left and the
-    /// filtered/total count plus column menu on the right.
+    /// filtered/total count plus column menu on the right. Exact ticker mode shows `=`.
     fn bottom_bar(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement {
         let label = |text: &'static str| {
             div()
@@ -688,6 +688,19 @@ impl ScreenerView {
                         .size(design::INPUT_SIZE)
                         .cleanable(true),
                 ),
+            )
+            .when(
+                moon_core::db::report_coin_is_exact(&self.coin_input.read(cx).value()),
+                |row| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .font_family(design::mono())
+                            .text_color(rgb(p.accent))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("="),
+                    )
+                },
             )
             .child(label(column_title("vol24")))
             .child(
@@ -784,9 +797,26 @@ fn entries_for(
         .collect()
 }
 
-/// Match an already-normalized filter against cached market and coin search text.
+/// Fold the Report keyboard layout and case without swallowing the exact-mode trailing space.
+fn normalize_coin_filter(raw: &str) -> String {
+    crate::controls::coin_search::normalize_layout(raw).to_uppercase()
+}
+
+/// Match normalized search text, admitting only the ticker and its `_` tails in exact mode.
 pub(super) fn matches_coin_filter(entry: &Entry, filter_uc: &str) -> bool {
-    entry.market_uc.contains(filter_uc) || entry.coin_uc.contains(filter_uc)
+    let exact = moon_core::db::report_coin_is_exact(filter_uc);
+    let query = filter_uc.trim();
+    let matches = |text: &str| {
+        if exact {
+            text == query
+                || text
+                    .strip_prefix(query)
+                    .is_some_and(|tail| tail.starts_with('_'))
+        } else {
+            text.contains(query)
+        }
+    };
+    matches(&entry.market_uc) || matches(&entry.coin_uc)
 }
 
 #[cfg(test)]
