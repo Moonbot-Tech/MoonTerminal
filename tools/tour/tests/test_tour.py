@@ -529,6 +529,39 @@ class Structure(unittest.TestCase):
         )
 
 
+class QuickStartContent(unittest.TestCase):
+    """Keep the published connection instructions usable for first-time VPS users."""
+
+    def test_linux_core_path_covers_the_current_wizard(self):
+        """Dropping a wizard route or VPS prerequisite would strand a new Linux user."""
+        _, content, _ = build()
+        digest = step_digest(content.steps[2], content.codes)
+        expected = {
+            "ru": (
+                "Ubuntu или Debian",
+                "x86-64",
+                "от 1 ГБ",
+                "<code>5160</code>",
+                "Перенос существующего ядра",
+                "по ключу",
+                "не запускайте установку повторно",
+            ),
+            "en": (
+                "Ubuntu or Debian",
+                "x86-64",
+                "at least 1 GB",
+                "<code>5160</code>",
+                "Moving an existing core",
+                "by its key",
+                "do not run the install again",
+            ),
+        }
+        for language, fragments in expected.items():
+            for fragment in fragments:
+                self.assertIn(fragment, digest.get(language), language)
+        self.assertNotIn("5017", render_mod.data_steps(content))
+
+
 class Escaping(unittest.TestCase):
     def test_a_script_close_in_content_cannot_end_the_block(self):
         literal = emit.js_literal({"k": "</script><img onerror=x>"})
@@ -579,7 +612,12 @@ class Escaping(unittest.TestCase):
 
         def inject(doc):
             """Put an active tag into the first markup-bearing block of step 3."""
-            doc["steps"][2]["blocks"][0]["warn"]["ru"] = "<img src=x onerror=alert(1)>"
+            warning = next(
+                block["warn"]
+                for block in doc["steps"][2]["blocks"]
+                if "warn" in block and block["warn"].get("html")
+            )
+            warning["ru"] = "<img src=x onerror=alert(1)>"
 
         with broken_content("quickstart.yml", inject) as content_dir:
             with self.assertRaises(ContentError):
@@ -604,8 +642,8 @@ class Escaping(unittest.TestCase):
         _, content, _ = build()
         step = content.steps[2]
         code = next(b["code"] for b in step["blocks"] if b["kind"] == "code")
-        self.assertIn('name="MoonBot-UDP-5017"', code)
-        self.assertIn("localport=5017", render_mod.data_steps(content))
+        self.assertIn('name="MoonBot-UDP-3000"', code)
+        self.assertIn("localport=3000", render_mod.data_steps(content))
         digest = step_digest(step, content.codes)
         for code_lang in content.codes:
             self.assertIn(f"<code>{code}</code>", digest.get(code_lang))
