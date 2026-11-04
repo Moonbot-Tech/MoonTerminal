@@ -10,6 +10,7 @@
 //! channel. Once the new core runs, the backend points this core's row at it and has the station
 //! follow ([`Backend::core_move_switch`]).
 
+mod steps;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -17,13 +18,14 @@ mod worker;
 
 use std::collections::HashMap;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{Context, Task};
 use moon_core::diagnostics::CORE_MOVE_TARGET;
 use moon_remote::ssh::Target;
 use rust_i18n::t;
 
+pub(crate) use steps::{StepEvent, StepId, StepNote, StepRow, StepState, Steps};
 pub(crate) use worker::{Command, MoveForm};
 
 use crate::Backend;
@@ -42,14 +44,17 @@ pub(crate) enum MovePhase {
     Review { target: Target, fingerprint: String },
     /// The move runs.
     Running,
-    /// The old core refuses to stop; `open_deals` unfinished deals (`None`: not read).
-    Refused { open_deals: Option<usize> },
+    /// The old core refuses to stop; its open deals ride the stop step's note.
+    Refused,
     /// Waiting until the old core's user stops it, then the move goes on by itself.
     Waiting,
     /// The new core runs at `address` and this core's row points at it.
     Done { address: String },
-    /// The move stopped on this error; the reason says what is left on the server.
-    Failed { reason: String },
+    /// The move stopped on `reason` (the error's own words); `outcome` says what that left.
+    Failed {
+        reason: String,
+        outcome: FailOutcome,
+    },
     /// The user cancelled; the new core is removed again.
     Cancelled,
 }
@@ -64,10 +69,35 @@ impl MovePhase {
     }
 }
 
+/// What a failed move left behind, for the wizard to say in plain words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FailOutcome {
+    /// The server's host key could not be read; nothing was sent to it.
+    Probe,
+    /// Nothing ran on the server; the old core trades as before.
+    OldRuns,
+    /// The new core never started and was taken off the server; the old one trades as before.
+    NewRemoved,
+    /// The new core in `dir` never started and could not be taken off the server.
+    NewLeft { dir: String },
+    /// The old core is down and the new one in `dir` installed, never started.
+    OldStopped { dir: String },
+    /// The new core in `dir` was started (or its start tried); the old one may be down.
+    Started { dir: String },
+    /// The move's thread ended without a word.
+    Lost,
+    /// The new core runs at `address`, but this terminal could not be pointed at it.
+    NotSwitched { address: String },
+}
+
 /// One core's move.
 pub(crate) struct MoveJob {
     pub(crate) phase: MovePhase,
     pub(crate) lines: Vec<String>,
+    /// The six steps the wizard shows.
+    pub(crate) steps: Steps,
+    /// When the move proper started; the steps' times count from here.
+    started: Option<Instant>,
     /// An answer was sent and the thread has not reported since: the answer buttons stay hidden,
     /// so one question takes one answer.
     pub(crate) answering: bool,
@@ -111,7 +141,14 @@ pub(super) enum Event {
     Started {
         address: String,
     },
-    Failed(String),
+    /// A step moved, `Duration` after the move's start.
+    Step(StepEvent, Duration),
+    /// The move stopped at `step` (`None`: before it began) on `reason`.
+    Failed {
+        reason: String,
+        outcome: FailOutcome,
+        step: Option<StepId>,
+    },
     Cancelled,
 }
 
@@ -157,9 +194,9 @@ impl Backend {
         };
         let answerable = match command {
             Command::Retry | Command::Cancel => {
-                matches!(job.phase, MovePhase::Refused { .. } | MovePhase::Waiting)
+                matches!(job.phase, MovePhase::Refused | MovePhase::Waiting)
             }
-            Command::WaitForStop => matches!(job.phase, MovePhase::Refused { .. }),
+            Command::WaitForStop => matches!(job.phase, MovePhase::Refused),
         };
         if job.answering || !answerable {
             return;
@@ -201,6 +238,7 @@ impl Backend {
         rx: mpsc::Receiver<Event>,
         cx: &mut Context<Self>,
     ) {
+        let started = matches!(phase, MovePhase::Running).then(Instant::now);
         let lines = match phase {
             // The probe opens a fresh move; the move itself continues the probe's log.
             MovePhase::Probing => Vec::new(),
@@ -239,8 +277,13 @@ impl Backend {
                         && job.phase.busy()
                     {
                         log::warn!(target: CORE_MOVE_TARGET, "core move {uid}: its thread ended without a word");
+                        let reason = t!("core_move.lost").to_string();
+                        let at = job.elapsed();
+                        let step = job.steps.current();
+                        job.steps.apply(StepEvent::Failed { step, reason: reason.clone() }, at);
                         job.phase = MovePhase::Failed {
-                            reason: t!("core_move.lost").to_string(),
+                            reason,
+                            outcome: FailOutcome::Lost,
                         };
                     }
                     cx.notify();
@@ -255,6 +298,8 @@ impl Backend {
             MoveJob {
                 phase,
                 lines,
+                steps: Steps::default(),
+                started,
                 answering: false,
                 commands,
                 _task: task,
@@ -269,7 +314,7 @@ impl Backend {
             return;
         };
         // Any report but a log line answers the last answer: the thread has moved on.
-        if !matches!(event, Event::Line(_)) {
+        if !matches!(event, Event::Line(_) | Event::Step(..)) {
             job.answering = false;
         }
         // The app log keeps the move too: a window closed, or the terminal quit, takes its own
@@ -282,6 +327,7 @@ impl Backend {
                 log::info!(target: CORE_MOVE_TARGET, "core move {uid}: {} presents {fingerprint}", target.addr())
             }
             Event::Line(line) => log::info!(target: CORE_MOVE_TARGET, "core move {uid}: {line}"),
+            Event::Step(..) => {}
             Event::Refused { open_deals } => {
                 log::info!(target: CORE_MOVE_TARGET, "core move {uid}: the old core refuses to stop ({open_deals:?} open)")
             }
@@ -292,7 +338,7 @@ impl Backend {
             Event::Started { address } => {
                 log::info!(target: CORE_MOVE_TARGET, "core move {uid}: new core runs at {address}")
             }
-            Event::Failed(reason) => {
+            Event::Failed { reason, .. } => {
                 log::warn!(target: CORE_MOVE_TARGET, "core move {uid}: failed: {reason}")
             }
             Event::Cancelled => log::info!(target: CORE_MOVE_TARGET, "core move {uid}: cancelled"),
@@ -308,15 +354,36 @@ impl Backend {
                 }
             }
             Event::Line(line) => push_line(&mut job.lines, line),
-            Event::Refused { open_deals } => job.phase = MovePhase::Refused { open_deals },
+            Event::Step(step, at) => job.steps.apply(step, at),
+            Event::Refused { .. } => job.phase = MovePhase::Refused,
             Event::Waiting => job.phase = MovePhase::Waiting,
             Event::Resumed => job.phase = MovePhase::Running,
-            Event::Failed(reason) => {
+            Event::Failed {
+                reason,
+                outcome,
+                step,
+            } => {
                 job.commands = None;
-                job.phase = MovePhase::Failed { reason };
+                push_line(
+                    &mut job.lines,
+                    t!("core_move.failed", reason = &reason).to_string(),
+                );
+                if let Some(step) = step {
+                    let at = job.elapsed();
+                    job.steps.apply(
+                        StepEvent::Failed {
+                            step,
+                            reason: reason.clone(),
+                        },
+                        at,
+                    );
+                }
+                job.phase = MovePhase::Failed { reason, outcome };
             }
             Event::Cancelled => {
                 job.commands = None;
+                let at = job.elapsed();
+                job.steps.apply(StepEvent::Cancelled, at);
                 job.phase = MovePhase::Cancelled;
             }
             Event::Started { address } => {
@@ -325,6 +392,15 @@ impl Backend {
                     Ok(()) => {
                         if let Some(job) = self.core_moves.jobs.get_mut(&uid) {
                             push_line(&mut job.lines, t!("core_move.switched").to_string());
+                            let at = job.elapsed();
+                            job.steps.apply(
+                                StepEvent::Mark {
+                                    id: StepId::Switch,
+                                    state: StepState::Done,
+                                    note: StepNote::Switched,
+                                },
+                                at,
+                            );
                             job.phase = MovePhase::Done { address };
                         }
                         self.station_follow_core(uid, cx);
@@ -332,13 +408,22 @@ impl Backend {
                     Err(e) => {
                         log::warn!(target: CORE_MOVE_TARGET, "core move {uid}: the row was not switched to {address}: {e:#}");
                         if let Some(job) = self.core_moves.jobs.get_mut(&uid) {
+                            let reason = format!("{e:#}");
+                            push_line(
+                                &mut job.lines,
+                                t!("core_move.failed", reason = &reason).to_string(),
+                            );
+                            let at = job.elapsed();
+                            job.steps.apply(
+                                StepEvent::Failed {
+                                    step: StepId::Switch,
+                                    reason: reason.clone(),
+                                },
+                                at,
+                            );
                             job.phase = MovePhase::Failed {
-                                reason: t!(
-                                    "core_move.switch_failed",
-                                    address = address,
-                                    reason = format!("{e:#}")
-                                )
-                                .to_string(),
+                                reason,
+                                outcome: FailOutcome::NotSwitched { address },
                             };
                         }
                     }
@@ -380,6 +465,13 @@ impl Backend {
         self.session.reconcile(&self.config, reports);
         self.servers_changed_outside = self.servers_changed_outside.wrapping_add(1);
         Ok(())
+    }
+}
+
+impl MoveJob {
+    /// The time since the move proper started (zero before it did).
+    fn elapsed(&self) -> Duration {
+        self.started.map(|t| t.elapsed()).unwrap_or_default()
     }
 }
 

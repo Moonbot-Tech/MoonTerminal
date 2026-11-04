@@ -428,10 +428,12 @@ class LanguageCompleteness(unittest.TestCase):
             doc["strings"]["hero.h1"].pop("en")
 
         locales = load_locales(paths.LOCALES_DIR)
-        with broken_content("page.yml", drop_english) as content_dir:
-            with self.assertRaises(ContentError) as caught:
-                content = load_content(content_dir, locales)
-                content.problems.raise_if_any("content is not usable", ContentError)
+        with (
+            broken_content("page.yml", drop_english) as content_dir,
+            self.assertRaises(ContentError) as caught,
+        ):
+            content = load_content(content_dir, locales)
+            content.problems.raise_if_any("content is not usable", ContentError)
         message = str(caught.exception)
         self.assertIn("hero.h1", message)
         self.assertIn("'en'", message)
@@ -448,10 +450,12 @@ class LanguageCompleteness(unittest.TestCase):
             raise AssertionError("zone 'live' is gone — update this test")
 
         locales = load_locales(paths.LOCALES_DIR)
-        with broken_content("zones.yml", typo_the_key) as content_dir:
-            with self.assertRaises(TourError) as caught:
-                content = load_content(content_dir, locales)
-                content.problems.raise_if_any("content is not usable", ContentError)
+        with (
+            broken_content("zones.yml", typo_the_key) as content_dir,
+            self.assertRaises(TourError) as caught,
+        ):
+            content = load_content(content_dir, locales)
+            content.problems.raise_if_any("content is not usable", ContentError)
         message = str(caught.exception)
         self.assertIn("unknown key", message)
         self.assertIn("toolbar.live_tip", message)   # the suggestion, not the typo
@@ -529,6 +533,41 @@ class Structure(unittest.TestCase):
         )
 
 
+class QuickStartContent(unittest.TestCase):
+    """Keep the published connection instructions usable for first-time VPS users."""
+
+    def test_linux_core_path_covers_the_current_wizard(self):
+        """Dropping a wizard route or VPS prerequisite would strand a new Linux user."""
+        _, content, _ = build()
+        digest = step_digest(content.steps[2], content.codes)
+        expected = {
+            "ru": (
+                "Ubuntu 24.04 или новее либо Debian 13 или новее",
+                "x86-64",
+                "от 1 ГБ",
+                "<code>5160</code>",
+                "Перенос существующего ядра",
+                "по ключу",
+                "ошибке входа на биржу",
+                "не запускайте установку повторно",
+            ),
+            "en": (
+                "Ubuntu 24.04 or newer, or Debian 13 or newer",
+                "x86-64",
+                "at least 1 GB",
+                "<code>5160</code>",
+                "Moving an existing core",
+                "by its key",
+                "exchange login error",
+                "do not run the install again",
+            ),
+        }
+        for language, fragments in expected.items():
+            for fragment in fragments:
+                self.assertIn(fragment, digest.get(language), language)
+        self.assertNotIn("5017", render_mod.data_steps(content))
+
+
 class Escaping(unittest.TestCase):
     def test_a_script_close_in_content_cannot_end_the_block(self):
         literal = emit.js_literal({"k": "</script><img onerror=x>"})
@@ -568,10 +607,12 @@ class Escaping(unittest.TestCase):
                     """Put one adversarial fragment into an allowed markup slot."""
                     doc["steps"][0]["body"]["ru"] = value
 
-                with broken_content("quickstart.yml", inject) as content_dir:
-                    with self.assertRaises(ContentError):
-                        content = load_content(content_dir, locales)
-                        content.problems.raise_if_any("content is not usable", ContentError)
+                with (
+                    broken_content("quickstart.yml", inject) as content_dir,
+                    self.assertRaises(ContentError),
+                ):
+                    content = load_content(content_dir, locales)
+                    content.problems.raise_if_any("content is not usable", ContentError)
 
     def test_quickstart_block_markup_is_validated(self):
         """A markup slot inside a quick-start block goes through the same allowlist."""
@@ -579,12 +620,19 @@ class Escaping(unittest.TestCase):
 
         def inject(doc):
             """Put an active tag into the first markup-bearing block of step 3."""
-            doc["steps"][2]["blocks"][0]["warn"]["ru"] = "<img src=x onerror=alert(1)>"
+            warning = next(
+                block["warn"]
+                for block in doc["steps"][2]["blocks"]
+                if "warn" in block and block["warn"].get("html")
+            )
+            warning["ru"] = "<img src=x onerror=alert(1)>"
 
-        with broken_content("quickstart.yml", inject) as content_dir:
-            with self.assertRaises(ContentError):
-                content = load_content(content_dir, locales)
-                content.problems.raise_if_any("content is not usable", ContentError)
+        with (
+            broken_content("quickstart.yml", inject) as content_dir,
+            self.assertRaises(ContentError),
+        ):
+            content = load_content(content_dir, locales)
+            content.problems.raise_if_any("content is not usable", ContentError)
 
     def test_unknown_quickstart_block_kind_is_rejected(self):
         """A typo in a block kind is a content error, not a silently dropped block."""
@@ -604,8 +652,8 @@ class Escaping(unittest.TestCase):
         _, content, _ = build()
         step = content.steps[2]
         code = next(b["code"] for b in step["blocks"] if b["kind"] == "code")
-        self.assertIn('name="MoonBot-UDP-5017"', code)
-        self.assertIn("localport=5017", render_mod.data_steps(content))
+        self.assertIn('name="MoonBot-UDP-3000"', code)
+        self.assertIn("localport=3000", render_mod.data_steps(content))
         digest = step_digest(step, content.codes)
         for code_lang in content.codes:
             self.assertIn(f"<code>{code}</code>", digest.get(code_lang))
@@ -718,10 +766,12 @@ class WindowModes(unittest.TestCase):
             doc["modes"] = [item for item in doc["modes"] if item["id"] != "auto"]
 
         locales = load_locales(paths.LOCALES_DIR)
-        with broken_content("modes.yml", drop_auto) as content_dir:
-            with self.assertRaises(TourError) as caught:
-                content = load_content(content_dir, locales)
-                content.problems.raise_if_any("content is not usable", ContentError)
+        with (
+            broken_content("modes.yml", drop_auto) as content_dir,
+            self.assertRaises(TourError) as caught,
+        ):
+            content = load_content(content_dir, locales)
+            content.problems.raise_if_any("content is not usable", ContentError)
         self.assertIn("auto", str(caught.exception))
 
     def test_mode_switch_is_keyboard_operable(self):

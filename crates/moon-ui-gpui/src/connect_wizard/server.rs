@@ -61,8 +61,8 @@ impl ServerFields {
         };
         Self {
             host: input(false, "", window, cx),
-            // Empty, with the usual answer as its placeholder: a prefilled "root" is missed and
-            // sent where the provider's login is another.
+            // Keep the field empty so the provider's alternative login is easy to enter.
+            // Leaving it empty uses the same default that the placeholder offers.
             login: {
                 let state = input(false, "", window, cx);
                 state.update(cx, |st, c| st.set_placeholder("root", window, c));
@@ -85,10 +85,8 @@ impl ServerFields {
         if target.host.parse::<Ipv4Addr>().is_err() {
             return Err(t!("connect_wizard.server.need_ipv4").to_string());
         }
-        let login = text(&self.login, cx);
-        if login.is_empty() || login.contains(char::is_whitespace) {
-            return Err(t!("connect_wizard.server.need_login").to_string());
-        }
+        effective_login(&text(&self.login, cx))
+            .ok_or_else(|| t!("connect_wizard.server.need_login").to_string())?;
         Ok(target)
     }
 
@@ -98,10 +96,9 @@ impl ServerFields {
             .host
             .parse::<Ipv4Addr>()
             .map_err(|_| t!("connect_wizard.server.need_ipv4").to_string())?;
-        let login = text(&self.login, cx);
-        if login.is_empty() || login.contains(char::is_whitespace) {
-            return Err(t!("connect_wizard.server.need_login").to_string());
-        }
+        let typed_login = text(&self.login, cx);
+        let login = effective_login(&typed_login)
+            .ok_or_else(|| t!("connect_wizard.server.need_login").to_string())?;
         let dir = text(&self.dir, cx);
         if dir.is_empty() || dir.contains(char::is_whitespace) {
             return Err(t!("connect_wizard.server.need_dir").to_string());
@@ -114,7 +111,7 @@ impl ServerFields {
         let key = self
             .by_key
             .then(|| (text(&self.key_path, cx), secret(&self.passphrase, cx)));
-        let first = job::first_access(login, secret(&self.password, cx), key)
+        let first = job::first_access(login.to_owned(), secret(&self.password, cx), key)
             .map_err(|e| format!("{e:#}"))?;
         Ok(ServerAccess {
             target,
@@ -240,6 +237,19 @@ impl ServerFields {
             .update(cx, |state, cx| state.set_value(path, window, cx));
     }
 }
+
+/// Trim a provider login and default an empty value to root; reject whitespace inside it.
+fn effective_login(value: &str) -> Option<&str> {
+    let login = value.trim();
+    if login.contains(char::is_whitespace) {
+        None
+    } else {
+        Some(if login.is_empty() { "root" } else { login })
+    }
+}
+
+#[cfg(test)]
+mod tests;
 
 /// A labelled input that wraps under its label at narrow widths.
 pub(super) fn field(

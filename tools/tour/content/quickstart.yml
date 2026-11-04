@@ -27,39 +27,106 @@ steps:
       a <code>.dmg</code> for macOS. Linux is build-from-source for now — <code>make build</code>.'
     html: true
 - title:
-    ru: Откройте Настройки → Подключения
-    en: Open Settings → Connections
+    ru: Откройте Настройки → Подключения → Ядра
+    en: Open Settings → Connections → Cores
   body:
-    ru: Кнопка «Настройки» — справа в торговом тулбаре. Первая вкладка окна и есть та, что нужна.
-    en: The Settings button sits at the right of the trading toolbar. The first tab of that window is
-      the one you need.
+    ru: Кнопка «Настройки» — справа в торговом тулбаре. На вкладке подключения ядер откройте мастер
+      подключения. Если ядер ещё нет, мастер откроется сам при запуске терминала.
+    en: The Settings button sits at the right of the trading toolbar. Open the connection wizard on
+      the core connections tab. If there are no cores yet, the wizard opens when the terminal starts.
     html: true
 - title:
-    ru: Добавьте ядро и вставьте ключ
-    en: Add a core and paste the key
+    ru: Подключите ядро Moonbot
+    en: Connect a Moonbot core
   body:
-    ru: Сначала настройка на машине с MoonBot, потом ключ — в терминал.
-    en: Set things up on the MoonBot machine first, then bring the key to the terminal.
+    ru: 'Мастер подключения предлагает три пути: создать ядро на Linux-сервере, перенести туда уже
+      подключённое ядро или подключить существующее ядро Moonbot по ключу. Ниже — все три пути и ручная
+      настройка Moonbot для Windows.'
+    en: 'The connection wizard offers three routes: create a core on a Linux server, move an already
+      connected core there, or connect an existing Moonbot core by its key. All three routes and the
+      manual Windows Moonbot setup are below.'
     html: true
   blocks:
+  - group:
+      ru: Новое ядро на Linux-сервере
+      en: A new core on a Linux server
+  - sub:
+      ru: Арендуйте VPS с Ubuntu 24.04 или новее либо Debian 13 или новее, архитектурой x86-64 и оперативной памятью от 1 ГБ. Провайдер
+        выдаст IP-адрес, логин (обычно <code>root</code>) и пароль.
+      en: Rent a VPS running Ubuntu 24.04 or newer, or Debian 13 or newer, on x86-64 with at least 1 GB of RAM. The provider will give
+        you its IP address, a login (usually <code>root</code>) and a password.
+      html: true
+  - sub:
+      ru: В мастере выберите создание нового ядра на Linux-сервере и введите данные сервера. Мастер
+        предлагает UDP-порт <code>5160</code>; оставьте его или задайте свой. Проверьте ключ сервера,
+        подтвердите вход, примите лицензионное соглашение и разрешите установку.
+      en: In the wizard, choose to create a new core on a Linux server and enter the server details. The
+        wizard suggests UDP port <code>5160</code>; keep it or choose another. Check the server key,
+        confirm the login, accept the license agreement and allow the install.
+      html: true
+  - sub:
+      ru: Откройте выбранный UDP-порт во внешнем фаерволе провайдера, если он есть. Если на сервере
+        включён <code>ufw</code>, мастер откроет порт в нём сам.
+      en: Open the chosen UDP port in the provider's external firewall, if it has one. If
+        <code>ufw</code> is active on the server, the wizard opens the port there itself.
+      html: true
+  - sub:
+      ru: После установки выберите биржу и введите её API-ключи в мастере. Добавьте IP-адрес VPS в список
+        разрешённых адресов API-ключа на бирже. Мастер сам сохранит подключение в терминале и проверит
+        связь с ядром.
+      en: After the install, choose the exchange and enter its API keys in the wizard. Add the VPS IP
+        address to the exchange API key's allowed-IP list. The wizard saves the connection in the
+        terminal itself and checks that the core is reachable.
+  - warn:
+      ru: Если после установки мастер сообщает об ошибке входа на биржу, не запускайте установку повторно.
+        Проверьте IP-адрес VPS в списке разрешённых адресов API-ключа и права ключа, затем исправьте ключи
+        или повторите вход в мастере. Если подключение уже установлено, но настройки ещё не получены,
+        дождитесь их — переключение режима торговли станет доступно после их получения.
+      en: If the wizard reports an exchange login error after installation, do not run the install again.
+        Check the VPS IP address in the API key's allowed-IP list and the key's permissions, then fix the
+        keys or retry the login in the wizard. If the connection is established but settings have not
+        arrived yet, wait for them — the trading-mode switch becomes available once they arrive.
+  - group:
+      ru: Перенос существующего ядра на Linux-сервер
+      en: Moving an existing core to a Linux server
+  - sub:
+      ru: Выберите перенос ядра, укажите уже подключённое ядро и введите данные VPS, как описано выше.
+        Мастер перенесёт настройки, стратегии и историю, остановит старое ядро перед запуском нового и
+        сам переключит терминал на новый адрес.
+      en: Choose to move a core, pick an already connected core and enter the VPS details as above. The
+        wizard carries over the settings, strategies and history, stops the old core before starting the
+        new one, and switches the terminal to the new address itself.
+  - note:
+      ru: Откройте выбранный UDP-порт во внешнем фаерволе и добавьте IP-адрес нового VPS в список
+        разрешённых адресов API-ключа на бирже.
+      en: Open the chosen UDP port in the external firewall and add the new VPS IP address to the
+        exchange API key's allowed-IP list.
+  - group:
+      ru: Существующее ядро Moonbot по ключу
+      en: An existing Moonbot core by its key
+  - sub:
+      ru: Выберите подключение по ключу и вставьте ключ существующего ядра. Мастер сам добавит ядро в
+        сохранённые настройки и проверит подключение. Как получить ключ в Moonbot для Windows вручную,
+        показано ниже.
+      en: Choose to connect by key and paste the existing core's key. The wizard adds the core to the
+        saved settings and checks the connection itself. The manual way to get a key from Windows
+        Moonbot is below.
+  - group:
+      ru: Ручная настройка Moonbot для Windows
+      en: Manual Windows Moonbot setup
   - warn:
       ru: 'Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Port</code>, режим и версию
         <b>до</b> <code>Copy Key</code> — ключ, скопированный раньше, уже устарел.'
       en: 'The order matters: the key carries the port and mode inside it. Set <code>Port</code>, the mode
         and the version <b>before</b> <code>Copy Key</code> — a key copied earlier is stale.'
       html: true
-  - group:
-      ru: На машине с MoonBot
-      en: On the MoonBot machine
   - sub:
       ru: 'Откройте UDP-порт ядра для входящих. В Windows:'
       en: 'Open the core''s UDP port for inbound traffic. On Windows:'
-  - code: netsh advfirewall firewall add rule name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017
+  - code: netsh advfirewall firewall add rule name="MoonBot-UDP-3000" dir=in action=allow protocol=UDP localport=3000
   - note:
-      ru: У хостера со своим фаерволом (AWS и подобные) порт нужно открыть и там. На обычном VPS достаточно
-        правила Windows.
-      en: A hoster with its own firewall (AWS and the like) needs the port opened there too. A plain VPS
-        needs only the Windows rule.
+      ru: Если у провайдера есть внешний фаервол, откройте тот же UDP-порт и там.
+      en: If the provider has an external firewall, open the same UDP port there too.
   - sub:
       ru: 'Откройте настройки <code>Moon Proto</code>:'
       en: 'Open the <code>Moon Proto</code> settings:'
@@ -81,8 +148,8 @@ steps:
       en: Tick <code>Kernel (VPS)</code>.
       html: true
   - sub:
-      ru: Задайте <code>Port</code> (по умолчанию <code>5017</code>).
-      en: Set <code>Port</code> (default <code>5017</code>).
+      ru: Задайте <code>Port</code> (по умолчанию <code>3000</code>).
+      en: Set <code>Port</code> (default <code>3000</code>).
       html: true
   - sub:
       ru: Выберите версию переключателями <code>V0</code> / <code>V1</code> / <code>V2</code>.
@@ -104,8 +171,8 @@ steps:
         yet).
       html: true
   - group:
-      ru: В терминале
-      en: In the terminal
+      ru: Ручное добавление ключа в терминале
+      en: Adding the key manually in the terminal
   - sub:
       ru: Нажмите <code>+ Добавить ядро (в «default»)</code> — появится строка.
       en: Press <code>+ Add core (to "default")</code> — a row appears.
@@ -154,17 +221,17 @@ steps:
         name, not for an address of your local network, which the station's server cannot reach.
   - p:
       ru: 'Около 25 ядер хотят примерно треть целой машины без режима burstable и несколько сотен МБ
-        свободно на сервере в 1 ГБ. Базовые 10% у burstable t3.micro ниже этого. Если статус станции
-        снова показывает <code>0 мин</code>, проверьте <code>CPUCreditBalance</code> (AWS) и
+        свободно на сервере в 1 ГБ. Базовые 10% процессора с burstable-производительностью ниже этого.
+        Если статус станции снова показывает <code>0 мин</code>, проверьте остаток CPU-кредитов и
         <code>killed</code> / <code>oom</code> в журнале службы.'
       en: 'About 25 cores want roughly a third of a whole non-burstable machine and a few hundred MB free
-        on a 1 GB box. A burstable t3.micro''s 10% baseline is below that. If the station status comes
-        back with <code>0 min</code>, check <code>CPUCreditBalance</code> (AWS) and <code>killed</code> /
+        on a 1 GB box. A 10% baseline on a burstable CPU is below that. If the station status comes back
+        with <code>0 min</code>, check the remaining CPU credits and <code>killed</code> /
         <code>oom</code> in the service journal.'
       html: true
 - title:
-    ru: Отметьте, что принимать
-    en: Choose what to accept
+    ru: При ручном добавлении отметьте, что принимать
+    en: When adding manually, choose what to accept
   body:
     ru: 'Флажки в строке ядра:'
     en: 'Checkboxes on the core''s row:'
@@ -187,11 +254,13 @@ steps:
           core.
         html: true
 - title:
-    ru: Нажмите «Сохранить»
-    en: Press Save
+    ru: При ручном добавлении нажмите «Сохранить»
+    en: When adding manually, press Save
   body:
-    ru: 'До сохранения ядро не подключается. После — статус проходит путь:'
-    en: 'Until you save, the core does not connect. After that the status moves along:'
+    ru: 'Мастер сохраняет подключение сам. Если добавляете строку вручную, до сохранения ядро не
+      подключается. После — статус проходит путь:'
+    en: 'The wizard saves the connection itself. If you add a row manually, the core does not connect
+      until you save. After that the status moves along:'
   blocks:
   - status:
     - ru: Нет данных (сохраните настройки для подключения)

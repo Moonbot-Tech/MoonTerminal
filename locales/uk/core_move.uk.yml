@@ -1,21 +1,31 @@
 # A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.card_button: "Перенести на VPS…"
+core_move.card_button: "Перенести на Linux-сервер…"
 core_move.save_first: "Спершу збережіть ядро: перенесенню потрібні його збережений ключ та історія."
 
 # --- Outcomes ---
-core_move.lost: "Перенесення обірвалося без відповіді: його потік завершився."
+core_move.lost: "Перенесення обірвалося без відповіді."
 core_move.switched: "Термінал тепер підключається до нового ядра."
-core_move.switch_failed: "Нове ядро працює на %{address}, але термінал не зміг перемкнутися: %{reason}. Вкажіть цю адресу в ядра в розділі «Підключення»."
-core_move.probe_failed: "Не вдалося прочитати ключ сервера: %{reason}"
 core_move.failed: "Перенесення не вдалося: %{reason}"
-core_move.failed_removed: "Перенесення не вдалося: %{reason}. Нове ядро не запускалося і видалене із сервера."
-core_move.failed_left: "Перенесення не вдалося: %{reason}. Нове ядро в %{dir} не запускалося, видалити його не вийшло: %{remove}"
-core_move.failed_started: "Перенесення не вдалося: %{reason}. Нове ядро лишилося в %{dir}, а старе може бути зупинене: перевірте обидва, перш ніж торгувати."
-core_move.failed_old_stopped: "Перенесення не вдалося: %{reason}. Старе ядро зупинене, а нове встановлене в %{dir}, але не запущене: запустіть одне з них, перш ніж торгувати."
 core_move.logged_in: "Вхід виконано: %{user}."
 core_move.old_stopped_by_hand: "Старе ядро зупинене."
+core_move.remove_failed: "Не вдалося видалити нове ядро з сервера: %{reason}"
+core_move.outcome.old_runs: "Старе ядро працює як раніше — торгівля не переривалася."
+core_move.outcome.old_unsure: "Перевірте старе ядро, перш ніж торгувати: перенесення обірвалося під час його зупинки."
+core_move.outcome.not_started: "Нове ядро не запускалося."
+core_move.outcome.new_removed: "Нове ядро не запускалося, ми видалили його з сервера."
+core_move.outcome.new_left: "Нове ядро не запускалося, але видалити його з сервера не вдалося — воно лишилося в теці %{dir}."
+core_move.outcome.old_stopped_head: "Торгівля стоїть: старе ядро зупинене, нове не запущене."
+core_move.outcome.old_stopped_body: "Нове ядро встановлене в теку %{dir}. Запустіть одне з ядер, перш ніж торгувати."
+core_move.outcome.started_head: "Перевірте обидва ядра, перш ніж торгувати."
+core_move.outcome.started_body: "Старе ядро може бути зупинене, а нове лишилося в теці %{dir} — чи працює воно, невідомо."
+core_move.outcome.lost_head: "Перенесення обірвалося без відповіді."
+core_move.outcome.lost_body: "Невідомо, на якому кроці воно зупинилося. Перевірте обидва ядра, перш ніж торгувати."
+core_move.outcome.not_switched_head: "Нове ядро працює на %{address}, але термінал не перемкнувся на нього."
+core_move.outcome.not_switched_body: "Вкажіть адресу %{address} у ядра в розділі «Підключення»."
+core_move.outcome.probe_head: "Не вдалося зв'язатися із сервером."
+core_move.outcome.probe_body: "На сервер нічого не надсилалося. Перевірте адресу і порт та спробуйте знову."
 
 # --- Progress lines ---
 core_move.step.snapshot: "Налаштування взято з ядра: %{size} МБ, біржа %{exchange}."

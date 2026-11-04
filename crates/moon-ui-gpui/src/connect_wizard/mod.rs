@@ -87,6 +87,8 @@ pub(crate) struct ConnectWizardView {
     /// The move branch: the core picked to move, and whether the user went on to its server.
     move_uid: Option<u64>,
     move_at_server: bool,
+    /// Whether the move's technical log is unfolded.
+    move_log_open: bool,
     /// A folder name for the server step, set where no window is at hand to set it.
     pending_dir: Option<String>,
     #[cfg(windows)]
@@ -129,6 +131,7 @@ impl ConnectWizardView {
             by_key_since: None,
             move_uid: None,
             move_at_server: false,
+            move_log_open: false,
             pending_dir: None,
             #[cfg(windows)]
             download: download::Download::default(),

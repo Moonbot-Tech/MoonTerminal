@@ -31,6 +31,8 @@ fn localized_tests_initialize_on_default_stacks() {
 /// Localized targets whose dictionary must initialize on the dedicated large stack.
 /// Keep these independent of source scanning so moving or removing a guard cannot hide a target.
 const COLD_LOOKUPS: &[&str] = &[
+    "backend::core_new::worker::tests::other_check_failures_keep_their_diagnostics",
+    "backend::core_new::worker::tests::password_refusal_names_login_and_provider_email",
     "panels::report::widths::tests::widths_refresh_scale_probe",
     "panels::report::widths::tests::widths_refresh_cache_matches_full_measurement",
     "chartdx::data_state::market::tests::chart_market_quiet_volume_completion_wakes_the_source_pull",

@@ -58,7 +58,7 @@ check)
     libc=$(getconf GNU_LIBC_VERSION 2>/dev/null || echo 'glibc 0')
     version=${libc#glibc }
     lowest=$(printf '2.38\n%s\n' "$version" | sort -V | head -n 1)
-    test "$lowest" = 2.38 || { echo "MoonBot for Linux needs glibc 2.38 or newer; this server has $libc" >&2; exit 1; }
+    test "$lowest" = 2.38 || { echo "MoonBot for Linux needs glibc 2.38 or newer; this server has $libc. Choose Ubuntu 24.04 or newer, or Debian 13 or newer, on x86-64." >&2; exit 1; }
     test -d /run/systemd/system || { echo 'MoonBot for Linux runs as a systemd service; this server has no systemd' >&2; exit 1; }
     missing=''
     for tool in curl unzip ss; do

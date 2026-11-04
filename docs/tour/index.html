@@ -989,7 +989,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
   <section id="start">
     <div class="shead"><span class="snum">02</span><h2 data-i18n="qs.h">Быстрый старт</h2></div>
     <p class="slead" data-i18n="qs.lead">Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока настройки не сохранены.</p>
-    <div class="steps" id="steps"><noscript><div class="step"><div class="sbody"><div class="cmd"><pre><code>netsh advfirewall firewall add rule name="MoonBot-UDP-5017" dir=in action=allow protocol=UDP localport=5017</code></pre></div></div></div></noscript></div>
+    <div class="steps" id="steps"><noscript><div class="step"><div class="sbody"><div class="cmd"><pre><code>netsh advfirewall firewall add rule name="MoonBot-UDP-3000" dir=in action=allow protocol=UDP localport=3000</code></pre></div></div></div></noscript></div>
   </section>
 
   <!-- ==================== 03. ПАНЕЛИ ==================== -->
@@ -1857,28 +1857,72 @@ const STEPS = [
   },
   {
     "ru": [
-      "Откройте Настройки → Подключения",
-      "Кнопка «Настройки» — справа в торговом тулбаре. Первая вкладка окна и есть та, что нужна.",
+      "Откройте Настройки → Подключения → Ядра",
+      "Кнопка «Настройки» — справа в торговом тулбаре. На вкладке подключения ядер откройте мастер подключения. Если ядер ещё нет, мастер откроется сам при запуске терминала.",
       []
     ],
     "en": [
-      "Open Settings → Connections",
-      "The Settings button sits at the right of the trading toolbar. The first tab of that window is the one you need.",
+      "Open Settings → Connections → Cores",
+      "The Settings button sits at the right of the trading toolbar. Open the connection wizard on the core connections tab. If there are no cores yet, the wizard opens when the terminal starts.",
       []
     ]
   },
   {
     "ru": [
-      "Добавьте ядро и вставьте ключ",
-      "Сначала настройка на машине с MoonBot, потом ключ — в терминал.",
+      "Подключите ядро Moonbot",
+      "Мастер подключения предлагает три пути: создать ядро на Linux-сервере, перенести туда уже подключённое ядро или подключить существующее ядро Moonbot по ключу. Ниже — все три пути и ручная настройка Moonbot для Windows.",
       [
         [
+          "group",
+          "Новое ядро на Linux-сервере"
+        ],
+        [
+          "sub",
+          "Арендуйте VPS с Ubuntu 24.04 или новее либо Debian 13 или новее, архитектурой x86-64 и оперативной памятью от 1 ГБ. Провайдер выдаст IP-адрес, логин (обычно <code>root<\/code>) и пароль."
+        ],
+        [
+          "sub",
+          "В мастере выберите создание нового ядра на Linux-сервере и введите данные сервера. Мастер предлагает UDP-порт <code>5160<\/code>; оставьте его или задайте свой. Проверьте ключ сервера, подтвердите вход, примите лицензионное соглашение и разрешите установку."
+        ],
+        [
+          "sub",
+          "Откройте выбранный UDP-порт во внешнем фаерволе провайдера, если он есть. Если на сервере включён <code>ufw<\/code>, мастер откроет порт в нём сам."
+        ],
+        [
+          "sub",
+          "После установки выберите биржу и введите её API-ключи в мастере. Добавьте IP-адрес VPS в список разрешённых адресов API-ключа на бирже. Мастер сам сохранит подключение в терминале и проверит связь с ядром."
+        ],
+        [
           "warn",
-          "Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Port<\/code>, режим и версию <b>до<\/b> <code>Copy Key<\/code> — ключ, скопированный раньше, уже устарел."
+          "Если после установки мастер сообщает об ошибке входа на биржу, не запускайте установку повторно. Проверьте IP-адрес VPS в списке разрешённых адресов API-ключа и права ключа, затем исправьте ключи или повторите вход в мастере. Если подключение уже установлено, но настройки ещё не получены, дождитесь их — переключение режима торговли станет доступно после их получения."
         ],
         [
           "group",
-          "На машине с MoonBot"
+          "Перенос существующего ядра на Linux-сервер"
+        ],
+        [
+          "sub",
+          "Выберите перенос ядра, укажите уже подключённое ядро и введите данные VPS, как описано выше. Мастер перенесёт настройки, стратегии и историю, остановит старое ядро перед запуском нового и сам переключит терминал на новый адрес."
+        ],
+        [
+          "note",
+          "Откройте выбранный UDP-порт во внешнем фаерволе и добавьте IP-адрес нового VPS в список разрешённых адресов API-ключа на бирже."
+        ],
+        [
+          "group",
+          "Существующее ядро Moonbot по ключу"
+        ],
+        [
+          "sub",
+          "Выберите подключение по ключу и вставьте ключ существующего ядра. Мастер сам добавит ядро в сохранённые настройки и проверит подключение. Как получить ключ в Moonbot для Windows вручную, показано ниже."
+        ],
+        [
+          "group",
+          "Ручная настройка Moonbot для Windows"
+        ],
+        [
+          "warn",
+          "Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Port<\/code>, режим и версию <b>до<\/b> <code>Copy Key<\/code> — ключ, скопированный раньше, уже устарел."
         ],
         [
           "sub",
@@ -1886,11 +1930,11 @@ const STEPS = [
         ],
         [
           "code",
-          "netsh advfirewall firewall add rule name=\"MoonBot-UDP-5017\" dir=in action=allow protocol=UDP localport=5017"
+          "netsh advfirewall firewall add rule name=\"MoonBot-UDP-3000\" dir=in action=allow protocol=UDP localport=3000"
         ],
         [
           "note",
-          "У хостера со своим фаерволом (AWS и подобные) порт нужно открыть и там. На обычном VPS достаточно правила Windows."
+          "Если у провайдера есть внешний фаервол, откройте тот же UDP-порт и там."
         ],
         [
           "sub",
@@ -1911,7 +1955,7 @@ const STEPS = [
         ],
         [
           "sub",
-          "Задайте <code>Port<\/code> (по умолчанию <code>5017<\/code>)."
+          "Задайте <code>Port<\/code> (по умолчанию <code>3000<\/code>)."
         ],
         [
           "sub",
@@ -1931,7 +1975,7 @@ const STEPS = [
         ],
         [
           "group",
-          "В терминале"
+          "Ручное добавление ключа в терминале"
         ],
         [
           "sub",
@@ -1967,21 +2011,65 @@ const STEPS = [
         ],
         [
           "p",
-          "Около 25 ядер хотят примерно треть целой машины без режима burstable и несколько сотен МБ свободно на сервере в 1 ГБ. Базовые 10% у burstable t3.micro ниже этого. Если статус станции снова показывает <code>0 мин<\/code>, проверьте <code>CPUCreditBalance<\/code> (AWS) и <code>killed<\/code> / <code>oom<\/code> в журнале службы."
+          "Около 25 ядер хотят примерно треть целой машины без режима burstable и несколько сотен МБ свободно на сервере в 1 ГБ. Базовые 10% процессора с burstable-производительностью ниже этого. Если статус станции снова показывает <code>0 мин<\/code>, проверьте остаток CPU-кредитов и <code>killed<\/code> / <code>oom<\/code> в журнале службы."
         ]
       ]
     ],
     "en": [
-      "Add a core and paste the key",
-      "Set things up on the MoonBot machine first, then bring the key to the terminal.",
+      "Connect a Moonbot core",
+      "The connection wizard offers three routes: create a core on a Linux server, move an already connected core there, or connect an existing Moonbot core by its key. All three routes and the manual Windows Moonbot setup are below.",
       [
         [
+          "group",
+          "A new core on a Linux server"
+        ],
+        [
+          "sub",
+          "Rent a VPS running Ubuntu 24.04 or newer, or Debian 13 or newer, on x86-64 with at least 1 GB of RAM. The provider will give you its IP address, a login (usually <code>root<\/code>) and a password."
+        ],
+        [
+          "sub",
+          "In the wizard, choose to create a new core on a Linux server and enter the server details. The wizard suggests UDP port <code>5160<\/code>; keep it or choose another. Check the server key, confirm the login, accept the license agreement and allow the install."
+        ],
+        [
+          "sub",
+          "Open the chosen UDP port in the provider's external firewall, if it has one. If <code>ufw<\/code> is active on the server, the wizard opens the port there itself."
+        ],
+        [
+          "sub",
+          "After the install, choose the exchange and enter its API keys in the wizard. Add the VPS IP address to the exchange API key's allowed-IP list. The wizard saves the connection in the terminal itself and checks that the core is reachable."
+        ],
+        [
           "warn",
-          "The order matters: the key carries the port and mode inside it. Set <code>Port<\/code>, the mode and the version <b>before<\/b> <code>Copy Key<\/code> — a key copied earlier is stale."
+          "If the wizard reports an exchange login error after installation, do not run the install again. Check the VPS IP address in the API key's allowed-IP list and the key's permissions, then fix the keys or retry the login in the wizard. If the connection is established but settings have not arrived yet, wait for them — the trading-mode switch becomes available once they arrive."
         ],
         [
           "group",
-          "On the MoonBot machine"
+          "Moving an existing core to a Linux server"
+        ],
+        [
+          "sub",
+          "Choose to move a core, pick an already connected core and enter the VPS details as above. The wizard carries over the settings, strategies and history, stops the old core before starting the new one, and switches the terminal to the new address itself."
+        ],
+        [
+          "note",
+          "Open the chosen UDP port in the external firewall and add the new VPS IP address to the exchange API key's allowed-IP list."
+        ],
+        [
+          "group",
+          "An existing Moonbot core by its key"
+        ],
+        [
+          "sub",
+          "Choose to connect by key and paste the existing core's key. The wizard adds the core to the saved settings and checks the connection itself. The manual way to get a key from Windows Moonbot is below."
+        ],
+        [
+          "group",
+          "Manual Windows Moonbot setup"
+        ],
+        [
+          "warn",
+          "The order matters: the key carries the port and mode inside it. Set <code>Port<\/code>, the mode and the version <b>before<\/b> <code>Copy Key<\/code> — a key copied earlier is stale."
         ],
         [
           "sub",
@@ -1989,11 +2077,11 @@ const STEPS = [
         ],
         [
           "code",
-          "netsh advfirewall firewall add rule name=\"MoonBot-UDP-5017\" dir=in action=allow protocol=UDP localport=5017"
+          "netsh advfirewall firewall add rule name=\"MoonBot-UDP-3000\" dir=in action=allow protocol=UDP localport=3000"
         ],
         [
           "note",
-          "A hoster with its own firewall (AWS and the like) needs the port opened there too. A plain VPS needs only the Windows rule."
+          "If the provider has an external firewall, open the same UDP port there too."
         ],
         [
           "sub",
@@ -2014,7 +2102,7 @@ const STEPS = [
         ],
         [
           "sub",
-          "Set <code>Port<\/code> (default <code>5017<\/code>)."
+          "Set <code>Port<\/code> (default <code>3000<\/code>)."
         ],
         [
           "sub",
@@ -2034,7 +2122,7 @@ const STEPS = [
         ],
         [
           "group",
-          "In the terminal"
+          "Adding the key manually in the terminal"
         ],
         [
           "sub",
@@ -2070,14 +2158,14 @@ const STEPS = [
         ],
         [
           "p",
-          "About 25 cores want roughly a third of a whole non-burstable machine and a few hundred MB free on a 1 GB box. A burstable t3.micro's 10% baseline is below that. If the station status comes back with <code>0 min<\/code>, check <code>CPUCreditBalance<\/code> (AWS) and <code>killed<\/code> / <code>oom<\/code> in the service journal."
+          "About 25 cores want roughly a third of a whole non-burstable machine and a few hundred MB free on a 1 GB box. A 10% baseline on a burstable CPU is below that. If the station status comes back with <code>0 min<\/code>, check the remaining CPU credits and <code>killed<\/code> / <code>oom<\/code> in the service journal."
         ]
       ]
     ]
   },
   {
     "ru": [
-      "Отметьте, что принимать",
+      "При ручном добавлении отметьте, что принимать",
       "Флажки в строке ядра:",
       [
         [
@@ -2096,7 +2184,7 @@ const STEPS = [
       ]
     ],
     "en": [
-      "Choose what to accept",
+      "When adding manually, choose what to accept",
       "Checkboxes on the core's row:",
       [
         [
@@ -2117,8 +2205,8 @@ const STEPS = [
   },
   {
     "ru": [
-      "Нажмите «Сохранить»",
-      "До сохранения ядро не подключается. После — статус проходит путь:",
+      "При ручном добавлении нажмите «Сохранить»",
+      "Мастер сохраняет подключение сам. Если добавляете строку вручную, до сохранения ядро не подключается. После — статус проходит путь:",
       [
         [
           "status",
@@ -2135,8 +2223,8 @@ const STEPS = [
       ]
     ],
     "en": [
-      "Press Save",
-      "Until you save, the core does not connect. After that the status moves along:",
+      "When adding manually, press Save",
+      "The wizard saves the connection itself. If you add a row manually, the core does not connect until you save. After that the status moves along:",
       [
         [
           "status",

@@ -1,21 +1,31 @@
 # A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.card_button: "Mover para VPS…"
+core_move.card_button: "Transferir para um servidor Linux…"
 core_move.save_first: "Salve o núcleo primeiro: a mudança precisa da chave salva e do histórico."
 
 # --- Outcomes ---
-core_move.lost: "A mudança parou sem resposta: a thread terminou."
+core_move.lost: "A transferência foi interrompida sem resposta."
 core_move.switched: "Este terminal agora se conecta ao novo núcleo."
-core_move.switch_failed: "O novo núcleo roda em %{address}, mas este terminal não conseguiu passar para ele: %{reason}. Defina esse endereço no núcleo em Conexões."
-core_move.probe_failed: "Não foi possível ler a chave do servidor: %{reason}"
 core_move.failed: "A mudança falhou: %{reason}"
-core_move.failed_removed: "A mudança falhou: %{reason}. O novo núcleo nunca foi iniciado e foi removido do servidor."
-core_move.failed_left: "A mudança falhou: %{reason}. O novo núcleo em %{dir} nunca foi iniciado e não pôde ser removido: %{remove}"
-core_move.failed_started: "A mudança falhou: %{reason}. O novo núcleo fica em %{dir} e o antigo pode estar parado: verifique os dois antes de operar."
-core_move.failed_old_stopped: "A mudança falhou: %{reason}. O núcleo antigo está parado e o novo está instalado em %{dir}, mas não iniciado: inicie um deles antes de operar."
 core_move.logged_in: "Conectado como %{user}."
 core_move.old_stopped_by_hand: "O núcleo antigo está parado."
+core_move.remove_failed: "Não foi possível remover o novo núcleo do servidor: %{reason}"
+core_move.outcome.old_runs: "O núcleo antigo funciona como antes — as operações não foram interrompidas."
+core_move.outcome.old_unsure: "Verifique o núcleo antigo antes de operar: a migração parou enquanto ele era desligado."
+core_move.outcome.not_started: "O novo núcleo não foi iniciado."
+core_move.outcome.new_removed: "O novo núcleo não foi iniciado, e nós o removemos do servidor."
+core_move.outcome.new_left: "O novo núcleo não foi iniciado, mas não foi possível removê-lo do servidor — ele ficou na pasta %{dir}."
+core_move.outcome.old_stopped_head: "As operações estão paradas: o núcleo antigo está parado e o novo não foi iniciado."
+core_move.outcome.old_stopped_body: "O novo núcleo está instalado na pasta %{dir}. Inicie um dos núcleos antes de operar."
+core_move.outcome.started_head: "Verifique os dois núcleos antes de operar."
+core_move.outcome.started_body: "O núcleo antigo pode estar parado, e o novo ficou na pasta %{dir} — não se sabe se está funcionando."
+core_move.outcome.lost_head: "A transferência foi interrompida sem resposta."
+core_move.outcome.lost_body: "Não se sabe em que etapa ela parou. Verifique os dois núcleos antes de operar."
+core_move.outcome.not_switched_head: "O novo núcleo está funcionando em %{address}, mas o terminal não mudou para ele."
+core_move.outcome.not_switched_body: "Informe o endereço %{address} para o núcleo em Conexões."
+core_move.outcome.probe_head: "Não foi possível contatar o servidor."
+core_move.outcome.probe_body: "Nada foi enviado ao servidor. Verifique o endereço e a porta e tente novamente."
 
 # --- Progress lines ---
 core_move.step.snapshot: "Configurações obtidas do núcleo: %{size} MB, corretora %{exchange}."

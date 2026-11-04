@@ -13,10 +13,11 @@ on.
 from __future__ import annotations
 
 import re
-from html import escape as html_escape
 from dataclasses import dataclass
+from html import escape as html_escape
 
-from . import emit, map as map_mod
+from . import emit
+from . import map as map_mod
 from .content import Content, as_html
 from .errors import OutputError, Problems, TemplateError
 from .theme import Theme, Themes
@@ -350,7 +351,7 @@ def _post_checks(page: str, content: Content, problems: Problems) -> None:
     # Attribute scans read MARKUP only. The behavioural JS builds a selector
     # string that contains `data-zone="`, and counting that as an attribute
     # would fail the render on a false positive.
-    markup = re.sub(r"<script>.*?</script>", "", page, flags=re.S)
+    markup = re.sub(r"<script>.*?</script>", "", page, flags=re.DOTALL)
 
     # Every key the template asks for by name must exist in the page dictionary.
     for key in sorted(set(re.findall(r'data-i18n="([^"]+)"', markup))):

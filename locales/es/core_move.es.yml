@@ -1,21 +1,31 @@
 # A core moved onto a Linux server: the card button, the move's steps, warnings and outcomes.
 _version: 1
 
-core_move.card_button: "Mover a VPS…"
+core_move.card_button: "Trasladar a un servidor Linux…"
 core_move.save_first: "Guarda primero el núcleo: el traslado necesita su clave guardada y su historial."
 
 # --- Outcomes ---
-core_move.lost: "El traslado se interrumpió sin respuesta: su hilo terminó."
+core_move.lost: "El traslado se interrumpió sin respuesta."
 core_move.switched: "Este terminal ahora se conecta al nuevo núcleo."
-core_move.switch_failed: "El nuevo núcleo funciona en %{address}, pero este terminal no pudo cambiar a él: %{reason}. Pon esa dirección en el núcleo en Conexiones."
-core_move.probe_failed: "No se pudo leer la clave del servidor: %{reason}"
 core_move.failed: "El traslado falló: %{reason}"
-core_move.failed_removed: "El traslado falló: %{reason}. El nuevo núcleo nunca se inició y se eliminó del servidor."
-core_move.failed_left: "El traslado falló: %{reason}. El nuevo núcleo en %{dir} nunca se inició y no se pudo eliminar: %{remove}"
-core_move.failed_started: "El traslado falló: %{reason}. El nuevo núcleo queda en %{dir} y el antiguo puede estar detenido: revisa ambos antes de operar."
-core_move.failed_old_stopped: "El traslado falló: %{reason}. El núcleo antiguo está detenido y el nuevo está instalado en %{dir} pero sin iniciar: inicia uno de los dos antes de operar."
 core_move.logged_in: "Sesión iniciada como %{user}."
 core_move.old_stopped_by_hand: "El núcleo antiguo está detenido."
+core_move.remove_failed: "No se pudo eliminar el núcleo nuevo del servidor: %{reason}"
+core_move.outcome.old_runs: "El núcleo antiguo funciona como antes: el trading no se interrumpió."
+core_move.outcome.old_unsure: "Revise el núcleo antiguo antes de operar: el traslado se cortó mientras se detenía."
+core_move.outcome.not_started: "El núcleo nuevo no se inició."
+core_move.outcome.new_removed: "El núcleo nuevo no se inició y lo eliminamos del servidor."
+core_move.outcome.new_left: "El núcleo nuevo no se inició, pero no se pudo eliminar del servidor: quedó en la carpeta %{dir}."
+core_move.outcome.old_stopped_head: "El trading está parado: el núcleo antiguo está detenido y el nuevo sin iniciar."
+core_move.outcome.old_stopped_body: "El núcleo nuevo está instalado en la carpeta %{dir}. Inicie uno de los núcleos antes de operar."
+core_move.outcome.started_head: "Revise ambos núcleos antes de operar."
+core_move.outcome.started_body: "El núcleo antiguo puede estar detenido y el nuevo quedó en la carpeta %{dir}; no se sabe si funciona."
+core_move.outcome.lost_head: "El traslado se interrumpió sin respuesta."
+core_move.outcome.lost_body: "No se sabe en qué paso se detuvo. Revise ambos núcleos antes de operar."
+core_move.outcome.not_switched_head: "El núcleo nuevo funciona en %{address}, pero el terminal no cambió a él."
+core_move.outcome.not_switched_body: "Indique la dirección %{address} para el núcleo en Conexiones."
+core_move.outcome.probe_head: "No se pudo conectar con el servidor."
+core_move.outcome.probe_body: "No se envió nada al servidor. Compruebe la dirección y el puerto e inténtelo de nuevo."
 
 # --- Progress lines ---
 core_move.step.snapshot: "Ajustes tomados del núcleo: %{size} MB, exchange %{exchange}."

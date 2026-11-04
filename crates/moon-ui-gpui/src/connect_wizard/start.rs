@@ -174,11 +174,15 @@ fn option_body(
                 .gap(design::ui_px(cx, 8.0))
                 .child(
                     div()
+                        .debug_selector(|| "cw-option-title".into())
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgba_from(MoonPalette::active(cx).text, 1.0))
                         .child(title),
                 )
                 .children(badge.map(|(label, tone)| MoonBadge::new(label).tone(tone).render())),
         )
-        .child(note(description, cx))
+        .child(note(description, cx).debug_selector(|| "cw-option-description".into()))
 }
+
+#[cfg(test)]
+mod tests;
