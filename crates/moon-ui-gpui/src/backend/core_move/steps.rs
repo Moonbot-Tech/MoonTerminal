@@ -206,6 +206,7 @@ impl Steps {
 }
 
 /// Fold `events`, each with its time since the move's start, into the six rows.
+#[cfg(test)]
 pub(crate) fn fold(events: impl IntoIterator<Item = (StepEvent, Duration)>) -> Steps {
     let mut steps = Steps::default();
     for (event, at) in events {
