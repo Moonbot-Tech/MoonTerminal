@@ -37,10 +37,10 @@ enum Inner {
 
 /// Whether this launch must not take the install lock.
 ///
-/// FireTest and `--fixture` have to be able to run beside a live terminal. The UI-atlas walk is
-/// the same: a lock would put a six-minute crawl behind the already-running process instead of
-/// driving its own windows. Updater helper modes never reach this function — they never enter
-/// [`super::run`].
+/// FireTest and `--fixture` have to be able to run beside a live terminal. The capture build's
+/// scene run is the same: a lock would leave `--ui-scenes` exiting behind the already-running
+/// process instead of driving its own windows. Updater helper modes never reach this function —
+/// they never enter [`super::run`].
 ///
 /// Args:
 ///     firetest: Whether `--debug-script` selected a FireTest scenario.
@@ -56,7 +56,7 @@ pub(super) fn lock_exempt(firetest: bool) -> bool {
     }
     #[cfg(uidoc)]
     {
-        if std::env::args().any(|arg| arg == "--ui-atlas") {
+        if std::env::args().any(|arg| arg == "--ui-scenes") {
             return true;
         }
     }

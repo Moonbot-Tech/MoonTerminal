@@ -34,7 +34,7 @@
 //! Windows Graphics Capture — `windows-capture` is already in `Cargo.lock` under `zed-scap`, though
 //! it is not built on the Windows target today and would bring an async frame pool with it.
 
-// `pub(crate)` rather than private: the UI-atlas run re-exports `ShotRect` through
+// `pub(crate)` rather than private: the UI scene capture re-exports `ShotRect` through
 // `panels/mod.rs` under `cfg(uidoc)`.
 pub(crate) mod rect;
 // Platform-neutral like `rect`: pure arithmetic and pure string work, so their unit tests run on
@@ -61,7 +61,7 @@ mod caption;
 mod clipboard_win;
 #[cfg(windows)]
 mod paint_win;
-// `pub(crate)` for the same reason as `rect` above: the UI-atlas re-export needs `DibImage` and
+// `pub(crate)` for the same reason as `rect` above: the UI scene capture's re-export needs `DibImage` and
 // `capture_client_rect`.
 #[cfg(windows)]
 pub(crate) mod win;
