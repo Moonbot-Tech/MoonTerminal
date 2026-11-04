@@ -713,18 +713,7 @@ impl ChartTabs {
         graphics_popup::subscribe_book_width(&book_width_input, window, cx);
         // Commit the custom-tab name field from the layout popup on blur or Enter.
         let custom_name_input = cx.new(|cx| MoonInputState::new(window, cx));
-        cx.subscribe(
-            &custom_name_input,
-            |this, input, ev: &MoonInputEvent, cx| {
-                if this.popup_shows(ChartPopup::Layout)
-                    && matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. })
-                {
-                    let name = input.read(cx).value().to_string();
-                    this.rename_active_custom(name, cx);
-                }
-            },
-        )
-        .detach();
+        common::subscribe_rename_commit(&custom_name_input, cx);
         // A strip that has just been built holds no overrides worth clearing; starting at the
         // current revision keeps it from replaying a press that happened before it existed. Read
         // BEFORE the handle moves into the struct.

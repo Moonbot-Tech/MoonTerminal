@@ -296,3 +296,30 @@ fn chart_settings_tooltips_reuse_popup_title_keys() {
         }
     }
 }
+
+/// Closing the layout popup must commit its name through the same host path as Enter and blur.
+///
+/// Breakage: removing the close-settlement call, bypassing the shared subscription on either host,
+/// or dropping the non-empty guard would respectively lose a typed name or erase a stored one.
+#[test]
+fn layout_close_commits_custom_name_on_both_hosts() {
+    let common = include_str!("common.rs");
+    let settle = common
+        .split("fn settle_closed_popup(")
+        .nth(1)
+        .and_then(|tail| tail.split("fn release_layout_field_focus(").next())
+        .expect("layout popup close settlement must exist");
+    assert!(settle.contains("self.commit_layout_popup(cx);"));
+    assert!(settle.contains("self.commit_rename_input(cx);"));
+
+    for host in [include_str!("mod.rs"), include_str!("detached_host/mod.rs")] {
+        assert!(host.contains("subscribe_rename_commit(&custom_name_input, cx);"));
+    }
+    for rename in [
+        include_str!("custom.rs"),
+        include_str!("detached_host/mod.rs"),
+    ] {
+        assert!(rename.contains("let name = name.trim().to_string();"));
+        assert!(rename.contains("if name.is_empty()"));
+    }
+}

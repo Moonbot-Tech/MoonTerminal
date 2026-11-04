@@ -12,7 +12,7 @@
 //!
 //! One slot holding one value removes the question: opening anything displaces whatever was there,
 //! and no combination of handlers can leave two up. What a displaced popup owes on the way out (⚙
-//! commits its size fields) belongs to the host trait, not here — this type is pure state.
+//! commits its layout fields and custom name) belongs to the host trait, not here — this type is pure state.
 
 /// One of a chart host's mutually exclusive overlays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
