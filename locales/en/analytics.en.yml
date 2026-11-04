@@ -1065,7 +1065,6 @@ analytics.sum.empty.body_none: "No closed trades in this period yet. Trades will
 analytics.sum.empty.show_year: "Show 365 days"
 analytics.sum.empty.reset: "Reset filters"
 analytics.sum.error.retry: "Retry"
-analytics.sum.catchup: "Loading new trades. Figures on screen are as of %{time} and update by themselves."
 analytics.auto.col: "Auto"
 analytics.auto.col_tip: "Coin auto-pick for every strategy, with its saved lists and the current pick settings. Sorting puts confirmed findings first, then unconfirmed ones by size."
 analytics.auto.chip_bl: "BL %{n}"

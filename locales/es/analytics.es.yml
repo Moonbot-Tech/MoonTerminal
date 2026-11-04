@@ -1065,7 +1065,6 @@ analytics.sum.empty.body_none: "Aún no hay operaciones cerradas en este períod
 analytics.sum.empty.show_year: "Mostrar 365 días"
 analytics.sum.empty.reset: "Restablecer filtros"
 analytics.sum.error.retry: "Reintentar"
-analytics.sum.catchup: "Cargando nuevas operaciones. Las cifras en pantalla corresponden a %{time} y se actualizan solas."
 analytics.auto.col: "Auto"
 analytics.auto.col_tip: "Selección automática de monedas para cada estrategia, con sus listas guardadas y los ajustes actuales. Orden: primero hallazgos confirmados, luego los no confirmados por tamaño."
 analytics.auto.chip_bl: "LN %{n}"

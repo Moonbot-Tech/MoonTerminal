@@ -121,7 +121,6 @@ impl AnalyticsView {
         self.strategy_data = ProfitLoadState::default();
         self.cal_days = ProfitLoadState::default();
         self.cal_prev = crate::load_state::LoadState::default();
-        self.cached_refreshing = [None; 3];
         self.snapshot_as_of = [None; 3];
         self.snapshot_keys = Default::default();
         self.undated = None;
@@ -214,9 +213,7 @@ impl AnalyticsView {
         // own schedule.
         if !after_report {
             self.data = ProfitLoadState::default();
-            self.data_as_of = None;
             self.summary_derived = None;
-            self.summary_catching_up = false;
         }
         // Presets keep their enum across civil rollovers while their resolved bounds slide, so
         // only the range can tell whether retained bucket hovers still name the same data.
@@ -299,17 +296,10 @@ impl AnalyticsView {
                     && this.keep_on_catch_up(after_report, data_outcome, report_req);
                 if !preserve_snapshot {
                     this.data.apply(data);
-                    this.data_as_of = Some(moon_core::util::now_unix_ms_i64() / 1000);
                     if let Some(d) = this.data.data() {
                         let present = d.core_days.iter().map(|c| c.uid).collect();
                         this.summary_ui.retain_picks(&present);
                     }
-                }
-                // Kept snapshot = a scheduled correction is still coming; a fresh publication
-                // (including an exhausted retry's) ends the catch-up.
-                this.summary_catching_up = preserve_snapshot;
-                if !preserve_snapshot {
-                    this.cached_refreshing[Tab::Summary.snapshot_index()] = None;
                 }
                 this.data_dirty = refresh::report_result_is_stale(
                     report_req,
@@ -431,7 +421,6 @@ impl AnalyticsView {
                 let preserve_snapshot = !matches!(this.strategy_data, ProfitLoadState::Loading)
                     && this.keep_on_catch_up(after_report, data_outcome, report_req);
                 if !preserve_snapshot {
-                    this.cached_refreshing[Tab::Strategies.snapshot_index()] = None;
                     this.strategy_data.apply(data);
                     // Measuring every core name is expensive, so invalidate only when its input
                     // text changed.

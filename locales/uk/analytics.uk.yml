@@ -1065,7 +1065,6 @@ analytics.sum.empty.body_none: "За цей період закритих уго
 analytics.sum.empty.show_year: "Показати 365 днів"
 analytics.sum.empty.reset: "Скинути фільтри"
 analytics.sum.error.retry: "Повторити"
-analytics.sum.catchup: "Довантажую угоди. На екрані дані на %{time}, оновляться самі."
 analytics.auto.col: "Авто"
 analytics.auto.col_tip: "Автопідбір монет для кожної стратегії з її збереженими списками та поточними налаштуваннями підбору. Сортування: спершу підтверджені знахідки, потім непідтверджені за кількістю монет."
 analytics.auto.chip_bl: "ЧС %{n}"

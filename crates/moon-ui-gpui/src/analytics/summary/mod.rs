@@ -30,7 +30,7 @@ pub(in crate::analytics) mod layout;
 pub(in crate::analytics) mod profit_chart;
 /// The right column: insights and the best/worst trades table.
 pub(in crate::analytics) mod side;
-/// Loading, empty, error and catch-up faces and the page frame.
+/// Loading, empty and error faces and the page frame.
 pub(in crate::analytics) mod states;
 
 /// Format a compact signed value such as `+341.2`, `-40.1`, or `0` — WITHOUT any unit.
@@ -188,7 +188,7 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// The data page: banner, KPI band, chart beside (or above) the side column, cores card.
+    /// The data page: KPI band, chart beside (or above) the side column, cores card.
     fn summary_data_page(
         &self,
         derived: &std::rc::Rc<derived::SummaryDerived>,
@@ -205,21 +205,9 @@ impl AnalyticsView {
         );
         let zone = self.bound_zone();
         let ui = &self.summary_ui;
-        let banner = super::refresh::summary_catchup_banner(
-            self.summary_catching_up
-                && self.cached_refreshing[super::Tab::Summary.snapshot_index()].is_none(),
-            self.data.data().is_some(),
-        )
-        .then(|| {
-            states::catchup_banner_el(
-                self.data_as_of
-                    .map_or_else(|| "—".to_string(), |t| states::as_of_text(t, zone)),
-            )
-        });
         let rows = model::core_rows(&data.core_days, ui.core_filter, ui.unfolded);
         let conc = model::Concentration::of(&data.core_days);
         let blocks = states::DataBlocks {
-            banner,
             kpi: kpi::kpi_band_el(
                 &model::KpiBand::new(&data, derived.pts.clone(), self.compare_prev),
                 cols,

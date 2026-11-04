@@ -1065,7 +1065,6 @@ analytics.sum.empty.body_none: "За этот период закрытых сд
 analytics.sum.empty.show_year: "Показать 365 дней"
 analytics.sum.empty.reset: "Сбросить фильтры"
 analytics.sum.error.retry: "Повторить"
-analytics.sum.catchup: "Догружаю сделки. На экране данные на %{time}, обновятся сами."
 analytics.auto.col: "Авто"
 analytics.auto.col_tip: "Автоподбор монет по каждой стратегии с её сохранёнными списками и текущими настройками подбора. Сортировка: сначала подтверждённые находки, потом неподтверждённые по числу монет."
 analytics.auto.chip_bl: "ЧС %{n}"

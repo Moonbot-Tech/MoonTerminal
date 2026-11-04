@@ -1065,7 +1065,6 @@ analytics.sum.empty.body_none: "Chưa có giao dịch đã đóng trong khoảng
 analytics.sum.empty.show_year: "Hiện 365 ngày"
 analytics.sum.empty.reset: "Đặt lại bộ lọc"
 analytics.sum.error.retry: "Thử lại"
-analytics.sum.catchup: "Đang tải giao dịch mới. Số liệu trên màn hình được cập nhật đến %{time} và sẽ tự cập nhật."
 analytics.auto.col: "Tự động"
 analytics.auto.col_tip: "Tự chọn coin cho mọi chiến lược, theo danh sách đã lưu và cài đặt chọn hiện tại. Sắp xếp: phát hiện đã xác nhận trước, rồi chưa xác nhận theo số lượng."
 analytics.auto.chip_bl: "Đen %{n}"

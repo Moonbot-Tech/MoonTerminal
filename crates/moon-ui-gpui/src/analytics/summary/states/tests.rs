@@ -3,7 +3,7 @@
 //! Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
 //! would shadow the built-in `#[test]` attribute.
 
-use super::{Face, as_of_text, face_of, period_days};
+use super::{Face, face_of, period_days};
 use crate::load_state::Note;
 use moon_core::db::{FailCode, FailKind};
 
@@ -54,13 +54,6 @@ fn period_days_counts_bounded_ranges_only() {
     assert_eq!(period_days((86_400, 86_400 + 3_600)), Some(1));
     assert_eq!(period_days((-1, 86_400)), None);
     assert_eq!(period_days((100, 100)), None);
-}
-
-/// The banner clock prints the snapshot time in the display zone.
-#[test]
-fn as_of_prints_the_zone_clock() {
-    assert_eq!(as_of_text(1_800_000_000, chrono_tz::UTC), "08:00");
-    assert_eq!(as_of_text(1_800_000_000, chrono_tz::Europe::Kyiv), "10:00");
 }
 
 /// A 25-hour fall-back civil day is one day, and a 23-hour spring-forward month still counts 30:

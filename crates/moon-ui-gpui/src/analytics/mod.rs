@@ -178,12 +178,6 @@ pub struct AnalyticsView {
     data_range: (i64, i64),
     /// Whether `data` predates the latest committed report generation.
     data_dirty: bool,
-    /// Whether the Summary on screen is a snapshot kept by a writer-driven catch-up whose
-    /// correction is still scheduled; drives the catch-up banner. Never derived from
-    /// `data_dirty`, which undated/cores metadata failures also raise.
-    summary_catching_up: bool,
-    /// Unix seconds at which the Summary on screen was published.
-    data_as_of: Option<i64>,
     /// Cores from the replica (for the combo box) plus multi-selection (empty = all), using
     /// the same controls as Orders and Report.
     cores: Vec<(u64, String)>,
@@ -292,8 +286,6 @@ pub struct AnalyticsView {
     latest_reads: bg::LatestReads,
     /// At most one speculative page read, with attempted scopes retained until inputs change.
     prefetch: prefetch::PrefetchState,
-    /// Original read times of cached snapshots being revalidated, retained independently per page.
-    cached_refreshing: [Option<i64>; 3],
     /// Original successful publication time of each currently retained page allocation.
     snapshot_as_of: [Option<i64>; 3],
     /// Semantic identity of retained figures, including resolved civil-period bounds.

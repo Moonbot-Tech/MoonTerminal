@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use super::{
     BusyRetryBudget, CatchUpOutcome, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh,
     core_metadata_wait, defer_axis_adoption, preserve_on_catch_up, report_result_is_stale,
-    strategy_base_allows_axis, summary_catchup_banner, visible_refresh,
+    strategy_base_allows_axis, visible_refresh,
 };
 use crate::analytics::Tab;
 use moon_core::db::{
@@ -550,13 +550,11 @@ fn axis_move_is_adopted_once_nothing_would_be_restarted() {
     assert!(!defer_axis_adoption(false, false));
 }
 
-/// The Summary's catch-up banner shows exactly while a kept snapshot is on screen: a transient
-/// result with a scheduled correction keeps it; a permanent failure, a replacement, or a
-/// transient result whose retry budget ran out with nothing newer pending publishes instead, and
-/// the banner goes.
+/// Removing catch-up feedback must not change snapshot retention: only a transient outcome
+/// with a scheduled correction keeps settled figures; exhausted or durable outcomes publish.
 #[test]
-fn summary_catchup_banner_follows_the_kept_snapshot() {
-    for (label, outcome, allowance, superseded, banner) in [
+fn summary_keeps_snapshot_only_while_a_correction_is_scheduled() {
+    for (label, outcome, allowance, superseded, expected_kept) in [
         (
             "kept, retry left",
             CatchUpOutcome::Transient,
@@ -594,11 +592,7 @@ fn summary_catchup_banner_follows_the_kept_snapshot() {
         ),
     ] {
         let kept = preserve_on_catch_up(true, outcome, allowance, superseded);
-        assert_eq!(summary_catchup_banner(kept, true), banner, "{label}");
-        assert!(
-            !summary_catchup_banner(kept, false),
-            "{label}: no figures, no banner"
-        );
+        assert_eq!(kept, expected_kept, "{label}");
     }
     // A manual reload never keeps a snapshot.
     assert!(!preserve_on_catch_up(

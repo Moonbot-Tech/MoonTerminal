@@ -39,8 +39,6 @@ impl AnalyticsView {
                     // An old period cannot remain visible under the newly restored label.
                     self.data = ProfitLoadState::default();
                     self.summary_derived = None;
-                    self.data_as_of = None;
-                    self.summary_catching_up = false;
                     self.data_dirty = true;
                 }
                 self.data_dirty

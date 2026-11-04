@@ -1590,6 +1590,7 @@ fn strategy_base_remeasures_core_width_only_for_changed_names() {
 /// `analytics/load.rs:reload_summary` must preserve a settled snapshot only across a retryable Busy
 /// catch-up failure. Broadening that publication leaves stale Summary numbers current-looking after
 /// NotReady, corruption, or an exhausted Busy budget with no retry left to correct them.
+/// Keeping a snapshot must reserve no catch-up notice space in either render path.
 #[test]
 fn summary_catch_up_preserves_only_a_retryable_busy_snapshot() {
     let analytics = read_src("analytics/load.rs");
@@ -1611,34 +1612,25 @@ fn summary_catch_up_preserves_only_a_retryable_busy_snapshot() {
             && decision.contains("this.data.apply(data);"),
         "only a retryable Busy failure may retain the Summary snapshot"
     );
-    let publish = chain_between(
-        &decision,
-        "if !preserve_snapshot {",
-        "}",
-        "Summary publication branch",
+    let publish = braced_body(&decision, "if !preserve_snapshot");
+    assert!(
+        publish.contains("this.data.apply(data);"),
+        "replacement figures must publish only when the previous snapshot is not preserved"
+    );
+    let render = read_src("analytics/render.rs");
+    let summary = read_src("analytics/summary/mod.rs");
+    let states = read_src("analytics/summary/states.rs");
+    assert!(
+        !render.contains("cached_refreshing") && !summary.contains("summary_catching_up"),
+        "kept snapshots must not add catch-up notices to the window or Summary"
     );
     assert!(
-        publish.contains("this.data.apply(data);") && publish.contains("this.data_as_of = Some("),
-        "the snapshot time must be stamped exactly where a Summary is published"
-    );
-    let drop = chain_between(
-        reload,
-        "self.data = ProfitLoadState::default();",
-        "}",
-        "Summary drop path",
+        !states.contains("catchup_banner_el") && !states.contains(".children(b.banner)"),
+        "the data page must reserve no catch-up banner slot"
     );
     assert!(
-        drop.contains("self.data_as_of = None;"),
-        "dropping the Summary must drop its snapshot time too, or the next face prints a stale clock"
-    );
-    assert!(
-        decision.contains("this.summary_catching_up = preserve_snapshot;"),
-        "the catch-up banner must follow the kept snapshot alone, never data_dirty"
-    );
-    assert!(
-        !analytics.contains("summary_catching_up = this.data_dirty")
-            && !analytics.contains("summary_catching_up = self.data_dirty"),
-        "metadata staleness must not raise the catch-up banner"
+        render.contains("an-integrity-banner"),
+        "integrity feedback must remain"
     );
 }
 

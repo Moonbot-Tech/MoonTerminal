@@ -1,14 +1,12 @@
 //! Faces of the Summary tab other than its data, and the page frame every face sits in: the
-//! loading skeleton, the empty period, the read failure, the catch-up banner, and the data page
+//! loading skeleton, the empty period, the read failure, and the data page
 //! whose main row stacks on narrow windows.
 
 use std::rc::Rc;
 
 use gpui::*;
 use moon_core::db::{FailCode, FailKind};
-use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonVariant, MoonPalette, MoonSkeleton, h_flex, v_flex,
-};
+use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, MoonSkeleton, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::kpi::KpiCols;
@@ -346,36 +344,8 @@ pub(in crate::analytics) fn error_el(
         .into_any_element()
 }
 
-/// Clock time of a snapshot in the display zone.
-pub(in crate::analytics) fn as_of_text(secs: i64, zone: chrono_tz::Tz) -> String {
-    chrono::DateTime::from_timestamp(secs, 0)
-        .map(|d| d.with_timezone(&zone).format("%H:%M").to_string())
-        .unwrap_or_else(|| "—".to_string())
-}
-
-/// The catch-up banner: the figures on screen are a kept snapshot while newer trades load.
-///
-/// Args:
-///     as_of: Clock text of the snapshot on screen.
-///
-/// Returns:
-///     The warning banner.
-pub(in crate::analytics) fn catchup_banner_el(as_of: String) -> AnyElement {
-    div()
-        .debug_selector(|| "sum-banner".into())
-        .w_full()
-        .child(
-            MoonAlert::warning("an-sum-catchup", t!("analytics.sum.catchup", time = as_of))
-                .banner()
-                .render(),
-        )
-        .into_any_element()
-}
-
 /// The blocks of the data page, rendered by their own `*_el` functions.
 pub(in crate::analytics) struct DataBlocks {
-    /// The catch-up banner, when a snapshot is kept.
-    pub(in crate::analytics) banner: Option<AnyElement>,
     /// The KPI band.
     pub(in crate::analytics) kpi: AnyElement,
     /// The profit chart card.
@@ -388,7 +358,7 @@ pub(in crate::analytics) struct DataBlocks {
     pub(in crate::analytics) cores: AnyElement,
 }
 
-/// Assemble the data page: banner, KPI band, the main row, and the cores card. Wide windows put
+/// Assemble the data page: KPI band, the main row, and the cores card. Wide windows put
 /// the chart beside the side column (2:1); below the four-column width the chart takes the full
 /// row with the side cards in two columns under it; below the two-column width everything
 /// stacks.
@@ -475,7 +445,6 @@ pub(in crate::analytics) fn data_page_el(cols: KpiCols, b: DataBlocks, cx: &App)
         .w_full()
         .p(design::ui_px(cx, 10.0))
         .gap(gap)
-        .children(b.banner)
         .child(
             div()
                 .debug_selector(|| "sum-page-kpi".into())
