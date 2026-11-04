@@ -43,7 +43,7 @@ connect_wizard.start.first_sub: "Terminal bir Moonbot çekirdeği üzerinden ça
 connect_wizard.start.title: "Ne yapalım?"
 connect_wizard.start.sub: "Bağlı çekirdek: %{n}. Yeni bir tane kurabilir, mevcut birini başka bir sunucuya taşıyabilir ya da bir Moonbot çekirdeğine bağlanabilirsiniz."
 connect_wizard.start.new_title: "Linux sunucusunda yeni çekirdek"
-connect_wizard.start.new_first: "Önce bir barındırma sağlayıcısından VPS, yani bir Linux sunucusu kiralayın (Ubuntu veya Debian, x86-64, en az 1 GB bellek). Sağlayıcı, sonraki adımda gireceğiniz IP adresini, kullanıcı adını ve parolayı gönderecektir. Çekirdek orada gece gündüz çalışacaktır."
+connect_wizard.start.new_first: "Önce bir barındırma sağlayıcısından VPS, yani bir Linux sunucusu kiralayın (Ubuntu 24.04 veya üzeri ya da Debian 13 veya üzeri; x86-64, en az 1 GB bellek). Sağlayıcı, sonraki adımda gireceğiniz IP adresini, kullanıcı adını ve parolayı gönderecektir. Çekirdek orada gece gündüz çalışacaktır."
 connect_wizard.start.new_more: "Sunucunuzda kendi borsa anahtarlarıyla yeni bir çekirdek."
 connect_wizard.start.recommended: "önerilen"
 connect_wizard.start.move_title: "Çekirdeği Linux sunucusuna taşı"

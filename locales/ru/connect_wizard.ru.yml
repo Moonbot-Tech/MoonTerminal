@@ -43,7 +43,7 @@ connect_wizard.start.first_sub: "Терминал работает через я
 connect_wizard.start.title: "Что сделаем?"
 connect_wizard.start.sub: "Подключено ядер: %{n}. Можно поставить новое, перенести существующее на другой сервер или подключиться к ядру Moonbot."
 connect_wizard.start.new_title: "Новое ядро на Linux-сервере"
-connect_wizard.start.new_first: "Сначала арендуйте VPS — Linux-сервер у хостинг-провайдера (Ubuntu или Debian, x86-64, от 1 ГБ памяти). Провайдер пришлёт IP, логин и пароль — их и введёте дальше. Ядро будет работать там круглосуточно."
+connect_wizard.start.new_first: "Сначала арендуйте VPS — Linux-сервер у хостинг-провайдера (Ubuntu 24.04 или новее либо Debian 13 или новее; x86-64, от 1 ГБ памяти). Провайдер пришлёт IP, логин и пароль — их и введёте дальше. Ядро будет работать там круглосуточно."
 connect_wizard.start.new_more: "Новое ядро на вашем сервере со своими ключами биржи."
 connect_wizard.start.recommended: "рекомендуем"
 connect_wizard.start.move_title: "Перенести ядро на Linux-сервер"

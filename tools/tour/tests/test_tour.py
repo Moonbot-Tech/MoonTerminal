@@ -538,7 +538,7 @@ class QuickStartContent(unittest.TestCase):
         digest = step_digest(content.steps[2], content.codes)
         expected = {
             "ru": (
-                "Ubuntu или Debian",
+                "Ubuntu 24.04 или новее либо Debian 13 или новее",
                 "x86-64",
                 "от 1 ГБ",
                 "<code>5160</code>",
@@ -548,7 +548,7 @@ class QuickStartContent(unittest.TestCase):
                 "не запускайте установку повторно",
             ),
             "en": (
-                "Ubuntu or Debian",
+                "Ubuntu 24.04 or newer, or Debian 13 or newer",
                 "x86-64",
                 "at least 1 GB",
                 "<code>5160</code>",

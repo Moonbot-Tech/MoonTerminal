@@ -43,7 +43,7 @@ connect_wizard.start.first_sub: "The terminal works through a Moonbot core. Put 
 connect_wizard.start.title: "What shall we do?"
 connect_wizard.start.sub: "Cores connected: %{n}. You can install a new one, move an existing one to another server, or connect to a Moonbot core."
 connect_wizard.start.new_title: "New core on a Linux server"
-connect_wizard.start.new_first: "First rent a VPS — a Linux server from a hosting provider (Ubuntu or Debian, x86-64, 1 GB of memory or more). The provider will send you an IP, login and password to enter next. The core will run there around the clock."
+connect_wizard.start.new_first: "First rent a VPS — a Linux server from a hosting provider (Ubuntu 24.04 or newer, or Debian 13 or newer; x86-64, 1 GB of memory or more). The provider will send you an IP, login and password to enter next. The core will run there around the clock."
 connect_wizard.start.new_more: "A new core on your server with its own exchange keys."
 connect_wizard.start.recommended: "recommended"
 connect_wizard.start.move_title: "Move a core to a Linux server"
