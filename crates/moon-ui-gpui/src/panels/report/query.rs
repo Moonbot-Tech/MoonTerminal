@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod ordering;
+
 /// Maximum number of report rows loaded for the current filter and sort order.
 ///
 /// Period totals come from a separate [`db::query_totals`] aggregate over the complete filtered
@@ -269,7 +271,8 @@ fn run_report_query(
     let strategy_metadata = strategy_scope
         .map(|scope| db::distinct_strategies(&snap, &scope).map(|strategies| (scope, strategies)))
         .transpose()?;
-    let table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
+    let mut table = db::query_reports(&snap, &filter, &sort_key, sort_desc, MAX_REPORT_ROWS)?;
+    ordering::sort_open_prefix(&mut table, filter.rows, &sort_key, sort_desc);
     let totals = db::query_totals(&snap, &filter)?;
     let row_keys = selection::row_keys(&table.cols, &table.rows, &table.core_uids, &table.rec_ids);
     let width_rows = widths::row_identities(&table.rows, &table.core_uids);
