@@ -1894,7 +1894,7 @@ const STEPS = [
         ],
         [
           "warn",
-          "Если установка завершилась, авторизация MoonProto прошла, но ядро не вернуло настройки, не запускайте установку повторно. Возможно, ядро ещё не вошло на биржу. Проверьте IP-адрес VPS в списке разрешённых адресов API-ключа и права ключа, затем исправьте ключи или повторите проверку в мастере."
+          "Если после установки мастер сообщает об ошибке входа на биржу, не запускайте установку повторно. Проверьте IP-адрес VPS в списке разрешённых адресов API-ключа и права ключа, затем исправьте ключи или повторите вход в мастере. Если подключение уже установлено, но настройки ещё не получены, дождитесь их — переключение режима торговли станет доступно после их получения."
         ],
         [
           "group",
@@ -2041,7 +2041,7 @@ const STEPS = [
         ],
         [
           "warn",
-          "If the install finished and MoonProto authenticated but the core did not return its settings, do not run the install again. The core may not have finished logging in to the exchange. Check the VPS IP address in the API key's allowed-IP list and the key's permissions, then fix the keys or retry the check in the wizard."
+          "If the wizard reports an exchange login error after installation, do not run the install again. Check the VPS IP address in the API key's allowed-IP list and the key's permissions, then fix the keys or retry the login in the wizard. If the connection is established but settings have not arrived yet, wait for them — the trading-mode switch becomes available once they arrive."
         ],
         [
           "group",

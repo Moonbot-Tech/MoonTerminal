@@ -544,6 +544,7 @@ class QuickStartContent(unittest.TestCase):
                 "<code>5160</code>",
                 "Перенос существующего ядра",
                 "по ключу",
+                "ошибке входа на биржу",
                 "не запускайте установку повторно",
             ),
             "en": (
@@ -553,6 +554,7 @@ class QuickStartContent(unittest.TestCase):
                 "<code>5160</code>",
                 "Moving an existing core",
                 "by its key",
+                "exchange login error",
                 "do not run the install again",
             ),
         }
