@@ -13,7 +13,7 @@ use rust_i18n::t;
 
 use super::ConnectWizardView;
 use super::render::{Screen, note};
-use crate::backend::core_move::{Command, FailOutcome, MoveForm, MovePhase};
+use crate::backend::core_move::{Command, FailOutcome, MoveForm, MovePhase, StepId, StepState};
 use crate::design;
 
 mod steps;
@@ -349,7 +349,11 @@ impl ConnectWizardView {
                 )
                 .with_log(),
             MovePhase::Failed { reason, outcome } => {
-                let (head, body) = failure_text(&outcome);
+                // A stop that broke off may have reached the old core: no claim it still trades.
+                let stop_broke = rows
+                    .iter()
+                    .any(|row| row.id == StepId::StopOld && row.state == StepState::Failed);
+                let (head, body) = failure_text(&outcome, stop_broke);
                 let mut screen = Screen::new(t!("connect_wizard.move.failed_title"))
                     .child(MoonAlert::error("cw-move-failed", body).title(head));
                 // A move that never began has no steps to show; its reason stands alone.
@@ -479,8 +483,14 @@ pub(super) fn answer_button_look(answer: Answer) -> MoonButton {
 }
 
 /// What a failed move did to trading, in plain words: the headline and the sentence under it.
-pub(super) fn failure_text(outcome: &FailOutcome) -> (String, String) {
-    let old_runs = || t!("core_move.outcome.old_runs").to_string();
+pub(super) fn failure_text(outcome: &FailOutcome, stop_broke: bool) -> (String, String) {
+    let old_runs = || {
+        if stop_broke {
+            t!("core_move.outcome.old_unsure").to_string()
+        } else {
+            t!("core_move.outcome.old_runs").to_string()
+        }
+    };
     match outcome {
         FailOutcome::Probe => (
             t!("core_move.outcome.probe_head").to_string(),
