@@ -245,3 +245,54 @@ fn prune_coin_selection_drops_markets_outside_the_new_scope() {
         HashSet::from([(7, "BTCUSDT".to_string()), (7, "ETHUSDT".to_string())])
     );
 }
+
+/// Every settings tooltip on both chart toolbars must reuse its popup's title key.
+///
+/// Breakage: reintroducing a separate `*.tip` key lets the hover wording drift from the window
+/// title in one or more locales.
+#[test]
+fn chart_settings_tooltips_reuse_popup_title_keys() {
+    let cases = [
+        (
+            "chart-layout-settings",
+            "detached-layout-settings",
+            "chart.layout.title",
+        ),
+        (
+            "chart-candle-settings",
+            "detached-candle-settings",
+            "chart.candles.title",
+        ),
+        (
+            "chart-graphics-settings",
+            "detached-graphics-settings",
+            "chart.graphics.title",
+        ),
+        (
+            "chart-history-settings",
+            "detached-history-settings",
+            "chart.history.title",
+        ),
+        (
+            "chart-labels-settings",
+            "detached-labels-settings",
+            "chart_labels.title",
+        ),
+    ];
+    for (docked_id, detached_id, title_key) in cases {
+        for (source, button_id) in [
+            (include_str!("strip.rs"), docked_id),
+            (include_str!("detached_host/render.rs"), detached_id),
+        ] {
+            let button = source
+                .split(button_id)
+                .nth(1)
+                .and_then(|tail| tail.split(".on_click").next())
+                .unwrap_or_else(|| panic!("missing chart toolbar button {button_id}"));
+            assert!(
+                button.contains(&format!("t!(\"{title_key}\")")),
+                "{button_id} must use {title_key} for its tooltip"
+            );
+        }
+    }
+}
