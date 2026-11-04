@@ -31,9 +31,10 @@ fn main() {
     }
 }
 
-/// Define `uidoc` when the private UI-atlas overlay is present, and say nothing when it is not.
+/// Define `uidoc` when the private UI scene-capture overlay is present, and say nothing when it is
+/// not.
 ///
-/// The atlas is not part of this repository: it lives in `private/uidoc`, which is excluded
+/// The scene capture is not part of this repository: it lives in `private/uidoc`, which is excluded
 /// locally, and `main.rs` reaches it through a `#[path]` guarded by this cfg. Presence on disk is
 /// the switch rather than a Cargo feature, because a feature published here would name files a
 /// clone does not have and fail to build the moment anyone enabled it.
@@ -58,8 +59,8 @@ fn emit_uidoc_overlay() {
     let entry = std::path::Path::new("../../private/uidoc/mod.rs");
     if !entry.is_file() {
         println!(
-            "cargo:warning=ui-inspector is on but private/uidoc is missing: the atlas is a local \
-             overlay and this build has none, so --ui-atlas will do nothing"
+            "cargo:warning=ui-inspector is on but private/uidoc is missing: the scene capture is a \
+             local overlay and this build has none, so --ui-scenes will do nothing"
         );
         return;
     }

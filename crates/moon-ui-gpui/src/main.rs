@@ -52,7 +52,7 @@ mod test_locale;
 mod test_support;
 mod trade_window;
 mod ui_session;
-// The UI-control atlas, kept OUT of this repository: a crawl that is not published, plus the
+// The UI scene capture, kept OUT of this repository: a tool that is not published, plus the
 // trade fixtures it runs against. `build.rs` defines `uidoc` only when the overlay is on disk, so
 // a clone without it compiles this crate unchanged and no feature promises what is missing.
 // rustfmt resolves this #[path] target before it evaluates #[cfg(uidoc)], so a clone without
@@ -760,9 +760,9 @@ fn main() -> anyhow::Result<()> {
     // second frame of the same size; built here for the same reason.
     moon_tg::warm_locales();
 
-    // Before the updater, before the configuration, before a window: the UI-atlas tools that work
-    // on a file the crawl already wrote need none of it, and running them through a normal launch
-    // would put a six-minute walk between a rule and its result.
+    // Before the updater, before the configuration, before a window: the capture build's offline
+    // export works on files a scene run already wrote and needs none of it, and running it through
+    // a normal launch would put a whole run between a change to the export and its result.
     #[cfg(uidoc)]
     if uidoc::run_offline_tools(std::env::args()) {
         return Ok(());

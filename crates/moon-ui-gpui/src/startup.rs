@@ -399,10 +399,10 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     let fixture =
         fixture::bootstrap(std::env::args_os().map(|arg| arg.to_string_lossy().into_owned()))?;
 
-    // Right after the fixture and still before anything reads a setting: an atlas run resets the
-    // configuration to the state it always starts from. A crawl clicks, clicks change dock layout
-    // and active tabs, and the terminal persists those — so without this, every run would begin
-    // from wherever the previous one stopped and its cached atlas would describe a window that no
+    // Right after the fixture and still before anything reads a setting: a capture build resets
+    // the configuration to the state every scene run starts from. A scene run clicks, clicks change
+    // dock layout and active tabs, and the terminal persists those — so without this, every run
+    // would begin from wherever the previous one stopped and compare against a window that no
     // longer exists.
     #[cfg(uidoc)]
     crate::uidoc::prepare_baseline(std::env::args());
@@ -842,7 +842,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
         init_moon_ui(cx);
         // Right after the components, never before: `init_moon_ui` installs an inspector renderer
         // of its own, and both that renderer and the per-state registration are last-one-wins.
-        // No-op unless `--ui-atlas` was passed to a capture build; the walk it arms waits for the
+        // No-op unless `--ui-scenes` was passed to a capture build; the run it arms waits for the
         // window on its own clock.
         #[cfg(uidoc)]
         crate::uidoc::start_if_requested(cx);

@@ -21,9 +21,9 @@
 mod alerts;
 mod assets;
 pub(crate) mod chart;
-/// The desktop capture the chart shot is built on, reached by the UI-atlas run too.
+/// The desktop capture the chart shot is built on, reached by the UI scene capture too.
 ///
-/// Re-exported rather than made public wholesale: the atlas needs exactly these three items, and a
+/// Re-exported rather than made public wholesale: the scene capture needs exactly these three items, and a
 /// DIB is bottom-up, DWORD-padded and BGR - three differences that are silent when missed, so one
 /// implementation of that flip in the process is one place for it to be right.
 #[cfg(all(uidoc, target_os = "windows"))]
