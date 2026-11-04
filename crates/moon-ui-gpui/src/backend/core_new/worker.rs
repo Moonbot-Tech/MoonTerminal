@@ -14,6 +14,9 @@ use rust_i18n::t;
 
 use super::{Event, NewPhase};
 
+#[cfg(test)]
+mod tests;
+
 /// What the user's form gives an install.
 pub(crate) struct NewForm {
     pub(crate) target: Target,
@@ -65,9 +68,7 @@ pub(super) fn run(form: NewForm, tx: &mpsc::Sender<Event>, commands: &mpsc::Rece
     match check(&form, &send) {
         Ok(found) => send(Event::Checked(found)),
         Err(e) => {
-            send(Event::Failed(
-                t!("connect_wizard.check_failed", reason = format!("{e:#}")).to_string(),
-            ));
+            send(Event::Failed(check_failure(&e, &form.first)));
             return;
         }
     }
@@ -110,6 +111,20 @@ pub(super) fn run(form: NewForm, tx: &mpsc::Sender<Event>, commands: &mpsc::Rece
         }
     }
     log::info!(target: CORE_MOVE_TARGET, "core install: the wizard let go of the login");
+}
+
+/// Explain a refused password with the attempted login, retaining the existing check error path.
+fn check_failure(error: &anyhow::Error, first: &FirstAccess) -> String {
+    let reason = if matches!(
+        error.downcast_ref::<moon_remote::ssh::OpenError>(),
+        Some(moon_remote::ssh::OpenError::Refused { .. })
+    ) && let FirstAccess::Password { user, .. } = first
+    {
+        t!("connect_wizard.server.login_refused", user = user).to_string()
+    } else {
+        format!("{error:#}")
+    };
+    t!("connect_wizard.check_failed", reason = reason).to_string()
 }
 
 /// What an install failure leaves behind.
