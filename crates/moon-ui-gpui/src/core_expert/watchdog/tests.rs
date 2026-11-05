@@ -5,6 +5,84 @@ use moon_core::feed::{
 use super::super::pages::watchdog_ids as ids;
 use super::{WatchdogBlock, invalid_row, stage_input, verdict_takes_edit};
 
+/// Minimal observer snapshots keep account identity separate from row position.
+fn snapshot(ids: &[&str]) -> std::sync::Arc<moon_core::feed::CoreWatchdogState> {
+    std::sync::Arc::new(moon_core::feed::CoreWatchdogState {
+        entries: ids
+            .iter()
+            .map(|id| moon_core::feed::CoreWatchdogEntry {
+                id: (*id).to_string(),
+                name: (*id).to_string(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    })
+}
+
+/// Keeping the old index after A disappears would highlight, edit and remove C instead of B.
+#[test]
+fn a_snapshot_push_keeps_the_picked_account() {
+    let mut block = WatchdogBlock::default();
+    block.take_snapshot(Some(snapshot(&["ACC_A", "ACC_B", "ACC_C"])));
+    block.selected = Some(1);
+    let generation = block.generation;
+    let pushed = snapshot(&["ACC_B", "ACC_C"]);
+    block.take_snapshot(Some(pushed.clone()));
+
+    assert_eq!(block.selected, Some(0));
+    let edit = block.edit_view(Some(&pushed));
+    assert_eq!(
+        super::saved_row_id(edit.as_ref(), block.selected).as_deref(),
+        Some("ACC_B")
+    );
+    assert_eq!(
+        super::input_value(ids::NAME, edit.as_ref(), block.selected),
+        "ACC_B"
+    );
+    assert_ne!(
+        block.generation, generation,
+        "editors must read the pushed values"
+    );
+}
+
+/// Keeping B's index after B disappears would let minus remove C without the trader picking it.
+#[test]
+fn a_snapshot_push_clears_a_vanished_pick() {
+    let mut block = WatchdogBlock::default();
+    block.take_snapshot(Some(snapshot(&["ACC_A", "ACC_B", "ACC_C"])));
+    block.selected = Some(1);
+    let pushed = snapshot(&["ACC_A", "ACC_C"]);
+    block.take_snapshot(Some(pushed.clone()));
+
+    assert_eq!(block.selected, None);
+    let edit = block.edit_view(Some(&pushed));
+    assert_eq!(super::saved_row_id(edit.as_ref(), block.selected), None);
+    assert_eq!(
+        super::input_value(ids::NAME, edit.as_ref(), block.selected),
+        ""
+    );
+}
+
+/// Remapping a draft's index against pushed rows would redirect edits away from its picked B.
+#[test]
+fn a_snapshot_push_preserves_the_drafts_row_order() {
+    let initial = snapshot(&["ACC_A", "ACC_B", "ACC_C"]);
+    let mut block = WatchdogBlock::default();
+    block.take_snapshot(Some(initial.clone()));
+    block.selected = Some(1);
+    let mut draft = initial.edit();
+    draft.entries[1].name = "ACC_B_EDITED".to_string();
+    block.draft = Some(draft.clone());
+    let generation = block.generation;
+
+    block.take_snapshot(Some(snapshot(&["ACC_B", "ACC_C"])));
+
+    assert_eq!(block.selected, Some(1));
+    assert_eq!(block.draft, Some(draft));
+    assert_eq!(block.generation, generation);
+}
+
 fn edit_with_row() -> WatchdogSettingsEdit {
     WatchdogSettingsEdit {
         entries: vec![WatchdogEntryEdit {

@@ -60,6 +60,8 @@ pub(crate) struct WatchdogBlock {
     asked: Option<(CoreId, u64)>,
     /// The store's `watchdog_rev` last drawn — the block's repaint gate.
     seen_rev: u64,
+    /// Last synchronized snapshot, so a picked index can be resolved before a push replaces it.
+    snapshot: Option<std::sync::Arc<CoreWatchdogState>>,
     /// Advances whenever the values the editors show change under them (a dropped edit, another
     /// row, a new snapshot with no edit), so each editor re-reads its value exactly once.
     generation: u64,
@@ -70,6 +72,21 @@ pub(crate) struct WatchdogBlock {
 }
 
 impl WatchdogBlock {
+    /// Take a pushed snapshot, keeping the pick on its observer and reseeding its editors.
+    /// A draft owns its row order until it is applied or discarded.
+    fn take_snapshot(&mut self, snapshot: Option<std::sync::Arc<CoreWatchdogState>>) {
+        if self.draft.is_none() {
+            let picked = self
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.entries.get(self.selected?))
+                .map(|e| e.id.as_str());
+            self.selected = picked_row_index(snapshot.as_deref(), picked);
+            self.reseed();
+        }
+        self.snapshot = snapshot;
+    }
+
     /// The editor built for `id`, once the block has rendered.
     pub(super) fn input(&self, id: &str) -> Option<&Entity<MoonInputState>> {
         self.inputs.get(id).map(|(_, state)| state)
@@ -206,6 +223,12 @@ fn saved_row_id(edit: Option<&WatchdogSettingsEdit>, row: Option<usize>) -> Opti
     (!entry.id.is_empty()).then(|| entry.id.clone())
 }
 
+/// Resolve a saved observer's identity in a replacement snapshot, clearing a vanished pick.
+fn picked_row_index(snapshot: Option<&CoreWatchdogState>, picked: Option<&str>) -> Option<usize> {
+    let id = picked?;
+    snapshot?.entries.iter().position(|e| e.id == id)
+}
+
 /// Whether the edit's verdict means the core now holds it, so the edit is rebuilt from the state the
 /// core returned — "applied but not saved" included: moonproto says to rebuild from that state
 /// before retrying, so new rows keep the ids the core gave them.
@@ -235,10 +258,7 @@ impl CoreExpertView {
         if entry.watchdog_rev != self.watchdog.seen_rev {
             self.watchdog.seen_rev = entry.watchdog_rev;
             changed = true;
-            // A snapshot moved under editors that show it, not an edit.
-            if self.watchdog.draft.is_none() {
-                self.watchdog.reseed();
-            }
+            self.watchdog.take_snapshot(entry.watchdog.clone());
         }
         if entry.watchdog_epoch != self.watchdog.epoch {
             self.watchdog.epoch = entry.watchdog_epoch;
@@ -273,12 +293,8 @@ impl CoreExpertView {
                 // Keep the pick on the same row by id: a new row now has one.
                 let picked = saved_row_id(self.watchdog.draft.as_ref(), self.watchdog.selected);
                 self.watchdog.drop_draft();
-                self.watchdog.selected = picked.and_then(|id| {
-                    entry
-                        .watchdog
-                        .as_ref()
-                        .and_then(|s| s.entries.iter().position(|e| e.id == id))
-                });
+                self.watchdog.selected =
+                    picked_row_index(entry.watchdog.as_deref(), picked.as_deref());
             }
             changed = true;
         }
