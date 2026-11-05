@@ -39,6 +39,7 @@ const COLD_LOOKUPS: &[&str] = &[
     "chartdx::data_state::market::tests::chart_market_quiet_volume_completion_wakes_the_source_pull",
     "analytics::tuner::ticks::delta_summary::tests::cached_summary_follows_rows_and_locale",
     "panels::label_edit::tests::module_editor_labels_fit_every_locale",
+    "chart_tabs::layout_popup::tests::price_axis_row_opens_the_display_frame_in_every_locale",
     "analytics::profit_monitor::tests::exchange_rows_group_by_venue_identity_not_by_caption",
     "analytics::profit_monitor::tests::idle_rows_cover_active_cores_only_and_only_by_core",
     "analytics::profit_monitor::tests::merged_rows_carry_the_newest_trade_of_their_cores",

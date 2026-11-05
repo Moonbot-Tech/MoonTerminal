@@ -60,6 +60,9 @@ fn axis_selector_row(
             it
         })
         .collect();
+    let row_selector = format!("{id}-row");
+    let caption_selector = format!("{id}-caption");
+    let seg_selector = format!("{id}-seg");
     let seg = MoonSegmentedControl::new(id)
         .accent(MoonAccent::Blue)
         .items(items)
@@ -70,17 +73,19 @@ fn axis_selector_row(
         })
         .render();
     h_flex()
+        .debug_selector(move || row_selector)
         .w_full()
         .items_center()
         .gap(design::ui_px(cx, 6.0))
         .child(
             div()
+                .debug_selector(move || caption_selector)
                 .flex_1()
                 .text_size(design::t_caption(cx))
                 .text_color(rgb(p.text))
                 .child(caption),
         )
-        .child(seg)
+        .child(div().debug_selector(move || seg_selector).child(seg))
 }
 
 /// Slot-size bounds in pixels; values below MIN or above MAX are invalid except Fit zero for stretch.
@@ -529,25 +534,37 @@ where
                     .children(min_slot_row.filter(|_| divider_shown)),
             ),
         )
-        // "Display" frame: time axis, line labels, and crosshair labels — what shares the pane with
-        // the plot. The order book and its control-zone switch used to open this frame; they moved
+        // "Display" frame: the price axis, time axis, line labels, and crosshair labels — what
+        // shares the pane with the plot. The price-axis selector opens the frame. The order book and its control-zone switch used to open this frame; they moved
         // to the graphics popup's order-book frame, beside the book's width and kind, as the
         // liquidation crosses moved there before them.
         .child(
             popup_group("frame-display", t!("chart.layout.frame_display")).child(
                 v_flex()
+                    .debug_selector({
+                        let id = id.to_string();
+                        move || format!("{id}-display-body")
+                    })
                     .gap(design::ui_px(cx, 6.0))
-                    .child(time_axis_cb)
+                    .child(price_axis_row)
+                    .child(
+                        div()
+                            .debug_selector({
+                                let id = id.to_string();
+                                move || format!("{id}-time-axis-row")
+                            })
+                            .child(time_axis_cb),
+                    )
                     .child(line_labels_cb)
                     .child(cursor_labels_cb),
             ),
         )
         .children(detect_group)
-        // Remaining controls: auto-pin and the price axis. The market BUTTONS used to be two more
-        // rows here — `Cancel Buy` and `Panic Sell`, each with a dash/L/C/R strip — and are now
-        // captions placed from the labels popup like everything else the chart prints.
+        // Remaining control: auto-pin. The price axis lives in the display frame above. The market
+        // BUTTONS used to be two more rows here — `Cancel Buy` and `Panic Sell`, each with a
+        // dash/L/C/R strip — and are now captions placed from the labels popup like everything
+        // else the chart prints.
         .child(auto_pin_cb)
-        .child(price_axis_row)
         .into_any_element()
 }
 
@@ -559,3 +576,6 @@ pub(super) fn clamp_height(mode: StackLayoutMode, raw: u16) -> u16 {
         _ => raw.clamp(MIN_H, MAX_H),
     }
 }
+
+#[cfg(test)]
+mod tests;
