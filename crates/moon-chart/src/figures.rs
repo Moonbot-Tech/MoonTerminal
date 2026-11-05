@@ -19,14 +19,15 @@
 //!
 //! Visual language (to distinguish figures from order lines and make their state visible):
 //! - regular figure — THIN BASE-STYLE LINE;
-//! - armed (alert) figure — THICK BASE-STYLE LINE (clearly shows that it is armed);
-//! - hovered / selected figure — SOLID, THICK, and bright (it sharply "comes alive"), with square
+//! - armed (alert) figure — THICK BASE-STYLE LINE in the inverse of its chosen RGB;
+//! - hovered / selected figure — base-style, THICK, and bright, with square
 //!   knots at the editable points of a SELECTED figure and a readout beside a HOVERED one.
 
 use std::sync::Arc;
 
 use moon_core::figures::{
-    BuildCtx, FigNode, Figure, GeomSink, LabelPlace, LabelText, LineKind, Stroke, build_figure,
+    BuildCtx, FigNode, Figure, FigureKind, GeomSink, LabelPlace, LabelText, LineKind, Stroke,
+    build_figure,
 };
 
 use crate::layers::{
@@ -55,6 +56,11 @@ pub enum LabelValue {
         from: f64,
         to: f64,
     },
+    /// A rectangle's persistent duration, with its signed price move only while hot.
+    RectSpan {
+        duration_ms: f64,
+        price_move: Option<(f64, f64)>,
+    },
     /// Finished text; cloning it is a refcount bump, not an allocation.
     Ready(Arc<str>),
 }
@@ -63,8 +69,8 @@ pub enum LabelValue {
 ///
 /// Carries a VALUE rather than a finished string: the text pass formats a price with the same
 /// precision as the axis it sits beside. Most tools label only the figure under the cursor and
-/// the one being drawn; a ratio scale labels its levels always, and a zone its width, because a
-/// reading that shows only under the cursor cannot be taken at a glance.
+/// the one being drawn; a ratio scale labels its levels always, a zone its width and a rectangle
+/// its duration, because a reading that shows only under the cursor cannot be taken at a glance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FigureLabel {
     /// Time relative to the chart epoch, in milliseconds. Unused by [`LabelPlace::RightEdge`] and
@@ -84,6 +90,13 @@ pub struct FigureLabel {
     pub permanent: bool,
     /// `0xRRGGBB` for the text layer, which has no alpha of its own.
     pub color: u32,
+}
+
+impl FigureLabel {
+    /// Keep measurements and hover readouts visible when resting line captions are disabled.
+    pub fn visible(&self, line_labels: bool) -> bool {
+        line_labels || !self.permanent || !matches!(self.place, LabelPlace::LineSpan { .. })
+    }
 }
 
 /// Buffers the figure layer appends into.
@@ -133,6 +146,17 @@ fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
         c[2] as f32 / 255.0,
         (c[3] as f32 / 255.0) * alpha_mul,
     ]
+}
+
+/// Invert an armed stroke's RGB without changing its stored colour, alpha, or fill.
+fn stroke_color(fig: &Figure, alpha_mul: f32) -> [f32; 4] {
+    let [r, g, b, a] = fig.color;
+    let color = if fig.alert {
+        [255 - r, 255 - g, 255 - b, a]
+    } else {
+        fig.color
+    };
+    rgba(color, alpha_mul)
 }
 
 /// Names a ratio-scale level and the price it sits at: `0.618 (6109.48)`.
@@ -185,9 +209,9 @@ struct Sink<'a, 'b> {
     fills: bool,
     /// Whether the figure being built is the DRAFT, whose labels are transient by nature.
     ///
-    /// Everything else's labels are permanent; those a figure draws at rest are what the per-tab
-    /// "line labels" switch hides (see `FigureLabel::permanent`). Deriving this from hover instead
-    /// would let pointing at a figure defeat that switch.
+    /// Everything else's labels are permanent; the per-tab "line labels" switch hides the ones
+    /// placed `LineSpan`, while rectangle measurements stay visible. Deriving permanence from
+    /// hover instead would let pointing at a figure defeat that switch.
     draft: bool,
     out: &'a mut FigureBuffers<'b>,
 }
@@ -195,6 +219,29 @@ struct Sink<'a, 'b> {
 impl Sink<'_, '_> {
     fn to_rel(&self, time_ms: f64) -> f32 {
         (time_ms - self.epoch_ms) as f32
+    }
+
+    /// Add a rectangle's duration beside its hover percent without duplicating the tool's label.
+    /// Other tools keep their own readout contract unchanged.
+    fn figure(&mut self, fig: &Figure, ctx: &BuildCtx) {
+        let FigureKind::Rect(rect) = &fig.kind else {
+            build_figure(&fig.kind, ctx, self);
+            return;
+        };
+        // The combined readout replaces only the rectangle's hover label. Geometry, fill and
+        // selected handles still come from the tool, with exactly the same resolved style.
+        build_figure(&fig.kind, &BuildCtx { hot: false, ..*ctx }, self);
+        self.out.labels.push(FigureLabel {
+            t_rel: self.to_rel(rect.a.time_ms.max(rect.b.time_ms)),
+            price: rect.a.price.max(rect.b.price) as f32,
+            place: LabelPlace::Above,
+            text: LabelValue::RectSpan {
+                duration_ms: (rect.b.time_ms - rect.a.time_ms).abs(),
+                price_move: ctx.hot.then_some((rect.a.price, rect.b.price)),
+            },
+            permanent: !self.draft,
+            color: rgb_u32(ctx.stroke.color),
+        });
     }
 }
 
@@ -316,6 +363,7 @@ impl GeomSink for Sink<'_, '_> {
 
 /// Builds chart figure geometry. `draft` is a preview of the figure being drawn; `hovered`/
 /// `selected` figures are highlighted, and a selected knot-grabbed figure gains endpoint knots.
+/// Rectangles keep their duration readout even without hover.
 pub fn build_figure_geometry<'a>(
     figures: impl IntoIterator<Item = &'a Figure>,
     draft: Option<&Figure>,
@@ -333,14 +381,14 @@ pub fn build_figure_geometry<'a>(
         let is_hovered = view.hovered == Some(fig.id);
         let ctx = fig_ctx(fig, is_hovered, is_sel);
         sink.fills = view.dragging != Some(fig.id);
-        build_figure(&fig.kind, &ctx, &mut sink);
+        sink.figure(fig, &ctx);
     }
     if let Some(d) = draft {
         // Preview of the figure being drawn: brighter and thicker, using the style's base line
         // kind, and already showing its readout so a trend line can be aimed while drawing.
         let ctx = BuildCtx {
             stroke: Stroke {
-                color: rgba(d.color, 1.0),
+                color: stroke_color(d, 1.0),
                 thickness: d.thickness * FIG_ACTIVE_THICKNESS,
                 kind: d.line_kind,
             },
@@ -363,37 +411,37 @@ pub fn build_figure_geometry<'a>(
         // drawing mode.
         sink.fills = d.kind.price_band().is_some();
         sink.draft = true;
-        build_figure(&d.kind, &ctx, &mut sink);
+        sink.figure(d, &ctx);
     }
 }
 
 /// Build context for a figure by state:
 /// - idle — thin base style from `fig.line_kind`;
-/// - hovered/selected — thick SOLID line (sharply "comes alive"), plus knots when selected;
-/// - armed (alert) — thick base style (thickness indicates that it is armed).
+/// - hovered/selected — thick base-style line, plus knots when selected;
+/// - armed (alert) — inverse RGB in every state, with thick base style at rest.
 ///
 /// The READOUT follows the cursor, not the selection: selection is sticky, and a label that
 /// outlives the pointer would keep the text pass formatting and re-shaping it every frame for as
 /// long as a figure stays selected. Hover and the draft are transient by nature, so for every tool
 /// that labels on `hot` an idle chart pays nothing. A ratio scale opts out and labels always — its
-/// levels ARE the reading — and pays for that on every frame it is on screen.
+/// levels ARE the reading — as does a rectangle's duration.
 fn fig_ctx(fig: &Figure, is_hovered: bool, is_selected: bool) -> BuildCtx {
     let is_hot = is_hovered || is_selected;
     let stroke = if is_hot {
         Stroke {
-            color: rgba(fig.color, 1.0),
+            color: stroke_color(fig, 1.0),
             thickness: fig.thickness * FIG_ACTIVE_THICKNESS,
-            kind: LineKind::Solid,
+            kind: fig.line_kind,
         }
     } else if fig.alert {
         Stroke {
-            color: rgba(fig.color, 1.0),
+            color: stroke_color(fig, 1.0),
             thickness: fig.thickness * FIG_ARMED_THICKNESS,
             kind: fig.line_kind,
         }
     } else {
         Stroke {
-            color: rgba(fig.color, FIG_IDLE_ALPHA),
+            color: stroke_color(fig, FIG_IDLE_ALPHA),
             thickness: fig.thickness,
             kind: fig.line_kind,
         }

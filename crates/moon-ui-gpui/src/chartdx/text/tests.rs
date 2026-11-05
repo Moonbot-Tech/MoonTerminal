@@ -6,6 +6,83 @@ use crate::chartdx::text::{
     cursor_ref_price, fmt_prospective_order_size, hvol_value_caption, volume_scale_label,
 };
 
+/// A second duration formatter or a hover-only rectangle label would lose the persisted
+/// measurement, whole-second rounding, or the ruler's localized two-unit spelling.
+#[test]
+fn rectangle_measurements_reuse_ruler_duration_at_rest_and_while_drawing() {
+    use moon_chart::figures::{FigureBuffers, FigureView, build_figure_geometry};
+    use moon_core::figures::tools::Rect;
+    use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind};
+
+    let _locale = crate::test_locale::force("ru");
+    for (span_ms, expected) in [
+        (10_900.0, "10с"),
+        (60_000.0, "1м 00с"),
+        (11_100_000.0, "3ч 05м"),
+        (183_600_000.0, "2д 03ч"),
+    ] {
+        for reverse in [false, true] {
+            let (a, b) = if reverse {
+                (span_ms, 0.0)
+            } else {
+                (0.0, span_ms)
+            };
+            let fig = Figure::new(
+                FigureKind::Rect(Rect {
+                    a: FigNode::new(a, 100.0),
+                    b: FigNode::new(b, 110.0),
+                }),
+                DrawStyle::default(),
+                0.0,
+            );
+            for draft in [false, true] {
+                let mut zones = Vec::new();
+                let mut hlines = Vec::new();
+                let mut segs = Vec::new();
+                let mut markers = Vec::new();
+                let mut labels = Vec::new();
+                build_figure_geometry(
+                    if draft { None } else { Some(&fig) },
+                    draft.then_some(&fig),
+                    FigureView {
+                        epoch_ms: 0.0,
+                        hovered: None,
+                        selected: None,
+                        dragging: None,
+                    },
+                    &mut FigureBuffers {
+                        zones: &mut zones,
+                        hlines: &mut hlines,
+                        segs: &mut segs,
+                        markers: &mut markers,
+                        labels: &mut labels,
+                    },
+                );
+                assert_eq!(labels.len(), 1);
+                assert!(
+                    labels[0].visible(false),
+                    "line labels off must keep the measurement"
+                );
+                let text = super::figure_label_text(&labels[0].text, 2).unwrap();
+                let expected = if draft {
+                    format!("+10.00% · {expected}")
+                } else {
+                    expected.to_string()
+                };
+                assert_eq!(text, expected);
+            }
+        }
+    }
+    let falling = moon_chart::figures::LabelValue::RectSpan {
+        duration_ms: 10_900.0,
+        price_move: Some((100.0, 90.0)),
+    };
+    assert_eq!(
+        super::figure_label_text(&falling, 2).unwrap(),
+        "-10.00% · 10с"
+    );
+}
+
 /// Removing the suffix would again present quote turnover as a bare coin count (issue #486).
 /// The figure is the scale's own tiered format (issue #579): lowercase `k` after a space, one
 /// place in the `1–9.99 k` tier, and the `$` right after the suffix.

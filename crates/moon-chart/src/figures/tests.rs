@@ -69,6 +69,98 @@ fn build_one(fig: &Figure, hovered: Option<u64>, selected: Option<u64>) -> Buffe
     (zones, hlines, segs, markers, labels)
 }
 
+/// Regressing hot paint to Solid hides the chosen pen kind until the pointer leaves.
+#[test]
+fn selected_and_hovered_figures_keep_their_stored_line_kind() {
+    for kind in LineKind::ALL {
+        let mut line = hline_fig(1);
+        line.line_kind = kind;
+        let mut segment = segment_fig(2);
+        segment.line_kind = kind;
+        for (hovered, selected) in [(true, false), (false, true)] {
+            let ctx = fig_ctx(&line, hovered, selected);
+            assert_eq!(ctx.stroke.kind, kind);
+            let (_, lines, ..) = build_one(&line, hovered.then_some(1), selected.then_some(1));
+            assert_eq!(lines[0].style, kind.to_pen() as f32);
+            let (_, _, segs, ..) = build_one(&segment, hovered.then_some(2), selected.then_some(2));
+            assert_eq!(segs[0].pattern, kind.to_pen() as f32);
+        }
+        let (_, preview, ..) = build_draft(&line, None);
+        let (_, landed, ..) = build_one(&line, None, Some(1));
+        assert_eq!(preview[0].style, landed[0].style);
+    }
+}
+
+/// Dropping the alert hue from hot paint makes armed and disarmed borders indistinguishable.
+/// The wash and stored colour must survive arming unchanged, including non-opaque strokes.
+#[test]
+fn an_armed_figure_inverts_only_its_stroke_in_every_state() {
+    let mut fig = draft_fig(FigureKind::Channel(Channel {
+        price1: 100.0,
+        price2: 110.0,
+    }));
+    fig.color = [10, 20, 30, 128];
+    let original = fig.clone();
+    let (idle_fill, ..) = build_one(&fig, None, None);
+    fig.alert = true;
+    for (hovered, selected) in [(None, None), (Some(7), None), (None, Some(7))] {
+        let (fill, lines, ..) = build_one(&fig, hovered, selected);
+        for line in lines {
+            assert_eq!(rgb_u32(line.color), 0xF5_EB_E1);
+            assert_eq!(line.color[3], 128.0 / 255.0);
+        }
+        assert_eq!(fill[0].color, idle_fill[0].color);
+        assert_eq!(fig.color, original.color);
+        assert_eq!(fig.fill, original.fill);
+    }
+    fig.alert = false;
+    for (hovered, selected) in [(None, None), (Some(7), None), (None, Some(7))] {
+        let (_, lines, ..) = build_one(&fig, hovered, selected);
+        assert_eq!(rgb_u32(lines[0].color), 0x0A_14_1E);
+    }
+}
+
+/// Removing the resting measurement or treating selection as hover loses the rectangle's
+/// duration or keeps an unwanted signed percent visible after the pointer leaves.
+#[test]
+fn rectangle_duration_survives_rest_and_line_labels_off_in_both_directions() {
+    use moon_core::figures::tools::Rect;
+
+    let a = FigNode::new(EPOCH, 100.0);
+    let b = FigNode::new(EPOCH + 10_900.0, 110.0);
+    for (a, b) in [(a, b), (b, a)] {
+        let fig = draft_fig(FigureKind::Rect(Rect { a, b }));
+        for selected in [None, Some(7)] {
+            let (_, _, _, _, labels) = build_one(&fig, None, selected);
+            assert_eq!(labels.len(), 1);
+            assert_eq!(
+                labels[0].text,
+                LabelValue::RectSpan {
+                    duration_ms: 10_900.0,
+                    price_move: None,
+                }
+            );
+            assert!(labels[0].permanent);
+            assert!(labels[0].visible(false));
+            assert_eq!(labels[0].place, LabelPlace::Above);
+            assert_eq!((labels[0].t_rel, labels[0].price), (10_900.0, 110.0));
+        }
+        let (_, _, _, _, hovered) = build_one(&fig, Some(7), None);
+        let (_, _, _, _, draft) = build_draft(&fig, None);
+        for labels in [hovered, draft] {
+            assert_eq!(labels.len(), 1, "percent and duration share one label");
+            assert_eq!(
+                labels[0].text,
+                LabelValue::RectSpan {
+                    duration_ms: 10_900.0,
+                    price_move: Some((a.price, b.price)),
+                }
+            );
+            assert!(labels[0].visible(false));
+        }
+    }
+}
+
 #[test]
 fn an_idle_figure_is_thin_dimmed_and_keeps_its_line_kind() {
     let fig = hline_fig(1);
@@ -87,6 +179,7 @@ fn an_idle_figure_is_thin_dimmed_and_keeps_its_line_kind() {
     assert!(labels.is_empty(), "an idle chart draws no figure text");
 }
 
+/// Hot paint and arming retain their weight cues without overriding the pen kind.
 #[test]
 fn arming_and_hovering_each_make_a_figure_stand_out_more_than_idle() {
     let fig = hline_fig(1);
@@ -107,7 +200,7 @@ fn arming_and_hovering_each_make_a_figure_stand_out_more_than_idle() {
         armed_lines[0].style, idle[0].style,
         "arming must not change the line kind"
     );
-    assert_eq!(hovered[0].style, 0.0, "hover forces a solid line");
+    assert_eq!(hovered[0].style, idle[0].style, "hover keeps the pen kind");
 }
 
 #[test]
@@ -422,6 +515,10 @@ fn a_level_readout_is_rendered_to_text_once_not_every_frame() {
         assert!(
             l.permanent,
             "a scale's readouts are drawn without the pointer on it"
+        );
+        assert!(
+            !l.visible(false),
+            "line labels off still hides scale captions"
         );
         match &l.text {
             LabelValue::Ready(s) => {

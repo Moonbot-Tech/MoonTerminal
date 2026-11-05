@@ -105,6 +105,33 @@ pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
 }
 
+/// Format figure values with axis precision and the percent ruler's localized duration spelling.
+fn figure_label_text(
+    value: &moon_chart::figures::LabelValue,
+    decimals: usize,
+) -> Option<std::borrow::Cow<'_, str>> {
+    use moon_chart::figures::LabelValue;
+    use std::borrow::Cow;
+
+    let pct =
+        |from: f64, to: f64| (from != 0.0).then(|| fmt_pct(((to / from - 1.0) * 100.0) as f32));
+    Some(match value {
+        LabelValue::Ready(s) => Cow::Borrowed(s),
+        LabelValue::Price(p) => Cow::Owned(format!("{p:.decimals$}")),
+        LabelValue::PctDelta { from, to } => Cow::Owned(pct(*from, *to)?),
+        LabelValue::RectSpan {
+            duration_ms,
+            price_move,
+        } => {
+            let duration = super::ruler::duration_text(*duration_ms);
+            Cow::Owned(match price_move.and_then(|(from, to)| pct(from, to)) {
+                Some(pct) => format!("{pct} · {duration}"),
+                None => duration,
+            })
+        }
+    })
+}
+
 /// Returns the price a cursor's percentage and color are measured against.
 ///
 /// Moonbot measures from the NEAREST side of the book — best bid below the current price, best
