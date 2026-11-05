@@ -771,7 +771,7 @@ impl RenderState {
 
                 if cx_log >= plot_left && cx_log <= plot_right {
                     let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;
-                    let now_ms = std::time::SystemTime::now()
+                    let now_ms = moon_core::util::time::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_or(0.0, |d| d.as_millis() as f64);
                     // For a day other than today, show "DD.MM HH:MM:SS" for large timeframes/windows.
@@ -1045,7 +1045,7 @@ impl RenderState {
             ) * 1000.0)
                 .max(1000.0);
             let with_sec = step_ms < 60_000.0;
-            let now_ms = std::time::SystemTime::now()
+            let now_ms = moon_core::util::time::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0.0, |d| d.as_millis() as f64);
             let right_unix = left_unix + window_ms;

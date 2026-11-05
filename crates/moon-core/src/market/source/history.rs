@@ -137,7 +137,7 @@ impl MarketDataSource {
             ..ChartHistoryRead::default()
         };
         if let Some(cp) = candle_params {
-            let now_ms = std::time::SystemTime::now()
+            let now_ms = crate::util::time::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as i64);
             read.path_prefix_changed = cursor.open_path.sync(
@@ -575,7 +575,7 @@ impl MarketDataSource {
             let span_ms = ((to_rel_ms - from_rel_ms).max(0.0) as i64).max(cp.tf_ms.max(1));
             let series_floor_ms = series_floor(cursor.series_from_base_ms, want_from_ms, span_ms);
             if use_deep {
-                let now_unix = std::time::SystemTime::now()
+                let now_unix = crate::util::time::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis() as i64);
                 poll_cache_prefix(
@@ -681,7 +681,7 @@ impl MarketDataSource {
             if use_deep {
                 let base_tf_native_ms = deep_kind_min as i64 * 60_000;
                 let rows = snapshot.tf_candles(market, deep_kind);
-                let now_unix_ms = std::time::SystemTime::now()
+                let now_unix_ms = crate::util::time::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
                 let cur_bucket_ms =
@@ -761,7 +761,7 @@ impl MarketDataSource {
                 // A reset while scrolling into the past used to truncate the base at that window.
                 // Returning live does not reset because it only extends left, leaving a gap in the
                 // middle from the historical position to today's live bucket until another pan.
-                let now_unix = std::time::SystemTime::now()
+                let now_unix = crate::util::time::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_millis() as i64);
                 let to_ms = ((epoch_ms + to_rel_ms as f64) as i64).max(now_unix);
@@ -1042,7 +1042,7 @@ impl MarketDataSource {
                 // Diagnose candle-to-now gaps. If the last candle is older than three timeframes,
                 // log layer coverage once every 30 seconds so the exhausted layer is identifiable
                 // as series, deep, cache, 5-minute, or 1-day instead of debugging screenshots.
-                let now_unix = std::time::SystemTime::now()
+                let now_unix = crate::util::time::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
                 let last_ms = cursor

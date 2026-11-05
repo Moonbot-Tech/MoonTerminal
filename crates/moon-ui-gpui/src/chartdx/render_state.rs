@@ -921,7 +921,7 @@ impl RenderState {
             if cx_log >= plot_left && cx_log <= plot_right {
                 let left_unix = pr.epoch_ms + pr.view.view_time0 as f64;
                 let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;
-                let now_ms = std::time::SystemTime::now()
+                let now_ms = moon_core::util::time::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
                 // A date other than today uses day-month plus time for large time frames or windows.

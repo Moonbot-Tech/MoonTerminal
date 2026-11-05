@@ -135,7 +135,7 @@ impl MarketDataSource {
                 .collect();
             (cache, providers)
         };
-        let now_ms = std::time::SystemTime::now()
+        let now_ms = crate::util::time::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
         let cur_bucket = (now_ms / TF) * TF;

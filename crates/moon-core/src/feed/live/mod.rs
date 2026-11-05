@@ -37,6 +37,7 @@ mod client_settings;
 mod commands;
 mod convert;
 mod deadline;
+mod default_settings;
 mod dirty;
 mod identity_refresh;
 mod market_role;
@@ -108,6 +109,7 @@ use convert::{
 };
 pub use convert::{percentage_stop_price, percentage_take_price};
 use deadline::CoalescedDeadline;
+pub(in crate::feed) use default_settings::default_core_settings;
 use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
 pub use shared_config::FieldMask;

@@ -369,7 +369,7 @@ impl TicksData {
     /// Missing rows and reproduced short tails that REST or an archive can still extend.
     pub(in crate::analytics::tuner) fn fetchable(&self) -> impl Iterator<Item = &DealRow> {
         self.fetchable_at(
-            chrono::Utc::now().timestamp_millis(),
+            moon_core::util::now_unix_ms_i64(),
             super::tail::effective_s(),
         )
     }
@@ -1155,7 +1155,7 @@ impl TicksState {
         super::rows::population_at(
             self,
             super::tail::effective_s(),
-            chrono::Utc::now().timestamp_millis(),
+            moon_core::util::now_unix_ms_i64(),
         )
     }
 

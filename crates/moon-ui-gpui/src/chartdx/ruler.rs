@@ -117,7 +117,7 @@ impl ChartEngine {
                     }
                     _ => None,
                 };
-                let now_ms = std::time::SystemTime::now()
+                let now_ms = moon_core::util::time::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(f64::INFINITY, |d| d.as_millis() as f64);
                 let candles = moon_chart::volume_bars::quote_turnover_between(

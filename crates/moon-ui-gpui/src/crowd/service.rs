@@ -400,7 +400,7 @@ fn wanted(want: Wants) -> bool {
 /// drawn on a card whose age is counted against the wall — so the crossing is stamped with the
 /// same clock the card is read by.
 fn wall_ms() -> u64 {
-    std::time::SystemTime::now()
+    moon_core::util::time::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_millis() as u64)
         .unwrap_or(0)

@@ -1561,7 +1561,7 @@ impl AnalyticsView {
             cx,
             move || {
                 let long_position_ms = key.sample.long_position_ms;
-                let now_ms = chrono::Utc::now().timestamp_millis();
+                let now_ms = moon_core::util::now_unix_ms_i64();
                 // One strategy reader for the whole pass.
                 let reads = super::ticks::PassReads::new();
                 // The reads on a thread of their own, the replay in the tuner's pool: there it

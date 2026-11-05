@@ -5,7 +5,59 @@
 //! consumed by `db` report timestamps and config/strategy backup snapshot directory names.
 //! User-selected civil display belongs to `display_time` instead.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// How far the application's clock stands from the system's, in milliseconds.
+///
+/// Zero in every ordinary run. [`pin_clock`] sets it once, for a run that has to show one known
+/// moment rather than whenever it happens to be started.
+static CLOCK_SHIFT_MS: AtomicI64 = AtomicI64::new(0);
+
+/// Start the application's clock at `at_ms` (Unix milliseconds) and let it run from there.
+///
+/// For the UI capture build: its pictures describe a recorded month of trades, and against the
+/// system clock every period the interface offers — today, this month, the calendar, the chart's
+/// live edge — falls in a month with no trades at all, and two runs a day apart describe two
+/// different applications. Time still RUNS from the new origin: a stopped clock would freeze every
+/// timer that waits for a wall-clock boundary and stamp every synthetic tick with one instant.
+///
+/// Only for a run on its own data folder with no live service: [`now_unix_secs`] and its siblings
+/// follow the pin, so what they stamp lands in that folder at the pinned date, and what they compare
+/// with an outside clock — a rate limit's reset from the update server, Telegram's `auth_date` — is
+/// misjudged by the whole shift.
+///
+/// Call it before anything reads the clock: a reader that already holds a system-time reading and
+/// later compares it with this clock sees the shift as a jump.
+///
+/// Args:
+///     at_ms: The moment the clock reads right now, in Unix milliseconds.
+pub fn pin_clock(at_ms: i64) {
+    let real = unix_ms_i64_of(SystemTime::now());
+    CLOCK_SHIFT_MS.store(at_ms.saturating_sub(real), Ordering::Relaxed);
+}
+
+/// The application's current time: the system clock, moved by [`pin_clock`] when a run pinned it.
+///
+/// For a reading of "now" that is shown, or compared with what the application stores. Direct
+/// `SystemTime::now()` remains where it cannot matter or must not move: readings compared only with
+/// each other (how long the Strategies window was closed, the Assets render cadence), a file's age,
+/// a random seed, a key's expiry from a live core, and the moment a licence was accepted.
+pub fn now() -> SystemTime {
+    shifted(SystemTime::now(), CLOCK_SHIFT_MS.load(Ordering::Relaxed))
+}
+
+/// `real` moved by `shift_ms`, either way; `real` itself when the result would leave `SystemTime`'s
+/// range, so a pinned clock can never make the application's time unreadable.
+fn shifted(real: SystemTime, shift_ms: i64) -> SystemTime {
+    let by = Duration::from_millis(shift_ms.unsigned_abs());
+    let moved = if shift_ms >= 0 {
+        real.checked_add(by)
+    } else {
+        real.checked_sub(by)
+    };
+    moved.unwrap_or(real)
+}
 
 /// Format minutes as zero-padded `HH:MM` without wrapping at midnight.
 /// Callers that display a time of day apply their own day modulo before calling.
@@ -27,7 +79,7 @@ pub fn format_week_endpoint(week_minute: u16, is_end: bool) -> String {
 /// Current Unix time in whole seconds (`u64`) for absolute network scheduling deadlines.
 /// Returns `0` if the system clock precedes the Unix epoch.
 pub fn now_unix_secs() -> u64 {
-    SystemTime::now()
+    now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
@@ -36,7 +88,7 @@ pub fn now_unix_secs() -> u64 {
 /// Current Unix time in milliseconds (`f64`), on the same scale as market tick `time_ms` values.
 /// Returns `0.0` if `duration_since(UNIX_EPOCH)` fails because the system time precedes the epoch.
 pub fn now_unix_ms() -> f64 {
-    SystemTime::now()
+    now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64() * 1000.0)
         .unwrap_or(0.0)
@@ -45,7 +97,7 @@ pub fn now_unix_ms() -> f64 {
 /// Current Unix time in whole milliseconds (`i64`) for log timestamps and database records.
 /// Returns `0` if `duration_since(UNIX_EPOCH)` fails because the system time precedes the epoch.
 pub fn now_unix_ms_i64() -> i64 {
-    SystemTime::now()
+    now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)

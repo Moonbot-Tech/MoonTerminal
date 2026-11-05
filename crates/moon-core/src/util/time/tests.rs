@@ -1,8 +1,27 @@
 //! Contract for compact UTC timestamps used in snapshot directory names.
 
 use super::{
-    STAMP_MAX, STAMP_MIN, format_hhmm, format_week_endpoint, local_utc_offset_ms, utc_stamp_compact,
+    STAMP_MAX, STAMP_MIN, format_hhmm, format_week_endpoint, local_utc_offset_ms, shifted,
+    unix_ms_i64_of, utc_stamp_compact,
 };
+
+/// A pinned clock that reads the wrong side of its origin puts a capture run's "today" into the
+/// wrong month; one that overflows would have to panic or lie, and must do neither.
+#[test]
+fn a_shifted_clock_moves_both_ways_and_never_leaves_the_range() {
+    let real = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_800_000_000_000);
+    assert_eq!(
+        unix_ms_i64_of(shifted(real, -17_000_000_000)),
+        1_783_000_000_000
+    );
+    assert_eq!(unix_ms_i64_of(shifted(real, 5_000)), 1_800_000_005_000);
+    assert_eq!(shifted(real, 0), real);
+    // Past the epoch backwards: the system time stands rather than wrapping or panicking.
+    assert_eq!(
+        shifted(std::time::UNIX_EPOCH, i64::MIN),
+        std::time::UNIX_EPOCH
+    );
+}
 
 /// Wrapping at midnight would change draft and tuner labels for unrestricted minute values.
 #[test]
