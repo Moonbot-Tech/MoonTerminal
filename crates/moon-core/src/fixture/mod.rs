@@ -452,11 +452,13 @@ fn shift_candles(klines: &Path, shift_ms: i64, now_ms: i64) -> anyhow::Result<()
 ///     Propagates SQLite failures reading the window.
 fn seed_figures(reports: &Path, market: &str) -> anyhow::Result<usize> {
     let conn = rusqlite::Connection::open(reports)?;
+    // Only the charted market's trades: a set holding other coins would stretch the figures over
+    // prices and days this chart never shows.
     let (core_uid, from_secs, to_secs, low, high): (i64, i64, i64, f64, f64) = conn.query_row(
         "SELECT MIN(core_uid), MIN(buydate), MAX(closedate),
                 MIN(MIN(buyprice, sellprice)), MAX(MAX(buyprice, sellprice))
-         FROM orders_rep WHERE buydate > 0",
-        [],
+         FROM orders_rep WHERE buydate > 0 AND ?1 LIKE coin || '%'",
+        [market],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
     if high <= low || !high.is_finite() || !low.is_finite() {

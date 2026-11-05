@@ -643,7 +643,8 @@ impl SettingsView {
                 draft_index: i,
                 name: s.name.clone(),
                 active: s.active,
-                key_bad: !moon_core::config::key_is_readable(s.key.expose()),
+                // A synthetic core has no key at all, so nothing was rejected.
+                key_bad: !s.synthetic && !moon_core::config::key_is_readable(s.key.expose()),
                 addr_note,
                 addr_invalid: endpoint.is_some_and(|e| e.invalid),
                 has_override: !s.endpoint_override.trim().is_empty(),
