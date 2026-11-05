@@ -230,6 +230,106 @@ fn the_hourly_slot_spans_one_real_hour_across_a_clock_change() {
     assert_eq!(window.at - window.from, 3600);
 }
 
+/// Subtracting displayed minutes after a half-hour clock change must not schedule Hourly or Today
+/// at hh:30, which would resend an overlapping period.
+#[test]
+fn hourly_slot_is_a_local_hh00_in_a_half_hour_dst_zone() {
+    use crate::telegram::notify::AutoReport;
+    use chrono::Timelike;
+    let zone = chrono_tz::Australia::Lord_Howe;
+    // 2026-10-04 02:00 +10:30 becomes 02:30 +11:00 at 15:30 UTC (Oct 3).
+    let now = Utc
+        .with_ymd_and_hms(2026, 10, 3, 15, 35, 0)
+        .unwrap()
+        .timestamp();
+    let expected = Utc
+        .with_ymd_and_hms(2026, 10, 3, 14, 30, 0)
+        .unwrap()
+        .timestamp();
+    for kind in [AutoReport::Hourly, AutoReport::Today] {
+        let window = super::auto_window(kind, now, zone).unwrap();
+        let local_at = crate::util::display_time::at(window.at, zone).unwrap();
+        assert_eq!(local_at.minute(), 0, "slot at {local_at}");
+        assert_eq!(window.at, expected);
+    }
+}
+
+/// Between 14:50 and 15:05 UTC Lord Howe has not reached another hh:00, so both reads must return
+/// the same slot; the next real slot must continue its period without overlap.
+#[test]
+fn hourly_fall_back_slots_tile_in_a_half_hour_dst_zone() {
+    use crate::telegram::notify::AutoReport;
+    use chrono::Timelike;
+    let zone = chrono_tz::Australia::Lord_Howe;
+    let utc = |hour, minute| {
+        Utc.with_ymd_and_hms(2026, 4, 4, hour, minute, 0)
+            .unwrap()
+            .timestamp()
+    };
+    let first = super::auto_window(AutoReport::Hourly, utc(14, 50), zone).unwrap();
+    let same = super::auto_window(AutoReport::Hourly, utc(15, 5), zone).unwrap();
+    let next = super::auto_window(AutoReport::Hourly, utc(15, 35), zone).unwrap();
+    assert_eq!(first.at, utc(14, 0));
+    assert_eq!(same, first);
+    assert_eq!(next.at, utc(15, 30));
+    for window in [&first, &same, &next] {
+        let local_at = crate::util::display_time::at(window.at, zone).unwrap();
+        assert_eq!(local_at.minute(), 0, "slot at {local_at}");
+    }
+    assert_eq!(next.from, first.at);
+    assert_eq!(first.to + 1, next.from);
+}
+
+/// Consecutive hourly reports must cover every second exactly once when a 30-minute clock change
+/// makes the civil hour containing either Lord Howe transition last 90 real minutes.
+#[test]
+fn hourly_periods_tile_across_half_hour_clock_changes() {
+    use crate::telegram::notify::AutoReport;
+    let zone = chrono_tz::Australia::Lord_Howe;
+    let utc = |month, day, hour, minute| {
+        Utc.with_ymd_and_hms(2026, month, day, hour, minute, 0)
+            .unwrap()
+            .timestamp()
+    };
+    for (first_now, second_now) in [
+        (utc(10, 3, 15, 35), utc(10, 3, 16, 5)),
+        (utc(4, 4, 14, 50), utc(4, 4, 15, 35)),
+    ] {
+        let first = super::auto_window(AutoReport::Hourly, first_now, zone).unwrap();
+        let second = super::auto_window(AutoReport::Hourly, second_now, zone).unwrap();
+        assert_eq!(second.from, first.at);
+        assert_eq!(first.to + 1, second.from);
+        assert_eq!(second.at - second.from, 90 * 60);
+    }
+}
+
+/// Ordinary one-hour DST shifts must retain 3600-second periods at local hh:00 in both directions.
+#[test]
+fn hourly_periods_stay_one_real_hour_across_berlin_clock_changes() {
+    use crate::telegram::notify::AutoReport;
+    use chrono::Timelike;
+    let zone = chrono_tz::Europe::Berlin;
+    let utc = |month, day, hour, minute| {
+        Utc.with_ymd_and_hms(2026, month, day, hour, minute, 0)
+            .unwrap()
+            .timestamp()
+    };
+    for (first_now, second_now) in [
+        (utc(3, 29, 0, 50), utc(3, 29, 1, 5)),
+        (utc(10, 25, 0, 50), utc(10, 25, 1, 5)),
+    ] {
+        let first = super::auto_window(AutoReport::Hourly, first_now, zone).unwrap();
+        let second = super::auto_window(AutoReport::Hourly, second_now, zone).unwrap();
+        for window in [&first, &second] {
+            let local_at = crate::util::display_time::at(window.at, zone).unwrap();
+            assert_eq!(local_at.minute(), 0, "slot at {local_at}");
+            assert_eq!(window.at - window.from, 3600);
+        }
+        assert_eq!(second.from, first.at);
+        assert_eq!(first.to + 1, second.from);
+    }
+}
+
 /// "Today" reports midnight up to the slot; at midnight, the whole day that just ended.
 #[test]
 fn the_today_slot_reports_today_so_far_or_the_day_just_ended() {
