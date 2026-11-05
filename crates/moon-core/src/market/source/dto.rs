@@ -362,6 +362,12 @@ pub struct DetectSnapshot {
     pub delta_24h: f32,
     /// Actual 1-hour price change in percent, comparing now with a close from about one hour ago.
     pub delta_1h: f32,
+    /// The exchange's 24-hour turnover from the market list, in the pair's quote: the Screener's
+    /// `Vol.` figure. `0.0` when the provider lists no such market.
+    pub vol_24h: f64,
+    /// Turnover over the last hour from the retained 5-minute candles, open candle included, in
+    /// the pair's quote: the Screener's `H.vol` figure. `0.0` until candle history is in.
+    pub vol_1h: f64,
     /// Venue the detecting core's provider is connected to, frozen with the rest of the card.
     ///
     /// The card captions this through the venue directory like every other core list, so a

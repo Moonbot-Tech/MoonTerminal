@@ -55,6 +55,8 @@ pub(super) fn publish(
     item.line = snapshot.line;
     item.delta_24h = snapshot.delta_24h;
     item.delta_1h = snapshot.delta_1h;
+    item.vol_24h = snapshot.vol_24h;
+    item.vol_1h = snapshot.vol_1h;
     item.venue = snapshot.venue;
     item.exchange_kind = snapshot.exchange_kind;
     true

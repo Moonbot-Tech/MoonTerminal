@@ -45,6 +45,8 @@ detects.empty_filtered: "Детекти є, але поточна область
 detects.empty_no_cores: "У цій групі немає доступних ядер — детектам нізвідки прийти"
 detects.field.none: "—"
 detects.field.coin: "Монета"
+detects.field.v24: "v 24 год"
+detects.field.v1: "v 1 год"
 detects.field.d24: "Δ 24 год"
 detects.field.d1: "Δ 1 год"
 detects.field.strategy: "Стратегія"

@@ -60,6 +60,10 @@ pub enum DetectField {
     Badge,
     /// Core-name badge.
     Core,
+    /// 24-hour turnover from the market list, in the pair's quote (the Screener's `Vol.`).
+    Vol24h,
+    /// Last-hour turnover from the retained 5-minute candles (the Screener's `H.vol`).
+    Vol1h,
     /// 24-hour delta, %.
     Delta24h,
     /// 1-hour delta, %.
@@ -74,12 +78,14 @@ pub enum DetectField {
 
 impl DetectField {
     /// All assignable fields (slot-dropdown order; `None` = "—").
-    pub const ALL: [DetectField; 10] = [
+    pub const ALL: [DetectField; 12] = [
         DetectField::None,
         DetectField::Coin,
         DetectField::Time,
         DetectField::Badge,
         DetectField::Core,
+        DetectField::Vol24h,
+        DetectField::Vol1h,
         DetectField::Delta24h,
         DetectField::Delta1h,
         DetectField::Exchange,

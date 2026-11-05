@@ -157,6 +157,8 @@ impl DetectsPanel {
                     it.line = line;
                     it.delta_24h = delta_24h;
                     it.delta_1h = delta_1h;
+                    it.vol_24h = 0.0;
+                    it.vol_1h = 0.0;
                     it.venue = venue;
                     it.exchange_kind = exchange_kind;
                 }
@@ -191,6 +193,8 @@ impl DetectsPanel {
                 line,
                 delta_24h,
                 delta_1h,
+                vol_24h: 0.0,
+                vol_1h: 0.0,
                 venue,
                 exchange_kind,
                 snapshot_core,

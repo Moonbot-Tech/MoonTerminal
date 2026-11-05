@@ -32,7 +32,7 @@ use crate::panels::{
 /// padding and border around it.
 const POPUP_W: f32 = 560.0;
 /// Floor of a slot's field trigger, in design units.
-const SLOT_FIELD_MIN_W: f32 = 76.0;
+pub(super) const SLOT_FIELD_MIN_W: f32 = 76.0;
 /// Micro toggles after a large slot's field, each 20 wide with a 2-pixel gap before it.
 const SLOT_TOGGLES_W: f32 = 3.0 * (20.0 + 2.0);
 /// Gap between two slot cells on a grid row.
@@ -91,6 +91,8 @@ pub(super) fn field_key(f: DetectField) -> &'static str {
         DetectField::Time => "detects.view.time",
         DetectField::Badge => "detects.view.badge",
         DetectField::Core => "detects.view.core",
+        DetectField::Vol24h => "detects.field.v24",
+        DetectField::Vol1h => "detects.field.v1",
         DetectField::Delta24h => "detects.field.d24",
         DetectField::Delta1h => "detects.field.d1",
         DetectField::Exchange => "detects.view.exchange",

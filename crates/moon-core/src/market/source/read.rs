@@ -1373,6 +1373,16 @@ impl super::DetectSnapshotRequest {
             })
             .filter(crate::venue::CoreVenue::is_nameable);
         out.exchange_kind = exchange_kind_label(info);
+        // The two volumes are the Screener's own `Vol.` and `H.vol` figures, read from the same
+        // sources it reads: the market list's 24-hour turnover and the retained 5-minute candles'
+        // last hour, open candle included. Neither waits on history, so `vol_24h` is present even
+        // when the chart below stays empty.
+        if let Some(handle) = snapshot.markets().get(market) {
+            out.vol_24h = handle.with(|m| m.volume);
+        }
+        if let Some(derived) = snapshot.market_history_derived_snapshot_now(market) {
+            out.vol_1h = derived.candle_volumes.one_hour;
+        }
 
         let tf_ms: i64 = 300_000; // 5 minutes
         // Candle mode takes its latest `bars` buckets, roughly two hours, from a 24-hour window;

@@ -45,6 +45,8 @@ detects.empty_filtered: "Có tín hiệu, nhưng phạm vi hiện tại đang �
 detects.empty_no_cores: "Nhóm này không có core khả dụng — chưa thể có tín hiệu"
 detects.field.none: "—"
 detects.field.coin: "Coin"
+detects.field.v24: "v 24h"
+detects.field.v1: "v 1h"
 detects.field.d24: "Δ 24h"
 detects.field.d1: "Δ 1h"
 detects.field.strategy: "Chiến lược"
