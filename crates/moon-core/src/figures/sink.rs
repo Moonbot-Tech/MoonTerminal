@@ -42,8 +42,9 @@ pub enum LabelPlace {
     /// left end, because that is where the eye starts a row and where every charting package puts
     /// a ratio scale's numbers; the whole span is carried so the renderer can clip.
     ///
-    /// This is THE placement for a readout drawn at rest, whatever the tool's `hot` state: the
-    /// per-tab "line labels" switch hides labels by it. A hover-only readout must not use it.
+    /// Resting line captions use this placement and follow the per-tab "line labels" switch.
+    /// Independent measurements, such as a rectangle's duration, may use [`Self::Above`] to stay
+    /// visible with that switch off. A hover-only readout must not use `LineSpan`.
     LineSpan { t0_ms: f64, t1_ms: f64 },
 }
 
