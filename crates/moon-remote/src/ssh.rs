@@ -181,6 +181,14 @@ impl Conn {
     /// user has not confirmed is never accepted, and `""` matches no key — credentials are sent
     /// only after the presented key equals the pin.
     pub fn open(target: &Target, auth: &Auth<'_>, pinned: &str) -> Result<Self, OpenError> {
+        // A bench or capture run promises no network. Its data root is a throwaway copy, yet a
+        // server can still be known there: the scenes stage one to photograph the station's pages,
+        // and every timer that reads `known_target` would otherwise dial it.
+        if moon_core::fixture::active().is_some() {
+            return Err(OpenError::Unreachable(anyhow::anyhow!(
+                "a fixture run reaches no server"
+            )));
+        }
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()

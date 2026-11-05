@@ -402,6 +402,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         strategy_edit_watches: Vec::new(),
         strategy_edit_note_cursor: HashMap::new(),
     });
+    #[cfg(uidoc)]
+    crate::uidoc::note_backend(backend.clone());
     backend.update(cx, |b, cx| b.station_recover(cx));
     // One off-thread read of the station, so its Settings pages open filled. After recovery: an
     // outstanding hand-over's read already runs and this one then stands down.

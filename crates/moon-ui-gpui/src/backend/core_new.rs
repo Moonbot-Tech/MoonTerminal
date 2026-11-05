@@ -119,6 +119,37 @@ pub(crate) struct NewJob {
 }
 
 impl NewJob {
+    /// An install standing at `phase` with no worker behind it, for the capture build's pictures.
+    ///
+    /// Args:
+    ///     phase: Where it stands.
+    ///     lines: What it has printed.
+    ///     exchanges: What the core offers.
+    ///     public_ip: The server's address.
+    ///
+    /// Returns:
+    ///     The job. Its commands go nowhere.
+    #[cfg(uidoc)]
+    pub(crate) fn staged(
+        phase: NewPhase,
+        lines: Vec<String>,
+        exchanges: Vec<Exchange>,
+        public_ip: String,
+    ) -> Self {
+        Self {
+            phase,
+            lines,
+            status: None,
+            exchanges,
+            public_ip,
+            proto_port: 5160,
+            dir: Some("mbcore".to_string()),
+            uid: Some(1),
+            commands: None,
+            _task: Task::ready(()),
+        }
+    }
+
     /// `ip:port` the core is reached at.
     pub(crate) fn address(&self) -> String {
         format!("{}:{}", self.public_ip, self.proto_port)

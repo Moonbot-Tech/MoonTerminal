@@ -78,6 +78,11 @@ impl Counts {
 
 /// Include only active real cores with credentials; no key is retained in comparison state.
 pub(crate) fn local_cores(cfg: &AppConfig) -> Vec<LocalCore> {
+    // A capture run's cores are synthetic, which this list skips, so a staged station brings its own.
+    #[cfg(uidoc)]
+    if crate::uidoc::station_staged() {
+        return crate::uidoc::staged_local_cores();
+    }
     cfg.servers
         .iter()
         .filter(|s| eligible(s.active, s.synthetic, &s.key))
