@@ -268,10 +268,11 @@ impl MarketDataSource {
     ///     provider: A market-data provider core (see [`MarketDataSource::provider_of`]).
     ///
     /// Returns:
-    ///     Rows in the provider's market order; empty when it has no client or snapshot yet.
+    ///     Rows in the provider's market order; empty when it has no client or snapshot yet,
+    ///     except on a synthetic core in a fixture run, which answers from `fixture::sample`.
     pub fn screener_market_rows(&self, provider: CoreId) -> Vec<ScreenerRow> {
         let Some(client) = self.core_client(provider) else {
-            return Vec::new();
+            return crate::fixture::sample::screener_rows(provider);
         };
         let Some(snap) = client.snapshot_versioned() else {
             return Vec::new();

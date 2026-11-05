@@ -458,8 +458,10 @@ impl MarketDataSource {
     ///     Catalog-verified market, or `None` while the core cannot resolve it.
     pub fn resolve_market(&self, core: CoreId, quote: &str, coin: &str) -> Option<String> {
         // One snapshot answers the search and the labels: `CatalogLookup` holds it.
-        self.catalog_lookup(core)?
-            .resolve_market(quote, self.traded_quote(core), coin)
+        let Some(lookup) = self.catalog_lookup(core) else {
+            return crate::fixture::sample::resolve(coin);
+        };
+        lookup.resolve_market(quote, self.traded_quote(core), coin)
     }
 
     /// The unverified names a report row's `coin` would carry on `core`'s exchange, for a coin
@@ -1253,7 +1255,8 @@ impl MarketDataSource {
     ///
     /// Returns canonical market names (e.g. `"BTCUSDT"`) ranked by MoonProto's
     /// built-in search (exact → prefix → contains). Empty when the core has no
-    /// provider/client/snapshot yet or the query is blank. The terminal pairs
+    /// provider/client/snapshot yet or the query is blank, except on a synthetic core
+    /// in a fixture run, which answers from `fixture::sample`. The terminal pairs
     /// each name with the core's server name for the `"BTC - Bybit1"` display.
     pub fn search_markets(&self, core: CoreId, query: &str, limit: usize) -> Vec<String> {
         let client = {
@@ -1263,7 +1266,7 @@ impl MarketDataSource {
             };
             match inner.clients.get(&provider).and_then(SharedMoonClient::get) {
                 Some(client) => client,
-                None => return Vec::new(),
+                None => return crate::fixture::sample::search(query, limit),
             }
         };
         let Some(snapshot) = client.snapshot_versioned() else {

@@ -830,6 +830,11 @@ impl Backend {
         kind: Kind,
         cx: &mut Context<Self>,
     ) {
+        // A capture build's staged station has no server behind it to log in to.
+        #[cfg(uidoc)]
+        if crate::uidoc::station_staged() {
+            return;
+        }
         // Recheck at execution time too: a queued action must not discard recovery access.
         if job.changes_access()
             && let Some(reason) = self.station.access_refusal()
