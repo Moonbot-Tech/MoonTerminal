@@ -12,6 +12,7 @@
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+mod account;
 mod recorded;
 
 use super::news::{NEWS_RING_CAP, NewsItem, NewsSnapshot};
@@ -62,6 +63,27 @@ fn env_f64(k: &str, d: f64) -> f64 {
         .unwrap_or(d)
 }
 
+/// The venue name `MOON_SYNTH_VENUES` gives a core, empty when it gives none.
+///
+/// The variable reads `<uid>=<name>,<uid>=<name>`. Unset, every core stays in the shared unidentified
+/// group, which is what a bench has always measured.
+///
+/// Args:
+///     uid: The core's uid.
+///
+/// Returns:
+///     The name, or an empty string.
+fn venue_of(uid: u64) -> String {
+    std::env::var("MOON_SYNTH_VENUES")
+        .unwrap_or_default()
+        .split(',')
+        .find_map(|pair| {
+            let (id, name) = pair.split_once('=')?;
+            (id.trim().parse() == Ok(uid)).then(|| name.trim().to_string())
+        })
+        .unwrap_or_default()
+}
+
 /// Deterministic LCG matching the Tauri synthesizer to produce the same data stream.
 struct Lcg(u64);
 impl Lcg {
@@ -110,13 +132,25 @@ pub(crate) fn run(
     );
 
     let _ = tx.send(FeedMsg::Status(ConnStatus::Ready));
-    // Synthetic exchange (code 200): the coordinator elects this core as its sole provider.
+    // Synthetic exchange (code 200): the coordinator elects this core as its sole provider. Cores
+    // given different venues are different exchanges to it, so each provides for itself; a synthetic
+    // feed fills its own market store either way.
+    let venue_name = venue_of(server.uid);
+    // A named venue takes a code of its own: two cores on one code are one exchange to every list,
+    // and the first name would stand for both. No caption is shown for a code no build knows but the
+    // reported one, and no DEX is sent, or the caption would print the name twice.
+    let code = if venue_name.is_empty() {
+        200
+    } else {
+        200 + (server.uid % 50) as u8
+    };
     let _ = tx.send(FeedMsg::Identity {
-        id: ExchangeId::new(200),
+        id: ExchangeId::new(code),
         dex: String::new(),
-        // No caption: the synthetic feed is not a venue, and naming it one would give it a section
-        // of its own in every core list instead of the shared unidentified group.
-        reported: String::new(),
+        // No caption by default: the synthetic feed is not a venue, and naming it one would give it
+        // a section of its own in every core list instead of the shared unidentified group. A
+        // capture run asks for one, because that section is what a real core list looks like.
+        reported: venue_name,
     });
     // Synthetic base currency is USDT, so group-local USD sizes convert at a one-to-one rate.
     let _ = tx.send(FeedMsg::CoreBase {
@@ -135,8 +169,18 @@ pub(crate) fn run(
     let _ = tx.send(FeedMsg::StrategiesRunning(!env_flag(
         "MOON_SYNTH_TRADING_OFF",
     )));
-    if env_flag("MOON_SYNTH_CORE_STATE") {
-        recorded::send_core_state(server.uid, tx);
+    let core_state = env_flag("MOON_SYNTH_CORE_STATE");
+    let strategy = if core_state {
+        recorded::send_core_state(server.uid, tx)
+    } else {
+        (0, String::new())
+    };
+    if core_state {
+        // The tick stream reads a non-positive start price as unset, and so does this.
+        let price = Some(env_f64("MOON_SYNTH_START_PRICE", 0.0))
+            .filter(|price| *price > 0.0)
+            .unwrap_or(100.0);
+        account::send_account_state(server.uid, &markets[0], price, &strategy, tx);
     }
 
     // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
@@ -174,6 +218,15 @@ pub(crate) fn run(
         }
     }
     let _ = tx.send(FeedMsg::Detects(dets));
+    // After the AddToChart rows: the store keeps the newest detect of a market for the chart's
+    // caption, and those rows carry no text, so the other order would leave the caption blank.
+    if core_state {
+        let _ = tx.send(FeedMsg::Detects(account::detects(
+            &markets[0],
+            &strategy.1,
+            now_ms(),
+        )));
+    }
 
     // Synthetic news for the chart's news marks. `MOON_SYNTH_NEWS` is how many items exist at
     // startup (0 disables the whole news stream), spaced `MOON_SYNTH_NEWS_SPACING_SEC` apart going
@@ -213,14 +266,26 @@ pub(crate) fn run(
     let book_dt = Duration::from_secs_f64(1.0 / bookhz);
     let mut last_tick = Instant::now();
     let mut last_book = Instant::now();
+    let mut last_health = Instant::now();
 
     loop {
+        let mut commanded = false;
         loop {
             match cmd_rx.try_recv() {
-                Ok(_) => continue,
+                Ok(_) => commanded = true,
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
+        }
+        // No command is executed, but a panel that sent one shows "sent, waiting" until the core's
+        // next snapshot arrives; only the Telegram page does, and it asks on opening.
+        if core_state && commanded {
+            account::send_telegram(tx);
+        }
+        // A live core reports its health on every ping, and the Core Status page ages the reading.
+        if core_state && last_health.elapsed() >= Duration::from_secs(1) {
+            last_health = Instant::now();
+            account::send_health(server.uid, tx);
         }
         if last_tick.elapsed() >= tick_dt {
             last_tick = Instant::now();
@@ -302,9 +367,14 @@ pub(crate) fn run(
 /// The whole synthetic news ring as one wire message, with a small tag catalog to exercise the
 /// tag filter. Sent on startup and again for every added item, because news travels as a ring.
 fn news_msg(news: &[NewsItem]) -> FeedMsg {
+    let catalog = if env_flag("MOON_SYNTH_CORE_STATE") {
+        account::sample_news_tags()
+    } else {
+        vec!["synth".to_string(), "listing".to_string()]
+    };
     FeedMsg::News(NewsSnapshot {
         items: news.to_vec(),
-        catalog: vec!["synth".to_string(), "listing".to_string()],
+        catalog,
     })
 }
 
@@ -313,25 +383,37 @@ fn news_msg(news: &[NewsItem]) -> FeedMsg {
 fn synth_news_item(seq: &mut u64, markets: &[String], time_ms: i64) -> NewsItem {
     let id = *seq;
     *seq += 1;
+    // A capture run photographs these for a public page, where a line saying what it is for would be
+    // the one thing on screen no real core ever sends.
+    let capture = env_flag("MOON_SYNTH_CORE_STATE");
+    let (en, ru, tag) = if capture {
+        account::sample_news(id)
+    } else {
+        (
+            format!(
+                "Synthetic news #{id}: an exchange announced a listing, a halt and a fee change in \
+                 one paragraph, which is long on purpose so the chart's hover card has to wrap it."
+            ),
+            format!(
+                "Синтетическая новость №{id}: биржа объявила листинг, остановку торгов и изменение \
+                 комиссий одним абзацем — намеренно длинным, чтобы карточка на графике переносила текст."
+            ),
+            "synth".to_string(),
+        )
+    };
     NewsItem {
         id: format!("synth-{id}"),
         time_ms,
         recv_time_ms: Some(time_ms + 120),
         send_time_ms: Some(time_ms + 180),
         recv_terminal_ms: None,
-        source: "synth".to_string(),
+        source: if capture { "Exchange" } else { "synth" }.to_string(),
         author: None,
         coins: markets.to_vec(),
-        en: format!(
-            "Synthetic news #{id}: an exchange announced a listing, a halt and a fee change in one \
-             paragraph, which is long on purpose so the chart's hover card has to wrap it."
-        ),
-        ru: format!(
-            "Синтетическая новость №{id}: биржа объявила листинг, остановку торгов и изменение \
-             комиссий одним абзацем — намеренно длинным, чтобы карточка на графике переносила текст."
-        ),
+        en,
+        ru,
         es: String::new(),
-        tags: vec!["synth".to_string()],
+        tags: vec![tag],
         is_original: true,
         no_translate: false,
     }

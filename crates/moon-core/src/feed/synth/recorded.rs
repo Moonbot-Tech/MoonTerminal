@@ -32,7 +32,11 @@ const SECTION_TITLE: &str = "Main";
 /// Args:
 ///     core_uid: The core these belong to, as the record files them.
 ///     tx: The feed's channel to the terminal.
-pub(super) fn send_core_state(core_uid: u64, tx: &FeedTx) {
+///
+/// Returns:
+///     The id and name of this core's first strategy, for whatever else it reports to name; zero and
+///     empty when the record holds none.
+pub(super) fn send_core_state(core_uid: u64, tx: &FeedTx) -> (u64, String) {
     let (settings, config) = super::super::live::default_core_settings();
     let _ = tx.send(FeedMsg::ClientSettings(settings));
     let _ = tx.send(FeedMsg::CoreConfig {
@@ -44,8 +48,13 @@ pub(super) fn send_core_state(core_uid: u64, tx: &FeedTx) {
         "synthetic feed: core {core_uid}, {} strategies from the record",
         rows.len()
     );
+    let first = rows
+        .first()
+        .map(|row| (row.id, row.name.clone()))
+        .unwrap_or_default();
     let _ = tx.send(FeedMsg::StrategySchema(schema_of(&rows)));
     let _ = tx.send(FeedMsg::Strategies(rows));
+    first
 }
 
 /// The strategies recorded for one core, at their latest versions.
