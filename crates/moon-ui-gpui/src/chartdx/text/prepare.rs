@@ -540,9 +540,8 @@ impl RenderState {
             // Figure readouts: a price at the right edge for a full-width line, the move a trend
             // line describes at the end it points to, and a ratio scale's level beside each of its
             // lines. Only the readouts placed `LineSpan` — a scale's levels, a zone's width — are
-            // there at rest; every other one appears while the pointer is on its figure or one is
-            // being drawn — a merely selected figure has none — so an idle chart with no scale or
-            // zone on it does no work here.
+            // there at rest, along with a rectangle's duration above its top-right corner.
+            // Other tools read out only under the pointer or while being drawn.
             // Room a ratio scale's readouts need, taken as the WIDEST of them: the side they sit
             // on has to be decided for the whole column at once. Per label, the wide levels would
             // flip while the narrow ones stayed, tearing the column the placement exists to make.
@@ -561,21 +560,9 @@ impl RenderState {
                 // Cloned out: a level's text is an `Arc<str>`, so this is a refcount bump, and
                 // holding a borrow of the pane would block measuring through `&mut self` below.
                 let label = self.panes[idx].figure_labels[li].clone();
-                // The per-tab "line labels" switch hides the readouts a figure draws AT REST: a
-                // ratio scale's, whether it spans a box like ours or the whole chart like
-                // Moonbot's, and a zone's width. Applied here, before any placement arm, so the
-                // test below is the only place that decides it.
-                //
-                // A readout that appears only under the POINTER is not one of those and stays.
-                // `permanent` cannot tell them apart — it means "not the draft" — so the PLACEMENT
-                // does: `LineSpan` is the one a figure uses for what it draws at rest (a scale's
-                // levels, a Moonbot scale's end percentages, a zone's width), while hover readouts
-                // sit `Above` a node or at the `RightEdge`. Asking the value instead was wrong both
-                // ways: a resting percentage passed the switch, a hover `R:R` was hidden by it.
-                if label.permanent
-                    && !self.line_labels
-                    && matches!(label.place, FigLabelPlace::LineSpan { .. })
-                {
+                // Only resting line captions follow this switch. Measurements, drafts and hover
+                // readouts keep their own visibility; a rectangle's duration is a measurement.
+                if !label.visible(self.line_labels) {
                     continue;
                 }
                 let y = line_y(label.price);
@@ -614,15 +601,8 @@ impl RenderState {
                 // A ratio level's text was rendered once at the geometry rebuild — its format is
                 // pure and deliberately unlike the axis. A price and a percentage are formatted
                 // HERE, where the axis's own precision lives.
-                let text: std::borrow::Cow<'_, str> = match &label.text {
-                    FigLabelValue::Ready(s) => std::borrow::Cow::Borrowed(&**s),
-                    FigLabelValue::Price(p) => std::borrow::Cow::Owned(format!("{p:.dec$}")),
-                    FigLabelValue::PctDelta { from, to } => {
-                        if *from == 0.0 {
-                            continue;
-                        }
-                        std::borrow::Cow::Owned(fmt_pct(((to / from - 1.0) * 100.0) as f32))
-                    }
+                let Some(text) = figure_label_text(&label.text, dec) else {
+                    continue;
                 };
                 let (x, ax, dy, ay) = match label.place {
                     // Already in the label column, which sits outside the plot when the order book

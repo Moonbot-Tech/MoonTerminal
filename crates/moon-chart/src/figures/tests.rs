@@ -120,6 +120,47 @@ fn an_armed_figure_inverts_only_its_stroke_in_every_state() {
     }
 }
 
+/// Removing the resting measurement or treating selection as hover loses the rectangle's
+/// duration or keeps an unwanted signed percent visible after the pointer leaves.
+#[test]
+fn rectangle_duration_survives_rest_and_line_labels_off_in_both_directions() {
+    use moon_core::figures::tools::Rect;
+
+    let a = FigNode::new(EPOCH, 100.0);
+    let b = FigNode::new(EPOCH + 10_900.0, 110.0);
+    for (a, b) in [(a, b), (b, a)] {
+        let fig = draft_fig(FigureKind::Rect(Rect { a, b }));
+        for selected in [None, Some(7)] {
+            let (_, _, _, _, labels) = build_one(&fig, None, selected);
+            assert_eq!(labels.len(), 1);
+            assert_eq!(
+                labels[0].text,
+                LabelValue::RectSpan {
+                    duration_ms: 10_900.0,
+                    price_move: None,
+                }
+            );
+            assert!(labels[0].permanent);
+            assert!(labels[0].visible(false));
+            assert_eq!(labels[0].place, LabelPlace::Above);
+            assert_eq!((labels[0].t_rel, labels[0].price), (10_900.0, 110.0));
+        }
+        let (_, _, _, _, hovered) = build_one(&fig, Some(7), None);
+        let (_, _, _, _, draft) = build_draft(&fig, None);
+        for labels in [hovered, draft] {
+            assert_eq!(labels.len(), 1, "percent and duration share one label");
+            assert_eq!(
+                labels[0].text,
+                LabelValue::RectSpan {
+                    duration_ms: 10_900.0,
+                    price_move: Some((a.price, b.price)),
+                }
+            );
+            assert!(labels[0].visible(false));
+        }
+    }
+}
+
 #[test]
 fn an_idle_figure_is_thin_dimmed_and_keeps_its_line_kind() {
     let fig = hline_fig(1);
@@ -474,6 +515,10 @@ fn a_level_readout_is_rendered_to_text_once_not_every_frame() {
         assert!(
             l.permanent,
             "a scale's readouts are drawn without the pointer on it"
+        );
+        assert!(
+            !l.visible(false),
+            "line labels off still hides scale captions"
         );
         match &l.text {
             LabelValue::Ready(s) => {
