@@ -20,7 +20,7 @@
 //! Visual language (to distinguish figures from order lines and make their state visible):
 //! - regular figure — THIN BASE-STYLE LINE;
 //! - armed (alert) figure — THICK BASE-STYLE LINE (clearly shows that it is armed);
-//! - hovered / selected figure — SOLID, THICK, and bright (it sharply "comes alive"), with square
+//! - hovered / selected figure — base-style, THICK, and bright, with square
 //!   knots at the editable points of a SELECTED figure and a readout beside a HOVERED one.
 
 use std::sync::Arc;
@@ -369,7 +369,7 @@ pub fn build_figure_geometry<'a>(
 
 /// Build context for a figure by state:
 /// - idle — thin base style from `fig.line_kind`;
-/// - hovered/selected — thick SOLID line (sharply "comes alive"), plus knots when selected;
+/// - hovered/selected — thick base-style line, plus knots when selected;
 /// - armed (alert) — thick base style (thickness indicates that it is armed).
 ///
 /// The READOUT follows the cursor, not the selection: selection is sticky, and a label that
@@ -383,7 +383,7 @@ fn fig_ctx(fig: &Figure, is_hovered: bool, is_selected: bool) -> BuildCtx {
         Stroke {
             color: rgba(fig.color, 1.0),
             thickness: fig.thickness * FIG_ACTIVE_THICKNESS,
-            kind: LineKind::Solid,
+            kind: fig.line_kind,
         }
     } else if fig.alert {
         Stroke {

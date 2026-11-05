@@ -69,6 +69,28 @@ fn build_one(fig: &Figure, hovered: Option<u64>, selected: Option<u64>) -> Buffe
     (zones, hlines, segs, markers, labels)
 }
 
+/// Regressing hot paint to Solid hides the chosen pen kind until the pointer leaves.
+#[test]
+fn selected_and_hovered_figures_keep_their_stored_line_kind() {
+    for kind in LineKind::ALL {
+        let mut line = hline_fig(1);
+        line.line_kind = kind;
+        let mut segment = segment_fig(2);
+        segment.line_kind = kind;
+        for (hovered, selected) in [(true, false), (false, true)] {
+            let ctx = fig_ctx(&line, hovered, selected);
+            assert_eq!(ctx.stroke.kind, kind);
+            let (_, lines, ..) = build_one(&line, hovered.then_some(1), selected.then_some(1));
+            assert_eq!(lines[0].style, kind.to_pen() as f32);
+            let (_, _, segs, ..) = build_one(&segment, hovered.then_some(2), selected.then_some(2));
+            assert_eq!(segs[0].pattern, kind.to_pen() as f32);
+        }
+        let (_, preview, ..) = build_draft(&line, None);
+        let (_, landed, ..) = build_one(&line, None, Some(1));
+        assert_eq!(preview[0].style, landed[0].style);
+    }
+}
+
 #[test]
 fn an_idle_figure_is_thin_dimmed_and_keeps_its_line_kind() {
     let fig = hline_fig(1);
@@ -87,6 +109,7 @@ fn an_idle_figure_is_thin_dimmed_and_keeps_its_line_kind() {
     assert!(labels.is_empty(), "an idle chart draws no figure text");
 }
 
+/// Hot paint and arming retain their weight cues without overriding the pen kind.
 #[test]
 fn arming_and_hovering_each_make_a_figure_stand_out_more_than_idle() {
     let fig = hline_fig(1);
@@ -107,7 +130,7 @@ fn arming_and_hovering_each_make_a_figure_stand_out_more_than_idle() {
         armed_lines[0].style, idle[0].style,
         "arming must not change the line kind"
     );
-    assert_eq!(hovered[0].style, 0.0, "hover forces a solid line");
+    assert_eq!(hovered[0].style, idle[0].style, "hover keeps the pen kind");
 }
 
 #[test]
