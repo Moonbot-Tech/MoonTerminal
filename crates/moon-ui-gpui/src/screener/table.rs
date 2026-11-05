@@ -195,7 +195,7 @@ pub(super) fn parse_vol(s: &str) -> f64 {
 }
 
 /// Format volume in Moonbot's compact form, such as `1.7m` or `320k`.
-fn vol_fmt(v: f64) -> String {
+pub(crate) fn vol_fmt(v: f64) -> String {
     let a = v.abs();
     if a >= 1e9 {
         format!("{:.1}b", v / 1e9)

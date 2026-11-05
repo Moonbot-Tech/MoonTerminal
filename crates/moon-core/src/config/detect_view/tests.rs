@@ -223,3 +223,67 @@ fn add_to_chart_follows_only_the_named_group() {
     assert!(file.shows_add_to_chart(""));
     assert!(!file.shows_add_to_chart("beta"));
 }
+
+/// The two volume fields sit immediately before the deltas in the slot menu, as in the Screener.
+///
+/// Breakage: appending them after `Strategy`, or in place of the deltas, moves the choice away
+/// from where the trader asked for it.
+#[test]
+fn volume_fields_sit_right_before_the_deltas() {
+    use DetectField as F;
+    assert_eq!(
+        DetectField::ALL,
+        [
+            F::None,
+            F::Coin,
+            F::Time,
+            F::Badge,
+            F::Core,
+            F::Vol24h,
+            F::Vol1h,
+            F::Delta24h,
+            F::Delta1h,
+            F::Exchange,
+            F::ExchangeKind,
+            F::Strategy,
+        ]
+    );
+}
+
+/// A layout saved before the volume fields existed loads every slot unchanged, and the factory
+/// layout still offers no volume slot.
+///
+/// Breakage: renaming an existing variant's wire name (a reordered `rename_all`, a new explicit
+/// rename) empties the slots of every saved layout; a factory slot turned to volume changes what
+/// every new install shows.
+#[test]
+fn old_saved_layouts_keep_their_slots_and_the_factory_has_no_volume() {
+    #[derive(serde::Deserialize)]
+    struct Wire {
+        field: DetectField,
+    }
+    for (wire, field) in [
+        ("none", DetectField::None),
+        ("coin", DetectField::Coin),
+        ("time", DetectField::Time),
+        ("badge", DetectField::Badge),
+        ("core", DetectField::Core),
+        ("delta24h", DetectField::Delta24h),
+        ("delta1h", DetectField::Delta1h),
+        ("exchange", DetectField::Exchange),
+        ("exchange_kind", DetectField::ExchangeKind),
+        ("strategy", DetectField::Strategy),
+    ] {
+        let back: Wire = toml::from_str(&format!("field = \"{wire}\"")).expect("old wire name");
+        assert_eq!(back.field, field, "{wire} no longer loads");
+    }
+    let cfg = DetectViewCfg::default();
+    for scfg in [&cfg.mini, &cfg.medium, &cfg.large] {
+        assert!(
+            scfg.slots
+                .iter()
+                .all(|s| !matches!(s.field, DetectField::Vol24h | DetectField::Vol1h)),
+            "a factory slot shows a volume"
+        );
+    }
+}

@@ -41,6 +41,8 @@ pub(super) fn detect_item(
         line: Vec::new(),
         delta_24h: 0.0,
         delta_1h: 0.0,
+        vol_24h: 0.0,
+        vol_1h: 0.0,
         venue: None,
         exchange_kind: String::new(),
         snapshot_core: core,
@@ -649,5 +651,91 @@ fn slot_fields_show_their_whole_name_and_the_grid_fits_the_popup(cx: &mut gpui::
                 frame.at
             );
         },
+    );
+}
+
+/// `v 24ч` and `v 1ч` fit the 76-wide closed slot whole at both font steps wherever the delta label
+/// does, and are never wider than the delta label, so the two new choices never widen the slot grid.
+///
+/// Breakage: a long label (`Объём 24ч`) is cut to `Объё…` in the closed box, as `Монета` is.
+#[gpui::test]
+fn volume_labels_fit_the_76_wide_closed_slot(cx: &mut gpui::TestAppContext) {
+    use gpui::{InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _};
+    use moon_core::config::DetectField;
+
+    const FIELDS: [DetectField; 2] = [DetectField::Vol24h, DetectField::Vol1h];
+    crate::controls::trigger_fit::probe::every_locale(
+        cx,
+        |_, cx| {
+            let w = super::popup::SLOT_FIELD_MIN_W;
+            let mut row = gpui::div().flex();
+            for (ix, f) in FIELDS.iter().enumerate() {
+                let label = t!(super::popup::field_key(*f)).to_string();
+                row = row.child(
+                    gpui::div()
+                        .flex_none()
+                        .debug_selector(move || format!("vol-{ix}"))
+                        .child(
+                            moon_ui::MoonDropdown::new(format!("probe-vol-{ix}"))
+                                .label(label)
+                                .trigger_caret(true)
+                                .trigger_variant(moon_ui::MoonButtonVariant::Soft)
+                                .trigger_size(moon_ui::MoonButtonSize::density(cx))
+                                .fit_trigger_width(w, w),
+                        ),
+                );
+            }
+            row.into_any_element()
+        },
+        |frame| {
+            // Each volume label is never wider than its own locale's delta label, so the new
+            // choices cannot widen the slot grid in any language.
+            for (vol, delta) in [
+                (DetectField::Vol24h, DetectField::Delta24h),
+                (DetectField::Vol1h, DetectField::Delta1h),
+            ] {
+                let v = t!(super::popup::field_key(vol)).to_string();
+                let d = t!(super::popup::field_key(delta)).to_string();
+                let (vw, dw) = frame.measure(|app| {
+                    let w = |s: &str| crate::design::ui_text_width(app, s, 14.0, 400.0, true);
+                    (w(&v), w(&d))
+                });
+                assert!(vw <= dw + 0.5, "{v:?} wider than {d:?}: {}", frame.at);
+            }
+            // Where the delta label itself fits the 76-wide box (Russian, English and the other
+            // `24h` locales), the volume label fits it whole too. Ukrainian and Turkish spell the
+            // hour as a word (`Δ 24 год`, `Δ 24 sa`) and already widen the slot past 76.
+            let words = frame.at.starts_with("uk") || frame.at.starts_with("tr");
+            if !words {
+                for (ix, f) in FIELDS.iter().enumerate() {
+                    let label = t!(super::popup::field_key(*f)).to_string();
+                    frame.assert_holds(&format!("vol-{ix}"), &label);
+                }
+            }
+        },
+    );
+}
+
+/// The card prints a volume with the Screener's own compact, lowercase, muted zero included.
+///
+/// Breakage: routing the card through the chart caption's `1.5K` compact makes the card and the
+/// `Vol.` column disagree on the same figure.
+#[test]
+fn card_volume_uses_the_screener_compact() {
+    let fmt = crate::screener::vol_fmt;
+    assert_eq!(fmt(0.0), "0");
+    assert_eq!(fmt(320_000.0), "320k");
+    assert_eq!(fmt(1_700_000.0), "1.7m");
+    assert_eq!(fmt(1_000_000_000.0), "1.0b");
+    let body = include_str!("cards.rs")
+        .split("fn volume_text(")
+        .nth(1)
+        .and_then(|tail| tail.split("\n}").next())
+        .expect("volume_text must exist");
+    assert!(body.contains("crate::screener::vol_fmt("));
+    assert!(body.contains("p.text_muted"), "zero is not the muted 0");
+    assert!(
+        !body.contains("pos_col") && !body.contains("neg_col"),
+        "a volume is coloured like a delta"
     );
 }

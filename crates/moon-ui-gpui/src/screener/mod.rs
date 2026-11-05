@@ -17,4 +17,5 @@ mod prepared;
 mod table;
 mod view;
 
+pub(crate) use table::vol_fmt;
 pub use view::open;

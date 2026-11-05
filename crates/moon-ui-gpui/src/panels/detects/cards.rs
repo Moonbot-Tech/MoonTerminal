@@ -334,6 +334,27 @@ fn soft(text: String, p: MoonPalette, cx: &App) -> MoonText {
         .uppercase(false)
 }
 
+/// Build a frozen turnover figure: its short muted key, then the value in the Screener's own
+/// compact (`320k`, `1.7m`, `1.0b`).
+///
+/// The key stays because two volumes side by side are otherwise indistinguishable. A volume has no
+/// direction, so the value takes the plain text tone rather than a delta colour; zero is the
+/// muted `0`, as in the Screener's table.
+fn volume_text(key: &str, v: f64, p: MoonPalette, cx: &App) -> Div {
+    let color = if v > 0.0 { p.text } else { p.text_muted };
+    let value = MoonText::new(crate::screener::vol_fmt(v))
+        .color(color)
+        .rendered_metrics(design::text_metrics(cx, -2.0, 11.0))
+        .mono(true)
+        .uppercase(false);
+    div()
+        .flex()
+        .items_baseline()
+        .gap(design::ui_px(cx, 3.0))
+        .child(muted(t!(key).to_string(), p, cx).render())
+        .child(value.render())
+}
+
 /// Reuse the terminal header's positive and negative delta colors.
 use design::{danger_color as neg_col, positive_color as pos_col};
 
@@ -503,6 +524,12 @@ fn chip(
         DetectField::Core => core_badge(it, super::crowd::rail_color(it, p))
             .render()
             .into_any_element(),
+        DetectField::Vol24h => {
+            volume_text(super::popup::field_key(field), it.vol_24h, p, cx).into_any_element()
+        }
+        DetectField::Vol1h => {
+            volume_text(super::popup::field_key(field), it.vol_1h, p, cx).into_any_element()
+        }
         DetectField::Delta24h => delta_chip(it.delta_24h, over, decimals, p, cx).into_any_element(),
         DetectField::Delta1h => delta_chip(it.delta_1h, over, decimals, p, cx).into_any_element(),
         DetectField::Exchange => {

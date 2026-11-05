@@ -45,6 +45,8 @@ detects.empty_filtered: "Детекты есть, но их скрывает т�
 detects.empty_no_cores: "В этой группе нет доступных ядер — детектам неоткуда прийти"
 detects.field.none: "—"
 detects.field.coin: "Монета"
+detects.field.v24: "v 24ч"
+detects.field.v1: "v 1ч"
 detects.field.d24: "Δ 24ч"
 detects.field.d1: "Δ 1ч"
 detects.field.strategy: "Стратегия"

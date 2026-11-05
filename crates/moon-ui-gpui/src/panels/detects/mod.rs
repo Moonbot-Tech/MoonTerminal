@@ -101,6 +101,10 @@ pub(crate) struct DetectItem {
     /// 24-hour and one-hour percentage price changes at detection time.
     delta_24h: f32,
     delta_1h: f32,
+    /// 24-hour and last-hour turnover at detection time, in the pair's quote: the Screener's
+    /// `Vol.` and `H.vol`, frozen with the deltas.
+    vol_24h: f64,
+    vol_1h: f64,
     /// Venue captured at detection time, captioned through the shared directory.
     venue: Option<moon_core::venue::CoreVenue>,
     /// Connection type, such as spot, futures, or DEX, captured at detection time.
@@ -439,6 +443,8 @@ impl DetectsPanel {
                 line: Vec::new(),
                 delta_24h: 0.0,
                 delta_1h: 0.0,
+                vol_24h: 0.0,
+                vol_1h: 0.0,
                 venue: None,
                 exchange_kind: String::new(),
                 snapshot_core: Some(next.core),
