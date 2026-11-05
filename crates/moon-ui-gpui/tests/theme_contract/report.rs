@@ -105,14 +105,14 @@ fn the_side_badge_is_the_one_shared_helper_in_both_panels() {
 
 /// Repaired at the PROVE task: the original draft checked every `moon_core::db::DISPLAY_COLUMNS`
 /// entry, which is WRONG -- `header_label`'s own docstring says the runtime schema genuinely
-/// carries columns outside the keyed set (six deliberately-untranslated technical names, `lev`,
-/// `fname`, every `*delta`/`*ratio` metric). The real invariant is that `is_keyed_report_header`'s
-/// `matches!` list and `locales/<lang>/report.<lang>.yml` are "kept in sync by hand -- one
-/// decision in two places" (`columns.rs`'s own docstring): every column NAMED THERE needs its
-/// `report.col.<name>` locale entry, in every shipped locale, or `header_label`'s miss path leaks
-/// the raw locale key text for a column someone added to one list and forgot in the other.
+/// carries columns outside the keyed set (`fname` and dynamically added core fields). The real
+/// invariant is that `is_keyed_report_header`'s `matches!` list and
+/// `locales/<lang>/report.<lang>.yml` are "kept in sync by hand -- one decision in two places"
+/// (`columns.rs`'s own docstring): every column NAMED THERE needs its `report.col.<name>` locale
+/// entry, in every shipped locale, or `header_label`'s miss path leaks the raw locale key text for
+/// a column someone added to one list and forgot in the other.
 #[test]
-fn every_keyed_report_header_has_a_localized_entry_in_all_three_locales() {
+fn every_keyed_report_header_has_a_localized_entry_in_all_seven_locales() {
     let columns_src = read_src("panels/report/columns.rs");
     let body = code_only(braced_body(&columns_src, "fn is_keyed_report_header("));
     let names: Vec<&str> = body.split('"').skip(1).step_by(2).collect();

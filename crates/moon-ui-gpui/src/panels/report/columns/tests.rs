@@ -117,6 +117,77 @@ fn profit_percent_has_a_readable_numeric_column_contract() {
     assert!(is_numeric_report_column("profitpct"));
 }
 
+/// MoonBot's technical labels must reach both the table and the Columns menu without changing the
+/// raw schema names used by export and clipboard copy.
+#[test]
+fn moonbot_technical_headers_match_in_every_language() {
+    let expected = [
+        ("takeprofitlag", "LagTP"),
+        ("btc1hdelta", "dBTC"),
+        ("btc24hdelta", "d24BTC"),
+        ("exchange1hdelta", "dMarket"),
+        ("exchange24hdelta", "dM24"),
+        ("btc5mdelta", "dBTC5m"),
+        ("bvsvratio", "bvsv"),
+        ("lev", "Lev"),
+        ("hvolf", "HVolFast"),
+        ("hvol", "H. Vol"),
+        ("dvol", "D. Vol"),
+        (moon_core::db::PROFIT_ABS_COLUMN, "ProfitAbs"),
+    ];
+    for language in ["en", "es", "pt", "ru", "tr", "uk", "vi"] {
+        let _locale = crate::test_locale::force(language);
+        for (column, label) in expected {
+            assert_eq!(header_label(column), label, "{language}: {column}");
+            assert_eq!(
+                super::column_menu_label(column),
+                format!("{label} — {column}"),
+                "{language}: Columns menu entry for {column}"
+            );
+            assert_eq!(header_for(column), column, "raw header for {column}");
+        }
+    }
+}
+
+/// Profit % follows the same translated noun as its neighbouring profit columns in every locale.
+#[test]
+fn profit_percent_label_follows_the_locales_profit_neighbour() {
+    for (language, label) in [
+        ("en", "Profit %"),
+        ("es", "Beneficio %"),
+        ("pt", "Lucro %"),
+        ("ru", "Профит %"),
+        ("tr", "Kâr %"),
+        ("uk", "Прибуток %"),
+        ("vi", "Lãi %"),
+    ] {
+        let _locale = crate::test_locale::force(language);
+        assert_eq!(header_label("profitpct"), label);
+    }
+}
+
+/// ProfitAbs uses Profit %'s signed two-decimal percent display and empty no-value cell.
+#[test]
+fn profit_abs_formats_like_profit_percent() {
+    let axis = ReportAxis::identity_core_local();
+    let palette = MoonPalette::default();
+    let column = moon_core::db::PROFIT_ABS_COLUMN;
+    assert!(is_numeric_report_column(column));
+    assert_eq!(header_for(column), column);
+    assert_eq!(
+        cell(column, &Value::Real(5.0), None, palette, &axis, 0, Tz::UTC).0,
+        "+5.00%"
+    );
+    assert_eq!(
+        cell(column, &Value::Real(-2.5), None, palette, &axis, 0, Tz::UTC).0,
+        "-2.50%"
+    );
+    assert_eq!(
+        cell(column, &Value::Null, None, palette, &axis, 0, Tz::UTC).0,
+        ""
+    );
+}
+
 /// Persisted quote ordinals must display as exact tickers rather than opaque integers.
 ///
 /// Removing `columns.rs:basecurrency_text` makes a USDC report row show `8`, hiding the identity
