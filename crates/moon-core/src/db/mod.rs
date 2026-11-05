@@ -64,9 +64,9 @@ pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxi
 pub use report_read::{
     CHART_TRADE_HISTORY_ATTACH, COLUMNS_ADDED_SINCE_V2, ChartTradeHistory, ChartTradeRecord,
     DISPLAY_COLUMNS, MINI_ENTRY_VOLUME_RATE_COLUMN, NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN,
-    NOTIFY_PROFIT_NATIVE_COLUMN, NOTIFY_QUOTE_COLUMN, PROFIT_PERCENT_COLUMN, PeriodBasis,
-    ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable, ReportTotals,
-    RowScope, SideFilter, StrategyPurgeRows, TotalsSlice, VALUATION_PROFIT_COLUMN,
+    NOTIFY_PROFIT_NATIVE_COLUMN, NOTIFY_QUOTE_COLUMN, PROFIT_ABS_COLUMN, PROFIT_PERCENT_COLUMN,
+    PeriodBasis, ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable,
+    ReportTotals, RowScope, SideFilter, StrategyPurgeRows, TotalsSlice, VALUATION_PROFIT_COLUMN,
     VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns, distinct_cores,
     distinct_strategies, max_core_uid, open_rows_for_bound, query_chart_trade_history,
     query_chart_trade_history_for_cores, query_mini_trades, query_notify_trades, query_report_wins,

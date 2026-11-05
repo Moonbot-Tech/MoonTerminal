@@ -691,10 +691,10 @@ pub(super) fn date_cell_instant(
 
 /// Return the font weight a GENERIC Report data cell's text is drawn — and MEASURED — with.
 ///
-/// The two profit columns carry the number the table exists to be read for, so they are weighted
-/// above the rest of the row. Their sibling `profitbtc` shares the same sign colouring but not the
-/// weight: weighting every numeric column would flatten the emphasis back out. `spentbtc` and
-/// `gainedbtc` carry neither — they are amounts, not results.
+/// The profit result columns carry the numbers the table exists to be read for, so they are
+/// weighted above the rest of the row. Their sibling `profitbtc` shares the same sign colouring but
+/// not the weight: weighting every numeric column would flatten the emphasis back out. `spentbtc`
+/// and `gainedbtc` carry neither — they are amounts, not results.
 ///
 /// The coin column is deliberately not part of this rule. It renders through the specialized
 /// `coin_cell` element at `BOLD`; this predicate governs generic Report cells and the corresponding
@@ -712,15 +712,17 @@ pub(super) fn date_cell_instant(
 ///     The weight for that column's body text.
 pub(super) fn cell_weight(col: &str) -> FontWeight {
     match col {
-        db::VALUATION_PROFIT_COLUMN | db::PROFIT_PERCENT_COLUMN => FontWeight::SEMIBOLD,
+        db::VALUATION_PROFIT_COLUMN | db::PROFIT_PERCENT_COLUMN | db::PROFIT_ABS_COLUMN => {
+            FontWeight::SEMIBOLD
+        }
         _ => FontWeight::NORMAL,
     }
 }
 
 /// Fallback text colour for a generic Report cell that carries no sign colour of its own.
 ///
-/// Colour, not weight, carries this table's identity-recedes hierarchy — `cell_weight` above is
-/// UNCHANGED. This is deliberately OUTSIDE `design::MonoBodyFontSignature` (the natural-width
+/// Colour, not weight, carries this table's identity-recedes hierarchy. This is deliberately
+/// OUTSIDE `design::MonoBodyFontSignature` (the natural-width
 /// cache key, documented above `cell_weight`): colour never resolves a different `FontId`, only
 /// weight does, so a third weight would strand stale widths with nothing to invalidate them, while
 /// an extra colour arm here is always cache-safe to add.
@@ -750,6 +752,7 @@ pub(crate) fn is_numeric_report_column(col: &str) -> bool {
             | "gainedbtc"
             | "profitbtc"
             | "profitpct"
+            | db::PROFIT_ABS_COLUMN
             | "valuation_profit_usdt"
             | "valuation_rate"
             | "lev"
@@ -848,7 +851,7 @@ pub(crate) fn cell(
                 .unwrap_or_default();
             (text, None)
         }
-        "profitbtc" | "profitpct" | "valuation_profit_usdt" => {
+        "profitbtc" | "profitpct" | db::PROFIT_ABS_COLUMN | "valuation_profit_usdt" => {
             let n = as_f64(v);
             let color = match n {
                 Some(x) if x > 0.0 => Some(p.green),
@@ -862,12 +865,12 @@ pub(crate) fn cell(
             // MoonBot's own report shows them at. Percent and the USDT conversion are fixed at two:
             // one is a ratio, the other is always USDT whatever the row is denominated in.
             let decimals = match col {
-                "profitpct" | db::VALUATION_PROFIT_COLUMN => 2,
+                "profitpct" | db::PROFIT_ABS_COLUMN | db::VALUATION_PROFIT_COLUMN => 2,
                 _ => money_decimals(quote),
             };
             let text = n
                 .map(|x| {
-                    if col == "profitpct" {
+                    if matches!(col, "profitpct" | db::PROFIT_ABS_COLUMN) {
                         format!("{x:+.2}%")
                     } else {
                         format!("{x:+.decimals$}")
@@ -994,9 +997,9 @@ pub(super) fn header_for(col: &str) -> String {
 ///
 /// `t!` does not fall back to a default on a missing key — it returns the literal
 /// `"report.col.<name>"` string — and the runtime schema genuinely carries columns outside this
-/// set (`DISPLAY_COLUMNS`' six deliberately-untranslated technical names, `lev`, `fname`, every
-/// `*delta`/`*ratio` metric column, and any dynamically added core field), so [`header_label`]
-/// must test membership here rather than trying `t!` on every column and hoping for the best.
+/// set (`DISPLAY_COLUMNS`' six deliberately-untranslated technical names, `fname`, and any
+/// dynamically added core field), so [`header_label`] must test membership here rather than trying
+/// `t!` on every column and hoping for the best.
 /// **Kept in sync with `locales/<lang>/report.<lang>.yml` by hand — one decision in two places.**
 fn is_keyed_report_header(col: &str) -> bool {
     matches!(
@@ -1015,8 +1018,10 @@ fn is_keyed_report_header(col: &str) -> bool {
             | "profitbtc"
             | "valuation_profit_usdt"
             | "profitpct"
+            | "profitabs"
             | "valuation_rate"
             | "valuation_rate_source"
+            | "lev"
             | "source"
             | "channel"
             | "channelname"
@@ -1025,6 +1030,12 @@ fn is_keyed_report_header(col: &str) -> bool {
             | "status"
             | "sellreason"
             | "comment"
+            | "btc1hdelta"
+            | "exchange1hdelta"
+            | "btc24hdelta"
+            | "exchange24hdelta"
+            | "btc5mdelta"
+            | "bvsvratio"
             | "pump1h"
             | "dump1h"
             | "d24h"
@@ -1039,9 +1050,7 @@ fn is_keyed_report_header(col: &str) -> bool {
             | "hvol"
             | "hvolf"
             | "dvol"
-            // `takeprofitlag` is deliberately absent: it is the one tuner column with no
-            // `tuner/fields.rs` FieldSpec to mirror, so it keeps its raw DB name rather than an
-            // invented label. Keep this in step with the `report.col.*` keys.
+            | "takeprofitlag"
             | "last_update_at"
     )
 }
@@ -1094,6 +1103,7 @@ pub(crate) fn width_for(col: &str) -> f32 {
         "core_name" | "coin" => 88.0,
         "profitbtc"
         | "profitpct"
+        | db::PROFIT_ABS_COLUMN
         | "gainedbtc"
         | "spentbtc"
         | "valuation_profit_usdt"

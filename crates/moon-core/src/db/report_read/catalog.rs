@@ -23,6 +23,7 @@ pub const DISPLAY_COLUMNS: &[&str] = &[
     "profitbtc",
     "valuation_profit_usdt",
     "profitpct",
+    "profitabs",
     "valuation_rate",
     "valuation_rate_source",
     "lev",
@@ -63,6 +64,9 @@ pub const DISPLAY_COLUMNS: &[&str] = &[
 
 /// Synthetic report column containing per-trade return on positive spent capital.
 pub const PROFIT_PERCENT_COLUMN: &str = "profitpct";
+
+/// Synthetic report column containing per-trade return with leverage removed.
+pub const PROFIT_ABS_COLUMN: &str = "profitabs";
 
 /// Synthetic report column carrying one trade's profit converted to USDT.
 pub const VALUATION_PROFIT_COLUMN: &str = "valuation_profit_usdt";
@@ -111,6 +115,10 @@ pub(super) const SYNTHETIC: &[Synthetic] = &[
     Synthetic {
         name: PROFIT_PERCENT_COLUMN,
         inputs: &["profitbtc", "spentbtc"],
+    },
+    Synthetic {
+        name: PROFIT_ABS_COLUMN,
+        inputs: &["profitbtc", "spentbtc", "lev"],
     },
     Synthetic {
         name: VALUATION_PROFIT_COLUMN,

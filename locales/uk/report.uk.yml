@@ -9,10 +9,9 @@ _version: 1
 # --- Column headers ---
 # In `crates/moon-core/src/db/report_read.rs::DISPLAY_COLUMNS` order. Every column NOT listed here
 # keeps its raw DB name as its header: the six `locales/README.md` deliberately-untranslated
-# technical columns (id, taskid, exorderid, strategyid, basecurrency, sellsetdate), plus `lev` and
-# `fname` — kept raw per this goal's own spec, not the README six — and every `*delta`/`*ratio`
-# metric column. This list is one decision mirrored in `columns::header_label`'s `matches!` guard —
-# keep both in sync, in the same `DISPLAY_COLUMNS` order.
+# technical columns (id, taskid, exorderid, strategyid, basecurrency, sellsetdate), plus `fname`.
+# This list is one decision mirrored in `columns::header_label`'s `matches!` guard — keep both in
+# sync, in the same `DISPLAY_COLUMNS` order.
 report.col.buydate: "Відкрита"
 report.col.closedate: "Закрита"
 report.col.core_name: "Ядро"
@@ -26,11 +25,11 @@ report.col.spentbtc: "Витрачено"
 report.col.gainedbtc: "Отримано"
 report.col.profitbtc: "Прибуток"
 report.col.valuation_profit_usdt: "Прибуток USDT"
-# %{amount} arm precedent: locales/analytics.yml `analytics.col.profit_pct` keeps the same three
-# identical strings, so a mixed Rust/YAML review does not read it as a missed translation.
-report.col.profitpct: "Profit %"
+report.col.profitpct: "Прибуток %"
+report.col.profitabs: "ProfitAbs"
 report.col.valuation_rate: "Курс"
 report.col.valuation_rate_source: "Джер. курсу"
+report.col.lev: "Lev"
 report.col.source: "Джерело"
 report.col.channel: "Канал"
 report.col.channelname: "Назва каналу"
@@ -39,10 +38,14 @@ report.col.emulator: "Ему"
 report.col.status: "Статус"
 report.col.sellreason: "Причина продажу"
 report.col.comment: "Коментар"
-# The remaining keyed columns are MoonBot's own tuner/filter field grid labels
-# (`crates/moon-core/src/db/tuner/fields.rs`) — industry-standard abbreviations, not dictionary
-# words, so all three locales carry the identical label (the same convention `report.export.csv`
-# already uses for "CSV").
+# MoonBot's technical Report names stay identical in all seven locales. Existing tuner FieldSpec
+# labels are reused where the tuner and Report use the same MoonBot spelling.
+report.col.btc1hdelta: "dBTC"
+report.col.exchange1hdelta: "dMarket"
+report.col.btc24hdelta: "d24BTC"
+report.col.exchange24hdelta: "dM24"
+report.col.btc5mdelta: "dBTC5m"
+report.col.bvsvratio: "bvsv"
 report.col.pump1h: "Pump1H"
 report.col.dump1h: "Dump1H"
 report.col.d24h: "d24h"
@@ -54,12 +57,10 @@ report.col.d1m: "d1m"
 report.col.dbtc1m: "dBTC1m"
 report.col.vd1m: "Vd1m"
 report.col.pricebug: "PriceBug"
-report.col.hvol: "H.Vol"
-report.col.hvolf: "H.VolF"
-report.col.dvol: "D.Vol"
-# `takeprofitlag` is deliberately NOT keyed: unlike every other column in this block it has no
-# `tuner/fields.rs` FieldSpec, so there is no MoonBot label to mirror and any wording here would be
-# invented rather than sourced. It falls through to its raw DB name via `columns::header_for`.
+report.col.hvol: "H. Vol"
+report.col.hvolf: "HVolFast"
+report.col.dvol: "D. Vol"
+report.col.takeprofitlag: "LagTP"
 report.col.last_update_at: "Оновлено"
 
 # --- Side/emulator cell values ---

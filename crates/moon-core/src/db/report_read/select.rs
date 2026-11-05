@@ -80,6 +80,14 @@ pub(super) fn synthetic_expression(
             let spent = crate::db::quote::settled_amount_expr("r", &src.cols, "spentbtc");
             format!("CASE WHEN {spent} > 0 THEN {profit} / {spent} * 100.0 END")
         }
+        PROFIT_ABS_COLUMN => {
+            // MoonBot's absolute return removes leverage from the same settled Profit % ratio.
+            let profit = crate::db::quote::settled_amount_expr("r", &src.cols, "profitbtc");
+            let spent = crate::db::quote::settled_amount_expr("r", &src.cols, "spentbtc");
+            format!(
+                "CASE WHEN {spent} > 0 THEN {profit} / {spent} * 100.0 / NULLIF(r.\"lev\", 0.0) END"
+            )
+        }
         // A cache-free retry has no `v` or `ra` aliases, so the expression must vanish with the
         // joins that back it.
         VALUATION_PROFIT_COLUMN => valuation?.profit_usdt.clone(),

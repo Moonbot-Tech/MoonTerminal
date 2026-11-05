@@ -1944,6 +1944,46 @@ fn profit_percent_is_derived_and_source_sorted_before_limit() {
     assert!(table.rows.iter().all(|row| row[percent] != Value::Null));
 }
 
+/// ProfitAbs divides the settled Profit % by leverage and stays undefined without positive spend
+/// or a nonzero leverage.
+///
+/// Breakage: dividing by raw `lev` without `NULLIF` returns no row for zero leverage on some SQL
+/// formulations or invents an infinite value on others; using raw rather than settled money also
+/// makes the two adjacent percentages disagree on liquidation rows.
+#[test]
+fn profit_abs_is_profit_percent_divided_by_leverage() {
+    let conn = Connection::open_in_memory().expect("open ProfitAbs fixture");
+    super::super::init_db(&conn).expect("initialize report database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, profitbtc REAL, spentbtc REAL, lev REAL,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 'CORE-A', 1, 100, 20.0, 200.0, 2.0),
+             (1, 'CORE-A', 2, 200, 20.0, 200.0, 0.0),
+             (1, 'CORE-A', 3, 300, 20.0, 200.0, NULL),
+             (1, 'CORE-A', 4, 400, 20.0, 0.0, 2.0);",
+    )
+    .expect("seed ProfitAbs rows");
+    super::super::test_support::rep_init(&conn);
+
+    let table = query_reports(&conn, &ReportFilter::default(), "closedate", false, 100)
+        .expect("read ProfitAbs rows");
+    assert_eq!(table.rec_ids, vec![1, 2, 3, 4]);
+    assert_eq!(number(&table, 0, super::PROFIT_PERCENT_COLUMN), Some(10.0));
+    assert_eq!(number(&table, 0, super::PROFIT_ABS_COLUMN), Some(5.0));
+    for row in 1..4 {
+        assert_eq!(
+            cell(&table, row, super::PROFIT_ABS_COLUMN),
+            &Value::Null,
+            "row {} has no defined ProfitAbs",
+            table.rec_ids[row]
+        );
+    }
+}
+
 /// A legacy visibility preference gains Profit % once, while a current preference may hide it.
 ///
 /// Breakage this pins: continuing to read only `report_visible`, which either leaves the new
@@ -2269,6 +2309,7 @@ fn every_synthetic_column_can_both_project_and_sort() {
         "basecurrency",
         "profitbtc",
         "spentbtc",
+        "lev",
     ]
     .iter()
     .map(|name| (*name).to_string())
@@ -2433,16 +2474,16 @@ fn current_rate_coverage_survives_an_unavailable_historical_cache() {
     );
 }
 
-/// The USDT profit column is offered BEFORE the percentage one.
+/// USDT profit, Profit %, and ProfitAbs keep MoonBot's adjacent column order.
 ///
-/// Breakage this pins: swapping the entries in `report_read/catalog.rs:DISPLAY_COLUMNS` would move the
-/// amount to the right in the table, Columns menu, and CSV export. The runtime schema-derived list
-/// is the shared consumer rather than a second reading of the constant.
+/// Breakage this pins: swapping entries in `report_read/catalog.rs:DISPLAY_COLUMNS` moves a column
+/// in the table, Columns menu, and CSV export. The runtime schema-derived list is the shared
+/// consumer rather than a second reading of the constant.
 #[test]
-fn the_usdt_profit_column_precedes_the_percentage_one() {
+fn profit_columns_keep_moonbot_order() {
     let conn = Connection::open_in_memory().expect("open column-order fixture");
     super::super::init_db(&conn).expect("initialize report database");
-    // The two synthetic columns are offered on their INPUTS, so the fixture carries exactly those.
+    // Synthetic columns are offered on their INPUTS, so the fixture carries exactly those.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS orders_rep (
              core_uid INTEGER NOT NULL,
@@ -2453,7 +2494,8 @@ fn the_usdt_profit_column_precedes_the_percentage_one() {
          ALTER TABLE orders_rep ADD COLUMN closedate INTEGER;
          ALTER TABLE orders_rep ADD COLUMN basecurrency INTEGER;
          ALTER TABLE orders_rep ADD COLUMN profitbtc REAL;
-         ALTER TABLE orders_rep ADD COLUMN spentbtc REAL;",
+         ALTER TABLE orders_rep ADD COLUMN spentbtc REAL;
+         ALTER TABLE orders_rep ADD COLUMN lev REAL;",
     )
     .expect("create typed report source");
 
@@ -2466,6 +2508,11 @@ fn the_usdt_profit_column_precedes_the_percentage_one() {
     assert!(
         at(super::VALUATION_PROFIT_COLUMN) < at(super::PROFIT_PERCENT_COLUMN),
         "the USDT amount reads first and the percentage sits to its right: {cols:?}"
+    );
+    assert_eq!(
+        at(super::PROFIT_ABS_COLUMN),
+        at(super::PROFIT_PERCENT_COLUMN) + 1,
+        "ProfitAbs sits immediately after Profit %: {cols:?}"
     );
 }
 
