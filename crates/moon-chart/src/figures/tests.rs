@@ -91,6 +91,35 @@ fn selected_and_hovered_figures_keep_their_stored_line_kind() {
     }
 }
 
+/// Dropping the alert hue from hot paint makes armed and disarmed borders indistinguishable.
+/// The wash and stored colour must survive arming unchanged, including non-opaque strokes.
+#[test]
+fn an_armed_figure_inverts_only_its_stroke_in_every_state() {
+    let mut fig = draft_fig(FigureKind::Channel(Channel {
+        price1: 100.0,
+        price2: 110.0,
+    }));
+    fig.color = [10, 20, 30, 128];
+    let original = fig.clone();
+    let (idle_fill, ..) = build_one(&fig, None, None);
+    fig.alert = true;
+    for (hovered, selected) in [(None, None), (Some(7), None), (None, Some(7))] {
+        let (fill, lines, ..) = build_one(&fig, hovered, selected);
+        for line in lines {
+            assert_eq!(rgb_u32(line.color), 0xF5_EB_E1);
+            assert_eq!(line.color[3], 128.0 / 255.0);
+        }
+        assert_eq!(fill[0].color, idle_fill[0].color);
+        assert_eq!(fig.color, original.color);
+        assert_eq!(fig.fill, original.fill);
+    }
+    fig.alert = false;
+    for (hovered, selected) in [(None, None), (Some(7), None), (None, Some(7))] {
+        let (_, lines, ..) = build_one(&fig, hovered, selected);
+        assert_eq!(rgb_u32(lines[0].color), 0x0A_14_1E);
+    }
+}
+
 #[test]
 fn an_idle_figure_is_thin_dimmed_and_keeps_its_line_kind() {
     let fig = hline_fig(1);

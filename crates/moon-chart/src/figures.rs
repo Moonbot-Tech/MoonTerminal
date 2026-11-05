@@ -19,7 +19,7 @@
 //!
 //! Visual language (to distinguish figures from order lines and make their state visible):
 //! - regular figure — THIN BASE-STYLE LINE;
-//! - armed (alert) figure — THICK BASE-STYLE LINE (clearly shows that it is armed);
+//! - armed (alert) figure — THICK BASE-STYLE LINE in the inverse of its chosen RGB;
 //! - hovered / selected figure — base-style, THICK, and bright, with square
 //!   knots at the editable points of a SELECTED figure and a readout beside a HOVERED one.
 
@@ -133,6 +133,17 @@ fn rgba(c: [u8; 4], alpha_mul: f32) -> [f32; 4] {
         c[2] as f32 / 255.0,
         (c[3] as f32 / 255.0) * alpha_mul,
     ]
+}
+
+/// Invert an armed stroke's RGB without changing its stored colour, alpha, or fill.
+fn stroke_color(fig: &Figure, alpha_mul: f32) -> [f32; 4] {
+    let [r, g, b, a] = fig.color;
+    let color = if fig.alert {
+        [255 - r, 255 - g, 255 - b, a]
+    } else {
+        fig.color
+    };
+    rgba(color, alpha_mul)
 }
 
 /// Names a ratio-scale level and the price it sits at: `0.618 (6109.48)`.
@@ -340,7 +351,7 @@ pub fn build_figure_geometry<'a>(
         // kind, and already showing its readout so a trend line can be aimed while drawing.
         let ctx = BuildCtx {
             stroke: Stroke {
-                color: rgba(d.color, 1.0),
+                color: stroke_color(d, 1.0),
                 thickness: d.thickness * FIG_ACTIVE_THICKNESS,
                 kind: d.line_kind,
             },
@@ -370,7 +381,7 @@ pub fn build_figure_geometry<'a>(
 /// Build context for a figure by state:
 /// - idle — thin base style from `fig.line_kind`;
 /// - hovered/selected — thick base-style line, plus knots when selected;
-/// - armed (alert) — thick base style (thickness indicates that it is armed).
+/// - armed (alert) — inverse RGB in every state, with thick base style at rest.
 ///
 /// The READOUT follows the cursor, not the selection: selection is sticky, and a label that
 /// outlives the pointer would keep the text pass formatting and re-shaping it every frame for as
@@ -381,19 +392,19 @@ fn fig_ctx(fig: &Figure, is_hovered: bool, is_selected: bool) -> BuildCtx {
     let is_hot = is_hovered || is_selected;
     let stroke = if is_hot {
         Stroke {
-            color: rgba(fig.color, 1.0),
+            color: stroke_color(fig, 1.0),
             thickness: fig.thickness * FIG_ACTIVE_THICKNESS,
             kind: fig.line_kind,
         }
     } else if fig.alert {
         Stroke {
-            color: rgba(fig.color, 1.0),
+            color: stroke_color(fig, 1.0),
             thickness: fig.thickness * FIG_ARMED_THICKNESS,
             kind: fig.line_kind,
         }
     } else {
         Stroke {
-            color: rgba(fig.color, FIG_IDLE_ALPHA),
+            color: stroke_color(fig, FIG_IDLE_ALPHA),
             thickness: fig.thickness,
             kind: fig.line_kind,
         }
