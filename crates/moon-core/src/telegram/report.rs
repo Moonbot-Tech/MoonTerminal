@@ -304,18 +304,7 @@ impl ReportRequest {
         let today = local.date_naive();
         let month = today.with_day(1)?;
         let (from, to) = match self.period {
-            Period::Hour => {
-                // In a repeated fall-back hour hh:00 occurs twice; the current hour began at the
-                // latest occurrence that is not after `now`.
-                let local = local.naive_local().with_minute(0)?.with_second(0)?;
-                let last = display_time::unix_from_local(local, zone, LocalBoundary::Upper)?;
-                let from = if last <= now {
-                    last
-                } else {
-                    display_time::unix_from_local(local, zone, LocalBoundary::Lower)?
-                };
-                return Some((from, now));
-            }
+            Period::Hour => return Some((current_hour_start(now, zone)?, now)),
             Period::Today => return Some((display_time::day_start(today, zone)?, now)),
             Period::Month => return Some((display_time::day_start(month, zone)?, now)),
             Period::Yesterday => (today.checked_sub_days(Days::new(1))?, today),
@@ -326,6 +315,48 @@ impl ReportRequest {
             display_time::day_start(from, zone)?,
             display_time::day_start(to, zone)? - 1,
         ))
+    }
+}
+
+/// Resolve the start of the civil hour containing `now` in `zone`.
+///
+/// A repeated fall-back hour starts at its latest occurrence not after `now`; a nonexistent hour
+/// starts at the first valid instant after the gap, matching the civil-time picker policy.
+///
+/// Args:
+///     now: Current UTC Unix seconds.
+///     zone: Selected report zone.
+///
+/// Returns:
+///     UTC Unix seconds of the current civil hour's start, or `None` at conversion limits.
+fn current_hour_start(now: i64, zone: Tz) -> Option<i64> {
+    let local = display_time::at(now, zone)?;
+    let local = local.naive_local().with_minute(0)?.with_second(0)?;
+    let last = display_time::unix_from_local(local, zone, LocalBoundary::Upper)?;
+    if last <= now {
+        Some(last)
+    } else {
+        display_time::unix_from_local(local, zone, LocalBoundary::Lower)
+    }
+}
+
+/// Resolve the latest instant at or before `now` where the local clock reads hh:00.
+///
+/// When a spring-forward gap removes the current hour's hh:00, stepping before the gap-clamped
+/// hour start resolves the preceding real hh:00 through the same civil-hour resolver.
+///
+/// Args:
+///     now: Current UTC Unix seconds.
+///     zone: Selected report zone.
+///
+/// Returns:
+///     UTC Unix seconds of the latest real local hh:00, or `None` at conversion limits.
+fn hourly_slot(now: i64, zone: Tz) -> Option<i64> {
+    let start = current_hour_start(now, zone)?;
+    if display_time::at(start, zone)?.minute() == 0 {
+        Some(start)
+    } else {
+        current_hour_start(start.checked_sub(1)?, zone)
     }
 }
 
@@ -343,10 +374,11 @@ pub struct AutoWindow {
 
 /// `kind`'s latest slot at or before `now` in `zone`, and the finished period it reports.
 ///
-/// The hour starts where the local clock reads hh:00, so a zone half an hour off UTC fires at its
-/// own hh:00, and the hour before a slot is always 3600 seconds, a daylight-saving change
-/// included. A day and a month start at local midnight through [`display_time::day_start`]: a day
-/// may last 23 or 25 hours.
+/// Hourly and Today slots occur only where the local clock reads hh:00. An Hourly period starts at
+/// the previous slot and ends the second before this one, so consecutive periods have no gap or
+/// overlap when a daylight-saving change makes a civil hour last 30 or 90 real minutes. A day and
+/// a month start at local midnight through [`display_time::day_start`]: a day may last 23 or 25
+/// hours.
 ///
 /// Returns:
 ///     `None` when the moment cannot be shown in the zone.
@@ -357,15 +389,18 @@ pub fn auto_window(
 ) -> Option<AutoWindow> {
     use crate::telegram::notify::AutoReport;
     let local = display_time::at(now, zone)?;
-    let hour = now - i64::from(local.minute()) * 60 - i64::from(local.second());
     match kind {
-        AutoReport::Hourly => Some(AutoWindow {
-            at: hour,
-            from: hour - 3600,
-            to: hour - 1,
-            period: Period::Hour,
-        }),
+        AutoReport::Hourly => {
+            let at = hourly_slot(now, zone)?;
+            Some(AutoWindow {
+                at,
+                from: hourly_slot(at.checked_sub(1)?, zone)?,
+                to: at - 1,
+                period: Period::Hour,
+            })
+        }
         AutoReport::Today => {
+            let hour = hourly_slot(now, zone)?;
             let date = display_time::at(hour, zone)?.date_naive();
             let start = display_time::day_start(date, zone)?;
             // At midnight today has nothing yet: the slot reports the day that just ended.
