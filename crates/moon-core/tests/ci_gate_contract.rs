@@ -706,7 +706,8 @@ fn macos_job_json(conclusion: &str, steps: Option<&str>) -> String {
 /// Execute the retry classifier against fixture API responses and assert whether it re-runs.
 fn assert_macos_retry(
     purpose: &str,
-    attempt: &str,
+    event_attempt: &str,
+    current_attempt: &str,
     jobs_json: &str,
     annotations_json: &str,
     expect_rerun: bool,
@@ -725,6 +726,11 @@ fn assert_macos_retry(
         macos_probe_retry_script_text(),
     )
     .expect("write retry classifier fixture");
+    std::fs::write(
+        root.join("run.json"),
+        format!(r#"{{"status":"completed","run_attempt":{current_attempt}}}"#),
+    )
+    .expect("write current-run fixture");
     std::fs::write(root.join("jobs.json"), jobs_json).expect("write jobs fixture");
     std::fs::write(root.join("annotations.json"), annotations_json)
         .expect("write annotations fixture");
@@ -736,6 +742,7 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$GH_FIXTURE_DIR/requests.log"
 if [[ "${1:-}" == "api" ]]; then
     case "${2:-}" in
+        *"/actions/runs/4242") cat "$GH_FIXTURE_DIR/run.json" ;;
         *"/jobs?per_page=100") cat "$GH_FIXTURE_DIR/jobs.json" ;;
         *"/annotations?per_page=100") cat "$GH_FIXTURE_DIR/annotations.json" ;;
         *) echo "[FAIL] unexpected API endpoint: ${2:-}" >&2; exit 1 ;;
@@ -758,7 +765,7 @@ fi
     let fixture_path: OsString = std::env::join_paths(paths).expect("join retry fixture PATH");
     let output = Command::new(release_script_bash())
         .arg(".github/scripts/retry-macos-probe.sh")
-        .args(["4242", attempt])
+        .args(["4242", event_attempt])
         .current_dir(&root)
         .env("PATH", fixture_path)
         .env("GH_FIXTURE_DIR", &root)
@@ -782,13 +789,17 @@ fi
     std::fs::remove_dir_all(root).expect("remove macOS retry fixture");
 }
 
-/// Breakage guarded: treating a compile failure as runner starvation re-runs real errors, while
-/// accepting every failed job without checking its steps or acquisition annotation retries failures
-/// the automation cannot fix. Empty steps and the explicit annotation are the only accepted proof.
+/// Breakage guarded: treating a compile failure or deliberate supersession as runner starvation
+/// re-runs jobs the automation cannot fix and can cancel a newer probe. Empty steps are accepted
+/// only without a different failure annotation; the explicit acquisition message is the fallback.
 #[test]
 fn the_macos_retry_reruns_only_when_no_step_ran() {
+    if !script_fixtures_can_run() {
+        return;
+    }
     assert_macos_retry(
         "empty-steps",
+        "1",
         "1",
         &macos_job_json("cancelled", Some("[]")),
         "[]",
@@ -796,6 +807,7 @@ fn the_macos_retry_reruns_only_when_no_step_ran() {
     );
     assert_macos_retry(
         "compile-failure",
+        "2",
         "2",
         &macos_job_json(
             "failure",
@@ -805,21 +817,32 @@ fn the_macos_retry_reruns_only_when_no_step_ran() {
         false,
     );
     assert_macos_retry(
+        "superseded",
+        "1",
+        "1",
+        &macos_job_json("cancelled", Some("[]")),
+        r#"[{"annotation_level":"failure","message":"Canceling since a higher priority waiting request for macOS-probe-refs/heads/main-push exists"}]"#,
+        false,
+    );
+    assert_macos_retry(
         "acquisition-annotation",
         "1",
+        "1",
         &macos_job_json("failure", None),
-        r#"[{"message":"The job was not acquired by Runner of type hosted even after multiple attempts"}]"#,
+        r#"[{"annotation_level":"failure","message":"The job was not acquired by Runner of type hosted even after multiple attempts"}]"#,
         true,
     );
     assert_macos_retry(
         "unrelated-annotation",
         "1",
+        "1",
         &macos_job_json("failure", None),
-        r#"[{"message":"Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."}]"#,
+        r#"[{"annotation_level":"notice","message":"Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."}]"#,
         false,
     );
     assert_macos_retry(
         "successful-job",
+        "1",
         "1",
         &macos_job_json("success", Some("[]")),
         "[]",
@@ -827,12 +850,24 @@ fn the_macos_retry_reruns_only_when_no_step_ran() {
     );
 }
 
-/// Breakage guarded: dropping the numeric attempt check creates an unbounded retry loop whenever
-/// hosted macOS capacity stays exhausted. The original attempt plus two retries end at attempt 3.
+/// Breakage guarded: dropping the numeric attempt check creates an unbounded retry loop, while
+/// accepting a historical listener event lets an old empty-steps attempt authorize a later retry.
 #[test]
 fn the_macos_retry_stops_after_two_extra_attempts() {
+    if !script_fixtures_can_run() {
+        return;
+    }
     assert_macos_retry(
         "retry-cap",
+        "3",
+        "3",
+        &macos_job_json("cancelled", Some("[]")),
+        "[]",
+        false,
+    );
+    assert_macos_retry(
+        "stale-listener",
+        "1",
         "3",
         &macos_job_json("cancelled", Some("[]")),
         "[]",
@@ -1342,12 +1377,12 @@ fn release_script_bash() -> PathBuf {
     PathBuf::from("bash")
 }
 
-/// Report whether the release scripts can run here, asking the same shell they run under.
+/// Report whether script fixtures can run here, asking the same shell they run under.
 ///
 /// They parse GitHub's JSON with `jq`, which neither macOS nor a stock Windows box installs. A
 /// developer without it gets an announced skip instead of a red suite; CI never does, because
 /// every hosted runner ships `jq` — a missing tool there is a broken image, not a local gap.
-fn release_scripts_can_run() -> bool {
+fn script_fixtures_can_run() -> bool {
     static PRESENT: OnceLock<bool> = OnceLock::new();
     *PRESENT.get_or_init(|| {
         let present = Command::new(release_script_bash())
@@ -1357,13 +1392,13 @@ fn release_scripts_can_run() -> bool {
             .is_ok_and(|probe| probe.status.success());
         assert!(
             present || std::env::var_os("CI").is_none(),
-            "CI must provide jq to the tests that execute the release scripts"
+            "CI must provide jq to the tests that execute script fixtures"
         );
         if !present {
             // Written straight to the handle: libtest captures the `eprintln!` macro and swallows
-            // it for a passing test, which would report a green suite with no hint that two tests
+            // it for a passing test, which would report a green suite with no hint that fixtures
             // did nothing at all.
-            let notice = b"[skip] jq is not installed, so the release scripts were not executed\n";
+            let notice = b"[skip] jq is not installed, so script fixtures were not executed\n";
             let _ = std::io::stderr().write_all(notice);
         }
         present
@@ -1965,7 +2000,7 @@ fn run_release_script(root: &Path, script: &str, args: &[&str]) -> Output {
 /// Replacing draft-list discovery with the tag endpoint reproduces GitHub's 404.
 #[test]
 fn release_verifier_discovers_the_exact_draft_from_release_lists() {
-    if !release_scripts_can_run() {
+    if !script_fixtures_can_run() {
         return;
     }
     let (root, commit) = create_release_script_fixture("list-discovery");
@@ -1988,7 +2023,7 @@ fn release_verifier_discovers_the_exact_draft_from_release_lists() {
 /// Accepting a draft for another commit would publish bytes outside the verified tag.
 #[test]
 fn release_verifier_rejects_the_wrong_target_commit() {
-    if !release_scripts_can_run() {
+    if !script_fixtures_can_run() {
         return;
     }
     let (root, _) = create_release_script_fixture("wrong-target");
@@ -2003,7 +2038,7 @@ fn release_verifier_rejects_the_wrong_target_commit() {
 /// Hex case must not make GitHub's valid digest appear different from the local asset.
 #[test]
 fn release_verifier_accepts_an_uppercase_digest() {
-    if !release_scripts_can_run() {
+    if !script_fixtures_can_run() {
         return;
     }
     let (root, commit) = create_release_script_fixture("uppercase-digest");
@@ -2021,7 +2056,7 @@ fn release_verifier_accepts_an_uppercase_digest() {
 /// Accepting a mismatched Windows digest would install unverified bytes.
 #[test]
 fn release_verifier_rejects_a_bad_windows_digest() {
-    if !release_scripts_can_run() {
+    if !script_fixtures_can_run() {
         return;
     }
     let (root, commit) = create_release_script_fixture("bad-windows-digest");
@@ -2039,7 +2074,7 @@ fn release_verifier_rejects_a_bad_windows_digest() {
 /// Accepting a mismatched station digest would install unverified bytes as root.
 #[test]
 fn release_verifier_rejects_a_bad_station_digest() {
-    if !release_scripts_can_run() {
+    if !script_fixtures_can_run() {
         return;
     }
     let (root, commit) = create_release_script_fixture("bad-station-digest");
@@ -2065,7 +2100,7 @@ fn release_verifier_rejects_a_bad_station_digest() {
 /// Publishing by tag or checking postconditions out of order can finalize the wrong draft.
 #[test]
 fn release_publisher_patches_the_verified_id_before_checking_publication() {
-    if !release_scripts_can_run() {
+    if !script_fixtures_can_run() {
         return;
     }
     let (root, commit) = create_release_script_fixture("publish-order");
@@ -2118,7 +2153,7 @@ fn release_publisher_patches_the_verified_id_before_checking_publication() {
 /// element, stranding a healthy draft before its digest can be verified and published.
 #[test]
 fn release_verifier_streams_release_page_larger_than_one_argument() {
-    if !release_scripts_can_run() {
+    if !script_fixtures_can_run() {
         return;
     }
     let (root, _) = create_release_script_fixture("large-page");
