@@ -399,16 +399,7 @@ impl SettingsView {
             return;
         }
         self.core_menu_open = Some((uid, current));
-        let weak = cx.entity().downgrade();
-        let handle = window.window_handle();
-        cx.defer(move |app| {
-            let _ = handle.update(app, |_, window, cx| {
-                let _ = weak.update(cx, |this, cx| {
-                    window.close_context_menu(cx);
-                    this.open_core_menu(uid, window, cx);
-                });
-            });
-        });
+        reopen_core_menu(uid, window, cx);
     }
 
     /// The "⋯" menu of a group: its icon, one transport mode for every core, a new core.
@@ -970,4 +961,35 @@ impl SettingsView {
             ))
             .into_any_element()
     }
+}
+
+/// A view that can rebuild its core-command context menu after ownership discovery.
+pub(super) trait CoreMenuReopen: 'static + Sized {
+    /// Close the current menu model and open rows for `uid` with newly discovered facts.
+    fn reopen_core_menu(&mut self, uid: u64, window: &mut Window, cx: &mut Context<Self>);
+}
+
+impl CoreMenuReopen for SettingsView {
+    /// Rebuild the production Settings menu after its asynchronous ownership answer.
+    fn reopen_core_menu(&mut self, uid: u64, window: &mut Window, cx: &mut Context<Self>) {
+        SettingsView::open_core_menu(self, uid, window, cx);
+    }
+}
+
+/// Replace an open menu after the current frame, when MoonUI can safely rebuild its Root overlay.
+pub(super) fn reopen_core_menu<T: CoreMenuReopen>(
+    uid: u64,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    let weak = cx.entity().downgrade();
+    let handle = window.window_handle();
+    cx.defer(move |app| {
+        let _ = handle.update(app, |_, window, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                window.close_context_menu(cx);
+                this.reopen_core_menu(uid, window, cx);
+            });
+        });
+    });
 }

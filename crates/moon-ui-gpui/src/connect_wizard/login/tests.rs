@@ -6,7 +6,7 @@ use moon_remote::setup::FirstAccess;
 use moon_remote::ssh::{OpenError, Target};
 use zeroize::Zeroizing;
 
-use super::{LoginState, ProviderLogin, finish_login};
+use super::{LoginState, ProviderLogin, complete_provider_login, finish_login};
 use crate::connect_wizard::server::ServerFields;
 
 /// Render only the shared server fields, without constructing the application backend.
@@ -116,7 +116,7 @@ fn password_login() -> FirstAccess {
     }
 }
 
-/// A completion from the previous host must not clear or close the wizard's newer login flow.
+/// A previous host's late success must not store, clear, or close the newer login flow.
 #[test]
 fn reused_login_flow_rejects_the_previous_completion() {
     let mut state = LoginState {
@@ -124,11 +124,41 @@ fn reused_login_flow_rejects_the_previous_completion() {
         ..LoginState::default()
     };
     let previous = state.generation;
-    assert!(state.completion_current(previous));
-
     state.restart_flow();
     state.running = true;
+    let target = || Target {
+        host: "203.0.113.7".into(),
+        port: 22,
+    };
+    let mut stored = false;
 
-    assert!(!state.completion_current(previous));
-    assert!(state.completion_current(state.generation));
+    let obsolete = complete_provider_login(
+        &mut state,
+        previous,
+        target(),
+        password_login(),
+        "HOST_KEY".into(),
+        Ok(()),
+        |_, _| stored = true,
+    );
+    assert!(obsolete.is_none());
+    assert!(!stored);
+    assert!(state.running);
+
+    let generation = state.generation;
+    let current = complete_provider_login(
+        &mut state,
+        generation,
+        target(),
+        password_login(),
+        "HOST_KEY".into(),
+        Err(anyhow::anyhow!("current login refused")),
+        |_, _| stored = true,
+    );
+    assert_eq!(
+        current.expect("current completion").expect_err("refusal"),
+        "current login refused"
+    );
+    assert!(!stored);
+    assert!(!state.running);
 }

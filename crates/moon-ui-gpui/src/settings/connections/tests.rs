@@ -1,17 +1,22 @@
 //! Deterministic regression coverage for the Connections hierarchy.
 
+use super::core_menu::MenuRow;
 use super::entries::{ConnEntry, EntryLabels, flatten_entries};
+use super::page::{CoreMenuReopen, reopen_core_menu};
 use super::sync_groups_from_servers;
 use super::tab::{
     ServerRowMeta, apply_group_transport, pending_server_indices, visible_group_rows,
 };
+use crate::backend::core_cmds::MenuForm;
 use crate::settings::draft_dirty;
+use gpui::{AppContext as _, Context, IntoElement, Render, Styled as _, Window, px};
 use moon_core::config::{
     AppConfig, CoreGroup, FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret,
     ServerConfig, TakeProfitMode, TransportVersion,
 };
 use moon_core::session::core_order::CoreOrder;
 use moon_core::venue::CoreVenue;
+use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, Root};
 
 /// Build one identified core's venue from its platform ordinal.
 fn venue(code: u8) -> CoreVenue {
@@ -429,4 +434,109 @@ fn draft_dirty_detects_hotkey_group_trade_and_core_group_changes() {
         cores: vec![1],
     });
     assert!(draft_dirty(&saved, &core_group_draft));
+}
+
+/// Minimal Root-backed host for the production deferred core-menu replacement handler.
+struct MenuHarness {
+    form: MenuForm,
+    rows: Vec<MenuRow>,
+    opens: usize,
+}
+
+impl MenuHarness {
+    /// Open the actual MoonUI menu with the enabled state produced by the core row builder.
+    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.opens += 1;
+        self.rows = super::core_menu::core_menu_rows(self.form, Some(true));
+        let items = self
+            .rows
+            .iter()
+            .map(|row| match row {
+                MenuRow::Caption(caption) => MoonMenuItem::label(caption.clone()),
+                MenuRow::Separator => MoonMenuItem::separator(),
+                MenuRow::Note(key) => MoonMenuItem::label(rust_i18n::t!(*key).to_string()),
+                MenuRow::Item {
+                    id,
+                    label_key,
+                    enabled,
+                    ..
+                } => MoonMenuItem::with_key(*id, rust_i18n::t!(*label_key).to_string())
+                    .disabled(!enabled),
+            })
+            .collect();
+        window.open_fitted_moon_context_menu(
+            cx,
+            "test-core-menu",
+            gpui::point(px(20.0), px(20.0)),
+            items,
+            240.0,
+            560.0,
+        );
+    }
+
+    /// Return the current builder's enabled state for one command row.
+    fn enabled(&self, id: &str) -> bool {
+        self.rows
+            .iter()
+            .find_map(|row| match row {
+                MenuRow::Item {
+                    id: found, enabled, ..
+                } if *found == id => Some(*enabled),
+                _ => None,
+            })
+            .expect("command row")
+    }
+}
+
+impl Render for MenuHarness {
+    /// Render inert content below the Root-owned context-menu overlay.
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::div().size_full()
+    }
+}
+
+impl CoreMenuReopen for MenuHarness {
+    /// Reopen through the same MoonUI path as the production Settings handler.
+    fn reopen_core_menu(&mut self, _: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.open(window, cx);
+    }
+}
+
+/// Ownership delivery must replace the retained Checking menu with enabled configuration rows.
+#[gpui::test]
+fn ownership_discovery_replaces_the_open_menu(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let mut view = None;
+    let handle = cx.open_window(gpui::size(px(720.0), px(480.0)), |window, cx| {
+        let inner = cx.new(|_| MenuHarness {
+            form: MenuForm::Checking,
+            rows: Vec::new(),
+            opens: 0,
+        });
+        view = Some(inner.clone());
+        Root::new(inner, window, cx).bordered(false)
+    });
+    let view = view.expect("menu harness");
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.simulate_resize(gpui::size(px(720.0), px(480.0)));
+    visual.update(|window, cx| view.update(cx, |this, cx| this.open(window, cx)));
+    visual.run_until_parked();
+    assert!(visual.debug_bounds("test-core-menu:menu:popup").is_some());
+    visual.update(|_, cx| assert!(!view.read(cx).enabled("exchange")));
+
+    visual.update(|window, cx| {
+        view.update(cx, |this, cx| {
+            this.form = MenuForm::Ours;
+            reopen_core_menu(7, window, cx);
+        })
+    });
+    visual.run_until_parked();
+
+    assert!(visual.debug_bounds("test-core-menu:menu:popup").is_some());
+    visual.update(|_, cx| {
+        let view = view.read(cx);
+        assert_eq!(view.opens, 2);
+        assert!(view.enabled("exchange"));
+    });
 }

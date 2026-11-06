@@ -57,6 +57,23 @@ fn provider_login(target: &Target, first: &FirstAccess, pin: &str) -> anyhow::Re
     moon_remote::setup::provider_login(target, first, pin).map(drop)
 }
 
+/// Apply an off-thread result only to its originating flow, returning its storage or error outcome.
+fn complete_provider_login(
+    state: &mut LoginState,
+    generation: u64,
+    target: Target,
+    first: FirstAccess,
+    pin: String,
+    result: anyhow::Result<()>,
+    store: impl FnOnce(String, SessionLogin),
+) -> Option<Result<(), String>> {
+    if !state.completion_current(generation) {
+        return None;
+    }
+    state.running = false;
+    Some(finish_login(target, first, pin, result, store))
+}
+
 impl ConnectWizardView {
     /// Show the server form, the existing host-key probe/review, or the running login state.
     pub(super) fn login_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Screen {
@@ -132,22 +149,27 @@ impl ConnectWizardView {
                 })
                 .await;
             let _ = view.update_in(cx, |this, window, cx| {
-                if !this.login.completion_current(generation) {
-                    return;
-                }
-                this.login.running = false;
                 let backend = this.backend.clone();
-                match finish_login(target, first, pin, result, |ip, login| {
-                    backend.update(cx, |backend, cx| {
-                        backend.core_cmds_add_login(ip, login);
-                        cx.notify();
-                    });
-                }) {
-                    Ok(()) => {
+                match complete_provider_login(
+                    &mut this.login,
+                    generation,
+                    target,
+                    first,
+                    pin,
+                    result,
+                    |ip, login| {
+                        backend.update(cx, |backend, cx| {
+                            backend.core_cmds_add_login(ip, login);
+                            cx.notify();
+                        });
+                    },
+                ) {
+                    None => {}
+                    Some(Ok(())) => {
                         this.server.forget_secrets(window, cx);
                         this.close(window, cx);
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         this.error = Some(error);
                         cx.notify();
                     }

@@ -261,15 +261,8 @@ impl ConnectWizardView {
         else {
             return;
         };
-        if self
-            .backend
-            .read(cx)
-            .core_new
-            .as_ref()
-            .is_some_and(|job| job.phase.ended())
-        {
-            self.backend.update(cx, |b, bcx| b.core_new_forget(bcx));
-        }
+        self.backend
+            .update(cx, |b, bcx| b.core_new_prepare_login(bcx));
         self.error = None;
         self.branch = Some(Branch::Login);
         // A host key ticked for another flow is never this login's confirmation.
