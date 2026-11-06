@@ -15,12 +15,13 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Weak};
 
 use gpui::SharedString;
 
 use super::super::list::{MAX_ROWS, partial_sort};
 use super::state::{CoinFilter, CoinsState, coin_token};
-use moon_core::db::analytics::GroupStat;
+use moon_core::db::analytics::{GroupStat, StrategyBase};
 use moon_core::symbol::CoinMask;
 
 /// One row, ready to draw. Owned, so the cache outlives the borrows it was built from —
@@ -60,14 +61,10 @@ pub(in crate::analytics::tuner) struct CoinCounts {
     pub(in crate::analytics::tuner) suggested: usize,
 }
 
-/// Everything the row model depends on. Two equal keys MUST mean two identical models — a
-/// field missing here is a stale table that no interaction refreshes.
+/// Settings that affect the model, compared alongside the retained source identities.
+/// A missing input would leave stale rows after an interaction that should change them.
 #[derive(PartialEq)]
 struct RowsKey {
-    /// Identity (not contents) of the two aggregate sets: `LoadState` hands out `Arc`s, and a
-    /// new read is a new allocation, so the pointer is the cheap "is this the same data".
-    base: usize,
-    scoped: usize,
     search: String,
     filter: CoinFilter,
     /// The "fewer trades than" threshold and the "no trades" switch. In the key like every
@@ -85,6 +82,9 @@ struct RowsKey {
 /// The built model, with the key it was built for.
 pub(in crate::analytics::tuner) struct RowsCache {
     key: RowsKey,
+    /// Weak references pin the Arc allocation identity without retaining obsolete source vectors.
+    base: Weak<StrategyBase>,
+    scoped: Weak<Vec<GroupStat>>,
     pub(in crate::analytics::tuner) rows: Vec<CoinRow>,
     pub(in crate::analytics::tuner) counts: CoinCounts,
     /// Working blacklist tokens the selected strategies never traded in the period, sorted.
@@ -96,12 +96,10 @@ pub(in crate::analytics::tuner) struct RowsCache {
 /// Rebuild the model unless the cache already holds it. Returns the cache to render from.
 pub(in crate::analytics::tuner) fn rows_for<'a>(
     state: &'a mut CoinsState,
-    base: &[GroupStat],
-    scoped: &[GroupStat],
+    base: &Arc<StrategyBase>,
+    scoped: &Arc<Vec<GroupStat>>,
 ) -> &'a RowsCache {
     let key = RowsKey {
-        base: base.as_ptr() as usize,
-        scoped: scoped.as_ptr() as usize,
         search: state.search.trim().to_lowercase(),
         filter: state.filter,
         min_trades: state.min_trades,
@@ -115,11 +113,17 @@ pub(in crate::analytics::tuner) fn rows_for<'a>(
         sort: state.sort.clone(),
         lists_rev: state.lists_rev,
     };
-    if state.rows.as_ref().is_none_or(|c| c.key != key) {
-        let (rows, counts, total) = build(state, base, scoped, &key.search);
+    if state.rows.as_ref().is_none_or(|c| {
+        c.base.as_ptr() != Arc::as_ptr(base)
+            || c.scoped.as_ptr() != Arc::as_ptr(scoped)
+            || c.key != key
+    }) {
+        let (rows, counts, total) = build(state, &base.coins, scoped, &key.search);
         let black_idle = black_idle(state, scoped);
         state.rows = Some(RowsCache {
             key,
+            base: Arc::downgrade(base),
+            scoped: Arc::downgrade(scoped),
             rows,
             counts,
             black_idle,

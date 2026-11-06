@@ -398,7 +398,7 @@ impl AnalyticsView {
                 // here, in the same block, is also what releases the borrow before
                 // `cx.entity()` below needs the view.
                 let (counts, total, drawn) = {
-                    let cache = rows::rows_for(&mut self.coins, &base.coins, &scoped);
+                    let cache = rows::rows_for(&mut self.coins, &base, &scoped);
                     (cache.counts, cache.total, cache.rows.len())
                 };
                 if coins_body(true, true, drawn) == CoinsBody::NoMatch {
