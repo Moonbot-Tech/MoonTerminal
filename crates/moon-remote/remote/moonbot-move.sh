@@ -197,6 +197,79 @@ ufw_active() {
     command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status | grep -q '^Status: active'
 }
 
+# Whether UDP port $1 already has a general IPv4 allow.
+ufw_has_v4() {
+    LC_ALL=C ufw status |
+        grep -q -E "^$1/udp[[:space:]]+ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere[[:space:]]*(#.*)?\$"
+}
+
+# Whether UDP port $1 already has a general IPv6 allow.
+ufw_has_v6() {
+    LC_ALL=C ufw status |
+        grep -q -E "^$1/udp[[:space:]]+\(v6\)[[:space:]]+ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere[[:space:]]+\(v6\)[[:space:]]*(#.*)?\$"
+}
+
+# Whether the general allow for port $1 and family $2 carries this instance's terminal marker.
+ufw_has_our_comment() {
+    LC_ALL=C ufw status | awk -v port="$1/udp " -v family="$2" -v tag="# MoonBot $3" '
+        index($0, port) == 1 && index($0, tag) {
+            v6 = index($0, "(v6)") > 0
+            if ((family == "6" && v6) || (family == "4" && !v6)) found = 1
+        }
+        END { exit !found }
+    '
+}
+
+# Open port $1 for whichever families lack an allow. Family-specific sources keep a user's rule in
+# the other family untouched, and insertion ahead of broader denies makes the new endpoint usable.
+# The new_ufw4/new_ufw6 globals also recover ownership after an interrupted marker rewrite.
+ufw_open() {
+    new_ufw4=0
+    new_ufw6=0
+    if ! ufw_has_v4 "$1"; then
+        ufw insert 1 allow from 0.0.0.0/0 to any port "$1" proto udp comment "MoonBot $2" >/dev/null
+        new_ufw4=1
+    elif ufw_has_our_comment "$1" 4 "$2"; then
+        new_ufw4=1
+    fi
+    if ! ufw_has_v6 "$1"; then
+        ufw insert 1 allow from ::/0 to any port "$1" proto udp comment "MoonBot $2" >/dev/null
+        new_ufw6=1
+    elif ufw_has_our_comment "$1" 6 "$2"; then
+        new_ufw6=1
+    fi
+}
+
+# Delete only the numbered allow for port $1, family $2, and this instance's terminal comment.
+ufw_delete_family() {
+    numbers=$(LC_ALL=C ufw status numbered | awk -v port="$1/udp " -v family="$2" -v tag="# MoonBot $3" '
+        index($0, port) && index($0, "ALLOW") && index($0, tag) {
+            v6 = index($0, "(v6)") > 0
+            if ((family == "6" && !v6) || (family == "4" && v6)) next
+            line = $0
+            sub(/^[[:space:]]*\[[[:space:]]*/, "", line)
+            sub(/[[:space:]]*\].*$/, "", line)
+            print line
+        }
+    ' | sort -rn)
+    for number in $numbers; do
+        ufw --force delete "$number" >/dev/null 2>&1 || true
+    done
+}
+
+# Delete the firewall allows recorded in marker $1 for port $2 and instance $3.
+ufw_delete_marked() {
+    if grep -qx ufw "$1"; then
+        ufw delete allow "$2/udp" >/dev/null 2>&1 || true
+    fi
+    if grep -qx ufw4 "$1"; then
+        ufw_delete_family "$2" 4 "$3"
+    fi
+    if grep -qx ufw6 "$1"; then
+        ufw_delete_family "$2" 6 "$3"
+    fi
+}
+
 # The absolute instance directory for $1: a relative name lives under /root. Every step resolves
 # it the same way, so finish and remove find what install made.
 resolve_dir() {
@@ -258,13 +331,13 @@ install)
     umask 077
     mkdir -p -- "$(dirname -- "$dest")"
     mkdir -- "$dest"
-    opened=''
+    new_ufw4=0
+    new_ufw6=0
     cleanup() {
         code=$?
         if test "$code" != 0; then
-            if test -n "$opened"; then
-                ufw delete allow "$port/udp" >/dev/null 2>&1 || true
-            fi
+            test "$new_ufw4" = 0 || ufw_delete_family "$port" 4 "$dest"
+            test "$new_ufw6" = 0 || ufw_delete_family "$port" 6 "$dest"
             rm -rf -- "$dest"
         fi
         rm -rf -- "$work"
@@ -288,14 +361,11 @@ install)
     fi
     chmod 700 "$dest/MoonBot"
     install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
-    # An inbound IPv4 allow from anywhere that was there before stays the user's: only a rule
-    # opened here is marked for removal. Any other rule for the port (deny, v6 only, one source)
-    # does not let the core be reached, so the allow is still added.
-    if ufw_active && ! LC_ALL=C ufw status |
-        grep -q -E "^${port}/udp[[:space:]]+ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere[[:space:]]*(#.*)?\$"; then
-        ufw allow "$port/udp" comment "MoonBot $dest" >/dev/null
-        opened=1
-        echo ufw >> "$dest/$marker"
+    # Only rules opened here are marked for removal, independently for IPv4 and IPv6.
+    if ufw_active; then
+        ufw_open "$port" "$dest"
+        test "$new_ufw4" = 0 || echo ufw4 >> "$dest/$marker"
+        test "$new_ufw6" = 0 || echo ufw6 >> "$dest/$marker"
     fi
     systemctl daemon-reload
     # Not started here: the old core must be down first, or two cores trade one account.
@@ -320,7 +390,8 @@ install-fresh)
     umask 077
     work=''
     made=''
-    opened=''
+    new_ufw4=0
+    new_ufw6=0
     started=''
     cleanup() {
         code=$?
@@ -329,9 +400,8 @@ install-fresh)
                 journalctl -u "$unit" -n 30 --no-pager >&2 || true
                 systemctl disable --now -- "$unit" >/dev/null 2>&1 || true
             fi
-            if test -n "$opened"; then
-                ufw delete allow "$port/udp" >/dev/null 2>&1 || true
-            fi
+            test "$new_ufw4" = 0 || ufw_delete_family "$port" 4 "$dest"
+            test "$new_ufw6" = 0 || ufw_delete_family "$port" 6 "$dest"
             if test -n "$made"; then
                 rm -rf -- "$dest"
             fi
@@ -355,11 +425,10 @@ install-fresh)
     chmod 700 "$dest/MoonBot" "$dest/mb"
     install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
     # As in install: only an allow opened here is marked for removal.
-    if ufw_active && ! LC_ALL=C ufw status |
-        grep -q -E "^${port}/udp[[:space:]]+ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere[[:space:]]*(#.*)?\$"; then
-        ufw allow "$port/udp" comment "MoonBot $dest" >/dev/null
-        opened=1
-        echo ufw >> "$dest/$marker"
+    if ufw_active; then
+        ufw_open "$port" "$dest"
+        test "$new_ufw4" = 0 || echo ufw4 >> "$dest/$marker"
+        test "$new_ufw6" = 0 || echo ufw6 >> "$dest/$marker"
     fi
     systemctl daemon-reload
     started=1
@@ -480,18 +549,13 @@ retarget)
     test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal" >&2; exit 1; }
     validate_port "${2:-}"
     old=$(head -n 1 "$dest/$marker")
-    new_ufw=0
+    new_ufw4=0
+    new_ufw6=0
     if test "$old" != "$p" && ufw_active; then
-        # A closed new port needs an allow whoever owned the old one. A matching user allow stays
-        # unmarked, so a later retarget or remove can never delete access MoonTerminal did not open.
-        if ! LC_ALL=C ufw status |
-            grep -q -E "^${p}/udp[[:space:]]+ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere[[:space:]]*(#.*)?\$"; then
-            ufw allow "$p/udp" comment "MoonBot $dest" >/dev/null
-            new_ufw=1
-        fi
-        if grep -qx ufw "$dest/$marker"; then
-            ufw delete allow "$old/udp" >/dev/null 2>&1 || true
-        fi
+        # The new port needs admission whoever owned the old rule. Existing user rules stay
+        # unmarked; a terminal comment left by an interrupted attempt retains its ownership.
+        ufw_open "$p" "$dest"
+        ufw_delete_marked "$dest/$marker" "$old" "$dest"
     fi
     kept="$dest/$marker.retarget"
     {
@@ -500,15 +564,13 @@ retarget)
             tail -n +2 "$dest/$marker"
         else
             tail -n +2 "$dest/$marker" | while IFS= read -r line; do
-                if test "$line" = ufw; then
-                    test "$new_ufw" = 0 || echo ufw
-                else
-                    printf '%s\n' "$line"
-                fi
+                case $line in
+                ufw|ufw4|ufw6) ;;
+                *) printf '%s\n' "$line" ;;
+                esac
             done
-            if ! grep -qx ufw "$dest/$marker" && test "$new_ufw" = 1; then
-                echo ufw
-            fi
+            test "$new_ufw4" = 0 || echo ufw4
+            test "$new_ufw6" = 0 || echo ufw6
         fi
     } > "$kept"
     cat "$kept" > "$dest/$marker"
@@ -589,9 +651,9 @@ remove)
     systemctl disable --now -- "$unit" >/dev/null 2>&1 || true
     # Never delete the folder of a core that is still running.
     ! systemctl is-active --quiet -- "$unit" || { echo "$unit did not stop: nothing removed" >&2; exit 1; }
-    # Only a rule this move opened goes: the port may have been open before it.
-    if grep -qx ufw "$dest/$marker" && ufw_active; then
-        ufw delete allow "$port/udp" >/dev/null 2>&1 || true
+    # Only rules this move opened go: either port family may have been open before it.
+    if ufw_active; then
+        ufw_delete_marked "$dest/$marker" "$port" "$dest"
     fi
     rm -rf -- "$dest"
     echo REMOVE_OK

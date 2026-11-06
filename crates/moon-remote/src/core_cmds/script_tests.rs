@@ -90,29 +90,73 @@ esac
 
 const UFW_STUB: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MB_TEST_ROOT/ufw_calls"
-case ${1:-} in
-allow)
-    port=$2
-    if ! grep -q "^$port " "$MB_TEST_ROOT/ufw_rules"; then
-        printf '%s ALLOW IN Anywhere\n' "$port" >> "$MB_TEST_ROOT/ufw_rules"
-    fi
+record_order() {
     if test -s "$MB_TEST_ROOT/retarget_marker"; then
         printf '%s|marker=%s\n' "$*" "$(head -n 1 "$(cat "$MB_TEST_ROOT/retarget_marker")")" >> "$MB_TEST_ROOT/retarget_order"
     fi
+}
+add_allow() {
+    position=''
+    if test "$1" = insert; then
+        position=$2
+        shift 2
+    fi
+    if test "${2:-}" = from; then
+        source=$3
+        port=$7
+    else
+        source=any
+        port=${2%/udp}
+    fi
+    comment=$(printf '%s\n' "$*" | sed -n 's/.* comment //p')
+    if test "$source" = ::/0; then
+        rule="$port/udp (v6) ALLOW IN Anywhere (v6) # $comment"
+        match="$port/udp (v6) ALLOW "
+    else
+        rule="$port/udp ALLOW IN Anywhere # $comment"
+        match="$port/udp ALLOW "
+    fi
+    if grep -q -F "$match" "$MB_TEST_ROOT/ufw_rules"; then
+        awk -v match="$match" -v rule="$rule" 'index($0, match) == 1 {$0 = rule} {print}' \
+            "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept"
+    elif test "$position" = 1; then
+        printf '%s\n' "$rule" > "$MB_TEST_ROOT/ufw_rules.kept"
+        cat "$MB_TEST_ROOT/ufw_rules" >> "$MB_TEST_ROOT/ufw_rules.kept"
+    else
+        cat "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept"
+        printf '%s\n' "$rule" >> "$MB_TEST_ROOT/ufw_rules.kept"
+    fi
+    cat "$MB_TEST_ROOT/ufw_rules.kept" > "$MB_TEST_ROOT/ufw_rules"
+    rm -f "$MB_TEST_ROOT/ufw_rules.kept"
+    record_order "$@"
+}
+case ${1:-} in
+allow|insert)
+    add_allow "$@"
     ;;
 delete)
     port=$3
     grep -v "^$port " "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept" || true
     cat "$MB_TEST_ROOT/ufw_rules.kept" > "$MB_TEST_ROOT/ufw_rules"
     rm -f "$MB_TEST_ROOT/ufw_rules.kept"
-    if test -s "$MB_TEST_ROOT/retarget_marker"; then
-        printf '%s|marker=%s\n' "$*" "$(head -n 1 "$(cat "$MB_TEST_ROOT/retarget_marker")")" >> "$MB_TEST_ROOT/retarget_order"
+    record_order "$@"
+    ;;
+--force)
+    if test "${2:-}" = delete; then
+        awk -v number="$3" 'NR != number' "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept"
+        cat "$MB_TEST_ROOT/ufw_rules.kept" > "$MB_TEST_ROOT/ufw_rules"
+        rm -f "$MB_TEST_ROOT/ufw_rules.kept"
+        record_order "$@"
     fi
     ;;
 status)
     if test "$(cat "$MB_TEST_ROOT/ufw_active")" = 1; then
         printf 'Status: active\n'
-        cat "$MB_TEST_ROOT/ufw_rules"
+        if test "${2:-}" = numbered; then
+            awk '{printf "[%3d] %s\n", NR, $0}' "$MB_TEST_ROOT/ufw_rules"
+        else
+            cat "$MB_TEST_ROOT/ufw_rules"
+        fi
     else
         printf 'Status: inactive\n'
     fi
@@ -528,24 +572,31 @@ fn log_refuses_unsupported_line_count() {
     assert_eq!(output.status.code(), Some(2));
 }
 
-/// A validated cached directory must make a stopped hand-installed core's trading log readable.
+/// Reading the whole file or ignoring the selected count would make log transfers unbounded.
 #[test]
-fn log_uses_directory_hint_only_after_locate_fails() {
+fn log_returns_exactly_the_selected_tail_from_a_stopped_core() {
     let Some(sandbox) = Sandbox::new() else {
         return;
     };
     let dir = sandbox.instance("moonbot-a");
     sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
-    sandbox.answer_at(
-        &dir.join("logs").join("LOG_2026-01-02.log"),
-        "first\nsecond\n",
-    );
+    let lines = (1..=501)
+        .map(|line| format!("line-{line}\n"))
+        .collect::<String>();
+    sandbox.answer_at(&dir.join("logs").join("LOG_2026-01-02.log"), &lines);
     let dir_text = sandbox.posix(&dir);
 
-    let output = sandbox.run(&["log", "3302", "200", &dir_text]);
-
-    assert_ok(&output);
-    assert_eq!(stdout(&output), "LOG_BEGIN\nfirst\nsecond\n");
+    for (count, first) in [(200, 302), (500, 2)] {
+        let output = sandbox.run(&["log", "3302", &count.to_string(), &dir_text]);
+        assert_ok(&output);
+        let expected = format!(
+            "LOG_BEGIN\n{}",
+            (first..=501)
+                .map(|line| format!("line-{line}\n"))
+                .collect::<String>()
+        );
+        assert_eq!(stdout(&output), expected);
+    }
     let relative = sandbox.run(&["log", "3302", "200", "root/moonbot-a"]);
     assert!(!relative.status.success());
     assert!(stdout(&relative).is_empty());
@@ -568,11 +619,13 @@ fn retarget_rewrites_only_the_port_and_moves_the_firewall_rule() {
 
     assert_ok(&output);
     assert_eq!(stdout(&output), "RETARGET_OK=3305\n");
-    assert_eq!(sandbox.read(&marker), "3305\nufw\nkept\n");
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw4\nufw6\n");
     assert_eq!(
         sandbox.read(&sandbox.root.join("retarget_order")),
         format!(
-            "allow 3305/udp comment MoonBot {dir_text}|marker=3302\ndelete allow 3302/udp|marker=3302\n"
+            "allow from 0.0.0.0/0 to any port 3305 proto udp comment MoonBot {dir_text}|marker=3302\n\
+             allow from ::/0 to any port 3305 proto udp comment MoonBot {dir_text}|marker=3302\n\
+             delete allow 3302/udp|marker=3302\n"
         )
     );
 }
@@ -740,11 +793,13 @@ fn retarget_opens_a_closed_new_port_without_owned_old_rule() {
     let output = sandbox.run(&["retarget", &dir_text, "3305"]);
 
     assert_ok(&output);
-    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw\n");
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw4\nufw6\n");
     assert!(
         sandbox
             .read(&sandbox.root.join("ufw_calls"))
-            .contains(&format!("allow 3305/udp comment MoonBot {dir_text}\n"))
+            .contains(&format!(
+                "insert 1 allow from 0.0.0.0/0 to any port 3305 proto udp comment MoonBot {dir_text}\n"
+            ))
     );
     assert!(
         !sandbox
@@ -753,7 +808,7 @@ fn retarget_opens_a_closed_new_port_without_owned_old_rule() {
     );
 }
 
-/// A pre-existing user allow must stay user-owned after retarget and later removal.
+/// A pre-existing IPv4 user allow must stay user-owned while the missing IPv6 allow is opened.
 #[test]
 fn retarget_does_not_claim_a_preexisting_user_rule() {
     let Some(sandbox) = Sandbox::new() else {
@@ -769,12 +824,128 @@ fn retarget_does_not_claim_a_preexisting_user_rule() {
     let output = sandbox.run(&["retarget", &dir_text, "3305"]);
 
     assert_ok(&output);
-    assert_eq!(sandbox.read(&marker), "3305\nkept\n");
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw6\n");
+    assert_eq!(
+        sandbox.read(&sandbox.root.join("ufw_rules")),
+        format!(
+            "3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n\
+             3305/udp ALLOW IN Anywhere # user\n"
+        )
+    );
+    let calls = sandbox.read(&sandbox.root.join("ufw_calls"));
+    assert!(!calls.contains("from 0.0.0.0/0 to any port 3305"));
+    assert!(calls.contains("delete allow 3302/udp"));
+}
+
+/// A generic allow must not claim or later delete a user's pre-existing IPv6-only rule.
+#[test]
+fn retarget_preserves_a_preexisting_ipv6_rule_through_remove() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nufw\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    sandbox.answer("ufw_rules", "3305/udp (v6) ALLOW IN Anywhere (v6) # user\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["retarget", &dir_text, "3305"]);
+
+    assert_ok(&output);
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw4\n");
+    assert_eq!(
+        sandbox.read(&sandbox.root.join("ufw_rules")),
+        format!(
+            "3305/udp ALLOW IN Anywhere # MoonBot {dir_text}\n\
+             3305/udp (v6) ALLOW IN Anywhere (v6) # user\n"
+        )
+    );
+    assert_ok(&sandbox.run(&["remove", &dir_text]));
+    assert_eq!(
+        sandbox.read(&sandbox.root.join("ufw_rules")),
+        "3305/udp (v6) ALLOW IN Anywhere (v6) # user\n"
+    );
+}
+
+/// Appending after a broader deny would report success while the new endpoint remained blocked.
+#[test]
+fn retarget_inserts_new_allows_ahead_of_a_broader_deny() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    sandbox.answer("ufw_rules", "3300:3399/udp DENY IN Anywhere\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["retarget", &dir_text, "3305"]);
+
+    assert_ok(&output);
+    assert_eq!(
+        sandbox.read(&sandbox.root.join("ufw_rules")),
+        format!(
+            "3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n\
+             3305/udp ALLOW IN Anywhere # MoonBot {dir_text}\n\
+             3300:3399/udp DENY IN Anywhere\n"
+        )
+    );
+}
+
+/// A failed marker rewrite must not orphan the terminal-created allows when retarget is retried.
+#[test]
+fn retarget_retry_recovers_interrupted_firewall_ownership() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    let interrupted = dir.join(".moonterminal-move.retarget");
+    sandbox.answer_at(&marker, "3302\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    fs::create_dir(&interrupted).expect("block the first temporary marker write");
+    let dir_text = sandbox.posix(&dir);
+
+    let first = sandbox.run(&["retarget", &dir_text, "3305"]);
+    assert!(!first.status.success());
+    fs::remove_dir(&interrupted).expect("restore marker writes");
+    assert_ok(&sandbox.run(&["retarget", &dir_text, "3305"]));
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw4\nufw6\n");
+
+    assert_ok(&sandbox.run(&["retarget", &dir_text, "3306"]));
+    let rules = sandbox.read(&sandbox.root.join("ufw_rules"));
+    assert!(!rules.contains("3305/udp"), "{rules}");
+    assert!(rules.contains("3306/udp"), "{rules}");
+}
+
+/// Recovery in one family must not transfer ownership of the other family's user rule.
+#[test]
+fn retarget_recovers_only_the_interrupted_terminal_family() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    let dir_text = sandbox.posix(&dir);
+    sandbox.answer(
+        "ufw_rules",
+        &format!(
+            "3305/udp ALLOW IN Anywhere # user\n\
+             3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n"
+        ),
+    );
+
+    let output = sandbox.run(&["retarget", &dir_text, "3305"]);
+
+    assert_ok(&output);
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw6\n");
+    assert_ok(&sandbox.run(&["remove", &dir_text]));
     assert_eq!(
         sandbox.read(&sandbox.root.join("ufw_rules")),
         "3305/udp ALLOW IN Anywhere # user\n"
     );
-    let calls = sandbox.read(&sandbox.root.join("ufw_calls"));
-    assert!(!calls.contains("allow 3305/udp comment"));
-    assert!(calls.contains("delete allow 3302/udp"));
 }
