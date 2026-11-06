@@ -142,12 +142,10 @@ fn cell_text_for_dashes_numeric_keys_when_the_core_is_offline() {
 /// Breaks when every non-ready status is dashed: a core still coming up would look dead.
 #[test]
 fn cell_text_for_keeps_numbers_while_the_core_is_connecting() {
+    let _locale = crate::test_locale::force("en");
     let connecting = sample_row(ConnStatus::Connecting);
     assert_eq!(cell_text_for(&connecting, "cpu_proc"), "7%");
-    assert_eq!(
-        cell_text_for(&connecting, "ping"),
-        cell_text_for(&sample_row(ConnStatus::Ready), "ping")
-    );
+    assert_eq!(cell_text_for(&connecting, "ping"), "12 ms");
 }
 
 /// A narrow measured width removes the drop tiers in order. Ping and the name stay.
