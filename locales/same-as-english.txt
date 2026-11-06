@@ -1,0 +1,606 @@
+# Dictionary values that equal English in some language. Checked by
+# crates/moon-ui-gpui/tests/theme_contract/translations.rs: a new one fails until it is translated or
+# listed here, and a translated one fails until its line goes. Each line is `key: languages`.
+#
+# Translated elsewhere, English here: the likely gaps. Work through these; what really stays English
+# (a term, an abbreviation) moves to the second section with a reason if it is not obvious.
+alerts.col.coin: tr vi
+alerts.col.core: vi
+alerts.fig.fib_retracement: es tr pt vi
+alerts.fig.mb_fib: es tr pt vi
+alerts.kind.moonbot: es tr pt vi
+alerts.kind.terminal: es tr pt vi
+alerts.short.moonbot: es tr pt vi
+alerts.short.terminal: es
+analytics.auto.col: es pt
+analytics.cal.funding_short: es vi
+analytics.cal.kpi_funding: es pt vi
+analytics.cal.kpi_volume: pt
+analytics.coins.col_auto: es pt
+analytics.coins.input_ph: tr vi
+analytics.coins.manual: es pt
+analytics.col.best: ru es uk
+analytics.col.coin: tr vi
+analytics.col.core: vi
+analytics.col.worst: ru es uk
+analytics.kpi.maxdd: ru es uk tr vi
+analytics.kpi.pf: ru es uk tr vi
+analytics.kpi.winrate: ru es uk
+analytics.minutes: es pt
+analytics.sum.chart.lines_top: pt vi
+analytics.sum.chart.total: es pt
+analytics.sum.cores.conc.top5: pt vi
+analytics.sum.ins.what.pf: ru
+analytics.sum.kpi.risk: tr
+analytics.sum.pp: es
+analytics.ticks.col.duration: es pt
+analytics.ticks.col.model: tr
+analytics.ticks.col.plan: es
+analytics.ticks.col.tape: pt vi
+analytics.ticks.dur_hm: es pt
+analytics.ticks.dur_m: es pt
+analytics.ticks.dur_ms: es pt
+analytics.ticks.fetch_progress_at: es
+analytics.ticks.model_btn: tr
+analytics.ticks.model_sec_take: es pt
+analytics.tuner.auto_ph: es pt
+analytics.tuner.compose_budget_beam: pt
+analytics.tuner.grp_delta: es pt
+analytics.tuner.grp_volume: pt
+assets.balance_stale: pt
+assets.balances_stale_n: pt
+assets.balances_total: es pt
+assets.col.core: vi
+assets.market_sell: ru uk pt vi
+assets.order: ru uk tr pt vi
+assets.order_dialog.size: tr
+assets.wallet.kind.futures: tr pt vi
+assets.wallet.kind.quarterly: tr pt vi
+assets.wallet.kind.spot: es tr pt vi
+badges.col.color: es
+chart.candles.frame_candles: pt
+chart.candles.frame_trades: es
+chart.candles.tf: pt
+chart.coin.search: tr vi
+chart.fig.cursor: es pt
+chart.graphics.frame_trade_marks: es
+chart.graphics.volume_tf_auto: es pt
+chart.hvol.caption_max: tr vi
+chart.volumes.tip: pt
+chart.volumes.title: pt
+chart_labels.color: es
+chart_labels.field.ask: es tr pt vi
+chart_labels.field.bid: es tr pt vi
+chart_labels.field.btc_delta_1h: es pt vi
+chart_labels.field.btc_delta_24h: es pt vi
+chart_labels.field.btc_delta_72h: es pt vi
+chart_labels.field.coin: tr vi
+chart_labels.field.core: vi
+chart_labels.field.exchange_delta_1h: es
+chart_labels.field.exchange_delta_24h: es
+chart_labels.field.funding: es pt vi
+chart_labels.field.mark_price: pt vi
+chart_labels.field.open_pnl_pct: ru es uk
+chart_labels.field.spread: es tr pt vi
+chart_labels.field.venue: es
+chart_labels.group.exchange: es
+chart_labels.group.volume: pt
+chart_labels.margin.cross: es pt
+chart_labels.preset.cursor_volumes: es pt
+chart_labels.preset.funding: es pt vi
+chart_labels.preset.volumes: pt
+chart_labels.short.ask: es tr pt vi
+chart_labels.short.bid: es tr pt vi
+chart_labels.short.btc_1h: es pt vi
+chart_labels.short.btc_24h: es pt vi
+chart_labels.short.btc_72h: es pt vi
+chart_labels.short.detect_strategy: es
+chart_labels.short.exchange_1h: es
+chart_labels.short.exchange_24h: es
+chart_labels.short.exposure: vi
+chart_labels.short.funding: es pt vi
+chart_labels.short.leverage: pt vi
+chart_labels.short.liq_price: es pt
+chart_labels.short.mark_delta: tr pt vi
+chart_labels.short.mark_price: tr pt vi
+chart_labels.short.pnl: ru es uk
+chart_labels.short.session_pnl: ru es uk pt vi
+chart_labels.short.spread: es tr pt vi
+chart_labels.short.temp_ban_left: pt
+chart_labels.short.volume_24h: es pt vi
+chart_labels.span.at_cursor: es pt
+chart_labels.tf: pt
+chart_labels.tf.auto: es pt
+city.AKL: es tr pt vi
+city.ALA: es pt vi
+city.AMS: tr vi
+city.ANC: es tr pt vi
+city.BER: tr vi
+city.BKK: es tr
+city.BNE: es tr pt vi
+city.BOG: es pt vi
+city.BOM: tr pt vi
+city.BUE: es tr pt vi
+city.CAI: pt vi
+city.CHI: es tr pt vi
+city.DEN: es tr pt vi
+city.DUB: tr pt vi
+city.DXB: tr pt vi
+city.HEL: es tr vi
+city.HKG: es tr pt
+city.HNL: es tr pt vi
+city.IST: vi
+city.JKT: vi
+city.JNB: tr vi
+city.KHI: es pt vi
+city.KIE: tr vi
+city.LAX: tr pt vi
+city.MAD: es tr vi
+city.NYC: tr vi
+city.PAR: tr pt vi
+city.PER: es tr pt vi
+city.RUH: vi
+city.SAO: es tr pt vi
+city.SCL: es tr pt vi
+city.SEL: vi
+city.SIN: vi
+city.SYD: pt vi
+city.TOR: es tr pt vi
+city.TYO: tr vi
+coin_bl_places.cores_one: vi
+coin_menu.target_core: vi
+coin_menu.tbl_left_stale: pt
+common.db_read_failed_file: vi
+common.size_gb: es tr pt vi
+common.size_kb: es tr pt vi
+common.size_mb: es tr pt vi
+conn.card.color: es
+conn.status.failed: es
+connect_wizard.done.status: pt
+connect_wizard.keys.exchange: es
+core_expert.buy_links: pt
+core_expert.gen_auto_cancel_min: es pt
+core_expert.hk_cancel_buy: tr
+core_expert.hk_controls_frame: pt
+core_expert.hk_join_sells: tr
+core_expert.log_support_en: ru es uk pt vi
+core_expert.tab_interface: pt
+core_expert.tab_login: pt
+core_expert.tab_telegram: es uk tr pt vi
+core_expert.tlg_client_status: pt
+core_expert.view_opt_auto: es pt
+core_expert.view_opt_normal: es tr pt
+core_expert.wd_col_online: pt
+core_expert.wd_status_error: es
+core_settings.tab_general: es
+core_status.axis_api: es uk tr pt vi
+core_status.chart_5m: es pt
+core_status.chart_mem: es tr pt vi
+core_status.chart_ping: es tr pt vi
+core_status.col.api_key: es pt
+core_status.col.core: vi
+core_status.col.cpu_proc: pt
+core_status.col.status: pt
+core_status.fault.f.core: vi
+core_status.health.sub_online_few: pt
+core_status.health.sub_online_many: pt
+core_status.health.sub_online_one: pt
+core_status.mb: es tr pt vi
+core_status.mem_free: es tr pt vi
+core_status.mode.servers_short: vi
+core_status.ms: es tr pt vi
+core_status.requests: pt
+core_status.server_n: ru es uk vi
+core_status.startup.kb: es tr pt vi
+core_status.startup.mb: es tr pt vi
+core_status.updates.legend_build_one: vi
+core_status.warn_conn: pt
+core_update.col.core: vi
+core_update.confirm.cores_one: vi
+core_update.target.named: es tr pt
+core_update.target.release: pt
+crowd.block.logo: tr vi
+crowd.col.coin: tr vi
+crowd.day.traders: es pt vi
+detects.cfg.chart_candles: pt
+detects.field.coin: tr vi
+detects.view.core: vi
+detects.view.exchange: es
+detects.view.size_mini: es tr pt vi
+dialogs.no: es
+dock.tab.generic: es tr
+dock.tab.log: pt
+general.sec.logs: pt
+header.ms_slots_hotkeys: vi
+header.trade_real: es pt
+hotkeys.chart_shot_tf: es tr pt vi
+hotkeys.mouse.buy_move: ru uk tr pt vi
+hotkeys.mouse.buy_move2: ru uk tr pt vi
+hotkeys.mouse.sell_move: ru uk tr pt vi
+hotkeys.mouse.sell_move2: ru uk tr pt vi
+hotkeys.mouse.short_buy_move: ru uk tr pt vi
+hotkeys.mouse.short_buy_move2: ru uk tr pt vi
+hotkeys.mouse.short_sell_move: ru uk tr pt vi
+hotkeys.mouse.short_sell_move2: ru uk tr pt vi
+hotkeys.scope.cursor: es pt
+iface.book_level_is_auto: es pt
+import.group.hotkeys: pt
+import.group.terminal: es tr pt vi
+import.preview.caption.fixed_sell_slot: ru uk tr pt vi
+lines.name.stop: es tr pt
+lines.name.take_profit: es pt
+lines.name.trailing: es pt vi
+log.file: vi
+log.source.local: es pt
+news.lat.unit: es tr pt vi
+news.tags: pt
+orders.col.core: vi
+orders.col.token: es tr pt
+orders.edit.coin: tr vi
+orders.edit.core: vi
+orders.edit.size: tr
+orders.edit.status: pt
+orders.edit.stops: es pt
+profit_monitor.core_fallback: vi
+profit_monitor.group.subtotal: es pt
+profit_monitor.settings.auto_buttons: es
+report.cell.emu: es tr pt
+report.col.coin: tr vi
+report.col.core_name: vi
+report.col.emulator: es tr pt
+report.col.status: pt
+report.filter.coin_ph: tr vi
+report.kind.emu_short: es pt
+report.kind.real_short: es
+report.side.long: tr pt vi
+report.side.short: tr pt vi
+report.totals: es pt
+report.totals_n: es pt
+report.traded_volume: pt
+screener.window_title: es pt
+security.bits: es pt
+settings.nav.group.common: es
+settings.nav.group.control: es
+shell.engine_toast.fail: es
+station.over.bot: es tr pt vi
+station.over.bot_chats: es pt
+storage.core_data_col_core: vi
+storage.core_data_col_sync: pt
+storage.core_data_unnamed: vi
+storage.trades_min: es pt
+storage.unit_min: es pt
+strat.dist_black: uk tr pt vi
+strat.dist_white: uk tr pt vi
+strat.dist_white_trading: uk tr pt vi
+strat.label.HookAntiPump: es tr pt
+strat.label.MStrikeVolume: pt
+strat.label.StopLoss: es pt
+strat.label.StopLoss3: es pt
+strat.label.TakeProfit: es pt
+strat.label.VLiteDelta0: es tr pt vi
+strat.label.VLitePDelta2: tr
+strat.label.VolBvShort: ru es uk
+strat.label.VolSvLong: ru es uk
+strat.label.WavesDelta0: es tr pt vi
+strat.section.Stops: es pt
+strat.tree_orders_words: pt
+telegram.access_chat: es pt vi
+telegram.access_title: es pt
+telegram.button_control: es
+telegram.button_status: pt
+telegram.chats.col_chat: es pt
+telegram.host.chats_n_few: es pt
+telegram.host.chats_n_many: es pt
+telegram.host.chats_n_one: es pt
+telegram.layout.col.volume: pt
+telegram.layout.field.coin: tr vi
+telegram.layout.total: es pt
+telegram.mini_chart_level_stop: es tr pt
+telegram.mini_chart_level_take: es tr pt
+telegram.mini_chart_range_300: es pt
+telegram.mini_chart_span_15: es pt
+telegram.mini_chart_span_2: es pt
+telegram.mini_chart_span_5: es pt
+telegram.mini_chart_stop: es tr pt
+telegram.mini_chart_take: es tr pt
+telegram.mini_coin_mode_ticks: es pt
+telegram.mini_cores_total: es pt
+telegram.mini_cpu: es tr pt vi
+telegram.mini_online: pt vi
+telegram.mini_orders_volume: pt
+telegram.mini_ping: es tr pt vi
+telegram.mini_report_total: es pt
+telegram.mini_trade_manual: es pt
+telegram.mini_trade_volume: pt
+telegram.mini_trading: es pt
+telegram.mini_unit_mb: es tr pt vi
+telegram.mini_unit_ms: es tr pt vi
+telegram.notify_editor.chat: es pt vi
+telegram.notify_manual: es pt
+telegram.report_exchanges: es
+telegram.report_total: es pt
+telegram.report_volume_col: pt
+telegram.server.catchup_rest_none: es
+telegram.server.catchup_venues_col_rest: pt
+telegram.server.catchup_venues_col_venue: es pt
+telegram.server.keep_mb: es tr pt vi
+telegram.server.login: pt
+telegram.server.logs: tr pt
+telegram.server.status: pt
+telegram.settings.minutes: es pt
+telegram.station.bot_label: es tr pt vi
+telegram.station.chat_bot: es tr pt vi
+telegram.station.chat_disk_free: tr
+telegram.station.cpu_minutes: es pt
+telegram.station.disk_label: tr
+telegram.station.section_tape: pt vi
+telegram.station.uptime_hm: es pt
+telegram.station.uptime_m: es pt
+telegram_core.email: vi
+telegram_core.proxy_host: es tr pt vi
+telegram_core.proxy_port: tr vi
+telegram_core.service_error: es
+tgcore.proxy.title: es tr pt vi
+tick_volume.candle_head: pt
+tick_volume.candle_head_unit: pt
+tick_volume.candle_head_unit_untimed: pt
+tick_volume.candle_head_untimed: pt
+tick_volume.candle_values: pt
+tick_volume.candle_values_untimed: pt
+tick_volume.minimum: tr
+toolbar.core_config_area_general: es
+toolbar.core_config_area_gestures: pt
+toolbar.core_config_area_interface: pt
+toolbar.core_config_area_telegram: es tr pt vi
+toolbar.scale_auto: es pt
+toolbar.screener: es pt
+toolbar.sl_title: es pt
+toolbar.stop_market: es tr
+toolbar.tp_title: es pt
+trade_sounds.col.exchange: es
+trade_sounds.ex.count_few: es
+trade_sounds.ex.count_many: es
+trade_sounds.ex.count_one: es
+
+# English in every language: names, tickers and terms kept on purpose (locales/README.md,
+# "Deliberately NOT translated"). A line here that should be translated is a gap too.
+analytics.col.pf: ru es uk tr pt vi
+analytics.col.profit_pct: ru es uk tr pt vi
+analytics.metric.pct: ru es uk tr pt vi
+analytics.time.field_day: ru es uk tr pt vi
+analytics.time.field_hour: ru es uk tr pt vi
+analytics.time.field_week: ru es uk tr pt vi
+analytics.tuner.grp_ping: ru es uk tr pt vi
+analytics.tuner.seed: ru es uk tr pt vi
+assets.col.pnl: ru es uk tr pt vi
+assets.order_dialog.max: ru es uk tr pt vi
+chart.candles.zone_max: ru es uk tr pt vi
+chart.defaults.kind.addto: ru es uk tr pt vi
+chart.order_menu.cancel: ru es uk tr pt vi
+chart.order_menu.join_sells: ru es uk tr pt vi
+chart.order_menu.split: ru es uk tr pt vi
+chart_labels.act.cancel_buy: ru es uk tr pt vi
+chart_labels.act.panic_sell: ru es uk tr pt vi
+chart_labels.act.stop_panic: ru es uk tr pt vi
+chart_labels.short.window_buy_share: ru es uk tr pt vi
+chart_labels.short.window_buy_volume: ru es uk tr pt vi
+chart_labels.short.window_sell_volume: ru es uk tr pt vi
+chart_labels.short.window_volume: ru es uk tr pt vi
+common.exchange_futures: ru es uk tr pt vi
+common.exchange_quarterly: ru es uk tr pt vi
+common.exchange_spot: ru es uk tr pt vi
+conn.preset.auto: ru es uk tr pt vi
+conn.preset.classic: ru es uk tr pt vi
+connect_wizard.done.license: ru es uk tr pt vi
+connect_wizard.keys.api_key: ru es uk tr pt vi
+connect_wizard.keys.api_secret: ru es uk tr pt vi
+core_expert.as_btc_delta_over: ru es uk tr pt vi
+core_expert.as_btc_delta_under: ru es uk tr pt vi
+core_expert.buy_special: ru es uk tr pt vi
+core_expert.buy_tv_webhook: ru es uk tr pt vi
+core_expert.gen_copy_clipboard: ru es uk tr pt vi
+core_expert.gen_paste: ru es uk tr pt vi
+core_expert.hk_bot_shot: ru es uk tr pt vi
+core_expert.hk_button: ru es uk tr pt vi
+core_expert.hk_cancel_all_buys: ru es uk tr pt vi
+core_expert.hk_center_chart: ru es uk tr pt vi
+core_expert.hk_chart_shot: ru es uk tr pt vi
+core_expert.hk_fit_sells: ru es uk tr pt vi
+core_expert.hk_move_order: ru es uk tr pt vi
+core_expert.hk_move_tp: ru es uk tr pt vi
+core_expert.hk_new_long: ru es uk tr pt vi
+core_expert.hk_new_short: ru es uk tr pt vi
+core_expert.hk_open_coin_all: ru es uk tr pt vi
+core_expert.hk_panic_sell: ru es uk tr pt vi
+core_expert.hk_panic_sell_one: ru es uk tr pt vi
+core_expert.hk_pending_long: ru es uk tr pt vi
+core_expert.hk_pending_short: ru es uk tr pt vi
+core_expert.hk_place_long: ru es uk tr pt vi
+core_expert.hk_place_short: ru es uk tr pt vi
+core_expert.hk_reload_book: ru es uk tr pt vi
+core_expert.hk_reload_chart: ru es uk tr pt vi
+core_expert.hk_scale_minus: ru es uk tr pt vi
+core_expert.hk_scale_plus: ru es uk tr pt vi
+core_expert.hk_sell_minus: ru es uk tr pt vi
+core_expert.hk_sell_plus: ru es uk tr pt vi
+core_expert.hk_sell_slot: ru es uk tr pt vi
+core_expert.hk_shift_buy_down: ru es uk tr pt vi
+core_expert.hk_shift_buy_up: ru es uk tr pt vi
+core_expert.hk_shift_sell_down: ru es uk tr pt vi
+core_expert.hk_shift_sell_up: ru es uk tr pt vi
+core_expert.hk_split_order: ru es uk tr pt vi
+core_expert.hk_switch_figure: ru es uk tr pt vi
+core_expert.int_buttons_memory: ru es uk tr pt vi
+core_expert.int_colors_setup: ru es uk tr pt vi
+core_expert.int_hide_pnl: ru es uk tr pt vi
+core_expert.int_lev_for_tp: ru es uk tr pt vi
+core_expert.int_pixel_size: ru es uk tr pt vi
+core_expert.int_scale_tool: ru es uk tr pt vi
+core_expert.int_spread_hdelta: ru es uk tr pt vi
+core_expert.log_api_key: ru es uk tr pt vi
+core_expert.log_api_secret: ru es uk tr pt vi
+core_expert.log_registration_id: ru es uk tr pt vi
+core_expert.sp_accept_beta: ru es uk tr pt vi
+core_expert.sp_auto_close_zero: ru es uk tr pt vi
+core_expert.sp_auto_dns: ru es uk tr pt vi
+core_expert.sp_auto_leverage: ru es uk tr pt vi
+core_expert.sp_auto_reduce: ru es uk tr pt vi
+core_expert.sp_autosell: ru es uk tr pt vi
+core_expert.sp_bnb_buy: ru es uk tr pt vi
+core_expert.sp_bnb_min: ru es uk tr pt vi
+core_expert.sp_connection: ru es uk tr pt vi
+core_expert.sp_connection_method: ru es uk tr pt vi
+core_expert.sp_connection_original: ru es uk tr pt vi
+core_expert.sp_custom_ip: ru es uk tr pt vi
+core_expert.sp_extended_debug: ru es uk tr pt vi
+core_expert.sp_iceberg_buys: ru es uk tr pt vi
+core_expert.sp_iceberg_sells: ru es uk tr pt vi
+core_expert.sp_ignore_replacing: ru es uk tr pt vi
+core_expert.sp_liquidation_control: ru es uk tr pt vi
+core_expert.sp_market_export: ru es uk tr pt vi
+core_expert.sp_my_channel: ru es uk tr pt vi
+core_expert.sp_no_trades: ru es uk tr pt vi
+core_expert.sp_old_as_new: ru es uk tr pt vi
+core_expert.sp_own_bot_id: ru es uk tr pt vi
+core_expert.sp_quantitative: ru es uk tr pt vi
+core_expert.sp_report_to_telegram: ru es uk tr pt vi
+core_expert.sp_this_bot_name: ru es uk tr pt vi
+core_expert.sp_turn_off_protection: ru es uk tr pt vi
+core_expert.sp_type_pin: ru es uk tr pt vi
+core_expert.sp_udp_export: ru es uk tr pt vi
+core_expert.sp_websocket_api: ru es uk tr pt vi
+core_expert.sp_weighted_mavg: ru es uk tr pt vi
+core_expert.tab_hotkeys: ru es uk tr pt vi
+core_expert.tlg_proxy: ru es uk tr pt vi
+core_settings.lev_config: ru es uk tr pt vi
+core_settings.ok: ru es uk tr pt vi
+core_status.chart_cpu: ru es uk tr pt vi
+core_status.col.version: ru es uk tr pt vi
+core_status.same.tz_off: ru es uk tr pt vi
+core_status.same.version: ru es uk tr pt vi
+core_status.servers.cpu: ru es uk tr pt vi
+core_status.startup.f.mtu: ru es uk tr pt vi
+core_status.startup.f.rtt: ru es uk tr pt vi
+core_update.menu.named_ph: ru es uk tr pt vi
+crowd.col.id: ru es uk tr pt vi
+hotkeys.cancel_all_buys: ru es uk tr pt vi
+hotkeys.cancel_all_buys_all_cores: ru es uk tr pt vi
+hotkeys.cancel_buy: ru es uk tr pt vi
+hotkeys.chart_shot: ru es uk tr pt vi
+hotkeys.cmd.sell_preset: ru es uk tr pt vi
+hotkeys.join_sells: ru es uk tr pt vi
+hotkeys.mouse.pending_long: ru es uk tr pt vi
+hotkeys.mouse.pending_short: ru es uk tr pt vi
+hotkeys.new_long: ru es uk tr pt vi
+hotkeys.new_short: ru es uk tr pt vi
+hotkeys.panic_sell: ru es uk tr pt vi
+hotkeys.panic_sell_one: ru es uk tr pt vi
+hotkeys.scale_minus: ru es uk tr pt vi
+hotkeys.scale_plus: ru es uk tr pt vi
+hotkeys.sells_to_rect: ru es uk tr pt vi
+hotkeys.shift_buy_down: ru es uk tr pt vi
+hotkeys.shift_buy_up: ru es uk tr pt vi
+hotkeys.shift_sell_down: ru es uk tr pt vi
+hotkeys.shift_sell_up: ru es uk tr pt vi
+hotkeys.split_order: ru es uk tr pt vi
+hotkeys.split_order_x: ru es uk tr pt vi
+hotkeys.switch_charts: ru es uk tr pt vi
+hotkeys.switch_figure: ru es uk tr pt vi
+import.preview.action.broadcast: ru es uk tr pt vi
+import.preview.action.cancel_all_buys: ru es uk tr pt vi
+import.preview.action.cancel_buy: ru es uk tr pt vi
+import.preview.action.fit_sells: ru es uk tr pt vi
+import.preview.action.join_sells: ru es uk tr pt vi
+import.preview.action.make_shot: ru es uk tr pt vi
+import.preview.action.make_shot_bot: ru es uk tr pt vi
+import.preview.action.new_long: ru es uk tr pt vi
+import.preview.action.new_short: ru es uk tr pt vi
+import.preview.action.panic_sell: ru es uk tr pt vi
+import.preview.action.panic_sell_one: ru es uk tr pt vi
+import.preview.action.reload_book: ru es uk tr pt vi
+import.preview.action.reload_chart: ru es uk tr pt vi
+import.preview.action.scale_minus: ru es uk tr pt vi
+import.preview.action.scale_plus: ru es uk tr pt vi
+import.preview.action.sell_minus: ru es uk tr pt vi
+import.preview.action.sell_plus: ru es uk tr pt vi
+import.preview.action.shift_buy_down: ru es uk tr pt vi
+import.preview.action.shift_buy_up: ru es uk tr pt vi
+import.preview.action.shift_sell_down: ru es uk tr pt vi
+import.preview.action.shift_sell_up: ru es uk tr pt vi
+import.preview.action.show_charts: ru es uk tr pt vi
+import.preview.action.split_order: ru es uk tr pt vi
+import.preview.action.split_order_x: ru es uk tr pt vi
+import.preview.action.spy_mode: ru es uk tr pt vi
+import.preview.action.switch_charts: ru es uk tr pt vi
+import.preview.action.switch_figure: ru es uk tr pt vi
+import.preview.value.take_profit: ru es uk tr pt vi
+lines.name.vstop: ru es uk tr pt vi
+log.follow_tail: ru es uk tr pt vi
+orders.col.pnl_tp: ru es uk tr pt vi
+orders.edit.fixed: ru es uk tr pt vi
+orders.edit.vol_lt: ru es uk tr pt vi
+report.col.btc1hdelta: ru es uk tr pt vi
+report.col.btc24hdelta: ru es uk tr pt vi
+report.col.btc5mdelta: ru es uk tr pt vi
+report.col.bvsvratio: ru es uk tr pt vi
+report.col.dbtc1m: ru es uk tr pt vi
+report.col.dump1h: ru es uk tr pt vi
+report.col.dvol: ru es uk tr pt vi
+report.col.exchange1hdelta: ru es uk tr pt vi
+report.col.exchange24hdelta: ru es uk tr pt vi
+report.col.hvol: ru es uk tr pt vi
+report.col.hvolf: ru es uk tr pt vi
+report.col.lev: ru es uk tr pt vi
+report.col.pricebug: ru es uk tr pt vi
+report.col.profitabs: ru es uk tr pt vi
+report.col.pump1h: ru es uk tr pt vi
+report.col.takeprofitlag: ru es uk tr pt vi
+report.col.vd1m: ru es uk tr pt vi
+report.export.csv: ru es uk tr pt vi
+report.export.xlsx: ru es uk tr pt vi
+report.valuation_total: ru es uk tr pt vi
+settings.nav.group.telegram: ru es uk tr pt vi
+strat.copy_chord: ru es uk tr pt vi
+strat.cut_chord: ru es uk tr pt vi
+strat.label.VLiteP1: ru es uk tr pt vi
+strat.label.VLiteP2: ru es uk tr pt vi
+strat.label.VLiteP3: ru es uk tr pt vi
+strat.label.VLiteT0: ru es uk tr pt vi
+strat.label.VLiteT1: ru es uk tr pt vi
+strat.label.VLiteT2: ru es uk tr pt vi
+strat.label.VLiteT3: ru es uk tr pt vi
+strat.label.VLiteV1: ru es uk tr pt vi
+strat.label.VLiteV2: ru es uk tr pt vi
+strat.label.VLiteV3: ru es uk tr pt vi
+strat.label.WavesP1: ru es uk tr pt vi
+strat.label.WavesP2: ru es uk tr pt vi
+strat.label.WavesP3: ru es uk tr pt vi
+strat.label.WavesT0: ru es uk tr pt vi
+strat.label.WavesT1: ru es uk tr pt vi
+strat.label.WavesT2: ru es uk tr pt vi
+strat.label.WavesT3: ru es uk tr pt vi
+strat.label.WavesV1: ru es uk tr pt vi
+strat.label.WavesV2: ru es uk tr pt vi
+strat.label.WavesV3: ru es uk tr pt vi
+strat.move_down_chord: ru es uk tr pt vi
+strat.move_up_chord: ru es uk tr pt vi
+telegram.button_miniapp: ru es uk tr pt vi
+telegram.mini_coin_pnl: ru es uk tr pt vi
+telegram.mini_panic_sell: ru es uk tr pt vi
+telegram.mini_title: ru es uk tr pt vi
+telegram.notify_core_named: ru es uk tr pt vi
+telegram.section_mini_app: ru es uk tr pt vi
+telegram_core.code_kind.fragment: ru es uk tr pt vi
+telegram_core.code_kind.sms: ru es uk tr pt vi
+telegram_core.list_telegram: ru es uk tr pt vi
+telegram_core.proxy_kind_mtproto: ru es uk tr pt vi
+telegram_core.proxy_kind_socks5: ru es uk tr pt vi
+tick_volume.sides_buy: ru es uk tr pt vi
+tick_volume.sides_sell: ru es uk tr pt vi
+toolbar.hedge: ru es uk tr pt vi
+toolbar.live: ru es uk tr pt vi
+toolbar.max_order_short: ru es uk tr pt vi
+trade_window.side.long: ru es uk tr pt vi
+trade_window.side.short: ru es uk tr pt vi
+workspace.mode.auto: ru es uk tr pt vi
+workspace.mode.classic: ru es uk tr pt vi

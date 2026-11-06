@@ -1,0 +1,12 @@
+# Text written straight into a label or a tooltip, not through t!. Checked by
+# crates/moon-ui-gpui/tests/theme_contract/translations.rs: a new one fails until it goes through t!
+# or is listed here. Each line is `file under crates/moon-ui-gpui/src | text`. Most are Moonbot's own
+# Latin labels and tickers (locales/README.md, "Deliberately NOT translated").
+analytics/tuner/time/grid.rs | IgnoreFilters
+analytics/tuner/time/grid.rs | IgnoreTime
+analytics/tuner/time/grid.rs | ignore=YES
+chrome/terminal_chrome.rs | Balance:
+screener/view.rs | BTC
+settings/telegram/message_layout/preview.rs | Moon Station
+shell/init.rs | BTC…
+shell/status_bar.rs | debug

@@ -39,6 +39,7 @@ mod strategies;
 mod telegram_core;
 mod theme;
 mod theme_selector;
+mod translations;
 mod tuner;
 mod update;
 mod windowing;
