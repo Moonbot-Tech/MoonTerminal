@@ -61,6 +61,7 @@ mod station_cores;
 mod store;
 mod tolerant;
 pub(crate) mod toml_io;
+pub use toml_io::{preserve_unreadable_config, read_config_text};
 mod uid_counter;
 mod wire_id;
 

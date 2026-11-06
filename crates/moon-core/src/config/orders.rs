@@ -273,12 +273,12 @@ impl OrdersStyle {
     /// A corrupt file yields the default without failing.
     pub fn load() -> Self {
         let path = paths::orders_path();
-        if !path.exists() {
-            let def = Self::default();
-            let _ = def.save();
-            return def;
+        let (cfg, status) =
+            super::toml_io::load_or_default_status::<Self>(&path, "orders.toml", |_| false);
+        if status == super::toml_io::ConfigLoad::Absent {
+            let _ = cfg.save();
         }
-        super::toml_io::load_or_default(&path, "orders.toml", |_| {})
+        cfg
     }
 
     /// Writes orders.toml (open, human-readable TOML that can be shared).
@@ -322,39 +322,58 @@ impl OrdersStyleSet {
     /// Reads `orders.toml`. The new format uses `[dark]`/`[light]` tables. An OLD flat
     /// `OrdersStyle` (without them) becomes `dark`, while `light` uses its own default;
     /// the result is immediately saved again.
-    /// A missing file yields and saves the default; a corrupt file yields the default without failing.
+    /// Missing files receive defaults; unreadable or malformed originals are never replaced.
     pub fn load() -> Self {
         let path = paths::orders_path();
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            let def = Self::default();
-            let _ = def.save();
-            return def;
+        let text = match super::toml_io::read_config_text(&path, "orders.toml") {
+            Ok(Some(text)) => text,
+            Ok(None) => {
+                let def = Self::default();
+                let _ = def.save();
+                return def;
+            }
+            Err(_) => return Self::default(),
         };
+        let (set, write_back) = match Self::resolve(&text) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                super::toml_io::preserve_unreadable_config(&path);
+                log::warn!(
+                    "orders.toml parse failed ({error}); preserving the original until restart"
+                );
+                return Self::default();
+            }
+        };
+        if write_back {
+            let _ = set.save();
+        }
+        set
+    }
+
+    /// Migrate valid legacy files without treating a malformed document as a default dark set.
+    fn resolve(text: &str) -> Result<(Self, bool), toml::de::Error> {
         // New format: a theme table is present. Early development builds migrated old flat
         // orders.toml files identically into `[dark]` and `[light]`, making lines almost invisible
         // in the light theme. When such a clone is found, keep dark as the user's set and reset
         // light to the light default.
         if text.contains("[dark") || text.contains("[light") {
-            let mut set: Self = toml::from_str(&text).unwrap_or_else(|e| {
-                log::warn!("orders.toml повреждён ({e}); беру дефолт");
-                Self::default()
-            });
-            if set.light == set.dark {
+            let mut set: Self = toml::from_str(text)?;
+            let cloned_light = set.light == set.dark;
+            if cloned_light {
                 set.light = OrdersStyle::default_light();
-                let _ = set.save();
             }
-            return set;
+            return Ok((set, cloned_light));
         }
         // Old flat file → take the dark set from the file and the light set from its own default.
-        let flat: OrdersStyle = toml::from_str(&text).unwrap_or_default();
+        let flat: OrdersStyle = toml::from_str(text)?;
         let set = Self {
             light: OrdersStyle::default_light(),
             dark: flat,
         };
-        let _ = set.save();
-        set
+        Ok((set, true))
     }
 
+    /// Persist the paired styles while honoring a failed-load write barrier.
     pub fn save(&self) -> anyhow::Result<()> {
         super::toml_io::save(&paths::orders_path(), self, "orders.toml")
     }

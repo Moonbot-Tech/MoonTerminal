@@ -2,6 +2,190 @@
 
 use super::{AppConfig, BadgesConfig, ChartThemeSet, OrdersStyleSet, UiThemeMode};
 
+/// A failed startup read must not let a later save overwrite the document with fallback values.
+#[test]
+fn failed_config_load_preserves_the_original_on_save() {
+    const CHILD: &str = "MOON_CONFIG_PRESERVATION_CASE";
+    const ROOT: &str = "MOON_CONFIG_PRESERVATION_ROOT";
+    let Ok(case) = std::env::var(CHILD) else {
+        let mut failures = Vec::new();
+        for kind in [
+            "layout",
+            "hotkeys",
+            "theme-flat",
+            "theme-paired",
+            "orders-flat",
+            "orders-paired",
+            "storage",
+            "detects",
+            "arb",
+            "badges",
+            "figures",
+        ] {
+            for mode in ["corrupt", "unreadable"] {
+                let case = format!("{kind}-{mode}");
+                let root = std::env::temp_dir()
+                    .join(format!("moon-preserve-{case}-{}", std::process::id()));
+                std::fs::create_dir_all(&root).unwrap();
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "config::tests::failed_config_load_preserves_the_original_on_save",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, &case)
+                    .env(ROOT, &root)
+                    .output()
+                    .unwrap();
+                std::fs::remove_dir_all(root).unwrap();
+                if !output.status.success()
+                    || !String::from_utf8_lossy(&output.stdout).contains("1 passed")
+                {
+                    failures.push(format!(
+                        "{case}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        return;
+    };
+    let root = std::path::PathBuf::from(std::env::var_os(ROOT).unwrap());
+    assert!(super::paths::set_data_dir_override(root));
+    let unreadable = case.ends_with("-unreadable");
+    let kind = case.rsplit_once('-').unwrap().0;
+    let body: &[u8] = if kind.ends_with("-paired") {
+        b"[dark\n"
+    } else {
+        b"[broken\n"
+    };
+    use super::paths;
+    match kind {
+        "layout" => preserve_config_fixture(
+            paths::layout_path(),
+            body,
+            unreadable,
+            || super::WindowLayout::load(super::ProfileAge::Established),
+            |cfg| {
+                cfg.save();
+            },
+        ),
+        "hotkeys" => preserve_config_fixture(
+            paths::hotkeys_path(),
+            body,
+            unreadable,
+            || super::HotkeysConfig::load().expect("existing file is not a migration source"),
+            |cfg| {
+                let _ = cfg.save();
+            },
+        ),
+        "theme-flat" | "theme-paired" => preserve_config_fixture(
+            paths::theme_path(),
+            body,
+            unreadable,
+            ChartThemeSet::load,
+            |cfg| {
+                let _ = cfg.save();
+            },
+        ),
+        "orders-flat" | "orders-paired" => preserve_config_fixture(
+            paths::orders_path(),
+            body,
+            unreadable,
+            OrdersStyleSet::load,
+            |cfg| {
+                let _ = cfg.save();
+            },
+        ),
+        "storage" => preserve_config_fixture(
+            paths::storage_path(),
+            body,
+            unreadable,
+            super::storage::load,
+            |cfg| super::storage::save(&cfg),
+        ),
+        "detects" => preserve_config_fixture(
+            paths::detects_view_path(),
+            body,
+            unreadable,
+            super::detect_view::DetectViewFile::load,
+            |cfg| {
+                cfg.save();
+            },
+        ),
+        "arb" => preserve_config_fixture(
+            paths::arb_view_path(),
+            body,
+            unreadable,
+            super::arb_view::ArbViewCfg::load,
+            |cfg| cfg.save(),
+        ),
+        "badges" => preserve_config_fixture(
+            paths::tab_badges_path(),
+            body,
+            unreadable,
+            super::TabBadgeSettings::load,
+            |cfg| {
+                cfg.save();
+            },
+        ),
+        "figures" => preserve_config_fixture(
+            paths::figures_path(),
+            body,
+            unreadable,
+            crate::figures::FigureStore::load,
+            |mut cfg| {
+                use crate::figures::tools::HLine;
+                use crate::figures::{DrawStyle, Figure, FigureKind};
+                cfg.add(
+                    1,
+                    "BTCUSDT",
+                    Figure::new(
+                        FigureKind::HLine(HLine { price: 42.0 }),
+                        DrawStyle::default(),
+                        0.0,
+                    ),
+                );
+                cfg.save();
+            },
+        ),
+        _ => panic!("unknown fixture {case}"),
+    }
+}
+
+/// Simulate either malformed bytes or a read failure that disappears before the next save.
+fn preserve_config_fixture<T>(
+    path: std::path::PathBuf,
+    original: &[u8],
+    unreadable: bool,
+    load: impl FnOnce() -> T,
+    save: impl FnOnce(T),
+) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    if unreadable {
+        std::fs::create_dir(&path).unwrap();
+    } else {
+        std::fs::write(&path, original).unwrap();
+    }
+    let cfg = load();
+    if unreadable {
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, original).unwrap();
+    }
+    save(cfg);
+    assert!(
+        std::fs::read(&path).unwrap() == original,
+        "a fallback must not replace the unread original"
+    );
+    let unrelated = path.with_extension("unrelated");
+    super::write_file_atomic(&unrelated, b"independent saved state", "fixture").unwrap();
+    assert_eq!(
+        std::fs::read(unrelated).unwrap(),
+        b"independent saved state"
+    );
+}
+
 /// Regression target: removing `ensure_server_group_configs` from
 /// `AppConfig::build_plaintext_config` leaves the environment-backed core without durable
 /// group-local Size, TP, or SL state.

@@ -492,10 +492,22 @@ impl ChartThemeSet {
     /// Reads `theme.toml`. The new format uses `[dark]`/`[light]` tables. An OLD flat
     /// `ChartTheme` (effectively a dark theme; light mode overrode it with defaults) becomes
     /// `dark`, while `light` takes the light default; the file is immediately saved again.
-    /// A missing file yields and saves the default; a corrupt file yields the default without failing.
+    /// Missing files receive defaults; unreadable or malformed originals are never replaced.
     pub fn load() -> Self {
-        let text = std::fs::read_to_string(paths::theme_path()).ok();
-        let (set, write_back) = Self::resolve(text.as_deref());
+        let path = paths::theme_path();
+        let Ok(text) = super::toml_io::read_config_text(&path, "theme.toml") else {
+            return Self::default();
+        };
+        let (set, write_back) = match Self::resolve(text.as_deref()) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                super::toml_io::preserve_unreadable_config(&path);
+                log::warn!(
+                    "theme.toml parse failed ({error}); preserving the original until restart"
+                );
+                return Self::default();
+            }
+        };
         if write_back {
             let _ = set.save();
         }
@@ -511,37 +523,25 @@ impl ChartThemeSet {
     /// worth asserting lives here; `load` is left holding nothing but the two file operations.
     ///
     /// Args:
-    ///     text: The file's contents, or `None` when it is missing or could not be read. The two
-    ///         are deliberately not distinguished — that is the behaviour this file has always
-    ///         had, and changing it is not in this function's remit.
+    ///     text: The file's contents, or `None` only when it is absent.
     ///
     /// Returns:
     ///     The set to install, and whether it must be written back. The flag is what keeps a
     ///     marker-shaped file that neither moved generation nor needed reshaping from being
     ///     rewritten on every launch.
-    fn resolve(text: Option<&str>) -> (Self, bool) {
+    fn resolve(text: Option<&str>) -> Result<(Self, bool), toml::de::Error> {
         let Some(text) = text else {
-            return (Self::default(), true);
+            return Ok((Self::default(), true));
         };
         if text.contains("[dark") || text.contains("[light") {
-            let mut set: Self = match toml::from_str(text) {
-                Ok(set) => set,
-                Err(e) => {
-                    // Unchanged: a marker-shaped file that will not parse yields the default and
-                    // is NOT written back, so the damaged file survives for the user to inspect.
-                    log::warn!("theme.toml повреждён ({e}); беру дефолт");
-                    return (Self::default(), false);
-                }
-            };
+            let mut set: Self = toml::from_str(text)?;
             // This branch never re-saved before, so it still writes only when the palette
             // generation actually moved. An already-migrated or fully custom file costs no write.
             let moved = set.retire_old_defaults();
-            return (set, moved);
+            return Ok((set, moved));
         }
-        // Markerless text: the legacy FLAT shape, or text that does not parse at all and becomes
-        // the default flat theme. Both have always been rewritten in the new shape here, and both
-        // still are — the write-back below is unconditional, exactly as before.
-        let mut flat: ChartTheme = toml::from_str(text).unwrap_or_default();
+        // Migrate only a successfully parsed legacy flat theme.
+        let mut flat: ChartTheme = toml::from_str(text)?;
         // Scoped to the flat side deliberately: `light` below is built fresh from the current
         // defaults and cannot hold a retired byte, and a flat file predates the marker by
         // construction, so there is no generation to gate on either.
@@ -556,7 +556,7 @@ impl ChartThemeSet {
             dark: flat,
             light: ChartTheme::default_light(),
         };
-        (set, true)
+        Ok((set, true))
     }
 
     /// Writes theme.toml (open, human-readable TOML that can be shared).

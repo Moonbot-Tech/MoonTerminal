@@ -418,6 +418,13 @@ sets it again. Quit places
 the final full snapshot behind the write already in flight, joins the worker and uses a synchronous
 fallback only for the classes the worker could not confirm.
 
+Config loaders distinguish missing files from unreadable or malformed originals. Falling back in
+memory protects that exact config path in the shared atomic writer until restart, so delayed saves
+and cloned models cannot replace bytes that were never loaded. Repair the original and restart to
+resume persistence; merely clearing a temporary sharing violation does not make an empty fallback
+authoritative. A successful existing quarantine remains writable because its original was preserved.
+Theme/order-style and hotkey migrations use the same rule.
+
 The Strategies gear popup resolves two optional `layout.toml` booleans: venue grouping defaults
 ON and active-only visibility defaults OFF. Explicit strategy reveals clear active-only through the
 same preference setter and persist that choice through the shared layout coordinator; the popup's

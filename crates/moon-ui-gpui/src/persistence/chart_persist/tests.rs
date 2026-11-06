@@ -3,6 +3,49 @@
 
 use super::*;
 
+/// A startup fallback must not erase saved tabs when a parse or read failure later disappears.
+#[test]
+fn failed_chart_load_does_not_replace_stored_tabs() {
+    const ROOT: &str = "MOON_CHART_PRESERVATION_ROOT";
+    const MODE: &str = "MOON_CHART_PRESERVATION_MODE";
+    let Some(root) = std::env::var_os(ROOT) else {
+        for mode in ["corrupt", "unreadable"] {
+            let root = std::env::temp_dir()
+                .join(format!("moon-chart-preserve-{mode}-{}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "persistence::chart_persist::tests::failed_chart_load_does_not_replace_stored_tabs", "--nocapture"])
+                .env(ROOT, &root).env(MODE, mode).output().unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{mode}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    assert!(paths::set_data_dir_override(root.into()));
+    let path = paths::charts_path();
+    let unreadable = std::env::var(MODE).unwrap() == "unreadable";
+    let original = b"[{broken saved tabs";
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    if unreadable {
+        std::fs::create_dir(&path).unwrap();
+    } else {
+        std::fs::write(&path, original).unwrap();
+    }
+    let tabs = load_all();
+    assert!(tabs.is_empty());
+    if unreadable {
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, original).unwrap();
+    }
+    assert!(!save_all(&tabs));
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
 /// A `charts.json` written before chart geometry carried a display identity must still load, and a
 /// geometry that names no display must not start writing the key.
 ///

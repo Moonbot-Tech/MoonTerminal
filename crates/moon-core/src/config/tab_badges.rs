@@ -64,18 +64,16 @@ pub struct TabBadgeSettings {
 }
 
 impl TabBadgeSettings {
-    /// Load from `tab_badges.json`, or an empty default when the file is absent or unreadable.
-    ///
-    /// A parse failure is LOGGED before falling back: resetting silently would show a full ring as
-    /// unread with no explanation, and the next save overwrites the file that could explain it.
+    /// Load badges, protecting unread originals from later saves of the in-memory fallback.
     pub fn load() -> Self {
         let path = paths::tab_badges_path();
-        match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+        match super::toml_io::read_config_text(&path, "tab_badges.json") {
+            Ok(Some(s)) => serde_json::from_str(&s).unwrap_or_else(|e| {
+                super::toml_io::preserve_unreadable_config(&path);
                 log::warn!("tab_badges.json parse failed ({e}); starting from defaults");
                 Self::default()
             }),
-            Err(_) => Self::default(),
+            Ok(None) | Err(_) => Self::default(),
         }
     }
 

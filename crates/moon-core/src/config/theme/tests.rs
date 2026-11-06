@@ -188,7 +188,7 @@ fn pre_split_file_inherits_the_hvol_backdrop_from_the_book_background() {
     let text =
         "palette_rev = 2\n\n[dark]\nbook_bg = [7, 8, 9]\n\n[light]\nbook_bg = [21, 22, 23]\n";
 
-    let (set, write_back) = ChartThemeSet::resolve(Some(text));
+    let (set, write_back) = ChartThemeSet::resolve(Some(text)).unwrap();
 
     assert!(write_back, "the split must be written back once");
     assert_eq!(set.palette_rev, CURRENT_PALETTE_REV);
@@ -209,7 +209,7 @@ fn post_split_hvol_backdrop_is_never_reinherited() {
     assert_eq!(set, before);
 
     let text = before.to_share_string().expect("current pair serializes");
-    let (resolved, write_back) = ChartThemeSet::resolve(Some(&text));
+    let (resolved, write_back) = ChartThemeSet::resolve(Some(&text)).unwrap();
     assert!(!write_back);
     assert_eq!(resolved, before);
 }
@@ -393,7 +393,7 @@ fn sharing_retires_both_tables_but_never_the_live_flat_light_set() {
 /// a new installation has no durable palette file for Settings and sharing.
 #[test]
 fn resolve_missing_text_returns_default_and_requests_a_save() {
-    let (set, write_back) = ChartThemeSet::resolve(None);
+    let (set, write_back) = ChartThemeSet::resolve(None).unwrap();
 
     assert_eq!(set, ChartThemeSet::default());
     assert!(write_back);
@@ -406,13 +406,13 @@ fn resolve_marker_shaped_text_saves_only_after_a_generation_move() {
     let legacy_text = legacy_retired_set()
         .to_share_string()
         .expect("legacy-shaped pair serializes");
-    let (migrated, migrated_write_back) = ChartThemeSet::resolve(Some(&legacy_text));
+    let (migrated, migrated_write_back) = ChartThemeSet::resolve(Some(&legacy_text)).unwrap();
     assert_eq!(migrated, ChartThemeSet::default());
     assert!(migrated_write_back);
 
     let current = ChartThemeSet::default();
     let current_text = current.to_share_string().expect("current pair serializes");
-    let (unchanged, unchanged_write_back) = ChartThemeSet::resolve(Some(&current_text));
+    let (unchanged, unchanged_write_back) = ChartThemeSet::resolve(Some(&current_text)).unwrap();
     assert_eq!(unchanged, current);
     assert!(!unchanged_write_back);
 }
@@ -428,7 +428,7 @@ fn resolve_marker_shaped_text_without_palette_rev_is_migrated_and_stamped() {
         toml::to_string_pretty(&legacy.light).expect("light theme serializes"),
     );
 
-    let (migrated, write_back) = ChartThemeSet::resolve(Some(&text));
+    let (migrated, write_back) = ChartThemeSet::resolve(Some(&text)).unwrap();
 
     assert_eq!(migrated, ChartThemeSet::default());
     assert_eq!(migrated.palette_rev, CURRENT_PALETTE_REV);
@@ -439,25 +439,19 @@ fn resolve_marker_shaped_text_without_palette_rev_is_migrated_and_stamped() {
 /// a parse error destroys the user's only inspectable copy of their palette.
 #[test]
 fn resolve_corrupt_marker_shaped_text_keeps_the_file() {
-    let (set, write_back) = ChartThemeSet::resolve(Some("[dark"));
-
-    assert_eq!(set, ChartThemeSet::default());
-    assert!(!write_back);
+    assert!(ChartThemeSet::resolve(Some("[dark")).is_err());
 }
 
-/// `theme.rs:ChartThemeSet::resolve` must rewrite both legacy flat and markerless malformed text;
-/// collapsing either branch loses automatic old-file migration or leaves an unusable format.
+/// Valid legacy themes still migrate; malformed markerless text must not be rewritten as defaults.
 #[test]
 fn resolve_markerless_text_is_migrated_and_saved() {
     let legacy = legacy_retired_set();
     let legacy_text = toml::to_string_pretty(&legacy.dark).expect("flat theme serializes");
-    let (migrated, migrated_write_back) = ChartThemeSet::resolve(Some(&legacy_text));
+    let (migrated, migrated_write_back) = ChartThemeSet::resolve(Some(&legacy_text)).unwrap();
     assert_eq!(migrated, ChartThemeSet::default());
     assert!(migrated_write_back);
 
-    let (fallback, fallback_write_back) = ChartThemeSet::resolve(Some("[broken"));
-    assert_eq!(fallback, ChartThemeSet::default());
-    assert!(fallback_write_back);
+    assert!(ChartThemeSet::resolve(Some("[broken")).is_err());
 }
 
 /// Making level defaults explicit would detach old flat/paired themes from their wall colours.
@@ -473,7 +467,7 @@ book_bid = [17, 91, 231]
 book_ask = [240, 139, 7]
 ",
     ] {
-        let (set, _) = ChartThemeSet::resolve(Some(text));
+        let (set, _) = ChartThemeSet::resolve(Some(text)).unwrap();
         for theme in [&set.dark, &set.light] {
             assert_eq!(theme.book_level_bid, None);
             assert_eq!(theme.book_level_ask, None);
@@ -521,11 +515,11 @@ book_level_ask = [255, 51, 0]
 book_level_bid = [51, 0, 102]
 book_level_ask = [102, 255, 51]
 ";
-    let (set, _) = ChartThemeSet::resolve(Some(text));
+    let (set, _) = ChartThemeSet::resolve(Some(text)).unwrap();
     let saved = set
         .to_share_string()
         .expect("explicit level colours serialize");
-    let (mut reloaded, write_back) = ChartThemeSet::resolve(Some(&saved));
+    let (mut reloaded, write_back) = ChartThemeSet::resolve(Some(&saved)).unwrap();
     assert!(!write_back);
     assert_eq!(reloaded.dark.book_level_bid, Some([0, 102, 255]));
     assert_eq!(reloaded.dark.book_level_ask, Some([255, 51, 0]));
@@ -553,7 +547,7 @@ book_level_ask = [102, 255, 51]
     );
     reloaded.dark.book_level_bid = None;
     let saved = reloaded.to_share_string().expect("reset serializes");
-    let (reset, _) = ChartThemeSet::resolve(Some(&saved));
+    let (reset, _) = ChartThemeSet::resolve(Some(&saved)).unwrap();
     assert_eq!(reset.dark.book_level_bid, None);
     assert_eq!(reset.dark.resolved_book_level(true), [1.0; 4]);
 }
