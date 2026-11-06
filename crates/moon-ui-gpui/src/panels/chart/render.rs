@@ -12,7 +12,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use moon_chart::paint::now_unix_ms;
+use crate::chartdx::now_unix_ms;
 
 use super::render_input;
 use super::{ChartPanel, chart_bootstrap_present_rate_hz};

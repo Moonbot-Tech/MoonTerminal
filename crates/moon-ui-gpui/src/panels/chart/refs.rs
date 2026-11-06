@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use moon_chart::paint::now_unix_ms;
+use crate::chartdx::now_unix_ms;
 use moon_core::config::ChartLabelField;
 use moon_core::session::CoreId;
 

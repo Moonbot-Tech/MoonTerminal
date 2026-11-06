@@ -895,7 +895,7 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     let report_write_permit = moon_core::db::report_recovery::prepare();
 
     // Use one time origin for sessions and chart views, equivalent to epoch_ms in egui.
-    let epoch = moon_chart::paint::now_unix_ms();
+    let epoch = crate::chartdx::now_unix_ms();
 
     // Register MoonUI's embedded SVG icons as the AssetSource; otherwise `IconName::*` values
     // (such as the `cleanable` clear icon, CircleX) cannot find their SVGs and render empty.

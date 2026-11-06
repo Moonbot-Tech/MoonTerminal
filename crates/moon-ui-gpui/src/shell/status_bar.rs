@@ -239,6 +239,9 @@ impl Shell {
             Some(version) => version.to_string(),
             None => "dev".to_string(),
         };
+        // Every release changes this figure, and the status row stands in nearly every picture.
+        #[cfg(uidoc)]
+        let version_label = crate::uidoc::steady_version(version_label);
         // The tooltip carries the RAW `release_base`, not the rendered label, so its three facts
         // are byte-identical to the boot line in `startup.rs`. The two genuinely differ: a legacy
         // two-component tag parses with patch 0 (`release.rs:ReleaseVersion::parse`) and renders

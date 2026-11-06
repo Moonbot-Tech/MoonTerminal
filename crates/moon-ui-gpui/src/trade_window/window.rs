@@ -253,7 +253,7 @@ fn new_view(
             .read(vcx)
             .report_axis(crate::chartdx::axes::display_zone()),
     );
-    let epoch = moon_chart::paint::now_unix_ms();
+    let epoch = crate::chartdx::now_unix_ms();
     let panel_backend = owner.clone();
     let panel_market = market.clone();
     let panel = vcx.new(|pcx| {

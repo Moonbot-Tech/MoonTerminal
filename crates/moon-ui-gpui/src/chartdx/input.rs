@@ -5,8 +5,8 @@
 //! window coordinates as `(position - slot_origin) * scale_factor`. This layer mutates chart views
 //! immediately; callers own event propagation, GPUI notification, and pending Main-open handoff.
 
+use crate::chartdx::now_unix_ms;
 use crate::chartdx::pane::Container;
-use moon_chart::paint::now_unix_ms;
 use moon_chart::view::{ChartView, Rect, XZoom, record_zoom_window};
 use moon_core::session::CoreId;
 
@@ -378,7 +378,8 @@ impl ChartInput {
                     if !gate_ok {
                         return false; // Do not start chart dragging from surrounding UI controls.
                     }
-                    let now = now_unix_ms();
+                    // The plain clock: time between two presses has to pass whatever the chart shows.
+                    let now = moon_chart::paint::now_unix_ms();
                     let (px, py) = self.last_ptr;
                     let dbl = now - self.last_lmb_ms < 400.0
                         && (px - self.last_lmb_pos.0).abs() < 28.0

@@ -42,6 +42,8 @@ impl ChartDataState {
         };
         let layout = self.container.borrow().layout(area);
         let now = now_unix_ms();
+        // What the recheck periods below compare: their time has to pass whatever the chart shows.
+        let recheck_ms = moon_chart::paint::now_unix_ms() as i64;
         let retry_now = Instant::now();
         let res = [self.w as f32, self.h as f32];
         let mut st = self.render.borrow_mut();
@@ -1363,7 +1365,7 @@ impl ChartDataState {
                 };
                 let key_moved = pr.hvol_window != hvol_window || pr.hvol_row_width != row_width;
                 let data_moved = volume_changed || history_source_changed || force_history_reset;
-                let clock_due = (now as i64).saturating_sub(pr.hvol_read_ms) >= HVOL_RECHECK_MS;
+                let clock_due = recheck_ms.saturating_sub(pr.hvol_read_ms) >= HVOL_RECHECK_MS;
                 // Whether the resident bins changed this sync, so the samples must be retaken.
                 let mut bins_moved = false;
                 if row_width > 0.0 && (key_moved || data_moved || clock_due) {
@@ -1374,7 +1376,7 @@ impl ChartDataState {
                     // whose provider, client or history is not there yet answers `None`, and
                     // stamping only a success would leave both moved and put that pane on the
                     // per-frame clock until the core showed up.
-                    pr.hvol_read_ms = now as i64;
+                    pr.hvol_read_ms = recheck_ms;
                     pr.hvol_window = hvol_window;
                     pr.hvol_row_width = row_width;
                     if let Some(window) = hvol_window {
@@ -1787,10 +1789,10 @@ impl ChartDataState {
             // The exchange's tick is asked for until it arrives, at most once a retry period, with
             // the book's own spacing standing in meanwhile; `LadderTick` holds the rules. The ladder
             // and trade clusters bucket by it; visible price labels also need its precision.
-            if pr.price_tick.due(now as i64) {
+            if pr.price_tick.due(recheck_ms) {
                 let previous_tick = pr.price_tick.tick();
                 let exact = source.price_tick(pane.core, &pane.market);
-                pr.price_tick.record(now as i64, exact, || {
+                pr.price_tick.record(recheck_ms, exact, || {
                     // Labels have a magnitude fallback; only grid consumers need to scan the book.
                     if !ladder_wanted && !bubbles {
                         return None;
@@ -2135,7 +2137,7 @@ impl ChartDataState {
         // than on every revision, which on a busy coin is several times that. A column of prices is
         // read by eye; the reference terminal repaints it no faster either.
         let wants_arb = live && st.chart_labels.any_drawn(|f| f == LabelField::ArbColumn);
-        let arb_now_ms = now as i64;
+        let arb_now_ms = recheck_ms;
         // The clock only advances while something counts down with it, and it is quantized so an
         // idle chart re-formats its captions when the printed figure moves rather than once per
         // market revision. The rule lives on the configuration — see `countdown_clock_ms` — because

@@ -8,6 +8,11 @@
 //! marks (the gems on the plot's bottom edge and their Ctrl-hover card) without a live news
 //! subscription: real news for a chosen coin inside the chart's visible window cannot be summoned
 //! on demand. See `MOON_SYNTH_NEWS*` below.
+//!
+//! `MOON_SYNTH_STILL_AT_MS` holds the market still at one moment instead: no ticks, one order book
+//! sent over and over, and the first news, all stamped with that moment. The same seed then gives
+//! the same market however long a run lasts, which a capture run needs for its pictures to come out
+//! the same.
 
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -99,6 +104,33 @@ impl Lcg {
     }
 }
 
+/// One order book of `depth` levels a side around `mid`, with random quantities.
+fn random_book(mid: f64, depth: usize, book_step: f64, rng: &mut Lcg) -> OrderBook {
+    let mut bids = Vec::with_capacity(depth);
+    let mut asks = Vec::with_capacity(depth);
+    for k in 0..depth {
+        let off = (k as f64 + 1.0) * mid * book_step;
+        bids.push(Level {
+            price: (mid - off) as f32,
+            qty: (rng.unit() * 10.0 + 1.0) as f32,
+        });
+        asks.push(Level {
+            price: (mid + off) as f32,
+            qty: (rng.unit() * 10.0 + 1.0) as f32,
+        });
+    }
+    OrderBook { bids, asks }
+}
+
+/// The moment `MOON_SYNTH_STILL_AT_MS` holds the market at, in Unix milliseconds; `None` when unset.
+fn still_at_from_env() -> Option<f64> {
+    std::env::var("MOON_SYNTH_STILL_AT_MS")
+        .ok()?
+        .parse()
+        .ok()
+        .filter(|at: &f64| at.is_finite() && *at > 0.0)
+}
+
 /// Runs with the `feed::spawn` signature, like live::run but without network access or reports.
 pub(crate) fn run(
     server: &ServerConfig,
@@ -106,6 +138,30 @@ pub(crate) fn run(
     cmd_rx: &Receiver<crate::feed::QueuedCmd>,
     market_store: Option<&SharedMarketStore>,
 ) -> anyhow::Result<()> {
+    run_from(server, tx, cmd_rx, market_store, still_at_from_env())
+}
+
+/// The feed itself.
+///
+/// Args:
+///     server: The core being stood in for.
+///     tx: The feed's channel to the terminal.
+///     cmd_rx: Commands from the terminal; the feed ends when their sender goes away.
+///     market_store: Where ticks and books are written.
+///     still_at: The moment to hold the market still at (see the module's documentation), in Unix
+///         milliseconds; `None` for the ordinary live stream.
+///
+/// Returns:
+///     `Ok` once the terminal has gone away.
+fn run_from(
+    server: &ServerConfig,
+    tx: &FeedTx,
+    cmd_rx: &Receiver<crate::feed::QueuedCmd>,
+    market_store: Option<&SharedMarketStore>,
+    still_at: Option<f64>,
+) -> anyhow::Result<()> {
+    let stamp = || still_at.unwrap_or_else(now_ms);
+    let still = still_at.is_some();
     let windows = env_usize("MOON_STRESS_WINDOWS", 10).max(1);
     let charts = env_usize("MOON_STRESS_CHARTS", 5).max(1);
     let n = env_usize("MOON_SYNTH_MARKETS", charts).max(1);
@@ -180,7 +236,7 @@ pub(crate) fn run(
         let price = Some(env_f64("MOON_SYNTH_START_PRICE", 0.0))
             .filter(|price| *price > 0.0)
             .unwrap_or(100.0);
-        account::send_account_state(server.uid, &markets[0], price, &strategy, tx);
+        account::send_account_state(server.uid, &markets[0], price, &strategy, stamp(), tx);
     }
 
     // AddToChart: window w (1..=WINDOWS) receives CHARTS markets in the Chart{w} container.
@@ -201,7 +257,7 @@ pub(crate) fn run(
                 // Numbered by the store on arrival, never zero.
                 seq: 0,
                 market: markets[m % n].clone(),
-                time_ms: now_ms(),
+                time_ms: stamp(),
                 sound_alert: false,
                 keep_alert_secs: 0,
                 add_to_chart: w as u32,
@@ -224,7 +280,7 @@ pub(crate) fn run(
         let _ = tx.send(FeedMsg::Detects(account::detects(
             &markets[0],
             &strategy.1,
-            now_ms(),
+            stamp(),
         )));
     }
 
@@ -243,7 +299,7 @@ pub(crate) fn run(
             news.push(synth_news_item(
                 &mut news_seq,
                 &markets,
-                now_ms() as i64 - (k as f64 * news_spacing_sec * 1000.0) as i64,
+                stamp() as i64 - (k as f64 * news_spacing_sec * 1000.0) as i64,
             ));
         }
         let _ = tx.send(news_msg(&news));
@@ -268,6 +324,11 @@ pub(crate) fn run(
     let mut last_book = Instant::now();
     let mut last_health = Instant::now();
     let dense_history = crate::fixture::active().and_then(|fixture| fixture.dense_history());
+    // The last book of each market. A still market keeps its first one and sends it for as long as
+    // the run lasts: the store has a market only once a chart has opened it, and a book sent before
+    // that lands nowhere. For the same reason a still market has no ticks: a single one would reach
+    // a chart or not depending on when the chart opened, and sent again it would add up.
+    let mut books: Vec<OrderBook> = Vec::with_capacity(n);
 
     loop {
         let mut commanded = false;
@@ -297,7 +358,7 @@ pub(crate) fn run(
             std::thread::sleep(Duration::from_millis(2));
             continue;
         }
-        if last_tick.elapsed() >= tick_dt {
+        if !still && last_tick.elapsed() >= tick_dt {
             last_tick = Instant::now();
             for (i, m) in markets.iter().enumerate() {
                 if let Some(history) = dense_history {
@@ -339,25 +400,16 @@ pub(crate) fn run(
         if last_book.elapsed() >= book_dt {
             last_book = Instant::now();
             for (i, m) in markets.iter().enumerate() {
-                let mid = price[i];
-                let mut bids = Vec::with_capacity(depth);
-                let mut asks = Vec::with_capacity(depth);
-                for k in 0..depth {
-                    let off = (k as f64 + 1.0) * mid * book_step;
-                    bids.push(Level {
-                        price: (mid - off) as f32,
-                        qty: (rng.unit() * 10.0 + 1.0) as f32,
-                    });
-                    asks.push(Level {
-                        price: (mid + off) as f32,
-                        qty: (rng.unit() * 10.0 + 1.0) as f32,
-                    });
+                if books.len() <= i {
+                    books.push(random_book(price[i], depth, book_step, &mut rng));
+                } else if !still {
+                    books[i] = random_book(price[i], depth, book_step, &mut rng);
                 }
                 if let Some(store) = market_store {
                     store
                         .write()
                         .expect("synthetic market store poisoned")
-                        .apply_book(server.id, m, &OrderBook { bids, asks });
+                        .apply_book(server.id, m, &books[i]);
                 }
             }
             let dirty: Vec<MarketDirty> = markets
@@ -368,7 +420,7 @@ pub(crate) fn run(
                 return Ok(());
             }
         }
-        if news_count > 0 && last_news.elapsed() >= news_every {
+        if news_count > 0 && !still && last_news.elapsed() >= news_every {
             last_news = Instant::now();
             news.push(synth_news_item(&mut news_seq, &markets, now_ms() as i64));
             // The wire carries a ring, not a delta: keep the same cap the core's ring uses.
@@ -437,3 +489,6 @@ fn synth_news_item(seq: &mut u64, markets: &[String], time_ms: i64) -> NewsItem 
         no_translate: false,
     }
 }
+
+#[cfg(test)]
+mod tests;
