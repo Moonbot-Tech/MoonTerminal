@@ -177,6 +177,11 @@ impl ScreenerView {
             this.request_refresh(cx);
         })
         .detach();
+        let market_catalog_revision = backend.read(cx).market_catalog_revision();
+        cx.observe(&market_catalog_revision, |this, _, cx| {
+            this.request_refresh(cx);
+        })
+        .detach();
 
         // A membership-only save advances `workspace_revision` without notifying `Backend`, so the
         // gate above never fires for it; observe the revision directly to pick up the new preset.

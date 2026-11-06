@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use moonproto::Event;
 use moonproto::state::{
-    CoinCardCandlesEvent, MarketHistoryEvent, MarketsEvent, OrderBookEvent, TradesEvent,
+    CandlesSnapshotEvent, CoinCardCandlesEvent, MarketHistoryEvent, MarketsEvent, OrderBookEvent,
+    TradesEvent,
 };
 
 use crate::feed::{MarketDirty, MarketDirtyFlags};
@@ -34,11 +35,13 @@ fn push_wanted_dirty(
     }
 }
 
-pub(super) fn market_dirty_from_events(
+/// Publish a read-model change even without chart subscriptions; names remain chart-local hints.
+/// `None` means no relevant input, while `Some(empty)` still wakes snapshot readers such as Screener.
+pub(crate) fn market_dirty_from_events(
     events: &[Event],
     wanted: &[String],
     force_sample: bool,
-) -> Vec<MarketDirty> {
+) -> Option<Vec<MarketDirty>> {
     let mut dirty = HashMap::<String, MarketDirtyFlags>::new();
     // Wanted-market flags are OR'd across the batch and applied once at the end.
     let mut wanted_flags = if force_sample {
@@ -64,7 +67,10 @@ pub(super) fn market_dirty_from_events(
                     flags | MarketDirtyFlags::HISTORY
                 }));
             }
-            Event::Markets(MarketsEvent::PricesUpdated { .. }) => {
+            Event::Markets(
+                MarketsEvent::PricesUpdated { .. } | MarketsEvent::StatsUpdated { .. },
+            )
+            | Event::CandlesSnapshot(CandlesSnapshotEvent::Ready { .. }) => {
                 wanted_flags = Some(wanted_flags.map_or(MarketDirtyFlags::HISTORY, |flags| {
                     flags | MarketDirtyFlags::HISTORY
                 }));
@@ -109,10 +115,15 @@ pub(super) fn market_dirty_from_events(
         push_wanted_dirty(&mut dirty, wanted, flags);
     }
 
-    dirty
-        .into_iter()
-        .map(|(market, flags)| MarketDirty::new(market, flags))
-        .collect()
+    if wanted_flags.is_none() && dirty.is_empty() {
+        return None;
+    }
+    Some(
+        dirty
+            .into_iter()
+            .map(|(market, flags)| MarketDirty::new(market, flags))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

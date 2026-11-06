@@ -319,6 +319,53 @@ fn catalog_wakes_are_independent_of_prices_and_open_markets() {
     );
 }
 
+/// The real SDK classifier and session drain must publish read-model changes with no chart names.
+#[test]
+fn retained_market_updates_wake_without_charts_or_backend_heartbeat() {
+    use moonproto::Event;
+    use moonproto::state::{CandlesSnapshotEvent, MarketsEvent};
+
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    assert!(session.wanted.is_empty());
+    let events = [
+        Event::Markets(MarketsEvent::PricesUpdated {
+            count: 1,
+            included_funding: true,
+            included_corr: true,
+        }),
+        Event::Markets(MarketsEvent::StatsUpdated { count: 1 }),
+        Event::CandlesSnapshot(CandlesSnapshotEvent::Ready {
+            #[cfg(feature = "moonproto-diagnostics")]
+            request_uid: 1,
+            summary: Default::default(),
+        }),
+    ];
+    for event in events {
+        let dirty = crate::feed::live::market_dirty_from_events(&[event], &[], false)
+            .expect("retained snapshots change even when no chart is subscribed");
+        assert!(dirty.is_empty());
+        tx.send(FeedMsg::MarketDataChanged(dirty)).unwrap();
+        let stats = session.drain();
+        assert!(stats.any && stats.market_data);
+        assert!(!stats.market_catalog && !stats.ui_state && !stats.sound_inputs);
+        assert!(
+            !session.drain().market_data,
+            "publication must not become a heartbeat"
+        );
+    }
+    let unchanged = [
+        Event::Markets(MarketsEvent::StatsRefreshFailed {
+            message: "offline".into(),
+        }),
+        Event::CandlesSnapshot(CandlesSnapshotEvent::Failed {
+            #[cfg(feature = "moonproto-diagnostics")]
+            request_uid: None,
+            error: "offline".into(),
+        }),
+    ];
+    assert!(crate::feed::live::market_dirty_from_events(&unchanged, &[], false).is_none());
+}
+
 /// Mapping changes invalidate routed catalogs even without any chart subscriptions.
 #[test]
 fn provider_catalog_wake_covers_initial_mapping_failover_and_removal() {

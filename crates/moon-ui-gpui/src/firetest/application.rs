@@ -26,11 +26,11 @@ impl Probe {
         if !errors.is_empty() {
             return Err(errors.join("; "));
         }
-        if results.len() != 3 {
-            return Err(format!("application probes completed {}/3", results.len()));
+        if results.len() != 4 {
+            return Err(format!("application probes completed {}/4", results.len()));
         }
         firetest_info(
-            "[firetest] application events: hidden status catch-up, market-only screener, foreign Report scope PASS",
+            "[firetest] application events: hidden status catch-up, market/catalog-only screener, foreign Report scope PASS",
         );
         Ok(())
     }
@@ -69,7 +69,8 @@ pub(super) fn start(backend: &Backend, group: String, cx: &mut Context<Backend>)
             result.record(Err("application probe window was closed".into()));
             return;
         };
-        // Only the market channel is notified: a generic Backend heartbeat must not rescue it.
+        // Core tests cover SDK events -> FeedMsg -> drain with no open charts. This checks the
+        // corresponding native consumer: a generic Backend heartbeat must not rescue it.
         let market_revision = backend.read(cx).market_data_revision();
         for _ in 0..8 {
             market_revision.update(cx, |_, cx| cx.notify());
@@ -78,7 +79,7 @@ pub(super) fn start(backend: &Backend, group: String, cx: &mut Context<Backend>)
             cx.background_executor()
                 .timer(Duration::from_millis(1100))
                 .await;
-            cx.update(|cx| {
+            let before_catalog = cx.update(|cx| {
                 let status_result = window
                     .update(cx, |_, window, cx| {
                         if status.read(cx).firetest_rows_generation() != before_status {
@@ -100,6 +101,23 @@ pub(super) fn start(backend: &Backend, group: String, cx: &mut Context<Backend>)
                 } else {
                     Err(format!(
                         "market-only Screener burst produced {refreshes} refreshes, expected one"
+                    ))
+                });
+                let before_catalog = screener.read(cx).firetest_prepare_sequence();
+                let catalog = backend.read(cx).market_catalog_revision();
+                catalog.update(cx, |_, cx| cx.notify());
+                before_catalog
+            });
+            cx.background_executor()
+                .timer(Duration::from_millis(1100))
+                .await;
+            cx.update(|cx| {
+                let refreshes = screener.read(cx).firetest_prepare_sequence() - before_catalog;
+                result.record(if refreshes == 1 {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "catalog-only Screener produced {refreshes} refreshes, expected one"
                     ))
                 });
                 crate::panels::ReportPanel::firetest_foreign_workspace(report, cx, move |check| {

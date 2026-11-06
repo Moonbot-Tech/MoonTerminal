@@ -739,9 +739,10 @@ impl SessionManager {
                     }
                     FeedMsg::MarketCatalogChanged => stats.market_catalog = true,
                     FeedMsg::MarketDataChanged(markets) => {
+                        // The provider snapshot also serves readers with no chart subscriptions.
+                        stats.market_data = true;
                         if !markets.is_empty() {
                             self.market_source.mark_dirty(sess.id, &markets);
-                            stats.market_data = true;
                         }
                     }
                     FeedMsg::Orders(orders) => {

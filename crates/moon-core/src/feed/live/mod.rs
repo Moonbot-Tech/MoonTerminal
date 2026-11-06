@@ -110,7 +110,7 @@ use convert::{
 pub use convert::{percentage_stop_price, percentage_take_price};
 use deadline::CoalescedDeadline;
 pub(in crate::feed) use default_settings::default_core_settings;
-use dirty::market_dirty_from_events;
+pub(crate) use dirty::market_dirty_from_events;
 pub(in crate::feed) use market_role::MarketRoleState;
 pub use shared_config::FieldMask;
 pub(in crate::feed) use shared_config::SharedConfigSequence;
@@ -1992,10 +1992,10 @@ pub(super) fn run(
             }
         }
         let wanted = market_role.wanted();
-        let dirty_markets = if market_role.is_provider() && !wanted.is_empty() {
+        let dirty_markets = if market_role.is_provider() {
             market_dirty_from_events(&events, wanted, force_market_sample)
         } else {
-            Vec::new()
+            None
         };
         let want_log = server.feed.log;
         // detect-diag: report a subset of server feed flags once per process. The line includes
@@ -2838,10 +2838,11 @@ pub(super) fn run(
 
         // Do NOT copy market data here. The feed only signals that the provider has a fresh
         // read-model snapshot; the visible chart pulls the markets it needs itself.
-        if !dirty_markets.is_empty() && tx.send(FeedMsg::MarketDataChanged(dirty_markets)).is_err()
-        {
-            let _ = client.disconnect();
-            return Ok(());
+        if let Some(dirty_markets) = dirty_markets {
+            if tx.send(FeedMsg::MarketDataChanged(dirty_markets)).is_err() {
+                let _ = client.disconnect();
+                return Ok(());
+            }
         }
         force_market_sample = false;
 
