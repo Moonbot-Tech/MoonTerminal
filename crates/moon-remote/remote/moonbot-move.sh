@@ -416,7 +416,10 @@ service)
         test "$action" = start || exit 1
         hint=${3:-}
         case $hint in *.service) unit=$hint;; *) exit 1;; esac
-        case $unit in -*|*[!A-Za-z0-9@._:-]*) exit 1;; esac
+        case $unit in -*) exit 1;; esac
+        # systemd escapes hyphens and other instance characters as literal \xHH sequences.
+        plain_unit=$(printf '%s\n' "$unit" | sed 's/[\\]x[0-9A-Fa-f][0-9A-Fa-f]//g')
+        case $plain_unit in *[!A-Za-z0-9@._:-]*) exit 1;; esac
         dir=$(systemctl show -p WorkingDirectory --value -- "$unit")
         if test -z "$dir"; then
             case $unit in
@@ -427,7 +430,7 @@ service)
                 ;;
             esac
         fi
-        test -n "$dir" && test -x "$dir/MoonBot" && test -x "$dir/mb" || exit 1
+        test -n "$dir" && test -x "$dir/MoonBot" || exit 1
         ours=0
         if test -f "$dir/$marker" && test "$(head -n 1 "$dir/$marker")" = "$p"; then
             ours=1
@@ -477,14 +480,36 @@ retarget)
     test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal" >&2; exit 1; }
     validate_port "${2:-}"
     old=$(head -n 1 "$dest/$marker")
-    if test "$old" != "$p" && grep -qx ufw "$dest/$marker" && ufw_active; then
-        ufw allow "$p/udp" comment "MoonBot $dest" >/dev/null
-        ufw delete allow "$old/udp" >/dev/null 2>&1 || true
+    new_ufw=0
+    if test "$old" != "$p" && ufw_active; then
+        # A closed new port needs an allow whoever owned the old one. A matching user allow stays
+        # unmarked, so a later retarget or remove can never delete access MoonTerminal did not open.
+        if ! LC_ALL=C ufw status |
+            grep -q -E "^${p}/udp[[:space:]]+ALLOW([[:space:]]+IN)?[[:space:]]+Anywhere[[:space:]]*(#.*)?\$"; then
+            ufw allow "$p/udp" comment "MoonBot $dest" >/dev/null
+            new_ufw=1
+        fi
+        if grep -qx ufw "$dest/$marker"; then
+            ufw delete allow "$old/udp" >/dev/null 2>&1 || true
+        fi
     fi
     kept="$dest/$marker.retarget"
     {
         printf '%s\n' "$p"
-        tail -n +2 "$dest/$marker"
+        if test "$old" = "$p"; then
+            tail -n +2 "$dest/$marker"
+        else
+            tail -n +2 "$dest/$marker" | while IFS= read -r line; do
+                if test "$line" = ufw; then
+                    test "$new_ufw" = 0 || echo ufw
+                else
+                    printf '%s\n' "$line"
+                fi
+            done
+            if ! grep -qx ufw "$dest/$marker" && test "$new_ufw" = 1; then
+                echo ufw
+            fi
+        fi
     } > "$kept"
     cat "$kept" > "$dest/$marker"
     rm -f -- "$kept"

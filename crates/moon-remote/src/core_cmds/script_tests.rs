@@ -47,8 +47,26 @@ show)
     *WorkingDirectory*) cat "$MB_TEST_ROOT/working_directory" ;;
     esac
     ;;
-is-active) exit 0 ;;
-start|stop|restart|enable|disable) exit 0 ;;
+is-active)
+    test "$(cat "$MB_TEST_ROOT/active_state")" = active
+    ;;
+start|restart)
+    if test -s "$MB_TEST_ROOT/service_action_fail"; then
+        printf 'inactive\n' > "$MB_TEST_ROOT/active_state"
+        : > "$MB_TEST_ROOT/ss_uan"
+        exit 1
+    fi
+    printf 'active\n' > "$MB_TEST_ROOT/active_state"
+    printf 'UNCONN 0 0 0.0.0.0:3302 0.0.0.0:*\n' > "$MB_TEST_ROOT/ss_uan"
+    ;;
+stop)
+    if test -s "$MB_TEST_ROOT/service_action_fail"; then
+        exit 1
+    fi
+    printf 'inactive\n' > "$MB_TEST_ROOT/active_state"
+    : > "$MB_TEST_ROOT/ss_uan"
+    ;;
+enable|disable) exit 0 ;;
 esac
 "#;
 
@@ -73,19 +91,33 @@ esac
 const UFW_STUB: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MB_TEST_ROOT/ufw_calls"
 case ${1:-} in
-allow|delete)
+allow)
+    port=$2
+    if ! grep -q "^$port " "$MB_TEST_ROOT/ufw_rules"; then
+        printf '%s ALLOW IN Anywhere\n' "$port" >> "$MB_TEST_ROOT/ufw_rules"
+    fi
     if test -s "$MB_TEST_ROOT/retarget_marker"; then
         printf '%s|marker=%s\n' "$*" "$(head -n 1 "$(cat "$MB_TEST_ROOT/retarget_marker")")" >> "$MB_TEST_ROOT/retarget_order"
     fi
     ;;
-esac
-if test "${1:-}" = status; then
+delete)
+    port=$3
+    grep -v "^$port " "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept" || true
+    cat "$MB_TEST_ROOT/ufw_rules.kept" > "$MB_TEST_ROOT/ufw_rules"
+    rm -f "$MB_TEST_ROOT/ufw_rules.kept"
+    if test -s "$MB_TEST_ROOT/retarget_marker"; then
+        printf '%s|marker=%s\n' "$*" "$(head -n 1 "$(cat "$MB_TEST_ROOT/retarget_marker")")" >> "$MB_TEST_ROOT/retarget_order"
+    fi
+    ;;
+status)
     if test "$(cat "$MB_TEST_ROOT/ufw_active")" = 1; then
         printf 'Status: active\n'
+        cat "$MB_TEST_ROOT/ufw_rules"
     else
         printf 'Status: inactive\n'
     fi
-fi
+    ;;
+esac
 "#;
 
 const SUDO_STUB: &str = r#"#!/bin/sh
@@ -167,6 +199,8 @@ impl Sandbox {
             "journal",
             "unescape",
             "ufw_calls",
+            "ufw_rules",
+            "service_action_fail",
             "retarget_marker",
             "retarget_order",
             "working_directory",
@@ -598,4 +632,149 @@ fn info_leaves_stopped_unit_uptime_empty() {
         text.contains("INFO_ACTIVE=inactive\nINFO_UPTIME=\n"),
         "{text}"
     );
+}
+
+/// Rejecting a valid cached unit or requiring an unused wrapper would make Stop one-way.
+#[test]
+fn service_start_accepts_a_cached_unit_without_mb() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.answer("working_directory", &format!("{}\n", sandbox.posix(&dir)));
+    sandbox.answer("active_state", "inactive\n");
+
+    let output = sandbox.run(&["service", "start", "3302", "UNIT_01.service"]);
+
+    assert_ok(&output);
+    assert_eq!(stdout(&output), "SERVICE_OK=active\n");
+    assert!(
+        sandbox
+            .read(&sandbox.root.join("systemctl_calls"))
+            .contains("start -- UNIT_01.service\n")
+    );
+}
+
+/// Systemd's escaped hyphen is part of a valid unit name, not shell syntax.
+#[test]
+fn service_start_accepts_a_systemd_escaped_unit() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.executable(&dir.join("mb"), "#!/bin/sh\nexit 0\n");
+    sandbox.answer("working_directory", &format!("{}\n", sandbox.posix(&dir)));
+    sandbox.answer("active_state", "inactive\n");
+    let unit = r"moonbot@opt-CORE\x2dA.service";
+
+    let output = sandbox.run(&["service", "start", "3302", unit]);
+
+    assert_ok(&output);
+    assert!(
+        sandbox
+            .read(&sandbox.root.join("systemctl_calls"))
+            .contains(&format!("start -- {unit}\n"))
+    );
+}
+
+/// A successful systemctl action must report the resulting service state.
+#[test]
+fn service_stop_reaches_systemctl_and_reports_inactive() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.live_owner(&dir, "UNIT_01.service", "MoonBot");
+    sandbox.answer("active_state", "active\n");
+
+    let output = sandbox.run(&["service", "stop", "3302"]);
+
+    assert_ok(&output);
+    assert_eq!(stdout(&output), "SERVICE_OK=inactive\n");
+    assert!(
+        sandbox
+            .read(&sandbox.root.join("systemctl_calls"))
+            .contains("stop -- UNIT_01.service\n")
+    );
+}
+
+/// Ignoring systemctl's exit status would report a failed restart as a success.
+#[test]
+fn service_restart_returns_the_journal_on_action_failure() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.live_owner(&dir, "UNIT_01.service", "MoonBot");
+    sandbox.answer("active_state", "active\n");
+    sandbox.answer("service_action_fail", "1\n");
+    sandbox.answer("journal", "restart failed\n");
+
+    let output = sandbox.run(&["service", "restart", "3302"]);
+
+    assert!(!output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "restart failed\n");
+    assert!(
+        sandbox
+            .read(&sandbox.root.join("systemctl_calls"))
+            .contains("restart -- UNIT_01.service\n")
+    );
+}
+
+/// Old-rule ownership must not decide whether the new endpoint is opened.
+#[test]
+fn retarget_opens_a_closed_new_port_without_owned_old_rule() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["retarget", &dir_text, "3305"]);
+
+    assert_ok(&output);
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw\n");
+    assert!(
+        sandbox
+            .read(&sandbox.root.join("ufw_calls"))
+            .contains(&format!("allow 3305/udp comment MoonBot {dir_text}\n"))
+    );
+    assert!(
+        !sandbox
+            .read(&sandbox.root.join("ufw_calls"))
+            .contains("delete allow 3302/udp")
+    );
+}
+
+/// A pre-existing user allow must stay user-owned after retarget and later removal.
+#[test]
+fn retarget_does_not_claim_a_preexisting_user_rule() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nufw\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    sandbox.answer("ufw_rules", "3305/udp ALLOW IN Anywhere # user\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["retarget", &dir_text, "3305"]);
+
+    assert_ok(&output);
+    assert_eq!(sandbox.read(&marker), "3305\nkept\n");
+    assert_eq!(
+        sandbox.read(&sandbox.root.join("ufw_rules")),
+        "3305/udp ALLOW IN Anywhere # user\n"
+    );
+    let calls = sandbox.read(&sandbox.root.join("ufw_calls"));
+    assert!(!calls.contains("allow 3305/udp comment"));
+    assert!(calls.contains("delete allow 3302/udp"));
 }

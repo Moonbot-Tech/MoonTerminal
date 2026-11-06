@@ -28,10 +28,12 @@ pub fn locate(conn: &Conn, privilege: &Privilege, port: u16) -> anyhow::Result<L
     Ok(locate_reply(&out.stdout_text()))
 }
 
-/// Promote a lone stopped candidate whether its port is confirmed or unknown.
+/// Promote a lone stopped candidate only when its requested port was confirmed on the server.
 fn locate_reply(text: &str) -> LocateResult {
     match parse_locate(text) {
-        LocateResult::Candidates(mut candidates) if candidates.len() == 1 => {
+        LocateResult::Candidates(mut candidates)
+            if candidates.len() == 1 && candidates[0].port_known =>
+        {
             let candidate = candidates.remove(0);
             LocateResult::Found(Located {
                 ours: false,
