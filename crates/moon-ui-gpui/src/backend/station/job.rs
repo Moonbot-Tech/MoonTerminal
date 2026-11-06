@@ -72,6 +72,13 @@ pub(crate) enum CoreStart {
 
 /// One unit of work on the server.
 pub(crate) enum Job {
+    /// Configure trusted HTTPS and MCP from the already authenticated Station destination.
+    McpSetup { target: Target },
+    /// Independent AI permissions; no Telegram token or bot state is read or changed.
+    Mcp {
+        target: Target,
+        request: moon_core::station_api::mcp::AdminRequest,
+    },
     /// Read the destination fingerprint without authenticating or changing the saved host.
     AddressProbe {
         source: moon_remote::hosts::Host,
@@ -240,6 +247,8 @@ impl JobButton {
     /// The button to name in the busy line.
     pub(crate) fn of(job: &Job, has_token: bool) -> Self {
         match job {
+            Job::McpSetup { .. } => Self::Key("station_mcp.setup"),
+            Job::Mcp { .. } => Self::Key("station_mcp.refresh"),
             Job::AddressProbe { .. } => Self::Key("telegram.server.address_probe"),
             Job::AddressChange { .. } => Self::Key("telegram.server.address_confirm"),
             Job::InstallProbe { .. } => Self::Key("telegram.server.install"),
@@ -336,6 +345,8 @@ pub(crate) enum Done {
 
 /// Progress, structured readings and completion sent from the worker to Settings.
 pub(crate) enum Event {
+    /// Independent MCP owner state, with no dependency on the station's Telegram bot.
+    Mcp(moon_core::station_api::mcp::AdminState),
     /// Distinct source core identities dropped from a cross-host payload.
     UnmappedCores(usize),
     /// Quarantined before removal; never starts a local poller until the successful end.
@@ -391,12 +402,16 @@ fn start_with_group_policy(
             let mut unmapped = |count| {
                 let _ = tx.send(Event::UnmappedCores(count));
             };
+            let mut mcp = |state| {
+                let _ = tx.send(Event::Mcp(state));
+            };
             let done = match run(
                 job,
                 &here,
                 automatic_groups,
                 &mut remember,
                 &mut unmapped,
+                &mut mcp,
                 &mut say,
             ) {
                 Ok(done) => done,
@@ -432,9 +447,26 @@ fn run(
     automatic_groups: bool,
     remember: &mut dyn FnMut(bot::ReturnedBot, Vec<moon_core::station_api::ListedCore>),
     unmapped: &mut dyn FnMut(usize),
+    mcp: &mut dyn FnMut(moon_core::station_api::mcp::AdminState),
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<Done> {
     match job {
+        Job::McpSetup { target } => {
+            mcp(station::mcp::setup(&target)?);
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
+                bot_off: false,
+            })
+        }
+        Job::Mcp { target, request } => {
+            mcp(station::api::mcp_admin(&target, request)?);
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
+                bot_off: false,
+            })
+        }
         Job::AddressProbe { source, target } => {
             say(Progress::step(
                 Step::AddressProbe,

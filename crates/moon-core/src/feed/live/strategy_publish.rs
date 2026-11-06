@@ -48,68 +48,45 @@ pub(super) fn strategy_edit_sig<'a>(
     sig
 }
 
-/// Log the desired-vs-echo revision for one resolved strategy edit, then queue it as a resolved
-/// note for the next `FeedMsg::StrategyEdits` publish.
-///
-/// The desired side comes from `desired_cache`, populated at `EditSubmitted` time, because
-/// moonproto removes the edit from its map in the same step that resolves it: by the time this
-/// runs, the live state has nothing left to read for the desired half. The log line exists to
-/// settle, on the first live run, whether the Delphi core renumbers `strategy_ver` when it
-/// adjusts or supersedes a submitted edit. An Adjusted line also names the fields that differ,
-/// as `name: sent -> saved`, because the revision pair alone stays equal when the core rewrites
-/// a value.
+/// Preserve the resolution's own snapshots; a later live read may already describe another edit.
 pub(super) fn record_strategy_edit_resolution(
-    echo_snap: Option<&MoonStateSnapshot>,
-    desired_cache: &mut std::collections::HashMap<u64, moonproto::StrategySnapshot>,
-    strategy_ids: &[u64],
-    result: StrategyEditResult,
+    schema: Option<&moonproto::StrategySchema>,
+    resolutions: &[moonproto::state::StrategyResolution],
     core_id: u64,
     notes: &mut Vec<StrategyEditResolution>,
 ) {
-    for &id in strategy_ids {
-        let desired = desired_cache.remove(&id);
-        let echo_rev = echo_snap
-            .and_then(|snap| snap.strats().snapshot(id))
-            .map(|strategy| (strategy.strategy_ver, strategy.last_date));
-        let desired_rev = desired
-            .as_ref()
-            .map(|strategy| (strategy.strategy_ver, strategy.last_date));
+    for resolution in resolutions {
+        let id = resolution.desired.strategy_id;
+        let result = match resolution.outcome {
+            moonproto::state::StrategyResolutionKind::Confirmed => StrategyEditResult::Confirmed,
+            moonproto::state::StrategyResolutionKind::Adjusted => StrategyEditResult::Adjusted,
+            moonproto::state::StrategyResolutionKind::Superseded => StrategyEditResult::Superseded,
+        };
+        let sent_revision = (
+            resolution.desired.strategy_ver,
+            resolution.desired.last_date,
+        );
+        let actual_revision = (resolution.actual.strategy_ver, resolution.actual.last_date);
         let changes = if result == StrategyEditResult::Adjusted {
-            adjusted_field_changes(echo_snap, desired.as_ref(), id)
+            super::strategies::strategy_field_changes(
+                schema,
+                &resolution.desired,
+                &resolution.actual,
+            )
         } else {
             Vec::new()
         };
-        if result == StrategyEditResult::Adjusted {
-            log::info!(
-                "core {} strategy {id} edit Adjusted: desired(ver,last_date)={desired_rev:?} echo(ver,last_date)={echo_rev:?}{}",
-                crate::feed::core_label(core_id),
-                super::strategies::format_adjustment_log(&changes),
-            );
-        } else {
-            log::info!(
-                "core {} strategy {id} edit {result:?}: desired(ver,last_date)={desired_rev:?} echo(ver,last_date)={echo_rev:?}",
-                crate::feed::core_label(core_id)
-            );
-        }
+        log::info!(
+            "core {} strategy {id} edit {result:?}: desired(ver,last_date)={sent_revision:?} echo(ver,last_date)={actual_revision:?}{}",
+            crate::feed::core_label(core_id),
+            super::strategies::format_adjustment_log(&changes),
+        );
         notes.push(StrategyEditResolution {
             id,
             result,
+            sent_revision,
+            actual: resolution.actual.clone(),
             changes,
         });
     }
-}
-
-/// Field differences for one Adjusted id, or nothing when either snapshot is already gone.
-pub(super) fn adjusted_field_changes(
-    echo_snap: Option<&MoonStateSnapshot>,
-    desired: Option<&moonproto::StrategySnapshot>,
-    id: u64,
-) -> Vec<super::StrategyFieldChange> {
-    let (Some(desired), Some(snap)) = (desired, echo_snap) else {
-        return Vec::new();
-    };
-    let Some(echo) = snap.strats().snapshot(id).cloned() else {
-        return Vec::new();
-    };
-    super::strategies::strategy_field_changes(snap.strats().strategy_schema(), desired, &echo)
 }

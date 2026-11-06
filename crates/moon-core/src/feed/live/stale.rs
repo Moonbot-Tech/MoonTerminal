@@ -54,6 +54,7 @@ impl Stale {
 /// Exhaustive on purpose: a new command must be classified here, not fall into a default.
 pub(super) fn is_live_action(cmd: &CoreCmd) -> bool {
     match cmd {
+        CoreCmd::Automation(_) => true,
         // Checkbox edits alone are configuration; Start/Stop is the engine itself.
         CoreCmd::StrategiesAction { start_stop, .. } => start_stop.is_some(),
         CoreCmd::TransferAsset { .. }

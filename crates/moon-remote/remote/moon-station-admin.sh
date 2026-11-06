@@ -19,6 +19,7 @@ DROPIN=$DROPIN_DIR/credentials.conf
 TOKEN=telegram-token
 # The bot's pairing (chats, owner, access): the station's own state, in its data root.
 PAIRING=/var/lib/moon-station/telegram.json
+MCP_AUTH=/var/lib/moon-station/mcp-auth.json
 # The USDT valuation cache, the station's own file once written.
 VALUATION=/var/lib/moon-station/valuation.sqlite
 # The running station's control API (moon_core::station_api), in its runtime directory.
@@ -395,12 +396,17 @@ cmd_status() {
     echo "bot_settings_merge=yes"
     # Config-field support belongs to the installed binary, not this independently upgraded helper.
     core_endpoint_override=no
+    mcp_https=no
     if [ -x "$BIN" ] && capabilities=$("$BIN" capabilities 2>/dev/null); then
         if printf '%s\n' "$capabilities" | grep -qx 'core_endpoint_override=yes'; then
             core_endpoint_override=yes
         fi
+        if printf '%s\n' "$capabilities" | grep -qx 'mcp_https=yes'; then
+            mcp_https=yes
+        fi
     fi
     echo "core_endpoint_override=$core_endpoint_override"
+    echo "mcp_https=$mcp_https"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
@@ -512,12 +518,16 @@ cmd_remove_station() {
     systemctl disable --now moon-station-update.path
     systemctl stop moon-station-update.service
     systemctl disable --now "$UNIT"
+    if systemctl cat moon-station-https.service >/dev/null 2>&1; then
+        systemctl disable --now moon-station-https.service
+    fi
     # Publish revocation before deleting anything; failed deletions remain retryable, and no
     # other terminal can put a credential back after this lock is released.
     : >"$REMOVED"
     rm -f "$CREDS"/core-*.cred "$CREDS"/.core-*.new \
         "$CREDS/$TOKEN.cred" "$CREDS/.$TOKEN.new" \
-        "$PAIRING" "$PAIRING.new" "$PAIRING.tmp" "$CONF" "$CONF.new" "$UPDATE_REQUEST"
+        "$PAIRING" "$PAIRING.new" "$PAIRING.tmp" "$CONF" "$CONF.new" "$UPDATE_REQUEST" \
+        "$MCP_AUTH" "$MCP_AUTH.tmp"
     write_dropin
     echo "removed=yes"
 }

@@ -702,6 +702,27 @@ impl CoreData {
         self.server_log_raw.iter().skip(start).cloned().collect()
     }
 
+    /// Read raw diagnostic lines by the same absolute cursor as formatted logs, reporting gaps.
+    pub fn raw_server_log_since(
+        &self,
+        cursor: u64,
+    ) -> (impl Iterator<Item = &crate::feed::CoreLogLine>, u64, bool) {
+        let missed = self.log_seq.saturating_sub(cursor);
+        let gap = cursor > self.log_seq || missed > self.server_log_raw.len() as u64;
+        let take = if cursor > self.log_seq {
+            self.server_log_raw.len()
+        } else {
+            (missed as usize).min(self.server_log_raw.len())
+        };
+        (
+            self.server_log_raw
+                .iter()
+                .skip(self.server_log_raw.len() - take),
+            self.log_seq,
+            gap,
+        )
+    }
+
     /// How much of a temporary ban on `symbol` is still to run, or `None` when this core holds no
     /// live one.
     ///
@@ -1130,6 +1151,8 @@ impl CoreData {
                         id: resolution.id,
                         result: resolution.result,
                         at_ms,
+                        sent_revision: resolution.sent_revision,
+                        actual: resolution.actual,
                         changes: resolution.changes,
                     });
                     notes_pushed_this_apply += 1;

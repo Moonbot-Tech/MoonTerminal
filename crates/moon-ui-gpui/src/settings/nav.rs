@@ -306,6 +306,7 @@ fn tab_icon(tab: Tab) -> &'static str {
         Tab::StCores => "icons/memory-stick.svg",
         Tab::StTape => "icons/trending-up.svg",
         Tab::StMaint => "icons/settings-2.svg",
+        Tab::StMcp => "icons/bot.svg",
         Tab::Appearance => "icons/palette.svg",
         Tab::Lines => "icons/chart-labels.svg",
         Tab::Badges => "icons/star.svg",

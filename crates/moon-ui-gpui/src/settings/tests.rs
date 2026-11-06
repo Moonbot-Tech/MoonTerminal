@@ -3,8 +3,8 @@
 use super::draft_dirty;
 use moon_core::config::AppConfig;
 
-/// The page ids of the approved mockup's navigation, in its order.
-const MOCKUP_IDS: [&str; 17] = [
+/// Stable navigation order, including Station AI access after its maintenance page.
+const MOCKUP_IDS: [&str; 18] = [
     "cores",
     "tg-bot",
     "tg-notify",
@@ -14,6 +14,7 @@ const MOCKUP_IDS: [&str; 17] = [
     "st-cores",
     "st-tape",
     "st-maint",
+    "st-mcp",
     "appearance",
     "lines",
     "badges",

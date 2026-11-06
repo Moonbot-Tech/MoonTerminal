@@ -1060,6 +1060,56 @@ sent and forgotten: neither a setting, nor a draft, nor a log line. Mirror types
 activation, section expand, core pick — plus once after `Connected { fresh: false }`;
 login / QR / code / reset / logout do not repeat themselves.
 
+## Station MCP: public tools and private owner consent
+
+`moon-station::mcp` is independent of Telegram. Presence of `[mcp]` selects the existing account
+feed (orders, balances and strategies) alongside report replication. Its loopback HTTP listener
+is published through the dedicated Caddy service installed by `moon-remote::station::mcp`.
+The setup uses the prepared server's public IP or existing DNS name, automatic short-lived ACME
+certificates and TCP 443. It refuses an occupied port and checks trusted HTTPS discovery from
+the Terminal before enabling authorization. No DNS-registration service is required.
+
+OAuth registration is public; approval is not. The browser's code must be entered in the
+Terminal's Station AI-access page through the existing pinned SSH/control-socket channel.
+The owner selects explicit core IDs and read/strategies/trading/settings scopes. Each HTTP
+request, queued owner call and feed mutation rechecks current authorization. Access tokens are opaque,
+stored as hashes, audience-bound, short-lived and revocable. Refresh credentials carry a grant-bound
+HMAC and expiry; one current hash and a private verification key per grant detect valid-token reuse
+without retaining thirty days of consumed-token tombstones. No raw token is saved.
+Last contact updates in memory on authenticated HTTP access and persists on the next durable transition.
+Disabling access revokes grants. It cannot undo a command already dispatched to a core.
+
+HTTP workers never own a SessionManager or raw MoonClient. A bounded queue transfers semantic
+reads and commands to the Station owner. Only `mcp/bridge.rs` reaches the `automation_*` session
+API and only `mcp/capture.rs` controls log delivery; source-contract tests keep that boundary.
+Trading and strategy writes enter the existing per-core feed queue. A preview is validated
+again there. Applying a retained preview twice cannot dispatch twice; an expired/evicted ID is
+rejected. All 64-bit core/strategy/order identities cross MCP as decimal strings.
+
+Strategies use native schema values and the existing pending-edit overlay/full-list owner.
+ActiveLib's immutable EditResolved payload replaces the former ID-keyed desired cache: notes
+retain the submitted revision and actual snapshot, preventing a later edit from masquerading
+as the earlier result. Guarded order moves/cancels bind preview to local incarnation and phase,
+then recheck on the ActiveLib runtime thread. New-order tickets are not exactly correlated to
+server UIDs by the current wire protocol, so a send receipt never claims an exchange fill.
+
+Settings use the SDK's SharedConfig JSON catalog and exact-field patching, preserving unedited
+values and opaque tails. They share SharedConfigSequence with ordinary edits and hold compact
+writes while waiting for a new full snapshot. Unknown outcomes are not retried automatically.
+There is no server-side CAS, multi-core transaction or full-import rollback guarantee.
+
+Diagnostic leases union their log subscriptions and expire without a connected chat. Logs are
+bounded and redacted before model-visible storage. Core-local forwarding time and UTC reception
+time stay separate. Low-priority ServerLog has no historical replay or reliable delivery;
+Station cursors identify local loss/reconnects, not every upstream packet loss.
+
+MoonDoc is fetched outside the owner thread as one public commit, with an atomic last-good cache
+and six-hour refresh. Reference, concepts and strategy examples are available through local
+search/read tools; task-specific guide sections accompany relevant live facts. Documentation
+never changes permissions or writes settings. Cursor events require client polling; an absent
+AI chat is not awakened by MCP. Reports use the existing replica, clock correction and currency
+coverage instead of a parallel accounting implementation.
+
 ## UI Components
 
 The application depends on `Moonbot-Tech/MoonUI` and uses components through `moon_ui::*` /

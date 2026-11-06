@@ -20,6 +20,7 @@ use crate::feed::{
 };
 use crate::util::now_unix_ms as now_ms;
 
+mod automation;
 mod chart_text;
 mod local_edits;
 mod placement;
@@ -440,11 +441,39 @@ pub(super) fn drain_commands(
         // A live action that waited out a lost connection is dropped here, never delivered late.
         // A tracked service action dropped this way is reported, so its banner stops waiting.
         let mut on_drop = |cmd: &CoreCmd, reason: super::stale::Stale| {
+            if let CoreCmd::Automation(request) = cmd {
+                let _ = request.reply.try_send(Err(reason.text().into()));
+            }
             if let Some(msg) = super::service::dropped(cmd, reason.text()) {
                 let _ = tx.send(msg);
             }
         };
         match super::stale::recv_fresh(cmd_rx, ready_since, server.id, &mut on_drop) {
+            Ok(CoreCmd::Automation(request)) => {
+                if matches!(
+                    request.action,
+                    crate::automation::Action::SettingsPatch { .. }
+                ) {
+                    if let Err(error) = shared_config_sequence.submit_automation(
+                        client,
+                        &request,
+                        client_settings_sequence.is_idle(),
+                    ) {
+                        let _ = request.reply.try_send(Err(error.to_string()));
+                    }
+                } else {
+                    let result = automation::execute(
+                        client,
+                        server.id,
+                        &request,
+                        strategy_placements,
+                        local_strat_edits,
+                    )
+                    .map_err(|e| e.to_string());
+                    *orders_mutated |= result.is_ok();
+                    let _ = request.reply.try_send(result);
+                }
+            }
             Ok(CoreCmd::SetMarket { .. }) => {}
             Ok(CoreCmd::StrategiesAction { checks, start_stop }) => {
                 // 1. Synchronize checkboxes: update local `checked` on changed entries and send
@@ -1395,7 +1424,8 @@ pub(super) fn drain_commands(
                 // Held back while a compact settings write is unechoed: a full-config packet
                 // built on the stale retained snapshot would revert it. See
                 // `ClientSettingsSequence::is_idle`.
-                if client_settings_sequence.is_idle() {
+                if client_settings_sequence.is_idle() || shared_config_sequence.automation_pending()
+                {
                     shared_config_sequence.drive(client, server.id, core_config_events);
                 } else {
                     shared_config_sequence.note_gated(server.id);
@@ -1417,7 +1447,7 @@ pub(super) fn drain_commands(
                 server.id,
             );
             *orders_mutated |= client_settings_sequence.drive(client, server.id);
-            if client_settings_sequence.is_idle() {
+            if client_settings_sequence.is_idle() || shared_config_sequence.automation_pending() {
                 shared_config_sequence.drive(client, server.id, core_config_events);
             } else {
                 shared_config_sequence.note_gated(server.id);

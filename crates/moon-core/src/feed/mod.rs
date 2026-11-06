@@ -444,6 +444,8 @@ impl OrderStopsForm {
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum CoreCmd {
+    /// Owner-authorized automation, checked again by the feed before submission.
+    Automation(Box<crate::automation::Submission>),
     /// Desired market role of the core as full state, not a delta.
     ///
     /// With `provider=true`, the core retains every exchange trade through

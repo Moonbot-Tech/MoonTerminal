@@ -86,6 +86,8 @@ enum Kind {
 /// Backend-owned bot-host admission and station jobs, as the Settings segment shows them.
 #[derive(Default)]
 pub(crate) struct StationJobs {
+    /// Last explicit MCP administration response; never inferred from Telegram availability.
+    pub(crate) mcp: Option<moon_core::station_api::mcp::AdminState>,
     /// A configured station owns the terminal's only bot, even when its service is unreachable.
     known: bool,
     /// A probe's exact destination and key awaiting explicit UI confirmation.
@@ -512,6 +514,7 @@ impl StationJobs {
         st.address_change = None;
         st.install_probe = None;
         st.bot = None;
+        st.mcp = None;
         st.cores_seen = None;
         st.core_uid_high_water = None;
         st.cores_result = None;
@@ -1016,6 +1019,10 @@ impl Backend {
     /// Apply one job event; `true` once the job has ended.
     fn station_event(&mut self, event: job::Event) -> bool {
         let done = match event {
+            job::Event::Mcp(state) => {
+                self.station.mcp = Some(state);
+                return false;
+            }
             job::Event::UnmappedCores(count) => {
                 self.station.unmapped_cores = count;
                 if self.station.kind == Kind::Groups {

@@ -104,6 +104,7 @@ impl Render for SettingsView {
             Tab::StCores => self.st_cores_page(body_width, cx),
             Tab::StTape => self.st_tape_page(body_width, cx),
             Tab::StMaint => self.st_maint_page(body_width, cx),
+            Tab::StMcp => self.st_mcp_page(body_width, cx),
         };
         let frame::PageParts {
             header,
@@ -262,6 +263,9 @@ impl SettingsView {
     ///     cx: Settings context notified after the page changes.
     pub(super) fn show_page(&mut self, page: Tab, cx: &mut Context<Self>) {
         self.active = page;
+        if page == Tab::StMcp {
+            self.mcp_admin(moon_core::station_api::mcp::AdminRequest::Status, cx);
+        }
         if matches!(page, Tab::TgBot | Tab::TgCore) {
             self.telegram_tab_activated(cx);
         }

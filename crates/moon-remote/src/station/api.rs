@@ -11,6 +11,19 @@ use super::{AdminConn, admin_conn, current_helper_status};
 use crate::script::{self, STEP_TIMEOUT};
 use crate::ssh::Target;
 
+/// Read or change MCP permissions over the station's private SSH administrative channel.
+pub fn mcp_admin(
+    target: &Target,
+    request: moon_core::station_api::mcp::AdminRequest,
+) -> anyhow::Result<moon_core::station_api::mcp::AdminState> {
+    let conn = admin_conn(target)?;
+    current_helper_status(&conn)?;
+    match call(&conn, &Request::Mcp(request))? {
+        Answer::Mcp(state) => Ok(state),
+        other => anyhow::bail!("the station answered MCP administration with {other:?}"),
+    }
+}
+
 /// One request on an open administrator connection whose helper is current.
 ///
 /// The station's hello is judged before its reply is read: a station of another API version is

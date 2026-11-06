@@ -28,7 +28,7 @@ use strategy_publish::{
     strategy_edit_sig,
 };
 
-use super::{StrategyFieldChange, strategies};
+use super::strategies;
 
 mod account_reconciliation;
 mod archive_probe;
@@ -442,16 +442,11 @@ pub(super) fn run(
     // Strategy-edit publish cadence, independent of the 1 Hz strategies gate below. The retained
     // latch is set on ANY edit event and cleared only once a publish actually goes out, so a
     // resolution arriving inside the 250 ms shadow of the previous publish is delayed, never
-    // dropped, by the rate limit. `strat_edit_desired_cache` remembers each pending edit's desired
-    // snapshot from the moment it was submitted, because moonproto removes the edit from its map
-    // in the same step that resolves it. The ver/last_date pair used to be enough to log the
-    // revision; naming the fields an Adjusted echo changed needs the values too.
+    // dropped, by the rate limit. Resolutions carry their exact snapshots from ActiveLib.
     let mut last_strat_edit_pub = Instant::now();
     let mut last_strat_edit_sig: u64 = 0;
     let mut strat_edit_publish_pending = false;
     let mut pending_strat_edit_notes: Vec<StrategyEditResolution> = Vec::new();
-    let mut strat_edit_desired_cache: std::collections::HashMap<u64, moonproto::StrategySnapshot> =
-        std::collections::HashMap::new();
     let mut last_strat_db_generation: Option<(u64, u64)> = None;
     let mut pending_strat_db_delivery: Option<((u64, u64), Receiver<bool>)> = None;
     let mut strat_db_retry_due = false;
@@ -926,6 +921,8 @@ pub(super) fn run(
                 // from the old connection may reach the next Ready.
                 if ready_since.take().is_some() {
                     client_settings_sequence.drop_lost_connection(server.id);
+                    shared_config_sequence
+                        .cancel_automation("connection lost before settings confirmation");
                 }
             }
             is_ready = ready;
@@ -1124,7 +1121,11 @@ pub(super) fn run(
             let _ = tx.send(FeedMsg::MarketCatalogChanged);
         }
         if let Some(profile) = station {
-            events.retain(|event| profile.keeps(event));
+            // Temporary diagnostic consumers use this client's existing subscription registry.
+            let logs = client.active_subscriptions().server_logs;
+            events.retain(|event| {
+                profile.keeps(event) || (logs && matches!(event, Event::ServerLog(_)))
+            });
         }
         let had_domain_event = !events.is_empty();
         // v4 delivers Stop/VStop changes as ordinary `OrderEvent::Updated` field
@@ -1484,52 +1485,15 @@ pub(super) fn run(
                 // make the ~250 ms publish block (further down) safe against the 1 Hz strategies
                 // gate's cadence; see `strategy_edit_sig` and `record_strategy_edit_resolution`.
                 Event::Strat(strat_ev) => match strat_ev {
-                    StratEvent::EditSubmitted { strategy_ids } => {
-                        strat_edit_publish_pending = true;
-                        if let Some(snap) = client.snapshot() {
-                            let strats = snap.strats();
-                            for &id in strategy_ids {
-                                if let Some(edit) = strats.strategy_edit(id) {
-                                    strat_edit_desired_cache.insert(id, edit.desired().clone());
-                                }
-                            }
-                        }
-                    }
-                    StratEvent::EditTimedOut { .. } => {
+                    StratEvent::EditSubmitted { .. } | StratEvent::EditTimedOut { .. } => {
                         strat_edit_publish_pending = true;
                     }
-                    StratEvent::EditConfirmed { strategy_ids } => {
+                    StratEvent::EditResolved { resolutions } => {
                         strat_edit_publish_pending = true;
-                        let echo_snap = client.snapshot();
+                        let snapshot = client.snapshot();
                         record_strategy_edit_resolution(
-                            echo_snap.as_deref(),
-                            &mut strat_edit_desired_cache,
-                            strategy_ids,
-                            StrategyEditResult::Confirmed,
-                            server.id,
-                            &mut pending_strat_edit_notes,
-                        );
-                    }
-                    StratEvent::EditAdjusted { strategy_ids } => {
-                        strat_edit_publish_pending = true;
-                        let echo_snap = client.snapshot();
-                        record_strategy_edit_resolution(
-                            echo_snap.as_deref(),
-                            &mut strat_edit_desired_cache,
-                            strategy_ids,
-                            StrategyEditResult::Adjusted,
-                            server.id,
-                            &mut pending_strat_edit_notes,
-                        );
-                    }
-                    StratEvent::EditSuperseded { strategy_ids } => {
-                        strat_edit_publish_pending = true;
-                        let echo_snap = client.snapshot();
-                        record_strategy_edit_resolution(
-                            echo_snap.as_deref(),
-                            &mut strat_edit_desired_cache,
-                            strategy_ids,
-                            StrategyEditResult::Superseded,
+                            snapshot.as_ref().and_then(|s| s.strats().strategy_schema()),
+                            resolutions,
                             server.id,
                             &mut pending_strat_edit_notes,
                         );
@@ -1667,7 +1631,7 @@ pub(super) fn run(
             {
                 shared_config_sequence.observe_update();
             }
-            if client_settings_sequence.is_idle() {
+            if client_settings_sequence.is_idle() || shared_config_sequence.automation_pending() {
                 shared_config_sequence.drive(&client, server.id, &mut core_config_events);
             } else {
                 shared_config_sequence.note_gated(server.id);
@@ -1997,7 +1961,8 @@ pub(super) fn run(
         } else {
             None
         };
-        let want_log = server.feed.log;
+        let want_log =
+            server.feed.log || (station.is_some() && client.active_subscriptions().server_logs);
         // detect-diag: report a subset of server feed flags once per process. The line includes
         // detects/reports/log but not alerts; `Event::Detect` can still run with detects=false when
         // alerts=true. Controlled by `channels.detect`, off by default.

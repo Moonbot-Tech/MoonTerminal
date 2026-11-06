@@ -55,7 +55,7 @@ fixture=$(mktemp -d)
 test -d "$fixture"
 trap 'rm -r -- "$fixture"' EXIT
 mkdir -p "$fixture/etc/creds" "$fixture/data" "$fixture/opt" "$fixture/admin"
-for file in etc/creds/core-1.cred etc/creds/core-9.cred etc/creds/.core-3.new etc/creds/telegram-token.cred etc/creds/.telegram-token.new etc/station.toml etc/station.toml.new data/telegram.json data/telegram.json.new data/telegram.json.tmp data/update.request; do
+for file in etc/creds/core-1.cred etc/creds/core-9.cred etc/creds/.core-3.new etc/creds/telegram-token.cred etc/creds/.telegram-token.new etc/station.toml etc/station.toml.new data/telegram.json data/telegram.json.new data/telegram.json.tmp data/update.request data/mcp-auth.json data/mcp-auth.json.tmp; do
     printf 'synthetic credential' >"$fixture/$file"
 done
 printf 'administrator key' >"$fixture/admin/authorized_keys"
@@ -63,7 +63,14 @@ printf 'retained history' >"$fixture/data/reports.sqlite"
 printf 'unrelated credential' >"$fixture/etc/creds/other.cred"
 id() { printf '0\n'; }
 flock() { return 0; }
-systemd-creds() { printf 'encrypted synthetic key' >"$4"; }
+# POSIX shells do not accept hyphens in function names; use an executable fixture.
+mkdir -p "$fixture/bin"
+cat >"$fixture/bin/systemd-creds" <<'STUB'
+#!/bin/sh
+printf 'encrypted synthetic key' >"$4"
+STUB
+chmod +x "$fixture/bin/systemd-creds"
+PATH="$fixture/bin:$PATH"
 systemctl() {
     printf '%s\n' "$*" >>"$fixture/calls"
     if [ "$fail_stop" = yes ] && [ "$*" = 'disable --now moon-station.service' ]; then return 1; fi
@@ -86,12 +93,15 @@ test ! -e "$fixture/data/telegram.json"
 test ! -e "$fixture/data/telegram.json.new"
 test ! -e "$fixture/data/telegram.json.tmp"
 test ! -e "$fixture/data/update.request"
+test ! -e "$fixture/data/mcp-auth.json"
+test ! -e "$fixture/data/mcp-auth.json.tmp"
 test "$(cat "$fixture/admin/authorized_keys")" = 'administrator key'
 test "$(cat "$fixture/data/reports.sqlite")" = 'retained history'
 test "$(cat "$fixture/etc/creds/other.cred")" = 'unrelated credential'
 test "$(sed -n '1p' "$fixture/calls")" = 'disable --now moon-station-update.path'
 test "$(sed -n '2p' "$fixture/calls")" = 'stop moon-station-update.service'
 test "$(sed -n '3p' "$fixture/calls")" = 'disable --now moon-station.service'
+test "$(sed -n '5p' "$fixture/calls")" = 'disable --now moon-station-https.service'
 test "$(cat "$fixture/dropin/credentials.conf")" = '[Service]'
 test "$cached_config" = yes
 test -f "$fixture/etc/removed"
@@ -102,7 +112,7 @@ if (helper start); then exit 1; fi
 test ! -e "$fixture/etc/creds/core-7.cred"
 test ! -e "$fixture/etc/creds/telegram-token.cred"
 test ! -e "$fixture/etc/station.toml"
-test "$(wc -l <"$fixture/calls")" -eq 4
+test "$(wc -l <"$fixture/calls")" -eq 6
 "#;
     let code = format!(
         "fail_stop={}\n{before}\n{helper}\n{after}",

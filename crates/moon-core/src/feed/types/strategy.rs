@@ -128,6 +128,9 @@ pub struct StrategyFieldChange {
 pub struct StrategyEditResolution {
     pub id: u64,
     pub result: StrategyEditResult,
+    /// Exact submitted revision and immutable event payload; later edits cannot rewrite this result.
+    pub sent_revision: (i32, u64),
+    pub actual: std::sync::Arc<moonproto::StrategySnapshot>,
     /// Empty unless `result` is [`StrategyEditResult::Adjusted`].
     pub changes: Vec<StrategyFieldChange>,
 }
@@ -141,6 +144,9 @@ pub struct StrategyEditNote {
     pub id: u64,
     pub result: StrategyEditResult,
     pub at_ms: i64,
+    /// Correlates an automation receipt with this resolution instead of matching only the strategy ID.
+    pub sent_revision: (i32, u64),
+    pub actual: std::sync::Arc<moonproto::StrategySnapshot>,
     /// Empty unless `result` is [`StrategyEditResult::Adjusted`]. The UI formats a bounded prefix
     /// of this list; the full list stays here so `+N` counts what was actually different.
     pub changes: Vec<StrategyFieldChange>,

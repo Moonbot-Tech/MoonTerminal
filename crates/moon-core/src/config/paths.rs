@@ -23,6 +23,16 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+/// Private MCP grants and hashed tokens, separate from published knowledge.
+pub fn station_mcp_auth() -> PathBuf {
+    data_dir().join("mcp-auth.json")
+}
+
+/// Last complete MoonDoc snapshot; replacing one file cannot mix documentation revisions.
+pub fn station_mcp_knowledge() -> PathBuf {
+    data_dir().join("mcp-knowledge.json")
+}
+
 /// Application identifier for user directories outside the bundle. Matches
 /// `CFBundleIdentifier` in `.github/scripts/make-dmg.sh`. Unused on Windows, where data
 /// lives beside the executable.
