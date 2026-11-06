@@ -39,7 +39,7 @@ name: release
 #
 # What restores: the cache key includes the job id, so the `windows` job below shares a
 # key with build.yml's `windows` and warm-starts from what `main` wrote. The `macos-slice`
-# job does not — build.yml's macOS job is `macos-probe` — so the arm64 build compiles cold.
+# job does not — macos-probe.yml's job is `macos-probe` — so the arm64 build compiles cold.
 on:
   push:
     tags: ["v*"]

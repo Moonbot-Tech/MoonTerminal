@@ -1,5 +1,6 @@
-//! Static contracts for the build and release workflows: CI must run the whole test suite on pull
-//! requests, and releases must build one exact canonical tag and verify the published executable.
+//! Static contracts for the build, macOS probe and release workflows: CI must run the whole test
+//! suite on pull requests, runner-starved probes retry only without executing steps, and releases
+//! must build one exact canonical tag and verify the published executable.
 //!
 //! This exists because the workflow built the binary and nothing else for the project's whole
 //! history, so a test suite that did not even compile sat on `main` unnoticed. The guard is
@@ -40,18 +41,21 @@ const TEST_JOB: &str = "tests";
 /// The job that builds, tests and lints the station for the Linux target it ships for.
 const STATION_JOB: &str = "station-linux";
 
-/// Every job that compiles the workspace and therefore runs the lockfile contract's three steps
-/// (verify -> refresh MoonUI -> assert nothing else moved). `audit` is deliberately excluded: it
-/// runs cargo-deny over the already-committed lock and never touches it.
-const COMPILING_JOBS: [&str; 5] = ["windows", TEST_JOB, "macos-probe", "clippy", STATION_JOB];
+/// Every `build.yml` job that compiles the workspace and therefore runs the lockfile contract's
+/// three steps (verify -> refresh MoonUI -> assert nothing else moved). `audit` is deliberately
+/// excluded: it runs cargo-deny over the already-committed lock and never touches it.
+const COMPILING_JOBS: [&str; 4] = ["windows", TEST_JOB, "clippy", STATION_JOB];
+
+/// The diagnostic macOS compile, separated so its cancellation cannot fail the gating build.
+const MACOS_PROBE_JOB: &str = "macos-probe";
 
 /// The `release.yml` jobs that compile the terminal, and so must ship MoonUI at its latest master
 /// through the same lockfile contract as `build.yml`'s compiling jobs. The station jobs are left
 /// out: `moon-station` does not depend on MoonUI.
 const RELEASE_TERMINAL_JOBS: [&str; 2] = ["windows", "macos-slice"];
 
-/// Every job that must run the lockfile contract, with the workflow text it lives in: `build.yml`'s
-/// compiling jobs and `release.yml`'s terminal jobs.
+/// Every job that must run the lockfile contract, with the workflow text it lives in: the build's
+/// compiling jobs, the standalone macOS probe and `release.yml`'s terminal jobs.
 fn lockfile_contract_jobs() -> Vec<(&'static str, String, &'static str)> {
     let build = workflow_text();
     let release = release_workflow_text();
@@ -59,6 +63,11 @@ fn lockfile_contract_jobs() -> Vec<(&'static str, String, &'static str)> {
         .iter()
         .map(|job| ("build.yml", build.clone(), *job))
         .collect();
+    jobs.push((
+        "macos-probe.yml",
+        macos_probe_workflow_text(),
+        MACOS_PROBE_JOB,
+    ));
     jobs.extend(
         RELEASE_TERMINAL_JOBS
             .iter()
@@ -69,10 +78,7 @@ fn lockfile_contract_jobs() -> Vec<(&'static str, String, &'static str)> {
 
 /// The compiling jobs that BLOCK a merge — the Windows `.exe` release gate, the `tests` gate, the
 /// `clippy` gate and the station's Linux gate — and so must neither be silently skipped nor
-/// downgraded to a probe.
-/// `macos-probe` is deliberately excluded here even though it shares the same `if:` condition: it already carries
-/// `continue-on-error: true` and never blocks, so there is no gate left for a quiet skip to hide
-/// behind, and it needs no guard of its own.
+/// downgraded to a probe. The diagnostic macOS job lives in another workflow and is not a gate.
 const GATING_JOBS: [&str; 4] = ["windows", TEST_JOB, "clippy", STATION_JOB];
 
 /// The only job-level `if:` a `GATING_JOBS` member may carry, normalized the same way
@@ -140,6 +146,28 @@ fn release_workflow_path() -> PathBuf {
 
 fn release_workflow_text() -> String {
     let path = release_workflow_path();
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// Read one of the standalone macOS probe workflows by its repository-relative file name.
+fn macos_workflow_text(file: &str) -> String {
+    let path = workspace_dir().join(".github/workflows").join(file);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// Read the standalone diagnostic macOS probe workflow.
+fn macos_probe_workflow_text() -> String {
+    macos_workflow_text("macos-probe.yml")
+}
+
+/// Read the workflow that listens for completed macOS probe attempts.
+fn macos_probe_retry_workflow_text() -> String {
+    macos_workflow_text("macos-probe-retry.yml")
+}
+
+/// Read the runner-acquisition classifier invoked by the retry workflow.
+fn macos_probe_retry_script_text() -> String {
+    let path = workspace_dir().join(".github/scripts/retry-macos-probe.sh");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
@@ -607,9 +635,214 @@ fn the_station_job_builds_tests_and_lints_for_linux() {
     }
 }
 
+/// Breakage guarded: putting the diagnostic macOS job back into the gating build, or removing its
+/// `continue-on-error`, lets a runner cancellation or expected Metal compile failure redden main.
+#[test]
+fn the_macos_probe_is_diagnostic_and_outside_the_gating_build() {
+    assert!(
+        job_body(&workflow_text(), MACOS_PROBE_JOB).is_none(),
+        "build.yml must not contain the diagnostic macOS probe"
+    );
+    let probe = macos_probe_workflow_text();
+    for trigger in ["push:", "pull_request:", "workflow_dispatch:", "schedule:"] {
+        assert!(
+            probe.lines().any(|line| line.trim() == trigger),
+            "macos-probe.yml must keep build.yml's `{trigger}` trigger"
+        );
+    }
+    let body = job_body(&probe, MACOS_PROBE_JOB).expect("standalone macOS probe job");
+    assert!(
+        body.iter()
+            .any(|line| line.trim() == "continue-on-error: true"),
+        "the macOS probe must remain diagnostic"
+    );
+    assert!(
+        body.iter()
+            .any(|line| line.trim() == "if: github.event_name != 'schedule'"),
+        "the macOS probe must skip the audit-only weekly schedule"
+    );
+}
+
+/// Breakage guarded: broadening the retry listener to another workflow, dropping its attempt cap,
+/// or granting unrelated token permissions turns a narrowly scoped infrastructure retry into an
+/// automatic re-run of real failures.
+#[test]
+fn the_macos_retry_listener_is_scoped_and_capped() {
+    let retry = macos_probe_retry_workflow_text();
+    for required in [
+        "workflow_run:",
+        "workflows: [\"macOS probe\"]",
+        "types: [completed]",
+        "actions: write",
+        "checks: read",
+        "contents: read",
+        "github.event.workflow_run.conclusion == 'cancelled'",
+        "github.event.workflow_run.conclusion == 'failure'",
+        "github.event.workflow_run.run_attempt < 3",
+        "GH_TOKEN: ${{ github.token }}",
+        "bash .github/scripts/retry-macos-probe.sh \"$RUN_ID\" \"$RUN_ATTEMPT\"",
+    ] {
+        assert!(
+            retry.contains(required),
+            "macos-probe-retry.yml must contain `{required}`"
+        );
+    }
+    assert!(
+        !retry.contains("pull_request_target"),
+        "the retry listener must run only for completed macOS probe workflows"
+    );
+}
+
+/// Render one list-jobs response, optionally with a steps field, for the retry classifier.
+fn macos_job_json(conclusion: &str, steps: Option<&str>) -> String {
+    let steps_field = steps
+        .map(|steps| format!(r#", "steps": {steps}"#))
+        .unwrap_or_default();
+    format!(
+        r#"{{"jobs":[{{"id":42,"name":"macOS probe (arm64 build, x86_64 check) — diagnostic","conclusion":"{conclusion}"{steps_field}}}]}}"#
+    )
+}
+
+/// Execute the retry classifier against fixture API responses and assert whether it re-runs.
+fn assert_macos_retry(
+    purpose: &str,
+    attempt: &str,
+    jobs_json: &str,
+    annotations_json: &str,
+    expect_rerun: bool,
+) {
+    let root = std::env::temp_dir().join(format!(
+        "moonterminal-macos-retry-{purpose}-{}",
+        std::process::id()
+    ));
+    if root.exists() {
+        std::fs::remove_dir_all(&root).expect("remove stale macOS retry fixture");
+    }
+    std::fs::create_dir_all(root.join(".github/scripts")).expect("create retry script directory");
+    std::fs::create_dir_all(root.join("bin")).expect("create retry fixture bin directory");
+    std::fs::write(
+        root.join(".github/scripts/retry-macos-probe.sh"),
+        macos_probe_retry_script_text(),
+    )
+    .expect("write retry classifier fixture");
+    std::fs::write(root.join("jobs.json"), jobs_json).expect("write jobs fixture");
+    std::fs::write(root.join("annotations.json"), annotations_json)
+        .expect("write annotations fixture");
+    std::fs::write(root.join("requests.log"), "").expect("reset retry request log");
+    std::fs::write(
+        root.join("bin/gh"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$GH_FIXTURE_DIR/requests.log"
+if [[ "${1:-}" == "api" ]]; then
+    case "${2:-}" in
+        *"/jobs?per_page=100") cat "$GH_FIXTURE_DIR/jobs.json" ;;
+        *"/annotations?per_page=100") cat "$GH_FIXTURE_DIR/annotations.json" ;;
+        *) echo "[FAIL] unexpected API endpoint: ${2:-}" >&2; exit 1 ;;
+    esac
+elif [[ "${1:-}" == "run" ]] && [[ "${2:-}" == "rerun" ]]; then
+    exit 0
+else
+    echo "[FAIL] unexpected gh invocation: $*" >&2
+    exit 1
+fi
+"#,
+    )
+    .expect("write fake gh for retry fixture");
+    make_fixture_executable(&root.join("bin/gh"));
+
+    let mut paths = vec![root.join("bin")];
+    if let Some(current) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&current));
+    }
+    let fixture_path: OsString = std::env::join_paths(paths).expect("join retry fixture PATH");
+    let output = Command::new(release_script_bash())
+        .arg(".github/scripts/retry-macos-probe.sh")
+        .args(["4242", attempt])
+        .current_dir(&root)
+        .env("PATH", fixture_path)
+        .env("GH_FIXTURE_DIR", &root)
+        .env("GITHUB_REPOSITORY", "Moonbot-Tech/MoonTerminal")
+        .env("GH_TOKEN", "fixture-token")
+        .output()
+        .expect("run macOS retry classifier fixture");
+    assert!(
+        output.status.success(),
+        "retry fixture {purpose} failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests =
+        std::fs::read_to_string(root.join("requests.log")).expect("read retry fixture requests");
+    assert_eq!(
+        requests.contains("run rerun 4242 --failed"),
+        expect_rerun,
+        "retry fixture {purpose} made unexpected requests: {requests}"
+    );
+    std::fs::remove_dir_all(root).expect("remove macOS retry fixture");
+}
+
+/// Breakage guarded: treating a compile failure as runner starvation re-runs real errors, while
+/// accepting every failed job without checking its steps or acquisition annotation retries failures
+/// the automation cannot fix. Empty steps and the explicit annotation are the only accepted proof.
+#[test]
+fn the_macos_retry_reruns_only_when_no_step_ran() {
+    assert_macos_retry(
+        "empty-steps",
+        "1",
+        &macos_job_json("cancelled", Some("[]")),
+        "[]",
+        true,
+    );
+    assert_macos_retry(
+        "compile-failure",
+        "2",
+        &macos_job_json(
+            "failure",
+            Some(r#"[{"name":"Probe-compile chartdx Metal backend"}]"#),
+        ),
+        "[]",
+        false,
+    );
+    assert_macos_retry(
+        "acquisition-annotation",
+        "1",
+        &macos_job_json("failure", None),
+        r#"[{"message":"The job was not acquired by Runner of type hosted even after multiple attempts"}]"#,
+        true,
+    );
+    assert_macos_retry(
+        "unrelated-annotation",
+        "1",
+        &macos_job_json("failure", None),
+        r#"[{"message":"Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."}]"#,
+        false,
+    );
+    assert_macos_retry(
+        "successful-job",
+        "1",
+        &macos_job_json("success", Some("[]")),
+        "[]",
+        false,
+    );
+}
+
+/// Breakage guarded: dropping the numeric attempt check creates an unbounded retry loop whenever
+/// hosted macOS capacity stays exhausted. The original attempt plus two retries end at attempt 3.
+#[test]
+fn the_macos_retry_stops_after_two_extra_attempts() {
+    assert_macos_retry(
+        "retry-cap",
+        "3",
+        &macos_job_json("cancelled", Some("[]")),
+        "[]",
+        false,
+    );
+}
+
 /// Breakage guarded: a well-meaning reorder in the lockfile contract (verify -> refresh MoonUI ->
-/// assert nothing else moved), in any compiling job of `build.yml` or terminal job of
-/// `release.yml`. `cargo fetch --locked` only proves the committed lock agrees with the manifests
+/// assert nothing else moved), in any compiling job of `build.yml`, the standalone macOS probe or
+/// a terminal job of `release.yml`. `cargo fetch --locked` only proves the committed lock agrees with the manifests
 /// when it runs BEFORE anything can rewrite the lock; run after `cargo update`, it only proves the
 /// lock agrees with itself. `assert-only-moonui-moved.sh` only has a refreshed lock to inspect once
 /// `cargo update` has actually run — moved ahead of it, or deleted outright, a MoonUI refresh that
