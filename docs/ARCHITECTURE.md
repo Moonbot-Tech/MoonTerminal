@@ -195,7 +195,13 @@ Rules that are easy to break unnoticed:
   a clean or inconclusive cheap result opens read access and starts one bounded full
   `integrity_check` in the background. Writes and maintenance wait for a conclusive full pass;
   a timeout or failed check does not authorize them. The writer also waits before opening the
-  database, so index-only damage that `quick_check` cannot see still receives no writes. A
+  database, so index-only damage that `quick_check` cannot see still receives no writes.
+  File size may skip only the synchronous cheap gate; the background scan uses its time budget
+  even above 2 GiB. An inconclusive full scan preserves access to existing history through SQLite
+  read-only connections and publishes a stopped-recording notice. New reader connections become
+  writable only after the full gate opens, preserving the Report preference-write API.
+  The existing report revision channel publishes a recovery notice even when no writer commits;
+  Report repaints the notice without requerying unchanged rows. A
   read-only WAL anchor held by the permit keeps early read-write preference readers from
   triggering a last-connection checkpoint before the writer opens.
   Confirmed damage is never "repaired" in place:

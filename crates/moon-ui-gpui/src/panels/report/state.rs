@@ -748,6 +748,11 @@ impl ReportPanel {
         // The dedicated report-revision channel avoids repainting every shell on each commit.
         let report_revision = backend.read(cx).report_revision.clone();
         cx.observe(&report_revision, |this, _revision, cx| {
+            let notice = db::report_recovery::status();
+            if notice != this.recovery_notice {
+                this.recovery_notice = notice;
+                cx.notify();
+            }
             let report_generation = this
                 .generation
                 .as_ref()
@@ -879,6 +884,7 @@ impl ReportPanel {
             generation,
             valuation_generation,
             valuation_status,
+            recovery_notice: db::report_recovery::status(),
             last_gen,
             last_status_rev,
             last_valuation_mode: seeded_valuation_mode,

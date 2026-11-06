@@ -128,6 +128,8 @@ pub(in crate::db) fn attach_databases(conn: &Connection, attach: AttachSet) -> R
 ///
 /// Same readiness and access rules as [`open_reader`]. The attach set is a
 /// property of the query: valuation-touching reads must use [`AttachSet::ALL`].
+/// Before a conclusive full check, SQLite itself enforces read-only access. Once authorized,
+/// new connections also support Report preference writes without changing their existing API.
 ///
 /// Args:
 ///     attach: Companion databases this query needs.
@@ -169,8 +171,15 @@ pub fn open_reader_with(attach: AttachSet) -> ReadResult<ReportReader> {
             FailCode::None,
         )
     })?;
-    let conn =
-        Connection::open(&path).map_err(|e| read_fail::read_fail_at("отчёты(reader)", &path, e))?;
+    let mut flags = rusqlite::OpenFlags::default();
+    if !report_recovery::access_permitted() {
+        flags.remove(
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
+        );
+        flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY);
+    }
+    let conn = Connection::open_with_flags(&path, flags)
+        .map_err(|e| read_fail::read_fail_at("отчёты(reader)", &path, e))?;
     // Before the ATTACH below: `cache_size` applies to one schema, and `main` is the
     // one every period scan reads.
     tune_reader(&conn);

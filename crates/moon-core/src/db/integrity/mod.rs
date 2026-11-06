@@ -3,7 +3,8 @@
 //! Individual reads only detect damage on pages they touch, so narrow period
 //! windows can succeed while wider ones fail. Startup uses one cheap `quick_check`
 //! gate, then one bounded full `integrity_check` off the UI thread and publishes a
-//! pollable verdict, including setup, size-limit, and timeout failures.
+//! pollable verdict, including setup and timeout failures. Large replicas skip only the
+//! synchronous gate; the bounded background scan must still be able to authorize the writer.
 //!
 //! The full check remains mandatory before the writer opens: `quick_check` skips
 //! the index-vs-table content comparison, so a replica whose index row counts have
@@ -39,11 +40,9 @@ pub enum Integrity {
 /// unbounded report. This bounds output, not scan work.
 const MAX_PROBLEM_ROWS: usize = 20;
 
-/// Provisional ceiling above which the full scan is skipped rather than
-/// competing with the writer for disk for minutes at every launch. Revisit with
-/// the elapsed-time telemetry this module logs on every run — the number is a
-/// bound, not a measurement.
-const MAX_CHECK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Avoid scanning large replicas on the startup thread. The full background scan uses a time
+/// budget instead: skipping it by size would permanently disable recording for healthy files.
+const MAX_QUICK_CHECK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Poll interval while the background full check is still running.
 const POLL_HINT: Duration = Duration::from_millis(500);
@@ -172,25 +171,11 @@ pub(super) fn reset_test_state() {
     WRITES_BLOCKED.store(false, Ordering::Release);
 }
 
-/// Run the check synchronously. Public to the crate so tests can drive it
-/// against a fabricated file without going through the thread.
+/// Run the time-bounded full check, including replicas too large for the synchronous cheap gate.
+/// Called on the recovery worker; tests may also drive it against an isolated file.
 pub(crate) fn run(path: &Path) -> Integrity {
-    // ONE metadata call answers all three questions — present, how big, or why
-    // not readable. `Path::exists` is unsuitable for the first question for
-    // the same reason `db::open_reader` rejects it: it reports false for a
-    // permission or metadata error too, which would make an unreadable replica
-    // read as an absent one HERE while the read path reports it as a failure.
-    // Two answers to "does the replica exist?" in one subsystem is worse than
-    // either answer.
+    // A metadata failure is not an absent replica; Path::exists would hide that distinction.
     match std::fs::metadata(path) {
-        Ok(m) if m.len() > MAX_CHECK_BYTES => {
-            log::info!(
-                "отчёты(integrity): проверка пропущена — файл {} МБ больше порога {} МБ",
-                m.len() / (1024 * 1024),
-                MAX_CHECK_BYTES / (1024 * 1024)
-            );
-            return Integrity::CheckFailed("файл слишком велик для полной проверки".into());
-        }
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Integrity::NotPresent,
         Err(e) => return Integrity::CheckFailed(format!("файл недоступен: {e}")),
@@ -290,7 +275,7 @@ pub(crate) fn run(path: &Path) -> Integrity {
 ///     leaves the later full check responsible for authorizing the writer.
 pub(crate) fn quick(path: &Path) -> Integrity {
     match std::fs::metadata(path) {
-        Ok(metadata) if metadata.len() > MAX_CHECK_BYTES => {
+        Ok(metadata) if metadata.len() > MAX_QUICK_CHECK_BYTES => {
             return Integrity::CheckFailed("replica is too large for startup validation".into());
         }
         Ok(_) => {}

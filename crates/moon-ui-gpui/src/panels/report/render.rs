@@ -517,23 +517,25 @@ impl Render for ReportPanel {
                 .into_any_element(),
             Ok(data) => self.table_el(data.clone(), &vis, p, cx),
         };
-        // Successful recovery permits reads, so it cannot reach the access-denied placeholder.
-        // Keep its saved-copy notice alongside loading/ready content, but let failures take priority.
-        let recovered_notice = match db::report_recovery::status() {
-            Some(notice @ db::report_recovery::RecoveryNotice::Recovered { .. })
-                if !matches!(self.data, LoadState::Failed(_)) =>
-            {
+        // These states permit reads, so their notice must accompany ready content as well.
+        // A query failure must not hide the separate fact that new trades are not recorded.
+        let recovery_notice = self
+            .recovery_notice
+            .filter(|notice| match notice {
+                db::report_recovery::RecoveryNotice::CheckIncomplete { .. } => true,
+                db::report_recovery::RecoveryNotice::Recovered { .. } => {
+                    !matches!(self.data, LoadState::Failed(_))
+                }
+                _ => false,
+            })
+            .map(|notice| {
                 let (title, detail) = crate::report_notice::recovery_notice_text(Some(notice));
-                Some(
-                    div()
-                        .flex_none()
-                        .px(design::ui_px(cx, 12.0))
-                        .py(design::ui_px(cx, 6.0))
-                        .child(moon_ui::MoonAlert::info("rep-recovered-note", detail).title(title)),
-                )
-            }
-            _ => None,
-        };
+                div()
+                    .flex_none()
+                    .px(design::ui_px(cx, 12.0))
+                    .py(design::ui_px(cx, 6.0))
+                    .child(moon_ui::MoonAlert::info("rep-recovered-note", detail).title(title))
+            });
 
         // Exact totals over the full filtered period. WHY the row is split into a never-yielding
         // head and one clipping tail is stated once, in `totals.rs`'s module doc; what only this
@@ -673,7 +675,7 @@ impl Render for ReportPanel {
             .children(coin_dismiss)
             .child(filters)
             .child(div().w_full().h(px(1.0)).bg(border))
-            .children(recovered_notice)
+            .children(recovery_notice)
             .child(table_el)
             // The comment of the current row, directly above the totals: full width, so a long
             // comment wraps to as many lines as it needs instead of being truncated in its cell.

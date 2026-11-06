@@ -199,7 +199,7 @@ struct ReportRevisionDecision {
 
 /// The report-data, valuation-data, and health edges observed in one coordination tick.
 ///
-/// A struct rather than four positional `bool`s: they share a type but have different publication
+/// Named fields rather than positional `bool`s: they share a type but have different publication
 /// and wake semantics. Swapping a health edge with a report-commit edge would compile while making
 /// a UI-only health transition unpark the valuation worker.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -213,6 +213,8 @@ struct TickEdges {
     valuation: bool,
     /// Published valuation health changed shape this tick.
     valuation_status: bool,
+    /// Startup recovery or incomplete-check guidance became available, even if no writer exists.
+    recovery_notice: bool,
 }
 
 /// Coalesce background report data without delaying live report commits or valuation work.
@@ -240,8 +242,8 @@ impl ReportRevisionGate {
 
     /// Select the report-revision side effects for one coordination tick.
     ///
-    /// An immediate report commit publishes at once and covers every background generation visible
-    /// in that notification. Catch-up report pages, valuation work, and valuation health changes
+    /// A live commit or startup recovery notice publishes at once and covers every background
+    /// generation visible in that notification. Catch-up pages, valuation work, and health changes
     /// remain pending until the one-minute boundary, while every report commit still wakes
     /// valuation processing at once. A stall is minutes old before it is reportable, so deferring
     /// its publication by up to a minute costs nothing the user can perceive.
@@ -259,7 +261,7 @@ impl ReportRevisionGate {
         // stall visible to surfaces that would otherwise poll the data generation forever.
         self.background_pending |=
             edges.background_report || edges.valuation || edges.valuation_status;
-        if edges.immediate_report {
+        if edges.immediate_report || edges.recovery_notice {
             self.background_pending = false;
             self.last_published_at = now;
             return ReportRevisionDecision {
