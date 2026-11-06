@@ -212,7 +212,7 @@ ufw_has_v6() {
 # Whether the general allow for port $1 and family $2 carries this instance's terminal marker.
 ufw_has_our_comment() {
     LC_ALL=C ufw status | awk -v port="$1/udp " -v family="$2" -v tag="# MoonBot $3" '
-        index($0, port) == 1 && index($0, tag) {
+        index($0, port) == 1 && substr($0, length($0) - length(tag) + 1) == tag {
             v6 = index($0, "(v6)") > 0
             if ((family == "6" && v6) || (family == "4" && !v6)) found = 1
         }
@@ -243,8 +243,12 @@ ufw_open() {
 # Delete only the numbered allow for port $1, family $2, and this instance's terminal comment.
 ufw_delete_family() {
     numbers=$(LC_ALL=C ufw status numbered | awk -v port="$1/udp " -v family="$2" -v tag="# MoonBot $3" '
-        index($0, port) && index($0, "ALLOW") && index($0, tag) {
-            v6 = index($0, "(v6)") > 0
+        {
+            rule = $0
+            sub(/^[[:space:]]*\[[[:space:]]*[0-9]+[[:space:]]*\][[:space:]]*/, "", rule)
+            if (index(rule, port) != 1 || index(rule, "ALLOW") == 0) next
+            if (substr($0, length($0) - length(tag) + 1) != tag) next
+            v6 = index(rule, "(v6)") > 0
             if ((family == "6" && !v6) || (family == "4" && v6)) next
             line = $0
             sub(/^[[:space:]]*\[[[:space:]]*/, "", line)

@@ -949,3 +949,56 @@ fn retarget_recovers_only_the_interrupted_terminal_family() {
         "3305/udp ALLOW IN Anywhere # user\n"
     );
 }
+
+/// Deleting an old port must not suffix-match and delete the newly opened endpoint.
+#[test]
+fn retarget_does_not_delete_a_new_port_with_the_old_port_suffix() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nufw4\nufw6\n");
+    sandbox.answer("ufw_active", "1\n");
+    let dir_text = sandbox.posix(&dir);
+    sandbox.answer(
+        "ufw_rules",
+        &format!(
+            "3302/udp ALLOW IN Anywhere # MoonBot {dir_text}\n\
+             3302/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n"
+        ),
+    );
+
+    let output = sandbox.run(&["retarget", &dir_text, "13302"]);
+
+    assert_ok(&output);
+    let rules = sandbox.read(&sandbox.root.join("ufw_rules"));
+    let lines = rules.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{rules}");
+    assert!(lines.iter().all(|line| line.starts_with("13302/udp")));
+    assert_eq!(sandbox.read(&marker), "13302\nufw4\nufw6\n");
+}
+
+/// An instance directory prefix must not transfer another instance's firewall ownership.
+#[test]
+fn retarget_does_not_claim_a_sibling_instances_rules() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nufw4\nufw6\n");
+    sandbox.answer("ufw_active", "1\n");
+    let dir_text = sandbox.posix(&dir);
+    let initial = format!(
+        "3305/udp ALLOW IN Anywhere # MoonBot {dir_text}b\n\
+         3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}b\n"
+    );
+    sandbox.answer("ufw_rules", &initial);
+
+    let output = sandbox.run(&["retarget", &dir_text, "3305"]);
+
+    assert_ok(&output);
+    assert_eq!(sandbox.read(&marker), "3305\n");
+    assert_eq!(sandbox.read(&sandbox.root.join("ufw_rules")), initial);
+}
