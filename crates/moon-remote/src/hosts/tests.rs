@@ -67,3 +67,19 @@ fn stale_or_colliding_address_changes_do_not_mutate_hosts() {
     );
     assert_eq!(toml::to_string(&hosts).unwrap(), before);
 }
+
+/// Matching the whole address or ignoring admin would select the wrong login for a core connection.
+#[test]
+fn admin_lookup_matches_ip_across_ports_and_requires_an_admin() {
+    let mut hosts = Hosts::default();
+    hosts.pin("203.0.113.10:22", "SHA256:a").unwrap();
+    hosts.pin("203.0.113.10:2222", "SHA256:b").unwrap();
+    hosts.set_admin("203.0.113.10:2222", "moon-admin").unwrap();
+    hosts.pin("203.0.113.20:22", "SHA256:c").unwrap();
+
+    assert_eq!(
+        hosts.admin_by_ip("203.0.113.10").unwrap().addr,
+        "203.0.113.10:2222"
+    );
+    assert!(hosts.admin_by_ip("203.0.113.20").is_none());
+}

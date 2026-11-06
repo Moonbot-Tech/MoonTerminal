@@ -11,6 +11,12 @@
 #   start   <instance dir>                      — start the core, wait until it took its key and
 #                                                 listens for MoonProto
 #   finish  <instance dir>                      — drop the first-start INI switch the move added
+#   locate  <udp port>                          — find the instance and unit that own the port
+#   info    <udp port>                          — locate and report service state and resource use
+#   service <start|stop|restart> <udp port> [<unit hint>]
+#                                               — change the located service state
+#   log     <udp port> <200|500|1000>           — print a bounded tail of the core's log
+#   retarget <instance dir> <new udp port>      — move the marker and its recorded firewall rule
 #   mb      <instance dir> <arguments…>         — one command of the core's own CLI; stdin passes
 #                                                 through
 #   remove  <instance dir>                      — stop and delete an instance this script made
@@ -22,6 +28,7 @@ set -eu
 trap 'exit 1' HUP INT TERM PIPE
 
 marker=.moonterminal-move
+PROC=${MB_PROC_ROOT:-/proc}
 
 # The service unit of an instance directory.
 unit_of() {
@@ -31,6 +38,105 @@ unit_of() {
 # Whether something listens on UDP port $1.
 udp_bound() {
     test -n "$(ss -H -uan "sport = :$1")"
+}
+
+# Reject anything but a decimal UDP port in the inclusive range 1..65535.
+validate_port() {
+    p=$1
+    case $p in ''|*[!0-9]*) exit 2;; esac
+    test "$p" -ge 1 && test "$p" -le 65535 || exit 2
+}
+
+# Set dir, unit and ours for the core on UDP port $1; return 1 when no core owns it.
+locate_port() {
+    dir=''
+    unit=''
+    ours=0
+    units=$(
+        {
+            systemctl list-units --all --plain --no-legend -- 'moonbot@*.service' 2>/dev/null || true
+            systemctl list-unit-files --plain --no-legend -- 'moonbot@*.service' 2>/dev/null || true
+        } | awk '{print $1}' | grep '^moonbot@.*\.service$' || true
+    )
+    for unit in $units; do
+        instance=${unit#moonbot@}
+        instance=${instance%.service}
+        test -n "$instance" || continue
+        candidate=$(systemd-escape --unescape --path "$instance") || continue
+        if test -f "$candidate/$marker" && test "$(head -n 1 "$candidate/$marker")" = "$1"; then
+            dir=$candidate
+            ours=1
+            return 0
+        fi
+    done
+    unit=''
+    pid=$(ss -H -ulnp "sport = :$1" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -n 1)
+    test -n "$pid" || return 1
+    dir=$(readlink "$PROC/$pid/cwd") || return 1
+    nl=$(printf '\n_')
+    nl=${nl%_}
+    case $dir in *"$nl"*) return 1;; esac
+    exe=$(readlink "$PROC/$pid/exe") || exe=''
+    case ${exe##*/} in
+    MoonBot) ;;
+    *) test -x "$dir/MoonBot" || return 1 ;;
+    esac
+    unit=$(sed -n 's|.*/\([^/]*\.service\)$|\1|p' "$PROC/$pid/cgroup" | tail -n 1)
+    if test -n "$unit"; then
+        test "$(systemctl show -p MainPID --value -- "$unit")" = "$pid" || return 1
+    fi
+    if test -f "$dir/$marker" && test "$(head -n 1 "$dir/$marker")" = "$1"; then
+        ours=1
+    fi
+    return 0
+}
+
+# Print stopped hand-installed services whose working or executable directory holds MoonBot.
+locate_stopped() {
+    found=0
+    units=$(systemctl list-unit-files --type=service --no-legend --plain 2>/dev/null | awk '{print $1}' || true)
+    for unit in $units; do
+        details=$(systemctl show -p WorkingDirectory,ExecStart,ActiveState --value -- "$unit") || continue
+        working=$(printf '%s\n' "$details" | sed -n '1p')
+        exec_start=$(printf '%s\n' "$details" | sed -n '2p')
+        active=$(printf '%s\n' "$details" | sed -n '3p')
+        test "$active" = active && continue
+        candidate=$working
+        if test -z "$candidate" || test ! -x "$candidate/MoonBot"; then
+            case $exec_start in
+            *path=*)
+                binary=${exec_start#*path=}
+                binary=${binary%% ;*}
+                binary=${binary%%\}*}
+                ;;
+            *) binary=${exec_start%% *} ;;
+            esac
+            case $binary in
+            /*) candidate=${binary%/*} ;;
+            *) continue ;;
+            esac
+        fi
+        test -n "$candidate" && test -x "$candidate/MoonBot" || continue
+        has_mb=0
+        test ! -x "$candidate/mb" || has_mb=1
+        printf 'LOCATE_CANDIDATE=%s|%s|%s\n' "$unit" "$candidate" "$has_mb"
+        found=1
+    done
+    test "$found" = 1
+}
+
+# Print the frozen LOCATE_* reply for the globals set by locate_port.
+print_locate() {
+    has_mb=0
+    test ! -x "$dir/mb" || has_mb=1
+    printf 'LOCATE_DIRECTORY=%s\nLOCATE_SERVICE=%s\nLOCATE_OURS=%s\nLOCATE_MB=%s\n' \
+        "$dir" "$unit" "$ours" "$has_mb"
+}
+
+# Print the recent service journal before failing a service operation.
+service_failed() {
+    journalctl -u "$unit" -n 30 --no-pager >&2 || true
+    exit 1
 }
 
 # Whether ufw is installed and active.
@@ -75,7 +181,7 @@ check)
     os=$( (. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-}") || true)
     printf 'CHECK_OS=%s\nCHECK_GLIBC=%s\n' "$os" "$version"
     awk '/^MemTotal:/ { printf "CHECK_MEM_TOTAL_MB=%d\n", $2 / 1024 }
-         /^MemAvailable:/ { printf "CHECK_MEM_AVAILABLE_MB=%d\n", $2 / 1024 }' /proc/meminfo
+         /^MemAvailable:/ { printf "CHECK_MEM_AVAILABLE_MB=%d\n", $2 / 1024 }' "$PROC/meminfo"
     if ufw_active; then echo CHECK_UFW=active; else echo CHECK_UFW=off; fi
     echo CHECK_OK
     ;;
@@ -168,7 +274,7 @@ install-fresh)
         if test "$code" != 0; then
             if test -n "$started"; then
                 journalctl -u "$unit" -n 30 --no-pager >&2 || true
-                systemctl disable --now "$unit" >/dev/null 2>&1 || true
+                systemctl disable --now -- "$unit" >/dev/null 2>&1 || true
             fi
             if test -n "$opened"; then
                 ufw delete allow "$port/udp" >/dev/null 2>&1 || true
@@ -204,13 +310,13 @@ install-fresh)
     fi
     systemctl daemon-reload
     started=1
-    systemctl enable --now "$unit" >/dev/null 2>&1
+    systemctl enable --now -- "$unit" >/dev/null 2>&1
     # A fresh core writes its default settings on the first start; its command channel answers
     # once it is up.
     # Bounded by the clock, not by passes: one hung probe takes its whole 10 s.
     deadline=$(($(date +%s) + 90))
     until (cd "$dest" && timeout 10 ./mb --status >/dev/null 2>&1); do
-        systemctl is-active --quiet "$unit" || { echo 'The core stopped right after its start' >&2; exit 1; }
+        systemctl is-active --quiet -- "$unit" || { echo 'The core stopped right after its start' >&2; exit 1; }
         test "$(date +%s)" -lt "$deadline" || { echo 'The core does not answer its commands within 90 s' >&2; exit 1; }
         sleep 1
     done
@@ -218,11 +324,120 @@ install-fresh)
     rm -rf -- "$work"
     printf 'MOVE_DIRECTORY=%s\nMOVE_SERVICE=%s\n' "$dest" "$unit"
     ;;
+locate)
+    validate_port "${1:-}"
+    if locate_port "$p"; then
+        print_locate
+    elif ! locate_stopped; then
+        echo LOCATE_NONE=1
+    fi
+    ;;
+info)
+    validate_port "${1:-}"
+    if ! locate_port "$p"; then
+        echo LOCATE_NONE=1
+        exit 0
+    fi
+    print_locate
+    active=$(systemctl show -p ActiveState --value -- "$unit")
+    entered=$(systemctl show -p ActiveEnterTimestampMonotonic --value -- "$unit")
+    memory=$(systemctl show -p MemoryCurrent --value -- "$unit")
+    read now _ < "$PROC/uptime"
+    uptime=''
+    if test "$active" = active; then
+        uptime=$(awk -v entered="$entered" -v now="$now" 'BEGIN {
+            if (entered ~ /^[0-9]+$/ && entered > 0) {
+                seconds = now - entered / 1000000
+                if (seconds >= 0) printf "%d", seconds
+            }
+        }')
+    fi
+    case $memory in ''|*[!0-9]*) memory='';; esac
+    printf 'INFO_ACTIVE=%s\nINFO_UPTIME=%s\nINFO_MEMORY=%s\n' "$active" "$uptime" "$memory"
+    ;;
+service)
+    action=${1:-}
+    case $action in start|stop|restart);; *) exit 2;; esac
+    validate_port "${2:-}"
+    if ! locate_port "$p"; then
+        test "$action" = start || exit 1
+        hint=${3:-}
+        case $hint in *.service) unit=$hint;; *) exit 1;; esac
+        case $unit in -*|*[!A-Za-z0-9@._:-]*) exit 1;; esac
+        dir=$(systemctl show -p WorkingDirectory --value -- "$unit")
+        if test -z "$dir"; then
+            case $unit in
+            moonbot@*.service)
+                instance=${unit#moonbot@}
+                instance=${instance%.service}
+                dir=$(systemd-escape --unescape --path "$instance") || exit 1
+                ;;
+            esac
+        fi
+        test -n "$dir" && test -x "$dir/MoonBot" && test -x "$dir/mb" || exit 1
+        ours=0
+        if test -f "$dir/$marker" && test "$(head -n 1 "$dir/$marker")" = "$p"; then
+            ours=1
+        fi
+    fi
+    systemctl "$action" -- "$unit" >/dev/null 2>&1 || service_failed
+    case $action in
+    start|restart)
+        deadline=$(($(date +%s) + 60))
+        until udp_bound "$p"; do
+            systemctl is-active --quiet -- "$unit" || service_failed
+            test "$(date +%s)" -lt "$deadline" || service_failed
+            sleep 1
+        done
+        ;;
+    esac
+    active=$(systemctl show -p ActiveState --value -- "$unit") || service_failed
+    printf 'SERVICE_OK=%s\n' "$active"
+    ;;
+log)
+    validate_port "${1:-}"
+    n=${2:-}
+    case $n in 200|500|1000);; *) exit 2;; esac
+    locate_port "$p" || exit 1
+    log_file=''
+    # ISO dates sort lexically, so the last matching path is the newest daily trading log.
+    for candidate in "$dir"/logs/LOG_????-??-??.log; do
+        test ! -f "$candidate" || log_file=$candidate
+    done
+    echo LOG_BEGIN
+    if test -n "$log_file" && tail -n "$n" "$log_file"; then
+        exit 0
+    fi
+    journalctl -u "$unit" -n "$n" --no-pager --utc -o short-iso
+    ;;
+retarget)
+    dest=$(resolve_dir "${1:-}")
+    test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal" >&2; exit 1; }
+    validate_port "${2:-}"
+    old=$(head -n 1 "$dest/$marker")
+    kept="$dest/$marker.retarget"
+    {
+        printf '%s\n' "$p"
+        tail -n +2 "$dest/$marker"
+    } > "$kept"
+    cat "$kept" > "$dest/$marker"
+    rm -f -- "$kept"
+    if grep -qx ufw "$dest/$marker" && ufw_active; then
+        ufw delete allow "$old/udp" >/dev/null 2>&1 || true
+        ufw allow "$p/udp" comment "MoonBot $dest" >/dev/null
+    fi
+    printf 'RETARGET_OK=%s\n' "$p"
+    ;;
 mb)
     dest=$(resolve_dir "$1")
     shift
-    # Only an instance this script made: the commands reconfigure a running core.
-    test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal" >&2; exit 1; }
+    # Hand-installed cores get read-only status and a login retry, never a reconfiguring command.
+    if test ! -f "$dest/$marker"; then
+        case ${1:-} in
+        --status|--retry-login) ;;
+        *) echo "$dest was not installed by MoonTerminal" >&2; exit 1 ;;
+        esac
+    fi
     # The wrapper finds its instance by the working directory and runs as root, without the
     # service's library path: system tools it calls must not see the core's libraries.
     cd "$dest"
@@ -238,23 +453,23 @@ start)
         code=$?
         if test "$code" != 0; then
             journalctl -u "$unit" -n 30 --no-pager >&2 || true
-            systemctl disable --now "$unit" >/dev/null 2>&1 || true
+            systemctl disable --now -- "$unit" >/dev/null 2>&1 || true
         fi
         exit "$code"
     }
     trap stop_on_error EXIT
-    systemctl enable --now "$unit" >/dev/null 2>&1
+    systemctl enable --now -- "$unit" >/dev/null 2>&1
     # The core takes the key file on its first start and deletes it.
     i=0
     while test -e "$dest/MoonProtoSetup.key"; do
-        systemctl is-active --quiet "$unit" || { echo 'The core stopped before taking its MoonProto key' >&2; exit 1; }
+        systemctl is-active --quiet -- "$unit" || { echo 'The core stopped before taking its MoonProto key' >&2; exit 1; }
         i=$((i + 1))
         test "$i" -le 60 || { echo 'The core did not take its MoonProto key within 60 s' >&2; exit 1; }
         sleep 1
     done
     i=0
     until udp_bound "$port"; do
-        systemctl is-active --quiet "$unit" || { echo 'The core stopped before listening for MoonProto' >&2; exit 1; }
+        systemctl is-active --quiet -- "$unit" || { echo 'The core stopped before listening for MoonProto' >&2; exit 1; }
         i=$((i + 1))
         test "$i" -le 30 || { echo "The core does not listen on UDP $port" >&2; exit 1; }
         sleep 1
@@ -284,9 +499,9 @@ remove)
     test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal: not removed" >&2; exit 1; }
     unit=$(unit_of "$dest")
     port=$(head -n 1 "$dest/$marker")
-    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    systemctl disable --now -- "$unit" >/dev/null 2>&1 || true
     # Never delete the folder of a core that is still running.
-    ! systemctl is-active --quiet "$unit" || { echo "$unit did not stop: nothing removed" >&2; exit 1; }
+    ! systemctl is-active --quiet -- "$unit" || { echo "$unit did not stop: nothing removed" >&2; exit 1; }
     # Only a rule this move opened goes: the port may have been open before it.
     if grep -qx ufw "$dest/$marker" && ufw_active; then
         ufw delete allow "$port/udp" >/dev/null 2>&1 || true

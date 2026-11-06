@@ -9,7 +9,8 @@
 //!
 //! The package and the service go on through the same server-side script as a moved core
 //! (`remote/moonbot-move.sh`, step `install-fresh`), so [`crate::core_move::check`] and
-//! [`crate::core_move::remove`] serve both. The commands reach only an instance that script made.
+//! [`crate::core_move::remove`] serve both. Reconfiguring commands reach only an instance that
+//! script made; hand-installed cores accept only status and login retry.
 
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
@@ -313,7 +314,7 @@ pub fn wait_settled(
 }
 
 /// Run one `mb` command in `dir` and return its JSON reply.
-fn mb(
+pub(crate) fn mb(
     conn: &Conn,
     privilege: &Privilege,
     dir: &str,
@@ -324,7 +325,7 @@ fn mb(
 }
 
 /// [`mb`] with its own deadline.
-fn mb_within(
+pub(crate) fn mb_within(
     conn: &Conn,
     privilege: &Privilege,
     dir: &str,

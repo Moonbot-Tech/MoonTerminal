@@ -99,6 +99,12 @@ struct Backend {
     station: backend::station::StationJobs,
     /// Moves of cores onto Linux servers, one per core: they outlive their windows.
     core_moves: backend::core_move::CoreMoves,
+    /// Server command queues, cached core facts, session logins, and worker channels.
+    core_cmds: backend::core_cmds::CoreCmdsState,
+    /// A host waiting for the connect wizard's provider-login flow.
+    connect_login_request: Option<String>,
+    /// The core whose detached Updates view has been requested.
+    core_status_updates_request: Option<u64>,
     /// A core card's "Move to VPS…" for the connect wizard to take: the core to move.
     wizard_move_request: Option<u64>,
     /// The connect wizard's install of a fresh core: it outlives the wizard's window.
