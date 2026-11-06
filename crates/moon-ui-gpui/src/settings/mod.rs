@@ -361,8 +361,8 @@ const CORE_SORT_LABELS: [(&str, CoreSortMode); 3] = [
 /// Dropdown items for one label table, captioned in the CURRENT locale.
 ///
 /// A select copies its captions into its own state, so they do not follow a later locale switch
-/// the way a `t!` call in `render` does: [`SettingsView::relabel_selects`] builds them again when
-/// a save changes the language.
+/// the way a `t!` call in `render` does: [`SettingsView::captions_sync`] builds them again when
+/// the language changes.
 fn localized_items<T: Copy>(labels: &[(&str, T)]) -> Vec<MoonSelectItem<T>> {
     labels
         .iter()
@@ -434,6 +434,8 @@ pub struct SettingsView {
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Order selector shared by every core list on the Connections tab.
     core_sort: Entity<MoonSelectState<CoreSortMode>>,
+    /// The language the dropdowns above were last captioned in: [`Self::captions_sync`].
+    captions_locale: String,
     /// Active Hotkeys category, matching Moonbot's hotkey pages.
     hotkeys_group: hotkeys::HotkeyGroup,
     /// Hotkeys search box: a command name, a MoonBot name or a key; searches every category.
@@ -894,6 +896,7 @@ impl SettingsView {
             live_scope,
             mode,
             core_sort,
+            captions_locale: rust_i18n::locale().to_string(),
             hotkeys_group: hotkeys::HotkeyGroup::Presets,
             hotkeys_query,
             hotkeys_conflicts_only: false,

@@ -48,6 +48,8 @@ impl Render for SettingsView {
     ///     The complete Settings window element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SETTINGS_RENDER);
+        // The dropdowns hold their captions as finished text, unlike the labels beside them.
+        self.captions_sync(cx);
         // A finished station job clears the secrets typed for it: its inputs need the window.
         self.server_bot_sync(window, cx);
         // "Save and close" waiting on the station closes or stays on its answer.
