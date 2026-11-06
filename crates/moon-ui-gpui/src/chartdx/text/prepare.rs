@@ -1079,8 +1079,9 @@ impl RenderState {
         }
 
         if readout_metrics_changed {
+            // The GPU pass consumes these rectangles later in this same frame. Axis-width
+            // changes separately request layout through ChartDataState, not an extra readout frame.
             self.sync_readout_params();
-            self.needs_present = true;
         }
 
         if self.text_run_cursor < self.text_runs.len() {
