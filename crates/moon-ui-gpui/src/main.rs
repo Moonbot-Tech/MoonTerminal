@@ -23,6 +23,7 @@ mod chartdx;
 mod chrome;
 mod conn_diag;
 mod connect_wizard;
+mod core_cmds;
 mod contrast;
 mod controls;
 mod core_color;
