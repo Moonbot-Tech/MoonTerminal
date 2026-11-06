@@ -27,10 +27,11 @@ fn locate_reads_ours_hand_installed_and_missing_cores() {
     assert_eq!(parse_locate("LOCATE_NONE=1\n"), LocateResult::None);
 }
 
-/// Dropping candidate lines would hide every stopped hand-installed core after the first one.
+/// Promoting an unconfirmed lone candidate could operate a stopped core on another port.
 #[test]
-fn locate_reads_one_and_two_stopped_candidates() {
-    let one = parse_locate("LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1\n");
+fn locate_reads_candidates_and_promotes_only_a_port_confirmed_single() {
+    let unconfirmed = "LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1|0\n";
+    let one = parse_locate(unconfirmed);
     let LocateResult::Candidates(one) = one else {
         panic!("expected one candidate");
     };
@@ -38,9 +39,20 @@ fn locate_reads_one_and_two_stopped_candidates() {
     assert_eq!(one[0].unit, "UNIT_01.service");
     assert!(!one[0].ours && one[0].has_mb);
     assert_eq!(one[0].active, Some(false));
+    assert!(!one[0].port_known);
+    assert!(matches!(
+        locate_reply(unconfirmed),
+        LocateResult::Candidates(_)
+    ));
+
+    let confirmed = "LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1|1\n";
+    let LocateResult::Found(one) = locate_reply(confirmed) else {
+        panic!("expected a port-confirmed candidate");
+    };
+    assert!(one.port_known);
 
     let two = parse_locate(
-        "LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1\nLOCATE_CANDIDATE=UNIT_02.service|/root/moonbot-b|0\n",
+        "LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1|1\nLOCATE_CANDIDATE=UNIT_02.service|/root/moonbot-b|0|0\n",
     );
     let LocateResult::Candidates(two) = two else {
         panic!("expected two candidates");
@@ -80,6 +92,7 @@ fn gate_refuses_reconfiguration_and_missing_mb() {
         ours: false,
         has_mb: true,
         active: None,
+        port_known: true,
     };
     for cmd in [
         Cmd::SwitchExchange,
@@ -118,6 +131,22 @@ fn command_lines_use_the_frozen_steps_and_quoting() {
         command("retarget", &["/root/moonbot-a", "3305"])
             .ends_with("moonbot-move retarget '/root/moonbot-a' '3305'")
     );
+}
+
+/// Returning a retarget error directly would discard the key after MoonProto was already configured.
+#[test]
+fn address_change_keeps_key_and_redacts_retarget_failure() {
+    let changed = address_changed(
+        Zeroizing::new("CORE_A".to_owned()),
+        Err(anyhow::anyhow!("SECRETPACKET")),
+    );
+    assert_eq!(changed.key.as_str(), "CORE_A");
+    let error = changed.retarget.unwrap_err();
+    assert_eq!(
+        error,
+        "MoonProto was configured, but its marker and firewall rule could not be updated"
+    );
+    assert!(!error.contains("SECRETPACKET"));
 }
 
 /// Cloning or failing to trim a key would leave extra secret copies or an unusable connection packet.

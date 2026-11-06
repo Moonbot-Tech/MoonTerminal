@@ -25,8 +25,15 @@ pub use wire::{
 pub fn locate(conn: &Conn, privilege: &Privilege, port: u16) -> anyhow::Result<LocateResult> {
     let port = port.to_string();
     let out = privilege.run(conn, &command("locate", &[&port]), &[], STEP_TIMEOUT)?;
-    Ok(match parse_locate(&out.stdout_text()) {
-        LocateResult::Candidates(mut candidates) if candidates.len() == 1 => {
+    Ok(locate_reply(&out.stdout_text()))
+}
+
+/// Promote only a uniquely stopped candidate whose installation confirms the requested port.
+fn locate_reply(text: &str) -> LocateResult {
+    match parse_locate(text) {
+        LocateResult::Candidates(mut candidates)
+            if candidates.len() == 1 && candidates[0].port_known =>
+        {
             let candidate = candidates.remove(0);
             LocateResult::Found(Located {
                 ours: false,
@@ -35,7 +42,7 @@ pub fn locate(conn: &Conn, privilege: &Privilege, port: u16) -> anyhow::Result<L
             })
         }
         result => result,
-    })
+    }
 }
 
 /// Resolve `port` and read its service state, uptime and current memory use.
@@ -98,6 +105,14 @@ pub fn retarget(conn: &Conn, privilege: &Privilege, dir: &str, port: u16) -> any
     Ok(())
 }
 
+/// A successful MoonProto setup, including a retarget failure that must not discard its key.
+pub struct AddressChanged {
+    /// The connection key returned by the core.
+    pub key: Zeroizing<String>,
+    /// Whether the installation marker and recorded firewall rule were moved.
+    pub retarget: Result<(), String>,
+}
+
 /// Configure MoonProto at `host:port`, retarget its marker and firewall, and return its secret key.
 pub fn set_moonproto_address(
     conn: &Conn,
@@ -105,10 +120,20 @@ pub fn set_moonproto_address(
     dir: &str,
     host: Ipv4Addr,
     port: u16,
-) -> anyhow::Result<Zeroizing<String>> {
+) -> anyhow::Result<AddressChanged> {
     let key = crate::core_new::setup_moonproto(conn, privilege, dir, host, port)?;
-    retarget(conn, privilege, dir, port)?;
-    Ok(key)
+    Ok(address_changed(key, retarget(conn, privilege, dir, port)))
+}
+
+/// Keep a successful setup's key beside a fixed, stdout-free retarget failure description.
+fn address_changed(key: Zeroizing<String>, retarget: anyhow::Result<()>) -> AddressChanged {
+    AddressChanged {
+        key,
+        retarget: retarget.map_err(|_| {
+            "MoonProto was configured, but its marker and firewall rule could not be updated"
+                .to_owned()
+        }),
+    }
 }
 
 /// Read the core's existing MoonProto connection key without exposing an unreadable reply in errors.
@@ -123,16 +148,11 @@ pub fn moonproto_key(
 
 /// Move, trim and wipe the connection key; the SSH stdout buffer remains a residual copy.
 fn connection_key(mut reply: serde_json::Value) -> anyhow::Result<Zeroizing<String>> {
-    let mut key = match reply.get_mut("key").map(serde_json::Value::take) {
+    let key = match reply.get_mut("key").map(serde_json::Value::take) {
         Some(serde_json::Value::String(key)) => Zeroizing::new(key),
         _ => anyhow::bail!("the core did not hand back a connection key"),
     };
-    let leading = key.len() - key.trim_start().len();
-    if leading > 0 {
-        key.drain(..leading);
-    }
-    let trimmed = key.trim_end().len();
-    key.truncate(trimmed);
+    let key = Zeroizing::new(key.trim().to_owned());
     anyhow::ensure!(
         !key.is_empty(),
         "the core did not hand back a connection key"

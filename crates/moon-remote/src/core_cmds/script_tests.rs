@@ -21,10 +21,14 @@ list-unit-files)
     ;;
 show)
     case "$*" in
-    *WorkingDirectory,ExecStart,ActiveState*)
-        cat "$MB_TEST_ROOT/working_directory"
-        cat "$MB_TEST_ROOT/exec_start"
-        cat "$MB_TEST_ROOT/active_state"
+    *Id,ExecStart,WorkingDirectory,ActiveState*|*WorkingDirectory,ExecStart,ActiveState*)
+        if test -s "$MB_TEST_ROOT/systemctl_all_units"; then
+            printf 'ActiveState=%s\n' "$(cat "$MB_TEST_ROOT/active_state")"
+            printf 'ExecStart=%s\n' "$(cat "$MB_TEST_ROOT/exec_start")"
+            printf 'WorkingDirectory=%s\n' "$(cat "$MB_TEST_ROOT/working_directory")"
+            awk '{print "Id=" $1; exit}' "$MB_TEST_ROOT/systemctl_all_units"
+            printf '\n'
+        fi
         ;;
     *MainPID*) cat "$MB_TEST_ROOT/main_pid" ;;
     *ActiveEnterTimestampMonotonic*) cat "$MB_TEST_ROOT/active_entered" ;;
@@ -58,6 +62,13 @@ esac
 
 const UFW_STUB: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MB_TEST_ROOT/ufw_calls"
+case ${1:-} in
+allow|delete)
+    if test -s "$MB_TEST_ROOT/retarget_marker"; then
+        printf '%s|marker=%s\n' "$*" "$(head -n 1 "$(cat "$MB_TEST_ROOT/retarget_marker")")" >> "$MB_TEST_ROOT/retarget_order"
+    fi
+    ;;
+esac
 if test "${1:-}" = status; then
     if test "$(cat "$MB_TEST_ROOT/ufw_active")" = 1; then
         printf 'Status: active\n'
@@ -146,6 +157,8 @@ impl Sandbox {
             "journal",
             "unescape",
             "ufw_calls",
+            "retarget_marker",
+            "retarget_order",
             "working_directory",
             "exec_start",
             "active_state",
@@ -312,7 +325,27 @@ fn locate_accepts_live_moonbot_and_rejects_foreign_owner() {
     assert_eq!(stdout(&foreign), "LOCATE_NONE=1\n");
 }
 
-/// Dropping the inactive-service fallback would make a stopped hand-installed core impossible to start.
+/// Accepting a UDP owner without a service unit would return an empty unit to service commands.
+#[test]
+fn locate_rejects_udp_owner_without_service_unit() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.live_owner(&dir, "UNIT_01.service", "MoonBot");
+    sandbox.answer_at(
+        &sandbox.proc.join("123").join("cgroup"),
+        "0::/user.slice/session-1.scope\n",
+    );
+
+    let output = sandbox.run(&["locate", "3302"]);
+
+    assert_ok(&output);
+    assert_eq!(stdout(&output), "LOCATE_NONE=1\n");
+}
+
+/// Positional property reads or per-unit scans would misparse or slow down the stopped fallback.
 #[test]
 fn locate_finds_stopped_hand_installed_core() {
     let Some(sandbox) = Sandbox::new() else {
@@ -321,8 +354,13 @@ fn locate_finds_stopped_hand_installed_core() {
     let dir = sandbox.instance("moonbot-a");
     sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
     sandbox.executable(&dir.join("mb"), "#!/bin/sh\nexit 0\n");
+    let dir_text = sandbox.posix(&dir);
     sandbox.answer("systemctl_all_units", "UNIT_01.service enabled enabled\n");
-    sandbox.answer("working_directory", &format!("{}\n", sandbox.posix(&dir)));
+    sandbox.answer("working_directory", &format!("{dir_text}\n"));
+    sandbox.answer(
+        "exec_start",
+        &format!("{{ path={dir_text}/MoonBot ; argv[]={dir_text}/MoonBot ; }}\n"),
+    );
     sandbox.answer("active_state", "inactive\n");
 
     let output = sandbox.run(&["locate", "3302"]);
@@ -330,11 +368,34 @@ fn locate_finds_stopped_hand_installed_core() {
     assert_ok(&output);
     assert_eq!(
         stdout(&output),
-        format!(
-            "LOCATE_CANDIDATE=UNIT_01.service|{}|1\n",
-            sandbox.posix(&dir)
-        )
+        format!("LOCATE_CANDIDATE=UNIT_01.service|{dir_text}|1|0\n")
     );
+    let calls = sandbox.read(&sandbox.root.join("systemctl_calls"));
+    assert!(
+        calls.contains("show --type=service --all -p Id,ExecStart,WorkingDirectory,ActiveState\n")
+    );
+    assert!(!calls.contains("list-unit-files --type=service"));
+}
+
+/// A marker for another port must not make that stopped core a candidate for this port.
+#[test]
+fn locate_rejects_stopped_core_on_another_port() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.answer_at(&dir.join(".moonterminal-move"), "4402\n");
+    let dir_text = sandbox.posix(&dir);
+    sandbox.answer("systemctl_all_units", "UNIT_01.service enabled enabled\n");
+    sandbox.answer("working_directory", &format!("{dir_text}\n"));
+    sandbox.answer("exec_start", &format!("{dir_text}/MoonBot\n"));
+    sandbox.answer("active_state", "inactive\n");
+
+    let output = sandbox.run(&["locate", "3302"]);
+
+    assert_ok(&output);
+    assert_eq!(stdout(&output), "LOCATE_NONE=1\n");
 }
 
 /// A missing UDP owner and no installed MoonBot service must produce the frozen no-core reply.
@@ -392,30 +453,29 @@ fn log_refuses_unsupported_line_count() {
     assert_eq!(output.status.code(), Some(2));
 }
 
-/// Rewriting the whole marker would drop its firewall provenance and break later retargets.
+/// Opening the new rule after deleting the old one or marking first could strand the changed endpoint.
 #[test]
 fn retarget_rewrites_only_the_port_and_moves_the_firewall_rule() {
     let Some(sandbox) = Sandbox::new() else {
         return;
     };
     let dir = sandbox.instance("moonbot-a");
-    sandbox.answer_at(&dir.join(".moonterminal-move"), "3302\nufw\nkept\n");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nufw\nkept\n");
     sandbox.answer("ufw_active", "1\n");
+    sandbox.answer("retarget_marker", &format!("{}\n", sandbox.posix(&marker)));
     let dir_text = sandbox.posix(&dir);
 
     let output = sandbox.run(&["retarget", &dir_text, "3305"]);
 
     assert_ok(&output);
     assert_eq!(stdout(&output), "RETARGET_OK=3305\n");
+    assert_eq!(sandbox.read(&marker), "3305\nufw\nkept\n");
     assert_eq!(
-        sandbox.read(&dir.join(".moonterminal-move")),
-        "3305\nufw\nkept\n"
-    );
-    let calls = sandbox.read(&sandbox.root.join("ufw_calls"));
-    assert!(calls.contains("delete allow 3302/udp\n"));
-    assert!(
-        calls.contains(&format!("allow 3305/udp comment MoonBot {dir_text}\n")),
-        "{calls}"
+        sandbox.read(&sandbox.root.join("retarget_order")),
+        format!(
+            "allow 3305/udp comment MoonBot {dir_text}|marker=3302\ndelete allow 3302/udp|marker=3302\n"
+        )
     );
 }
 

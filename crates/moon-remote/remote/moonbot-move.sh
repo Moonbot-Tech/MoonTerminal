@@ -82,46 +82,93 @@ locate_port() {
     *) test -x "$dir/MoonBot" || return 1 ;;
     esac
     unit=$(sed -n 's|.*/\([^/]*\.service\)$|\1|p' "$PROC/$pid/cgroup" | tail -n 1)
-    if test -n "$unit"; then
-        test "$(systemctl show -p MainPID --value -- "$unit")" = "$pid" || return 1
-    fi
+    test -n "$unit" || return 1
+    test "$(systemctl show -p MainPID --value -- "$unit")" = "$pid" || return 1
     if test -f "$dir/$marker" && test "$(head -n 1 "$dir/$marker")" = "$1"; then
         ours=1
     fi
     return 0
 }
 
-# Print stopped hand-installed services whose working or executable directory holds MoonBot.
+# Print one stopped candidate whose executable exists and whose marker does not conflict with the port.
+print_stopped_candidate() {
+    requested=$1
+    candidate_unit=$2
+    working=$3
+    exec_start=$4
+    port_known=0
+    case $candidate_unit in
+    moonbot@*.service)
+        instance=${candidate_unit#moonbot@}
+        instance=${instance%.service}
+        if test -n "$instance"; then
+            instance_dir=$(systemd-escape --unescape --path "$instance") || return 1
+            if test -f "$instance_dir/$marker"; then
+                test "$(head -n 1 "$instance_dir/$marker")" = "$requested" || return 1
+                port_known=1
+            fi
+        fi
+        ;;
+    esac
+    candidate=$working
+    if test -z "$candidate" || test ! -x "$candidate/MoonBot"; then
+        case $exec_start in
+        *path=*)
+            binary=${exec_start#*path=}
+            binary=${binary%% ;*}
+            binary=${binary%%\}*}
+            ;;
+        *) binary=${exec_start%% *} ;;
+        esac
+        case $binary in
+        /*) candidate=${binary%/*} ;;
+        *) return 1 ;;
+        esac
+    fi
+    test -n "$candidate" && test -x "$candidate/MoonBot" || return 1
+    if test -f "$candidate/$marker"; then
+        test "$(head -n 1 "$candidate/$marker")" = "$requested" || return 1
+        port_known=1
+    fi
+    has_mb=0
+    test ! -x "$candidate/mb" || has_mb=1
+    printf 'LOCATE_CANDIDATE=%s|%s|%s|%s\n' "$candidate_unit" "$candidate" "$has_mb" "$port_known"
+}
+
+# Print inactive MoonBot services from one keyed snapshot of loaded and installed units.
 locate_stopped() {
     found=0
-    units=$(systemctl list-unit-files --type=service --no-legend --plain 2>/dev/null | awk '{print $1}' || true)
-    for unit in $units; do
-        details=$(systemctl show -p WorkingDirectory,ExecStart,ActiveState --value -- "$unit") || continue
-        working=$(printf '%s\n' "$details" | sed -n '1p')
-        exec_start=$(printf '%s\n' "$details" | sed -n '2p')
-        active=$(printf '%s\n' "$details" | sed -n '3p')
-        test "$active" = active && continue
-        candidate=$working
-        if test -z "$candidate" || test ! -x "$candidate/MoonBot"; then
-            case $exec_start in
-            *path=*)
-                binary=${exec_start#*path=}
-                binary=${binary%% ;*}
-                binary=${binary%%\}*}
-                ;;
-            *) binary=${exec_start%% *} ;;
-            esac
-            case $binary in
-            /*) candidate=${binary%/*} ;;
-            *) continue ;;
-            esac
+    details=$(systemctl show --type=service --all -p Id,ExecStart,WorkingDirectory,ActiveState 2>/dev/null) || return 1
+    unit=''
+    working=''
+    exec_start=''
+    active=''
+    mentions=0
+    while IFS= read -r line || test -n "$line"; do
+        if test -z "$line"; then
+            if test "$mentions" = 1 && test -n "$unit" && test "$active" != active; then
+                if print_stopped_candidate "$1" "$unit" "$working" "$exec_start"; then
+                    found=1
+                fi
+            fi
+            unit=''
+            working=''
+            exec_start=''
+            active=''
+            mentions=0
+            continue
         fi
-        test -n "$candidate" && test -x "$candidate/MoonBot" || continue
-        has_mb=0
-        test ! -x "$candidate/mb" || has_mb=1
-        printf 'LOCATE_CANDIDATE=%s|%s|%s\n' "$unit" "$candidate" "$has_mb"
-        found=1
-    done
+        case $line in *MoonBot*) mentions=1 ;; esac
+        case $line in
+        Id=*) unit=${line#Id=} ;;
+        ExecStart=*) exec_start=${line#ExecStart=} ;;
+        WorkingDirectory=*) working=${line#WorkingDirectory=} ;;
+        ActiveState=*) active=${line#ActiveState=} ;;
+        esac
+    done <<EOF
+$details
+
+EOF
     test "$found" = 1
 }
 
@@ -328,7 +375,7 @@ locate)
     validate_port "${1:-}"
     if locate_port "$p"; then
         print_locate
-    elif ! locate_stopped; then
+    elif ! locate_stopped "$p"; then
         echo LOCATE_NONE=1
     fi
     ;;
@@ -415,6 +462,10 @@ retarget)
     test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal" >&2; exit 1; }
     validate_port "${2:-}"
     old=$(head -n 1 "$dest/$marker")
+    if grep -qx ufw "$dest/$marker" && ufw_active; then
+        ufw allow "$p/udp" comment "MoonBot $dest" >/dev/null
+        ufw delete allow "$old/udp" >/dev/null 2>&1 || true
+    fi
     kept="$dest/$marker.retarget"
     {
         printf '%s\n' "$p"
@@ -422,10 +473,6 @@ retarget)
     } > "$kept"
     cat "$kept" > "$dest/$marker"
     rm -f -- "$kept"
-    if grep -qx ufw "$dest/$marker" && ufw_active; then
-        ufw delete allow "$old/udp" >/dev/null 2>&1 || true
-        ufw allow "$p/udp" comment "MoonBot $dest" >/dev/null
-    fi
     printf 'RETARGET_OK=%s\n' "$p"
     ;;
 mb)

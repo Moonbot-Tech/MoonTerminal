@@ -15,6 +15,8 @@ pub struct Located {
     pub has_mb: bool,
     /// Whether the core is active, or `None` when activity was not part of the reply.
     pub active: Option<bool>,
+    /// Whether the resolved installation is confirmed to use the requested MoonProto port.
+    pub port_known: bool,
 }
 
 /// The possible outcomes of resolving a core by its MoonProto UDP port.
@@ -22,7 +24,7 @@ pub struct Located {
 pub enum LocateResult {
     /// One running or uniquely identified stopped core.
     Found(Located),
-    /// Several stopped hand-installed cores; the user must choose a unit.
+    /// Stopped hand-installed cores awaiting port confirmation or unit selection.
     Candidates(Vec<Located>),
     /// No core or no complete location reply.
     None,
@@ -157,12 +159,14 @@ pub fn parse_locate(text: &str) -> LocateResult {
         ours,
         has_mb,
         active: None,
+        port_known: true,
     })
 }
 
-/// Parse one stopped candidate's pipe-delimited unit, directory and `mb` flag.
+/// Parse one stopped candidate's unit, directory, `mb` flag and port confirmation.
 fn parse_candidate(text: &str) -> Option<Located> {
     let (unit, rest) = text.split_once('|')?;
+    let (rest, port_known) = rest.rsplit_once('|')?;
     let (dir, has_mb) = rest.rsplit_once('|')?;
     if unit.is_empty() || dir.is_empty() {
         return None;
@@ -173,6 +177,7 @@ fn parse_candidate(text: &str) -> Option<Located> {
         ours: false,
         has_mb: parse_flag(has_mb)?,
         active: Some(false),
+        port_known: parse_flag(port_known)?,
     })
 }
 
