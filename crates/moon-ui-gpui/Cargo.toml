@@ -56,12 +56,12 @@ qrcode = { version = "0.14", default-features = false }
 
 # Canonical Moon UI source: standalone GPUI runtime + Moon components.
 # Local development overrides this Git source through untracked `.cargo/config.toml`.
-gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "codex/render-audit-roots-2026-11-06" }
+gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 # runtime_shaders: compile Metal shaders at runtime via the OS Metal framework
 # instead of the `metal` CLI (ships only with full Xcode). Lets the build work with
 # just Command Line Tools on macOS; no-op on Windows/Linux.
-gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "codex/render-audit-roots-2026-11-06", features = ["font-kit", "runtime_shaders"] }
-moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "codex/render-audit-roots-2026-11-06" }
+gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["font-kit", "runtime_shaders"] }
+moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 
 anyhow = "1"
 log = "0.4"
@@ -182,7 +182,7 @@ naga = { version = "29.0.1", features = ["wgsl-in"] }
 # A dev-dependency, deliberately: the workspace is on resolver "2", so this feature reaches the
 # test build only and never the shipped binary. MoonUI's own `moon-ui-components` declares it the
 # same way.
-gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "codex/render-audit-roots-2026-11-06", features = ["test-support"] }
+gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["test-support"] }
 
 [lints]
 workspace = true
