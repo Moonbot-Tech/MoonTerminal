@@ -362,6 +362,10 @@ trade_sounds.ex.count_few: es
 trade_sounds.ex.count_many: es
 trade_sounds.ex.count_one: es
 
+# Obsidian is the theme name; Russian and Ukrainian use its Cyrillic spelling.
+iface.obsidian_theme: es tr pt vi
+iface.theme.obsidian: es tr pt vi
+
 # English in every language: names, tickers and terms kept on purpose (locales/README.md,
 # "Deliberately NOT translated"). A line here that should be translated is a gap too.
 analytics.col.pf: ru es uk tr pt vi
