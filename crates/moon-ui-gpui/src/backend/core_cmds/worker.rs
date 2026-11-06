@@ -5,7 +5,8 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use moon_remote::core_cmds::{
-    self, Cmd, LocateResult, Located, LogLines, LogTail, Login, Refusal, ServiceAction, ServiceInfo,
+    self, Cmd, LocateResult, Located, LogLines, LogTail, Login, Refusal, ServiceAction,
+    ServiceFailed, ServiceInfo,
 };
 use moon_remote::core_new::{self, ApiKeys, CoreStatus, Exchange};
 use moon_remote::script::Privilege;
@@ -43,8 +44,8 @@ pub(crate) trait Runner {
         port: u16,
         unit_hint: Option<&str>,
     ) -> anyhow::Result<String>;
-    /// Read a bounded core log tail.
-    fn log_tail(&self, port: u16, n: LogLines) -> anyhow::Result<LogTail>;
+    /// Read a bounded core log tail, with the cached directory as a stopped-core fallback.
+    fn log_tail(&self, port: u16, n: LogLines, dir_hint: Option<&str>) -> anyhow::Result<LogTail>;
     /// Read the core's exchange and MoonProto state.
     fn status(&self, dir: &str) -> anyhow::Result<CoreStatus>;
     /// Ask the core to retry its exchange login.
@@ -115,8 +116,8 @@ impl Runner for SshRunner {
         core_cmds::service(&self.conn, &self.privilege, action, port, unit_hint)
     }
 
-    fn log_tail(&self, port: u16, n: LogLines) -> anyhow::Result<LogTail> {
-        core_cmds::log_tail(&self.conn, &self.privilege, port, n)
+    fn log_tail(&self, port: u16, n: LogLines, dir_hint: Option<&str>) -> anyhow::Result<LogTail> {
+        core_cmds::log_tail(&self.conn, &self.privilege, port, n, dir_hint)
     }
 
     fn status(&self, dir: &str) -> anyhow::Result<CoreStatus> {
@@ -181,19 +182,24 @@ impl Runner for SshRunner {
     }
 }
 
-/// Start a named worker thread and return its request channel.
+/// Start a named worker thread whose events carry this spawn's generation.
 pub(super) fn spawn(
     uid: u64,
+    generation: u64,
     target: Target,
     login: Login,
     port: u16,
     located: Option<Located>,
-    events: mpsc::Sender<(u64, Event)>,
+    events: mpsc::Sender<(u64, u64, Event)>,
 ) -> Option<mpsc::Sender<CmdRequest>> {
     let (commands, answers) = mpsc::channel();
     std::thread::Builder::new()
         .name(format!("core-cmds-{uid}"))
-        .spawn(move || serve(uid, target, login, port, located, answers, events))
+        .spawn(move || {
+            serve(
+                uid, generation, target, login, port, located, answers, events,
+            )
+        })
         .ok()?;
     Some(commands)
 }
@@ -201,12 +207,13 @@ pub(super) fn spawn(
 /// Serve requests until the backend forgets the core or drops its channel.
 fn serve(
     uid: u64,
+    generation: u64,
     target: Target,
     login: Login,
     mut port: u16,
     mut located: Option<Located>,
     commands: mpsc::Receiver<CmdRequest>,
-    events: mpsc::Sender<(u64, Event)>,
+    events: mpsc::Sender<(u64, u64, Event)>,
 ) {
     let mut runner = None;
     while let Ok(request) = commands.recv() {
@@ -216,7 +223,7 @@ fn serve(
             CmdRequest::Forget => break,
         };
         let send = |event: Event| {
-            let _ = events.send((uid, event));
+            let _ = events.send((uid, generation, event));
         };
         send(Event::Phase(
             cmd,
@@ -318,7 +325,7 @@ fn run_with(
         Cmd::Status => match runner.status(&located.dir) {
             Ok(status) => {
                 emit(Event::Status(status));
-                info_after(runner, cmd, port, emit)
+                info_after(runner, cmd, port, None, emit)
             }
             Err(error) => fail(cmd, ssh_failure(error), emit),
         },
@@ -352,7 +359,7 @@ fn run_with(
                 CmdArgs::Log(lines) => lines,
                 _ => LogLines::L200,
             };
-            match runner.log_tail(port, lines) {
+            match runner.log_tail(port, lines, Some(&located.dir)) {
                 Ok(log) => {
                     emit(Event::Log(log));
                     done(cmd, emit)
@@ -369,7 +376,13 @@ fn run_with(
             };
             let hint = (cmd == Cmd::Start).then_some(located.unit.as_str());
             match runner.service(action, port, hint) {
-                Ok(_) => info_after(runner, cmd, port, emit),
+                Ok(_) => info_after(
+                    runner,
+                    cmd,
+                    port,
+                    (cmd == Cmd::Stop).then_some(located.clone()),
+                    emit,
+                ),
                 Err(error) => fail(cmd, ssh_failure(error), emit),
             }
         }
@@ -382,7 +395,19 @@ fn run_with(
                 Err(error) => fail(cmd, ssh_failure(error), emit),
             },
             CmdArgs::Exchange(name) => match runner.select_exchange(&located.dir, &name) {
-                Ok(()) => done(cmd, emit),
+                Ok(()) => match runner.status(&located.dir) {
+                    Ok(status) => {
+                        emit(Event::Status(status));
+                        match runner.exchanges(&located.dir) {
+                            Ok(exchanges) => {
+                                emit(Event::Exchanges(exchanges));
+                                done(cmd, emit)
+                            }
+                            Err(error) => fail(cmd, ssh_failure(error), emit),
+                        }
+                    }
+                    Err(error) => fail(cmd, ssh_failure(error), emit),
+                },
                 Err(error) => fail(cmd, ssh_failure(error), emit),
             },
             _ => invalid_args(cmd, emit),
@@ -446,14 +471,32 @@ fn update_location(located: &mut Option<Located>, event: &Event) {
     }
 }
 
-/// Publish refreshed service information and finish a service or status command.
-fn info_after(runner: &dyn Runner, cmd: Cmd, port: u16, emit: &mut dyn FnMut(Event)) -> bool {
+/// Publish refreshed service information, preserving a stopped core when location now finds nothing.
+fn info_after(
+    runner: &dyn Runner,
+    cmd: Cmd,
+    port: u16,
+    stopped: Option<Located>,
+    emit: &mut dyn FnMut(Event),
+) -> bool {
     match runner.info(port) {
         Ok(Some(info)) => {
             emit(Event::Info(info));
             done(cmd, emit)
         }
-        Ok(None) => fail(cmd, CmdError::NoCore { port }, emit),
+        Ok(None) => match stopped {
+            Some(mut located) => {
+                located.active = Some(false);
+                emit(Event::Info(ServiceInfo {
+                    located,
+                    active: "inactive".into(),
+                    uptime_s: None,
+                    memory: None,
+                }));
+                done(cmd, emit)
+            }
+            None => fail(cmd, CmdError::NoCore { port }, emit),
+        },
         Err(error) => fail(cmd, ssh_failure(error), emit),
     }
 }
@@ -479,7 +522,11 @@ fn invalid_args(cmd: Cmd, emit: &mut dyn FnMut(Event)) -> bool {
     )
 }
 
-/// Convert an SSH-layer error to the window's non-secret failure form.
+/// Convert transport errors to SSH failures without reconnecting after a service refusal.
 fn ssh_failure(error: anyhow::Error) -> CmdError {
-    CmdError::Ssh(format!("{error:#}"))
+    if error.is::<ServiceFailed>() {
+        CmdError::Refused(error.to_string())
+    } else {
+        CmdError::Ssh(format!("{error:#}"))
+    }
 }

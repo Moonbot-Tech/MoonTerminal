@@ -151,6 +151,15 @@ fn all_command_states_fit_locales_themes_and_window_sizes(cx: &mut gpui::TestApp
                         header.bottom() <= body.origin.y && body.bottom() <= footer.origin.y,
                         "{context}: chrome overlaps"
                     );
+                    if w == MIN_SIZE.0 {
+                        let target = visual.debug_bounds("cc-ssh-target").expect("ssh target");
+                        assert!(
+                            target.size.width > px(0.0)
+                                && target.origin.x >= header.origin.x
+                                && target.right() <= header.right(),
+                            "{context}: ssh target hidden or clipped: {target:?}"
+                        );
+                    }
                     if w >= 640.0 {
                         let rail = visual.debug_bounds("cc-rail").expect("rail");
                         assert!(

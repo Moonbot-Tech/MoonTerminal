@@ -80,7 +80,7 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
         (
             "core_cmds.status.kv_moonproto",
             format!(
-                "0.0.0.0:{}",
+                "UDP {}",
                 if status.moonproto_port > 0 {
                     status.moonproto_port
                 } else {

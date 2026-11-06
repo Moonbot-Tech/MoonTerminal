@@ -21,13 +21,12 @@ pub(super) fn classify(line: &str) -> (Option<&str>, Kind, &str) {
                 .enumerate()
                 .all(|(i, b)| i == 2 || i == 5 || b.is_ascii_digit())
     };
-    let timestamp_end = if is_clock(first) {
-        Some(end)
-    } else if first.len() >= 19
-        && first.as_bytes()[4] == b'-'
-        && first.as_bytes()[7] == b'-'
-        && first.as_bytes()[10] == b'T'
-        && is_clock(&first[11..])
+    let timestamp_end = if is_clock(first)
+        || (first.len() >= 19
+            && first.as_bytes()[4] == b'-'
+            && first.as_bytes()[7] == b'-'
+            && first.as_bytes()[10] == b'T'
+            && is_clock(&first[11..]))
     {
         Some(end)
     } else if first.len() == 10 && first.as_bytes()[4] == b'-' && first.as_bytes()[7] == b'-' {

@@ -6,7 +6,9 @@ use std::time::Instant;
 
 use moon_remote::core_cmds::{Cmd, Located, LogLines, LogTail, ServiceInfo};
 use moon_remote::core_new::{CoreState, CoreStatus, Exchange};
+use moon_remote::hosts::Hosts;
 use moon_remote::setup::FirstAccess;
+use moon_remote::ssh::Target;
 use zeroize::Zeroizing;
 
 /// The command menu's form for the current login and location knowledge.
@@ -142,14 +144,23 @@ impl std::fmt::Debug for SessionLogin {
     }
 }
 
-/// Backend-owned queues, cached facts, session logins, and worker channels for core commands.
-#[allow(dead_code)] // used from batch 3
+/// A worker channel pinned to one SSH endpoint, core port, and spawn generation.
+pub(crate) struct CoreWorker {
+    pub target: Target,
+    pub port: u16,
+    pub generation: u64,
+    pub sender: mpsc::Sender<CmdRequest>,
+}
+
+/// Backend-owned queues, cached facts, host metadata, logins, and worker channels.
 #[derive(Default)]
 pub(crate) struct CoreCmdsState {
     pub pending: Vec<(u64, CmdRequest)>,
     pub facts: HashMap<u64, CoreFacts>,
     pub logins: HashMap<String, SessionLogin>,
-    pub workers: HashMap<u64, mpsc::Sender<CmdRequest>>,
+    pub hosts: Hosts,
+    pub workers: HashMap<u64, CoreWorker>,
+    pub next_generation: u64,
 }
 
 /// Choose the menu form from login presence and the cached installation identity.

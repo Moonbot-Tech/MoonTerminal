@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
-use moon_core::config::{parse_endpoint_override, target_from_key};
+use moon_core::config::{ServerConfig, parse_endpoint_override, target_from_key};
 use moon_remote::core_cmds::{Cmd, Login};
 use moon_remote::hosts::Hosts;
 use moon_remote::ssh::Target;
@@ -21,6 +21,13 @@ const POLL: Duration = Duration::from_millis(250);
 /// How long a status check suppresses another automatic status request.
 const STATUS_REFRESH: Duration = Duration::from_secs(60);
 
+/// Resolve a saved core's current connection host and MoonProto port without DNS.
+pub(crate) fn core_host_port(server: &ServerConfig) -> Option<(String, u16)> {
+    let endpoint = parse_endpoint_override(&server.endpoint_override).ok()?;
+    let target = target_from_key(server.key.expose(), endpoint.as_ref())?;
+    Some((target.host.to_string(), target.port))
+}
+
 impl Backend {
     /// Queue `req` for the command worker associated with core `uid`.
     pub(crate) fn core_cmds_send(&mut self, uid: u64, req: CmdRequest) {
@@ -29,15 +36,16 @@ impl Backend {
 
     /// Store a confirmed provider login for `ip` for the rest of this terminal session.
     pub(crate) fn core_cmds_add_login(&mut self, ip: String, login: SessionLogin) {
+        self.core_cmds.refresh_hosts();
         self.core_cmds.logins.insert(ip.clone(), login);
         let uids: Vec<_> = self
             .config
             .servers
             .iter()
             .filter_map(|server| {
-                let endpoint = parse_endpoint_override(&server.endpoint_override).ok()?;
-                let target = target_from_key(server.key.expose(), endpoint.as_ref())?;
-                (target.host.to_string() == ip).then_some(server.uid)
+                core_host_port(server)
+                    .is_some_and(|(host, _)| host == ip)
+                    .then_some(server.uid)
             })
             .collect();
         for uid in uids {
@@ -59,10 +67,9 @@ impl Backend {
         self.core_cmds.request_status(uid);
     }
 
-    /// Prefer a confirmed session login, then fall back to the administrator pinned for `ip`.
+    /// Prefer a confirmed session login, then fall back to the cached administrator for `ip`.
     pub(crate) fn core_cmds_login_for(&self, ip: &str) -> Option<Login> {
-        let hosts = Hosts::load(&Hosts::path()).unwrap_or_default();
-        self.core_cmds_login_from(ip, &hosts)
+        self.core_cmds_login_from(ip, &self.core_cmds.hosts)
     }
 
     /// Choose a session or administrator login using one already loaded host snapshot.
@@ -78,7 +85,8 @@ impl Backend {
 
     /// Start the persistent 250 ms drain for all per-core command workers.
     pub(crate) fn core_cmds_track(&mut self, cx: &mut Context<Self>) {
-        let (events, answers) = mpsc::channel::<(u64, worker::Event)>();
+        self.core_cmds.refresh_hosts();
+        let (events, answers) = mpsc::channel::<(u64, u64, worker::Event)>();
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
@@ -95,13 +103,16 @@ impl Backend {
         .detach();
     }
 
-    /// Dispatch queued requests and apply every event workers have published.
+    /// Dispatch queued requests and apply every current-generation worker event.
     fn core_cmds_tick(
         &mut self,
-        events: &mpsc::Sender<(u64, worker::Event)>,
-        answers: &mpsc::Receiver<(u64, worker::Event)>,
+        events: &mpsc::Sender<(u64, u64, worker::Event)>,
+        answers: &mpsc::Receiver<(u64, u64, worker::Event)>,
         cx: &mut Context<Self>,
     ) {
+        if !self.core_cmds.pending.is_empty() {
+            self.core_cmds.refresh_hosts();
+        }
         let mut changed = false;
         for (uid, request) in std::mem::take(&mut self.core_cmds.pending) {
             changed = true;
@@ -120,31 +131,58 @@ impl Backend {
                     .servers
                     .iter()
                     .find(|s| s.uid == uid)
-                    .and_then(|server| {
-                        let endpoint = parse_endpoint_override(&server.endpoint_override).ok()?;
-                        let core = target_from_key(server.key.expose(), endpoint.as_ref())?;
-                        Some((core.host.to_string(), core.port))
-                    })
+                    .and_then(core_host_port)
                     .unwrap_or_default();
                 self.core_cmds.no_login(uid, cmd, target, port);
                 continue;
             };
+            let endpoint_changed = self.core_cmds.workers.get(&uid).is_some_and(|worker| {
+                worker.target.host != target.host
+                    || worker.target.port != target.port
+                    || worker.port != port
+            });
+            if endpoint_changed {
+                self.core_cmds.workers.remove(&uid);
+                if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
+                    facts.located = None;
+                }
+            }
             let facts = self
                 .core_cmds
                 .facts
                 .entry(uid)
-                .or_insert_with(|| core_facts(display, port));
+                .or_insert_with(|| core_facts(display.clone(), port));
+            facts.target = display;
+            facts.port = port;
+            let generation = self
+                .core_cmds
+                .workers
+                .get(&uid)
+                .map(|worker| worker.generation)
+                .unwrap_or_else(|| {
+                    self.core_cmds.next_generation = self.core_cmds.next_generation.wrapping_add(1);
+                    self.core_cmds.next_generation
+                });
             if !self.core_cmds.workers.contains_key(&uid)
                 && let Some(sender) = worker::spawn(
                     uid,
-                    target,
+                    generation,
+                    target.clone(),
                     login,
                     port,
                     facts.located.clone(),
                     events.clone(),
                 )
             {
-                self.core_cmds.workers.insert(uid, sender);
+                self.core_cmds.workers.insert(
+                    uid,
+                    CoreWorker {
+                        target,
+                        port,
+                        generation,
+                        sender,
+                    },
+                );
             }
             facts.phases.insert(
                 cmd,
@@ -157,7 +195,7 @@ impl Backend {
                 .core_cmds
                 .workers
                 .get(&uid)
-                .is_some_and(|worker| worker.send(request).is_ok());
+                .is_some_and(|worker| worker.sender.send(request).is_ok());
             if !sent {
                 self.core_cmds.workers.remove(&uid);
                 if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
@@ -170,46 +208,74 @@ impl Backend {
                 }
             }
         }
-        while let Ok((uid, event)) = answers.try_recv() {
-            changed |= self.core_cmds_event(uid, event);
+        while let Ok((uid, generation, event)) = answers.try_recv() {
+            changed |= self.core_cmds_event(uid, generation, event);
         }
         if changed {
             cx.notify();
         }
     }
 
-    /// Resolve the core address and login a worker needs without contacting the server.
+    /// Resolve the core address and real SSH login endpoint without contacting the server.
     fn core_cmds_worker_config(&self, uid: u64) -> Option<(Target, String, u16, Login)> {
         let server = self
             .config
             .servers
             .iter()
             .find(|server| server.uid == uid)?;
-        let endpoint = parse_endpoint_override(&server.endpoint_override).ok()?;
-        let core = target_from_key(server.key.expose(), endpoint.as_ref())?;
-        let host = core.host.to_string();
-        let hosts = Hosts::load(&Hosts::path()).unwrap_or_default();
-        let login = self.core_cmds_login_from(&host, &hosts)?;
+        let (host, core_port) = core_host_port(server)?;
+        let login = self.core_cmds_login_from(&host, &self.core_cmds.hosts)?;
         let fallback = format!("{host}:22");
-        let display = match &login {
-            Login::Provider { .. } => self
-                .core_cmds
-                .logins
-                .get(&host)
-                .map(|login| login.target.clone())
-                .filter(|target| !target.is_empty())
-                .unwrap_or(fallback),
-            Login::Admin => hosts
-                .admin_by_ip(&host)
-                .and_then(|host| host.admin.as_deref())
-                .map(|admin| format!("{admin}@{host}:22"))
-                .unwrap_or(fallback),
+        let (display, ssh_port) = match &login {
+            Login::Provider { .. } => {
+                let display = self
+                    .core_cmds
+                    .logins
+                    .get(&host)
+                    .map(|login| login.target.clone())
+                    .filter(|target| !target.is_empty())
+                    .unwrap_or(fallback);
+                let port = ssh_target_port(&display).unwrap_or(22);
+                (display, port)
+            }
+            Login::Admin => {
+                let known = self.core_cmds.hosts.admin_by_ip(&host);
+                let display = known
+                    .map(|known| {
+                        known
+                            .admin
+                            .as_deref()
+                            .map(|admin| format!("{admin}@{}", known.addr))
+                            .unwrap_or(fallback)
+                    })
+                    .unwrap_or_else(|| format!("{host}:22"));
+                let port = known
+                    .and_then(|known| ssh_target_port(&known.addr))
+                    .unwrap_or(22);
+                (display, port)
+            }
         };
-        Some((Target { host, port: 22 }, display, core.port, login))
+        Some((
+            Target {
+                host,
+                port: ssh_port,
+            },
+            display,
+            core_port,
+            login,
+        ))
     }
 
-    /// Apply one worker event and return whether it changed a cached core.
-    fn core_cmds_event(&mut self, uid: u64, event: worker::Event) -> bool {
+    /// Apply one current-generation worker event and return whether it changed a cached core.
+    fn core_cmds_event(&mut self, uid: u64, generation: u64, event: worker::Event) -> bool {
+        if !self
+            .core_cmds
+            .workers
+            .get(&uid)
+            .is_some_and(|worker| worker.generation == generation)
+        {
+            return false;
+        }
         match event {
             worker::Event::AddressChanged { host, port } => {
                 self.core_cmds_address_changed(uid, &host, port)
@@ -222,34 +288,26 @@ impl Backend {
         }
     }
 
-    /// Save a changed MoonProto endpoint through the same settings edit as a completed core move.
-    fn core_cmds_address_changed(&mut self, uid: u64, host: &str, port: u16) -> bool {
-        let address = format!("{host}:{port}");
+    /// Save the current connect host with the new port through the completed core-move edit.
+    fn core_cmds_address_changed(&mut self, uid: u64, _listen_host: &str, port: u16) -> bool {
+        let connect_host = self
+            .config
+            .servers
+            .iter()
+            .find(|server| server.uid == uid)
+            .and_then(core_host_port)
+            .map(|(host, _)| host)
+            .or_else(|| {
+                self.core_cmds
+                    .facts
+                    .get(&uid)
+                    .and_then(|facts| ssh_display_host(&facts.target))
+            });
         let result = (|| {
-            let point = |servers: &mut Vec<moon_core::config::ServerConfig>| -> bool {
-                match servers.iter_mut().find(|server| server.uid == uid) {
-                    Some(server) => {
-                        server.endpoint_override = address.clone();
-                        server.endpoint_to_station = true;
-                        true
-                    }
-                    None => false,
-                }
-            };
-            let mut candidate = self.config.clone();
-            anyhow::ensure!(
-                point(&mut candidate.servers),
-                "the core is no longer in the settings"
-            );
-            candidate.save()?;
-            self.config = candidate;
-            if let Some(preview) = self.preview.as_mut() {
-                point(&mut preview.servers);
-            }
-            let reports = self.reports.as_ref().map(|handle| &handle.tx);
-            self.session.reconcile(&self.config, reports);
-            self.servers_changed_outside = self.servers_changed_outside.wrapping_add(1);
-            Ok::<(), anyhow::Error>(())
+            let host = connect_host
+                .filter(|host| !host.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("the current core address is unavailable"))?;
+            self.core_move_switch(uid, &format!("{host}:{port}"))
         })();
         if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
             if let Err(error) = result {
@@ -270,6 +328,11 @@ impl Backend {
 }
 
 impl CoreCmdsState {
+    /// Refresh the cached host pins once per active backend tick or confirmed login.
+    fn refresh_hosts(&mut self) {
+        self.hosts = Hosts::load(&Hosts::path()).unwrap_or_default();
+    }
+
     /// Hide only the connection key and cancel its reveal so late results cannot expose it.
     fn forget_key(&mut self, uid: u64) {
         if let Some(facts) = self.facts.get_mut(&uid) {
@@ -336,6 +399,12 @@ impl CoreFacts {
                 {
                     return false;
                 }
+                if cmd == Cmd::MoonProtoAddress
+                    && matches!(phase, CmdPhase::Done)
+                    && matches!(self.phases.get(&cmd), Some(CmdPhase::Failed(_)))
+                {
+                    return false;
+                }
                 self.phases.insert(cmd, phase);
             }
             worker::Event::Located(located) => self.located = Some(located),
@@ -376,6 +445,33 @@ impl CoreFacts {
         }
         true
     }
+}
+
+/// Read the SSH port from a decorated `user@host:port` login target.
+fn ssh_target_port(target: &str) -> Option<u16> {
+    let address = target
+        .rsplit_once('@')
+        .map_or(target, |(_, address)| address);
+    address
+        .rsplit_once(':')?
+        .1
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port > 0)
+}
+
+/// Recover the current connect IP from the worker's decorated display target.
+fn ssh_display_host(target: &str) -> Option<String> {
+    let address = target
+        .rsplit_once('@')
+        .map_or(target, |(_, address)| address);
+    if address.parse::<std::net::IpAddr>().is_ok() {
+        return Some(address.to_owned());
+    }
+    let (host, port) = address.rsplit_once(':')?;
+    port.parse::<u16>().ok()?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    (!host.is_empty()).then(|| host.to_owned())
 }
 
 /// Create empty cached facts for a core's first queued request.

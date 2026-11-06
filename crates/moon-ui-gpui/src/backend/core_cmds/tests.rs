@@ -4,7 +4,10 @@ use moon_remote::core_cmds::{Cmd, Located};
 use moon_remote::core_new::{CoreState, CoreStatus};
 use zeroize::Zeroizing;
 
-use super::{CmdArgs, CmdError, CmdPhase, CoreCmdsState, MenuForm, core_facts, menu_form, worker};
+use super::{
+    CmdArgs, CmdError, CmdPhase, CoreCmdsState, CoreWorker, MenuForm, core_facts, menu_form,
+    ssh_display_host, ssh_target_port, worker,
+};
 
 /// Build a located core with only its installation ownership varied.
 fn located(ours: bool) -> Located {
@@ -130,7 +133,18 @@ fn forget_erases_only_key_and_drops_late_key() {
     assert!(facts.key.is_some());
     state.facts.insert(7, facts);
     let (sender, _receiver) = std::sync::mpsc::channel();
-    state.workers.insert(7, sender);
+    state.workers.insert(
+        7,
+        CoreWorker {
+            target: moon_remote::ssh::Target {
+                host: "203.0.113.7".into(),
+                port: 22,
+            },
+            port: 3302,
+            generation: 1,
+            sender,
+        },
+    );
 
     state.forget_key(7);
     let facts = state.facts.get_mut(&7).expect("facts survive Forget");
@@ -159,5 +173,38 @@ fn first_request_without_login_records_refused_phase() {
     assert!(matches!(
         facts.phases.get(&Cmd::Status),
         Some(CmdPhase::Failed(CmdError::Refused(_)))
+    ));
+}
+
+/// Hardcoding SSH port 22 would make pinned and session logins unreachable on their real port.
+#[test]
+fn ssh_targets_keep_their_login_port_and_connect_host() {
+    for target in [
+        "root@203.0.113.7:2222",
+        "203.0.113.7:2222",
+        "root@[2001:db8::7]:2222",
+    ] {
+        assert_eq!(ssh_target_port(target), Some(2222));
+    }
+    assert_eq!(ssh_target_port("root@203.0.113.7"), None);
+    assert_eq!(
+        ssh_display_host("root@203.0.113.7:2222").as_deref(),
+        Some("203.0.113.7")
+    );
+}
+
+/// A worker's later Done must not erase a local endpoint-save failure shown to the user.
+#[test]
+fn address_save_failure_survives_late_worker_done() {
+    let mut facts = core_facts("root@203.0.113.7:22".into(), 3302);
+    facts.phases.insert(
+        Cmd::MoonProtoAddress,
+        CmdPhase::Failed(CmdError::Ssh("save failed".into())),
+    );
+
+    assert!(!facts.apply(worker::Event::Phase(Cmd::MoonProtoAddress, CmdPhase::Done,)));
+    assert!(matches!(
+        facts.phases.get(&Cmd::MoonProtoAddress),
+        Some(CmdPhase::Failed(CmdError::Ssh(reason))) if reason == "save failed"
     ));
 }

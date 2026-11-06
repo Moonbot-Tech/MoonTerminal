@@ -13,7 +13,9 @@ use zeroize::Zeroizing;
 
 use super::pages::{Action, Block, Confirm, ViewState};
 use super::{chrome, pages, rail};
-use crate::backend::core_cmds::{CmdArgs, CmdPhase, CmdRequest, CoreFacts, MenuForm};
+use crate::backend::core_cmds::{
+    CmdArgs, CmdPhase, CmdRequest, CoreFacts, MenuForm, core_host_port,
+};
 use crate::{Backend, design};
 
 /// Command forms hold inputs; command outcomes and the revealed connection key stay in Backend.
@@ -111,14 +113,7 @@ impl CoreCmdsView {
         picker.update(cx, |picker, _| {
             picker.set_selected_value(&cmd);
         });
-        let log_choices = [
-            (LogLines::L200, "core_cmds.log.lines_200"),
-            (LogLines::L500, "core_cmds.log.lines_500"),
-            (LogLines::L1000, "core_cmds.log.lines_1000"),
-        ]
-        .map(|(lines, key)| MoonSelectItem::new(lines, t!(key).to_string()))
-        .to_vec();
-        let log_picker = cx.new(|cx| MoonSelectState::new(log_choices, None, window, cx));
+        let log_picker = cx.new(|cx| MoonSelectState::new(log_choices(), None, window, cx));
         log_picker.update(cx, |picker, _| {
             picker.set_selected_value(&LogLines::L200);
         });
@@ -305,20 +300,11 @@ impl CoreCmdsView {
             }
             Cmd::MoonProtoAddress => {
                 let host = self.host_input.read(cx).value().trim().to_string();
-                let Some(port) = self
-                    .port_input
-                    .read(cx)
-                    .value()
-                    .trim()
-                    .parse::<u16>()
-                    .ok()
-                    .filter(|p| *p > 0)
-                else {
-                    return;
-                };
-                if host.parse::<std::net::IpAddr>().is_err() {
+                let port = self.port_input.read(cx).value();
+                if !pages::valid_address(&host, &port) {
                     return;
                 }
+                let port = port.parse::<u16>().expect("validated address port");
                 CmdArgs::Address { host, port }
             }
             _ => CmdArgs::None,
@@ -413,16 +399,12 @@ impl CoreCmdsView {
                 .map(|facts| target_host(&facts.target).to_string())
                 .filter(|host| !host.is_empty())
                 .or_else(|| {
-                    let server = b
-                        .config
+                    b.config
                         .servers
                         .iter()
-                        .find(|server| server.uid == self.uid)?;
-                    let endpoint =
-                        moon_core::config::parse_endpoint_override(&server.endpoint_override)
-                            .ok()?;
-                    moon_core::config::target_from_key(server.key.expose(), endpoint.as_ref())
-                        .map(|target| target.host.to_string())
+                        .find(|server| server.uid == self.uid)
+                        .and_then(core_host_port)
+                        .map(|(host, _)| host)
                 })
         };
         if let Some(ip) = ip {
@@ -497,20 +479,10 @@ impl CoreCmdsView {
             latest,
             key_filled: !self.key_input.read(cx).value().is_empty(),
             secret_filled: !self.secret_input.read(cx).value().is_empty(),
-            address_valid: self
-                .host_input
-                .read(cx)
-                .value()
-                .trim()
-                .parse::<std::net::IpAddr>()
-                .is_ok()
-                && self
-                    .port_input
-                    .read(cx)
-                    .value()
-                    .trim()
-                    .parse::<u16>()
-                    .is_ok_and(|p| p > 0),
+            address_valid: pages::valid_address(
+                &self.host_input.read(cx).value(),
+                &self.port_input.read(cx).value(),
+            ),
             revealed: self.revealed,
             confirm: self.confirm.clone(),
             elapsed,
@@ -754,17 +726,18 @@ impl CoreCmdsView {
                     .min_w_0()
                     .flex_1(),
             )
-            .when(!narrow, |row| {
-                row.child(
-                    div()
-                        .max_w(px(260.0))
-                        .truncate()
-                        .font_family(design::mono())
-                        .text_size(px(12.0))
-                        .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(target),
-                )
-            })
+            .child(
+                div()
+                    .debug_selector(|| "cc-ssh-target".to_owned())
+                    .flex_none()
+                    .min_w_0()
+                    .max_w(px(if narrow { 140.0 } else { 260.0 }))
+                    .truncate()
+                    .font_family(design::mono())
+                    .text_size(px(12.0))
+                    .text_color(rgba_from(p.text_muted, 1.0))
+                    .child(target),
+            )
             .when(design::show_custom_window_controls(), |row| {
                 row.child(
                     MoonWindowFrame::tool("cc-controls", width)
@@ -932,6 +905,17 @@ pub(super) fn target_host(target: &str) -> &str {
         })
 }
 
+/// Build localized log-count labels for initial display and every locale revision.
+fn log_choices() -> Vec<MoonSelectItem<LogLines>> {
+    [
+        (LogLines::L200, "core_cmds.log.lines_200"),
+        (LogLines::L500, "core_cmds.log.lines_500"),
+        (LogLines::L1000, "core_cmds.log.lines_1000"),
+    ]
+    .map(|(lines, key)| MoonSelectItem::new(lines, t!(key).to_string()))
+    .to_vec()
+}
+
 /// Empty facts keep the loading page available before the first worker response arrives.
 fn empty_facts() -> CoreFacts {
     CoreFacts {
@@ -948,21 +932,31 @@ fn empty_facts() -> CoreFacts {
     }
 }
 
-/// Release the backend read before constructing GPUI controls; no snapshot survives a frame.
-fn snapshot(facts: &CoreFacts) -> CoreFacts {
+/// Copy only the current page's data; large logs and secret keys stay unread on other pages.
+fn snapshot(facts: &CoreFacts, cmd: Cmd) -> CoreFacts {
     CoreFacts {
         target: facts.target.clone(),
         port: facts.port,
         located: facts.located.clone(),
-        status: facts.status.clone(),
+        status: matches!(
+            cmd,
+            Cmd::Status | Cmd::RetryLogin | Cmd::SwitchExchange | Cmd::ApiKeys | Cmd::UpdateCore
+        )
+        .then(|| facts.status.clone())
+        .flatten(),
         info: facts.info.clone(),
-        log: facts.log.clone(),
-        key: facts.key.as_ref().map(|k| Zeroizing::new(k.to_string())),
-        exchanges: facts.exchanges.clone(),
+        log: (cmd == Cmd::Log).then(|| facts.log.clone()).flatten(),
+        key: (cmd == Cmd::ConnectionKey)
+            .then(|| facts.key.as_ref().map(|k| Zeroizing::new(k.to_string())))
+            .flatten(),
+        exchanges: (cmd == Cmd::SwitchExchange)
+            .then(|| facts.exchanges.clone())
+            .flatten(),
         checked_at: facts.checked_at,
         phases: facts
             .phases
             .iter()
+            .filter(|(phase_cmd, _)| **phase_cmd == cmd)
             .map(|(cmd, phase)| {
                 (
                     *cmd,
@@ -989,9 +983,9 @@ impl Render for CoreCmdsView {
         let facts = backend
             .as_ref()
             .and_then(|b| b.read(cx).core_cmds.facts.get(&self.uid))
-            .map(snapshot);
+            .map(|facts| snapshot(facts, self.cmd));
         #[cfg(test)]
-        let facts = facts.or_else(|| self.fixture.as_ref().map(snapshot));
+        let facts = facts.or_else(|| self.fixture.as_ref().map(|facts| snapshot(facts, self.cmd)));
         let facts = facts.as_ref().unwrap_or(&fallback);
         let state = self.state(facts, cx);
         let active = facts
@@ -1013,6 +1007,10 @@ impl Render for CoreCmdsView {
                 .collect::<Vec<_>>();
             self.picker
                 .update(cx, |picker, cx| picker.set_items(choices, cx));
+            self.log_picker.update(cx, |picker, cx| {
+                picker.set_items(log_choices(), cx);
+                picker.set_selected_value(&self.log_lines);
+            });
             self.nav_signature = Some(signature);
         }
         if let Some(CmdPhase::Running { since, .. }) = facts.phases.get(&self.cmd) {

@@ -13,6 +13,8 @@ mod status;
 pub(super) mod tests;
 mod update;
 
+pub(super) use addr::valid_address;
+
 use crate::backend::core_cmds::{CmdPhase, CoreFacts, MenuForm};
 use moon_remote::core_cmds::{Cmd, LogLines};
 use moon_remote::core_new::CoreState;

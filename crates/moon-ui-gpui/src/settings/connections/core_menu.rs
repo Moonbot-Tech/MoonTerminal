@@ -1,6 +1,6 @@
 //! Command-menu rows and address eligibility, independent of the Settings window.
 
-use std::net::IpAddr;
+use std::net::Ipv4Addr;
 
 use moon_remote::core_cmds::Cmd;
 
@@ -33,7 +33,8 @@ pub(crate) enum MenuCmd {
 pub(crate) fn core_menu_rows(form: MenuForm, active: Option<bool>) -> Vec<MenuRow> {
     if form == MenuForm::NoLogin {
         return vec![
-            MenuRow::Note("core_cmds.menu.nologin_note"),
+            MenuRow::Note("core_cmds.menu.nologin_note_1"),
+            MenuRow::Note("core_cmds.menu.nologin_note_2"),
             MenuRow::Item {
                 id: "add-login",
                 label_key: "core_cmds.menu.add_login",
@@ -90,15 +91,19 @@ pub(crate) fn core_menu_rows(form: MenuForm, active: Option<bool>) -> Vec<MenuRo
         }
     }
     if form == MenuForm::Hand {
-        rows.push(MenuRow::Note("core_cmds.menu.hand_note"));
+        rows.extend([
+            MenuRow::Note("core_cmds.menu.hand_note_1"),
+            MenuRow::Note("core_cmds.menu.hand_note_2"),
+            MenuRow::Note("core_cmds.menu.hand_note_3"),
+        ]);
     }
     rows
 }
 
-/// Offer server commands for literal IPs, including LAN hosts, but never loopback or names.
+/// Offer server commands for non-loopback literal IPv4 hosts, including LAN addresses.
 pub(crate) fn eligible(addr_host: &str) -> bool {
     addr_host
-        .parse::<IpAddr>()
+        .parse::<Ipv4Addr>()
         .is_ok_and(|ip| !ip.is_loopback())
 }
 

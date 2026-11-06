@@ -440,7 +440,7 @@ impl Backend {
     /// key), so its history goes on; a replaced key would read as a new core there. The saved
     /// settings and an open Settings draft change alike, or saving the draft would point the row
     /// back at the old core.
-    fn core_move_switch(&mut self, uid: u64, address: &str) -> anyhow::Result<()> {
+    pub(crate) fn core_move_switch(&mut self, uid: u64, address: &str) -> anyhow::Result<()> {
         let point = |servers: &mut Vec<moon_core::config::ServerConfig>| -> bool {
             match servers.iter_mut().find(|s| s.uid == uid) {
                 Some(s) => {

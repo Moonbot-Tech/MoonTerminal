@@ -15,7 +15,9 @@
 #   info    <udp port>                          — locate and report service state and resource use
 #   service <start|stop|restart> <udp port> [<unit hint>]
 #                                               — change the located service state
-#   log     <udp port> <200|500|1000>           — print a bounded tail of the core's log
+#   log     <udp port> <200|500|1000> [<dir hint>]
+#                                               — print a bounded tail, using the hint only when
+#                                                 no running or installed core can be located
 #   retarget <instance dir> <new udp port>      — move the marker and its recorded firewall rule
 #   mb      <instance dir> <arguments…>         — one command of the core's own CLI; stdin passes
 #                                                 through
@@ -90,7 +92,7 @@ locate_port() {
     return 0
 }
 
-# Print one stopped candidate whose executable exists and whose marker does not conflict with the port.
+# Print one stopped candidate whose executable exists and whose INI or marker confirms the port when known.
 print_stopped_candidate() {
     requested=$1
     candidate_unit=$2
@@ -105,7 +107,6 @@ print_stopped_candidate() {
             instance_dir=$(systemd-escape --unescape --path "$instance") || return 1
             if test -f "$instance_dir/$marker"; then
                 test "$(head -n 1 "$instance_dir/$marker")" = "$requested" || return 1
-                port_known=1
             fi
         fi
         ;;
@@ -126,8 +127,14 @@ print_stopped_candidate() {
         esac
     fi
     test -n "$candidate" && test -x "$candidate/MoonBot" || return 1
+    candidate_port=''
     if test -f "$candidate/$marker"; then
-        test "$(head -n 1 "$candidate/$marker")" = "$requested" || return 1
+        candidate_port=$(head -n 1 "$candidate/$marker")
+    elif test -f "$candidate/MoonBot.ini"; then
+        candidate_port=$(sed -n 's/^[[:space:]]*[Mm]oon[Pp]roto[Pp]ort[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$candidate/MoonBot.ini" | head -n 1)
+    fi
+    if test -n "$candidate_port"; then
+        test "$candidate_port" = "$requested" || return 1
         port_known=1
     fi
     has_mb=0
@@ -135,18 +142,19 @@ print_stopped_candidate() {
     printf 'LOCATE_CANDIDATE=%s|%s|%s|%s\n' "$candidate_unit" "$candidate" "$has_mb" "$port_known"
 }
 
-# Print inactive MoonBot services from one keyed snapshot of loaded and installed units.
+# Print inactive MoonBot services from one keyed snapshot of installed units.
 locate_stopped() {
     found=0
-    details=$(systemctl show --type=service --all -p Id,ExecStart,WorkingDirectory,ActiveState 2>/dev/null) || return 1
+    units=$(systemctl list-unit-files --type=service --no-legend --plain 2>/dev/null | awk '$1 ~ /\.service$/ && $1 !~ /@\.service$/ {print $1}') || return 1
+    test -n "$units" || return 1
+    details=$(systemctl show -p Id,ExecStart,WorkingDirectory,ActiveState -- $units 2>/dev/null) || return 1
     unit=''
     working=''
     exec_start=''
     active=''
-    mentions=0
     while IFS= read -r line || test -n "$line"; do
         if test -z "$line"; then
-            if test "$mentions" = 1 && test -n "$unit" && test "$active" != active; then
+            if test -n "$unit" && test "$active" != active; then
                 if print_stopped_candidate "$1" "$unit" "$working" "$exec_start"; then
                     found=1
                 fi
@@ -155,10 +163,8 @@ locate_stopped() {
             working=''
             exec_start=''
             active=''
-            mentions=0
             continue
         fi
-        case $line in *MoonBot*) mentions=1 ;; esac
         case $line in
         Id=*) unit=${line#Id=} ;;
         ExecStart=*) exec_start=${line#ExecStart=} ;;
@@ -445,12 +451,21 @@ log)
     validate_port "${1:-}"
     n=${2:-}
     case $n in 200|500|1000);; *) exit 2;; esac
-    locate_port "$p" || exit 1
+    if ! locate_port "$p"; then
+        dir=${3:-}
+        case $dir in /*) ;; *) exit 1;; esac
+        nl=$(printf '\n_')
+        nl=${nl%_}
+        case $dir in *"$nl"*) exit 1;; esac
+        test -x "$dir/MoonBot" || exit 1
+        unit=''
+    fi
     log_file=''
     # ISO dates sort lexically, so the last matching path is the newest daily trading log.
     for candidate in "$dir"/logs/LOG_????-??-??.log; do
         test ! -f "$candidate" || log_file=$candidate
     done
+    test -n "$log_file" || test -n "$unit" || exit 1
     echo LOG_BEGIN
     if test -n "$log_file" && tail -n "$n" "$log_file"; then
         exit 0
@@ -462,7 +477,7 @@ retarget)
     test -f "$dest/$marker" || { echo "$dest was not installed by MoonTerminal" >&2; exit 1; }
     validate_port "${2:-}"
     old=$(head -n 1 "$dest/$marker")
-    if grep -qx ufw "$dest/$marker" && ufw_active; then
+    if test "$old" != "$p" && grep -qx ufw "$dest/$marker" && ufw_active; then
         ufw allow "$p/udp" comment "MoonBot $dest" >/dev/null
         ufw delete allow "$old/udp" >/dev/null 2>&1 || true
     fi

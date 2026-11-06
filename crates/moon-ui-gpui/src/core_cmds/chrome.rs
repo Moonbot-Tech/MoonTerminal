@@ -183,13 +183,13 @@ pub(super) fn mono_block(lines: Vec<String>, cx: &App) -> impl IntoElement {
             if !prefix.is_empty() {
                 runs.push(TextRun {
                     len: prefix.len(),
-                    color: rgba_from(p.text_faint, 1.0).into(),
+                    color: rgba_from(p.text_faint, 1.0),
                     ..TextRun::default()
                 });
             }
             runs.push(TextRun {
                 len: message.len(),
-                color: rgba_from(color, 1.0).into(),
+                color: rgba_from(color, 1.0),
                 ..TextRun::default()
             });
             div()

@@ -26,7 +26,7 @@ use super::tab::{apply_group_transport, group_icon, icon_picker_grid, sorted_gro
 use super::table::{
     apply_pasted_key, feed_count, feed_get, feed_set, set_core_active, set_for_station, status_dot,
 };
-use crate::backend::core_cmds::{MenuForm, menu_form};
+use crate::backend::core_cmds::{MenuForm, core_host_port, menu_form};
 use crate::design;
 use crate::settings::Tab;
 use crate::settings::common::column_row;
@@ -103,10 +103,11 @@ impl SettingsView {
                     .position(|row| row.row_key == key)
                     .and_then(|i| {
                         let b = self.backend.read(cx);
-                        let server = b.preview.as_ref().unwrap_or(&b.config).servers.get(i)?;
-                        let host = command_host(server)?;
+                        let uid = b.preview.as_ref().unwrap_or(&b.config).servers.get(i)?.uid;
+                        let server = b.config.servers.iter().find(|server| server.uid == uid)?;
+                        let (host, _) = core_host_port(server)?;
                         (core_menu::eligible(&host) && b.core_cmds_login_for(&host).is_some())
-                            .then_some(server.uid)
+                            .then_some(uid)
                     });
                 if let Some(uid) = uid {
                     self.backend
@@ -277,7 +278,7 @@ impl SettingsView {
                 .iter()
                 .find(|server| server.uid == uid)
                 .and_then(|server| {
-                    let ip = command_host(server)?;
+                    let (ip, _) = core_host_port(server)?;
                     if !core_menu::eligible(&ip) {
                         return None;
                     }
@@ -308,17 +309,7 @@ impl SettingsView {
                 MenuRow::Caption(caption) => items.push(MoonMenuItem::label(caption)),
                 MenuRow::Separator => items.push(MoonMenuItem::separator()),
                 MenuRow::Note(key) => {
-                    // MoonUI labels are single-line: keep each sentence in its own inert row.
-                    let text = t!(key).to_string();
-                    let mut sentences = text.split(". ").peekable();
-                    while let Some(sentence) = sentences.next() {
-                        let label = if sentences.peek().is_some() {
-                            format!("{sentence}.")
-                        } else {
-                            sentence.to_string()
-                        };
-                        items.push(MoonMenuItem::label(label));
-                    }
+                    items.push(MoonMenuItem::label(t!(key).to_string()));
                 }
                 MenuRow::Item {
                     id,
@@ -916,11 +907,4 @@ impl SettingsView {
             ))
             .into_any_element()
     }
-}
-
-/// Resolve an endpoint without DNS so menu eligibility cannot admit hostnames or loopback.
-fn command_host(server: &ServerConfig) -> Option<String> {
-    let endpoint = moon_core::config::parse_endpoint_override(&server.endpoint_override).ok()?;
-    moon_core::config::target_from_key(server.key.expose(), endpoint.as_ref())
-        .map(|target| target.host.to_string())
 }

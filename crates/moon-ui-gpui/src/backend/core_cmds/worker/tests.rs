@@ -43,6 +43,7 @@ struct FakeRunner {
     wait_status: CoreStatus,
     calls: RefCell<Vec<String>>,
     retarget_error: Option<String>,
+    info_available: bool,
 }
 
 impl FakeRunner {
@@ -53,6 +54,7 @@ impl FakeRunner {
             wait_status: status(CoreState::Ready),
             calls: RefCell::new(Vec::new()),
             retarget_error: None,
+            info_available: true,
         }
     }
 
@@ -86,7 +88,7 @@ impl Runner for FakeRunner {
 
     fn info(&self, port: u16) -> anyhow::Result<Option<ServiceInfo>> {
         self.record(format!("info:{port}"));
-        Ok(Some(ServiceInfo {
+        Ok(self.info_available.then(|| ServiceInfo {
             located: self.located(),
             active: "active".into(),
             uptime_s: Some(60),
@@ -108,8 +110,12 @@ impl Runner for FakeRunner {
         Ok("active".into())
     }
 
-    fn log_tail(&self, port: u16, n: LogLines) -> anyhow::Result<LogTail> {
-        self.record(format!("log_tail:{port}:{}", n.count()));
+    fn log_tail(&self, port: u16, n: LogLines, dir_hint: Option<&str>) -> anyhow::Result<LogTail> {
+        self.record(format!(
+            "log_tail:{port}:{}:{}",
+            n.count(),
+            dir_hint.unwrap_or("-")
+        ));
         Ok(LogTail {
             lines: vec!["CORE_A ready".into()],
         })
@@ -303,22 +309,43 @@ fn retry_unfinished_after_wait_fails_timeout() {
     ));
 }
 
-/// Losing the cached unit between Stop and Start would make a stopped core impossible to restart.
+/// Losing the cached unit when post-stop locate finds nothing would make Start impossible.
 #[test]
 fn start_after_stop_passes_cached_unit_hint() {
-    let fake = FakeRunner::new();
-    for cmd in [Cmd::Stop, Cmd::Start] {
-        let events = run(
-            &fake,
-            cached_snapshot(&fake),
-            CmdRequest::Run {
-                cmd,
-                args: CmdArgs::None,
-            },
-        );
-        assert!(matches!(phase(&events, cmd), CmdPhase::Done));
-    }
+    let mut fake = FakeRunner::new();
+    fake.locate_result = LocateResult::Found(located(false));
+    fake.info_available = false;
+    let stopped = run(
+        &fake,
+        cached_snapshot(&fake),
+        CmdRequest::Run {
+            cmd: Cmd::Stop,
+            args: CmdArgs::None,
+        },
+    );
+    assert!(matches!(phase(&stopped, Cmd::Stop), CmdPhase::Done));
+    let stopped = stopped
+        .iter()
+        .find_map(|event| match event {
+            Event::Info(info) => Some(info.located.clone()),
+            _ => None,
+        })
+        .expect("stopped location survives missing post-stop info");
+    assert_eq!(stopped.active, Some(false));
 
+    fake.info_available = true;
+    let started = run(
+        &fake,
+        FactsSnapshot {
+            port: 3302,
+            located: Some(stopped),
+        },
+        CmdRequest::Run {
+            cmd: Cmd::Start,
+            args: CmdArgs::None,
+        },
+    );
+    assert!(matches!(phase(&started, Cmd::Start), CmdPhase::Done));
     let services: Vec<_> = fake
         .calls
         .borrow()
@@ -519,4 +546,44 @@ fn info_refreshes_cached_active_state_and_unit() {
             .iter()
             .any(|call| call == "service:start:3302:UNIT_02.service")
     );
+}
+
+/// Selecting an exchange without refreshing would leave current status and key captions stale.
+#[test]
+fn selected_exchange_refreshes_status_and_choices_before_done() {
+    let fake = FakeRunner::new();
+    let events = run(
+        &fake,
+        cached_snapshot(&fake),
+        CmdRequest::Run {
+            cmd: Cmd::SwitchExchange,
+            args: CmdArgs::Exchange("EX-XX".into()),
+        },
+    );
+
+    assert_eq!(
+        fake.calls.borrow().as_slice(),
+        [
+            "select_exchange:/root/moonbot-a:EX-XX",
+            "status:/root/moonbot-a",
+            "exchanges:/root/moonbot-a",
+        ]
+    );
+    assert!(events.iter().any(|event| matches!(event, Event::Status(_))));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::Exchanges(_)))
+    );
+    assert!(matches!(
+        phase(&events, Cmd::SwitchExchange),
+        CmdPhase::Done
+    ));
+}
+
+/// A service refusal is not a transport failure and must not tear down the SSH session.
+#[test]
+fn service_failure_is_a_refusal_not_an_ssh_failure() {
+    let error = ssh_failure(ServiceFailed { tail: Vec::new() }.into());
+    assert!(matches!(error, CmdError::Refused(_)));
 }

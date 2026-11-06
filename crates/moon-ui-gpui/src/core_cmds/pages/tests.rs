@@ -1,6 +1,6 @@
 //! Page-state oracles protect the actions offered after server outcomes and partial input.
 
-use super::{Action, Block, Confirm, Kind, ViewState, build};
+use super::{Action, Block, Confirm, Kind, ViewState, build, valid_address};
 use crate::backend::core_cmds::{CmdError, CmdPhase, CoreFacts, MenuForm};
 use moon_remote::core_cmds::{Cmd, Located};
 use moon_remote::core_new::{CoreState, CoreStatus};
@@ -208,4 +208,35 @@ fn failed_forms_keep_inputs_and_validate_retry() {
                 .enabled
         );
     }
+}
+
+/// IPv6, zero, and out-of-range ports must keep Apply disabled just as the worker refuses them.
+#[test]
+fn moonproto_address_validation_requires_ipv4_and_a_real_port() {
+    assert!(valid_address("0.0.0.0", "1"));
+    assert!(valid_address("203.0.113.7", "65535"));
+    for (host, port) in [
+        ("2001:db8::7", "3302"),
+        ("core.example", "3302"),
+        ("203.0.113.7", "0"),
+        ("203.0.113.7", "65536"),
+        ("203.0.113.7", "not-a-port"),
+    ] {
+        assert!(!valid_address(host, port), "{host}:{port}");
+    }
+}
+
+/// The status page must not invent a bind host that the core did not report.
+#[test]
+fn status_shows_only_the_moonproto_udp_port() {
+    let _locale = crate::test_locale::force("en");
+    let page = build(&facts(), &state(Cmd::Status));
+    let value = page.body.iter().find_map(|block| match block {
+        Block::Kv(rows) => rows
+            .iter()
+            .find(|(key, _)| *key == "core_cmds.status.kv_moonproto")
+            .map(|(_, value)| value),
+        _ => None,
+    });
+    assert_eq!(value.map(String::as_str), Some("UDP 3302"));
 }

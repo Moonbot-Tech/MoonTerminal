@@ -21,14 +21,24 @@ list-unit-files)
     ;;
 show)
     case "$*" in
-    *Id,ExecStart,WorkingDirectory,ActiveState*|*WorkingDirectory,ExecStart,ActiveState*)
-        if test -s "$MB_TEST_ROOT/systemctl_all_units"; then
+    *Id,ExecStart,WorkingDirectory,ActiveState*)
+        while test $# -gt 0; do
+            if test "$1" = --; then
+                shift
+                break
+            fi
+            shift
+        done
+        if test $# = 0; then
+            printf 'Version=stub\n'
+            exit 0
+        fi
+        for name in "$@"; do
             printf 'ActiveState=%s\n' "$(cat "$MB_TEST_ROOT/active_state")"
             printf 'ExecStart=%s\n' "$(cat "$MB_TEST_ROOT/exec_start")"
             printf 'WorkingDirectory=%s\n' "$(cat "$MB_TEST_ROOT/working_directory")"
-            awk '{print "Id=" $1; exit}' "$MB_TEST_ROOT/systemctl_all_units"
-            printf '\n'
-        fi
+            printf 'Id=%s\n\n' "$name"
+        done
         ;;
     *MainPID*) cat "$MB_TEST_ROOT/main_pid" ;;
     *ActiveEnterTimestampMonotonic*) cat "$MB_TEST_ROOT/active_entered" ;;
@@ -345,7 +355,7 @@ fn locate_rejects_udp_owner_without_service_unit() {
     assert_eq!(stdout(&output), "LOCATE_NONE=1\n");
 }
 
-/// Positional property reads or per-unit scans would misparse or slow down the stopped fallback.
+/// A no-name systemctl show returns manager properties, so stopped discovery must name installed units.
 #[test]
 fn locate_finds_stopped_hand_installed_core() {
     let Some(sandbox) = Sandbox::new() else {
@@ -355,7 +365,10 @@ fn locate_finds_stopped_hand_installed_core() {
     sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
     sandbox.executable(&dir.join("mb"), "#!/bin/sh\nexit 0\n");
     let dir_text = sandbox.posix(&dir);
-    sandbox.answer("systemctl_all_units", "UNIT_01.service enabled enabled\n");
+    sandbox.answer(
+        "systemctl_all_units",
+        "moonbot@.service enabled enabled\nUNIT_01.service enabled enabled\n",
+    );
     sandbox.answer("working_directory", &format!("{dir_text}\n"));
     sandbox.answer(
         "exec_start",
@@ -371,10 +384,38 @@ fn locate_finds_stopped_hand_installed_core() {
         format!("LOCATE_CANDIDATE=UNIT_01.service|{dir_text}|1|0\n")
     );
     let calls = sandbox.read(&sandbox.root.join("systemctl_calls"));
+    assert!(calls.contains("list-unit-files --type=service --no-legend --plain\n"));
     assert!(
-        calls.contains("show --type=service --all -p Id,ExecStart,WorkingDirectory,ActiveState\n")
+        calls.contains("show -p Id,ExecStart,WorkingDirectory,ActiveState -- UNIT_01.service\n")
     );
-    assert!(!calls.contains("list-unit-files --type=service"));
+    assert!(!calls.contains("show --type=service --all"));
+}
+
+/// A matching MoonProto INI port confirms a stopped candidate; a conflicting one excludes it.
+#[test]
+fn locate_reads_stopped_core_port_from_ini() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.answer_at(&dir.join("MoonBot.ini"), "MoonProtoPort=3302\r\n");
+    let dir_text = sandbox.posix(&dir);
+    sandbox.answer("systemctl_all_units", "UNIT_01.service enabled enabled\n");
+    sandbox.answer("working_directory", &format!("{dir_text}\n"));
+    sandbox.answer("active_state", "inactive\n");
+
+    let output = sandbox.run(&["locate", "3302"]);
+
+    assert_ok(&output);
+    assert_eq!(
+        stdout(&output),
+        format!("LOCATE_CANDIDATE=UNIT_01.service|{dir_text}|0|1\n")
+    );
+    sandbox.answer_at(&dir.join("MoonBot.ini"), "MoonProtoPort=4402\n");
+    let other = sandbox.run(&["locate", "3302"]);
+    assert_ok(&other);
+    assert_eq!(stdout(&other), "LOCATE_NONE=1\n");
 }
 
 /// A marker for another port must not make that stopped core a candidate for this port.
@@ -453,6 +494,29 @@ fn log_refuses_unsupported_line_count() {
     assert_eq!(output.status.code(), Some(2));
 }
 
+/// A validated cached directory must make a stopped hand-installed core's trading log readable.
+#[test]
+fn log_uses_directory_hint_only_after_locate_fails() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.answer_at(
+        &dir.join("logs").join("LOG_2026-01-02.log"),
+        "first\nsecond\n",
+    );
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["log", "3302", "200", &dir_text]);
+
+    assert_ok(&output);
+    assert_eq!(stdout(&output), "LOG_BEGIN\nfirst\nsecond\n");
+    let relative = sandbox.run(&["log", "3302", "200", "root/moonbot-a"]);
+    assert!(!relative.status.success());
+    assert!(stdout(&relative).is_empty());
+}
+
 /// Opening the new rule after deleting the old one or marking first could strand the changed endpoint.
 #[test]
 fn retarget_rewrites_only_the_port_and_moves_the_firewall_rule() {
@@ -477,6 +541,26 @@ fn retarget_rewrites_only_the_port_and_moves_the_firewall_rule() {
             "allow 3305/udp comment MoonBot {dir_text}|marker=3302\ndelete allow 3302/udp|marker=3302\n"
         )
     );
+}
+
+/// Deleting and re-adding the same firewall rule could leave a working core unreachable.
+#[test]
+fn retarget_to_same_port_keeps_marker_and_firewall_rule() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nufw\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["retarget", &dir_text, "3302"]);
+
+    assert_ok(&output);
+    assert_eq!(stdout(&output), "RETARGET_OK=3302\n");
+    assert_eq!(sandbox.read(&marker), "3302\nufw\nkept\n");
+    assert_eq!(sandbox.read(&sandbox.root.join("ufw_calls")), "");
 }
 
 /// Passing a leading-dash unit hint to systemctl could turn it into an option instead of a unit.

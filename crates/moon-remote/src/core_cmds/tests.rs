@@ -27,29 +27,24 @@ fn locate_reads_ours_hand_installed_and_missing_cores() {
     assert_eq!(parse_locate("LOCATE_NONE=1\n"), LocateResult::None);
 }
 
-/// Promoting an unconfirmed lone candidate could operate a stopped core on another port.
+/// Refusing an unknown-port lone candidate would make a stopped hand-installed core impossible to start.
 #[test]
-fn locate_reads_candidates_and_promotes_only_a_port_confirmed_single() {
-    let unconfirmed = "LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1|0\n";
-    let one = parse_locate(unconfirmed);
-    let LocateResult::Candidates(one) = one else {
-        panic!("expected one candidate");
-    };
-    assert_eq!(one.len(), 1);
-    assert_eq!(one[0].unit, "UNIT_01.service");
-    assert!(!one[0].ours && one[0].has_mb);
-    assert_eq!(one[0].active, Some(false));
-    assert!(!one[0].port_known);
-    assert!(matches!(
-        locate_reply(unconfirmed),
-        LocateResult::Candidates(_)
-    ));
-
-    let confirmed = "LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1|1\n";
-    let LocateResult::Found(one) = locate_reply(confirmed) else {
-        panic!("expected a port-confirmed candidate");
-    };
-    assert!(one.port_known);
+fn locate_promotes_a_lone_candidate_with_confirmed_or_unknown_port() {
+    for (port_known, flag) in [(false, 0), (true, 1)] {
+        let reply = format!("LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1|{flag}\n");
+        let LocateResult::Candidates(one) = parse_locate(&reply) else {
+            panic!("expected one candidate");
+        };
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].unit, "UNIT_01.service");
+        assert!(!one[0].ours && one[0].has_mb);
+        assert_eq!(one[0].active, Some(false));
+        assert_eq!(one[0].port_known, port_known);
+        let LocateResult::Found(one) = locate_reply(&reply) else {
+            panic!("expected a lone stopped candidate");
+        };
+        assert_eq!(one.port_known, port_known);
+    }
 
     let two = parse_locate(
         "LOCATE_CANDIDATE=UNIT_01.service|/root/moonbot-a|1|1\nLOCATE_CANDIDATE=UNIT_02.service|/root/moonbot-b|0|0\n",

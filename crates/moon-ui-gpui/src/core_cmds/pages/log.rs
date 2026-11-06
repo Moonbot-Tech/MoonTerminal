@@ -4,12 +4,11 @@ use super::*;
 
 /// Build the bounded line picker, raw log, and UTC caption.
 pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
-    let mut buttons = vec![];
-    buttons.push(Button::new("core_cmds.common.refresh", Action::Run));
-    buttons.push(
+    let buttons = vec![
+        Button::new("core_cmds.common.refresh", Action::Run),
         Button::new("core_cmds.common.copy", Action::CopyLog)
             .enabled(facts.log.as_ref().is_some_and(|l| !l.lines.is_empty())),
-    );
+    ];
     let mut page = Page::new(Kind::Log, title(view.cmd))
         .block(Block::LogControls)
         .block(Block::Buttons(buttons));

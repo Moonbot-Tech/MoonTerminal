@@ -28,12 +28,10 @@ pub fn locate(conn: &Conn, privilege: &Privilege, port: u16) -> anyhow::Result<L
     Ok(locate_reply(&out.stdout_text()))
 }
 
-/// Promote only a uniquely stopped candidate whose installation confirms the requested port.
+/// Promote a lone stopped candidate whether its port is confirmed or unknown.
 fn locate_reply(text: &str) -> LocateResult {
     match parse_locate(text) {
-        LocateResult::Candidates(mut candidates)
-            if candidates.len() == 1 && candidates[0].port_known =>
-        {
+        LocateResult::Candidates(mut candidates) if candidates.len() == 1 => {
             let candidate = candidates.remove(0);
             LocateResult::Found(Located {
                 ours: false,
@@ -80,16 +78,21 @@ fn service_output(out: Output) -> anyhow::Result<String> {
     parse_service(&out.stdout_text())
 }
 
-/// Read at most the selected number of lines from the located core's newest log.
+/// Read at most the selected number of lines, using `dir_hint` only if location finds no core.
 pub fn log_tail(
     conn: &Conn,
     privilege: &Privilege,
     port: u16,
     n: LogLines,
+    dir_hint: Option<&str>,
 ) -> anyhow::Result<LogTail> {
     let port = port.to_string();
     let n = n.count().to_string();
-    let out = privilege.run_raw(conn, &command("log", &[&port, &n]), &[], STEP_TIMEOUT)?;
+    let mut args = vec![port.as_str(), n.as_str()];
+    if let Some(dir) = dir_hint {
+        args.push(dir);
+    }
+    let out = privilege.run_raw(conn, &command("log", &args), &[], STEP_TIMEOUT)?;
     anyhow::ensure!(out.ok(), "the core log could not be read");
     Ok(parse_log(&out.stdout_text()))
 }
