@@ -81,26 +81,22 @@ pub(crate) fn typed_build_name(raw: &str) -> Option<String> {
 ///     initial: Text to start with -- the name a failed attempt used, so a retry corrects it
 ///         instead of retyping it. `None` starts empty.
 ///     window: Window that will host the field.
-///     cx: Application context used to create and focus the input.
+///     cx: Application context used to create the input.
 ///
 /// Returns:
-///     The input state, already focused.
+///     The input state; its host assigns focus after opening.
 pub(crate) fn build_name_input(
     initial: Option<String>,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<MoonInputState> {
-    let input = cx.new(|cx| {
+    cx.new(|cx| {
         let state = MoonInputState::new(window, cx);
         match initial {
             Some(text) => state.default_value(text),
             None => state,
         }
-    });
-    input
-        .clone()
-        .update(cx, |input, cx| input.focus(window, cx));
-    input
+    })
 }
 
 /// The hint under the build-name field: every accepted form written out in full, and what `ALL`
@@ -216,6 +212,7 @@ pub(crate) fn open_named_dialog(
     app: &mut App,
 ) {
     let input = build_name_input(initial, window, app);
+    let initial_focus = input.clone();
 
     window.open_unique_moon_dialog(NAMED_DIALOG_ID, app, move |dialog, _window, cx| {
         let p = MoonPalette::active(cx);
@@ -276,6 +273,7 @@ pub(crate) fn open_named_dialog(
             })
             .footer(named_footer(confirm_input, confirm_backend, cores, p))
     });
+    initial_focus.update(app, |input, cx| input.focus(window, cx));
 }
 
 /// Cancel and Done for the named-build prompt.

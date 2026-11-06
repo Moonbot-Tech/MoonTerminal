@@ -156,13 +156,7 @@ pub(crate) fn open_save_dialog(
         name: cx.new(|cx| MoonInputState::new(window, cx)),
         cores,
     });
-    // The dialog focuses its own handle on open and MoonInput does not self-focus, so without this
-    // the single field of a one-field modal has to be clicked before it accepts a keystroke.
-    state
-        .read(app)
-        .name
-        .clone()
-        .update(app, |input, cx| input.focus(window, cx));
+    let initial_focus = state.read(app).name.clone();
     window.open_unique_moon_dialog(SAVE_DIALOG_ID, app, move |dialog, _window, cx| {
         let p = MoonPalette::active(cx);
         let body = state.clone();
@@ -176,6 +170,8 @@ pub(crate) fn open_save_dialog(
         .content(move |content, _window, _cx| content.child(body.clone()))
         .footer(save_footer(confirm, p))
     });
+    // Let Root capture the previous focus before the field takes it.
+    initial_focus.update(app, |input, cx| input.focus(window, cx));
 }
 
 /// Cancel and Create for the save modal.
