@@ -11,7 +11,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonPalette, h_flex, v_flex,
+    MoonAlert, MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonNotification,
+    MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -232,20 +233,57 @@ pub(super) fn own_bot(view: &Entity<CoreExpertView>, rm: &RemoteCtx<'_>, cx: &Ap
         .into_any_element()
 }
 
-/// The PIN to type into the channel, as the core generated it, or a dash before it did.
+/// The PIN to type into the channel, with a copy action while the core has supplied one.
 pub(super) fn pin(rm: &RemoteCtx<'_>, p: MoonPalette, cx: &App) -> AnyElement {
     let pin = rm
         .snapshot
         .and_then(|s| s.channel_pin.clone())
         .filter(|pin| !pin.is_empty());
     let shown = pin.is_some();
-    div()
-        .font_family(design::mono())
-        .child(caption(
-            pin.unwrap_or_else(|| "—".to_string()),
-            shown && rm.fresh,
-            p,
-            cx,
-        ))
+    h_flex()
+        .debug_selector(|| "exp-sp-pin-row".to_string())
+        .w_full()
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        .child(
+            div()
+                .debug_selector(|| "exp-sp-pin-value".to_string())
+                .flex_none()
+                .font_family(design::mono())
+                .child(caption(
+                    pin.clone().unwrap_or_else(|| "—".to_string()),
+                    shown && rm.fresh,
+                    p,
+                    cx,
+                )),
+        )
+        .children(pin.map(|pin| {
+            div()
+                .debug_selector(|| "exp-sp-copy-pin".to_string())
+                .flex_none()
+                .child(
+                    MoonButton::new("exp-sp-copy-pin-button")
+                        .xsmall()
+                        .mono(false)
+                        .label(t!("core_cmds.common.copy").to_string())
+                        .variant(MoonButtonVariant::Neutral)
+                        // Keep the full localized label beside the PIN at the window minimum.
+                        .padding_x(4.0)
+                        .on_click(move |_, window, app| {
+                            app.write_to_clipboard(ClipboardItem::new_string(pin.clone()));
+                            window.push_notification(
+                                MoonNotification::success(
+                                    t!("core_expert.remote_pin_copied").to_string(),
+                                ),
+                                app,
+                            );
+                        })
+                        .render(),
+                )
+                .into_any_element()
+        }))
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;
