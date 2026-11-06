@@ -25,6 +25,9 @@ use super::types::{ChartViewGpu, SIDE_VOLUME_CAPACITY, SideVolumeGpu, VolumeStyl
 const SIDE_CAPACITY: u32 = SIDE_VOLUME_CAPACITY as u32;
 const SIDE_VOLUME_HLSL: &str = include_str!("shaders/side_volume.hlsl");
 
+#[cfg(test)]
+mod tests;
+
 struct SidePipe {
     vs: ID3D11VertexShader,
     ps: ID3D11PixelShader,
@@ -37,9 +40,11 @@ struct SidePipe {
     view_cb: ID3D11Buffer,
 }
 
+/// Retain the latest samples so device replacement can replay them without a market revision.
 pub struct SideVolumeLayer {
     pipe: Option<SidePipe>,
-    pending: Option<Vec<SideVolumeGpu>>,
+    data: Vec<SideVolumeGpu>,
+    data_dirty: bool,
     count: u32,
     style: VolumeStyleGpu,
     style_dirty: bool,
@@ -47,10 +52,12 @@ pub struct SideVolumeLayer {
 }
 
 impl SideVolumeLayer {
+    /// Create an empty layer whose first prepare initializes its native resources.
     pub fn new() -> Self {
         Self {
             pipe: None,
-            pending: None,
+            data: Vec::new(),
+            data_dirty: false,
             count: 0,
             style: VolumeStyleGpu::default(),
             style_dirty: true,
@@ -60,7 +67,8 @@ impl SideVolumeLayer {
 
     /// Fully replaces the bucket set after the series was re-read.
     pub fn set(&mut self, data: Vec<SideVolumeGpu>) {
-        self.pending = Some(data);
+        self.data = data;
+        self.data_dirty = true;
     }
 
     /// Idempotently sets the band style: kind, height, opacity and normalisation.
@@ -81,7 +89,7 @@ impl SideVolumeLayer {
         self.style.m3[0] >= 0.5
     }
 
-    /// Uploads the pending buffer and style constants during `prepare_gpu`.
+    /// Upload changed samples and constants, replaying retained data after device replacement.
     pub fn prepare(
         &mut self,
         device: &ID3D11Device,
@@ -92,17 +100,19 @@ impl SideVolumeLayer {
             self.pipe = None;
             self.count = 0;
             self.style_dirty = true;
+            self.data_dirty = true;
         }
         if self.pipe.is_none() {
             self.pipe = Some(Self::create_pipe(device));
         }
         let pipe = self.pipe.as_ref().unwrap();
-        if let Some(data) = self.pending.take() {
+        if std::mem::take(&mut self.data_dirty) {
+            let data = &self.data;
             let cap = SIDE_CAPACITY as usize;
             let data: &[SideVolumeGpu] = if data.len() > cap {
                 &data[data.len() - cap..]
             } else {
-                &data
+                data
             };
             if !data.is_empty() {
                 update_dynamic(context, &pipe.buffer, data);

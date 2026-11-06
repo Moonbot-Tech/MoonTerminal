@@ -7,6 +7,8 @@ use moon_chart::trade_marks::{
 use super::*;
 use crate::chartdx::types::mk_of;
 
+mod recovery;
+
 fn marks() -> Vec<TradeMark> {
     (0..5)
         .map(|i| TradeMark {

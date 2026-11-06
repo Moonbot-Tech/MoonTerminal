@@ -3,6 +3,53 @@
 use super::{ChartCross, ComboLayer, TickTimeOrder};
 use crate::chartdx::types::reset_cross_ring;
 
+/// A stopped producer cannot refill a lost device: the layer must restore its resident ring itself.
+#[test]
+fn native_device_recreation_preserves_uploaded_ticks_without_new_history() {
+    use crate::chartdx::gpu::test_support::TestTarget;
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(4, 4);
+    let target = TestTarget::new(1000, 600);
+    let (view, area, _) = follow_pane();
+    let view = gpu_of(&view, area);
+    layer.reset(vec![
+        cross(1.0, 0, 1.0),
+        cross(2.0, 1, 2.0),
+        cross(3.0, 0, 3.0),
+    ]);
+    layer.prepare(&view, &target.device, &target.context, &target.raw(1));
+    layer.append(&[cross(4.0, 1, 4.0), cross(5.0, 0, 5.0)]);
+    layer.prepare(&view, &target.device, &target.context, &target.raw(1));
+    let bytes = 4 * std::mem::size_of::<ChartCross>();
+    let expected = target.buffer_bytes(&layer.pipe.as_ref().unwrap().buffer, bytes);
+    let expected_head = layer.head;
+    for generation in [2, 3] {
+        let recovered = TestTarget::new(1000, 600);
+        layer.prepare(
+            &view,
+            &recovered.device,
+            &recovered.context,
+            &recovered.raw(generation),
+        );
+        assert_eq!(
+            layer.count, 4,
+            "recovery must not wait for another market event"
+        );
+        assert_eq!(layer.head, expected_head);
+        assert_eq!(
+            recovered.buffer_bytes(&layer.pipe.as_ref().unwrap().buffer, bytes),
+            expected
+        );
+    }
+    layer.reset(Vec::new());
+    let cleared = TestTarget::new(1000, 600);
+    layer.prepare(&view, &cleared.device, &cleared.context, &cleared.raw(4));
+    assert_eq!(
+        layer.count, 0,
+        "a queued clear must win over retained history"
+    );
+}
+
 /// Reinstating overlap/wrap guards rebakes every dense live append after offscreen eviction.
 #[test]
 fn offscreen_eviction_with_overlapping_append_keeps_incremental_bake() {

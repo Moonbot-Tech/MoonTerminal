@@ -125,13 +125,12 @@ impl OrderBookLayer {
         if bw <= 0.0 || bh <= 0.0 {
             return false;
         }
-        // Device loss drops the pipeline and texture and resets the level count. This layer keeps no
-        // CPU copy and cannot reupload by itself, so it remains empty until a later `set()` queues
-        // fresh levels.
+        // Replay the retained levels on a new device, including an update already queued by set().
         if device_changed(&mut self.device_generation, gpu) {
             self.pipe = None;
             self.tex = None;
             self.count = 0;
+            self.pending_set = true;
         }
         if self.pipe.is_none() {
             self.pipe = Some(Self::create_pipe(device, INITIAL_LEVEL_BUFFER_CAPACITY));

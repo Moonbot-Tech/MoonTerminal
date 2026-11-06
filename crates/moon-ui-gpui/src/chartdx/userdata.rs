@@ -203,31 +203,21 @@ impl UserDataLayer {
         true
     }
 
-    /// Prepare phase: creates resources and uploads pending user geometry.
+    /// Create resources and upload pending geometry, replaying the visible union after device loss.
     pub fn prepare(
         &mut self,
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         gpu: &RawGpuAccess,
     ) {
-        // Device loss recreates empty buffers and resets their counters. It does not queue pending
-        // geometry; data returns only after a later order sync or generation change calls `set()`.
-        // Until then the layer remains empty.
         if device_changed(&mut self.device_generation, gpu) {
             self.pipe = None;
-            self.zone_count = 0;
-            self.hl_count = 0;
-            self.seg_count = 0;
-            self.mk_count = 0;
-            // The GPU copy is gone; a patch has nothing to patch until the next `set`.
-            self.mk_cpu.clear();
-            self.mk_dirty = false;
-            self.markers_patched = false;
-            self.last_zones.clear();
-            self.last_hlines.clear();
-            self.last_segs.clear();
-            self.last_markers.clear();
-            self.cl_count = 0;
+            if self.pending.is_none() {
+                let mut retained = std::mem::take(&mut self.spare);
+                // mk_cpu owns the latest hover patch; spare.mk is the previous marker allocation.
+                std::mem::swap(&mut retained.mk, &mut self.mk_cpu);
+                self.pending = Some(retained);
+            }
         }
         if self.pipe.is_none() {
             // A fresh pipe holds empty buffers: the clusters' CPU copy goes up again below.
@@ -307,11 +297,8 @@ impl UserDataLayer {
         };
         update_dynamic(context, &pipe.view_cb, &[*view]);
         let vp = full_viewport(gpu);
-        // Deliberately NOT counted as `CHART_USER_DRAW`, unlike the Metal and wgpu zone draws: that
-        // counter carries a FireTest per-frame ceiling sized for the overlay pass alone, and a
-        // second bump per pane per base rebuild would eat its headroom. It would not have caught
-        // this layer's real failure either — the draw was issued all along; the pixels were painted
-        // over afterwards.
+        // Zones belong to the base bake. CHART_USER_DRAW counts the separate overlay pass once
+        // per pane on every backend, regardless of how many primitive buffers it contains.
         unsafe {
             context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
             context.RSSetViewports(Some(&[vp]));

@@ -123,3 +123,17 @@ fn book_debt() {
         "paid debt must settle"
     );
 }
+
+/// Replacing the native device must replay the latest CPU book without waiting for a new feed.
+#[test]
+fn quiet_book_survives_device_replacement() {
+    let engine = book_chart();
+    let before = draw(&engine, &TestTarget::new(320, 200), 1);
+    assert_eq!(stripe(&before), &[0, 255, 0, 255]);
+    let after = draw(&engine, &TestTarget::new(320, 200), 2);
+    assert_eq!(
+        stripe(&after),
+        stripe(&before),
+        "device recovery lost retained levels"
+    );
+}

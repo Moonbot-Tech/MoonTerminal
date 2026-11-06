@@ -111,4 +111,36 @@ impl TestTarget {
         pixels
     }
 
+    /// Inspect uploaded bytes on this device instead of trusting the layer's CPU dirty flags.
+    pub(crate) fn buffer_bytes(&self, buffer: &ID3D11Buffer, len: usize) -> Vec<u8> {
+        let mut desc = D3D11_BUFFER_DESC::default();
+        unsafe {
+            buffer.GetDesc(&mut desc);
+        }
+        assert!(len <= desc.ByteWidth as usize);
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        desc.MiscFlags = 0;
+        desc.StructureByteStride = 0;
+        let mut staging = None;
+        unsafe {
+            self.device
+                .CreateBuffer(&desc, None, Some(&mut staging))
+                .unwrap();
+        }
+        let staging: ID3D11Buffer = staging.unwrap();
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.context.CopyResource(&staging, buffer);
+            self.context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .unwrap();
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(mapped.pData as *const u8, len).to_vec() };
+        unsafe {
+            self.context.Unmap(&staging, 0);
+        }
+        bytes
+    }
 }

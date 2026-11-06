@@ -116,8 +116,7 @@ impl CandleLayer {
         gpu: &RawGpuAccess,
     ) {
         if device_changed(&mut self.device_generation_seen, gpu) {
-            // A lost device invalidates these resources. The data-state orchestrator retains the
-            // data and reuploads it by revision, so recreating the pipeline and resetting is enough.
+            // Replay the retained window immediately; a quiet source may never send another revision.
             self.pipe = None;
             self.count = 0;
             self.style_dirty = true;
