@@ -36,9 +36,13 @@ impl SettingsView {
             });
         });
         let open_dir = dir.clone();
+        let shown_dir = dir.display().to_string();
+        // A capture run's data folder is a temporary one, named per process and holding the user's name.
+        #[cfg(uidoc)]
+        let shown_dir = crate::uidoc::steady_folder(&dir, shown_dir);
         folder_el(
             FolderView {
-                dir: dir.display().to_string(),
+                dir: shown_dir,
                 open: self.more_open.contains("trade-sounds-own-folder"),
                 scanned,
                 stats,
