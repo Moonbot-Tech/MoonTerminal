@@ -48,9 +48,10 @@ fn moving_a_key_keeps_the_key_and_changes_only_the_endpoint() {
 }
 
 #[test]
+/// Corrupt the stored hash itself: changing random payload bytes can collide in the legacy checksum.
 fn a_container_whose_own_hash_fails_is_refused() {
     let mut packet = ConnectionPacket::generate(VPS, 3000, TransportVersion::V0).unwrap();
-    packet.container[40] ^= 0xFF;
+    packet.container[CONTAINER_HASHED] ^= 1;
     let text = packet.export().unwrap();
     // The outer checksum is fresh, so moonproto still reads it; a core would refuse the key.
     assert!(parse_key_info(&text).is_some());
