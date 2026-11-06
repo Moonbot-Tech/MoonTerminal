@@ -45,8 +45,11 @@ use cities::City;
 /// timestamp outside chrono's year range can fail the conversion — the epoch fallback keeps the
 /// header drawing rather than panicking a window on it.
 fn now_utc() -> DateTime<Utc> {
-    DateTime::from_timestamp_millis(moon_core::util::now_unix_ms_i64())
-        .unwrap_or(DateTime::UNIX_EPOCH)
+    let now_ms = moon_core::util::now_unix_ms_i64();
+    // A picture of the interface should not differ from the last one by the second it was taken in.
+    #[cfg(uidoc)]
+    let now_ms = crate::uidoc::steady_clock_ms(now_ms);
+    DateTime::from_timestamp_millis(now_ms).unwrap_or(DateTime::UNIX_EPOCH)
 }
 
 /// How long a resolved system zone is reused.

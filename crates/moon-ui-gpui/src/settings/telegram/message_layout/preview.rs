@@ -360,8 +360,11 @@ fn report_table(table: &PreviewTable, window: &Window, cx: &App) -> AnyElement {
 
 /// Use the shared safe system offset rather than Chrono's fallible Windows Local path.
 fn local_clock() -> chrono::DateTime<chrono::Utc> {
-    let millis = moon_core::util::time::now_unix_ms_i64()
-        .saturating_add(moon_core::util::time::local_utc_offset_ms());
+    let now_ms = moon_core::util::time::now_unix_ms_i64();
+    // A picture of the interface should not differ from the last one by the minute it was taken in.
+    #[cfg(uidoc)]
+    let now_ms = crate::uidoc::steady_clock_ms(now_ms);
+    let millis = now_ms.saturating_add(moon_core::util::time::local_utc_offset_ms());
     chrono::DateTime::from_timestamp_millis(millis).unwrap_or(chrono::DateTime::UNIX_EPOCH)
 }
 

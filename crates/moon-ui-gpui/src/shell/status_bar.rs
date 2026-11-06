@@ -52,6 +52,9 @@ impl Shell {
         mode_suggestions: &HashMap<CoreId, Option<TransportVersion>>,
         cx: &App,
     ) -> impl IntoElement {
+        // A picture of the interface should not differ from the last one because of the machine's load.
+        #[cfg(uidoc)]
+        let (snap, fps) = crate::uidoc::steady_status(snap, fps);
         let all_ok = conn.total > 0 && conn.ready == conn.total;
         let any_failed = conn
             .down
