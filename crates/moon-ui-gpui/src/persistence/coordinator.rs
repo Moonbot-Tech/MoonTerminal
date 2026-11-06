@@ -17,6 +17,8 @@ use crate::window::detached::DetachedSpec;
 #[cfg(test)]
 mod tests;
 
+pub(crate) mod firetest;
+
 /// Immutable values written by one serial persistence request.
 #[derive(Clone)]
 pub(crate) struct PersistenceSnapshot {

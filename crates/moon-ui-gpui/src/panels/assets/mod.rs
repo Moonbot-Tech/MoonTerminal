@@ -82,6 +82,9 @@ pub(super) enum AssetsScope {
 
 /// Assets dock panel or standalone window content.
 pub struct AssetsView {
+    /// Native FireTest form uses the ordinary Assets host, never a diagnostic window.
+    #[cfg(debug_assertions)]
+    pub(crate) firetest_f1: Option<Entity<crate::firetest::f1::Form>>,
     pub(super) backend: Entity<Backend>,
     scope: AssetsScope,
     /// Whether this view draws its own OS-window frame and persists its geometry. This is true for
@@ -389,6 +392,8 @@ impl AssetsView {
         .detach();
 
         let mut this = Self {
+            #[cfg(debug_assertions)]
+            firetest_f1: None,
             backend,
             scope,
             windowed,

@@ -1027,7 +1027,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 } else {
                     String::new()
                 };
-                if let Some(sample) = crate::diag::take_sample(ms) {
+                if let Some(sample) = cx.update(|cx| crate::diag::take_sample(ms, cx)) {
                     crate::diag::write_sample(ms, &sample, &ctx);
                     cx.update(|cx| {
                         coord_backend.update(cx, |b, _| {
@@ -1051,7 +1051,16 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             i as f32 * 40.0,
         );
     }
-    if firetest_config.is_none() {
+    if firetest_config.is_some() {
+        // The run starts with the real group window visible, before settling or measuring idle.
+        let first_window = cfg
+            .servers
+            .iter()
+            .find_map(|server| backend.read(cx).group_windows.get(&server.group).copied());
+        if let Some(handle) = first_window {
+            let _ = handle.update(cx, |_, window, _| window.activate_window());
+        }
+    } else {
         // Windows replaces the executable in place; macOS opens the release .dmg. Linux has no
         // update path, so it never spends GitHub quota on discovery.
         #[cfg(any(windows, target_os = "macos"))]

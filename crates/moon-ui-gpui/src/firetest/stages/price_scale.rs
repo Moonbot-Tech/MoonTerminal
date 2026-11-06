@@ -82,9 +82,20 @@ pub(in crate::firetest) fn verify_20_then_request_auto(
 pub(in crate::firetest) fn verify_auto(
     runtime: &mut Runtime,
     backend: &mut Backend,
-    _cx: &mut Context<Backend>,
+    cx: &mut Context<Backend>,
 ) -> StageStep {
-    runtime.verify_price_scale(backend, None).into()
+    match runtime.verify_price_scale(backend, None) {
+        Ok(()) => {
+            runtime.start_core_status_probe(backend, cx);
+            runtime.application_probe = Some(crate::firetest::application::start(
+                backend,
+                runtime.opened_group.clone().unwrap_or_default(),
+                cx,
+            ));
+            StageStep::Next
+        }
+        Err(error) => StageStep::Fail(error),
+    }
 }
 
 impl Runtime {

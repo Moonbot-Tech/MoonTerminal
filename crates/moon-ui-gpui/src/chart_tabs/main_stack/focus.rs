@@ -3,6 +3,49 @@
 use super::*;
 
 impl MainChartStack {
+    /// Exercise the real Main stack with two synthetic markets backed by the same generated history.
+    pub(crate) fn firetest_dense_pair(
+        &mut self,
+        core: CoreId,
+        cx: &mut Context<Self>,
+    ) -> [crate::chartdx::ChartDataHandle; 2] {
+        use moon_core::fixture::dense::{CAPACITY, MARKETS};
+        use moon_core::market::{CandleViewCfg, candles::CANDLE_ZONE_MAX};
+        let handles = MARKETS.map(|market| {
+            self.open_or_focus(
+                core,
+                market.to_string(),
+                crate::backend::ChartHistoryScope::Default,
+                cx,
+            );
+            let entry = &self.charts[self.active.expect("opened Main chart")];
+            entry.panel.update(cx, |panel, cx| {
+                let mut graphics = panel.effective_chart_graphics(cx);
+                graphics.hvol_enabled = true;
+                graphics.candle_volume_sides = true;
+                panel.set_chart_graphics(Some(graphics), cx);
+                panel.set_candle_view(
+                    Some(CandleViewCfg {
+                        tf_min: 1,
+                        trade_candles: if market == MARKETS[1] {
+                            CANDLE_ZONE_MAX
+                        } else {
+                            0
+                        },
+                        hide_candles: 0,
+                        trades_limit: CAPACITY as u32,
+                        ..CandleViewCfg::default()
+                    }),
+                    cx,
+                );
+                panel.debug_data_handle()
+            })
+        });
+        self.set_layout_columns(Some(1), Some(true), None, cx);
+        self.toggle_from_chart(self.active.expect("opened Main chart"), cx);
+        handles
+    }
+
     pub(crate) fn active_target(&self, cx: &App) -> Option<(CoreId, String)> {
         self.active
             .and_then(|ix| self.charts.get(ix))

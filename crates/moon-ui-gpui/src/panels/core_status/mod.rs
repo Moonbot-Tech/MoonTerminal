@@ -488,4 +488,9 @@ impl CoreStatusView {
     pub fn table_state(&self) -> Entity<MoonDataTableState> {
         self.table_state.clone()
     }
+
+    /// Let FireTest observe completed row snapshots without forcing a rebuild or repaint.
+    pub(crate) fn firetest_rows_generation(&self) -> u64 {
+        self.rows_generation
+    }
 }

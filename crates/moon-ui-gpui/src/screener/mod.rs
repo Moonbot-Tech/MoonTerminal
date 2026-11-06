@@ -18,4 +18,5 @@ mod table;
 mod view;
 
 pub(crate) use table::vol_fmt;
+pub(crate) use view::ScreenerView;
 pub use view::open;

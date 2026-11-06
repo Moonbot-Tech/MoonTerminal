@@ -94,6 +94,9 @@ pub(in crate::chartdx) struct RenderState {
     pub(in crate::chartdx) firetest_text_layer: GpuCanvasRetainedTextLayer,
     pub(in crate::chartdx) firetest_text_revision: u64,
     pub(in crate::chartdx) firetest_force_present: bool,
+    /// One-shot native image capture; absent during ordinary rendering.
+    #[cfg(windows)]
+    pub(in crate::chartdx) firetest_capture: Option<super::recovery_probe::Capture>,
     pub(in crate::chartdx) ui_palette: moon_ui::MoonPalette,
     /// Top-left chart-slot origin in the backbuffer. UI cursor coordinates are local slot device
     /// pixels, while own-pass renders in window coordinates.
@@ -1342,6 +1345,28 @@ impl RenderState {
                         gpu,
                     );
                     pr.finish_order_present(present_ms);
+                }
+                if matches!(
+                    self.firetest_capture,
+                    Some(super::recovery_probe::Capture::Requested)
+                ) {
+                    let image = self
+                        .panes
+                        .iter()
+                        .find(|pane| pane.active)
+                        .ok_or_else(|| "recovery has no active chart".to_string())
+                        .and_then(|pane| {
+                            super::recovery_probe::capture(
+                                &device,
+                                &context,
+                                &rtv,
+                                bounds_clip(pane.pane_bounds, res),
+                                generation,
+                            )
+                            .map(std::sync::Arc::new)
+                            .map_err(|error| error.to_string())
+                        });
+                    self.firetest_capture = Some(super::recovery_probe::Capture::Ready(image));
                 }
                 unsafe {
                     context.RSSetState(prev_rs.as_ref());

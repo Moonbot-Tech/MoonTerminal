@@ -82,7 +82,11 @@ pub struct ScreenerView {
 
 impl ScreenerView {
     /// Retain control state while the first market publication is prepared off-thread.
-    fn new(backend: Entity<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        backend: Entity<Backend>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let coin_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC"));
         let dvol_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("500k"));
         for input in [&coin_input, &dvol_input] {
@@ -232,6 +236,11 @@ impl ScreenerView {
                 .await;
             let _ = this.update(cx, |this, cx| this.rebuild(cx));
         }));
+    }
+
+    /// Expose admitted refreshes to the native event-routing regression probe.
+    pub(crate) fn firetest_prepare_sequence(&self) -> u64 {
+        self.prepare_seq
     }
 
     /// Prepare a coherent feed publication off-thread; the current controls remain immediate.

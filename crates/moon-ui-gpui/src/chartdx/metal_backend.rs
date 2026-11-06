@@ -1052,7 +1052,6 @@ impl MetalLayers {
         // on purpose: with a backdrop the grid draws lines only, and a fill over them is what every
         // charting package does. Still below the candles, which is where a band belongs.
         if !self.zones.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_uniform(encoder, 0, self.view_uniform.buffer());
             set_storage(encoder, 1, self.zone_buffer.buffer());
             draw(encoder, &pipelines.zone, 6, self.zones.len() as u64);
@@ -1158,27 +1157,25 @@ impl MetalLayers {
         }
     }
 
+    /// Draw one overlay pass; the diagnostic counts passes, not populated primitive buffers.
     fn draw_user_layers(&self, encoder: &RenderCommandEncoderRef) {
+        crate::diag::bump(&crate::diag::CHART_USER_DRAW);
         let pipelines = self.pipelines.as_ref().unwrap();
         set_uniform(encoder, 0, self.view_uniform.buffer());
         // The trade clusters go first: over the candles, under every order line and marker.
         if !self.clusters.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.cluster_buffer.buffer());
             draw(encoder, &pipelines.marker, 6, self.clusters.len() as u64);
         }
         if !self.hlines.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.hline_buffer.buffer());
             draw(encoder, &pipelines.hline, 6, self.hlines.len() as u64);
         }
         if !self.segs.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.seg_buffer.buffer());
             draw(encoder, &pipelines.seg, 6, self.segs.len() as u64);
         }
         if !self.markers.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.marker_buffer.buffer());
             draw(encoder, &pipelines.marker, 6, self.markers.len() as u64);
         }

@@ -300,7 +300,15 @@ impl Runtime {
             check_storm_load(&mut fail, prefix, phase, &baseline);
         }
         if self.config.text_labels > 0 {
-            // The one gate that belongs to a single phase: only the text storm has a text layer.
+            firetest_info(&format!(
+                "[firetest] static_text visible_labels_submitted={:.0}/s retained_labels={}",
+                static_text_avg_rate("firetest_text_visible"),
+                self.config.text_labels
+            ));
+            if static_text_avg_rate("firetest_text_visible") <= 0.0 {
+                fail.push("static text stress submitted no visible labels".into());
+            }
+            // Only the text storm has a text layer; cached submissions must not rebuild its runs.
             check_max(
                 &mut fail,
                 "firetest_text_cold",

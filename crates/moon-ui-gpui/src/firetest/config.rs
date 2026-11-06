@@ -83,7 +83,11 @@ impl Config {
         let market = std::env::var("MOON_FIRETEST_MARKET")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_MARKET.to_string());
+            .unwrap_or_else(|| {
+                moon_core::fixture::active()
+                    .map_or(DEFAULT_MARKET, |fixture| fixture.market())
+                    .to_string()
+            });
         let mouse_hz = std::env::var("MOON_FIRETEST_MOUSE_HZ")
             .ok()
             .and_then(|s| s.parse::<f64>().ok())

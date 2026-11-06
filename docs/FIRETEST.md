@@ -66,7 +66,13 @@ Static text stress is part of standard `chart-smoke`: FireTest itself turns on
 “draw every string over one viewport”: the layer bakes the whole set,
 and present frames draw only the visible label-range. So the test checks exactly
 retained buffer + culling, not a pointless GPU flood of thousands of unreadable
-labels. New shared checks are added as stages of this same run. Narrow
+labels. The mouse geometry carries a weak handle to the same chart that receives the text load;
+another painted window cannot silently redirect the storm. `firetest_text_visible` counts
+successfully submitted visible labels even when the retained layer is cached. The text storm
+fails if this counter stays zero; accepting the configuration alone does not prove execution.
+`userdata_draw` counts one overlay pass per pane on every backend, including an empty pass;
+zones belong to the base bake, and individual primitive buffers do not add another pass.
+New shared checks are added as stages of this same run. Narrow
 diagnostic scenarios are allowed only when the shared run gets in the way of isolating
 another problem, as `order-cancel-lag` for the delay of showing an order cancel.
 
@@ -98,9 +104,10 @@ a run where `news_render` is visible together with a non-zero `pulse_tick`.
 ## The arrival frame: the `arrival_flash` stage
 
 Right after `idle_floor` and in the same cold mode comes `arrival_flash`: FireTest itself lights
-the arrival frame on EVERY live chart and keeps it lit for the whole window (re-lights every
+the arrival frame on EVERY scene-visible chart and keeps it lit for the whole window (re-lights every
 2400 ms, because own-pass extinguishes it after 2600 ms). Then it extinguishes it explicitly — `baseline` must not
-inherit a dying frame.
+inherit a dying frame. Hidden retained tabs do not enter the chart divisor. Cleanup still clears
+their flashes, including a chart hidden during the measurement window.
 
 The stage exists because the cost of the frame cannot be derived from reading the code and cannot be waited for:
 a live detect is not scheduled, and a run that got not a single arrival reads
@@ -255,3 +262,32 @@ Failure writes `result=FAIL FIRETEST FAIL ... reasons=...` or
 `result=FAIL FIRETEST FAIL reason=...` and exits the process with code `2`.
 
 The test is deliberately red on regressions of the form “on mousemove someone again did a top-down render, notify, a heavy query, an allocating render path or an expensive GPU frame”. A screenshot is not a criterion of this test; FireTest checks behaviour and load.
+
+
+## Native frame-debt check
+
+Debug `chart-smoke` uses the existing cooldown after GPU recovery to exercise a real MoonInput in
+MoonResizablePanelGroup inside the ordinary Assets window. It changes the first panel width during
+prepaint and the input text during paint, then issues no rescue mouse, resize, refresh, or notify.
+The native frame loop must paint the final text and geometry and settle; repeating the same setup
+must settle again. `[firetest] f1_native` records the completed-frame text check, measured width and
+quiet render count. The inspector collects painted text with a zero-width inspector panel; no new
+window or alternative application host is created. This debug-only check complements the runtime
+unit tests and does not qualify final GPU plot pixels or release-mode text collection.
+
+The ordinary dev profile deliberately disables `debug_assertions`, so it logs
+`f1_native=SKIPPED reason=debug_assertions_disabled`. For this diagnostic check, raise assertions
+only for the runtime, its inspector proc macros, and terminal packages; backend packages keep their
+normal validation policy. Run this from a VS 2022 developer shell (`vcvars64.bat`), as in the Windows
+instructions above:
+
+```powershell
+cargo build -p moon-ui-gpui --bin moonterminal --target x86_64-pc-windows-msvc `
+  --config profile.dev.package.moon-gpui.debug-assertions=true `
+  --config profile.dev.package.moon-gpui-macros.debug-assertions=true `
+  --config profile.dev.package.moon-ui-gpui.debug-assertions=true
+```
+
+Then run that executable with `--fixture dense --debug-script chart-smoke`. Use the ordinary profile
+for the separate full performance verdict. Quietness requires exactly zero additional form renders
+between two consecutive native callbacks; an FPS-based allowance cannot establish quiescence.

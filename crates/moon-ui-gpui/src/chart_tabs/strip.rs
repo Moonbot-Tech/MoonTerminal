@@ -31,6 +31,7 @@ impl Render for ChartTabs {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::CHART_TABS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::CHART_TABS_RENDER_US);
+        crate::firetest::dense::install_main(&self.main, &self.backend, &self.group, window, cx);
         // Snapshot tabs so callbacks do not retain a borrow of `self.add`: identity, label, width
         // count, unread badge count, and detachability.
         let mut tabs: Vec<(Tab, String, usize, usize, bool)> =

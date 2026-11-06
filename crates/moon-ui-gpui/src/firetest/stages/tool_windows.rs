@@ -5,7 +5,7 @@
 //! created a duplicate would still leave a window under each field, and only the changed id
 //! exposes it.
 
-use gpui::Context;
+use gpui::{AppContext as _, Context};
 
 use crate::Backend;
 
@@ -49,6 +49,59 @@ pub(in crate::firetest) fn verify_dedup(
 }
 
 impl Runtime {
+    /// Retain an active status entity to check that its cache progresses without input.
+    pub(in crate::firetest) fn start_core_status_probe(
+        &self,
+        backend: &Backend,
+        cx: &mut Context<Backend>,
+    ) {
+        let Some(window) = backend.assets_window else {
+            return;
+        };
+        let backend = cx.entity();
+        let group = self.opened_group.clone().unwrap_or_default();
+        cx.defer(move |cx| {
+            let panel = window.update(cx, |_, window, cx| {
+                cx.new(|cx| {
+                    crate::panels::CoreStatusView::restored_group(
+                        backend.clone(),
+                        group,
+                        window,
+                        cx,
+                    )
+                })
+            });
+            if let Ok(panel) = panel {
+                let generation = panel.read(cx).firetest_rows_generation();
+                backend.update(cx, |backend, _| {
+                    if let Some(runtime) = &mut backend.firetest {
+                        runtime.core_status_probe = Some((panel, generation));
+                    }
+                });
+            }
+        });
+    }
+
+    /// A quiet core still needs elapsed ages and warning graphs in active panels to advance.
+    pub(in crate::firetest) fn verify_core_status_probe(
+        &self,
+        cx: &gpui::App,
+    ) -> Result<(), String> {
+        let (panel, before) = self
+            .core_status_probe
+            .as_ref()
+            .ok_or("core status probe was not constructed")?;
+        let after = panel.read(cx).firetest_rows_generation();
+        if after == *before {
+            return Err("core status cache stopped during the quiet tail".into());
+        }
+        firetest_info(&format!(
+            "[firetest] core_status quiet_tail snapshots={}",
+            after - before
+        ));
+        Ok(())
+    }
+
     /// Ask for all three tool windows. Deferred because opening a window from inside a `Backend`
     /// update would re-enter the context that is currently borrowed.
     pub(in crate::firetest) fn request_tool_windows_open(&self, cx: &mut Context<Backend>) {

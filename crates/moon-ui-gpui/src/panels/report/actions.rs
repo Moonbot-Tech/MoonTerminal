@@ -28,6 +28,39 @@ fn report_export_scope_is_current(
 }
 
 impl ReportPanel {
+    /// Verify that another workspace event preserves this panel's selection and export authority.
+    pub(crate) fn firetest_foreign_workspace(
+        panel: Entity<Self>,
+        cx: &mut App,
+        done: impl FnOnce(Result<(), String>) + 'static,
+    ) {
+        let key = selection::ReportRowKey::Replicated {
+            core_uid: 0,
+            rec_id: 123,
+        };
+        let (before, scope, revision) = panel.update(cx, |panel, cx| {
+            panel.selection.select_all(&[Some(key)]);
+            (
+                panel.query_seq,
+                panel.export_scope_identity(cx),
+                panel.backend.read(cx).workspace_revision(),
+            )
+        });
+        revision.update(cx, |revision, cx| revision.advance(cx));
+        cx.defer(move |cx| {
+            let panel = panel.read(cx);
+            let result = if panel.query_seq == before
+                && panel.selection.contains(Some(key))
+                && report_export_scope_is_current(&scope, &panel.export_scope_identity(cx))
+            {
+                Ok(())
+            } else {
+                Err("unrelated workspace event reset Report selection, query or export".into())
+            };
+            done(result);
+        });
+    }
+
     /// Toggle a core in the retained Classic or standalone multi-selection.
     ///
     /// `None` is the All toggle and clears the explicit selection back to the empty-means-all

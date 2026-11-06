@@ -69,7 +69,11 @@ pub mod orderbook;
 pub mod pane;
 #[cfg(windows)]
 pub mod readout;
+#[cfg(windows)]
+mod recovery_probe;
 mod render_state;
+#[cfg(windows)]
+pub(crate) use recovery_probe::RecoveryImage;
 mod ruler;
 pub use ruler::RulerSpan;
 #[cfg(windows)]

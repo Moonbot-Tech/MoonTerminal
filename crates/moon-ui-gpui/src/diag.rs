@@ -10,9 +10,9 @@
 //! Without one of those switches, diagnostics are inert in both development and release builds and
 //! do not create the log file.
 //!
-//! This remains manual instrumentation at selected call sites, so new paths can be missed. A
-//! framework checkpoint that records each view render by type would cover view rendering more
-//! completely; custom own-pass layers would still require manual counters.
+//! GPUI also counts actual view renders at its common dispatch point. Full Rust type names
+//! accompany the manual counters, covering new/uncatalogued views without adding call sites.
+//! Custom own-pass layers and non-render work retain their explicit counters below.
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
@@ -374,6 +374,7 @@ diag_counters!(
     CHART_BOOK_BAKE   => "orderbook_bake",
     // Order-book instance rebuilds on the CPU; a pan inside the emitted margin should not count.
     CHART_BOOK_LEVEL_BUILD => "orderbook_level_build",
+    // Overlay passes per pane, including empty passes; zones belong to base_bake on every backend.
     CHART_USER_DRAW   => "userdata_draw",
     ORDERS_OBS_FIRE   => "orders_obs_fire",
     ORDERS_OBS_NOTIFY => "orders_obs_notify",
@@ -431,6 +432,8 @@ diag_counters!(
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",
     FIRETEST_TEXT_COLD => "firetest_text_cold",
+    // Visible retained labels submitted successfully, including frames that reuse the text cache.
+    FIRETEST_TEXT_VISIBLE => "firetest_text_visible",
     // Background CPU investigation counters added in 2026-07. Each rate shows which path wakes
     // without changed input; the diagnostic line also records CPU, window count, and chart count
     // so the log identifies what was open and ticking during a CPU increase.
@@ -822,14 +825,19 @@ pub fn bump_by(c: &AtomicU64, n: u64) {
     }
 }
 
-/// Snapshot and reset all counters for the elapsed interval, returning their rates in hertz.
+/// Snapshot manual counters and GPUI's actual view renders, returning their rates in hertz.
 ///
 /// Returns `None` while render diagnostics are off — see [`enabled`].
-pub fn take_sample(elapsed_ms: f64) -> Option<Vec<DiagRate>> {
-    if !enabled() {
+pub fn take_sample(elapsed_ms: f64, cx: &mut gpui::App) -> Option<Vec<DiagRate>> {
+    let enabled = enabled();
+    cx.set_view_render_tracking(enabled);
+    if !enabled {
         return None;
     }
-    let snap = snapshot_and_reset();
+    let mut snap = snapshot_and_reset();
+    let mut views = cx.take_view_render_counts();
+    views.sort_unstable_by_key(|(name, _)| *name);
+    snap.extend(views);
     let hz = |c: u64| c as f64 * 1000.0 / elapsed_ms.max(1.0);
     Some(
         snap.into_iter()

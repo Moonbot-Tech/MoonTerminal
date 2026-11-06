@@ -477,14 +477,19 @@ impl Render for ChartPanel {
                         .absolute(),
                 )
             })
-            // FireTest probe only. Do not source chart geometry from this GPUI probe;
-            // `GpuFrameInfo.bounds` is the sole source of truth for input and own-pass rendering.
+            // FireTest targets the engine's plot, excluding the axes and order-book control zone.
+            // Hovering a trading button legitimately renders its GPUI owner and is a different test.
             .child({
                 let is_main = self.num.is_none();
                 let backend = self.backend.clone();
+                let chart = self.chart.data_handle();
+                let entity = cx.entity();
                 canvas(
                     move |bounds, _, _| bounds,
                     move |bounds, _, window, cx| {
+                        let Some(plot) = entity.read(cx).local_plot_rect(0) else {
+                            return;
+                        };
                         // The probe is platform space: the storms add its rectangle to the
                         // window's screen origin or scale it by its factor, so content-space
                         // bounds go in multiplied by the content zoom, with the zoom taken out
@@ -495,15 +500,15 @@ impl Render for ChartPanel {
                             crate::window::windowing::window_hwnd(window),
                             f32::from(window.window_bounds().get_bounds().origin.x),
                             f32::from(window.window_bounds().get_bounds().origin.y),
-                            f32::from(bounds.origin.x) * zoom,
-                            f32::from(bounds.origin.y) * zoom,
-                            f32::from(bounds.size.width) * zoom,
-                            f32::from(bounds.size.height) * zoom,
+                            f32::from(bounds.origin.x) * zoom + plot.x / platform_sf,
+                            f32::from(bounds.origin.y) * zoom + plot.y / platform_sf,
+                            plot.w / platform_sf,
+                            plot.h / platform_sf,
                             platform_sf,
                         );
                         if is_main && let Some(probe) = firetest_probe {
                             backend.update(cx, |b, _| {
-                                crate::firetest::observe_chart_probe(b, probe);
+                                crate::firetest::observe_chart_probe(b, probe, chart.clone());
                             });
                         }
                     },

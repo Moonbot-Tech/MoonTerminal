@@ -69,7 +69,6 @@ impl WgpuLayers {
         // backdrop the grid draws lines only, and a fill over them is what every charting package
         // does. Still below the candles, which is where a band belongs.
         if !self.zones.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.zone,
@@ -170,12 +169,13 @@ impl WgpuLayers {
         }
     }
 
+    /// Draw one overlay pass; the diagnostic counts passes, not populated primitive buffers.
     fn draw_user_layers(&self, pass: &mut wgpu::RenderPass<'_>) {
+        crate::diag::bump(&crate::diag::CHART_USER_DRAW);
         let pipelines = self.pipelines.as_ref().unwrap();
         let binds = self.prepared_binds.as_ref().unwrap();
         // The trade clusters go first: over the candles, under every order line and marker.
         if !self.clusters.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.marker,
@@ -185,7 +185,6 @@ impl WgpuLayers {
             );
         }
         if !self.hlines.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.hline,
@@ -195,11 +194,9 @@ impl WgpuLayers {
             );
         }
         if !self.segs.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(pass, &pipelines.seg, &binds.seg, 6, self.segs.len() as u32);
         }
         if !self.markers.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.marker,
