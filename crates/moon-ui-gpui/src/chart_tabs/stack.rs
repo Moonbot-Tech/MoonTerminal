@@ -140,6 +140,15 @@ pub(super) const COMPACT_STABLE: Duration = Duration::from_millis(5000);
 const STACK_GUTTER: f32 = 8.0;
 const STACK_HEADER_H: f32 = 20.0;
 
+/// Strength of the highlight ink in a tile's frame and header rule under the Facet skin.
+const FACET_TILE_EDGE: f32 = 0.08;
+/// Strength of the highlight ink along the top of a tile header's sheen under the Facet skin.
+const FACET_HEAD_SHEEN: f32 = 0.05;
+/// Opacity of the accent glow inside the selected tile's header under the Facet skin.
+const FACET_SELECTED_GLOW_ALPHA: f32 = 0.35;
+/// Blur radius of that glow, in design-reference pixels.
+const FACET_SELECTED_GLOW_BLUR: f32 = 10.0;
+
 /// Whether one tile draws the gutter strip below itself.
 ///
 /// The gutter separates tiles from one another, so a lone tile has nothing to separate from: drawn
@@ -170,6 +179,14 @@ type VisibleRangeHandler = Box<dyn Fn(Range<usize>, &mut Window, &mut App)>;
 /// `tokens` scales the chrome in that closure. The `gutter` is an 8-unit separator strip below
 /// the card, spacing stacked tiles apart; it is dropped for a single full-bleed chart. `trailing` is an optional muted note pinned to the
 /// header's right, such as which chart of how many is on screen.
+///
+/// `selected` says the caller passed the accent as `border` to mark the selected tile. Only the
+/// Facet skin reads it. There the header trades its flat fill for a sheen over the window's own
+/// colour, the gutter strip goes unpainted so that colour also stands between the tiles, and an
+/// unselected tile's frame and header rule become a lit hairline. The selected
+/// tile keeps its accent frame and gains an accent glow, painted INSIDE the header strip: a
+/// shadow around the frame would be a blurred filled shape under a body that is deliberately
+/// unfilled, and so would tint the chart. The plot zone gets nothing under either skin.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn chart_stack_card(
     id: SharedString,
@@ -181,15 +198,20 @@ pub(super) fn chart_stack_card(
     tokens: &moon_ui::MoonThemeTokens,
     gutter: bool,
     trailing: Option<SharedString>,
+    selected: bool,
 ) -> Stateful<Div> {
     let label = label.into();
     let gutter_h = if gutter { STACK_GUTTER } else { 0.0 };
+    let facet = tokens.skin.is_facet();
+    let facet_edge = facet && !selected;
     div()
         .id(id)
         .w_full()
         .relative()
         .overflow_hidden()
-        .when(gutter, |this| {
+        // Facet skin: the gap between two tiles is the window's own ground, so the strip that
+        // fills it under Flat is not drawn. The card above still stops short of it.
+        .when(gutter && !facet, |this| {
             this.child(
                 div()
                     .absolute()
@@ -210,6 +232,9 @@ pub(super) fn chart_stack_card(
                 .overflow_hidden()
                 .border_1()
                 .border_color(border)
+                .when(facet_edge, |card| {
+                    card.border_color(moon_ui::rgba_from(p.overlay, FACET_TILE_EDGE))
+                })
                 .child(
                     h_flex()
                         .absolute()
@@ -224,6 +249,23 @@ pub(super) fn chart_stack_card(
                         .bg(rgb(p.panel_head))
                         .border_b_1()
                         .border_color(border)
+                        .when(facet, |head| {
+                            head.bg(crate::design::facet_sheen(p, FACET_HEAD_SHEEN))
+                        })
+                        .when(facet_edge, |head| {
+                            head.border_color(moon_ui::rgba_from(p.overlay, FACET_TILE_EDGE))
+                        })
+                        .when(facet && selected, |head| {
+                            head.shadow(vec![
+                                moon_ui::facet_glow(
+                                    p.accent,
+                                    FACET_SELECTED_GLOW_ALPHA,
+                                    FACET_SELECTED_GLOW_BLUR,
+                                    tokens,
+                                )
+                                .inset(),
+                            ])
+                        })
                         .child(
                             div()
                                 .font_family(crate::design::mono())

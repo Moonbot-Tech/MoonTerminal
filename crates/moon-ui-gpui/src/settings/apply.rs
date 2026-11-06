@@ -282,6 +282,8 @@ impl SettingsView {
     ///     [`SaveOutcome::Saved`] only when the config reached disk and any password change was
     ///     accepted; the window must stay open on anything else.
     pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> SaveOutcome {
+        self.backend
+            .update(cx, |backend, _| backend.finish_pending_persistence());
         // Passwords FIRST. Applying them only changes key material in memory; the config write
         // below is what puts the resulting key slots on disk. Running it afterwards would leave
         // the passwords for a write that already happened, and quitting there would lose them with
@@ -447,6 +449,7 @@ impl SettingsView {
                 let reports = b.reports.as_ref().map(|h| &h.tx);
                 b.session.reconcile(&b.config, reports);
                 b.session.set_market_mode(b.config.market_mode);
+                b.market_catalog_revision.update(bcx, |_, cx| cx.notify());
                 if b.reconcile_open_main_request_group() {
                     bcx.notify();
                 }
@@ -475,8 +478,10 @@ impl SettingsView {
         } else if mode_changed {
             // Apply market mode live. Cores stay connected and the coordinator reselects providers
             // on its next tick.
-            self.backend
-                .update(cx, |b, _| b.session.set_market_mode(b.config.market_mode));
+            self.backend.update(cx, |b, bcx| {
+                b.session.set_market_mode(b.config.market_mode);
+                b.market_catalog_revision.update(bcx, |_, cx| cx.notify());
+            });
         }
 
         // A bundle or split edit alone does not reach `structural_sig` (both are presentation), so

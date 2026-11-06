@@ -450,7 +450,16 @@ fn a_replica_wipe_redeclares_full_history_after_the_acknowledgements() {
 
     // One replay pass over the ordered actions, not one pass per message kind.
     assert_eq!(writer.matches("for action in post_commit").count(), 1);
-    assert_eq!(writer.matches("PostCommit::ReplicaReset").count(), 1);
+    // COIN-M invalidation inspects these actions before COMMIT; it does not replay their
+    // in-memory publications. Count reset publication only in the actual ordered replay.
+    let replay = writer
+        .split_once("for action in post_commit {")
+        .unwrap()
+        .1
+        .split_once("if let Some(publication) = publication")
+        .unwrap()
+        .0;
+    assert_eq!(replay.matches("PostCommit::ReplicaReset").count(), 1);
 }
 
 /// `db/report_writer.rs:commit_stateful_batch` must retry the same owned work with a fresh

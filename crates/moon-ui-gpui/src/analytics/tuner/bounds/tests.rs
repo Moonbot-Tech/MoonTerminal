@@ -81,7 +81,12 @@ impl Render for Probe {
 /// A wrapped header, misplaced copy arrow, or different row width breaks alignment in any locale.
 #[gpui::test]
 fn livefix_bound_headers_are_one_row_and_align_with_inputs(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),

@@ -590,6 +590,8 @@ impl SettingsView {
     /// save every other pending edit too. The draft stays as it was, still dirty, still the
     /// user's to save or drop. Typed passwords stay in their fields for the same reason.
     fn forget_machines(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.backend
+            .update(cx, |backend, _| backend.finish_pending_persistence());
         let before = vault::snapshot();
         if let Err(error) = vault::forget_other_machines() {
             self.security.status = Some(SecurityStatus {

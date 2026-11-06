@@ -1411,17 +1411,23 @@ fn core_status_tree_renderer_holds_a_weak_owner() {
     );
 }
 
-/// `core_status/mod.rs` must keep telemetry repaints throttled to at most once per second and show
-/// CPU AVERAGED over the window, not the last flickering sample. Removing the throttle floods the
-/// panel with repaints; dropping the average makes the number unreadable.
+/// Publishing status on every backend drain floods the panel with telemetry repaints. The shared
+/// warning-engine clock owns that throttle; bypassing its CPU average makes the number flicker.
 #[test]
 fn core_status_throttles_repaints_and_averages_cpu() {
-    let text = read_src("panels/core_status/mod.rs");
-
+    let text = code_only(&read_src("panels/core_status/mod.rs"));
+    let boot = code_only(&read_src("startup/boot.rs"));
+    let sample = braced_body(&boot, "if telemetry_tick {");
+    assert!(boot.contains("let telemetry_tick = b.warn.tick_due(now_ms)"));
+    assert!(sample.contains("b.core_status_revision.update(cx, |_, cx| cx.notify())"));
+    let observer = braced_body(&text, "cx.observe(&core_status_revision,");
+    assert!(observer.contains("this.refresh_sample(cx)"));
+    let backend_observer = braced_body(&text, "cx.observe(&backend,");
+    assert!(braced_body(backend_observer, "if !update_changed").contains("return;"));
     assert!(
-        text.contains("now - this.last_repaint_ms < 1000") && text.contains("return;"),
-        "Core Status must gate ALL telemetry work to at most once per second (early-return on \
-         faster drains), not just the repaint"
+        backend_observer.find("if !update_changed").unwrap()
+            < backend_observer.find("this.refresh_sample(cx)").unwrap(),
+        "ordinary backend drains must not bypass the telemetry clock; only update transitions may refresh immediately"
     );
     // Detection and CPU averaging moved to the backend engine; the panel must read the smoothed
     // value from it rather than the raw last sample. `collect` lives in the cache-pipeline module.
@@ -1556,6 +1562,11 @@ fn the_main_tab_row_is_gated_and_addresses_charts_by_identity() {
 /// The shared row also paints `shell_high` across that sibling and carries the strip's full-width
 /// one-pixel bottom rule: deleting either builder during a layout refactor restores the dark
 /// toolbar band or the visibly broken hairline at the strip/chrome seam.
+///
+/// Both are the Flat skin's. Under the Facet skin `MoonTabStrip` paints no fill, so the row must
+/// paint none either and its line must fade: an ungated `shell_high` there draws a flat band
+/// across the top of the chart area, under the Obsidian theme only, where no screenshot of the
+/// five Flat themes would show it.
 #[test]
 fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
     let strip = code_only(braced_body(
@@ -1592,21 +1603,42 @@ fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
         ".child(right_cluster),",
         "the shared chart tab row",
     );
+    let flat_fill = ".when(!facet, |row| row.bg(rgb(p_strip.shell_high)))";
     assert!(
-        tab_row.contains(".bg(rgb(p_strip.shell_high))"),
-        "the shared tab row must paint shell_high behind the in-flow chrome cluster"
+        tab_row.contains(flat_fill),
+        "the shared tab row must paint shell_high behind the in-flow chrome cluster under the \
+         Flat skin"
+    );
+    assert_eq!(
+        tab_row.matches(".bg(rgb(p_strip.shell_high))").count(),
+        1,
+        "and nowhere else: under the Facet skin the row stays unfilled"
+    );
+    assert!(
+        strip.contains("let facet = design::is_facet(cx);"),
+        "the gate must read the active skin"
     );
     let continued_rule = chain_between(
         tab_row,
-        ".bg(rgb(p_strip.shell_high))",
+        flat_fill,
         ".child(div().flex_1().min_w_0().h_full().child(strip))",
         "the chart tab row surface and strip slot",
     );
     assert!(
         continued_rule.contains(
-            ".child(\n                        div()\n                            .absolute()\n                            .left(px(0.0))\n                            .bottom(px(0.0))\n                            .w_full()\n                            .h(px(1.0))\n                            .bg(rgba_from(p_strip.border, 0.78)),"
-        ),
+            ".child(\n                        div()\n                            .absolute()\n                            .left(px(0.0))\n                            .bottom(px(0.0))\n                            .w_full()\n                            .h(px(1.0))\n"
+        ) && continued_rule.contains("line.bg(rgba_from(p_strip.border, 0.78))"),
         "the row must continue the strip's full-width one-pixel bottom rule behind the chrome"
+    );
+    let facet_rule = chain_between(
+        continued_rule,
+        "if facet {",
+        "} else {",
+        "the Facet arm of the chart tab row's bottom line",
+    );
+    assert!(
+        facet_rule.contains("fading_rule_h(") && !facet_rule.contains("p_strip.border"),
+        "under the Facet skin that line must be a fading rule, not the solid border ink"
     );
 
     let row = code_only(braced_body(

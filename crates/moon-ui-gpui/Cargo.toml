@@ -148,7 +148,8 @@ libc = "0.2"
 backtrace = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }
+# Must resolve to MoonUI's wgpu package: raw GPU pointers carry Rust objects, not a C ABI.
+wgpu = { version = "29.0.1" }
 x11 = { version = "2.21", features = ["xlib", "xtest"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -168,6 +169,8 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 raw-window-handle = "0.6"
 
 [dev-dependencies]
+# Validate the native Linux shaders on every test host, before wgpu creates a live pipeline.
+naga = { version = "29.0.1", features = ["wgsl-in"] }
 # `test-support` is what makes `gpui::TestAppContext` / `gpui::VisualTestContext` -- and with them
 # `#[gpui::test]` and a real headless `draw()` -- nameable from this crate's tests. GPUI gates both
 # behind `cfg(any(test, feature = "test-support"))`, so without this line a test can only assert on

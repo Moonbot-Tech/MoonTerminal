@@ -221,13 +221,17 @@ impl PlatformLayers {
 
     /// Whether a throttled order-book bake is due, so a frame must prepare it.
     ///
-    /// Metal only: DX11 keeps its book inside the base and bakes on the next prepare.
+    /// Both cached-book backends own this deadline; wgpu currently draws levels without a throttle.
     pub fn book_bake_due(&self, now: std::time::Instant) -> bool {
+        #[cfg(windows)]
+        {
+            self.orderbook.bake_due(now)
+        }
         #[cfg(target_os = "macos")]
         {
             self.metal.book_bake_due(now)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = now;
             false
@@ -606,6 +610,7 @@ impl PlatformLayers {
         }
     }
 
+    /// Prepare native layers and report a changed book bitmap embedded in the outer base cache.
     #[cfg(windows)]
     pub fn prepare_d3d(
         &mut self,
@@ -615,15 +620,17 @@ impl PlatformLayers {
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         gpu: &gpui::RawGpuAccess,
-    ) {
+    ) -> bool {
         self.candles.prepare(device, context, gpu);
         self.path_candles.prepare(device, context, gpu);
         self.side_volume.prepare(device, context, gpu);
         self.hvol.prepare(device, context, gpu);
         self.combo.prepare(view, device, context, gpu);
-        self.orderbook
+        let book_changed = self
+            .orderbook
             .prepare(orderbook_view, book_style, device, context, gpu);
         self.userdata.prepare(device, context, gpu);
+        book_changed
     }
 
     #[cfg(target_os = "linux")]

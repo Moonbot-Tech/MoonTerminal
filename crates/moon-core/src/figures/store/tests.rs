@@ -67,7 +67,7 @@ fn a_ratio_scale_survives_a_save_and_load() {
         hidden_levels: 0b1_0010,
     };
     let id = store.add(1, "BTCUSDT", fig(FigureKind::FibRetracement(drawn)));
-    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let json = serde_json::to_string(&store.snapshot().to_persist()).expect("store must serialize");
     let back = FigureStore::from_json(&json);
     assert_eq!(
         back.get(1, "BTCUSDT", id).map(|f| f.kind.clone()),
@@ -98,7 +98,7 @@ fn a_fill_survives_a_save_and_load() {
     let mut f = hline(10.0);
     f.fill = [9, 8, 7, 123];
     let id = store.add(1, "BTCUSDT", f);
-    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let json = serde_json::to_string(&store.snapshot().to_persist()).expect("store must serialize");
     let back = FigureStore::from_json(&json);
     assert_eq!(
         back.get(1, "BTCUSDT", id).map(|f| f.fill),
@@ -148,7 +148,7 @@ fn the_saved_form_round_trips_and_stays_readable_by_the_shipped_build() {
             price2: 2.0,
         })),
     );
-    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let json = serde_json::to_string(&store.snapshot().to_persist()).expect("store must serialize");
     // A flat array, exactly as every shipped build parses it. An object wrapper here would make
     // this file load as "empty" on a downgrade, and the next save would erase the drawings.
     assert!(json.starts_with('['), "not an array: {json}");
@@ -165,14 +165,15 @@ fn a_figure_only_a_newer_build_understands_costs_only_itself_and_survives_a_save
     assert_eq!(figs.len(), 1, "the readable figure must survive the load");
     assert_eq!(figs[0].id, 2);
 
-    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let json = serde_json::to_string(&store.snapshot().to_persist()).expect("store must serialize");
     assert!(
         json.contains("Pitchfork"),
         "the unreadable figure was destroyed by the save: {json}"
     );
     // And it is still there after a second round trip, not just the first.
     let again = FigureStore::from_json(&json);
-    let json2 = serde_json::to_string(&again.to_persist()).expect("store must serialize");
+    let json2 =
+        serde_json::to_string(&again.snapshot().to_persist()).expect("store must serialize");
     assert!(json2.contains("Pitchfork"));
     assert!(json2.contains("HLine"));
 }
@@ -237,11 +238,36 @@ fn server_figures_are_not_persisted() {
     store
         .by_key
         .insert((1, "BTCUSDT".to_string()), vec![remote, hline(6.0)]);
-    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let json = serde_json::to_string(&store.snapshot().to_persist()).expect("store must serialize");
     assert!(
         !json.contains("42"),
         "a server alert reached the file: {json}"
     );
+}
+
+/// The worker owns the old local drawing while live edits and server alerts continue independently.
+#[test]
+fn persistence_snapshot_retains_unknown_figures_and_is_independent_of_later_edits() {
+    let mut store = FigureStore::from_json(UNKNOWN_FILE);
+    let snapshot = store.snapshot();
+    store.remove(1, "BTCUSDT", 2);
+    let mut remote = hline(999.0);
+    remote.from_server = true;
+    store
+        .by_key
+        .entry((1, "BTCUSDT".into()))
+        .or_default()
+        .push(remote);
+    let saved = std::thread::spawn(move || serde_json::to_string(&snapshot.to_persist()).unwrap())
+        .join()
+        .unwrap();
+    let restored = FigureStore::from_json(&saved);
+    assert_eq!(restored.figures(1, "BTCUSDT").len(), 1);
+    assert_eq!(restored.figures(1, "BTCUSDT")[0].id, 2);
+    assert!(saved.contains("Pitchfork"));
+    let current = serde_json::to_string(&store.snapshot().to_persist()).unwrap();
+    assert!(!current.contains("HLine"));
+    assert!(current.contains("Pitchfork"));
 }
 
 #[test]
@@ -311,7 +337,7 @@ fn sharing_survives_a_save_and_load() {
     let mut store = FigureStore::default();
     let id = store.add(1, "BTCUSDT", hline(10.0));
     store.set_shared(1, "BTCUSDT", id, true);
-    let json = serde_json::to_string(&store.to_persist()).expect("store must serialize");
+    let json = serde_json::to_string(&store.snapshot().to_persist()).expect("store must serialize");
     let back = FigureStore::from_json(&json);
     assert!(back.get(1, "BTCUSDT", id).expect("figure").shared);
     assert_eq!(back.visible(2, "BTCUSDT").count(), 1);
@@ -545,7 +571,7 @@ fn horizontal_ray_and_legacy_figures_survive_store_roundtrip() {
     drawn.thickness = 3.5;
     drawn.line_kind = crate::figures::LineKind::DashDot;
     let id = store.add(1, "BTCUSDT", drawn.clone());
-    let json = serde_json::to_string(&store.to_persist()).expect("serialize figures");
+    let json = serde_json::to_string(&store.snapshot().to_persist()).expect("serialize figures");
     let back = FigureStore::from_json(&json);
     assert_eq!(back.figures(1, "BTCUSDT").len(), 5);
     assert_eq!(

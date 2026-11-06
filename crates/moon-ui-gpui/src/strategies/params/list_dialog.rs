@@ -44,8 +44,10 @@ impl StrategiesView {
                 .close_button(true)
                 .overlay(true)
                 .overlay_closable(true)
-                .bg(moon(p.shell_high))
-                .border_color(moon(p.border))
+                // Facet skin: no override, so MoonUI's popup surface shows.
+                .when(!design::is_facet(cx), |dialog| {
+                    dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+                })
                 .text_color(moon(p.text))
                 .title(format!("{label}: {}", target.field))
                 .content(move |content, _, cx| {

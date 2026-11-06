@@ -183,14 +183,36 @@ fn graphite_theme_mode_round_trips_as_the_lowercase_settings_value() {
     assert_eq!(reread.ui_theme_mode, UiThemeMode::Graphite);
 }
 
-/// Catches changing `config/schema.rs:UiThemeMode::is_light` to include Graphite, or leaving the
-/// light experimental mode out. Either would route a mode through the other side's color branches
-/// in badges, orders, lines, and charts.
+/// Catches giving `config/schema.rs:UiThemeMode::Obsidian` an explicit serde name, or dropping the
+/// enum's `serde(rename_all = "lowercase")`. Either persists Obsidian under a spelling other than
+/// `"obsidian"`, so a stored Obsidian choice falls back to Dark on the next load.
+#[test]
+fn obsidian_theme_mode_round_trips_as_the_lowercase_settings_value() {
+    let stored = SettingsFile {
+        ui_theme_mode: UiThemeMode::Obsidian,
+        ..SettingsFile::default()
+    };
+    let persisted = toml::to_string(&stored).expect("settings file must serialize");
+    assert!(
+        persisted
+            .lines()
+            .any(|line| line == "ui_theme_mode = \"obsidian\""),
+        "settings.toml must persist the lowercase Obsidian spelling"
+    );
+    let reread: SettingsFile =
+        toml::from_str("ui_theme_mode = \"obsidian\"").expect("stored obsidian must load");
+    assert_eq!(reread.ui_theme_mode, UiThemeMode::Obsidian);
+}
+
+/// Catches changing `config/schema.rs:UiThemeMode::is_light` to include Graphite or Obsidian, or
+/// leaving the light experimental mode out. Either would route a mode through the other side's
+/// color branches in badges, orders, lines, and charts.
 #[test]
 fn graphite_is_dark_while_light_remains_the_only_light_mode() {
     assert!(UiThemeMode::Light.is_light());
     assert!(UiThemeMode::LightExperimental.is_light());
     assert!(!UiThemeMode::Graphite.is_light());
+    assert!(!UiThemeMode::Obsidian.is_light());
     assert!(!UiThemeMode::Dark.is_light());
     assert!(!UiThemeMode::DarkExperimental.is_light());
 }

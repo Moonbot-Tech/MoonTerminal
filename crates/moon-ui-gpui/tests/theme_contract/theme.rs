@@ -180,6 +180,124 @@ fn chart_background_policy_keeps_gpu_canvas_under_scene() {
     );
 }
 
+/// `chart_tabs/stack.rs:chart_stack_card` must keep the selected tile's Facet glow an INSET shadow
+/// on the tile header, and cast no other shadow.
+///
+/// GPUI paints a drop shadow as a blurred FILLED shape under the whole element rather than as a
+/// ring around it, and the tile's frame and body are deliberately unfilled so the chart own-pass
+/// shows through. Breakage: moving the glow onto the frame, or dropping `.inset()`, washes the
+/// whole plot zone with the accent — and only under the Obsidian theme, so no screenshot of the
+/// five Flat themes would show it.
+#[test]
+fn chart_tile_facet_glow_stays_inside_the_tile_header() {
+    let stack = read_src("chart_tabs/stack.rs");
+    let card = code_only(braced_body(&stack, "pub(super) fn chart_stack_card("));
+    assert_eq!(
+        card.matches(".shadow(").count(),
+        1,
+        "the stack card may cast one shadow only: the selected tile's header glow"
+    );
+    let at = |needle: &str| {
+        card.find(needle)
+            .unwrap_or_else(|| panic!("chart_stack_card must keep `{needle}`"))
+    };
+    let header = at(".h(px(tokens.ui(STACK_HEADER_H)))");
+    let glow = at(".shadow(");
+    let plot_host = at(".top(px(tokens.ui(STACK_HEADER_H)))");
+    assert!(
+        header < glow && glow < plot_host,
+        "the glow must be chained onto the header strip, before the plot host below it"
+    );
+    assert!(
+        chain_between(&card, ".shadow(", ".child(", "the selected tile's glow")
+            .contains(".inset()"),
+        "the header glow must stay inset: a drop shadow fills the area under its element"
+    );
+}
+
+/// `settings/render.rs` must paint its `shell` fills — the window root and both page-body
+/// wrappers — only under the Flat skin.
+///
+/// Under the Facet skin `MoonRoot` paints the window backdrop BEHIND this view, and it is opaque
+/// fills here that would cover it. Breakage: restoring a bare `.bg(rgba_from(p.shell, 1.0))` on
+/// any of the three hides the backdrop — under the Obsidian theme only, where the window then
+/// reads as flat black, so no screenshot of the five Flat themes would show it.
+#[test]
+fn settings_paints_no_opaque_fill_over_the_facet_backdrop() {
+    let render = code_only(&read_src("settings/render.rs"));
+    let fills = render.matches(".bg(rgba_from(p.shell, 1.0))").count();
+    let gated = render
+        .matches(".when(!facet, |this| this.bg(rgba_from(p.shell, 1.0)))")
+        .count();
+    assert_eq!(
+        (fills, gated),
+        (3, 3),
+        "the Settings root and both body wrappers must each gate their shell fill on the skin"
+    );
+    assert!(
+        render.contains("let facet = design::is_facet(cx);"),
+        "the gate must read the active skin"
+    );
+}
+
+/// A dialog opened anywhere in the terminal must set its flat frame only under the Flat skin.
+///
+/// Under the Facet skin MoonUI paints a dialog as its popup surface and applies the caller's
+/// style AFTER it, so a fill chained straight onto the dialog builder covers that surface.
+/// Breakage: a new dialog copied from the old shape — `.overlay_closable(true)` followed directly
+/// by `.bg(..)` — opens as a flat box under the Obsidian theme only, where no screenshot of the
+/// five Flat themes would show it. The fill belongs behind `.when(!design::is_facet(cx), ..)`.
+#[test]
+fn panel_dialogs_leave_the_facet_popup_surface_uncovered() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+    let mut dialogs = 0;
+    for path in sources {
+        if file_name(&path) == "tests.rs" {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let compact = code_only(&text).split_whitespace().collect::<String>();
+        dialogs += compact.matches(".overlay_closable(true)").count();
+        assert!(
+            !compact.contains(".overlay_closable(true).bg("),
+            "{}: a dialog's flat fill must be gated on the Flat skin",
+            path.display()
+        );
+    }
+    assert!(
+        dialogs > 0,
+        "the scan found no dialog builder at all, so it guards nothing"
+    );
+}
+
+/// The group window and the detached chart window must keep their clear colour on the palette
+/// under the Facet skin.
+///
+/// Both roots paint no fill, and under Facet the Auto rail, the chart tab strip, the empty Main
+/// screen and the gaps between chart tiles paint none either, so the window's clear colour is
+/// what stands there — and it is set once, when the window opens. Breakage: dropping the
+/// `ground.sync(..)` call from either render leaves those surfaces showing the previous theme's
+/// ground after a switch into Obsidian: whole bands of a light theme inside a dark one, until
+/// the terminal restarts.
+#[test]
+fn no_fill_windows_keep_their_clear_colour_on_the_facet_palette() {
+    for (path, call) in [
+        ("shell/render.rs", "self.ground.sync(p.shell, window, cx)"),
+        (
+            "chart_tabs/detached_host/render.rs",
+            "self.ground.sync(p.chart_bg, window, cx)",
+        ),
+    ] {
+        assert!(
+            code_only(&read_src(path)).contains(call),
+            "{path} must call `{call}` from its render"
+        );
+    }
+}
+
 #[test]
 fn main_chart_stack_rmb_toggle_uses_full_chart_area_not_plot_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

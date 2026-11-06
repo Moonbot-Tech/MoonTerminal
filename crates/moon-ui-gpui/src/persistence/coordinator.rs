@@ -1,17 +1,23 @@
-//! Serial background persistence for window ownership and detection display preferences.
+//! Serial background persistence for immutable snapshots of live workspace state.
 
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use moon_core::config::{DetectViewFile, WindowLayout};
+use moon_core::config::{
+    ConfigSnapshot, CoreUpdateHistory, DetectViewFile, TabBadgeSettings, WindowLayout,
+};
+use moon_core::figures::FigureSnapshot;
 use moon_ui::DockTopologyByName;
 
+use crate::persistence::chart_persist::ChartTabSpec;
 use crate::persistence::dock_persist::DockMap;
 use crate::window::detached::DetachedSpec;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) mod firetest;
 
 /// Immutable values written by one serial persistence request.
 #[derive(Clone)]
@@ -24,6 +30,16 @@ pub(crate) struct PersistenceSnapshot {
     auto: Option<DockTopologyByName>,
     /// Complete detection display authority when a popup control changed.
     detects: Option<DetectViewFile>,
+    /// Chart specifications captured before any later tab edits.
+    charts: Option<Vec<ChartTabSpec>>,
+    /// Local drawings, including unknown types retained from newer builds.
+    figures: Option<FigureSnapshot>,
+    /// Tab display preferences and read watermarks.
+    badges: Option<TabBadgeSettings>,
+    /// A snapshot of the session-owned core update history.
+    updates: Option<CoreUpdateHistory>,
+    /// Validated config, normalized on the application thread before capture.
+    config: Option<ConfigSnapshot>,
 }
 
 impl PersistenceSnapshot {
@@ -37,6 +53,11 @@ impl PersistenceSnapshot {
             classic: None,
             auto: None,
             detects: None,
+            charts: None,
+            figures: None,
+            badges: None,
+            updates: None,
+            config: None,
         }
     }
 
@@ -83,6 +104,36 @@ impl PersistenceSnapshot {
         self
     }
 
+    /// Capture chart specifications without JSON serialization on the UI thread.
+    pub(crate) fn with_charts(mut self, charts: Vec<ChartTabSpec>) -> Self {
+        self.charts = Some(charts);
+        self
+    }
+
+    /// Attach the current local drawing snapshot.
+    pub(crate) fn with_figures(mut self, figures: FigureSnapshot) -> Self {
+        self.figures = Some(figures);
+        self
+    }
+
+    /// Attach current tab preferences and read watermarks.
+    pub(crate) fn with_badges(mut self, badges: TabBadgeSettings) -> Self {
+        self.badges = Some(badges);
+        self
+    }
+
+    /// Attach the bounded update history without adding a second mutable authority.
+    pub(crate) fn with_updates(mut self, updates: CoreUpdateHistory) -> Self {
+        self.updates = Some(updates);
+        self
+    }
+
+    /// Attach config only after UID normalization reached the live authority.
+    pub(crate) fn with_config(mut self, config: ConfigSnapshot) -> Self {
+        self.config = Some(config);
+        self
+    }
+
     /// Return whether this request contains no selected persistence class.
     ///
     /// Returns:
@@ -92,6 +143,11 @@ impl PersistenceSnapshot {
             && self.classic.is_none()
             && self.auto.is_none()
             && self.detects.is_none()
+            && self.charts.is_none()
+            && self.figures.is_none()
+            && self.badges.is_none()
+            && self.updates.is_none()
+            && self.config.is_none()
     }
 
     /// Describe the persistence classes selected by this snapshot.
@@ -104,6 +160,11 @@ impl PersistenceSnapshot {
             classic: self.classic.is_some(),
             auto: self.auto.is_some(),
             detects: self.detects.is_some(),
+            charts: self.charts.is_some(),
+            figures: self.figures.is_some(),
+            badges: self.badges.is_some(),
+            updates: self.updates.is_some(),
+            config: self.config.is_some(),
         }
     }
 
@@ -127,6 +188,21 @@ impl PersistenceSnapshot {
         if !classes.detects {
             self.detects = None;
         }
+        if !classes.charts {
+            self.charts = None;
+        }
+        if !classes.figures {
+            self.figures = None;
+        }
+        if !classes.badges {
+            self.badges = None;
+        }
+        if !classes.updates {
+            self.updates = None;
+        }
+        if !classes.config {
+            self.config = None;
+        }
         self
     }
 }
@@ -142,6 +218,16 @@ pub(crate) struct PersistenceClasses {
     pub(crate) auto: bool,
     /// Whether detection display preferences belong to the request.
     pub(crate) detects: bool,
+    /// Whether chart specifications belong to the request.
+    pub(crate) charts: bool,
+    /// Whether local drawings belong to the request.
+    pub(crate) figures: bool,
+    /// Whether tab preferences and watermarks belong to the request.
+    pub(crate) badges: bool,
+    /// Whether core update history belongs to the request.
+    pub(crate) updates: bool,
+    /// Whether automatic configuration persistence belongs to the request.
+    pub(crate) config: bool,
 }
 
 /// Result of one serial persistence request.
@@ -164,6 +250,11 @@ impl PersistenceAck {
             classic: self.classes.classic && !self.succeeded.classic,
             auto: self.classes.auto && !self.succeeded.auto,
             detects: self.classes.detects && !self.succeeded.detects,
+            charts: self.classes.charts && !self.succeeded.charts,
+            figures: self.classes.figures && !self.succeeded.figures,
+            badges: self.classes.badges && !self.succeeded.badges,
+            updates: self.classes.updates && !self.succeeded.updates,
+            config: self.classes.config && !self.succeeded.config,
         }
     }
 }
@@ -200,6 +291,21 @@ trait PersistenceSink: Send + 'static {
 
     /// Persist complete detection display preferences; false retains the authority for retry.
     fn save_detects(&mut self, detects: &DetectViewFile) -> bool;
+
+    /// Persist the complete captured chart specification list.
+    fn save_charts(&mut self, charts: &[ChartTabSpec]) -> bool;
+
+    /// Persist local drawings without borrowing the live UI store.
+    fn save_figures(&mut self, figures: &FigureSnapshot) -> bool;
+
+    /// Persist tab preferences and read watermarks.
+    fn save_badges(&mut self, badges: &TabBadgeSettings) -> bool;
+
+    /// Persist a captured session update-history ring.
+    fn save_updates(&mut self, updates: &CoreUpdateHistory) -> bool;
+
+    /// Persist the complete normalized config using its existing multi-file contract.
+    fn save_config(&mut self, config: &ConfigSnapshot) -> bool;
 }
 
 /// Production sink that performs the existing atomic file writes.
@@ -238,6 +344,41 @@ impl PersistenceSink for FilePersistenceSink {
     fn save_detects(&mut self, detects: &DetectViewFile) -> bool {
         detects.save()
     }
+
+    /// Serialize and atomically write chart specifications on this worker.
+    fn save_charts(&mut self, charts: &[ChartTabSpec]) -> bool {
+        super::chart_persist::save_all(charts)
+    }
+
+    /// Serialize and atomically write captured local drawings on this worker.
+    fn save_figures(&mut self, figures: &FigureSnapshot) -> bool {
+        figures.save()
+    }
+
+    /// Keep badge write failures visible to the live retry loop.
+    fn save_badges(&mut self, badges: &TabBadgeSettings) -> bool {
+        badges.save()
+    }
+
+    /// Keep update-history failures pending without blocking later classes.
+    fn save_updates(&mut self, updates: &CoreUpdateHistory) -> bool {
+        if let Err(error) = updates.save() {
+            log::warn!("core update history save failed: {error}");
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Preserve config failure reporting so the latest live authority is retried.
+    fn save_config(&mut self, config: &ConfigSnapshot) -> bool {
+        if let Err(error) = config.save() {
+            log::warn!("config autosave failed: {error}");
+            false
+        } else {
+            true
+        }
+    }
 }
 
 /// Commands consumed in order by the single persistence worker.
@@ -252,6 +393,9 @@ enum WorkerCommand {
 /// tick, and each dispatch clones every authority.
 pub(crate) const DOCK_DISPATCH_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Frequent chart edits retain the existing one-second autosave limit.
+const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Whether a snapshot may be dispatched at `now`, given when the previous one was accepted.
 pub(crate) fn dock_dispatch_due(last: Option<Instant>, now: Instant) -> bool {
     last.is_none_or(|last| now.saturating_duration_since(last) >= DOCK_DISPATCH_INTERVAL)
@@ -265,6 +409,8 @@ pub(crate) struct PersistenceCoordinator {
     in_flight: Option<PersistenceClasses>,
     /// When the last debounced snapshot was accepted, for [`DOCK_DISPATCH_INTERVAL`].
     last_dispatch: Option<Instant>,
+    /// Last autosave attempt, independent of layout traffic; invalid snapshots are also rate-limited.
+    last_autosave: Option<Instant>,
     /// Independent sink used only if the worker cannot perform the final quit snapshot.
     fallback: Box<dyn PersistenceSink>,
 }
@@ -317,6 +463,7 @@ impl PersistenceCoordinator {
             worker,
             in_flight: None,
             last_dispatch: None,
+            last_autosave: None,
             fallback,
         }
     }
@@ -352,6 +499,18 @@ impl PersistenceCoordinator {
         dock_dispatch_due(self.last_dispatch, now)
     }
 
+    /// Admit a coalesced autosave without repeatedly cloning dirty models while the gate is closed.
+    pub(crate) fn admit_autosave(&mut self, now: Instant) -> bool {
+        if self
+            .last_autosave
+            .is_some_and(|last| now.saturating_duration_since(last) < AUTOSAVE_INTERVAL)
+        {
+            return false;
+        }
+        self.last_autosave = Some(now);
+        true
+    }
+
     /// Poll the one outstanding debounced acknowledgement without blocking GPUI.
     ///
     /// Returns:
@@ -380,6 +539,21 @@ impl PersistenceCoordinator {
     ///     `true` while the worker owns a previously dispatched live request.
     pub(crate) fn is_in_flight(&self) -> bool {
         self.in_flight.is_some()
+    }
+
+    /// Quit must include the latest config when an older config write has not been acknowledged.
+    pub(crate) fn has_pending_config(&self) -> bool {
+        self.in_flight.is_some_and(|classes| classes.config)
+    }
+
+    /// Finish earlier autosaves before a deliberate synchronous config/key change.
+    /// The live tick uses `poll`; only explicit save operations may wait for disk here.
+    pub(crate) fn finish_pending(&mut self) -> Option<PersistenceAck> {
+        let classes = self.in_flight.take()?;
+        Some(self.acknowledgements.recv().unwrap_or(PersistenceAck {
+            classes,
+            succeeded: PersistenceClasses::default(),
+        }))
     }
 
     /// Queue the latest full snapshot behind prior work, then join at the final durability boundary.
@@ -464,6 +638,26 @@ fn persist_snapshot(
         .detects
         .as_ref()
         .is_some_and(|detects| sink.save_detects(detects));
+    let charts = snapshot
+        .charts
+        .as_ref()
+        .is_some_and(|charts| sink.save_charts(charts));
+    let figures = snapshot
+        .figures
+        .as_ref()
+        .is_some_and(|figures| sink.save_figures(figures));
+    let badges = snapshot
+        .badges
+        .as_ref()
+        .is_some_and(|badges| sink.save_badges(badges));
+    let updates = snapshot
+        .updates
+        .as_ref()
+        .is_some_and(|updates| sink.save_updates(updates));
+    let config = snapshot
+        .config
+        .as_ref()
+        .is_some_and(|config| sink.save_config(config));
     PersistenceAck {
         classes,
         succeeded: PersistenceClasses {
@@ -471,6 +665,11 @@ fn persist_snapshot(
             classic,
             auto,
             detects,
+            charts,
+            figures,
+            badges,
+            updates,
+            config,
         },
     }
 }

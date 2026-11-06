@@ -80,6 +80,11 @@ const NARROW_W: f32 = 560.0;
 /// Nominal header height before UI scaling.
 const HEADER_H: f32 = 34.0;
 
+/// Strength of the highlight ink along the top of the title bar under the Facet skin: the value
+/// the group window's header and the detached chart window's title bar start from, so every
+/// chart window is lit alike.
+const FACET_TITLE_LIGHT: f32 = 0.06;
+
 /// Measure of the state sentence in the empty chart area, in logical pixels before the font scale.
 ///
 /// PIXELS, which is what [`design::font_w_px`] takes — it returns font-scaled pixels and has never
@@ -116,6 +121,10 @@ fn focus_button() -> MoonButton {
 ///
 /// The settings and scale slots are supplied by the view; a headless layout test can exercise
 /// this same row without constructing a backend or fetching a trade. Embedded panes omit chrome.
+///
+/// Under the Facet skin the row is lit from above and settles into the chart ground below it,
+/// closed by a rule that fades toward its ends. It stays opaque: the trade window's root paints
+/// no fill behind it, so that the chart's own pass shows under the scene.
 fn trade_header(
     title: String,
     embedded: bool,
@@ -172,6 +181,17 @@ fn trade_header(
         // Fixed controls leave truncation to the title at the minimum supported window width.
         .when(!embedded && design::show_custom_window_controls(), |el| {
             el.child(frame.visual_controls(cx).flex_none())
+        })
+        // Facet skin. The rule is one more child, out of flow, and it goes last: the row's own
+        // children keep the positions the layout test indexes them by.
+        .when(design::is_facet(cx), |this| {
+            design::facet_bottom_rule(
+                this.bg(design::facet_band(
+                    design::facet_lit(p, p.chart_bg, FACET_TITLE_LIGHT),
+                    moon(p.chart_bg),
+                )),
+                design::facet_ink(p, design::FACET_CHROME_RULE),
+            )
         })
 }
 

@@ -258,6 +258,13 @@ impl AnalyticsView {
             .bg(moon_alpha(p.table_head, 0.6))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.7))
+            // Facet skin: lit like the "By filter" subheadings it is styled after.
+            .when(design::is_facet(cx), |el| {
+                design::facet_top_rule(
+                    el.bg(design::facet_sheen(p, design::FACET_SECTION_SHEEN)),
+                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                )
+            })
             .text_size(design::t_caption(cx))
             .child(div().text_color(moon(p.text_soft)).child("IgnoreTime"))
             .child(

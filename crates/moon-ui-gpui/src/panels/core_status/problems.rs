@@ -519,6 +519,10 @@ fn actions(
         .justify_end()
         .border_b_1()
         .border_color(rgb(p.border))
+        // Facet skin: the rule under the action row fades toward the panel edges.
+        .when(design::is_facet(cx), |row| {
+            design::facet_bottom_rule(row, design::facet_ink(p, design::FACET_PANEL_RULE))
+        })
         .child(action_button(
             "core-status-problems-test",
             t!("core_status.problems_test").to_string(),
@@ -680,6 +684,9 @@ fn notice_text(scope: &ProblemsScope) -> Option<String> {
 
 /// The line that states what this view cannot tell you, or nothing when it can tell you everything.
 ///
+/// A `table_head` strip under the Flat skin. Under Facet it paints no fill and is set off the
+/// table below by a rule that fades toward the panel edges.
+///
 /// Args:
 ///     scope: What the scope could and could not report.
 ///     p: Active palette.
@@ -699,6 +706,7 @@ fn notice(
     // window, and the count in the line already carries the total.
     let silent =
         (!scope.silent.is_empty()).then(|| ellipsize(&scope.silent.join(", "), DETAILS_MAX_CHARS));
+    let facet = design::is_facet(cx);
     Some(
         h_flex()
             .id("cs-problems-notice")
@@ -712,7 +720,16 @@ fn notice(
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 4.0))
             .items_center()
-            .bg(rgb(p.table_head))
+            // Facet skin: the strip paints no fill, so the dock's own surface shows through it,
+            // and a rule that fades toward the panel edges sets it off the table below.
+            .when(!facet, |strip| strip.bg(rgb(p.table_head)))
+            .when(facet, |strip| {
+                strip
+                    .relative()
+                    .child(div().absolute().left_0().right_0().bottom_0().child(
+                        moon_ui::fading_rule_h(design::facet_ink(p, design::FACET_PANEL_RULE)),
+                    ))
+            })
             // MIXED NODE: `notice_text` welds the unknown/truncated COUNTS into the sentence.
             .font_family(design::mono())
             .text_size(design::t_caption(cx))

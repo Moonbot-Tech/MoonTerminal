@@ -517,7 +517,7 @@ impl AnalyticsView {
             .gap(design::ui_px(cx, ROW_GAP))
             .text_size(design::t_body(cx))
             .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
+            .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
             .child(
                 div().flex_none().child(
                     MoonCheckbox::new("an-ticks-en-all")
@@ -764,6 +764,14 @@ impl AnalyticsView {
             .bg(moon_alpha(p.table_head, 0.6))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.7))
+            // Facet skin: the heading is lit from its top edge instead of filled, under a rule
+            // that fades toward the card's edges.
+            .when(design::is_facet(cx), |el| {
+                design::facet_top_rule(
+                    el.bg(design::facet_sheen(p, design::FACET_SECTION_SHEEN)),
+                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                )
+            })
             .text_size(design::t_caption(cx))
             .font_family(design::ui_font())
             .child(collapse_caret(

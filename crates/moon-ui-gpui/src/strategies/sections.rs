@@ -206,16 +206,22 @@ impl StrategiesView {
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
+        // Facet skin: the column is a rail on the window backdrop — no fill of its own, its
+        // right edge a rule that fades toward the top and the bottom of the window.
+        let facet = design::is_facet(cx);
         let mut col = v_flex()
             .w(px(self.panels.sections_w))
             .flex_none()
             .h_full()
-            .bg(moon(p.shell_high))
+            .when(!facet, |this| this.bg(moon(p.shell_high)))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .line_height(design::line_px(cx, 14.0))
             .border_r_1()
             .border_color(border)
+            .when(facet, |this| {
+                design::facet_right_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+            })
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 12.0))
             .gap(design::ui_px(cx, 7.0))
@@ -225,7 +231,11 @@ impl StrategiesView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("strat.sections").to_string()),
             )
-            .child(div().w_full().h(px(1.0)).bg(border));
+            .child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).bg(border),
+            ));
 
         // With nothing selected this column has nothing to list, and the parameters pane to its
         // right already says so. Repeating the sentence here made the window ask the same question

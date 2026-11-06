@@ -278,7 +278,8 @@ impl StrategiesView {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .bg(moon(p.panel))
+            // Facet skin: the tab fills the window body, which stays on the window backdrop.
+            .when(!design::is_facet(cx), |this| this.bg(moon(p.panel)))
             .child(body)
             .children(trades)
             .into_any_element()
@@ -481,6 +482,10 @@ impl StrategiesView {
             .py(design::ui_px(cx, 6.0))
             .border_b_1()
             .border_color(moon(p.border_soft))
+            // Facet skin: the rule under the board's header fades toward its ends.
+            .when(design::is_facet(cx), |this| {
+                design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)

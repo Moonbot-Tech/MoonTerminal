@@ -262,8 +262,13 @@ fn read_one(path: &std::path::Path, mode: UiThemeMode) -> LegacyChartGraphics {
     };
 
     // Same discriminator `ChartThemeSet::load` uses, deliberately: the two must never disagree
-    // about which shape a file is in.
-    let tables: Vec<&toml::Value> = if text.contains("[dark") || text.contains("[light") {
+    // about which shape a file is in — hence one shared function rather than two copies.
+    //
+    // Only `[dark]` and `[light]` are searched, and the order is still decided by `is_light()`
+    // rather than by the chart colour set: the six keys left `ChartTheme` before the `[obsidian]`
+    // table existed, so that table can never hold one, and a user now on Obsidian tuned them
+    // while the dark table was the one they were looking at.
+    let tables: Vec<&toml::Value> = if super::theme::has_set_tables(&text) {
         let (first, second) = if mode.is_light() {
             ("light", "dark")
         } else {

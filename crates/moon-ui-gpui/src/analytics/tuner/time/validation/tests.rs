@@ -127,7 +127,12 @@ impl Render for Probe {
 /// Production controls stay in bounds across all locales and themes; orange prose gains height.
 #[gpui::test]
 fn time_validation_layout(cx: &mut gpui::TestAppContext) {
-    for mode in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for mode in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(mode, 1.0),

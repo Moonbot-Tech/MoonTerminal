@@ -38,6 +38,12 @@ The chart is drawn via a GPU own-pass on top of MoonUI/GPUI:
 This is not the old `egui + wgpu offscreen + readback` and not a shared-texture bridge between
 different renderers. CPU readback is not used for the live chart.
 
+The raw canvas API borrows the runtime's GPU objects. On Linux, producer and consumer must
+resolve to the **same Cargo `wgpu` package**, including source and version: these pointers
+refer to Rust types, not a stable C ABI. `lockfile_contract` checks both direct dependency
+edges, including local MoonUI override builds. The terminal uses MoonUI's registry source;
+switching either side to a fork requires switching both sides together.
+
 Key contract: the chart itself decides whether a frame is needed (`gpu_canvas.frame()`), and can
 prepare data for that same frame without a top-down `cx.notify()` of the whole window. Shell/Orders must not
 repaint at live-scroll, mousemove, or present frequency.
@@ -189,7 +195,13 @@ Rules that are easy to break unnoticed:
   a clean or inconclusive cheap result opens read access and starts one bounded full
   `integrity_check` in the background. Writes and maintenance wait for a conclusive full pass;
   a timeout or failed check does not authorize them. The writer also waits before opening the
-  database, so index-only damage that `quick_check` cannot see still receives no writes. A
+  database, so index-only damage that `quick_check` cannot see still receives no writes.
+  File size may skip only the synchronous cheap gate; the background scan uses its time budget
+  even above 2 GiB. An inconclusive full scan preserves access to existing history through SQLite
+  read-only connections and publishes a stopped-recording notice. New reader connections become
+  writable only after the full gate opens, preserving the Report preference-write API.
+  The existing report revision channel publishes a recovery notice even when no writer commits;
+  Report repaints the notice without requerying unchanged rows. A
   read-only WAL anchor held by the permit keeps early read-write preference readers from
   triggering a last-connection checkpoint before the writer opens.
   Confirmed damage is never "repaired" in place:
@@ -405,12 +417,29 @@ name is what left Binance COIN-M (code 6, reports `Binance Quarterly`) with no b
 test in `tests/theme_contract/naming.rs` sweeps the whole crate to keep `reported` out of every
 surface but the formatter.
 
-All three layout classes — `layout.toml`, the shared `auto_dock.json` and the joint Classic snapshot —
-are serialized by one persistence worker. The live GPUI contour only passes immutable snapshots and
-accepts acknowledgements: an accepted enqueue clears dirty, and a new mutation or a failed ack
-sets it again. Quit places
+One serial persistence worker writes layout, shared Auto/Classic topology, detection preferences,
+chart tabs, local figures, tab badges, core update history, and automatic config changes.
+The live GPUI contour captures immutable values and accepts acknowledgements; serialization,
+comparison with existing files, encryption, writes, sync and rename stay on the worker.
+An accepted enqueue clears dirty, and a later edit or failed acknowledgement sets it again.
+Only one request can be in flight; edits during a slow write coalesce in the live authority.
+Workspace/config snapshots are admitted at most once per second, independently of the existing
+layout cadence. Config normalization assigns durable IDs on the UI thread before capture, and
+figure snapshots retain unknown local figures without copying server-owned geometry.
+
+Rare deliberate writes (Settings, key changes, pairing, station handover and core setup) first
+finish the preceding snapshot, so an older autosave cannot overwrite their result. Quit places
 the final full snapshot behind the write already in flight, joins the worker and uses a synchronous
-fallback only for the classes the worker could not confirm.
+fallback only for the classes the worker could not confirm. These explicit commit/exit boundaries
+can wait for disk; routine trading updates do not.
+
+Config loaders distinguish missing files from unreadable or malformed originals. Falling back in
+memory protects that exact config path in the shared atomic writer until restart, so delayed saves
+and cloned models cannot replace bytes that were never loaded. Repair the original and restart to
+resume persistence; merely clearing a temporary sharing violation does not make an empty fallback
+authoritative. A successful existing quarantine remains writable because its original was preserved.
+Theme/order-style and hotkey migrations use the same rule. Figure and tab-badge saves retain pending
+edits after a failed write; the coordination gates retry at their existing one-second cadence.
 
 The Strategies gear popup resolves two optional `layout.toml` booleans: venue grouping defaults
 ON and active-only visibility defaults OFF. Explicit strategy reveals clear active-only through the
@@ -611,8 +640,11 @@ of operations rests on one rule: **only the transaction that applied the map wri
 Query reads go through `open_reader` / `open_reader_with` and come back as a `ReportReader`. A
 process-wide permit (`db::reader_budget`) allows eight at once. The connection field is declared
 before the permit, so the descriptors close before the slot returns. The permit owns the budget:
-`read_snapshot` borrows a transaction from the caller's connection, so a shared worker cannot sit
-in its place. A reader that finds every slot taken waits up to three seconds. If one frees, the
+`read_snapshot` returns a `ReportSnapshot` borrowing the caller's connection and dereferencing to
+its transaction, so a shared worker cannot sit in its place. The snapshot also pins the COIN-M
+money interpretation across all statements and nested queries; an old WAL cannot republish proof
+invalidated by a committed replica reset. A reader that finds every slot taken waits up to three
+seconds. If one frees, the
 open continues. If the wait expires, the open fails as `FailKind::Exhausted`. A wait cancelled
 because the request was superseded is `FailKind::Other`, not exhaustion.
 

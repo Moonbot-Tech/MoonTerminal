@@ -21,6 +21,9 @@ use windows::core::{Interface, PCSTR};
 
 pub use super::types::{BlitParams, ChartCross, ChartViewGpu};
 
+#[cfg(test)]
+pub(super) mod test_support;
+
 static DEBUG_FRAME_DUMP_DONE: AtomicBool = AtomicBool::new(false);
 static DEBUG_FRAME_DUMP_SEEN: AtomicU64 = AtomicU64::new(0);
 static DEBUG_COMBO_DUMP_DONE: AtomicBool = AtomicBool::new(false);

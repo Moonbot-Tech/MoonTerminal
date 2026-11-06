@@ -158,6 +158,14 @@ pub(super) fn section_header(
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 0.7))
         .bg(moon_alpha(palette.table_head, 0.8))
+        // Facet skin: the heading is lit from its top edge instead of filled, over a rule that
+        // fades toward the table's edges. A selected heading still takes the blue below.
+        .when(design::is_facet(cx), |caption| {
+            design::facet_bottom_rule(
+                caption.bg(design::facet_sheen(palette, design::FACET_SECTION_SHEEN)),
+                design::facet_ink(palette, design::FACET_PANEL_RULE),
+            )
+        })
         // The SAME blue the rows use, for the same reason: `table_selected` belongs to the arrival
         // tint here, and one colour for both would make a selected section swallow the new-trade
         // flash of the rows it introduces.

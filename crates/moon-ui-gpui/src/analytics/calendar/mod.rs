@@ -18,6 +18,7 @@ mod month;
 mod year;
 
 use chrono::{Datelike, NaiveDate};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonVariant, MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex,
@@ -616,6 +617,10 @@ impl AnalyticsView {
                             .py_1()
                             .rounded_sm()
                             .bg(moon(p.table_head))
+                            // Facet skin: the unit chip stands off the bar as a raised pill.
+                            .when(design::is_facet(cx), |el| {
+                                design::facet_surface(el, moon_ui::MoonFacetKind::Raised, cx)
+                            })
                             .text_size(design::t_caption(cx))
                             .text_color(moon(p.text_soft))
                             .child(currency.ticker()),
@@ -646,6 +651,10 @@ impl AnalyticsView {
             .items_center()
             .border_b_1()
             .border_color(moon(p.border))
+            // Facet skin: the rule that closes the navigation bar fades toward the window edges.
+            .when(design::is_facet(cx), |el| {
+                design::facet_bottom_rule(el, design::facet_ink(p, design::FACET_CHROME_RULE))
+            })
             .child(modes)
             .child(nav)
             .child(trailing)

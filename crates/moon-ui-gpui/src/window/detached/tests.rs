@@ -181,7 +181,7 @@ fn owned_window_release_queues_removes_and_then_wakes_shell() {
 /// an OS-owned child of its group window, so application exit destroys it BEFORE the group window
 /// whose close unregisters it: without the guard that release reads as user-driven, docks the panel
 /// and deletes its `DetachedSpec`, and the detachment does not survive the restart. The flag is fed
-/// by `on_window_should_close`, which on Windows every user-driven close routes through.
+/// by `on_window_should_close`, which every native or client-drawn user close routes through.
 #[test]
 fn a_release_the_user_did_not_ask_for_stays_silent() {
     let source = include_str!("../detached.rs");
@@ -202,16 +202,17 @@ fn a_release_the_user_did_not_ask_for_stays_silent() {
         .expect("a user-driven release must queue a repin");
     assert!(guard < queue, "the guard must precede queueing the repin");
 
-    // Seeding the flag `true` everywhere would restore the bug on the shipping platforms, where the
-    // hook is authoritative. Only a platform whose frame button bypasses it (Linux) may start true.
+    // The common request-close path makes the hook authoritative on Linux too. Seeding true on
+    // any platform would mistake owner teardown for an explicit user request.
     let seed = source
         .split("let user_close = std::rc::Rc::new(std::cell::Cell::new(")
         .nth(1)
         .and_then(|tail| tail.split("));").next())
-        .expect("the flag must be seeded from the platform's close semantics");
-    assert!(
-        seed.contains("target_os = \"windows\"") && seed.contains("target_os = \"macos\""),
-        "Windows and macOS route every user close through the hook and must start from false"
+        .expect("the flag must be seeded before registering the close policy");
+    assert_eq!(
+        seed.trim(),
+        "false",
+        "every platform starts without a user close request"
     );
 }
 

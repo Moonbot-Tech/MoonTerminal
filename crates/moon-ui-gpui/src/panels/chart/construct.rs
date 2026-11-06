@@ -220,8 +220,8 @@ impl ChartPanel {
             this.requery_trade_history_on_core_scope(cx);
         })
         .detach();
-        let market_data_revision = backend.read(cx).market_data_revision();
-        cx.observe(&market_data_revision, |this, _revision, cx| {
+        let market_catalog_revision = backend.read(cx).market_catalog_revision();
+        cx.observe(&market_catalog_revision, |this, _revision, cx| {
             // A sibling's catalog can become resolvable without a Backend notification or a
             // workspace change. In PerCore that catalog is its own, so the admitted aliases have
             // to be collected again or that sibling never enters the read.
@@ -447,8 +447,8 @@ impl ChartPanel {
             this.requery_trade_history_on_core_scope(cx);
         })
         .detach();
-        let market_data_revision = backend.read(cx).market_data_revision();
-        cx.observe(&market_data_revision, |this, _revision, cx| {
+        let market_catalog_revision = backend.read(cx).market_catalog_revision();
+        cx.observe(&market_catalog_revision, |this, _revision, cx| {
             // A sibling's catalog can become resolvable without a Backend notification or a
             // workspace change. In PerCore that catalog is its own, so the admitted aliases have
             // to be collected again or that sibling never enters the read.

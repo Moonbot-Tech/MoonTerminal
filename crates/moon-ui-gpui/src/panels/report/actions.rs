@@ -6,8 +6,8 @@ use super::*;
 /// Workspace authority captured while an export destination picker is open.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ReportExportScopeIdentity {
-    /// Group-workspace generation, or `None` for an explicit standalone Report scope.
-    workspace_generation: Option<u64>,
+    /// This group's semantic scope, or `None` for an explicit standalone Report.
+    workspace_scope: Option<EffectiveCoreScope>,
     /// Deterministic effective core ids represented by the export request.
     core_ids: Vec<CoreId>,
 }
@@ -19,7 +19,7 @@ struct ReportExportScopeIdentity {
 ///     current: Scope rebuilt from the live panel and Backend after the picker returns.
 ///
 /// Returns:
-///     `true` only when neither group generation nor effective core membership changed.
+///     `true` only when this group's scope and effective core membership still match.
 fn report_export_scope_is_current(
     requested: &ReportExportScopeIdentity,
     current: &ReportExportScopeIdentity,
@@ -28,6 +28,39 @@ fn report_export_scope_is_current(
 }
 
 impl ReportPanel {
+    /// Verify that another workspace event preserves this panel's selection and export authority.
+    pub(crate) fn firetest_foreign_workspace(
+        panel: Entity<Self>,
+        cx: &mut App,
+        done: impl FnOnce(Result<(), String>) + 'static,
+    ) {
+        let key = selection::ReportRowKey::Replicated {
+            core_uid: 0,
+            rec_id: 123,
+        };
+        let (before, scope, revision) = panel.update(cx, |panel, cx| {
+            panel.selection.select_all(&[Some(key)]);
+            (
+                panel.query_seq,
+                panel.export_scope_identity(cx),
+                panel.backend.read(cx).workspace_revision(),
+            )
+        });
+        revision.update(cx, |revision, cx| revision.advance(cx));
+        cx.defer(move |cx| {
+            let panel = panel.read(cx);
+            let result = if panel.query_seq == before
+                && panel.selection.contains(Some(key))
+                && report_export_scope_is_current(&scope, &panel.export_scope_identity(cx))
+            {
+                Ok(())
+            } else {
+                Err("unrelated workspace event reset Report selection, query or export".into())
+            };
+            done(result);
+        });
+    }
+
     /// Toggle a core in the retained Classic or standalone multi-selection.
     ///
     /// `None` is the All toggle and clears the explicit selection back to the empty-means-all
@@ -911,18 +944,12 @@ impl ReportPanel {
     ///     cx: Application context used to read Backend and workspace revision state.
     ///
     /// Returns:
-    ///     Group generation plus effective ids, or explicit standalone ids without a generation.
+    ///     Group scope plus effective ids, or explicit standalone ids without workspace authority.
     fn export_scope_identity(&self, cx: &App) -> ReportExportScopeIdentity {
-        let (workspace_revision, core_ids) = {
-            let backend = self.backend.read(cx);
-            (
-                (!self.standalone).then(|| backend.workspace_revision()),
-                self.effective_core_ids(backend),
-            )
-        };
+        let backend = self.backend.read(cx);
         ReportExportScopeIdentity {
-            workspace_generation: workspace_revision.map(|revision| revision.read(cx).generation()),
-            core_ids,
+            workspace_scope: self.report_scope(backend),
+            core_ids: self.effective_core_ids(backend),
         }
     }
 

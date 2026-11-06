@@ -356,6 +356,8 @@ impl AlertsPanel {
                 )
                 .into_any_element()
         };
+        // Facet skin: the bar paints no fill of its own and its top rule fades toward the edges.
+        let facet = design::is_facet(cx);
         h_flex()
             .flex_none()
             .w_full()
@@ -363,9 +365,12 @@ impl AlertsPanel {
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, 16.0))
-            .bg(moon(p.shell_high))
+            .when(!facet, |bar| bar.bg(moon(p.shell_high)))
             .border_t_1()
             .border_color(moon(p.border))
+            .when(facet, |bar| {
+                design::facet_top_rule(bar, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .items_end()
             .child(field(
                 t!("alerts.duration").to_string(),

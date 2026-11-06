@@ -79,7 +79,8 @@ impl HotkeysConfig {
     /// file would be silently overwritten by the stale legacy copy from settings.toml.
     pub fn load() -> Option<Self> {
         let path = paths::hotkeys_path();
-        if !path.exists() {
+        if std::fs::symlink_metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
             return None;
         }
         let mut cfg: Self = super::toml_io::load_or_default(&path, "hotkeys.toml", |_| {});

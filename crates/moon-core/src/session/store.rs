@@ -1365,11 +1365,9 @@ impl CoreData {
                 }
             }
             FeedMsg::SysStatus(sys) => {
-                // Telemetry arrives every Ping with a fresh `updated_ms`, so store it every
-                // time to keep the panel's "Updated" column live — but bump `sys_rev` (the
-                // repaint signature) ONLY when the metrics changed, else a steady core would
-                // churn it every Ping. Repaints are also capped by the 250ms backend throttle
-                // and the panel RenderGate.
+                // Keep every timestamp: server aggregation selects the freshest core sample.
+                // Metric identity excludes that timestamp; the warning sampler owns periodic
+                // presentation, so a health ping does not wake unrelated backend observers.
                 let metrics_changed = !self.sys.metrics_eq(&sys);
                 self.sys = sys;
                 if metrics_changed {
@@ -1617,6 +1615,7 @@ impl CoreData {
             | FeedMsg::IdentityStale(_)
             | FeedMsg::CoreBase { .. }
             | FeedMsg::MarketDataChanged(_)
+            | FeedMsg::MarketCatalogChanged
             | FeedMsg::ChartArchiveAnswered { .. }
             | FeedMsg::TradeSounds(_)
             | FeedMsg::TradeOpened { .. }

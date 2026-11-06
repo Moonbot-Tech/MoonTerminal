@@ -94,6 +94,9 @@ pub(in crate::chartdx) struct RenderState {
     pub(in crate::chartdx) firetest_text_layer: GpuCanvasRetainedTextLayer,
     pub(in crate::chartdx) firetest_text_revision: u64,
     pub(in crate::chartdx) firetest_force_present: bool,
+    /// One-shot native image capture; absent during ordinary rendering.
+    #[cfg(windows)]
+    pub(in crate::chartdx) firetest_capture: Option<super::recovery_probe::Capture>,
     pub(in crate::chartdx) ui_palette: moon_ui::MoonPalette,
     /// Top-left chart-slot origin in the backbuffer. UI cursor coordinates are local slot device
     /// pixels, while own-pass renders in window coordinates.
@@ -220,18 +223,6 @@ const READOUT_FALLBACK_FONT_W: f32 = 8.5;
 const READOUT_PAD_X: f32 = 5.0;
 const READOUT_PAD_Y: f32 = 2.5;
 const READOUT_INSET: f32 = 2.0;
-
-#[cfg(windows)]
-/// The clip for the order-line and trade-mark pass: the pane, less the horizontal-volume zone
-/// when one is carved out beside the plot (`HvolStyleGpu::user_clip_left`). The zone sits at the
-/// pane's left edge, so this only moves the left side.
-fn userdata_clip(pane_clip: [f32; 4], hvol: &super::HvolStyleGpu) -> [f32; 4] {
-    let Some(edge) = hvol.user_clip_left() else {
-        return pane_clip;
-    };
-    let left = edge.ceil().clamp(pane_clip[0], pane_clip[2] - 1.0);
-    [left, pane_clip[1], pane_clip[2], pane_clip[3]]
-}
 
 fn bounds_clip(bounds: [f32; 4], res: [f32; 2]) -> [f32; 4] {
     // IMPORTANT: `clamp(min, max)` panics when min exceeds max. With degenerate panel bounds such as
@@ -940,11 +931,9 @@ impl RenderState {
 
             if !axis_hidden && cy_log >= plot_top && cy_log <= plot_bottom {
                 let price_to_px = pr.view.price_to_px / sf;
-                let price_range = plot_h / price_to_px.max(1e-6);
                 let y_min = pr.view.view_price0;
-                let dec = moon_chart::axes::price_decimals(y_min + price_range * 0.5);
                 let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
-                let label = format!("{price:.dec$}");
+                let label = moon_chart::axes::format_price(price, pr.price_tick.tick());
                 let text_w = readout_text_width(&label, pr.readout_price_width);
                 let line_h = pr.readout_price_line_h.max(1.0);
                 let x = if axis_on_right {
@@ -1050,6 +1039,7 @@ impl RenderState {
         }
     }
 
+    /// Upload pending layers and propagate changed inner textures to their containing base cache.
     pub(super) fn prepare_gpu(&mut self, gpu: &RawGpuAccess) -> anyhow::Result<()> {
         let width = gpu.width();
         let height = gpu.height();
@@ -1082,7 +1072,7 @@ impl RenderState {
                     view.resolution = res;
                     orderbook_view.resolution = res;
                     crate::diag::bump(&crate::diag::CHART_GPU_PREPARE);
-                    pr.layers.prepare_d3d(
+                    self.base_dirty |= pr.layers.prepare_d3d(
                         &view,
                         &orderbook_view,
                         &pr.book_style,
@@ -1203,12 +1193,7 @@ impl RenderState {
             background_params.resolution = res;
             grid_params.resolution = res;
             orderbook_view.resolution = res;
-            let panel_clip = [
-                view.bounds[0],
-                view.bounds[1],
-                orderbook_view.bounds[0] + orderbook_view.bounds[2],
-                view.bounds[1] + view.bounds[3],
-            ];
+            let panel_clip = view.content_clip(&orderbook_view);
             gpu::set_scissor(
                 context,
                 scissor_rs,
@@ -1311,11 +1296,8 @@ impl RenderState {
                     cursor_params.resolution = res;
                     sync_readout_resolution(&mut pr.readout_rects, res);
                     let pane_clip = bounds_clip(pr.pane_bounds, res);
-                    // Order lines and trade marks stop at the horizontal-volume zone: a mark whose
-                    // time scrolled off the plot's left edge would otherwise draw over the zone's
-                    // rows. The cursor pass below keeps the whole pane — the crosshair and the
-                    // volume readout live in the zone.
-                    let user_clip = userdata_clip(pane_clip, &pr.hvol_style);
+                    // Preserve order-line reach into the book while excluding every axis gutter.
+                    let user_clip = view.content_clip(&pr.orderbook_view);
                     gpu::set_scissor(
                         &context,
                         &scissor_rs,
@@ -1326,6 +1308,20 @@ impl RenderState {
                     );
                     pr.layers
                         .render_userdata_lines_d3d(&view, &context, &rtv, gpu);
+                    if matches!(
+                        self.firetest_capture,
+                        Some(super::recovery_probe::Capture::CheckClip)
+                    ) {
+                        self.firetest_capture = Some(super::recovery_probe::Capture::ClipChecked(
+                            super::clip_probe::check(
+                                &view,
+                                &pr.orderbook_view,
+                                pr.pane_bounds,
+                                gpu,
+                            ),
+                        ));
+                        self.needs_present = true;
+                    }
                     gpu::set_scissor(
                         &context,
                         &scissor_rs,
@@ -1343,6 +1339,28 @@ impl RenderState {
                         gpu,
                     );
                     pr.finish_order_present(present_ms);
+                }
+                if matches!(
+                    self.firetest_capture,
+                    Some(super::recovery_probe::Capture::Requested)
+                ) {
+                    let image = self
+                        .panes
+                        .iter()
+                        .find(|pane| pane.active)
+                        .ok_or_else(|| "recovery has no active chart".to_string())
+                        .and_then(|pane| {
+                            super::recovery_probe::capture(
+                                &device,
+                                &context,
+                                &rtv,
+                                bounds_clip(pane.pane_bounds, res),
+                                generation,
+                            )
+                            .map(std::sync::Arc::new)
+                            .map_err(|error| error.to_string())
+                        });
+                    self.firetest_capture = Some(super::recovery_probe::Capture::Ready(image));
                 }
                 unsafe {
                     context.RSSetState(prev_rs.as_ref());

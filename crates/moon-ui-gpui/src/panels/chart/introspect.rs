@@ -43,7 +43,10 @@ impl ChartPanel {
         }
     }
 
-    #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
+    /// Hand out this panel's chart-data handle for debug registration and FireTest.
+    ///
+    /// Not gated by profile: FireTest compiles into every build, release included, and its dense
+    /// run reaches this through `MainChartStack::firetest_dense_pair`.
     pub fn debug_data_handle(&self) -> crate::chartdx::ChartDataHandle {
         self.chart.data_handle()
     }

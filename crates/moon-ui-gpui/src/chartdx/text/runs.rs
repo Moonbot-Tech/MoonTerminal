@@ -206,6 +206,8 @@ impl RenderState {
         )
     }
 
+    /// Bake the full stress set and submit its visible page, recording cache work separately
+    /// from successful visible submissions so a cached frame still proves the load is present.
     pub(super) fn draw_firetest_text(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
@@ -283,6 +285,7 @@ impl RenderState {
 
         crate::diag::bump_by(&crate::diag::FIRETEST_TEXT_DRAW, drawn);
         crate::diag::bump_by(&crate::diag::FIRETEST_TEXT_COLD, cold);
+        crate::diag::bump_by(&crate::diag::FIRETEST_TEXT_VISIBLE, visible_count as u64);
         Ok(())
     }
 

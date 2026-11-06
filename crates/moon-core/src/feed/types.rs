@@ -156,6 +156,9 @@ pub enum FeedMsg {
     /// `SessionManager` mark particular markets dirty while visible charts pull the snapshots they
     /// need. The ticks and order book themselves do not travel through the UI channel.
     MarketDataChanged(Vec<MarketDirty>),
+    /// A client's market catalog changed or its client slot was installed/cleared. Unlike
+    /// market-data wakes, this is sent even without an elected provider or an open chart.
+    MarketCatalogChanged,
     /// The core answered this client's chart-archive request for the market — merged it into the
     /// retained rings (`Ready`) or failed it. Sent by EVERY core, provider or not, chart open or
     /// not: the tuner's tape stage asks any connected core of the venue and waits for exactly this

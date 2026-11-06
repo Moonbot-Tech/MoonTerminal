@@ -17,8 +17,12 @@
 //! FireTest deliberately drives the real app: a real chart on a real core, real OS mouse input,
 //! real windows. Static architecture checks belong in `tests/theme_contract/`, never here.
 
+mod application;
 mod bench;
 mod config;
+pub(crate) mod dense;
+#[cfg(debug_assertions)]
+pub(crate) mod f1;
 // Named `logging`, not `log`: a module called `log` here would shadow the `log` crate for every
 // later edit in this file, and the shadowing error reads as a missing macro.
 mod logging;
@@ -67,7 +71,8 @@ pub(crate) struct Runtime {
     /// `None` until one appears — an empty session list at startup means "nobody has reported yet",
     /// not "nothing to wait for", and reading it as the latter skips the wait entirely.
     cores_seen_at: Option<Instant>,
-    probe: Option<ChartProbe>,
+    /// Geometry and owner travel together so the text load and mouse storm hit the same chart.
+    probe: Option<(ChartProbe, crate::chartdx::ChartDataHandle)>,
     /// How much app the idle window was measured against. `None` until that stage records it.
     bench: Option<bench::BenchShape>,
     samples: Vec<Sample>,
@@ -79,6 +84,15 @@ pub(crate) struct Runtime {
     flash_charts: Option<usize>,
     opened_group: Option<String>,
     tool_window_ids: Option<(String, String, String)>,
+    /// Real retained status panel and its row generation before the existing quiet tail.
+    core_status_probe: Option<(gpui::Entity<crate::panels::CoreStatusView>, u64)>,
+    /// Event-routing checks share the existing tool-window and recovery settling time.
+    application_probe: Option<application::Probe>,
+    /// Painted Input/Resizable result and quietness in the existing Assets window.
+    #[cfg(debug_assertions)]
+    f1_probe: Option<f1::Probe>,
+    /// Two independent chart consumers of the generated history, when that fixture is selected.
+    dense: Option<dense::DenseRun>,
     locale_switch: Option<(Language, Language)>,
     order_cancel: Option<OrderCancelRun>,
     text_overlay_enabled: bool,
@@ -123,6 +137,11 @@ impl Runtime {
             flash_charts: None,
             opened_group: None,
             tool_window_ids: None,
+            core_status_probe: None,
+            application_probe: None,
+            #[cfg(debug_assertions)]
+            f1_probe: None,
+            dense: None,
             locale_switch: None,
             order_cancel: None,
             text_overlay_enabled: false,
@@ -131,10 +150,29 @@ impl Runtime {
         }
     }
 
-    /// Accept the chart's reported bounds, if the current stage declared it wants them.
-    fn observe_probe(&mut self, probe: ChartProbe) {
-        if self.current_stage().is_some_and(|stage| stage.wants_probe) {
-            self.probe = Some(probe);
+    /// Start the painted native check or explicitly report the profile that compiled it out.
+    fn start_f1_probe(&mut self, _backend: &Backend, _cx: &mut Context<Backend>) {
+        #[cfg(debug_assertions)]
+        {
+            self.f1_probe = Some(f1::start(_backend, _cx));
+        }
+        #[cfg(not(debug_assertions))]
+        firetest_info(
+            "[firetest] f1_native=SKIPPED reason=debug_assertions_disabled; build: cargo build -p moon-ui-gpui --bin moonterminal --target x86_64-pc-windows-msvc --config profile.dev.package.moon-gpui.debug-assertions=true --config profile.dev.package.moon-gpui-macros.debug-assertions=true --config profile.dev.package.moon-ui-gpui.debug-assertions=true",
+        );
+    }
+
+    /// Follow the first visible probe's owner through layout changes without switching the load
+    /// to a different chart when another window paints.
+    fn observe_probe(&mut self, probe: ChartProbe, chart: crate::chartdx::ChartDataHandle) {
+        if dense::selected() && self.dense.as_ref().is_none_or(|run| run.hybrid != chart) {
+            return;
+        }
+        if self.current_stage().is_some_and(|stage| stage.wants_probe)
+            && chart.is_scene_visible()
+            && self.probe.as_ref().is_none_or(|(_, owner)| owner == &chart)
+        {
+            self.probe = Some((probe, chart));
         }
     }
 
@@ -170,6 +208,9 @@ impl Runtime {
     /// act. A row that answers `Next` hands over to the row after it in the table — no stage names
     /// its successor, so inserting one never means editing its neighbour.
     fn tick(&mut self, backend: &mut Backend, cx: &mut Context<Backend>) {
+        if let Some(run) = &mut self.dense {
+            run.tick(self.plan.get(self.cursor).map(|stage| stage.phase), backend);
+        }
         let Some(stage) = self.current_stage() else {
             return;
         };
@@ -274,10 +315,14 @@ pub(crate) fn tick_backend(backend: &mut Backend, cx: &mut Context<Backend>) {
     backend.firetest = Some(runtime);
 }
 
-/// Report the chart's real on-screen bounds, called from the chart element's render.
-pub(crate) fn observe_chart_probe(backend: &mut Backend, probe: ChartProbe) {
+/// Report the chart's real on-screen bounds and owner from the chart element's paint.
+pub(crate) fn observe_chart_probe(
+    backend: &mut Backend,
+    probe: ChartProbe,
+    chart: crate::chartdx::ChartDataHandle,
+) {
     if let Some(runtime) = backend.firetest.as_mut() {
-        runtime.observe_probe(probe);
+        runtime.observe_probe(probe, chart);
     }
 }
 

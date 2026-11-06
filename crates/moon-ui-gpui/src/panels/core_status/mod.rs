@@ -2,8 +2,8 @@
 //! (`Event::KernelHealth`) for every core in scope.
 //!
 //! `CoreData::sys` holds the latest sample, and `sys_rev` marks when metric values or the decoded
-//! endpoint changed. The panel itself rebuilds on its own 1 s gate over backend notifications
-//! rather than by polling that counter; the counters gate the NOTIFY, upstream in the session.
+//! endpoint changed. The warning engine publishes its completed 1 s samples through a dedicated
+//! channel, so history and elapsed status time progress even without unrelated backend traffic.
 //!
 //! Like the Assets panel, it is scoped to a window group and can live in a dock
 //! tab or a detached window. [`crate::persistence::table_persist`] stores separate column
@@ -76,16 +76,13 @@ pub struct CoreStatusView {
     /// Retained Classic multi-select core filter; an empty set means every group core. Auto mode
     /// pins its effective workspace scope without using or mutating this selection.
     pub(super) sel_cores: HashSet<CoreId>,
-    /// Unix ms of the last repaint; telemetry repaints at most once per second.
-    last_repaint_ms: i64,
-    /// `core_update_rev()` as of the last rebuild, bypassing the 1 s repaint gate on change so a
-    /// phase transition never sits stale for up to a second — see the backend observer below.
+    /// `core_update_rev()` last consumed by the immediate update-transition observer.
     last_update_rev: u64,
-    /// `core_update_history_rev()` as of the last rebuild, folded into the same bypass as
-    /// `last_update_rev`: a record appended by a completing attempt moves the history but need
-    /// not move any phase, so gating on the phase revision alone would leave the Updates list
-    /// stale for up to a second.
+    /// `core_update_history_rev()` last consumed alongside the phase revision: a completed
+    /// attempt can append history without changing any phase.
     last_history_rev: u64,
+    /// Defers sampled table snapshots while hidden, preserving one activation catch-up.
+    sample_gate: crate::panels::RenderGate,
     /// Whether any server currently has a warning; drives the dock-tab badge.
     has_warn: bool,
     /// Whether this instance is a detached window (vs a dock tab). Only a window renders the chart.
@@ -261,40 +258,36 @@ impl CoreStatusView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // This fires on every backend notify (event-driven, ≤4 Hz — not a timer/poll), but the
-        // rebuild is gated to once per second. Detection AND chart-history recording run in the
-        // backend engine (backend-always), so the panel only rebuilds its display from that state.
+        let core_status_revision = backend.read(cx).core_status_revision.clone();
+        cx.observe(&core_status_revision, |this, _, cx| {
+            this.refresh_sample(cx);
+        })
+        .detach();
+
+        // Update transitions remain immediate. Other status, history, and age changes are read
+        // from the dedicated sample above, independent of general backend notifications.
         cx.observe(&backend, |this, backend, cx| {
-            let now = moon_chart::paint::now_unix_ms() as i64;
-            // OR alongside the 1 s time gate, never a replacement for it: a signature-driven
-            // bypass here is what keeps a phase transition from sitting stale for up to a second,
-            // while the time gate still governs every OTHER backend notify -- up to 4 Hz over a
-            // 200-core fleet, which is why this must not become the panel's only gate.
             let update_rev = backend.read(cx).session.core_update_rev();
             let history_rev = backend.read(cx).session.core_update_history_rev();
             let update_changed =
                 update_rev != this.last_update_rev || history_rev != this.last_history_rev;
-            if !update_changed && now - this.last_repaint_ms < 1000 {
+            if !update_changed {
                 return;
             }
-            this.last_repaint_ms = now;
             this.last_update_rev = update_rev;
             this.last_history_rev = history_rev;
-            this.rebuild_cache(cx);
-            cx.notify();
+            this.refresh_sample(cx);
         })
         .detach();
 
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
-            this.rebuild_cache(cx);
-            cx.notify();
+            this.refresh_sample(cx);
         })
         .detach();
         let workspace_revision = backend.read(cx).workspace_revision();
         cx.observe(&workspace_revision, |this, _revision, cx| {
-            this.rebuild_cache(cx);
-            cx.notify();
+            this.refresh_sample(cx);
         })
         .detach();
         let core_filter_revision = backend.read(cx).core_filter_revision();
@@ -418,9 +411,9 @@ impl CoreStatusView {
             sel_cores: HashSet::new(),
             core_selection: RowSelection::default(),
             problems_picked: None,
-            last_repaint_ms: 0,
             last_update_rev: 0,
             last_history_rev: 0,
+            sample_gate: crate::panels::RenderGate::default(),
             has_warn: false,
             detached,
             chart_window: ChartWindow::default(),
@@ -494,5 +487,10 @@ impl CoreStatusView {
     /// Return the table state used by the detached window's auto-width reset button.
     pub fn table_state(&self) -> Entity<MoonDataTableState> {
         self.table_state.clone()
+    }
+
+    /// Let FireTest observe completed row snapshots without forcing a rebuild or repaint.
+    pub(crate) fn firetest_rows_generation(&self) -> u64 {
+        self.rows_generation
     }
 }

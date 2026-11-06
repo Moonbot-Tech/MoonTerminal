@@ -1,5 +1,5 @@
-//! Shared load/save logic for plaintext TOML config files: one pattern of
-//! "missing → defaults; corrupt → log + on_corrupt + defaults" instead of duplicates.
+//! Shared config I/O. Missing files accept defaults; unread originals remain protected for this
+//! process, including saves through an older in-memory copy after a temporary read failure.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -7,6 +7,32 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+/// Paths whose fallback values cannot safely replace their unread original during this process.
+static PROTECTED_FILES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Keep an unread or unparsed config intact until restart, including deferred and cloned saves.
+/// Callers use the same paths authority as their writer and log the specific load failure.
+pub fn preserve_unreadable_config(path: &Path) {
+    PROTECTED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(path.to_path_buf());
+}
+
+/// Read a config without confusing absence with unreadability; a failed read seals write-back.
+pub fn read_config_text(path: &Path, label: &str) -> std::io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            preserve_unreadable_config(path);
+            log::error!("{label}: read failed ({error}); preserving the original until restart");
+            Err(error)
+        }
+    }
+}
 
 /// Config-load outcome used by the caller to decide whether writing back is safe.
 ///
@@ -61,18 +87,14 @@ pub fn load_or_default_status<T: Default + DeserializeOwned>(
     label: &str,
     on_corrupt: impl FnOnce(&Path) -> bool,
 ) -> (T, ConfigLoad) {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let text = match read_config_text(path, label) {
+        Ok(Some(text)) => text,
+        Ok(None) => {
             return (defaults_for_absent_file(label), ConfigLoad::Absent);
         }
         // This is NOT file absence: the distinction prevents the caller from turning a temporary
         // read failure into a permanent overwrite during write-back.
-        Err(e) => {
-            log::error!(
-                "{label}: файл есть, но не читается ({e}); работаю на дефолтах В ПАМЯТИ и НЕ \
-                 перезаписываю файл"
-            );
+        Err(_) => {
             return (defaults_for_absent_file(label), ConfigLoad::Unreadable);
         }
     };
@@ -85,6 +107,7 @@ pub fn load_or_default_status<T: Default + DeserializeOwned>(
             let status = if on_corrupt(path) {
                 ConfigLoad::Corrupt
             } else {
+                preserve_unreadable_config(path);
                 log::error!("{label}: карантин не удался — запись файла запрещена");
                 ConfigLoad::Unreadable
             };
@@ -93,8 +116,8 @@ pub fn load_or_default_status<T: Default + DeserializeOwned>(
     }
 }
 
-/// Like [`load_or_default_status`] without the status, for layout/theme files whose unreadable
-/// state does not trigger an automatic overwrite.
+/// Load a config whose callers need fallback values but cannot carry a load status in the model.
+/// Write-back remains protected unless the corruption handler actually removes the original.
 pub fn load_or_default<T: Default + DeserializeOwned>(
     path: &Path,
     label: &str,
@@ -102,7 +125,7 @@ pub fn load_or_default<T: Default + DeserializeOwned>(
 ) -> T {
     load_or_default_status(path, label, |p| {
         on_corrupt(p);
-        true
+        p.try_exists().is_ok_and(|exists| !exists)
     })
     .0
 }
@@ -239,6 +262,13 @@ fn write_atomic_memo_with(
 
 /// Atomically replace a file, propagating errors so the caller retries a failed save.
 fn write_atomic_raw(path: &Path, bytes: &[u8], label: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !PROTECTED_FILES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(path),
+        "{label}: preserving a config that could not be loaded; repair it and restart before saving"
+    );
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).with_context(|| format!("создание папки для {label}"))?;
     }

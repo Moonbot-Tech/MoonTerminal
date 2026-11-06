@@ -263,6 +263,10 @@ impl StrategiesView {
                         .rounded(design::ui_px(cx, 4.0))
                         .border_1()
                         .border_color(moon(p.border))
+                        // Facet skin: the stand-in for an input is sunk like one.
+                        .when(design::is_facet(cx), |this| {
+                            design::facet_surface(this, moon_ui::MoonFacetKind::Well, cx)
+                        })
                         .text_size(design::t_caption(cx))
                         .text_color(moon(p.text_muted))
                         .child(display);

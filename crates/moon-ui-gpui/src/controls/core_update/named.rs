@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_core::feed::{CORE_UPDATE_ALL_WORD, CORE_UPDATE_COMMAND_WORD, UpdateTarget};
 use moon_core::session::CoreId;
@@ -81,26 +82,22 @@ pub(crate) fn typed_build_name(raw: &str) -> Option<String> {
 ///     initial: Text to start with -- the name a failed attempt used, so a retry corrects it
 ///         instead of retyping it. `None` starts empty.
 ///     window: Window that will host the field.
-///     cx: Application context used to create and focus the input.
+///     cx: Application context used to create the input.
 ///
 /// Returns:
-///     The input state, already focused.
+///     The input state; its host assigns focus after opening.
 pub(crate) fn build_name_input(
     initial: Option<String>,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<MoonInputState> {
-    let input = cx.new(|cx| {
+    cx.new(|cx| {
         let state = MoonInputState::new(window, cx);
         match initial {
             Some(text) => state.default_value(text),
             None => state,
         }
-    });
-    input
-        .clone()
-        .update(cx, |input, cx| input.focus(window, cx));
-    input
+    })
 }
 
 /// The hint under the build-name field: every accepted form written out in full, and what `ALL`
@@ -216,6 +213,7 @@ pub(crate) fn open_named_dialog(
     app: &mut App,
 ) {
     let input = build_name_input(initial, window, app);
+    let initial_focus = input.clone();
 
     window.open_unique_moon_dialog(NAMED_DIALOG_ID, app, move |dialog, _window, cx| {
         let p = MoonPalette::active(cx);
@@ -245,8 +243,10 @@ pub(crate) fn open_named_dialog(
             .close_button(true)
             .overlay(true)
             .overlay_closable(true)
-            .bg(moon(p.shell_high))
-            .border_color(moon(p.border))
+            // Facet skin: no override, so MoonUI's popup surface shows.
+            .when(!design::is_facet(cx), |dialog| {
+                dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+            })
             .rounded(design::r_container(cx))
             .text_color(moon(p.text))
             .header(
@@ -255,6 +255,13 @@ pub(crate) fn open_named_dialog(
                     .py_2()
                     .border_b_1()
                     .border_color(moon(p.border))
+                    // Facet skin: the rule under the title fades toward the dialog's edges.
+                    .when(design::is_facet(cx), |header| {
+                        design::facet_bottom_rule(
+                            header,
+                            design::facet_ink(p, design::FACET_PANEL_RULE),
+                        )
+                    })
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("core_update.menu.named").to_string()),
             )
@@ -276,6 +283,7 @@ pub(crate) fn open_named_dialog(
             })
             .footer(named_footer(confirm_input, confirm_backend, cores, p))
     });
+    initial_focus.update(app, |input, cx| input.focus(window, cx));
 }
 
 /// Cancel and Done for the named-build prompt.

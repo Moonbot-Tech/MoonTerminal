@@ -123,6 +123,10 @@ pub(super) fn split_body(
                 .py(design::ui_px(cx, 5.0))
                 .rounded(design::ui_px(cx, 5.0))
                 .bg(moon(palette.table_head))
+                // Facet skin: a total stands off the window as a raised pill.
+                .when(design::is_facet(cx), |el| {
+                    design::facet_surface(el, moon_ui::MoonFacetKind::Raised, cx)
+                })
                 .text_color(moon(sign.pick(
                     design::positive_color(palette),
                     design::danger_color(palette),
@@ -728,7 +732,10 @@ pub(super) fn table(
         cx,
     )
     .h(design::fit_h_px(cx, 42.0, 14.0, 10.0))
-    .bg(moon(palette.table_head))
+    // Facet skin: the total row paints no fill, so the window backdrop runs under it.
+    .when(!design::is_facet(cx), |element| {
+        element.bg(moon(palette.table_head))
+    })
     .text_size(design::t_title(cx))
     .font_weight(FontWeight::SEMIBOLD)
     .border_t(px(2.0))
@@ -860,7 +867,8 @@ fn table_header(
         .h(row_h_px(cx))
         .px(design::ui_px(cx, TABLE_HORIZONTAL_PADDING))
         .gap(design::ui_px(cx, TABLE_COLUMN_GAP))
-        .bg(moon(palette.table_head))
+        // Facet skin: the heading row paints no fill, so the window backdrop runs under it.
+        .when(!design::is_facet(cx), |el| el.bg(moon(palette.table_head)))
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 0.7))
         // The run column has no sortable heading: it is a control, not a value — and here it is

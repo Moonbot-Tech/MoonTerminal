@@ -46,6 +46,42 @@ fn absent_file_is_not_present() {
     assert_eq!(run(&p), Integrity::NotPresent);
 }
 
+/// File length must not permanently disqualify a replica from the mandatory background scan.
+/// Unix set_len creates a sparse tail: this tests the actual 2 GiB gate without a 2 GiB fixture.
+#[cfg(unix)]
+#[test]
+fn background_check_accepts_files_above_the_startup_size_limit() {
+    let dir = temp_dir("large-sparse");
+    let path = dir.join("reports.sqlite");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("CREATE TABLE marker(value INTEGER); INSERT INTO marker VALUES(42);")
+        .unwrap();
+    drop(conn);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(2 * 1024 * 1024 * 1024 + 4096)
+        .unwrap();
+    assert!(
+        matches!(quick(&path), Integrity::CheckFailed(_)),
+        "the first window must not wait for a large synchronous scan"
+    );
+    assert_eq!(
+        run(&path),
+        Integrity::Ok,
+        "the bounded background check must actually run"
+    );
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT value FROM marker", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        42
+    );
+    drop(conn);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A healthy replica passes and index-page damage produces diagnostics.
 #[test]
 fn healthy_db_is_ok_and_damaged_db_is_reported() {

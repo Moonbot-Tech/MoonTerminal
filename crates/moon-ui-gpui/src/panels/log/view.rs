@@ -5,6 +5,7 @@
 //! listeners.
 
 use super::*;
+use gpui::prelude::FluentBuilder;
 
 impl Render for LogPanel {
     /// Renders the panel and activates direct detached-window hosts on their first frame.
@@ -225,7 +226,11 @@ impl Render for LogPanel {
             .size_full()
             // The same body colour Orders and Report paint their roots with. Without it the panel
             // showed the dock's own surface and read as a different kind of window.
-            .bg(rgb(p.table_body))
+            // Under the Facet skin that surface is the look, so the body stays unfilled there,
+            // as Orders and Report leave theirs.
+            .when(!crate::design::is_facet(cx), |this| {
+                this.bg(rgb(p.table_body))
+            })
             .track_focus(&self.focus)
             // Set the monospace font on this root, as Orders, Assets, and Report do. A detached
             // panel does not inherit it from the dock header; without this, it would render in Inter
@@ -247,7 +252,11 @@ impl Render for LogPanel {
                 cx.listener(|t, _ev: &MouseUpEvent, _w, _cx| t.release_press()),
             )
             .child(controls)
-            .child(div().w_full().h(px(1.0)).bg(rgb(p.border)))
+            .child(crate::design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).bg(rgb(p.border)),
+            ))
             .child(body)
     }
 }

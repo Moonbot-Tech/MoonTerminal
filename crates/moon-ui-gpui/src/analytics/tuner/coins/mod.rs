@@ -283,7 +283,7 @@ impl AnalyticsView {
             .items_center()
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
+            .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
             .child(sortable(
                 "an-coin-hdr-name".into(),
                 t!("analytics.col.coin").to_string(),
@@ -398,7 +398,7 @@ impl AnalyticsView {
                 // here, in the same block, is also what releases the borrow before
                 // `cx.entity()` below needs the view.
                 let (counts, total, drawn) = {
-                    let cache = rows::rows_for(&mut self.coins, &base.coins, &scoped);
+                    let cache = rows::rows_for(&mut self.coins, &base, &scoped);
                     (cache.counts, cache.total, cache.rows.len())
                 };
                 if coins_body(true, true, drawn) == CoinsBody::NoMatch {
@@ -463,6 +463,10 @@ impl AnalyticsView {
             .bg(moon(p.panel))
             .border_1()
             .border_color(moon(p.border))
+            // Facet skin: the coin list is a card resting on the window.
+            .when(design::is_facet(cx), |el| {
+                design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+            })
             .overflow_hidden()
             .child(
                 h_flex()
@@ -680,7 +684,7 @@ fn coin_row(
         .px(design::ui_px(cx, COIN_ROW_PAD_X))
         .gap(design::ui_px(cx, COIN_ROW_GAP))
         .items_center()
-        .bg(moon(p.table_body))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_body)))
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.5))
         // The floor goes on the flex ITEM: at zero width the name would paint outside

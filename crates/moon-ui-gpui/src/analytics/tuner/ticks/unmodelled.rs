@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::tuner::ticks::params::ParamSection;
 use moon_core::db::tuner::ticks::unmodelled::{UnmodelledField, unmodelled_fields};
@@ -242,13 +243,17 @@ impl AnalyticsView {
                 let p = MoonPalette::active(cx);
                 let rows = rows.clone();
                 let go = view.clone();
+                // Facet skin: the fill and the border are not overridden, so MoonUI's popup
+                // surface shows, and the rule under the title fades toward the dialog's edges.
+                let facet = design::is_facet(cx);
                 dialog
                     .w(design::font_w_px(cx, 520.0))
                     .close_button(false)
                     .overlay(true)
                     .overlay_closable(true)
-                    .bg(moon(p.shell_high))
-                    .border_color(moon(p.border))
+                    .when(!facet, |dialog| {
+                        dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+                    })
                     .rounded(design::r_container(cx))
                     .text_color(moon(p.text))
                     .header(
@@ -257,6 +262,12 @@ impl AnalyticsView {
                             .py_2()
                             .border_b_1()
                             .border_color(moon(p.border))
+                            .when(facet, |header| {
+                                design::facet_bottom_rule(
+                                    header,
+                                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                                )
+                            })
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(t!(title_key).to_string()),
                     )

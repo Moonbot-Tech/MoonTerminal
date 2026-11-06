@@ -20,6 +20,7 @@ use super::SOURCE_TRACE_LEVEL;
 use super::archive;
 
 mod convert;
+mod dense;
 mod fixture;
 mod policy;
 mod prefix;
@@ -63,6 +64,21 @@ impl MarketDataSource {
         // the very same file.
         if let Some(fixture) = crate::fixture::active() {
             if fixture.covers(market) {
+                if let Some(history) = fixture.dense_history() {
+                    return Some(dense::read(
+                        &history.lock().unwrap_or_else(|error| error.into_inner()),
+                        core,
+                        epoch_ms,
+                        dense::Viewport {
+                            window: (from_rel_ms, to_rel_ms),
+                            force_reset,
+                            price_window,
+                        },
+                        candle_params,
+                        cursor,
+                        out,
+                    ));
+                }
                 let cache = {
                     let inner = self.inner.read().expect("market source poisoned");
                     inner.kline_cache.clone()

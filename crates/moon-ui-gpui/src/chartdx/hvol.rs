@@ -27,6 +27,9 @@ use super::types::{ChartViewGpu, HVOL_BG_INSTANCES, HVOL_CAPACITY, HvolRowGpu, H
 const ROW_CAPACITY: u32 = HVOL_CAPACITY as u32;
 const HVOL_HLSL: &str = include_str!("shaders/hvol.hlsl");
 
+#[cfg(test)]
+mod tests;
+
 struct HvolPipe {
     vs: ID3D11VertexShader,
     ps: ID3D11PixelShader,
@@ -39,9 +42,11 @@ struct HvolPipe {
     view_cb: ID3D11Buffer,
 }
 
+/// Retain the latest profile so device replacement can replay it without a market revision.
 pub struct HvolLayer {
     pipe: Option<HvolPipe>,
-    pending: Option<Vec<HvolRowGpu>>,
+    data: Vec<HvolRowGpu>,
+    data_dirty: bool,
     count: u32,
     style: HvolStyleGpu,
     style_dirty: bool,
@@ -49,10 +54,12 @@ pub struct HvolLayer {
 }
 
 impl HvolLayer {
+    /// Create an empty layer whose first prepare initializes its native resources.
     pub fn new() -> Self {
         Self {
             pipe: None,
-            pending: None,
+            data: Vec::new(),
+            data_dirty: false,
             count: 0,
             style: HvolStyleGpu::default(),
             style_dirty: true,
@@ -62,7 +69,8 @@ impl HvolLayer {
 
     /// Fully replaces the sample set after it was retaken.
     pub fn set(&mut self, data: Vec<HvolRowGpu>) {
-        self.pending = Some(data);
+        self.data = data;
+        self.data_dirty = true;
     }
 
     /// Idempotently sets the zone, colours, kind and normalisation.
@@ -79,7 +87,7 @@ impl HvolLayer {
         self.style.zone[2] >= 1.0
     }
 
-    /// Uploads the pending buffer and style constants during `prepare_gpu`.
+    /// Upload changed samples and constants, replaying retained data after device replacement.
     pub fn prepare(
         &mut self,
         device: &ID3D11Device,
@@ -90,18 +98,16 @@ impl HvolLayer {
             self.pipe = None;
             self.count = 0;
             self.style_dirty = true;
+            self.data_dirty = true;
         }
         if self.pipe.is_none() {
             self.pipe = Some(Self::create_pipe(device));
         }
         let pipe = self.pipe.as_ref().unwrap();
-        if let Some(data) = self.pending.take() {
+        if std::mem::take(&mut self.data_dirty) {
+            let data = &self.data;
             let cap = ROW_CAPACITY as usize;
-            let data: &[HvolRowGpu] = if data.len() > cap {
-                &data[..cap]
-            } else {
-                &data
-            };
+            let data: &[HvolRowGpu] = if data.len() > cap { &data[..cap] } else { data };
             if !data.is_empty() {
                 update_dynamic(context, &pipe.buffer, data);
             }

@@ -226,7 +226,8 @@ fn spawn_group_window_inner(
     let display_id = display_id.or_else(|| cx.primary_display().map(|display| display.id()));
     let win_bounds = windowing::reachable_window_bounds(win_bounds, display_id, None, cx);
     let window_bounds = windowing::window_bounds_for(
-        saved.map(|g| g.maximized).unwrap_or(false),
+        saved.map(|g| g.maximized).unwrap_or(false)
+            || (backend.read(cx).firetest.is_some() && crate::firetest::dense::selected()),
         saved.map(|g| g.fullscreen).unwrap_or(false),
         win_bounds,
     );

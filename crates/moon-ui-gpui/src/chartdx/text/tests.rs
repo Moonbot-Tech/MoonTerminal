@@ -63,7 +63,7 @@ fn rectangle_measurements_reuse_ruler_duration_at_rest_and_while_drawing() {
                     labels[0].visible(false),
                     "line labels off must keep the measurement"
                 );
-                let text = super::figure_label_text(&labels[0].text, 2).unwrap();
+                let text = super::figure_label_text(&labels[0].text, None).unwrap();
                 let expected = if draft {
                     format!("+10.00% · {expected}")
                 } else {
@@ -78,9 +78,28 @@ fn rectangle_measurements_reuse_ruler_duration_at_rest_and_while_drawing() {
         price_move: Some((100.0, 90.0)),
     };
     assert_eq!(
-        super::figure_label_text(&falling, 2).unwrap(),
+        super::figure_label_text(&falling, None).unwrap(),
         "-10.00% · 10с"
     );
+}
+
+/// A figure's price must read like the axis beside it: a magnitude-based format printed
+/// `0.0000` on a small-price market, and narrowing to `f32` would misprint a large price's last
+/// tick (`150000.13` is `150000.125` in `f32`).
+#[test]
+fn figure_price_label_follows_the_axis_format() {
+    use moon_chart::figures::LabelValue::Price;
+
+    for (price, tick, expected) in [
+        (0.000_001_23, Some(0.000_000_01), "123 sat"),
+        (0.000_001_23, None, "123.0 sat"),
+        (150_000.13, Some(0.01), "150000.13"),
+    ] {
+        assert_eq!(
+            super::figure_label_text(&Price(price), tick).unwrap(),
+            expected
+        );
+    }
 }
 
 /// Removing the suffix would again present quote turnover as a bare coin count (issue #486).

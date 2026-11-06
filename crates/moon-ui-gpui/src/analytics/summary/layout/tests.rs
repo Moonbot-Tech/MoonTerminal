@@ -24,8 +24,13 @@ use super::{KPI_BAND, kpi_delta, kpi_delta_part, kpi_group, kpi_label, kpi_tile,
 use crate::analytics::set_pnl_unit;
 use crate::design;
 
-/// Themes the probe walks: the light set and both dark-set modes.
-const THEMES: [UiThemeMode; 3] = [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite];
+/// Themes the probe walks: the light set and the three reviewed dark-set modes.
+const THEMES: [UiThemeMode; 4] = [
+    UiThemeMode::Light,
+    UiThemeMode::Dark,
+    UiThemeMode::Graphite,
+    UiThemeMode::Obsidian,
+];
 /// Content zooms the probe walks.
 const ZOOMS: [f32; 2] = [1.0, 1.25];
 /// Window widths the probe walks, at the design reference size: four, two and one column.

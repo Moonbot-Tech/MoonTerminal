@@ -6,7 +6,11 @@ use super::*;
 pub(super) const ASSETS_HEADER_H: f32 = 32.0;
 
 /// Builds the Assets window title bar with its drag cluster and optional system controls.
+///
+/// Under the Facet skin the bar paints no fill, so the window backdrop's top light shows through,
+/// and its bottom border becomes a rule that fades toward the window edges.
 pub(super) fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .id("assets-window-header")
         .relative()
@@ -16,9 +20,12 @@ pub(super) fn assets_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(rgb(p.shell_high))
+        .when(!facet, |this| this.bg(rgb(p.shell_high)))
         .border_b(px(1.0))
         .border_color(rgb(p.border))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("assets-titlebar-title", 0.0)
                 .title_cluster(

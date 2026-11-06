@@ -37,6 +37,7 @@ impl ChartDataState {
             render,
             theme,
             order_book_width_px: moon_core::config::book_width::DEFAULT,
+            pending_price_axis_width: None,
             orders: OrdersStyle::default(),
             follow: true,
             present_rate_hz: 60.0,
@@ -428,6 +429,42 @@ impl ChartDataState {
         self.view_dirty = true;
     }
 
+    /// Queue one measured gutter without publishing future geometry to input before its frame.
+    pub(crate) fn set_price_axis_width(&mut self, measured: f32) -> bool {
+        let width = measured.ceil().max(moon_chart::PRICE_AXIS_W);
+        let applied = self
+            .container
+            .borrow()
+            .pane(0)
+            .map(|pane| pane.price_axis_width);
+        if applied.is_none() || applied == Some(width) {
+            self.pending_price_axis_width = None;
+            return false;
+        }
+        if self.pending_price_axis_width == Some(width) {
+            return false;
+        }
+        self.pending_price_axis_width = Some(width);
+        self.mark_view_dirty();
+        true
+    }
+
+    /// Apply the previous text pass only to its market, immediately before this frame's layout.
+    fn apply_price_axis_width(&mut self) {
+        if let Some(width) = self.pending_price_axis_width.take() {
+            let rendered = self.render.borrow();
+            let mut container = self.container.borrow_mut();
+            if let Some(pane) = container.pane_mut(0)
+                && rendered
+                    .panes
+                    .first()
+                    .is_some_and(|old| old.core == Some(pane.core) && old.market == pane.market)
+            {
+                pane.price_axis_width = width;
+            }
+        }
+    }
+
     pub(crate) fn set_order_visual(
         &mut self,
         highlight: Option<(CoreId, u64)>,
@@ -528,6 +565,7 @@ impl ChartDataState {
         // Geometry before pull/sync: the fork already has this frame's slot, so the own
         // pass draws it without a one- or two-frame reflow flash. A reveal applies it in
         // the same call, before anything is drawn.
+        self.apply_price_axis_width();
         self.apply_slot_geometry(&info);
         let now = info.now;
         if self.observe_present_rate(now) {
@@ -597,8 +635,7 @@ impl ChartDataState {
         }
     }
 
-    /// Prepare the panes whose deferred tick-eviction rebake fell due. A quiet market runs no
-    /// market sync, and the rebake that erases evicted history must not wait for the next tick.
+    /// Prepare deferred tick-eviction and book bakes even when no further market revision arrives.
     fn tick_eviction_rebakes(&mut self, now: Instant) {
         if !self.scene_visible {
             return;
@@ -616,7 +653,8 @@ impl ChartDataState {
             st.needs_present = true;
         }
         // A book update held back by the data throttle bakes once the throttle expires, even when
-        // no further revision arrives; the book is outside the base, so only a present follows.
+        // no further revision arrives. DX11 invalidates its containing base when the book bakes;
+        // Metal composites the book separately and needs only a present.
         for pr in st.panes.iter_mut() {
             if pr.active && pr.layers.book_bake_due(now) {
                 pr.gpu_prepare_dirty = true;

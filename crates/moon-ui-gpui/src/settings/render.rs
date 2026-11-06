@@ -70,6 +70,9 @@ impl Render for SettingsView {
             self.rebuild_conn(selected, None, window, cx);
         }
         let p = MoonPalette::active(cx);
+        // Under the Facet skin `MoonRoot` paints the window backdrop behind this view, and an
+        // opaque fill on the window root or on the page body would cover it.
+        let facet = design::is_facet(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 
         // ── Active tab body ─────────────────────────────────────────────────
@@ -122,7 +125,7 @@ impl Render for SettingsView {
             div()
                 .id("settings-body")
                 .size_full()
-                .bg(rgba_from(p.shell, 1.0))
+                .when(!facet, |this| this.bg(rgba_from(p.shell, 1.0)))
                 .flex()
                 .flex_col()
                 .min_h(px(0.0))
@@ -139,7 +142,7 @@ impl Render for SettingsView {
             div()
                 .relative()
                 .size_full()
-                .bg(rgba_from(p.shell, 1.0))
+                .when(!facet, |this| this.bg(rgba_from(p.shell, 1.0)))
                 .child(scrollable_tab_content(content, &scroll, cx))
                 .children(moon_scrollbar_overlay_with_palette(
                     "settings-body-scrollbar",
@@ -227,7 +230,7 @@ impl Render for SettingsView {
         v_flex()
             .size_full()
             .relative()
-            .bg(rgba_from(p.shell, 1.0))
+            .when(!facet, |this| this.bg(rgba_from(p.shell, 1.0)))
             .font_family(design::ui_font())
             .text_size(design::t_body(cx))
             .line_height(design::line_px(cx, 14.0))
@@ -300,7 +303,11 @@ pub(super) fn bounded_body(tab: Tab) -> bool {
 }
 
 /// Build the window header with native minimize, maximize, and close controls.
+///
+/// Under the Facet skin the header paints no fill of its own, so the window backdrop's top light
+/// shows through it, and its bottom border becomes a rule that fades toward the window edges.
 fn settings_header(p: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .id("settings-window-header")
         .relative()
@@ -310,9 +317,12 @@ fn settings_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(rgba_from(p.shell_high, 1.0))
+        .when(!facet, |this| this.bg(rgba_from(p.shell_high, 1.0)))
         .border_b(px(1.0))
         .border_color(rgba_from(p.border, 1.0))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("settings-titlebar-title", 0.0)
                 .title_cluster(t!("settings.title").to_string(), cx)

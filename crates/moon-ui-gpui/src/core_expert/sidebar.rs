@@ -257,6 +257,10 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
                 .child(t!("core_expert.cores_none").to_string()),
         );
     }
+    // Facet skin: the rail stands on the window backdrop — no fill of its own, its right edge a
+    // rule that fades toward the top and the bottom, and the rules under its summary and above
+    // its hint fading toward the sides.
+    let facet = design::is_facet(cx);
     let content = v_flex()
         .debug_selector(|| "expert-rail".into())
         .flex_none()
@@ -269,7 +273,10 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
         .text_color(rgb(p.text_muted))
         .border_r_1()
         .border_color(rgb(p.border_hover))
-        .bg(rgb(p.gutter))
+        .when(!facet, |this| this.bg(rgb(p.gutter)))
+        .when(facet, |this| {
+            design::facet_right_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             h_flex()
                 .debug_selector(|| "expert-header".into())
@@ -312,6 +319,9 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
                 .pb(design::ui_px(cx, 8.0))
                 .border_b_1()
                 .border_color(rgb(p.border_soft))
+                .when(facet, |this| {
+                    design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_PANEL_RULE))
+                })
                 .children(
                     summary
                         .into_iter()
@@ -341,6 +351,9 @@ fn rail(input: RailPresentation<'_>, p: MoonPalette, cx: &App) -> impl IntoEleme
                 .py(design::ui_px(cx, 6.0))
                 .border_t_1()
                 .border_color(rgb(p.border_soft))
+                .when(facet, |this| {
+                    design::facet_top_rule(this, design::facet_ink(p, design::FACET_PANEL_RULE))
+                })
                 .child(
                     div()
                         .debug_selector(|| "expert-footer-text".into())

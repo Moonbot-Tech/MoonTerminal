@@ -10,6 +10,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, Bounds, Div, FontWeight, Hsla, InteractiveElement, IntoElement,
     MouseMoveEvent, ParentElement, PathBuilder, Pixels, StatefulInteractiveElement, Styled, Window,
@@ -328,6 +329,10 @@ pub(in crate::analytics) fn profit_chart_el(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: the chart card rests on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
         .child(header_el(m, acts, p, cx))
         .child(legend_el(m, p, cx))
         .child(plot_el(m, hover, acts, p, cx))

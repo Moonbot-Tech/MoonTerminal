@@ -449,6 +449,10 @@ impl Shell {
 
     /// Render the application-wide virtualized core rail for one Auto group window.
     ///
+    /// Under the Flat skin the rail is a recessed `gutter` strip with a solid edge. Under Facet it
+    /// paints no fill and stands on the window's own ground, and its edge and the rule under the
+    /// summary fade toward their ends.
+    ///
     /// Args:
     ///     density: Full, compact, or icon rung chosen from the body width.
     ///     p: Active Moon palette.
@@ -663,6 +667,10 @@ impl Shell {
                 ))
             }
         };
+        // Facet skin: the rail paints no fill, so it stands on the window's own ground like the
+        // dock slabs beside it, and its two solid lines — the edge against the dock and the rule
+        // under the summary — become rules that fade toward their ends.
+        let facet = design::is_facet(cx);
         v_flex()
             .size_full()
             .h_full()
@@ -676,7 +684,10 @@ impl Shell {
             // convention without turning the rail into a framed card.
             .border_r_1()
             .border_color(rgb(p.border_hover))
-            .bg(rgb(p.gutter))
+            .when(!facet, |rail| rail.bg(rgb(p.gutter)))
+            .when(facet, |rail| {
+                design::facet_right_rule(rail, design::facet_ink(p, design::FACET_CHROME_RULE))
+            })
             .child(
                 div()
                     .flex_none()
@@ -691,6 +702,12 @@ impl Shell {
                     .font_weight(FontWeight::SEMIBOLD)
                     .border_b_1()
                     .border_color(rgb(p.border_soft))
+                    .when(facet, |summary| {
+                        design::facet_bottom_rule(
+                            summary,
+                            design::facet_ink(p, design::FACET_PANEL_RULE),
+                        )
+                    })
                     .child(
                         div()
                             .id(SharedString::from(format!(

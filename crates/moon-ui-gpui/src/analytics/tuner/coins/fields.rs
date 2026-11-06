@@ -217,6 +217,9 @@ pub(in crate::analytics::tuner) fn list_field_el(
             .py(design::ui_px(cx, 10.0))
             .gap(design::ui_px(cx, 6.0))
             .when(!m.black, |el| el.border_t_1().border_color(moon(p.border)))
+            .when(!m.black && design::is_facet(cx), |el| {
+                design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .font_family(design::ui_font())
             .child(
                 div()
@@ -344,6 +347,10 @@ pub(in crate::analytics::tuner) fn list_field_el(
         .bg(moon(p.shell))
         .border_1()
         .border_color(moon(p.border_soft))
+        // Facet skin: the chip well is sunk into its card.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Well, cx)
+        })
         .p(design::ui_px(cx, 6.0))
         .child(
             h_flex()
@@ -363,6 +370,10 @@ pub(in crate::analytics::tuner) fn list_field_el(
         .py(design::ui_px(cx, 10.0))
         .gap(design::ui_px(cx, 6.0))
         .when(!m.black, |el| el.border_t_1().border_color(moon(p.border)))
+        // Facet skin: the rule between the two list fields fades toward the card's edges.
+        .when(!m.black && design::is_facet(cx), |el| {
+            design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+        })
         .child(header)
         .child(well)
         .child(list_hint_el(&m.legend, side, p, cx))

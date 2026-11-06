@@ -302,7 +302,8 @@ pub(in crate::analytics::tuner) fn auto_card_el(
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 6.0))
             .rounded(design::ui_px(cx, 4.0))
-            .bg(moon(p.shell_high)),
+            // Facet skin: the note paints no fill, so the card it sits in shows.
+            .when(!design::is_facet(cx), |el| el.bg(moon(p.shell_high))),
         ),
         AutoView::Settings => body,
         AutoView::Running { line } => body

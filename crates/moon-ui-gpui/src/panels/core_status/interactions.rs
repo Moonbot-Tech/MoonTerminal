@@ -1213,6 +1213,7 @@ impl CoreStatusView {
             core_update::replaces_test_note(letters.iter().map(String::as_str))
         };
         let input = named.then(|| core_update::build_name_input(None, window, cx));
+        let initial_focus = input.clone();
         window.open_unique_moon_dialog(
             "core-status-fleet-update-confirm",
             cx,
@@ -1231,8 +1232,12 @@ impl CoreStatusView {
                     .close_button(true)
                     .overlay(true)
                     .overlay_closable(true)
-                    .bg(rgb(p.shell_high))
-                    .border_color(rgb(p.border))
+                    // Facet skin: no override, so MoonUI's popup surface shows.
+                    .when(!design::is_facet(cx), |dialog| {
+                        dialog
+                            .bg(rgb(p.shell_high))
+                            .border_color(rgb(p.border))
+                    })
                     .rounded(design::r_container(cx))
                     .text_color(rgb(p.text))
                     .header(
@@ -1241,6 +1246,13 @@ impl CoreStatusView {
                             .py_2()
                             .border_b_1()
                             .border_color(rgb(p.border))
+                            // Facet skin: the rule under the title fades toward the dialog's edges.
+                            .when(design::is_facet(cx), |header| {
+                                design::facet_bottom_rule(
+                                    header,
+                                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                                )
+                            })
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(t!("core_update.confirm.title").to_string()),
                     )
@@ -1380,6 +1392,9 @@ impl CoreStatusView {
                     )
             },
         );
+        if let Some(input) = initial_focus {
+            input.update(cx, |input, cx| input.focus(window, cx));
+        }
     }
 }
 
@@ -1388,6 +1403,9 @@ impl CoreStatusView {
 /// One builder rather than two copies of forty lines, because the two dialogs differ in exactly
 /// three things — their words, their button colour, and what Yes does — and a second copy is how
 /// only one of them gets a fix.
+///
+/// The flat frame — `shell_high` fill, `border` edge, solid rule under the title — is the Flat
+/// skin's. Under Facet the dialog keeps the popup surface MoonUI gives it, and that rule fades.
 ///
 /// Args:
 ///     dialog: The dialog under construction, from `open_unique_moon_dialog`.
@@ -1417,8 +1435,10 @@ fn problem_confirm_dialog(
         .close_button(true)
         .overlay(true)
         .overlay_closable(true)
-        .bg(rgb(p.shell_high))
-        .border_color(rgb(p.border))
+        // Facet skin: no override, so MoonUI's popup surface shows.
+        .when(!design::is_facet(cx), |dialog| {
+            dialog.bg(rgb(p.shell_high)).border_color(rgb(p.border))
+        })
         .rounded(design::r_container(cx))
         .text_color(rgb(p.text))
         .header(
@@ -1427,6 +1447,13 @@ fn problem_confirm_dialog(
                 .py_2()
                 .border_b_1()
                 .border_color(rgb(p.border))
+                // Facet skin: the rule under the title fades toward the dialog's edges.
+                .when(design::is_facet(cx), |header| {
+                    design::facet_bottom_rule(
+                        header,
+                        design::facet_ink(p, design::FACET_PANEL_RULE),
+                    )
+                })
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )

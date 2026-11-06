@@ -8,6 +8,50 @@
 use super::config::{Config, Script};
 use super::plan::{CHART_SMOKE, DONE_STAGE_NAME, ORDER_CANCEL_LAG_PLAN, Phase, StageDef, plan_for};
 
+/// A second painted window must not steal the storm target from the chart carrying the text load.
+/// Hidden targets are rejected before any native mouse thread can start.
+#[test]
+fn probe_keeps_one_visible_owner_and_tracks_its_layout() {
+    use super::{ChartProbe, Runtime};
+    use crate::chartdx::ChartEngine;
+    use moon_core::config::ChartTheme;
+
+    let config = Config::from_args(["--debug-script", "chart-smoke"].map(str::to_string))
+        .unwrap()
+        .unwrap();
+    let mut runtime = Runtime::new(config);
+    runtime.cursor = CHART_SMOKE
+        .iter()
+        .position(|stage| stage.wants_probe)
+        .unwrap();
+    let mut first = ChartEngine::new(0.0, ChartTheme::default());
+    let mut second = ChartEngine::new(0.0, ChartTheme::default());
+    let probe = ChartProbe::new(None, 0.0, 0.0, 10.0, 20.0, 300.0, 200.0, 1.0).unwrap();
+
+    runtime.observe_probe(probe, first.data_handle());
+    assert!(
+        runtime.probe.is_none(),
+        "a retained hidden chart cannot own the measurement"
+    );
+    first.set_scene_visible(true);
+    runtime.observe_probe(probe, first.data_handle());
+    second.set_scene_visible(true);
+    runtime.observe_probe(probe, second.data_handle());
+    assert!(runtime.probe.as_ref().unwrap().1 == first.data_handle());
+    let moved = ChartProbe {
+        left: 50.0,
+        ..probe
+    };
+    runtime.observe_probe(moved, first.data_handle());
+    assert_eq!(runtime.probe.as_ref().unwrap().0.left, 50.0);
+
+    first.set_scene_visible(false);
+    assert!(runtime.start_mouse_storm().is_err());
+    first.set_scene_visible(true);
+    drop(first);
+    assert!(runtime.start_mouse_storm().is_err());
+}
+
 /// Every stage line a run of `plan` writes, in order — its rows, then the closing line. The
 /// closing name is included because it is the one `stage=` line no row owns, so nothing else
 /// would pin it.
@@ -84,6 +128,7 @@ fn chart_smoke_stage_plan_is_one_contiguous_scenario() {
             "price_scale_auto",
             "price_scale_verify_auto",
             "order_cancel_lag",
+            "gpu_recovery",
             "cooldown",
             "result",
         ],
@@ -258,6 +303,11 @@ fn the_columns_match_the_run_they_replaced() {
             ("arrival_flash", "arrival_flash did not finish"),
             ("flash_storm", "flash_storm did not finish"),
             ("order_cancel_lag", "order_cancel_lag timed out"),
+            (
+                "gpu_recovery",
+                "native GPU recovery did not restore both dense consumers"
+            ),
+            ("cooldown", "application event probes did not complete"),
         ]
     );
 }
@@ -300,14 +350,14 @@ fn a_stage_that_can_wait_forever_declares_a_timeout() {
     // that hangs when it never gets what it waits for. Those must carry a deadline; the two storms
     // are the exception, bounded by `config.storm` inside `await_storm`.
     //
-    // The guard's limit, stated rather than hidden: it cannot see a DWELLING row whose `run`
-    // answers `Stay` forever, because "can this function wait" is not in the table. Today none
-    // does — every dwelling row answers `Next` or `Fail` on its first acting tick.
+    // Cooldown also polls asynchronous application probes after its dwell. Its deadline must
+    // reject a missing callback instead of hanging the run. Other dwelling rows do not wait.
     for stage in CHART_SMOKE.iter().chain(ORDER_CANCEL_LAG_PLAN.iter()) {
-        if stage.min_dwell.is_zero() && stage.timeout.is_none() {
+        if (stage.min_dwell.is_zero() || stage.phase == Phase::Cooldown) && stage.timeout.is_none()
+        {
             assert!(
                 matches!(stage.phase, Phase::Storm | Phase::StaticTextStorm),
-                "{} polls the app with neither a dwell nor a deadline; a stuck run would hang \
+                "{} polls the app without a deadline; a stuck run would hang \
                  instead of going red",
                 stage.name
             );

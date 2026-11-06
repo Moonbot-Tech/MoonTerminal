@@ -544,6 +544,18 @@ impl AnalyticsView {
             .bg(moon(p.shell_high))
             .border_b_1()
             .border_color(moon(p.border));
+        // Facet skin: the row is the lower half of the top-lit band the title bar starts, and
+        // the rule that closes the band fades toward the window edges. The fill stays opaque —
+        // the Analytics root paints nothing behind this row. The lower half of the band's ambient
+        // light goes in first, under the row's contents.
+        if design::is_facet(cx) {
+            row = design::facet_bottom_rule(
+                row.relative()
+                    .bg(design::facet_toolbar_fill(p))
+                    .child(design::facet_band_lights(design::FacetBandRow::Toolbar, cx)),
+                design::facet_ink(p, design::FACET_CHROME_RULE),
+            );
+        }
         for t in Tab::ALL {
             let on = self.tab == t;
             let title = t.title();
@@ -1491,8 +1503,15 @@ impl AnalyticsView {
             }))
             .children(has_note.then(|| design::chrome_divider(cx, p)))
             .child(counter_cell.child(counter));
+        // Facet skin: the rule that closes the chrome fades toward the window edges. It stands
+        // in for the border of whichever element ends up carrying it, so it is applied last.
+        let facet = design::is_facet(cx);
+        let closing_rule = move |el: Div| match facet {
+            true => design::facet_bottom_rule(el, design::facet_ink(p, design::FACET_CHROME_RULE)),
+            false => el,
+        };
         let Some((label, _)) = compare else {
-            return row.into_any_element();
+            return closing_rule(row).into_any_element();
         };
         let toggle = MoonToggle::new("an-sum-compare")
             .checked(self.compare_prev)
@@ -1500,25 +1519,25 @@ impl AnalyticsView {
             .mono(false)
             .on_change(cx.listener(|this, _: &bool, _, cx| this.toggle_compare_prev(cx)));
         if compare_inline {
-            return row
-                .child(div().flex_none().child(toggle))
-                .into_any_element();
+            return closing_rule(row.child(div().flex_none().child(toggle))).into_any_element();
         }
         // Own line: the bottom rule moves to the wrapper so it still closes the whole chrome.
-        v_flex()
-            .flex_none()
-            .w_full()
-            .border_b_1()
-            .border_color(moon(p.border))
-            .child(row.border_b_0())
-            .child(
-                h_flex()
-                    .w_full()
-                    .px(design::ui_px(cx, 10.0))
-                    .pb(design::ui_px(cx, 8.0))
-                    .justify_end()
-                    .child(toggle),
-            )
-            .into_any_element()
+        closing_rule(
+            v_flex()
+                .flex_none()
+                .w_full()
+                .border_b_1()
+                .border_color(moon(p.border)),
+        )
+        .child(row.border_b_0())
+        .child(
+            h_flex()
+                .w_full()
+                .px(design::ui_px(cx, 10.0))
+                .pb(design::ui_px(cx, 8.0))
+                .justify_end()
+                .child(toggle),
+        )
+        .into_any_element()
     }
 }

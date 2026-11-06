@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, px, rgb,
@@ -68,7 +69,8 @@ fn core_header(name: String, venue: String, button: MoonButton, cx: &App) -> gpu
         .gap(design::ui_px(cx, 6.0))
         .px(design::ui_px(cx, 8.0))
         .py(design::ui_px(cx, 3.0))
-        .bg(rgb(p.shell_high))
+        // Facet skin: the band carries no fill of its own.
+        .when(!design::is_facet(cx), |el| el.bg(rgb(p.shell_high)))
         .child(
             div()
                 .flex_1()

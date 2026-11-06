@@ -9,6 +9,7 @@
 //! Every mutation from these modals funnels through `Backend::edit_core_groups`, which sanitizes
 //! and raises `config_dirty` — never a direct write to `config.core_groups` here.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, FontWeight, IntoElement, ParentElement as _, Render,
     Styled as _, Subscription, Window, div, px,
@@ -36,6 +37,9 @@ const MANAGE_DIALOG_ID: &str = "core-groups-manage";
 /// other dialogs in this crate; extracting it for all of them is a separate cleanup, and this at
 /// least stops the count from growing by two.
 ///
+/// The flat frame — `shell_high` fill, `border` edge, solid rule under the title — is the Flat
+/// skin's. Under Facet the dialog keeps the popup surface MoonUI gives it, and that rule fades.
+///
 /// Args:
 ///     dialog: The dialog under construction.
 ///     width: Fixed dialog width in logical pixels.
@@ -56,8 +60,10 @@ fn group_dialog_chrome(
         .close_button(true)
         .overlay(true)
         .overlay_closable(true)
-        .bg(moon(p.shell_high))
-        .border_color(moon(p.border))
+        // Facet skin: no override, so MoonUI's popup surface shows.
+        .when(!design::is_facet(cx), |dialog| {
+            dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+        })
         .rounded(design::r_container(cx))
         .text_color(moon(p.text))
         .header(
@@ -66,6 +72,13 @@ fn group_dialog_chrome(
                 .py_2()
                 .border_b_1()
                 .border_color(moon(p.border))
+                // Facet skin: the rule under the title fades toward the dialog's edges.
+                .when(design::is_facet(cx), |header| {
+                    design::facet_bottom_rule(
+                        header,
+                        design::facet_ink(p, design::FACET_PANEL_RULE),
+                    )
+                })
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )
@@ -156,13 +169,7 @@ pub(crate) fn open_save_dialog(
         name: cx.new(|cx| MoonInputState::new(window, cx)),
         cores,
     });
-    // The dialog focuses its own handle on open and MoonInput does not self-focus, so without this
-    // the single field of a one-field modal has to be clicked before it accepts a keystroke.
-    state
-        .read(app)
-        .name
-        .clone()
-        .update(app, |input, cx| input.focus(window, cx));
+    let initial_focus = state.read(app).name.clone();
     window.open_unique_moon_dialog(SAVE_DIALOG_ID, app, move |dialog, _window, cx| {
         let p = MoonPalette::active(cx);
         let body = state.clone();
@@ -176,6 +183,8 @@ pub(crate) fn open_save_dialog(
         .content(move |content, _window, _cx| content.child(body.clone()))
         .footer(save_footer(confirm, p))
     });
+    // Let Root capture the previous focus before the field takes it.
+    initial_focus.update(app, |input, cx| input.focus(window, cx));
 }
 
 /// Cancel and Create for the save modal.

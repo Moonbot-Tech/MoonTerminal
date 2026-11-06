@@ -640,6 +640,7 @@ impl AssetsView {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let facet = design::is_facet(cx);
         // Keep the selected core while it remains in scope; otherwise fall back to the first core.
         let selected = self
             .effective_wallet_core(self.backend.read(cx))
@@ -658,6 +659,10 @@ impl AssetsView {
             .py_1()
             .border_t_1()
             .border_color(rgb(p.border))
+            // Facet skin: the rule above the section fades toward the panel edges.
+            .when(facet, |bar| {
+                design::facet_top_rule(bar, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .child(
                 h_flex()
                     .id("assets-wallets-toggle")
@@ -750,6 +755,14 @@ impl AssetsView {
                         .bg(design::moon_alpha(p.panel_high, 0.72))
                         .border_b_1()
                         .border_color(rgb(p.border_soft))
+                        // Facet skin: the heading is lit from its top edge instead of filled,
+                        // over a rule that fades toward the column's edges.
+                        .when(facet, |heading| {
+                            design::facet_bottom_rule(
+                                heading.bg(design::facet_sheen(p, design::FACET_SECTION_SHEEN)),
+                                design::facet_ink(p, design::FACET_PANEL_RULE),
+                            )
+                        })
                         .text_size(design::t_caption(cx))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(p.text_muted))
@@ -819,13 +832,18 @@ impl AssetsView {
             .flex_shrink_1()
             .border_r_1()
             .border_color(rgb(p.border))
+            // Facet skin: the rule between the roster and the wallets fades toward its ends.
+            .when(facet, |column| {
+                design::facet_right_rule(column, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .child(
                 div()
                     .w_full()
                     .flex_none()
                     .px(design::ui_px(cx, 6.0))
                     .py(design::ui_px(cx, 3.0))
-                    .bg(rgb(p.shell_high))
+                    // Facet skin: column headings carry no fill of their own.
+                    .when(!facet, |el| el.bg(rgb(p.shell_high)))
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(p.text_soft))
@@ -871,6 +889,9 @@ impl AssetsView {
                     .min_h(px(0.0))
                     .border_t_1()
                     .border_color(rgb(p.border))
+                    .when(facet, |row| {
+                        design::facet_top_rule(row, design::facet_ink(p, design::FACET_PANEL_RULE))
+                    })
                     .child(left)
                     .child(div().flex_1().h_full().min_w_0().child(right)),
             )
@@ -1430,8 +1451,10 @@ fn open_market_sell_confirm(
                 .close_button(true)
                 .overlay(true)
                 .overlay_closable(true)
-                .bg(rgb(p.shell_high))
-                .border_color(rgb(p.border))
+                // Facet skin: no override, so MoonUI's popup surface shows.
+                .when(!design::is_facet(cx), |dialog| {
+                    dialog.bg(rgb(p.shell_high)).border_color(rgb(p.border))
+                })
                 .rounded(design::r_container(cx))
                 .text_color(rgb(p.text))
                 .header(
@@ -1440,6 +1463,13 @@ fn open_market_sell_confirm(
                         .py_2()
                         .border_b_1()
                         .border_color(rgb(p.border))
+                        // Facet skin: the rule under the title fades toward the dialog's edges.
+                        .when(design::is_facet(cx), |header| {
+                            design::facet_bottom_rule(
+                                header,
+                                design::facet_ink(p, design::FACET_PANEL_RULE),
+                            )
+                        })
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(t!("assets.market_sell_confirm").to_string()),
                 )

@@ -241,9 +241,11 @@ impl StrategiesView {
                 );
             }
         }
-        col = col
-            .child(header)
-            .child(div().w_full().h(px(1.0)).bg(moon(p.border)));
+        col = col.child(header).child(design::panel_rule(
+            cx,
+            p,
+            div().w_full().h(px(1.0)).bg(moon(p.border)),
+        ));
 
         if let Some(banner) = self.edit_state_banner(&row_pairs, &pending, &edit_notes, cx) {
             col = col.child(banner);

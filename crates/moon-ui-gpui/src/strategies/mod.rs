@@ -554,10 +554,13 @@ impl Render for StrategiesView {
             .child(right);
 
         let p = MoonPalette::active(cx);
+        // Under the Facet skin `MoonRoot` paints the window backdrop behind this view, and an
+        // opaque fill on the window root would cover it.
+        let facet = design::is_facet(cx);
         let mut root = v_flex()
             .size_full()
             .relative()
-            .bg(moon(p.shell))
+            .when(!facet, |this| this.bg(moon(p.shell)))
             .text_color(moon(p.text))
             .font_family(design::mono())
             .text_size(design::t_body(cx))

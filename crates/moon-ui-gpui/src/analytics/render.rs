@@ -177,6 +177,10 @@ impl Render for AnalyticsView {
                                 .bg(moon(p.panel_high))
                                 .border_1()
                                 .border_color(moon(p.border))
+                                // Facet skin: the notice floats above the window as a popup.
+                                .when(design::is_facet(cx), |el| {
+                                    design::facet_surface(el, moon_ui::MoonFacetKind::Popup, cx)
+                                })
                                 .font_family(design::ui_font())
                                 .text_size(design::t_body(cx))
                                 .text_color(moon(p.text_soft))
@@ -224,6 +228,10 @@ fn quote_split_note(
                 .py_1()
                 .rounded_sm()
                 .bg(moon(p.table_head))
+                // Facet skin: a total stands off the window as a raised pill.
+                .when(design::is_facet(cx), |el| {
+                    design::facet_surface(el, moon_ui::MoonFacetKind::Raised, cx)
+                })
                 .text_color(moon(sign.pick(p.green, p.red, p.text_soft)))
                 .child(amount),
         );
@@ -235,6 +243,9 @@ fn quote_split_note(
                 .py_1()
                 .rounded_sm()
                 .bg(moon(p.table_head))
+                .when(design::is_facet(cx), |el| {
+                    design::facet_surface(el, moon_ui::MoonFacetKind::Raised, cx)
+                })
                 .text_color(moon(p.orange))
                 .child(t!("analytics.quote_unknown_orders", n = totals.unknown_orders).to_string()),
         );
@@ -325,6 +336,12 @@ fn quote_split_note(
 }
 
 /// Render the Analytics title bar with the current custom-window-control policy.
+///
+/// Under the Facet skin the bar is the upper half of one top-lit band whose lower half is the
+/// tab row under it, so the hairline between the two is not drawn. The band stays opaque: this
+/// window's root paints no fill, and no backdrop, because the trade pane's chart draws under
+/// the scene. Like a group window's, the band therefore carries the ambient light a tool window
+/// has in its backdrop; the layer goes in first, so the bar's contents paint over it.
 fn analytics_header(p: MoonPalette, cx: &App) -> impl IntoElement {
     h_flex()
         .id("analytics-window-header")
@@ -338,6 +355,11 @@ fn analytics_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .bg(moon(p.shell_high))
         .border_b(px(1.0))
         .border_color(moon_alpha(p.border, 1.0))
+        .when(design::is_facet(cx), |this| {
+            this.bg(design::facet_header_fill(p))
+                .border_b_0()
+                .child(design::facet_band_lights(design::FacetBandRow::Header, cx))
+        })
         .child(
             MoonWindowFrame::tool("analytics-titlebar-title", 0.0)
                 .title_cluster(t!("analytics.window_title").to_string(), cx)

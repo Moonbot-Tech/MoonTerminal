@@ -657,6 +657,7 @@ fn query_projected_reports(
     limit: usize,
     projection: (Vec<String>, Option<RowKey>),
 ) -> ReadResult<ReportTable> {
+    let _money = super::super::pin_money_read(conn);
     let (cols, row_key) = projection;
     let meta = report_strategy_meta(conn, f)
         .map_err(|error| read_fail("reports: resolve strategy mask", error))?;

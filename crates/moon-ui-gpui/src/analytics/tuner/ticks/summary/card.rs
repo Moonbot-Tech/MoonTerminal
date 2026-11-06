@@ -415,6 +415,9 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                 .pt(design::ui_px(cx, 8.0))
                 .border_t_1()
                 .border_color(moon(p.border))
+                .when(design::is_facet(cx), |el| {
+                    design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+                })
                 .child(
                     prose(m.changed_header.clone(), p.text_muted, cx)
                         .font_weight(FontWeight::SEMIBOLD),
@@ -514,6 +517,9 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                 .pt(design::ui_px(cx, 8.0))
                 .border_t_1()
                 .border_color(moon(p.border))
+                .when(design::is_facet(cx), |el| {
+                    design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+                })
                 .child(
                     h_flex()
                         .w_full()

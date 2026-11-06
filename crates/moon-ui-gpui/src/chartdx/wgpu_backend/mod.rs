@@ -17,21 +17,21 @@ use super::types::{
     ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
 
-const BACKGROUND_SHADER: &str = include_str!("shaders/native_background.wgsl");
-const GRID_SHADER: &str = include_str!("shaders/native_grid.wgsl");
-const CURSOR_SHADER: &str = include_str!("shaders/native_cursor.wgsl");
-const CROSSES_SHADER: &str = include_str!("shaders/native_crosses.wgsl");
-const PRICE_SHADER: &str = include_str!("shaders/native_price.wgsl");
-const BOOK_SHADER: &str = include_str!("shaders/native_book.wgsl");
-const ZONE_SHADER: &str = include_str!("shaders/native_zone.wgsl");
-const HLINE_SHADER: &str = include_str!("shaders/native_hline.wgsl");
-const SEG_SHADER: &str = include_str!("shaders/native_seg.wgsl");
-const MARKER_SHADER: &str = include_str!("shaders/native_marker.wgsl");
-const READOUT_SHADER: &str = include_str!("shaders/native_readout.wgsl");
-const CANDLES_SHADER: &str = include_str!("shaders/native_candles.wgsl");
-const SIDE_VOLUME_SHADER: &str = include_str!("shaders/native_side_volume.wgsl");
-const HVOL_SHADER: &str = include_str!("shaders/native_hvol.wgsl");
-const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.png");
+const BACKGROUND_SHADER: &str = include_str!("../shaders/native_background.wgsl");
+const GRID_SHADER: &str = include_str!("../shaders/native_grid.wgsl");
+const CURSOR_SHADER: &str = include_str!("../shaders/native_cursor.wgsl");
+const CROSSES_SHADER: &str = include_str!("../shaders/native_crosses.wgsl");
+const PRICE_SHADER: &str = include_str!("../shaders/native_price.wgsl");
+const BOOK_SHADER: &str = include_str!("../shaders/native_book.wgsl");
+const ZONE_SHADER: &str = include_str!("../shaders/native_zone.wgsl");
+const HLINE_SHADER: &str = include_str!("../shaders/native_hline.wgsl");
+const SEG_SHADER: &str = include_str!("../shaders/native_seg.wgsl");
+const MARKER_SHADER: &str = include_str!("../shaders/native_marker.wgsl");
+const READOUT_SHADER: &str = include_str!("../shaders/native_readout.wgsl");
+const CANDLES_SHADER: &str = include_str!("../shaders/native_candles.wgsl");
+const SIDE_VOLUME_SHADER: &str = include_str!("../shaders/native_side_volume.wgsl");
+const HVOL_SHADER: &str = include_str!("../shaders/native_hvol.wgsl");
+const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../../assets/img/3Dlogo_s01.png");
 const MIN_COMBO_CAPACITY: usize = 1;
 
 #[inline]

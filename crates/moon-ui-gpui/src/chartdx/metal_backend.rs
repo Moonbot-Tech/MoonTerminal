@@ -1015,11 +1015,10 @@ impl MetalLayers {
         }
         self.draw_cached_book(device, encoder, orderbook_view);
         self.draw_price_lines_layer(device, encoder, view);
-        // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
-        // the whole pane, as the crosshair and the volume readout live in the zone.
-        let pane_sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
-        encoder.set_scissor_rect(userdata_scissor(pane_sc, &self.hvol_style));
+        // Content excludes the axes; cursor readouts below intentionally include them.
+        encoder.set_scissor_rect(sc);
         self.draw_user_layers(encoder);
+        let pane_sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
         encoder.set_scissor_rect(pane_sc);
         self.draw_cursor_layer(encoder, cursor_params, readout_rects);
         Ok(())
@@ -1052,7 +1051,6 @@ impl MetalLayers {
         // on purpose: with a backdrop the grid draws lines only, and a fill over them is what every
         // charting package does. Still below the candles, which is where a band belongs.
         if !self.zones.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_uniform(encoder, 0, self.view_uniform.buffer());
             set_storage(encoder, 1, self.zone_buffer.buffer());
             draw(encoder, &pipelines.zone, 6, self.zones.len() as u64);
@@ -1158,27 +1156,25 @@ impl MetalLayers {
         }
     }
 
+    /// Draw one overlay pass; the diagnostic counts passes, not populated primitive buffers.
     fn draw_user_layers(&self, encoder: &RenderCommandEncoderRef) {
+        crate::diag::bump(&crate::diag::CHART_USER_DRAW);
         let pipelines = self.pipelines.as_ref().unwrap();
         set_uniform(encoder, 0, self.view_uniform.buffer());
         // The trade clusters go first: over the candles, under every order line and marker.
         if !self.clusters.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.cluster_buffer.buffer());
             draw(encoder, &pipelines.marker, 6, self.clusters.len() as u64);
         }
         if !self.hlines.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.hline_buffer.buffer());
             draw(encoder, &pipelines.hline, 6, self.hlines.len() as u64);
         }
         if !self.segs.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.seg_buffer.buffer());
             draw(encoder, &pipelines.seg, 6, self.segs.len() as u64);
         }
         if !self.markers.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             set_storage(encoder, 1, self.marker_buffer.buffer());
             draw(encoder, &pipelines.marker, 6, self.markers.len() as u64);
         }
@@ -2281,35 +2277,16 @@ fn scissor_rect(
     width: u32,
     height: u32,
 ) -> MTLScissorRect {
-    let x = view.bounds[0].floor().max(0.0) as u64;
-    let y = view.bounds[1].floor().max(0.0) as u64;
-    let r = (orderbook_view.bounds[0] + orderbook_view.bounds[2])
-        .ceil()
-        .clamp(x as f32 + 1.0, width.max(1) as f32) as u64;
-    let b = (view.bounds[1] + view.bounds[3])
-        .ceil()
-        .clamp(y as f32 + 1.0, height.max(1) as f32) as u64;
+    let clip = view.content_clip(orderbook_view);
+    let x = clip[0].floor().max(0.0) as u64;
+    let y = clip[1].floor().max(0.0) as u64;
+    let r = clip[2].ceil().clamp(x as f32 + 1.0, width.max(1) as f32) as u64;
+    let b = clip[3].ceil().clamp(y as f32 + 1.0, height.max(1) as f32) as u64;
     MTLScissorRect {
         x,
         y,
         width: (r - x).max(1),
         height: (b - y).max(1),
-    }
-}
-
-/// The pane scissor less a horizontal-volume zone carved out at its left edge, for the user
-/// layers; see `HvolStyleGpu::user_clip_left`.
-fn userdata_scissor(pane: MTLScissorRect, hvol: &HvolStyleGpu) -> MTLScissorRect {
-    let Some(edge) = hvol.user_clip_left() else {
-        return pane;
-    };
-    let right = pane.x + pane.width;
-    let left = (edge.ceil().max(0.0) as u64).clamp(pane.x, right - 1);
-    MTLScissorRect {
-        x: left,
-        y: pane.y,
-        width: right - left,
-        height: pane.height,
     }
 }
 

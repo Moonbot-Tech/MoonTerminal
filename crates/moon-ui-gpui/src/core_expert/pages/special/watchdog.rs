@@ -584,6 +584,10 @@ fn row_editor(
         .rounded(design::r_button(cx))
         .border_1()
         .border_color(rgb(p.border))
+        // Facet skin: the form is a card resting on the page.
+        .when(design::is_facet(cx), |this| {
+            design::facet_surface(this, moon_ui::MoonFacetKind::Card, cx)
+        })
         .child(
             h_flex()
                 .w_full()

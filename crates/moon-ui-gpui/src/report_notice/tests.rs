@@ -109,3 +109,19 @@ fn report_access_denial_without_notice_still_warns_about_recording() {
     assert!(detail.contains("not being recorded"));
     assert!(detail.contains("restarting the terminal"));
 }
+
+/// An inconclusive scan must explain readable history and stopped recording without falsely
+/// blaming a second terminal, asserting corruption, or displaying internal diagnostics.
+#[test]
+fn incomplete_check_notice_describes_the_actual_access_mode() {
+    let _locale = crate::test_locale::force("en");
+    let (title, detail) = recovery_notice_text(Some(&RecoveryNotice::CheckIncomplete {
+        detail: "fixture internal watchdog diagnostic".into(),
+    }));
+    assert_eq!(title, "The replica integrity check did not complete.");
+    assert!(detail.contains("history remains available for reading"));
+    assert!(detail.contains("not being recorded"));
+    assert!(detail.contains("diagnostic log"));
+    assert!(!detail.contains("second terminal"));
+    assert!(!detail.contains("fixture internal"));
+}

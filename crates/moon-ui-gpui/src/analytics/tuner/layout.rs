@@ -144,6 +144,10 @@ fn parameters_with_scroll(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: the Parameters card rests on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
         .overflow_hidden()
         .child(div().w_full().flex_none().child(header))
         .child(

@@ -77,7 +77,8 @@ fn wallet_kind_label(kind: WalletKind) -> String {
     }
 }
 
-/// Coin-transfer preview displayed under the drag cursor.
+/// Coin-transfer preview displayed under the drag cursor: a flat chip with a blue edge, on
+/// MoonUI's popup surface under the Facet skin.
 struct AssetDragPreview {
     label: SharedString,
 }
@@ -92,6 +93,12 @@ impl Render for AssetDragPreview {
             .bg(rgb(p.shell_high))
             .border_1()
             .border_color(rgb(p.blue))
+            // Facet skin: it floats over the window, so it takes MoonUI's popup surface, and
+            // keeps the blue edge that marks it as the thing being carried.
+            .when(design::is_facet(cx), |preview| {
+                design::facet_surface(preview, moon_ui::MoonFacetKind::Popup, cx)
+                    .border_color(rgb(p.blue))
+            })
             .text_color(rgb(p.text))
             .text_size(design::t_body(cx))
             .font_family(design::mono())
@@ -244,13 +251,18 @@ impl AssetsView {
             .min_w_0()
             .border_r_1()
             .border_color(rgb(p.border))
+            // Facet skin: the rule between two wallets fades toward its ends.
+            .when(design::is_facet(cx), |column| {
+                design::facet_right_rule(column, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .child(
                 div()
                     .w_full()
                     .flex_none()
                     .px(design::ui_px(cx, 6.0))
                     .py(design::ui_px(cx, 3.0))
-                    .bg(rgb(p.shell_high))
+                    // Facet skin: column headings carry no fill of their own.
+                    .when(!design::is_facet(cx), |el| el.bg(rgb(p.shell_high)))
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(p.text_soft))
@@ -338,8 +350,10 @@ impl AssetsView {
                 .close_button(true)
                 .overlay(true)
                 .overlay_closable(true)
-                .bg(rgb(p.shell_high))
-                .border_color(rgb(p.border))
+                // Facet skin: no override, so MoonUI's popup surface shows.
+                .when(!design::is_facet(cx), |dialog| {
+                    dialog.bg(rgb(p.shell_high)).border_color(rgb(p.border))
+                })
                 .rounded(design::r_container(cx))
                 .text_color(rgb(p.text))
                 .on_cancel(move |_, _, cx| {

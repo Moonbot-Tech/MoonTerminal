@@ -178,11 +178,21 @@ impl Render for AssetsView {
             .track_focus(&self.focus)
             .font_family(design::mono())
             .text_size(design::t_body(cx))
-            .bg(rgb(p.table_body))
+            // Facet skin: the body stays unfilled — the dock's surface shows through in a tab,
+            // the window backdrop in the standalone window.
+            .when(!design::is_facet(cx), |this| this.bg(rgb(p.table_body)))
             .when(windowed, |this| this.child(assets_header(p, cx)))
             .child(core_bar)
             .child(self.dust_core_headers(cx))
-            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
+            .child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)),
+            ));
+        #[cfg(debug_assertions)]
+        if let Some(form) = &self.firetest_f1 {
+            root = root.child(form.clone());
+        }
         // The asset table is always present. With wallets it uses its natural content height so the
         // lower section can expand; in a dock tab it fills the space above the footer.
         let table_wrap = v_flex()
@@ -195,12 +205,18 @@ impl Render for AssetsView {
         } else {
             table_wrap.flex_1()
         });
-        root = root.child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
+        root = root.child(design::panel_rule(
+            cx,
+            p,
+            div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)),
+        ));
         // In standalone views, let the wallet section consume the flexible space below the table.
         if let Some(tree) = tree_section {
-            root = root
-                .child(tree)
-                .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)));
+            root = root.child(tree).child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)),
+            ));
         }
         // Footer: visible-row count and Σ on the left, scope account equity on the right.
         root = root.child(footer);

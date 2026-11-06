@@ -26,16 +26,23 @@ fn report_and_analytics_share_the_recovery_notice_composer() {
 }
 
 /// A recovered replica permits reads, so routing its notice only through access denial hides
-/// the saved-copy location forever. Keep the notice alongside content and behind failure priority.
+/// the saved-copy location forever. Keep it alongside content and behind failure priority; an
+/// incomplete check must also explain that recording is disabled even if a read query fails.
 #[test]
 fn report_successful_recovery_notice_coexists_with_content() {
-    let report = read_src("panels/report/render.rs");
-    let recovered = code_only(braced_body(&report, "let recovered_notice = match"));
+    let report = code_only(&read_src("panels/report/render.rs"));
+    let recovered = chain_between(
+        &report,
+        "let recovery_notice =",
+        "let selection_actions =",
+        "readable recovery notice",
+    );
     assert!(recovered.contains("RecoveryNotice::Recovered"));
     assert!(recovered.contains("!matches!(self.data, LoadState::Failed(_))"));
     assert!(recovered.contains("crate::report_notice::recovery_notice_text(Some(notice))"));
     assert!(recovered.contains("MoonAlert::info(\"rep-recovered-note\", detail).title(title)"));
-    assert!(report.contains(".children(recovered_notice)\n            .child(table_el)"));
+    assert!(recovered.contains("RecoveryNotice::CheckIncomplete { .. } => true"));
+    assert!(report.contains(".children(recovery_notice)\n            .child(table_el)"));
 }
 
 /// Breakage: someone "helpfully" points `export.rs` (CSV, XLSX) or `selection.rs` (clipboard TSV)

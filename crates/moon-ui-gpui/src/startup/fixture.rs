@@ -125,6 +125,15 @@ where
         // every reader of them runs later in this same startup.
         unsafe { std::env::set_var(key, value) };
     }
+    if fixture.dense_history().is_some() {
+        // SAFETY: startup is still single-threaded, as for the ordinary fixture environment above.
+        unsafe {
+            std::env::set_var(
+                "MOON_SYNTH_MARKET_NAMES",
+                moon_core::fixture::dense::MARKETS.join(","),
+            )
+        };
+    }
     Ok(Some(fixture))
 }
 

@@ -206,14 +206,13 @@ pub fn load() -> StorageCfg {
 
 /// Read and normalize storage settings at the supplied config path.
 fn load_at(path: &std::path::Path) -> StorageCfg {
-    if !path.exists() {
-        let cfg = StorageCfg::default();
+    let (cfg, status) = toml_io::load_or_default_status(path, "storage.toml", |_| false);
+    if status == toml_io::ConfigLoad::Absent {
         if let Err(e) = toml_io::save(path, &cfg, "storage.toml") {
             log::warn!("storage.toml: не удалось записать дефолт: {e:#}");
         }
-        return cfg;
     }
-    sanitize(toml_io::load_or_default(path, "storage.toml", |_| {}))
+    sanitize(cfg)
 }
 
 /// Bound what a hand-edited file may carry: the long-position threshold is clamped to

@@ -70,7 +70,8 @@ impl ReportPanel {
     /// as the comment allows. It does NOT align to the table's row grid: matching that grid means a
     /// line box as tall as a table row, which reads as a stretched-out block for text this size.
     /// Its own background and top rule are what separate it from the table instead, so the table's
-    /// unused tail below the last row stays visibly part of the table.
+    /// unused tail below the last row stays visibly part of the table. Under the Facet skin that
+    /// separation is MoonUI's card surface rather than a flat fill.
     ///
     /// Height is capped at [`COMMENT_PANE_MAX_ROWS`] table rows, with anything past the cap
     /// reachable by wheel scrolling. Every realistic comment is far below that; without a cap a
@@ -110,9 +111,15 @@ impl ReportPanel {
             // Its own surface, not the table's: without a lift the comment reads as one more
             // (unaligned) table row, and the table's unused tail below the last row reads as part
             // of the comment. The top rule closes the table above it.
+            //
+            // Facet skin: the lift is MoonUI's card surface — gradient fill, lit edge, cast
+            // shadow — which sets the pane off the table without a flat band.
             .bg(rgb(p.panel))
             .border_t_1()
             .border_color(rgb(p.border))
+            .when(design::is_facet(cx), |pane| {
+                design::facet_surface(pane, moon_ui::MoonFacetKind::Card, cx)
+            })
             .max_h(px(row_h * COMMENT_PANE_MAX_ROWS))
             // The element scrolls itself. `overflow_y_scrollbar()` would look nicer but wraps the
             // pane in its own `size_full()` div that copies only `size` from this style — the cap

@@ -27,6 +27,8 @@ pub struct ChartHistoryCursor {
     pub(super) price_fit: price_fit::PriceFitIndex,
     /// Fixture candles last uploaded by this pane, retained for viewport-only fitting without SQL.
     pub(super) fixture_candles: Vec<ChartCandle>,
+    /// Generated fixture sequence consumed by this chart, independent of every other chart.
+    pub(super) dense_next: Option<u64>,
     pub(super) liq_rows: Vec<TradeHistoryRow>,
     pub(super) last_price_rows: Vec<LastPricePoint>,
     pub(super) mark_price_rows: Vec<MarkPricePoint>,
@@ -216,6 +218,7 @@ impl ChartHistoryCursor {
     }
 
     pub fn reset(&mut self) {
+        self.dense_next = None;
         self.trades = None;
         self.liquidations = None;
         self.last_prices = None;

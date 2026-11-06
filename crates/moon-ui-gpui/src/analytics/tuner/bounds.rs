@@ -110,7 +110,7 @@ pub(super) fn header(
         .min_h(design::fit_h_px(cx, 26.0, 14.0, 5.0))
         .whitespace_nowrap()
         .font_family(design::ui_font())
-        .bg(moon(p.table_head))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
         .text_color(moon(p.text_soft))
         .child(check)
         .child(name)

@@ -370,7 +370,7 @@ pub(super) fn scroll_wheel(
         && within
         && let Some(idx) = this.input.pane_at(pos.0, pos.1)
         && let Some((_, rect)) = this.input.pane_rects.iter().find(|(i, _)| *i == idx)
-        && pos.0 <= rect.x + moon_chart::PRICE_AXIS_W * sf
+        && pos.0 <= rect.x + this.stack_scroll_strip_width(idx) * sf
     {
         return;
     }

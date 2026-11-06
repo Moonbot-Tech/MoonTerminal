@@ -122,6 +122,11 @@ impl ReportWritePermit {
 /// User-facing startup recovery state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryNotice {
+    /// The full check did not finish; existing history remains readable but recording is off.
+    CheckIncomplete {
+        /// Technical reason recorded for diagnostics.
+        detail: String,
+    },
     /// The process lease could not be acquired; recovery never started.
     LeaseUnavailable {
         /// Technical reason recorded for diagnostics.
@@ -236,10 +241,10 @@ pub(crate) fn ensure_read_access() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Hold a read-only WAL connection until the asynchronous writer has initialized.
+/// Hold a read-only WAL connection through the transition to the asynchronous writer.
 ///
-/// Early report preference reads still need read-write connections. Keeping this anchor alive
-/// prevents their close from becoming SQLite's last-connection checkpoint on the UI thread.
+/// After the full check opens write access, preference readers may acquire writable connections
+/// before writer initialization finishes. The anchor prevents their last-connection checkpoint.
 fn startup_read_anchor(path: &Path) -> anyhow::Result<Option<Connection>> {
     match std::fs::metadata(path) {
         Ok(_) => {
@@ -345,12 +350,11 @@ pub fn prepare() -> Option<ReportWritePermit> {
                 Ok(_) => Some(ReportWritePermit { gate, anchor }),
                 Err(error) => {
                     ACCESS_ENABLED.store(false, Ordering::Release);
-                    READ_ACCESS_ENABLED.store(false, Ordering::Release);
-                    gate.finish(false);
-                    WRITE_ACCESS.finish(false);
                     let detail = format!("reports integrity thread did not start: {error}");
                     log::error!("{detail}");
-                    let _ = NOTICE.set(RecoveryNotice::Failed { detail });
+                    let _ = NOTICE.set(RecoveryNotice::CheckIncomplete { detail });
+                    gate.finish(false);
+                    WRITE_ACCESS.finish(false);
                     None
                 }
             }
@@ -399,10 +403,16 @@ fn conclusive(verdict: &Integrity) -> bool {
 fn finish_background(decision: Decision, verdict: Integrity) -> bool {
     let allowed = match decision {
         Decision::Ready => {
-            let allowed = conclusive(&verdict) && !integrity::writes_blocked();
+            let readable = !integrity::writes_blocked();
+            let allowed = conclusive(&verdict) && readable;
+            if readable && !conclusive(&verdict) {
+                let detail = format!("reports full integrity check did not complete: {verdict:?}");
+                log::warn!("{detail}");
+                let _ = NOTICE.set(RecoveryNotice::CheckIncomplete { detail });
+            }
             integrity::publish(verdict);
             ACCESS_ENABLED.store(allowed, Ordering::Release);
-            READ_ACCESS_ENABLED.store(allowed, Ordering::Release);
+            READ_ACCESS_ENABLED.store(readable, Ordering::Release);
             allowed
         }
         Decision::Recovered(snapshot_dir) => {

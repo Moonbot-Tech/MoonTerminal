@@ -86,7 +86,7 @@ fn a_trade_batch_marks_wanted_markets_once_and_keeps_the_book_flag() {
         events.push(Event::Trade(TradesEvent::Applied {}));
     }
 
-    let actual = sorted(market_dirty_from_events(&events, &wanted, false));
+    let actual = sorted(market_dirty_from_events(&events, &wanted, false).unwrap());
     let expected = reference_fold(&events, &wanted, false);
 
     assert_eq!(actual, expected);

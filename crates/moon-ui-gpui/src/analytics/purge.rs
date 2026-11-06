@@ -28,6 +28,7 @@
 
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AsyncApp, BackgroundExecutor, Context, Entity, FontWeight, IntoElement,
     ParentElement, Styled, WeakEntity, Window, div, px,
@@ -938,14 +939,18 @@ impl AnalyticsView {
                 let p = MoonPalette::active(cx);
                 let (content_view, cancel_view, close_view) =
                     (view.clone(), view.clone(), view.clone());
+                // Facet skin: the fill and the border are not overridden, so MoonUI's popup
+                // surface shows, and the rule under the title fades toward the dialog's edges.
+                let facet = design::is_facet(cx);
                 dialog
                     .w(px(460.0))
                     // A destructive confirmation offers Cancel, not a bare dismiss.
                     .close_button(false)
                     .overlay(true)
                     .overlay_closable(true)
-                    .bg(moon(p.shell_high))
-                    .border_color(moon(p.border))
+                    .when(!facet, |dialog| {
+                        dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+                    })
                     .rounded(design::r_container(cx))
                     .text_color(moon(p.text))
                     .header(
@@ -954,6 +959,12 @@ impl AnalyticsView {
                             .py_2()
                             .border_b_1()
                             .border_color(moon(p.border))
+                            .when(facet, |header| {
+                                design::facet_bottom_rule(
+                                    header,
+                                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                                )
+                            })
                             .child(title.clone()),
                     )
                     .on_cancel(move |_, _, cx| {

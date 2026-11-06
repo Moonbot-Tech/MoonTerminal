@@ -17,6 +17,7 @@ mod table;
 #[cfg(test)]
 mod tests;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput, MoonInputEvent,
@@ -567,7 +568,7 @@ impl AnalyticsView {
             .py(design::ui_px(cx, 4.0))
             .gap(design::ui_px(cx, 6.0))
             .items_center()
-            .bg(moon(p.table_head))
+            .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
             .child(
                 div().flex_1().min_w(design::ui_px(cx, 120.0)).child(
                     MoonInput::new("an-strat-search")

@@ -5,6 +5,7 @@
 //! through `update_order_stops` and `moon-core::feed::order_edit`. Cancel, the close button, and
 //! overlay dismissal discard the dialog state without submitting it.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_core::feed::{OrderRow, OrderStopsForm, StopGroupEdit, TakeProfitEdit, VStopEdit};
 use moon_core::session::CoreId;
@@ -108,6 +109,9 @@ fn side_label(r: &OrderRow, executed: bool) -> (&'static str, MoonTone) {
 /// Apply the modal frame shared by active-order and spot-order dialogs.
 /// The caller supplies its width and localized title; palette and dismissal rules stay identical.
 ///
+/// The flat frame — `shell_high` fill, `border` edge, solid rule under the title — is the Flat
+/// skin's. Under Facet the dialog keeps the popup surface MoonUI gives it, and that rule fades.
+///
 /// Args:
 ///     dialog: Dialog under construction.
 ///     width: Fixed width in logical pixels.
@@ -128,8 +132,10 @@ pub(crate) fn order_dialog_chrome(
         .close_button(true)
         .overlay(true)
         .overlay_closable(true)
-        .bg(moon(p.shell_high))
-        .border_color(moon(p.border))
+        // Facet skin: no override, so MoonUI's popup surface shows.
+        .when(!design::is_facet(cx), |dialog| {
+            dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+        })
         .rounded(design::r_container(cx))
         .text_color(moon(p.text))
         .header(
@@ -138,6 +144,13 @@ pub(crate) fn order_dialog_chrome(
                 .py_2()
                 .border_b_1()
                 .border_color(moon(p.border))
+                // Facet skin: the rule under the title fades toward the dialog's edges.
+                .when(design::is_facet(cx), |header| {
+                    design::facet_bottom_rule(
+                        header,
+                        design::facet_ink(p, design::FACET_PANEL_RULE),
+                    )
+                })
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )

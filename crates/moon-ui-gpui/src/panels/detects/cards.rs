@@ -8,7 +8,10 @@
 //! visuals only; [`super`] owns card ordering and attaches left- and right-click actions.
 
 use gpui::*;
-use moon_ui::{MoonBadge, MoonBadgeVariant, MoonPalette, MoonText, h_flex, rgba_from, v_flex};
+use moon_ui::{
+    MoonBadge, MoonBadgeVariant, MoonFacetKind, MoonPalette, MoonText, MoonTheme, facet_glow,
+    h_flex, rgba_from, v_flex,
+};
 
 use rust_i18n::t;
 
@@ -24,6 +27,12 @@ use crate::design;
 const MEDIUM_CHART_FRAC: f32 = 0.40;
 /// Height reserved for each field band above and below a large card's chart, in logical pixels.
 const BAND_H: f32 = 16.0;
+/// Width a configured rail is drawn at under the Facet skin, in unscaled pixels.
+const FACET_RAIL_W: f32 = 2.0;
+/// Opacity of the glow the rail casts under the Facet skin.
+const FACET_RAIL_GLOW_ALPHA: f32 = 0.8;
+/// Blur radius of that glow, in design-reference pixels.
+const FACET_RAIL_GLOW_BLUR: f32 = 8.0;
 
 /// Return the rounded chart-zone dimensions in scaled logical pixels.
 ///
@@ -97,9 +106,16 @@ pub(super) fn card_sized(
 }
 
 /// Build the neutral card surface and its server-color rail with gradient fade.
+///
+/// Under the Facet skin the surface is MoonUI's card — gradient fill, lit edge, cast shadow — at
+/// the same radius, and a configured rail is drawn [`FACET_RAIL_W`] wide with a glow. The content
+/// inset still follows the configured rail width, so the fields sit where they do under Flat.
 fn base(scfg: &DetectSizeCfg, color: u32, p: MoonPalette, cx: &App) -> Div {
     let w = design::ui_px(cx, f32::from(scfg.w));
     let h = design::ui_px(cx, f32::from(scfg.h));
+    let facet = design::is_facet(cx);
+    // A rail the user switched off stays off under either skin.
+    let facet_rail = facet && scfg.rail_w_clamped() > 0;
     let mut card = div()
         .relative()
         .flex()
@@ -114,9 +130,19 @@ fn base(scfg: &DetectSizeCfg, color: u32, p: MoonPalette, cx: &App) -> Div {
         .bg(rgb(p.shell_high))
         .overflow_hidden()
         .hover(|s| s.border_color(rgba_from(color, 0.6)).bg(rgb(p.panel_high)));
+    if facet {
+        card = design::facet_surface(card, MoonFacetKind::Card, cx);
+    }
+    if facet_rail {
+        card = card.child(rail_glow(color, cx));
+    }
     for layer in rail_layers(
         color,
-        f32::from(scfg.rail_w_clamped()),
+        if facet_rail {
+            FACET_RAIL_W
+        } else {
+            f32::from(scfg.rail_w_clamped())
+        },
         f32::from(scfg.rail_grad_clamped()),
         f32::from(scfg.w),
         cx,
@@ -124,6 +150,36 @@ fn base(scfg: &DetectSizeCfg, color: u32, p: MoonPalette, cx: &App) -> Div {
         card = card.child(layer);
     }
     card
+}
+
+/// Build the glow a card's rail casts under the Facet skin.
+///
+/// The rail itself is a full-card background layer (see [`rail_layers`]), and a shadow on that
+/// layer would surround the whole card. The glow therefore comes from a separate box of the
+/// rail's width laid over the stripe; it carries no fill, and the layers painted after it draw
+/// the stripe on top. It stops short of the card's corners by their radius, because a box this
+/// narrow cannot follow them, and the card's own clip keeps the glow inside the card.
+///
+/// Args:
+///     color: The rail colour as `0xRRGGBB`.
+///     cx: Application context for the theme tokens and the UI scale.
+///
+/// Returns:
+///     The glow source, to add to the card before its rail layers.
+fn rail_glow(color: u32, cx: &App) -> Div {
+    let corner = design::ui_px(cx, 6.0);
+    div()
+        .absolute()
+        .left(px(1.0))
+        .top(corner)
+        .bottom(corner)
+        .w(design::ui_px(cx, FACET_RAIL_W))
+        .shadow(vec![facet_glow(
+            color,
+            FACET_RAIL_GLOW_ALPHA,
+            FACET_RAIL_GLOW_BLUR,
+            &MoonTheme::active_tokens(cx),
+        )])
 }
 
 /// Build full-card background layers for the rail stripe and its gradient fade.

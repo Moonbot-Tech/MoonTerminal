@@ -364,20 +364,14 @@ impl ComboLayer {
         context: &ID3D11DeviceContext,
         gpu: &RawGpuAccess,
     ) {
-        // A new device invalidates the old buffers, shaders, and ring. Reset both resources and ring
-        // counters because the recreated buffer is empty and a stale count would make DrawInstanced
-        // read garbage. Incrementing device_gen makes prepare reupload all history via collect_all.
-        if device_changed(&mut self.device_generation_seen, gpu) {
+        // The device owns buffers, not history. Restore their retained slot layout before queued
+        // changes, so a stopped producer also recovers in this first prepare.
+        let device_lost = device_changed(&mut self.device_generation_seen, gpu);
+        if device_lost {
             self.pipe = None;
             self.tex = None;
             self.vol_tex = None;
             self.eviction_rebake_at = None;
-            self.count = 0;
-            self.head = 0;
-            self.resident_crosses.clear();
-            self.resident_head = 0;
-            self.resident_count = 0;
-            self.refresh_pending_time_order();
             self.last_ring.invalidate_gpu();
             self.mark_ring.invalidate_gpu();
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
@@ -386,6 +380,13 @@ impl ComboLayer {
         }
         if self.pipe.is_none() {
             self.pipe = Some(self.create_pipe(device));
+        }
+        if device_lost && self.pending_reset.is_none() && !self.resident_crosses.is_empty() {
+            update_dynamic(
+                context,
+                &self.pipe.as_ref().unwrap().buffer,
+                &self.resident_crosses,
+            );
         }
         self.apply_uploads(context);
         // Before any early return, so a due deadline is always consumed and never re-arms frames.

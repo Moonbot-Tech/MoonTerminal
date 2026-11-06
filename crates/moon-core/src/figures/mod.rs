@@ -36,7 +36,7 @@ pub use kind::FigureKind;
 pub use node::FigNode;
 pub use proj::Proj;
 pub use sink::{BuildCtx, GeomSink, LabelPlace, LabelText, Stroke};
-pub use store::{FigureKey, FigureStore};
+pub use store::{FigureKey, FigureSnapshot, FigureStore};
 pub use style::{DEFAULT_FILL_ALPHA, DrawStyle, LineKind};
 pub use tools::{
     FigureTool, Grab, GrabMode, ToolDef, ToolSetting, ToolSettings, ToolShape, apply_settings,

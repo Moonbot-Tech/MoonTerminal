@@ -350,7 +350,7 @@ pub struct DetachedWindow {
     /// unregister it — its release then looks user-driven, docks the panel and deletes the
     /// `DetachedSpec`, which is how a detachment failed to survive a restart.
     ///
-    /// The flag is authoritative rather than a guess on both shipping platforms. On Windows every
+    /// The flag is authoritative rather than a guess on every platform. On Windows every
     /// user-driven close of this window — the frame's ✕ (a `window_control_area` hit-test, which the
     /// platform turns into `WM_CLOSE`), Alt+F4, the system menu, the taskbar — arrives through
     /// `on_window_should_close`, while dying with the owner arrives as a bare `WM_DESTROY` that
@@ -358,10 +358,8 @@ pub struct DetachedWindow {
     /// user close (the red button, Cmd+W); MoonUI draws no frame buttons there, and both the
     /// programmatic `close` and a child window dying with its parent skip it.
     ///
-    /// Linux is the exception: MoonUI's frame button calls `remove_window()` directly and bypasses
-    /// the hook (logged in `docs-internal/FORK_BUGS.md`), so it starts from `true` and keeps the
-    /// previous behaviour, guarded by `Backend::quitting` and by the shutdown branch that
-    /// unregisters these windows.
+    /// Linux native close messages and MoonUI's client-drawn frame both consult the same policy.
+    /// Forced removal and owner teardown skip it, preserving the detached specification.
     user_close: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
@@ -409,10 +407,7 @@ impl DetachedWindow {
         // Record the user's own request to close this window. See `DetachedWindow::user_close`:
         // ownership alone cannot tell a real close from this window being destroyed with its owner,
         // because the child dies FIRST and the owner's close is what would have unregistered it.
-        let user_close = std::rc::Rc::new(std::cell::Cell::new(!cfg!(any(
-            target_os = "windows",
-            target_os = "macos"
-        ))));
+        let user_close = std::rc::Rc::new(std::cell::Cell::new(false));
         {
             let requested = user_close.clone();
             window.on_window_should_close(cx, move |_window, _app| {
@@ -562,6 +557,11 @@ impl Render for DetachedWindow {
             )
         };
         let p = MoonPalette::active(cx);
+        // Facet skin: `MoonRoot` paints the window backdrop behind this view, and the panels
+        // hosted here leave their bodies unfilled to show it. A fill on this root or on the
+        // title bar would cover it, so both go unpainted and the bar's bottom border becomes a
+        // rule that fades toward the window edges.
+        let facet = crate::design::is_facet(cx);
         let title = format!(
             "{} · {}",
             crate::persistence::panel_meta::panel_title(&self.panel),
@@ -569,7 +569,7 @@ impl Render for DetachedWindow {
         );
         v_flex()
             .size_full()
-            .bg(rgb(p.shell))
+            .when(!facet, |this| this.bg(rgb(p.shell)))
             .text_color(rgb(p.text))
             .child(
                 h_flex()
@@ -584,7 +584,13 @@ impl Render for DetachedWindow {
                     .pr(crate::design::ui_px(cx, 6.0))
                     .border_b_1()
                     .border_color(rgb(p.border))
-                    .bg(rgb(p.shell_high))
+                    .when(!facet, |this| this.bg(rgb(p.shell_high)))
+                    .when(facet, |this| {
+                        crate::design::facet_bottom_rule(
+                            this,
+                            crate::design::facet_ink(p, crate::design::FACET_CHROME_RULE),
+                        )
+                    })
                     .child(
                         MoonWindowFrame::detached_panel("detached-panel-title-drag", 0.0)
                             .title_cluster(title, cx)

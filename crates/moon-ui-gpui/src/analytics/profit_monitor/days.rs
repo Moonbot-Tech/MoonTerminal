@@ -405,11 +405,16 @@ pub(super) fn day_table(
     if !stacked {
         widths[1] += available - natural;
     }
+    // Facet skin: the table and the total above it are cards resting on the window.
+    let facet = design::is_facet(cx);
     let mut table = v_flex()
         .w_full()
         .border_1()
         .border_color(moon(palette.border))
-        .rounded(design::ui_px(cx, 4.0));
+        .rounded(design::ui_px(cx, 4.0))
+        .when(facet, |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        });
     let layout = DayColumns { widths, stacked };
     table = table.child(day_table_row(
         &headings, layout, "head", true, None, palette, cx,
@@ -450,7 +455,10 @@ pub(super) fn day_table(
             .border_color(moon(palette.border))
             .rounded(design::ui_px(cx, 4.0))
             .debug_selector(|| "days-total".into())
-            .bg(moon(palette.shell_high)),
+            .bg(moon(palette.shell_high))
+            .when(facet, |el| {
+                design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+            }),
         )
         .child(table.debug_selector(|| "days-table".into()))
         .into_any_element()
@@ -525,7 +533,8 @@ fn day_table_row(
         } else {
             design::t_body(cx)
         })
-        .when(heading, |el| {
+        // Facet skin: the heading row paints no fill, so the card under the table shows.
+        .when(heading && !design::is_facet(cx), |el| {
             el.bg(moon(design::table_style(palette).header_bg))
         })
         .font_family(if heading {

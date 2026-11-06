@@ -31,6 +31,7 @@
 
 use std::sync::LazyLock;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -198,6 +199,10 @@ fn key_cell(label: String, value: String, p: MoonPalette, cx: &App) -> impl Into
                 .rounded(design::r_button(cx))
                 .border_1()
                 .border_color(rgb(p.border))
+                // Facet skin: the stand-in for a text box is sunk like one.
+                .when(design::is_facet(cx), |this| {
+                    design::facet_surface(this, moon_ui::MoonFacetKind::Well, cx)
+                })
                 .child(caption(value, false, p, cx)),
         )
 }

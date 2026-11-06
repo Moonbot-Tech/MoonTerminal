@@ -670,6 +670,8 @@ pub struct ReportPanel {
     /// Latest published worker health, refreshed only when its revision moves. Polled separately
     /// from the data generation because a stalled worker commits no rows at all.
     valuation_status: ValuationStatus,
+    /// Startup notice already reflected in this panel; it can arrive without a report commit.
+    recovery_notice: Option<&'static db::report_recovery::RecoveryNotice>,
     last_gen: u64,
     /// Health revision already folded into `valuation_status`.
     last_status_rev: u64,
@@ -757,6 +759,8 @@ pub struct ReportPanel {
     pub(super) period: Period,
     /// Last resolved workspace period bucket, used to distinguish cross-bucket rail switches.
     last_period_bucket: ReportPeriodBucket,
+    /// Scope consumed by the last query request; unrelated workspace events leave rows intact.
+    last_workspace_scope: Option<EffectiveCoreScope>,
     /// All, real, or emulated order kind, defaulting to real as in Orders. Persisted beside
     /// [`Self::side`].
     pub(super) kind: ReportKind,

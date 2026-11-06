@@ -141,8 +141,8 @@ fn deny_allow_git() -> Vec<String> {
         .collect()
 }
 
-/// The reviewed set of git hosts this workspace is allowed to depend on — the same seven this
-/// task named, kept here as a literal so a drift in *either* `Cargo.lock` or `deny.toml` alone
+/// The reviewed set of git hosts this workspace is allowed to depend on, kept here as a
+/// literal so a drift in *either* `Cargo.lock` or `deny.toml` alone
 /// (not both moving together) is what reddens this test.
 ///
 /// A SLICE, not a fixed-size array (`[&str; N]`): the array form encodes its own length in the
@@ -152,7 +152,6 @@ fn deny_allow_git() -> Vec<String> {
 const ALLOWED_GIT_REPOS: &[&str] = &[
     "https://github.com/Moonbot-Tech/MoonUI",
     "https://github.com/Moonbot-Tech/MoonProtoBeta",
-    "https://github.com/zed-industries/wgpu",
     "https://github.com/zed-industries/async-process",
     "https://github.com/zed-industries/font-kit",
     "https://github.com/zed-industries/xim-rs",
@@ -184,6 +183,38 @@ fn cargo_lock_is_committed_at_the_workspace_root() {
         ".gitignore must not exclude Cargo.lock — third-party versions are frozen by committing \
          it, and an ignore rule would silently stop that from a checkout onward"
     );
+}
+
+/// A raw `Device`, `Queue`, or encoder pointer may only be cast back to the same Cargo type.
+/// Lockfile dependency references include version/source whenever the name is ambiguous, so
+/// comparing the two direct edges catches both source forks and version splits. This also
+/// applies to local overrides: sharing a spelling or API version does not make types identical.
+#[test]
+fn raw_gpu_producer_and_consumer_share_the_same_wgpu_package() {
+    let text = lock_text();
+    assert_eq!(
+        dependency_reference(&text, "moon-gpui-wgpu", "wgpu"),
+        dependency_reference(&text, "moon-ui-gpui", "wgpu"),
+        "MoonUI and MoonTerminal must share one wgpu package across the raw pointer boundary"
+    );
+}
+
+/// Read one canonical dependency reference without discarding its disambiguating package ID.
+fn dependency_reference(text: &str, package: &str, dependency: &str) -> String {
+    let header = format!("name = \"{package}\"");
+    let block = text
+        .split("[[package]]")
+        .find(|block| block.lines().any(|line| line == header))
+        .unwrap_or_else(|| panic!("Cargo.lock must contain {package}"));
+    block
+        .lines()
+        .skip_while(|line| *line != "dependencies = [")
+        .skip(1)
+        .take_while(|line| *line != "]")
+        .filter_map(|line| line.trim().strip_prefix('"')?.strip_suffix("\","))
+        .find(|entry| *entry == dependency || entry.starts_with(&format!("{dependency} ")))
+        .unwrap_or_else(|| panic!("{package} must depend on {dependency}"))
+        .to_owned()
 }
 
 /// Breakage guarded: a `Cargo.lock` generated while the sibling MoonUI override

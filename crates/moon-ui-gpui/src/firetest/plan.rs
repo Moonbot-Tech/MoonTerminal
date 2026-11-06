@@ -102,6 +102,7 @@ pub(super) enum Phase {
     PriceScaleAuto,
     PriceScaleVerifyAuto,
     OrderCancelLag,
+    GpuRecovery,
     Cooldown,
     // Keep this last: cargo tests use it to catch unplanned FireTest phases.
     #[allow(dead_code)]
@@ -277,11 +278,39 @@ const ORDER_CANCEL_LAG: StageDef = StageDef::new(
 /// The quiet tail, then the verdict. `evaluate_and_exit` ends the process on every path; the
 /// `Fail` below is what would happen if it ever stopped doing so, because a run that reaches the
 /// end and neither passes nor fails is worse than a loud one.
-const COOLDOWN_STAGE: StageDef = StageDef::new(Phase::Cooldown, "cooldown", |runtime, _, _| {
+const COOLDOWN_STAGE: StageDef = StageDef::new(Phase::Cooldown, "cooldown", |runtime, _, cx| {
+    if runtime
+        .application_probe
+        .as_ref()
+        .is_some_and(|probe| probe.is_pending())
+    {
+        return StageStep::Stay;
+    }
+    if let Some(probe) = &runtime.application_probe
+        && let Err(error) = probe.verify()
+    {
+        return StageStep::Fail(error);
+    }
+    if runtime.tool_window_ids.is_some()
+        && let Err(error) = runtime.verify_core_status_probe(cx)
+    {
+        return StageStep::Fail(error);
+    }
+    #[cfg(debug_assertions)]
+    if let Some(probe) = &runtime.f1_probe
+        && let Err(error) = probe.verify()
+    {
+        return StageStep::Fail(error);
+    }
     runtime.evaluate_and_exit();
     StageStep::Fail("verdict returned without ending the run".to_string())
 })
-.dwell(COOLDOWN);
+.dwell(COOLDOWN)
+// Cover both bounded Screener waits and the deferred Report check without extending healthy runs.
+.deadline(
+    Duration::from_secs(12),
+    "application event probes did not complete",
+);
 
 /// The full `chart-smoke` run: the perf measurement, then every runtime contract, in order.
 pub(super) const CHART_SMOKE: &[StageDef] = &[
@@ -424,6 +453,21 @@ pub(super) const CHART_SMOKE: &[StageDef] = &[
     )
     .dwell(STAGE_GAP),
     ORDER_CANCEL_LAG,
+    StageDef::new(Phase::GpuRecovery, "gpu_recovery", |runtime, _backend, cx| {
+        let Some(run) = &mut runtime.dense else {
+            super::logging::firetest_info("[firetest] gpu_recovery skipped: select --fixture dense for frozen generated history");
+            runtime.start_f1_probe(_backend, cx);
+            return StageStep::Next;
+        };
+        match run.recover(cx) {
+            Ok(true) => {
+                runtime.start_f1_probe(_backend, cx);
+                StageStep::Next
+            },
+            Ok(false) => StageStep::Stay,
+            Err(error) => StageStep::Fail(error),
+        }
+    }).deadline(Duration::from_secs(15), "native GPU recovery did not restore both dense consumers"),
     COOLDOWN_STAGE,
 ];
 

@@ -477,3 +477,107 @@ fn inconclusive_full_verdicts_do_not_pass_the_write_gate() {
     assert!(!conclusive(&Integrity::TimeLimitExceeded));
     assert!(!conclusive(&Integrity::CheckFailed("fixture".into())));
 }
+
+/// A timeout must preserve readable history without permitting writes or implicit checkpoints.
+/// A conclusive pass must still allow Report preference writes; confirmed damage closes both.
+#[test]
+fn background_verdict_preserves_read_history_without_bypassing_writes() {
+    const CHILD: &str = "MOON_REPORT_GATE_TEST_CASE";
+    const ROOT: &str = "MOON_REPORT_GATE_TEST_ROOT";
+    let Ok(case) = std::env::var(CHILD) else {
+        // Each process owns its own lease and one-shot verdict; no global test reset can model that.
+        for case in ["pending", "timeout", "setup", "healthy", "damage"] {
+            let root = test_root(case);
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "db::report_recovery::tests::background_verdict_preserves_read_history_without_bypassing_writes", "--nocapture"])
+                .env(CHILD, case)
+                .env(ROOT, &root)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{case}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        return;
+    };
+    let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+    assert!(paths::set_data_dir_override(root));
+    let path = paths::reports_db_path();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE app_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE marker(value INTEGER); INSERT INTO marker VALUES(42);",
+    )
+    .unwrap();
+    drop(conn);
+    assert!(
+        LEASE
+            .set(Mutex::new(
+                acquire_lease(&paths::reports_recovery_lease_path()).unwrap()
+            ))
+            .is_ok()
+    );
+    READ_ACCESS_ENABLED.store(true, Ordering::Release);
+    if case != "pending" {
+        if case == "damage" {
+            integrity::record_corruption(&rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(11),
+                None,
+            ));
+        }
+        let verdict = match case.as_str() {
+            "timeout" => Integrity::TimeLimitExceeded,
+            "setup" => Integrity::CheckFailed("fixture setup failure".into()),
+            _ => Integrity::Ok,
+        };
+        assert_eq!(
+            finish_background(Decision::Ready, verdict),
+            case == "healthy"
+        );
+        assert_eq!(wait_for_write_access().is_ok(), case == "healthy");
+    }
+    let reader = super::super::open_reader();
+    if case == "damage" {
+        assert!(matches!(
+            reader,
+            Err(super::super::ReadFail::Failed {
+                kind: super::super::FailKind::ReplicaAccessDenied,
+                ..
+            })
+        ));
+        return;
+    }
+    let reader = reader.expect("available history must remain readable");
+    assert_eq!(
+        reader
+            .query_row("SELECT value FROM marker", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        42
+    );
+    if case == "healthy" {
+        super::super::save_sort(&reader, "profitpct", true);
+        assert_eq!(
+            super::super::load_sort(&reader),
+            Some(("profitpct".into(), true))
+        );
+    } else {
+        let error = reader
+            .execute("INSERT INTO marker VALUES(99)", [])
+            .unwrap_err();
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly)
+        );
+        if case != "pending" {
+            assert!(
+                status().is_some(),
+                "stopped recording must have its own notice"
+            );
+        }
+    }
+}

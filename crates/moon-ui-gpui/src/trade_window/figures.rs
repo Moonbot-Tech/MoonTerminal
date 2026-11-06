@@ -4,6 +4,7 @@
 //! figure comes from the report row that was clicked. That is what makes the window useful even
 //! when the venue cannot be reached at all — the picture may be missing, the trade never is.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::ChartTradeRecord;
 use moon_core::util::fmt;
@@ -257,6 +258,8 @@ pub(super) fn rail(
     ]);
     cells.extend(tail);
     let gap = design::ui_px(cx, design::CHROME_GAP);
+    let facet = design::is_facet(cx);
+    let rule = design::facet_ink(p, design::FACET_CHROME_RULE);
     match narrow {
         true => h_flex()
             .id("tw-rail-narrow")
@@ -268,6 +271,9 @@ pub(super) fn rail(
             .border_b_1()
             .border_color(moon(p.border))
             .bg(moon(p.panel))
+            .when(facet, |this| {
+                design::facet_bottom_rule(facet_rail_fill(this, cx), rule)
+            })
             .children(cells)
             .into_any_element(),
         false => v_flex()
@@ -281,7 +287,32 @@ pub(super) fn rail(
             .border_l_1()
             .border_color(moon(p.border))
             .bg(moon(p.panel))
+            .when(facet, |this| {
+                design::facet_left_rule(facet_rail_fill(this, cx), rule)
+            })
             .children(cells)
             .into_any_element(),
     }
+}
+
+/// Fill the figures rail as the Facet skin's slab: the panel a chart stands beside.
+///
+/// Only the slab's gradient is taken. The rail stays opaque because the trade window's root
+/// paints no fill behind it. The slab's shadows are left out: the highlight inside its top edge
+/// would draw a second line under the header's rule, and GPUI paints a shadow that falls outside
+/// an element as a filled shape under it — here that shape would lie over the chart beside the
+/// rail.
+///
+/// Args:
+///     el: The rail to fill.
+///     cx: Application context holding the theme global.
+///
+/// Returns:
+///     `el` with the slab fill.
+fn facet_rail_fill<E: Styled>(el: E, cx: &App) -> E {
+    let slab = moon_ui::facet(
+        moon_ui::MoonFacetKind::Slab,
+        &moon_ui::MoonTheme::active_tokens(cx),
+    );
+    el.bg(slab.fill)
 }

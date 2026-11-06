@@ -1143,6 +1143,9 @@ pub(crate) fn open(backend: Entity<Backend>, coin: String, window: &mut Window, 
 
 /// Shared modal chrome. The header is drawn by the body: the dialog header slot is not the
 /// live view, and the coin plus the counts change every render.
+///
+/// The `shell_high` fill and the `border` edge are the Flat skin's; under Facet the dialog keeps
+/// the popup surface MoonUI gives it.
 fn places_chrome(dialog: MoonDialog, width: f32, cx: &App) -> MoonDialog {
     let p = MoonPalette::active(cx);
     dialog
@@ -1150,8 +1153,12 @@ fn places_chrome(dialog: MoonDialog, width: f32, cx: &App) -> MoonDialog {
         .close_button(true)
         .overlay(true)
         .overlay_closable(true)
-        .bg(design::moon(p.shell_high))
-        .border_color(design::moon(p.border))
+        // Facet skin: no override, so MoonUI's popup surface shows.
+        .when(!design::is_facet(cx), |dialog| {
+            dialog
+                .bg(design::moon(p.shell_high))
+                .border_color(design::moon(p.border))
+        })
         .rounded(design::r_container(cx))
         .text_color(design::moon(p.text))
 }

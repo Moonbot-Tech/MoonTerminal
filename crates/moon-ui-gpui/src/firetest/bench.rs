@@ -22,7 +22,7 @@ use crate::Backend;
 pub(super) struct BenchShape {
     /// Connected core sessions.
     pub(super) cores: usize,
-    /// Live chart consumers. Each one renders and presents on its own.
+    /// Chart consumers included in their host's visible scene; hidden tabs retain live handles.
     pub(super) charts: usize,
     /// Shell (group) windows — the ones that carry a header clock and a panel set. Deliberately
     /// NOT every GPUI window: tool and detached windows do not repaint the per-window panels, so
@@ -35,12 +35,16 @@ impl BenchShape {
     pub(super) fn capture(backend: &mut Backend, _cx: &App) -> Self {
         Self {
             cores: backend.session.sessions().len(),
-            charts: backend.live_chart_consumers().len(),
+            charts: backend
+                .live_chart_consumers()
+                .iter()
+                .filter(|chart| chart.is_scene_visible())
+                .count(),
             windows: backend.group_windows.len(),
         }
     }
 
-    /// Divide a measured level by the number of live charts, never by zero.
+    /// Divide a measured level by the number of visible charts, never by zero.
     ///
     /// Documented law (`diag.rs`): `chart_order_sync` is "multiplied by the number of open charts
     /// observing each backend notification", and each chart panel renders and presents for itself.

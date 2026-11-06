@@ -416,15 +416,11 @@ impl ChartTabs {
         }
     }
 
-    /// Persist changed scales for Main, regular Add tabs, and detached tabs to `charts.json`.
-    /// Main uses number zero; Custom tabs still in `self.custom` are omitted by this method.
+    /// Persist changed scales for every chart host to `charts.json`, including attached Custom tabs.
     pub(super) fn persist_scales(&self, cx: &mut Context<Self>) {
         let mut items: Vec<(u32, ChartBucket, Option<f32>)> =
             vec![(0, ChartBucket::Shared, self.main.read(cx).scale())];
-        for (n, c, p) in &self.add {
-            items.push((*n, c.clone(), p.read(cx).scale()));
-        }
-        for (n, c, p) in &self.detached {
+        for (n, c, p) in self.add.iter().chain(&self.custom).chain(&self.detached) {
             items.push((*n, c.clone(), p.read(cx).scale()));
         }
         for (num, bucket, scale) in items {

@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, HWND_TOP, PostMessageW, SW_RESTORE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SetCursorPos, SetForegroundWindow, SetWindowPos, ShowWindow, WM_MOUSEMOVE,
+    GetCursorPos, HWND_TOP, IsIconic, PostMessageW, SW_RESTORE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SetCursorPos, SetForegroundWindow, SetWindowPos, ShowWindow, WM_MOUSEMOVE,
 };
 
 use crate::diag;
@@ -42,7 +42,10 @@ pub(in crate::firetest) fn start_mouse_storm(
             let start = Instant::now();
             let hwnd = HWND(hwnd as *mut _);
             unsafe {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
+                // Restoring a maximized window changes the geometry captured by the chart probe.
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                }
                 let _ = SetWindowPos(
                     hwnd,
                     Some(HWND_TOP),

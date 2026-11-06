@@ -7,6 +7,7 @@
 //! Controls follow the chart-settings popup idiom: framed groups, segments, and stateless controls.
 //! Copy and Paste exchange one group's configuration as detects_view.toml text, like Settings tabs.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown,
@@ -607,6 +608,11 @@ fn content(
         .border_1()
         .border_color(rgb(p.border))
         .bg(rgb(p.panel_high))
+        // Facet skin: the surface the detect cards themselves take, so the mock stays a
+        // picture of what it configures.
+        .when(design::is_facet(cx), |card| {
+            design::facet_surface(card, moon_ui::MoonFacetKind::Card, cx)
+        })
         .overflow_hidden()
         // The rail overlay is drawn at an explicit width, so it has to be told how much of the
         // content box the group frame around it consumes.

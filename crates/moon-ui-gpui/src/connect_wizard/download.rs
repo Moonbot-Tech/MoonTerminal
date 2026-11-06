@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonButton, MoonPalette, MoonSpinner, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
@@ -69,6 +70,10 @@ impl ConnectWizardView {
                     .border_1()
                     .border_color(rgba_from(p.border, 1.0))
                     .rounded(design::r_container(cx))
+                    // Facet skin: the offer is a card resting on the page.
+                    .when(design::is_facet(cx), |this| {
+                        design::facet_surface(this, moon_ui::MoonFacetKind::Card, cx)
+                    })
                     .child(
                         v_flex()
                             .flex_1()

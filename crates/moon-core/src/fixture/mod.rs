@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod dense;
 mod figures;
 pub mod sample;
 pub mod unlisted;
@@ -92,6 +93,8 @@ pub struct ChartFixture {
     figures: usize,
     /// Most recently served window; see [`Served`].
     served: std::sync::Mutex<Option<Served>>,
+    /// Generated retained trades, present only for the self-contained dense bench.
+    dense: Option<std::sync::Mutex<dense::DenseHistory>>,
 }
 
 impl ChartFixture {
@@ -113,7 +116,17 @@ impl ChartFixture {
     /// Newest close in the bench: the price a synthetic tick stream should start from, so the
     /// ticker, the order book and the chart do not disagree by orders of magnitude.
     pub fn last_price(&self) -> f32 {
-        self.last_price
+        self.dense.as_ref().map_or(self.last_price, |history| {
+            history
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .last_price()
+        })
+    }
+
+    /// Generated history for a diagnostic run; ordinary fixtures and live sessions have none.
+    pub fn dense_history(&self) -> Option<&std::sync::Mutex<dense::DenseHistory>> {
+        self.dense.as_ref()
     }
 
     /// Seconds every timestamp was moved forward when the bench was prepared.
@@ -124,6 +137,10 @@ impl ChartFixture {
     /// Whether `market` is the one the bench carries, ignoring case as the catalog does.
     pub fn covers(&self, market: &str) -> bool {
         self.market.eq_ignore_ascii_case(market)
+            || self.dense.is_some()
+                && dense::MARKETS
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(market))
     }
 
     /// Write the one line that says a bench is installed and what it holds.
@@ -188,6 +205,12 @@ impl ChartFixture {
         from_ms: i64,
         to_ms: i64,
     ) -> Vec<ChartCandle> {
+        if let Some(history) = &self.dense {
+            return history
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .candles(tf_ms, from_ms, to_ms);
+        }
         let tf_ms = tf_ms.max(60_000);
         let base_kind = base_kind_for(tf_ms);
         let base_tf_ms = base_kind as i64 * 60_000;
@@ -232,6 +255,9 @@ fn base_kind_for(tf_ms: i64) -> u32 {
 ///     copy fails, the data-root override was already installed, or the databases are unusable.
 pub fn prepare(name: &str) -> anyhow::Result<&'static ChartFixture> {
     validate_name(name)?;
+    if name == "dense" {
+        return dense::prepare();
+    }
     let source = locate(name).ok_or_else(|| {
         anyhow::anyhow!(
             "фикстура {name:?} не найдена: положите её в {FIXTURES_DIR}/{name} рядом с exe, \
@@ -290,6 +316,7 @@ pub fn prepare(name: &str) -> anyhow::Result<&'static ChartFixture> {
         shift_secs,
         figures,
         served: std::sync::Mutex::new(None),
+        dense: None,
     };
     ACTIVE
         .set(fixture)

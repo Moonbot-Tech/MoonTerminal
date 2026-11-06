@@ -36,6 +36,13 @@ pub struct FigureStore {
     pub dirty: bool,
 }
 
+/// Owned local drawings captured without serializing or touching the filesystem on the UI thread.
+#[derive(Clone)]
+pub struct FigureSnapshot {
+    by_key: HashMap<FigureKey, Vec<Figure>>,
+    unknown: HashMap<FigureKey, Vec<serde_json::Value>>,
+}
+
 impl FigureStore {
     pub fn rev(&self) -> u64 {
         self.rev
@@ -340,44 +347,38 @@ impl FigureStore {
             .max()
     }
 
-    /// Loads from `figures.json`; a missing or malformed file produces an empty store.
-    ///
-    /// An I/O failure that is NOT "no such file" is logged: the store would otherwise start empty
-    /// and the first debounced save would overwrite a file that was merely locked or unreadable.
+    /// Load figures while protecting an unread original from later edits to the fallback store.
     pub fn load() -> Self {
         let path = paths::figures_path();
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => {
-                log::warn!("не прочитал figures.json ({e}) → без фигур");
-                String::new()
-            }
-        };
-        Self::from_json(&text)
+        match crate::config::read_config_text(&path, "figures.json") {
+            Ok(Some(text)) => Self::parse_json(&text).unwrap_or_else(|error| {
+                crate::config::preserve_unreadable_config(&path);
+                log::warn!(
+                    "figures.json parse failed ({error}); preserving the original until restart"
+                );
+                Self::default()
+            }),
+            Ok(None) | Err(_) => Self::default(),
+        }
     }
 
-    /// Parses store contents figure by figure.
-    ///
-    /// The file stays the flat ARRAY it has always been, deliberately: a version wrapper would
-    /// make every file this build writes unreadable by the SHIPPED one, which falls back to an
-    /// empty store and then saves that emptiness over the user's drawings. Tolerance is what
-    /// forward compatibility actually needed, and it needs no new shape — a figure this build
-    /// cannot parse is kept verbatim in `unknown` and written back untouched.
-    ///
-    /// Split from [`Self::load`] so the format rules are testable without a filesystem.
+    /// Parse standalone figure text without assigning it to any persistent file.
     pub fn from_json(text: &str) -> Self {
+        Self::parse_json(text).unwrap_or_else(|error| {
+            log::warn!("figures.json parse failed ({error}); using an empty in-memory store");
+            Self::default()
+        })
+    }
+
+    /// Parse store contents figure by figure, returning document errors to the persistence owner.
+    ///
+    /// The flat array format and unknown per-figure values remain compatible with older builds.
+    fn parse_json(text: &str) -> Result<Self, serde_json::Error> {
         let mut store = Self::default();
         if text.trim().is_empty() {
-            return store;
+            return Ok(store);
         }
-        let entries: Vec<PersistEntry> = match serde_json::from_str(text) {
-            Ok(v) => v,
-            Err(e) => {
-                log::warn!("figures.json битый ({e}) → без фигур");
-                return store;
-            }
-        };
+        let entries: Vec<PersistEntry> = serde_json::from_str(text)?;
         for e in entries {
             let key = (e.core, e.market);
             let mut figures = Vec::with_capacity(e.figures.len());
@@ -421,23 +422,51 @@ impl FigureStore {
             }
             store.by_key.insert(key, figures);
         }
-        store
+        Ok(store)
     }
 
-    /// Saves to `figures.json` non-fatally and clears `dirty`. Server alerts (`from_server`)
-    /// are NOT persisted because they are managed by the core.
+    /// Save local figures, clearing dirty only after a successful write so transient failures retry.
+    /// Server alerts remain core-managed and are not persisted.
     pub fn save(&mut self) {
-        match serde_json::to_string_pretty(&self.to_persist()) {
-            Ok(s) => {
-                if let Err(e) =
-                    write_file_atomic(&paths::figures_path(), s.as_bytes(), "figures.json")
-                {
-                    log::warn!("не записал figures.json: {e}");
-                }
-            }
-            Err(e) => log::warn!("не сериализовал figures.json: {e}"),
+        if self.snapshot().save() {
+            self.dirty = false;
         }
-        self.dirty = false;
+    }
+
+    /// Copy only persisted drawings; server alerts stay with the live core-owned collection.
+    pub fn snapshot(&self) -> FigureSnapshot {
+        FigureSnapshot {
+            by_key: self
+                .by_key
+                .iter()
+                .filter_map(|(key, figures)| {
+                    let local: Vec<_> = figures
+                        .iter()
+                        .filter(|figure| !figure.from_server)
+                        .cloned()
+                        .collect();
+                    (!local.is_empty()).then(|| (key.clone(), local))
+                })
+                .collect(),
+            unknown: self.unknown.clone(),
+        }
+    }
+}
+
+impl FigureSnapshot {
+    /// Serialize and atomically replace the captured drawings on the persistence worker.
+    pub fn save(&self) -> bool {
+        let result = serde_json::to_string_pretty(&self.to_persist())
+            .map_err(anyhow::Error::from)
+            .and_then(|text| {
+                write_file_atomic(&paths::figures_path(), text.as_bytes(), "figures.json")
+            });
+        if let Err(error) = result {
+            log::warn!("figures.json save failed: {error}");
+            false
+        } else {
+            true
+        }
     }
 
     /// Builds the persisted form: local figures only, one entry per chart, plus every figure this
@@ -452,9 +481,6 @@ impl FigureStore {
             .filter_map(|key| {
                 let mut figures: Vec<serde_json::Value> = Vec::new();
                 for f in self.by_key.get(key).into_iter().flatten() {
-                    if f.from_server {
-                        continue;
-                    }
                     match serde_json::to_value(f) {
                         Ok(v) => figures.push(v),
                         Err(e) => log::warn!("figures.json: фигура {} не сериализуется: {e}", f.id),

@@ -256,14 +256,6 @@ impl HvolStyleGpu {
     pub fn is_overlay(&self) -> bool {
         self.m[0] >= 0.5
     }
-
-    /// The x past which the order-line and trade-mark pass may draw, in physical px, or `None`
-    /// when nothing keeps it off the pane's left edge: no zone, or a zone laid over the plot,
-    /// which the marks must reach across exactly as they reach across the bottom band. The one
-    /// statement of that clip, read by all three backends.
-    pub fn user_clip_left(&self) -> Option<f32> {
-        (self.zone[2] >= 1.0 && !self.is_overlay()).then(|| self.zone[0] + self.zone[2])
-    }
 }
 
 /// Price-line style constants: cbuffer `PriceStyle` at b1 in crosses.hlsl,
@@ -709,6 +701,19 @@ pub struct ChartViewGpu {
     pub volume_sell_inv: f32,
     pub volume_alpha: f32,
     pub _pad2: f32,
+}
+
+impl ChartViewGpu {
+    /// Content may reach the book, but never the price/time gutters or a carved volume zone.
+    /// Cursor readouts and axis labels deliberately keep the enclosing pane instead.
+    pub fn content_clip(&self, book: &Self) -> [f32; 4] {
+        [
+            self.bounds[0],
+            self.bounds[1],
+            (self.bounds[0] + self.bounds[2]).max(book.bounds[0] + book.bounds[2]),
+            self.bounds[1] + self.bounds[3],
+        ]
+    }
 }
 
 /// Quad blit/background uniform.

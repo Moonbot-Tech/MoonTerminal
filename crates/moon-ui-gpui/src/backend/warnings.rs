@@ -42,6 +42,7 @@ impl Backend {
     /// Returns:
     ///     Nothing; the engine's tracking, warning state, and episode log advance in place.
     pub(crate) fn tick_core_warnings(&mut self, now_ms: i64) {
+        let episode_rev = self.warn.episode_rev();
         let enabled = self.warn_enabled();
         self.warn.set_enabled(enabled);
         let tuning = self.warn_tuning();
@@ -201,6 +202,9 @@ impl Backend {
         if self.warn_persisted_rev != persisted_rev {
             self.warn_persisted_rev = persisted_rev;
             self.warn.bump_rev();
+        }
+        // Chart warning marks need openings and closures even without any later feed message.
+        if self.warn.episode_rev() != episode_rev {
             self.backend_dirty_since_notify = true;
         }
     }

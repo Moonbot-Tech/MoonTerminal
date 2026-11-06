@@ -358,19 +358,21 @@ impl Shell {
             HotkeyAction::ScalePlus | HotkeyAction::ScaleMinus => {
                 // "+" is the scale NUMBER growing, not the zoom: Moonbot's Scale + widens the band.
                 let scale_up = matches!(action, HotkeyAction::ScalePlus);
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     let next = crate::controls::step_scale(b.price_scale, scale_up);
                     b.price_scale = next;
                     b.price_scale_group = Some(group.clone());
                     b.price_scale_rev = b.price_scale_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }
             // Moonbot's Ctrl+Right hits every chart, so the revision is global and unaddressed:
             // each `ChartTabs` centres every stack it holds, detached windows included.
             HotkeyAction::CenterChart => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.center_chart_rev = b.center_chart_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }
@@ -387,9 +389,10 @@ impl Shell {
             // Keeping it separate from the scale revision prevents switching and zooming from
             // consuming each other's signals.
             HotkeyAction::SwitchCharts => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.switch_charts_group = Some(group.clone());
                     b.switch_charts_rev = b.switch_charts_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }
@@ -425,8 +428,9 @@ impl Shell {
             }
             // Built-in Shift+Escape increments the global revision that closes every Main stack.
             HotkeyAction::CloseAllCharts => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.close_all_charts_rev = b.close_all_charts_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }

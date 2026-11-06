@@ -50,6 +50,8 @@ impl ChartEngine {
             firetest_text_layer: GpuCanvasRetainedTextLayer::default(),
             firetest_text_revision: 0,
             firetest_force_present: false,
+            #[cfg(windows)]
+            firetest_capture: None,
             ui_palette: initial_palette_from_theme(&theme),
             slot_origin: [0.0, 0.0],
             cursor: None,

@@ -90,7 +90,12 @@ impl Render for FixedAlignmentProbe {
 /// Restoring either old fixed-row gap or inset must move the numeric edge and fail this check.
 #[gpui::test]
 fn livefix_read_only_current_values_align_with_editable_rows(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),

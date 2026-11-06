@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonContextMenuWindowExt as _, MoonInput,
@@ -317,8 +318,12 @@ impl SettingsView {
                 .close_button(true)
                 .overlay(true)
                 .overlay_closable(true)
-                .bg(rgba_from(p.shell_high, 1.0))
-                .border_color(rgba_from(p.border, 1.0))
+                // Facet skin: no override, so MoonUI's popup surface shows.
+                .when(!design::is_facet(cx), |dialog| {
+                    dialog
+                        .bg(rgba_from(p.shell_high, 1.0))
+                        .border_color(rgba_from(p.border, 1.0))
+                })
                 .rounded(design::r_container(cx))
                 .text_color(rgba_from(p.text, 1.0))
                 .header(

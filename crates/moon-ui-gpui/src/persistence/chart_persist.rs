@@ -441,14 +441,16 @@ where
     Ok(cfg)
 }
 
-/// Loads `charts.json`, returning an empty list when the file is absent or invalid.
+/// Load chart tabs, protecting an unread original from subsequent saves of an empty fallback.
 pub fn load_all() -> Vec<ChartTabSpec> {
-    match std::fs::read_to_string(paths::charts_path()) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+    let path = paths::charts_path();
+    match moon_core::config::read_config_text(&path, "charts.json") {
+        Ok(Some(s)) => serde_json::from_str(&s).unwrap_or_else(|e| {
+            moon_core::config::preserve_unreadable_config(&path);
             log::warn!("charts.json битый ({e}) → без сохранённых вкладок");
             Vec::new()
         }),
-        Err(_) => Vec::new(),
+        Ok(None) | Err(_) => Vec::new(),
     }
 }
 

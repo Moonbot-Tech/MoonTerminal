@@ -61,6 +61,11 @@ impl Render for DebugChartHost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let title = self.title.clone();
+        // Facet skin: the title bar is lit from above and settles into the chart ground below
+        // it, closed by a rule that fades toward the window edges. It stays opaque — this
+        // window's root paints no fill behind it, so that the chart's own pass shows under the
+        // scene. The light is the strength the detached chart window's title bar starts from.
+        let facet = design::is_facet(cx);
         v_flex()
             .size_full()
             .track_focus(&self.focus)
@@ -75,6 +80,15 @@ impl Render for DebugChartHost {
                     .border_b_1()
                     .border_color(rgb(p.border))
                     .bg(rgb(p.shell_high))
+                    .when(facet, |this| {
+                        design::facet_bottom_rule(
+                            this.bg(design::facet_band(
+                                design::facet_lit(p, p.chart_bg, 0.06),
+                                design::moon(p.chart_bg),
+                            )),
+                            design::facet_ink(p, design::FACET_CHROME_RULE),
+                        )
+                    })
                     .child(
                         MoonWindowFrame::debug("debug-chart-title-drag", 0.0)
                             .title_cluster(title, cx)
@@ -244,6 +258,9 @@ impl Render for DebugPerfWindow {
         let close_backend = self.backend.clone();
         let fill_backend = self.backend.clone();
         let fill_group = self.group.clone();
+        // Under the Facet skin `MoonRoot` paints the window backdrop behind this view, and an
+        // opaque fill on the window root would cover it.
+        let facet = design::is_facet(cx);
 
         v_flex()
             .id("debug-perf-window")
@@ -252,7 +269,7 @@ impl Render for DebugPerfWindow {
             .track_focus(&self.focus)
             .gap(design::ui_px(cx, 8.0))
             .p_4()
-            .bg(rgb(p.shell))
+            .when(!facet, |this| this.bg(rgb(p.shell)))
             .text_size(design::t_body(cx))
             .text_color(rgb(p.text))
             .child(
@@ -405,6 +422,10 @@ impl Render for DebugPerfWindow {
                             .p_2()
                             .rounded(design::r_button(cx))
                             .bg(rgba(0x00000055))
+                            // Facet skin: the log line sits in a well sunk into the window.
+                            .when(facet, |this| {
+                                design::facet_surface(this, moon_ui::MoonFacetKind::Well, cx)
+                            })
                             .font_family(design::mono())
                             .text_size(design::t_body(cx))
                             .text_color(rgb(p.text_soft))

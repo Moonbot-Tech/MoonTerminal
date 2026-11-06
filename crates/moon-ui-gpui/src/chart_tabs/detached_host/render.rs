@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonInput, MoonPalette, MoonSize,
-    MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex,
+    MoonWindowFrame, MoonWindowFrameControls, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -22,6 +22,10 @@ use super::super::volumes_popup;
 use super::super::{chart_pane_label, coin_search};
 use super::DetachedChartHost;
 use crate::design;
+
+/// Strength of the highlight ink along the top of the title bar under the Facet skin: the value
+/// the group window's header starts from, so both windows are lit alike.
+const FACET_TITLE_LIGHT: f32 = 0.06;
 
 impl Render for DetachedChartHost {
     /// Renders the detached chart window with the dock toolbar's grouping and popup behavior.
@@ -64,6 +68,10 @@ impl Render for DetachedChartHost {
             }
         }
         let p = MoonPalette::active(cx);
+        // Facet skin: the title bar is a top-lit band closed by a fading rule, and the gaps
+        // between chart tiles are unfilled, so the window's clear colour has to follow the theme.
+        let facet = design::is_facet(cx);
+        self.ground.sync(p.chart_bg, window, cx);
         // Scale belongs to this panel per tab and is edited directly on it.
         let scale = self.panel.read(cx).scale();
         let panel = self.panel.clone();
@@ -250,6 +258,17 @@ impl Render for DetachedChartHost {
                     .border_b_1()
                     .border_color(rgb(p.border))
                     .bg(rgb(p.shell_high))
+                    // Facet skin: lit from above and settling into the chart ground below it.
+                    // Still opaque, because this window's root paints no fill behind the bar.
+                    .when(facet, |bar| {
+                        design::facet_bottom_rule(
+                            bar.bg(design::facet_band(
+                                design::facet_lit(p, p.chart_bg, FACET_TITLE_LIGHT),
+                                rgba_from(p.chart_bg, 1.0),
+                            )),
+                            design::facet_ink(p, design::FACET_CHROME_RULE),
+                        )
+                    })
                     .child(
                         frame
                             .title_cluster(title, cx)

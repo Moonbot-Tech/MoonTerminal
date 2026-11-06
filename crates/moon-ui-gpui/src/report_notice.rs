@@ -12,6 +12,10 @@ use rust_i18n::t;
 ///     Human-readable title and detail, excluding the technical diagnostics kept in the log.
 pub(crate) fn recovery_notice_text(notice: Option<&RecoveryNotice>) -> (String, String) {
     let (title, detail) = match notice {
+        Some(RecoveryNotice::CheckIncomplete { .. }) => (
+            t!("analytics.integrity_unchecked").to_string(),
+            t!("analytics.integrity_read_only_detail").to_string(),
+        ),
         Some(RecoveryNotice::Recovered { snapshot_dir }) => {
             return (
                 t!("analytics.recovery_done").to_string(),

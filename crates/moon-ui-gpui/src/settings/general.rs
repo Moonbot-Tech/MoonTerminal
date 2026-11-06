@@ -11,8 +11,8 @@ use std::rc::Rc;
 
 use moon_core::config::AppConfig;
 use moon_ui::{
-    MoonButtonSize, MoonInputEvent, MoonInputState, MoonNumberInput, MoonPalette, MoonSelect,
-    MoonSliderState, h_flex, rgba_from, v_flex,
+    MoonButtonSize, MoonFacetKind, MoonInputEvent, MoonInputState, MoonNumberInput, MoonPalette,
+    MoonSelect, MoonSliderState, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -80,6 +80,9 @@ pub(super) fn page_section(
 }
 
 /// The bordered, raised box a page groups its rows in.
+///
+/// Under the Facet skin it is a card resting on the page: MoonUI's card gradient, lit edge and
+/// cast shadow, at the same corner radius.
 pub(super) fn page_box(rows: Vec<AnyElement>, cx: &App) -> Div {
     let p = MoonPalette::active(cx);
     v_flex()
@@ -91,6 +94,9 @@ pub(super) fn page_box(rows: Vec<AnyElement>, cx: &App) -> Div {
         .border_color(rgba_from(p.border, 1.0))
         .rounded(design::r_container(cx))
         .bg(rgba_from(p.shell_high, 1.0))
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, MoonFacetKind::Card, cx)
+        })
         // A hairline between rows, none above the first.
         .children(rows.into_iter().enumerate().map(|(i, row)| {
             div()

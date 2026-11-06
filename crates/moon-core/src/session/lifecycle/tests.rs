@@ -294,6 +294,144 @@ fn status_drain_marks_sound_inputs() {
     assert!(session.drain().sound_inputs);
 }
 
+/// Catalog delivery cannot depend on an open market, and price bursts must not wake catalog walks.
+#[test]
+fn catalog_wakes_are_independent_of_prices_and_open_markets() {
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    assert!(session.wanted.is_empty());
+    tx.send(FeedMsg::MarketCatalogChanged).unwrap();
+    let stats = session.drain();
+    assert!(stats.any && stats.market_catalog);
+    assert!(!stats.market_data && !stats.ui_state && !stats.sound_inputs);
+    for _ in 0..100 {
+        tx.send(FeedMsg::MarketDataChanged(vec![MarketDirty::new(
+            "BTCUSDT",
+            MarketDirtyFlags::HISTORY,
+        )]))
+        .unwrap();
+    }
+    let stats = session.drain();
+    assert!(stats.market_data);
+    assert!(!stats.market_catalog);
+    assert!(
+        !session.drain().market_catalog,
+        "catalog wakes are drained, not sticky"
+    );
+}
+
+/// The real SDK classifier and session drain must publish read-model changes with no chart names.
+#[test]
+fn retained_market_updates_wake_without_charts_or_backend_heartbeat() {
+    use moonproto::Event;
+    use moonproto::state::{CandlesSnapshotEvent, MarketsEvent};
+
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    assert!(session.wanted.is_empty());
+    let events = [
+        Event::Markets(MarketsEvent::PricesUpdated {
+            count: 1,
+            included_funding: true,
+            included_corr: true,
+        }),
+        Event::Markets(MarketsEvent::StatsUpdated { count: 1 }),
+        Event::CandlesSnapshot(CandlesSnapshotEvent::Ready {
+            #[cfg(feature = "moonproto-diagnostics")]
+            request_uid: 1,
+            summary: Default::default(),
+        }),
+    ];
+    for event in events {
+        let dirty = crate::feed::live::market_dirty_from_events(&[event], &[], false)
+            .expect("retained snapshots change even when no chart is subscribed");
+        assert!(dirty.is_empty());
+        tx.send(FeedMsg::MarketDataChanged(dirty)).unwrap();
+        let stats = session.drain();
+        assert!(stats.any && stats.market_data);
+        assert!(!stats.market_catalog && !stats.ui_state && !stats.sound_inputs);
+        assert!(
+            !session.drain().market_data,
+            "publication must not become a heartbeat"
+        );
+    }
+    let unchanged = [
+        Event::Markets(MarketsEvent::StatsRefreshFailed {
+            message: "offline".into(),
+        }),
+        Event::CandlesSnapshot(CandlesSnapshotEvent::Failed {
+            #[cfg(feature = "moonproto-diagnostics")]
+            request_uid: None,
+            error: "offline".into(),
+        }),
+    ];
+    assert!(crate::feed::live::market_dirty_from_events(&unchanged, &[], false).is_none());
+}
+
+/// Mapping changes invalidate routed catalogs even without any chart subscriptions.
+#[test]
+fn provider_catalog_wake_covers_initial_mapping_failover_and_removal() {
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    session.set_market_mode(crate::market::MarketDataMode::PerCore);
+    assert!(session.set_open(&[], &[]));
+    assert!(!session.set_open(&[], &[]));
+    session.set_market_mode(crate::market::MarketDataMode::Dedup);
+    assert!(
+        session.core_provider.is_empty(),
+        "mode changes clear routing before the next election"
+    );
+    assert!(!session.set_open(&[], &[]));
+    tx.send(FeedMsg::Identity {
+        id: crate::feed::ExchangeId { code: 1, dex: 0 },
+        dex: String::new(),
+        reported: "Binance".into(),
+    })
+    .unwrap();
+    session.drain();
+    assert!(
+        session.set_open(&[], &[]),
+        "late identity establishes the provider"
+    );
+    assert!(!session.set_open(&[], &[]));
+    tx.send(FeedMsg::Status(ConnStatus::Ready)).unwrap();
+    session.drain();
+    let (second_tx, handle) = crate::feed::trade_sound_test_feed();
+    session.store.ensure(2);
+    session.sessions.push(CoreSession {
+        id: 2,
+        name: "second".into(),
+        group: String::new(),
+        conn_sig: 0,
+        handle,
+    });
+    second_tx
+        .send(FeedMsg::Identity {
+            id: crate::feed::ExchangeId::new(1),
+            dex: String::new(),
+            reported: "Binance".into(),
+        })
+        .unwrap();
+    second_tx.send(FeedMsg::Status(ConnStatus::Ready)).unwrap();
+    session.drain();
+    assert!(
+        session.set_open(&[], &[]),
+        "a second core joins the catalog route"
+    );
+    assert_eq!(session.core_provider.get(&2), Some(&1));
+    tx.send(FeedMsg::Status(ConnStatus::Disconnected)).unwrap();
+    session.drain();
+    assert!(
+        session.set_open(&[], &[]),
+        "failover must invalidate the old provider's catalog"
+    );
+    assert_eq!(session.core_provider.get(&1), Some(&2));
+    assert!(!session.set_open(&[], &[]));
+    session.sessions.clear();
+    assert!(
+        session.set_open(&[], &[]),
+        "removing the last core removes the catalog route"
+    );
+    assert!(!session.set_open(&[], &[]));
+}
+
 /// Trades and prices must not request a sound scan.
 ///
 /// Counting `MarketDataChanged` or `TradeOpened` would walk every core on each price
@@ -327,4 +465,31 @@ fn detects_drain_marks_sound_inputs() {
     let (mut session, tx) = super::trade_sound_tests::fixture();
     tx.send(FeedMsg::Detects(Vec::new())).unwrap();
     assert!(session.drain().sound_inputs);
+}
+
+/// Health samples belong to the telemetry consumer, even when their metrics change.
+#[test]
+fn telemetry_drain_retains_every_sample_without_waking_unrelated_views() {
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    for (stamp, cpu, revision) in [(1000, 10, 1), (2000, 10, 1), (3000, 20, 2)] {
+        tx.send(FeedMsg::SysStatus(crate::feed::CoreSysStatus {
+            updated_ms: stamp,
+            process_cpu_percent: Some(cpu),
+            ..Default::default()
+        }))
+        .unwrap();
+        let stats = session.drain();
+        assert!(stats.any);
+        assert!(!stats.ui_state, "telemetry must use its own publication");
+        let core = session.store.core(1).unwrap();
+        assert_eq!(core.sys.updated_ms, stamp);
+        assert_eq!(core.sys.process_cpu_percent, Some(cpu));
+        assert_eq!(core.sys_rev, revision);
+    }
+    tx.send(FeedMsg::Status(crate::feed::ConnStatus::Ready))
+        .unwrap();
+    assert!(
+        session.drain().ui_state,
+        "connection changes still wake their consumers"
+    );
 }

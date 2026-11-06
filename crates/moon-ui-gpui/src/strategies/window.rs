@@ -8,7 +8,11 @@ mod tests;
 pub(super) const STRATEGIES_HEADER_H: f32 = 32.0;
 
 /// Build the window header with native minimize, maximize, and close controls.
+///
+/// Under the Facet skin the header paints no fill of its own, so the window backdrop's top light
+/// shows through it, and its bottom border becomes a rule that fades toward the window edges.
 pub(super) fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .id("strategies-window-header")
         .relative()
@@ -18,9 +22,12 @@ pub(super) fn strategies_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(moon(p.shell_high))
+        .when(!facet, |this| this.bg(moon(p.shell_high)))
         .border_b(px(1.0))
         .border_color(moon_alpha(p.border, 1.0))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("strategies-titlebar-title", 0.0)
                 .title_cluster(t!("strat.window_title").to_string(), cx)

@@ -14,6 +14,14 @@ impl Focusable for CoreStatusView {
 }
 
 impl Panel for CoreStatusView {
+    /// Materialize one latest snapshot when a hidden tab becomes visible again.
+    fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.sample_gate.set_active(active) {
+            self.rebuild_cache(cx);
+            cx.notify();
+        }
+    }
+
     fn panel_name(&self) -> &'static str {
         "CoreStatus"
     }

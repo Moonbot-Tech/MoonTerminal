@@ -57,6 +57,8 @@ pub(crate) use pane_layout::{BookLayout, PaneAreas, pane_layout};
 use pane_render::PaneRender;
 use render_state::{RenderState, UdScratch};
 #[cfg(windows)]
+mod clip_probe;
+#[cfg(windows)]
 pub mod gpu;
 #[cfg(windows)]
 pub mod grid;
@@ -69,7 +71,11 @@ pub mod orderbook;
 pub mod pane;
 #[cfg(windows)]
 pub mod readout;
+#[cfg(windows)]
+mod recovery_probe;
 mod render_state;
+#[cfg(windows)]
+pub(crate) use recovery_probe::RecoveryImage;
 mod ruler;
 pub use ruler::RulerSpan;
 #[cfg(windows)]
@@ -161,12 +167,20 @@ impl GpuCanvasDriver for ChartCanvasDriver {
         }
     }
 
+    /// Publish measured axis geometry only after the RenderState borrow and text pass complete.
     fn prepare_text(&mut self, ctx: &mut GpuCanvasTextContext<'_>) -> anyhow::Result<()> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.state.borrow_mut().prepare_text(ctx)
         }));
         match result {
-            Ok(result) => result,
+            Ok(result) => {
+                if let Some(width) = result?
+                    && let Some(data) = self.data.upgrade()
+                {
+                    data.borrow_mut().set_price_axis_width(width);
+                }
+                Ok(())
+            }
             Err(e) => {
                 let msg = e
                     .downcast_ref::<&str>()

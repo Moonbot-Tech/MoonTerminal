@@ -6,6 +6,7 @@ use super::ip_cell::mask_affordance;
 use super::table;
 use super::{CoreStatusMode, CoreStatusView};
 use crate::design;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem,
@@ -240,6 +241,9 @@ impl CoreStatusView {
 /// Core Status only. The other panels keep the shared [`crate::panels::pinned_scope_host`] chip.
 /// It is not clickable, exactly like that chip, and carries the same tooltip.
 ///
+/// Under the Facet skin the box is MoonUI's card surface rather than a flat fill: lit like the
+/// content around it, and still not the raised look the switch's segments carry.
+///
 /// Args:
 ///     label: The pinned scope's name, such as the workspace overview.
 ///     width: Rendered width, already scaled by the caller.
@@ -266,6 +270,9 @@ fn pinned_scope_flat(label: String, width: Pixels, p: MoonPalette, cx: &App) -> 
                 .px(design::ui_px(cx, design::PINNED_SCOPE_PAD_X))
                 .rounded(design::r_button(cx))
                 .bg(rgb(p.panel_head))
+                .when(design::is_facet(cx), |chip| {
+                    design::facet_surface(chip, moon_ui::MoonFacetKind::Card, cx)
+                })
                 .font_family(design::mono())
                 .text_size(design::ui_px(
                     cx,
@@ -281,6 +288,9 @@ fn pinned_scope_flat(label: String, width: Pixels, p: MoonPalette, cx: &App) -> 
 const SCOPE_RULE_PAD: f32 = 8.0;
 
 /// Toolbar row. The four slots wrap onto a second line; nothing is clipped to stay on one.
+///
+/// Under the Facet skin the row paints no fill, so the dock's own surface shows through it, and
+/// the rule beside the scope control fades toward its ends.
 ///
 /// Args:
 ///     scope: Core-scope combo or pinned chip.
@@ -299,6 +309,7 @@ pub(super) fn toolbar_row(
     cx: &App,
 ) -> impl IntoElement {
     let p = MoonPalette::active(cx);
+    let facet = design::is_facet(cx);
     h_flex()
         .id("core-status-toolbar")
         .debug_selector(|| "cs-toolbar".into())
@@ -310,7 +321,7 @@ pub(super) fn toolbar_row(
         .gap(design::ui_px(cx, 8.0))
         .px(design::ui_px(cx, 12.0))
         .py(design::ui_px(cx, 8.0))
-        .bg(rgb(p.panel_high))
+        .when(!facet, |row| row.bg(rgb(p.panel_high)))
         .font_family(design::ui_font())
         // The scope control filters which cores the panel covers; it is not a view. A rule on
         // its right edge keeps it from reading as a sixth segment of the switch beside it.
@@ -321,6 +332,9 @@ pub(super) fn toolbar_row(
                 .pr(design::ui_px(cx, SCOPE_RULE_PAD))
                 .border_r_1()
                 .border_color(rgb(p.border))
+                .when(facet, |slot| {
+                    design::facet_right_rule(slot, design::facet_ink(p, design::FACET_CHROME_RULE))
+                })
                 .child(scope),
         )
         .child(

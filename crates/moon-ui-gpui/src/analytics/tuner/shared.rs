@@ -193,6 +193,10 @@ fn card_header_layout(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: an auxiliary card rests on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
         .overflow_hidden()
         .child(head)
         .child(body)

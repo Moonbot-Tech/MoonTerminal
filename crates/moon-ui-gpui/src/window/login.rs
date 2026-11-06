@@ -404,7 +404,11 @@ impl Render for LoginView {
         v_flex()
             .size_full()
             .relative()
-            .bg(rgba_from(p.shell, 1.0))
+            // Under the Facet skin `MoonRoot` paints the window backdrop behind this view, and an
+            // opaque fill on the window root would cover it.
+            .when(!design::is_facet(cx), |this| {
+                this.bg(rgba_from(p.shell, 1.0))
+            })
             // Prose window: a caption, an error line and a throttle notice, all sentences. The one
             // value it holds is the secret itself, pinned back to mono at its own input.
             .font_family(design::ui_font())
@@ -424,7 +428,11 @@ impl Render for LoginView {
 }
 
 /// Build the draggable window header.
+///
+/// Under the Facet skin the header paints no fill of its own, so the window backdrop's top light
+/// shows through it, and its bottom border becomes a rule that fades toward the window edges.
 fn header(p: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .id("login-window-header")
         .relative()
@@ -434,9 +442,12 @@ fn header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(rgba_from(p.shell_high, 1.0))
+        .when(!facet, |this| this.bg(rgba_from(p.shell_high, 1.0)))
         .border_b(px(1.0))
         .border_color(rgba_from(p.border, 1.0))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("login-titlebar-title", 0.0)
                 .title_cluster(t!("login.window_title").to_string(), cx)

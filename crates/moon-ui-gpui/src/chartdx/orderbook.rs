@@ -102,8 +102,16 @@ impl OrderBookLayer {
         self.pending_immediate |= immediate;
     }
 
+    /// Wake a quiet chart when its last uploaded levels can finally replace the cached bitmap.
+    pub fn bake_due(&self, now: Instant) -> bool {
+        self.tex
+            .as_ref()
+            .is_some_and(|tex| book_data_due(tex.dirty, tex.last_bake_at, now))
+    }
+
     /// Prepare phase: uploads levels and bakes the offscreen book texture when due.
     /// This may switch render targets and must run from `GpuCanvasDriver::prepare_gpu`.
+    /// Returns whether the bitmap changed, invalidating the outer base that contains it.
     pub fn prepare(
         &mut self,
         view: &ChartViewGpu,
@@ -111,19 +119,18 @@ impl OrderBookLayer {
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
         gpu: &RawGpuAccess,
-    ) {
+    ) -> bool {
         let bw = view.bounds[2];
         let bh = view.bounds[3];
         if bw <= 0.0 || bh <= 0.0 {
-            return;
+            return false;
         }
-        // Device loss drops the pipeline and texture and resets the level count. This layer keeps no
-        // CPU copy and cannot reupload by itself, so it remains empty until a later `set()` queues
-        // fresh levels.
+        // Replay the retained levels on a new device, including an update already queued by set().
         if device_changed(&mut self.device_generation, gpu) {
             self.pipe = None;
             self.tex = None;
             self.count = 0;
+            self.pending_set = true;
         }
         if self.pipe.is_none() {
             self.pipe = Some(Self::create_pipe(device, INITIAL_LEVEL_BUFFER_CAPACITY));
@@ -236,6 +243,7 @@ impl OrderBookLayer {
             tex.dirty = false;
             tex.last_bake_at = Some(now);
         }
+        plan.bake
     }
 
     /// Composite the cached order book into `view.bounds` of the caller-provided render target

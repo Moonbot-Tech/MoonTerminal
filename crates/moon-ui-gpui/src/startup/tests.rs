@@ -15,7 +15,12 @@ fn presentation_installs_the_scale_as_window_zoom_only() {
     use moon_core::config::UiThemeMode;
     use moon_ui::MoonSize;
 
-    for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
+    for mode in [
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+        UiThemeMode::Light,
+    ] {
         let theme = super::moon_theme_config_for_presentation(mode, 1.5);
         for scale in [theme.dark.scale, theme.light.scale] {
             assert_eq!(scale.zoom, 1.5);
@@ -41,7 +46,30 @@ fn presentation_rejects_non_finite_and_non_positive_scales() {
     }
 }
 
-/// Build one tick's edges from the four flags, in declaration order.
+/// Catches `startup.rs:moon_theme_config_for_mode` installing a palette on the other side from
+/// the one its mode names. The chart picks its colour table from the MODE, while the order lines
+/// drawn over it follow the measured palette (`panels/chart/render.rs`); the two agree only while
+/// every mode's installed palette measures the way `UiThemeMode::is_light` answers. A mismatch
+/// would draw light-set lines over a dark-set chart with nothing else red.
+#[test]
+fn every_mode_installs_a_palette_on_the_side_it_names() {
+    use moon_core::config::UiThemeMode;
+    use moon_ui::MoonTheme;
+
+    for (mode, light) in [
+        (UiThemeMode::Dark, false),
+        (UiThemeMode::Graphite, false),
+        (UiThemeMode::Obsidian, false),
+        (UiThemeMode::DarkExperimental, false),
+        (UiThemeMode::Light, true),
+        (UiThemeMode::LightExperimental, true),
+    ] {
+        let theme = MoonTheme::from_config(super::moon_theme_config_for_mode(mode));
+        assert_eq!(theme.palette.is_light(), light, "{mode:?}");
+    }
+}
+
+/// Build data and valuation edges without a startup recovery notice.
 ///
 /// Args:
 ///     immediate_report: Live report data committed.
@@ -62,6 +90,7 @@ fn edges(
         background_report,
         valuation,
         valuation_status,
+        recovery_notice: false,
     }
 }
 
@@ -240,6 +269,35 @@ fn a_health_change_alone_still_reaches_a_revision() {
             wake_valuation: false,
         },
         "and is published at the next boundary"
+    );
+}
+
+/// A stopped-writer notice cannot wait for a trade that will never commit. Its publication
+/// also covers pending background work without spuriously waking the valuation worker.
+#[test]
+fn recovery_notice_publishes_without_a_writer_or_a_second_pending_refresh() {
+    let start = Instant::now();
+    let mut gate = ReportRevisionGate::new(start);
+    assert_eq!(
+        gate.observe(edges(false, false, true, false), start),
+        ReportRevisionDecision::default()
+    );
+    assert_eq!(
+        gate.observe(
+            TickEdges {
+                recovery_notice: true,
+                ..TickEdges::default()
+            },
+            start + Duration::from_secs(1)
+        ),
+        ReportRevisionDecision {
+            notify: true,
+            wake_valuation: false
+        },
+    );
+    assert_eq!(
+        gate.observe(TickEdges::default(), start + Duration::from_secs(61)),
+        ReportRevisionDecision::default()
     );
 }
 

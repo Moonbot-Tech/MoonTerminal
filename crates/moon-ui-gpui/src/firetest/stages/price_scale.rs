@@ -21,7 +21,30 @@ pub(in crate::firetest) fn request_50(
     backend: &mut Backend,
     cx: &mut Context<Backend>,
 ) -> StageStep {
-    runtime.request_price_scale(backend, Some(0.50), cx);
+    let Some(handle) = runtime
+        .opened_group
+        .as_ref()
+        .and_then(|group| backend.group_windows.get(group))
+        .copied()
+    else {
+        return StageStep::Fail("scale hotkey requires the normal group window".into());
+    };
+    // Start at Auto; the real Shell action must publish the 50% step to ChartTabs itself.
+    backend.price_scale = None;
+    cx.defer(move |cx| {
+        let _ = handle.update(cx, |root, window, cx| {
+            if let Ok(shell) = root.view().clone().downcast::<crate::shell::Shell>() {
+                shell.update(cx, |shell, cx| {
+                    shell.dispatch_hotkey(
+                        crate::hotkeys::HotkeyAction::ScaleMinus,
+                        crate::hotkeys::HotkeyPress::POINTER,
+                        window,
+                        cx,
+                    );
+                });
+            }
+        });
+    });
     StageStep::Next
 }
 
@@ -59,9 +82,20 @@ pub(in crate::firetest) fn verify_20_then_request_auto(
 pub(in crate::firetest) fn verify_auto(
     runtime: &mut Runtime,
     backend: &mut Backend,
-    _cx: &mut Context<Backend>,
+    cx: &mut Context<Backend>,
 ) -> StageStep {
-    runtime.verify_price_scale(backend, None).into()
+    match runtime.verify_price_scale(backend, None) {
+        Ok(()) => {
+            runtime.start_core_status_probe(backend, cx);
+            runtime.application_probe = Some(crate::firetest::application::start(
+                backend,
+                runtime.opened_group.clone().unwrap_or_default(),
+                cx,
+            ));
+            StageStep::Next
+        }
+        Err(error) => StageStep::Fail(error),
+    }
 }
 
 impl Runtime {

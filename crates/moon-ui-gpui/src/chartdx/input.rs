@@ -174,7 +174,7 @@ impl ChartInput {
     /// This pane's areas as the ENGINE lays them out. Navigation asks the same function `prepare`
     /// does, or it pans and zooms against a width nothing drew — a cramped pane's narrowed book, a
     /// disabled book's width handed back to the plot, a broom pane's plot floored at one pixel.
-    fn areas_of(&self, rect: &Rect, ppp: f32) -> crate::chartdx::PaneAreas {
+    fn areas_of(&self, rect: &Rect, ppp: f32, price_axis_width: f32) -> crate::chartdx::PaneAreas {
         crate::chartdx::pane_layout(
             *rect,
             crate::chartdx::BookLayout {
@@ -186,10 +186,18 @@ impl ChartInput {
             self.price_axis_pos,
             self.hvol,
             ppp,
+            price_axis_width,
         )
     }
 
-    fn plot_metrics_for(&self, pane: Option<usize>, fallback_w: f32, ppp: f32) -> (f32, f32) {
+    /// Anchor navigation to the same measured gutter used by the rendered pane.
+    fn plot_metrics_for(
+        &self,
+        pane: Option<usize>,
+        fallback_w: f32,
+        ppp: f32,
+        container: &Container,
+    ) -> (f32, f32) {
         let Some(idx) = pane else {
             return (
                 fallback_w.max(1.0),
@@ -202,7 +210,10 @@ impl ChartInput {
                 self.last_ptr.0.clamp(0.0, fallback_w.max(1.0)),
             );
         };
-        let plot = self.areas_of(r, ppp).plot;
+        let axis_width = container
+            .pane(idx)
+            .map_or(moon_chart::PRICE_AXIS_W, |pane| pane.price_axis_width);
+        let plot = self.areas_of(r, ppp, axis_width).plot;
         let cursor_x = (self.last_ptr.0 - plot.x).clamp(0.0, plot.w);
         (plot.w, cursor_x)
     }
@@ -232,7 +243,10 @@ impl ChartInput {
         // Ignore double-clicks in the order book's own RECTANGLE, wherever the engine put it: left
         // of an outboard right-side axis gutter, narrowed on a cramped pane, the whole pane in
         // broom mode — where this gesture therefore has nowhere left to fire, which is the intent.
-        let glass = self.areas_of(r, ppp).glass;
+        let axis_width = container
+            .pane(idx)
+            .map_or(moon_chart::PRICE_AXIS_W, |pane| pane.price_axis_width);
+        let glass = self.areas_of(r, ppp, axis_width).glass;
         if glass.w > 0.0 && self.last_ptr.0 >= glass.x {
             return;
         }
@@ -274,7 +288,8 @@ impl ChartInput {
             self.wheel_pane = self.hovered_pane;
             self.wheel_mode = Some(mode);
         }
-        let (plot_w, cursor_x) = self.plot_metrics_for(self.hovered_pane, fallback_w, ppp);
+        let (plot_w, cursor_x) =
+            self.plot_metrics_for(self.hovered_pane, fallback_w, ppp, container);
         let now = now_unix_ms();
         if let Some(view) = self.hovered_view_mut(container) {
             if mode == WheelMode::Pan {
@@ -320,7 +335,7 @@ impl ChartInput {
         }
         let mut changed = false;
         for (idx, _) in &self.pane_rects {
-            let (width, _) = self.plot_metrics_for(Some(*idx), fallback_w, ppp);
+            let (width, _) = self.plot_metrics_for(Some(*idx), fallback_w, ppp, container);
             if let Some(view) = container.view_mut(*idx) {
                 view.zoom_x_at(
                     if zoom_in { 2.0 } else { 0.5 },
@@ -436,7 +451,7 @@ impl ChartInput {
         // Left drag pans time horizontally and price vertically.
         if self.lmb_down {
             let target = self.drag_pane.or(self.hovered_pane);
-            let (plot_w, _) = self.plot_metrics_for(target, fallback_w, ppp);
+            let (plot_w, _) = self.plot_metrics_for(target, fallback_w, ppp, container);
             let now = now_unix_ms();
             if let Some(view) = self.view_mut(container, target) {
                 if dy != 0.0 {

@@ -656,7 +656,11 @@ impl Render for DetectsPanel {
 
         // Place the gear-triggered configuration toolbar and divider above the feed.
         let toolbar = popup::toolbar(self, &cfg, p, cx);
-        let divider = div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border));
+        let divider = crate::design::panel_rule(
+            cx,
+            p,
+            div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)),
+        );
 
         // Render fixed-size cards in reverse insertion order in a wrapping grid. Newly inserted
         // markets appear first; a repeated core-market detection refreshes its existing position.
@@ -804,7 +808,10 @@ impl Render for DetectsPanel {
             .size_full()
             .min_h(px(0.0))
             .track_focus(&self.focus)
-            .bg(rgb(p.table_body))
+            // Facet skin: the panel leaves its body unfilled so the dock's own surface shows.
+            .when(!crate::design::is_facet(cx), |this| {
+                this.bg(rgb(p.table_body))
+            })
             .child(toolbar)
             .child(divider)
             .child(body)

@@ -67,7 +67,9 @@ impl Render for CoreExpertView {
         v_flex()
             .size_full()
             .relative()
-            .bg(moon(p.shell))
+            // Under the Facet skin `MoonRoot` paints the window backdrop behind this view, and an
+            // opaque fill on the window root would cover it.
+            .when(!design::is_facet(cx), |this| this.bg(moon(p.shell)))
             .text_color(moon(p.text))
             // The UI face, not the monospaced one. Moonbot's dialog is drawn in a proportional
             // font, and every `MoonText` on these pages already renders in it — leaving the root on
@@ -108,7 +110,11 @@ impl Render for CoreExpertView {
 }
 
 /// Window title bar, drawn by the shared tool-window frame like every other tool window here.
+///
+/// Under the Facet skin the bar paints no fill of its own, so the window backdrop's top light
+/// shows through it, and its bottom border becomes a rule that fades toward the window edges.
 fn title_bar(p: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .id("core-expert-header")
         .relative()
@@ -118,9 +124,12 @@ fn title_bar(p: MoonPalette, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(moon(p.shell_high))
+        .when(!facet, |this| this.bg(moon(p.shell_high)))
         .border_b(px(1.0))
         .border_color(moon_alpha(p.border, 1.0))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("core-expert-titlebar-title", 0.0)
                 .title_cluster(t!("core_expert.window_title").to_string(), cx)
@@ -503,6 +512,10 @@ impl CoreExpertView {
             .py(design::ui_px(cx, 8.0))
             .border_t(px(1.0))
             .border_color(moon_alpha(p.border, 1.0))
+            // Facet skin: the rule above the footer fades toward the window edges.
+            .when(design::is_facet(cx), |this| {
+                design::facet_top_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+            })
             .child(
                 h_flex()
                     .flex_1()

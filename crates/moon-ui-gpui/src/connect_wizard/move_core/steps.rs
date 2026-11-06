@@ -94,6 +94,8 @@ pub(super) fn clock(at: Duration) -> String {
 }
 
 /// The six rows in one bordered list.
+///
+/// Under the Facet skin the list is a card resting on the page.
 pub(super) fn checklist(rows: &[StepRow], cx: &App) -> impl IntoElement + use<> {
     let p = MoonPalette::active(cx);
     let mut list = v_flex()
@@ -102,7 +104,10 @@ pub(super) fn checklist(rows: &[StepRow], cx: &App) -> impl IntoElement + use<> 
         .border_1()
         .border_color(rgba_from(p.border, 1.0))
         .rounded(design::ui_px(cx, 6.0))
-        .bg(rgba_from(p.panel, 1.0));
+        .bg(rgba_from(p.panel, 1.0))
+        .when(design::is_facet(cx), |this| {
+            design::facet_surface(this, moon_ui::MoonFacetKind::Card, cx)
+        });
     for (i, row) in rows.iter().enumerate() {
         list = list.child(step_row(i, row, p, cx));
     }

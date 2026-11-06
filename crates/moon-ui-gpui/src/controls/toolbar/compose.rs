@@ -11,6 +11,10 @@ use super::*;
 /// its optional labels collapse against that width by an explicit priority ([`row_fit`]), because
 /// the row would otherwise push the trailing window buttons off the edge.
 ///
+/// The row fills itself with `shell_high` and closes the chrome block with a solid bottom border.
+/// Under the Facet skin the fill is the lower half of the top-lit band the header starts, and
+/// that border becomes a rule that fades toward the window edges.
+///
 /// Args:
 ///     backend: Shared terminal state and singleton-window registry.
 ///     group: Main-window group whose trading controls are rendered.
@@ -334,6 +338,19 @@ pub fn toolbar(
         // is why the header carries none.
         .border_b_1()
         .border_color(rgb(p.border));
+    // Facet skin: the row is the lower half of the top-lit band the header starts, and the rule
+    // that bounds the chrome block fades toward the window edges instead of running solid. The
+    // fill stays opaque — the group window's root paints nothing behind this row.
+    let facet = design::is_facet(cx);
+    if facet {
+        // The lower half of the band's ambient light goes in first, under the row's contents;
+        // the row is already `relative`.
+        row = design::facet_bottom_rule(
+            row.bg(design::facet_toolbar_fill(p))
+                .child(design::facet_band_lights(design::FacetBandRow::Toolbar, cx)),
+            design::facet_ink(p, design::FACET_CHROME_RULE),
+        );
+    }
 
     row = row
         // §0 SOURCE. Leftmost, before everything it governs: this switch decides WHICH generation
@@ -657,6 +674,15 @@ pub fn toolbar(
                         .bg(rgb(p.shell_high))
                         .border_l_1()
                         .border_color(rgb(p.border))
+                        // Facet skin: the row's own background is the band gradient, and this
+                        // section spans the same height, so it repeats that gradient; the rule
+                        // before it fades toward the row's top and bottom edges.
+                        .when(facet, |section| {
+                            design::facet_left_rule(
+                                section.bg(design::facet_toolbar_fill(p)),
+                                design::facet_ink(p, design::FACET_CHROME_RULE),
+                            )
+                        })
                 })
                 .children(button(Launcher::Settings).map(|settings| {
                     div()

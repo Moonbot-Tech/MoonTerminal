@@ -81,6 +81,10 @@ pub(super) fn render_rail_item(
                 .font_weight(FontWeight::SEMIBOLD)
                 .border_b_1()
                 .border_color(rgb(p.border_soft))
+                // Facet skin: that rule fades toward the rail's edges.
+                .when(design::is_facet(cx), |row| {
+                    design::facet_bottom_rule(row, design::facet_ink(p, design::FACET_PANEL_RULE))
+                })
                 .child(
                     h_flex()
                         .flex_1()
@@ -138,6 +142,11 @@ pub(super) fn render_rail_item(
             // `p.gutter` shows through as the section gap; the inner row alone paints the solid
             // one-step-up background, so the heading itself reads as elevated, not the gap above
             // it.
+            //
+            // Facet skin: the rail is unfilled, so the heading is lit instead of stepped up — a
+            // sheen from its top edge in place of the solid fill, over a rule that fades toward
+            // the rail's edges.
+            let facet = design::is_facet(cx);
             div()
                 .id(row_id)
                 .size_full()
@@ -157,6 +166,12 @@ pub(super) fn render_rail_item(
                         .bg(rgb(p.panel_high))
                         .border_b_1()
                         .border_color(rgb(p.border_soft))
+                        .when(facet, |heading| {
+                            design::facet_bottom_rule(
+                                heading.bg(design::facet_sheen(p, design::FACET_SECTION_SHEEN)),
+                                design::facet_ink(p, design::FACET_PANEL_RULE),
+                            )
+                        })
                         .children(controls)
                         .when_some(logo, |row, logo| {
                             row.child(

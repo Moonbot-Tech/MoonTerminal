@@ -171,8 +171,8 @@ const DENOMINATION_RULES: &[DenominationRule] = &[DenominationRule {
 
 /// Learn which cores own COIN-M rows, from the sources a reader just opened.
 ///
-/// Called where a connection exists, so the SQL builders below stay pure functions of the columns
-/// they are given. The evidence is a scan over `fname` that no index covers, and this sits on the
+/// Called where a connection exists; the SQL builders share this read batch's pinned proof instead
+/// of rereading changing process knowledge. The evidence scans `fname`, which no index covers, on the
 /// discovery path of EVERY money query — so [`coin_m`] pays it per core rather than per call, and
 /// asks the replica nothing at all once every core present has been examined.
 ///

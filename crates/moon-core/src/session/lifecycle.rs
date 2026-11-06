@@ -737,10 +737,12 @@ impl SessionManager {
                     FeedMsg::ChartArchiveAnswered { market, epoch } => {
                         self.market_source.archive_answered(sess.id, &market, epoch);
                     }
+                    FeedMsg::MarketCatalogChanged => stats.market_catalog = true,
                     FeedMsg::MarketDataChanged(markets) => {
+                        // The provider snapshot also serves readers with no chart subscriptions.
+                        stats.market_data = true;
                         if !markets.is_empty() {
                             self.market_source.mark_dirty(sess.id, &markets);
-                            stats.market_data = true;
                         }
                     }
                     FeedMsg::Orders(orders) => {
@@ -843,6 +845,13 @@ impl SessionManager {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             core.apply(FeedMsg::Endpoint(endpoint));
                             stats.ui_state = true;
+                        }
+                    }
+                    telemetry @ FeedMsg::SysStatus(_) => {
+                        // The warning sampler reads every sample and publishes its own UI edge.
+                        // A health ping is not a change to orders, charts, or account controls.
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            core.apply(telemetry);
                         }
                     }
                     other => {

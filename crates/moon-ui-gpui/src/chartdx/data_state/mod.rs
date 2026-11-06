@@ -10,6 +10,8 @@ pub(in crate::chartdx) struct ChartDataState {
     pub(in crate::chartdx) theme: ChartTheme,
     /// App-wide order-book width in physical pixels.
     pub(in crate::chartdx) order_book_width_px: f32,
+    /// Text measurement awaiting the next frame's atomic layout/input geometry update.
+    pub(in crate::chartdx) pending_price_axis_width: Option<f32>,
     pub(in crate::chartdx) orders: OrdersStyle,
     pub(in crate::chartdx) follow: bool,
     pub(in crate::chartdx) present_rate_hz: f32,

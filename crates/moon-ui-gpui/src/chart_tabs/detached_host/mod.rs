@@ -108,6 +108,9 @@ pub(crate) struct DetachedChartHost {
     /// The follow mode the taskbar policy was last applied for, so a checkbox change on a core
     /// resyncs this window's button without waiting for its next activation.
     taskbar_mode: crate::window::chart_follow::ChartFollow,
+    /// This window's clear colour, kept on the palette under the Facet skin, where the gaps
+    /// between chart tiles are unfilled and show it.
+    ground: crate::design::FacetGround,
 }
 
 impl DetachedChartHost {
@@ -445,6 +448,12 @@ impl DetachedChartHost {
             taskbar_hide,
             taskbar_hidden,
             taskbar_mode,
+            // The opener cleared this window with the palette's chart background just before
+            // building the host (`windowing::configure_chart_clear_color`).
+            ground: crate::design::FacetGround::new(
+                moon_ui::MoonPalette::active(cx).chart_bg,
+                crate::design::is_facet(cx),
+            ),
         }
     }
 
@@ -572,6 +581,7 @@ impl DetachedChartHost {
     /// only coin — and on a multi-coin window without an anchor it acts on nothing. A click has one:
     /// the chart's action layer passes the pane the press landed on, so a middle click on ETH in a
     /// window anchored on BTC panic-sells ETH, which is what was clicked, and not the anchor.
+    /// Global chart revisions notify their existing observers even on an otherwise idle core.
     pub(crate) fn dispatch_hotkey_at(
         &mut self,
         action: crate::hotkeys::HotkeyAction,
@@ -604,8 +614,9 @@ impl DetachedChartHost {
             }
             // Built-in Shift+Esc closes every group's Main charts.
             HotkeyAction::CloseAllCharts => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.close_all_charts_rev = b.close_all_charts_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }
@@ -627,8 +638,9 @@ impl DetachedChartHost {
             }
             // Application-global, like Shift+Esc: bump the revision every `ChartTabs` consumes.
             HotkeyAction::CenterChart => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.center_chart_rev = b.center_chart_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }

@@ -91,21 +91,29 @@ pub fn clamp_chart_stack_height(value: u16) -> u16 {
 
 /// Interface theme the user picked on the General tab.
 ///
-/// FIVE modes, but only TWO colour sets. `Graphite` is a middle theme — mid-tone neutral
-/// surfaces between `Dark`'s near-black and `Light` — and it shares the DARK set for badges,
-/// order styles, lines and the chart theme. The two experimental modes are MoonUI's colour-role
-/// modes and draw the set of the side they are on. Nothing here is a third table.
+/// SIX modes, but only TWO colour sets for badges, order styles and lines. `Graphite` is a middle
+/// theme — mid-tone neutral surfaces between `Dark`'s near-black and `Light` — and `Obsidian` is
+/// a second dark theme with an interface palette of its own. Both share the DARK set there. The
+/// two experimental modes are MoonUI's colour-role modes and draw the set of the side they are
+/// on.
 ///
-/// [`Self::is_light`] is the only sanctioned way to ask which set a mode draws. A bare equality
-/// test against the `Light` variant reads correctly today and then silently answers "not light,
-/// therefore dark" for a variant added later — which is exactly how Graphite would have been
-/// handed the light set at half of its call sites.
+/// The CHART theme is the one exception: it has a third table for `Obsidian`, whose near-black
+/// panels the dark set's grey chart ground does not sit in. That choice is not made here — see
+/// [`super::theme::ChartColorSet::for_mode`], the only place a mode maps onto a chart table.
+///
+/// [`Self::is_light`] is the only sanctioned way to ask which of the TWO sets a mode draws. A
+/// bare equality test against the `Light` variant reads correctly today and then silently answers
+/// "not light, therefore dark" for a variant added later — which is exactly how Graphite would
+/// have been handed the light set at half of its call sites.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UiThemeMode {
     Light,
     /// Mid-tone neutral surfaces with light text; draws the DARK colour set.
     Graphite,
+    /// MoonUI's Obsidian interface palette, a dark theme beside `Dark`; draws the DARK colour set
+    /// for badges, orders and lines, and its OWN chart table.
+    Obsidian,
     /// MoonUI's light colour mode, built from its colour roles; draws the LIGHT colour set.
     ///
     /// Experimental: the roles are still being adopted, so components not yet migrated take the
@@ -126,8 +134,9 @@ pub enum UiThemeMode {
 impl UiThemeMode {
     /// Whether this mode draws the LIGHT colour set.
     ///
-    /// `Graphite` and `DarkExperimental` are dark and answer `false`, so every per-mode colour
-    /// table (`badges`, `orders`, `lines`, the chart theme) keeps its two entries.
+    /// `Graphite`, `Obsidian` and `DarkExperimental` are dark and answer `false`, so the two-entry
+    /// colour tables (`badges`, `orders`, `lines`) keep their two entries. The chart theme has
+    /// three and is NOT chosen by this answer; see [`super::theme::ChartColorSet::for_mode`].
     ///
     /// Returns:
     ///     `true` for [`UiThemeMode::Light`] and [`UiThemeMode::LightExperimental`].
@@ -366,7 +375,8 @@ pub struct SettingsFile {
     /// Number of days to retain log files; older files are deleted. 0 keeps all. Defaults to 14.
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
-    /// Interface theme mode. Graphite shares dark colour data; this plaintext setting is not secret.
+    /// Interface theme mode. Graphite and Obsidian share dark colour data, except that Obsidian
+    /// has a chart table of its own; this plaintext setting is not secret.
     #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub ui_theme_mode: UiThemeMode,
     /// Window content zoom, the one UI scale control in Settings. A retired `ui_density` key in

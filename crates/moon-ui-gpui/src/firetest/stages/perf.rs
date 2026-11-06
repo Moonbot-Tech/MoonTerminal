@@ -20,12 +20,22 @@ use crate::firetest::storm::{MouseStorm, start_mouse_storm};
 /// is why the row's `min_dwell` carries the duration and this only starts the storm.
 pub(in crate::firetest) fn start_storm(
     runtime: &mut Runtime,
-    _backend: &mut Backend,
+    backend: &mut Backend,
     _cx: &mut Context<Backend>,
 ) -> StageStep {
+    if let Some(run) = &runtime.dense
+        && let Err(error) = run.verify_visible()
+    {
+        return StageStep::Fail(error);
+    }
     match runtime.start_mouse_storm() {
         Ok(storm) => {
             runtime.storm = Some(storm);
+            if let Some(run) = &mut runtime.dense
+                && let Err(error) = run.start_autosave(backend)
+            {
+                return StageStep::Fail(error);
+            }
             StageStep::Next
         }
         Err(err) => StageStep::Fail(err),
@@ -43,6 +53,11 @@ pub(in crate::firetest) fn await_storm(
     let done = runtime.storm.as_ref().is_some_and(MouseStorm::is_done);
     if done || runtime.phase_since.elapsed() >= runtime.config.storm {
         runtime.stop_storm();
+        if let Some(run) = &runtime.dense
+            && let Err(error) = run.verify_autosave()
+        {
+            return StageStep::Fail(error);
+        }
         StageStep::Next
     } else {
         StageStep::Stay
@@ -53,10 +68,10 @@ pub(in crate::firetest) fn await_storm(
 /// a silently skipped overlay would leave the second storm measuring the first storm's conditions.
 pub(in crate::firetest) fn attach_text_overlay(
     runtime: &mut Runtime,
-    backend: &mut Backend,
+    _backend: &mut Backend,
     cx: &mut Context<Backend>,
 ) -> StageStep {
-    if runtime.enable_text_overlay(backend, cx) == 0 {
+    if runtime.enable_text_overlay(cx) == 0 {
         StageStep::Fail("chart opened but static text stress overlay did not attach".to_string())
     } else {
         StageStep::Next
@@ -64,12 +79,15 @@ pub(in crate::firetest) fn attach_text_overlay(
 }
 
 impl Runtime {
-    /// Start a storm over the observed chart bounds. Fails when no probe has arrived.
+    /// Start a storm over the selected chart's bounds, refusing a hidden or destroyed target.
     pub(in crate::firetest) fn start_mouse_storm(&mut self) -> Result<MouseStorm, String> {
-        let Some(probe) = self.probe else {
+        let Some((probe, chart)) = self.probe.as_ref() else {
             return Err("missing chart probe before mouse storm".to_string());
         };
-        start_mouse_storm(probe, self.config.storm, self.config.mouse_hz)
+        if !chart.is_scene_visible() {
+            return Err("mouse storm target is no longer visible".to_string());
+        }
+        start_mouse_storm(*probe, self.config.storm, self.config.mouse_hz)
     }
 
     /// Stop the running storm, if any.
@@ -95,15 +113,11 @@ impl Runtime {
         }
     }
 
-    /// Attach the retained static-text stress layer to one live chart.
+    /// Attach the retained static-text stress layer to the chart targeted by the mouse storm.
     ///
     /// Returns how many charts accepted it — `0` means nothing attached, which the caller treats as
     /// a failed stage rather than a silently skipped one.
-    pub(in crate::firetest) fn enable_text_overlay(
-        &mut self,
-        backend: &mut Backend,
-        cx: &mut Context<Backend>,
-    ) -> usize {
+    pub(in crate::firetest) fn enable_text_overlay(&mut self, cx: &mut Context<Backend>) -> usize {
         if self.text_overlay_enabled {
             return 0;
         }
@@ -114,7 +128,8 @@ impl Runtime {
             return 0;
         }
         let mut applied = 0usize;
-        if let Some(chart) = backend.live_chart_consumers().into_iter().next()
+        if let Some((_, chart)) = &self.probe
+            && chart.is_scene_visible()
             && chart.set_firetest_text_labels(count)
         {
             applied += 1;

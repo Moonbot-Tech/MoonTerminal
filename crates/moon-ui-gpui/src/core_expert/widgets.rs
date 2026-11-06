@@ -555,6 +555,15 @@ pub(super) fn list_box_select(
         .rounded(design::r_button(cx))
         .border_1()
         .border_color(rgb(if mixed { p.amber } else { p.border }))
+        // Facet skin: the list box is sunk like the inputs beside it. A mixed one keeps its
+        // amber edge over the well.
+        .when(design::is_facet(cx), |this| {
+            let well = design::facet_surface(this, moon_ui::MoonFacetKind::Well, cx);
+            match mixed {
+                true => well.border_color(rgb(p.amber)),
+                false => well,
+            }
+        })
         .overflow_y_scroll()
         .when(empty, |this| this.child(hint(empty_note, p, cx)))
         .children(lines.into_iter().enumerate().map(|(row, line)| {

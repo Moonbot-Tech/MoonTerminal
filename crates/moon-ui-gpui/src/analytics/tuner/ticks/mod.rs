@@ -265,6 +265,10 @@ impl AnalyticsView {
             .bg(moon(p.panel))
             .border_1()
             .border_color(moon(p.border))
+            // Facet skin: the deals card rests on the window.
+            .when(design::is_facet(cx), |el| {
+                design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+            })
             .overflow_hidden()
             .child(
                 h_flex()
@@ -335,7 +339,11 @@ impl AnalyticsView {
                     .gap(design::ui_px(cx, 8.0))
                     .border_t_1()
                     .border_color(moon(p.border))
-                    .bg(moon(p.table_head))
+                    // Facet skin: the rule above the totals fades toward the card's edges.
+                    .when(design::is_facet(cx), |el| {
+                        design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+                    })
+                    .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
                     .font_family(design::ui_font())
                     .text_size(design::t_caption(cx))
                     .text_color(moon(p.text_muted))
@@ -820,7 +828,7 @@ fn deal_header_el(
         .gap(design::ui_px(cx, DEAL_ROW_GAP))
         .items_center()
         .text_size(design::t_caption(cx))
-        .bg(moon(p.table_head))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
         .child(sortable(
             t!("analytics.col.coin").to_string(),
             COL_COIN,
@@ -1220,7 +1228,10 @@ fn deal_row(
         .px(design::ui_px(cx, DEAL_ROW_PAD_X))
         .gap(design::ui_px(cx, DEAL_ROW_GAP))
         .items_center()
-        .bg(moon(if selected { p.panel_high } else { p.table_body }))
+        // Facet skin: only the selected row is filled; the others let the card show.
+        .when(selected || !design::is_facet(cx), |el| {
+            el.bg(moon(if selected { p.panel_high } else { p.table_body }))
+        })
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.5))
         .child(coin_cell(scale).child(d.coin.clone()));

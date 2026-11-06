@@ -6,7 +6,7 @@
 //! canvas in the window, and the storm phases cannot see it because they force presents anyway.
 //!
 //! Waiting for a real detect would not answer it either — a run that happened to see no arrival
-//! reads exactly like a free flash. So this stage LIGHTS the flash itself, on every live chart, and
+//! reads exactly like a free flash. So this stage LIGHTS the flash itself, on every visible chart, and
 //! keeps it lit for a fixed window that the verdict compares against `idle_floor`: same charts,
 //! same feed, same cold present mode, one difference.
 //!
@@ -185,11 +185,15 @@ pub(in crate::firetest) fn drive_storm(
     StageStep::Stay
 }
 
-/// Stamp (or clear) the flash on every live chart, returning how many took it.
+/// Light visible charts and count only those able to render. Clearing reaches hidden charts too,
+/// so a tab hidden during the stage cannot carry the test flash into a later phase.
 fn light(backend: &mut Backend, at: Option<Instant>, accent: u32) -> usize {
-    backend
-        .live_chart_consumers()
-        .into_iter()
-        .filter(|chart| chart.set_firetest_arrival_flash(at, accent))
-        .count()
+    let mut visible = 0;
+    for chart in backend.live_chart_consumers() {
+        let shown = chart.is_scene_visible();
+        if (at.is_none() || shown) && chart.set_firetest_arrival_flash(at, accent) && shown {
+            visible += 1;
+        }
+    }
+    visible
 }

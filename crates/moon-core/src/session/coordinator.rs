@@ -31,13 +31,14 @@ impl SessionManager {
     /// This runs when desired market or order-book state is dirty and as an infrequent wall-clock
     /// fallback, not on every present or render frame. It re-elects providers, computes served
     /// markets per provider, and sends each core a market role only when that role changes.
+    /// Returns whether provider routing changed, invalidating consumers of the routed catalogs.
     pub fn set_open(
         &mut self,
         desired: &[(CoreId, String)],
         desired_orderbook: &[(CoreId, String)],
-    ) {
+    ) -> bool {
         let now = Instant::now();
-        self.reconcile_providers();
+        let providers_changed = self.reconcile_providers();
         self.sweep_coin_naming();
 
         // 1. A provider's desired markets are the union of open charts for cores assigned to that
@@ -134,6 +135,7 @@ impl SessionManager {
                 });
             }
         }
+        providers_changed
     }
 
     /// Write each core's spelling of the coins the naming channel follows.
@@ -177,7 +179,8 @@ impl SessionManager {
     /// `Dedup` prefers one Ready core per exchange, retaining the current Ready provider when
     /// possible and falling back to the exchange's first available core when none are Ready. In
     /// `PerCore`, every core is its own provider.
-    fn reconcile_providers(&mut self) {
+    /// Returns whether the effective catalog routing changed.
+    fn reconcile_providers(&mut self) -> bool {
         // Snapshot `(id, exchange, Ready?)` so later mutations do not retain borrows of `self`.
         let infos: Vec<(CoreId, Option<ExchangeId>, bool)> = self
             .sessions
@@ -264,7 +267,9 @@ impl SessionManager {
         // own exchange out of its own column, and a pane sits on a core whether or not that core
         // serves prices.
         self.market_source.set_core_venues(&self.core_venue);
+        let changed = self.core_provider != new_core_provider;
         self.core_provider = new_core_provider;
+        changed
     }
 }
 

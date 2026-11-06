@@ -40,12 +40,10 @@ impl WgpuLayers {
             self.draw_cached_combo(device, queue, pass, view);
         }
         self.draw_price_lines_layer(pass);
-        // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
-        // the whole pane, as the crosshair and the volume readout live in the zone.
-        let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
-        let user_sc = userdata_scissor(sc, &self.hvol_style);
-        pass.set_scissor_rect(user_sc.0, user_sc.1, user_sc.2, user_sc.3);
+        // Content excludes the axes; cursor readouts below intentionally include them.
+        pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
         self.draw_user_layers(pass);
+        let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
         pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
         self.draw_cursor_layer(pass, cursor_params, readout_rects);
         Ok(())
@@ -69,7 +67,6 @@ impl WgpuLayers {
         // backdrop the grid draws lines only, and a fill over them is what every charting package
         // does. Still below the candles, which is where a band belongs.
         if !self.zones.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.zone,
@@ -170,12 +167,13 @@ impl WgpuLayers {
         }
     }
 
+    /// Draw one overlay pass; the diagnostic counts passes, not populated primitive buffers.
     fn draw_user_layers(&self, pass: &mut wgpu::RenderPass<'_>) {
+        crate::diag::bump(&crate::diag::CHART_USER_DRAW);
         let pipelines = self.pipelines.as_ref().unwrap();
         let binds = self.prepared_binds.as_ref().unwrap();
         // The trade clusters go first: over the candles, under every order line and marker.
         if !self.clusters.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.marker,
@@ -185,7 +183,6 @@ impl WgpuLayers {
             );
         }
         if !self.hlines.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.hline,
@@ -195,11 +192,9 @@ impl WgpuLayers {
             );
         }
         if !self.segs.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(pass, &pipelines.seg, &binds.seg, 6, self.segs.len() as u32);
         }
         if !self.markers.is_empty() {
-            crate::diag::bump(&crate::diag::CHART_USER_DRAW);
             draw_pipeline(
                 pass,
                 &pipelines.marker,
@@ -636,6 +631,11 @@ fn draw_pipeline_range(
     pass.draw(0..vertices, first..last);
 }
 
+/// Borrow MoonUI's GPU objects for this prepare call.
+///
+/// # Safety
+/// The objects must originate from the same wgpu package as this consumer. The lockfile
+/// contract test checks both dependency edges; matching API versions alone is insufficient.
 unsafe fn borrow_wgpu_prepare<'a>(
     gpu: &RawGpuAccess,
 ) -> Option<(
@@ -656,6 +656,11 @@ unsafe fn borrow_wgpu_prepare<'a>(
     ))
 }
 
+/// Borrow MoonUI's active render pass, under the same package and lifetime contract as prepare.
+///
+/// # Safety
+/// The producer and consumer must use the same wgpu package, and the pass must remain active
+/// for the borrow. Neither the pass nor the device/queue references may escape the draw call.
 unsafe fn borrow_wgpu_draw<'a>(
     gpu: &RawGpuAccess,
 ) -> Option<(
@@ -686,31 +691,12 @@ fn scissor_rect(
     width: u32,
     height: u32,
 ) -> (u32, u32, u32, u32) {
-    let l = view.bounds[0].floor().max(0.0) as u32;
-    let t = view.bounds[1].floor().max(0.0) as u32;
-    let r = (orderbook_view.bounds[0] + orderbook_view.bounds[2])
-        .ceil()
-        .clamp(l as f32 + 1.0, width.max(1) as f32) as u32;
-    let b = (view.bounds[1] + view.bounds[3])
-        .ceil()
-        .clamp(t as f32 + 1.0, height.max(1) as f32) as u32;
+    let clip = view.content_clip(orderbook_view);
+    let l = clip[0].floor().max(0.0) as u32;
+    let t = clip[1].floor().max(0.0) as u32;
+    let r = clip[2].ceil().clamp(l as f32 + 1.0, width.max(1) as f32) as u32;
+    let b = clip[3].ceil().clamp(t as f32 + 1.0, height.max(1) as f32) as u32;
     (l, t, (r - l).max(1), (b - t).max(1))
-}
-
-/// The pane scissor less the horizontal-volume zone at its left edge, for the user layers.
-/// The pane scissor less a horizontal-volume zone carved out at its left edge, for the user
-/// layers; see `HvolStyleGpu::user_clip_left`.
-fn userdata_scissor(
-    pane: (u32, u32, u32, u32),
-    hvol: &crate::chartdx::HvolStyleGpu,
-) -> (u32, u32, u32, u32) {
-    let Some(edge) = hvol.user_clip_left() else {
-        return pane;
-    };
-    let (l, t, w, h) = pane;
-    let right = l + w;
-    let left = (edge.ceil().max(0.0) as u32).clamp(l, right - 1);
-    (left, t, right - left, h)
 }
 
 fn bounds_scissor(bounds: [f32; 4], width: u32, height: u32) -> (u32, u32, u32, u32) {
