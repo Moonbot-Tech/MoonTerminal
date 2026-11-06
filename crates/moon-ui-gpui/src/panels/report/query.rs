@@ -361,7 +361,9 @@ impl ReportPanel {
         }
     }
 
+    /// Request current rows and retain the scope already consumed by this explicit change.
     pub(super) fn request_requery(&mut self, cx: &mut Context<Self>) {
+        self.last_workspace_scope = self.report_scope(self.backend.read(cx));
         self.needs_query = true;
         self.schedule_requery(cx);
         cx.notify();

@@ -1,16 +1,22 @@
 //! Export-scope identity regressions for the asynchronous Report path picker.
 
 use super::{ReportExportScopeIdentity, report_export_scope_is_current};
+use crate::workspace::{RetainedCoreScope, resolve_group_scope};
+use moon_core::config::WorkspaceMode;
 
-/// `actions.rs:report_export_scope_is_current` must reject a group generation or membership drift,
-/// while a standalone export remains independent of unrelated workspace generations.
+/// A group's semantic mode and membership protect its export without observing other groups.
 ///
 /// Mutation: compare only whether either core list is nonempty. A destination chosen for core 7
 /// could then export core 9 after Auto navigation.
 #[test]
 fn stale_group_export_scope_is_rejected_after_path_selection() {
     let requested = ReportExportScopeIdentity {
-        workspace_generation: Some(4),
+        workspace_scope: Some(resolve_group_scope(
+            WorkspaceMode::Classic,
+            None,
+            &[7],
+            RetainedCoreScope::All,
+        )),
         core_ids: vec![7],
     };
 
@@ -18,27 +24,32 @@ fn stale_group_export_scope_is_rejected_after_path_selection() {
     assert!(!report_export_scope_is_current(
         &requested,
         &ReportExportScopeIdentity {
-            workspace_generation: Some(5),
+            workspace_scope: Some(resolve_group_scope(
+                WorkspaceMode::AutoTrading,
+                Some(7),
+                &[7],
+                RetainedCoreScope::All
+            )),
             core_ids: vec![7],
         }
     ));
     assert!(!report_export_scope_is_current(
         &requested,
         &ReportExportScopeIdentity {
-            workspace_generation: Some(4),
+            workspace_scope: requested.workspace_scope.clone(),
             core_ids: vec![9],
         }
     ));
 
     let standalone = ReportExportScopeIdentity {
-        workspace_generation: None,
+        workspace_scope: None,
         core_ids: vec![7],
     };
     assert!(report_export_scope_is_current(&standalone, &standalone));
     assert!(!report_export_scope_is_current(
         &standalone,
         &ReportExportScopeIdentity {
-            workspace_generation: None,
+            workspace_scope: None,
             core_ids: vec![9],
         }
     ));

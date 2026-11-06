@@ -759,6 +759,8 @@ pub struct ReportPanel {
     pub(super) period: Period,
     /// Last resolved workspace period bucket, used to distinguish cross-bucket rail switches.
     last_period_bucket: ReportPeriodBucket,
+    /// Scope consumed by the last query request; unrelated workspace events leave rows intact.
+    last_workspace_scope: Option<EffectiveCoreScope>,
     /// All, real, or emulated order kind, defaulting to real as in Orders. Persisted beside
     /// [`Self::side`].
     pub(super) kind: ReportKind,

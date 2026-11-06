@@ -814,6 +814,10 @@ impl ReportPanel {
             if this.standalone {
                 return;
             }
+            let scope = this.report_scope(this.backend.read(cx));
+            if scope == this.last_workspace_scope {
+                return;
+            }
             let period_bucket =
                 period_bucket_for_scope(this.workspace_scope(this.backend.read(cx)).as_ref());
             if period_bucket != this.last_period_bucket {
@@ -925,6 +929,7 @@ impl ReportPanel {
                 Period::Today
             },
             last_period_bucket: ReportPeriodBucket::Single,
+            last_workspace_scope: None,
             kind: scope
                 .as_ref()
                 .map(|scope| ReportKind::from_filter(scope.emulator))
@@ -972,6 +977,7 @@ impl ReportPanel {
         // The panel is built docked here; a window re-reads under its own context in
         // `mark_table_detached`.
         this.restore_persisted_filters(cx);
+        this.last_workspace_scope = this.report_scope(this.backend.read(cx));
         this.load_initial_metadata(expected_revisions, allow_app_visible, cx);
         this
     }
