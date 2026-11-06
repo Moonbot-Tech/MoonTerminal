@@ -217,6 +217,7 @@ fn serve(
     events: mpsc::Sender<(u64, u64, Event)>,
 ) {
     let mut runner = None;
+    let mut recover_address = false;
     while let Ok(request) = commands.recv() {
         let cmd = match &request {
             CmdRequest::Run { cmd, .. } => *cmd,
@@ -254,14 +255,22 @@ fn serve(
             request,
             &mut |event| {
                 match &event {
-                    Event::Located(_) | Event::Info(_) => update_location(&mut located, &event),
-                    Event::AddressChanged { port: changed, .. } => port = *changed,
+                    Event::Located(_) | Event::Info(_) => {
+                        update_location(&mut located, &event, recover_address)
+                    }
+                    Event::AddressChanged { port: changed, .. } => {
+                        port = *changed;
+                        recover_address = true;
+                    }
+                    Event::Phase(Cmd::MoonProtoAddress, CmdPhase::Done) => {
+                        recover_address = false;
+                    }
                     Event::Phase(_, CmdPhase::Failed(CmdError::Ssh(_))) => {
                         reconnect = true;
-                        update_location(&mut located, &event);
+                        update_location(&mut located, &event, recover_address);
                     }
                     Event::Phase(_, CmdPhase::Failed(CmdError::NoCore { .. })) => {
-                        update_location(&mut located, &event);
+                        update_location(&mut located, &event, recover_address);
                     }
                     _ => {}
                 }
@@ -318,7 +327,10 @@ fn run_with(
                 emit(Event::Status(status));
                 info_after(runner, cmd, port, None, emit)
             }
-            Err(error) => fail(cmd, ssh_failure(error), emit),
+            Err(error) => {
+                info_after_status_failure(runner, port, &located, emit);
+                fail(cmd, ssh_failure(error), emit)
+            }
         },
         Cmd::RetryLogin => {
             if let Err(error) = runner.retry_login(&located.dir) {
@@ -454,14 +466,51 @@ fn run_with(
 }
 
 /// Keep the worker's identity cache current and force a fresh locate after stale-core failures.
-fn update_location(located: &mut Option<Located>, event: &Event) {
+fn update_location(located: &mut Option<Located>, event: &Event, recover_address: bool) {
     match event {
         Event::Located(found) => *located = Some(found.clone()),
-        Event::Info(info) => *located = Some(info.located.clone()),
+        Event::Info(info) => {
+            let mut info = info.clone();
+            if recover_address && let Some(recovery) = located.as_ref() {
+                preserve_retarget_location(recovery, &mut info);
+            }
+            *located = Some(info.located);
+        }
         Event::Phase(_, CmdPhase::Failed(CmdError::NoCore { .. } | CmdError::Ssh(_))) => {
             *located = None;
         }
         _ => {}
+    }
+}
+
+/// Preserve an owned installation when its old marker makes post-retarget info look hand-installed.
+pub(super) fn preserve_retarget_location(recovery: &Located, info: &mut ServiceInfo) {
+    if recovery.ours && !info.located.ours && recovery.dir == info.located.dir {
+        info.located.ours = true;
+        info.located.has_mb = recovery.has_mb;
+    }
+}
+
+/// Refresh independent systemd facts without hiding the core-status failure that triggered them.
+fn info_after_status_failure(
+    runner: &dyn Runner,
+    port: u16,
+    located: &Located,
+    emit: &mut dyn FnMut(Event),
+) {
+    match runner.info(port) {
+        Ok(Some(info)) => emit(Event::Info(info)),
+        Ok(None) => {
+            let mut located = located.clone();
+            located.active = Some(false);
+            emit(Event::Info(ServiceInfo {
+                located,
+                active: "inactive".into(),
+                uptime_s: None,
+                memory: None,
+            }));
+        }
+        Err(_) => {}
     }
 }
 

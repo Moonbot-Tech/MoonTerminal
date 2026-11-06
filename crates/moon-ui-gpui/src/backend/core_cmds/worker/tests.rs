@@ -44,6 +44,7 @@ struct FakeRunner {
     calls: RefCell<Vec<String>>,
     retarget_error: Option<String>,
     info_available: bool,
+    info_active: bool,
     status_error: bool,
 }
 
@@ -56,6 +57,7 @@ impl FakeRunner {
             calls: RefCell::new(Vec::new()),
             retarget_error: None,
             info_available: true,
+            info_active: true,
             status_error: false,
         }
     }
@@ -90,11 +92,20 @@ impl Runner for FakeRunner {
 
     fn info(&self, port: u16) -> anyhow::Result<Option<ServiceInfo>> {
         self.record(format!("info:{port}"));
-        Ok(self.info_available.then(|| ServiceInfo {
-            located: self.located(),
-            active: "active".into(),
-            uptime_s: Some(60),
-            memory: Some(1024),
+        Ok(self.info_available.then(|| {
+            let mut located = self.located();
+            located.active = Some(self.info_active);
+            ServiceInfo {
+                located,
+                active: if self.info_active {
+                    "active"
+                } else {
+                    "inactive"
+                }
+                .into(),
+                uptime_s: self.info_active.then_some(60),
+                memory: self.info_active.then_some(1024),
+            }
         }))
     }
 
@@ -517,6 +528,7 @@ fn no_core_and_ssh_failures_invalidate_location_before_next_request() {
         update_location(
             &mut location,
             &Event::Phase(Cmd::Status, CmdPhase::Failed(error)),
+            false,
         );
         let events = run(
             &fake,
@@ -550,6 +562,7 @@ fn info_refreshes_cached_active_state_and_unit() {
             uptime_s: None,
             memory: None,
         }),
+        false,
     );
     assert_eq!(location.as_ref().unwrap().active, Some(false));
     run(
@@ -646,4 +659,56 @@ fn core_command_failure_is_a_refusal_not_an_ssh_failure() {
     assert!(
         matches!(error, CmdError::Refused(reason) if reason == "exit 1: command socket unavailable")
     );
+}
+
+/// A stopped core whose command socket is gone must still replace stale active-service facts.
+#[test]
+fn status_failure_refreshes_inactive_service_before_failing() {
+    let mut fake = FakeRunner::new();
+    fake.status_error = true;
+    fake.info_active = false;
+
+    let events = run(
+        &fake,
+        cached_snapshot(&fake),
+        CmdRequest::Run {
+            cmd: Cmd::Status,
+            args: CmdArgs::None,
+        },
+    );
+
+    assert!(events.iter().any(|event| {
+        matches!(event, Event::Info(info) if info.located.active == Some(false) && info.active == "inactive")
+    }));
+    assert!(matches!(
+        phase(&events, Cmd::Status),
+        CmdPhase::Failed(CmdError::Ssh(_))
+    ));
+    assert_eq!(
+        fake.calls.borrow().as_slice(),
+        ["status:/root/moonbot-a", "info:3302"]
+    );
+}
+
+/// Old-marker info must not downgrade the owned location retained for an address Retry.
+#[test]
+fn retarget_recovery_preserves_ownership_and_refreshes_active_state() {
+    let mut location = Some(located(true));
+    let mut found = located(false);
+    found.active = Some(false);
+
+    update_location(
+        &mut location,
+        &Event::Info(ServiceInfo {
+            located: found,
+            active: "inactive".into(),
+            uptime_s: None,
+            memory: None,
+        }),
+        true,
+    );
+
+    let location = location.expect("owned location survives");
+    assert!(location.ours);
+    assert_eq!(location.active, Some(false));
 }

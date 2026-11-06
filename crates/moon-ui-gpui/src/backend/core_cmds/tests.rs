@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
-use moon_remote::core_cmds::{Cmd, Located};
+use moon_remote::core_cmds::{Cmd, Located, ServiceInfo};
 use moon_remote::core_new::{CoreState, CoreStatus};
 use zeroize::Zeroizing;
 
 use super::{
     CmdArgs, CmdError, CmdPhase, CoreCmdsState, CoreWorker, MenuForm, core_facts, menu_form,
-    ssh_display_host, ssh_target_port, worker, worker_endpoint_matches, worker_generation_matches,
+    ssh_display_host, ssh_target_port, worker, worker_endpoint_matches,
 };
 
 /// Build a located core with only its installation ownership varied.
@@ -249,13 +249,29 @@ fn stale_worker_address_event_requires_the_original_endpoint() {
     assert!(!worker_endpoint_matches(&worker, None));
 }
 
-/// A replaced worker must not persist an address event even when its endpoint still matches.
+/// The dispatch handler must withhold an old worker's address result from endpoint persistence.
 #[test]
-fn stale_generation_event_is_rejected_before_endpoint_handling() {
-    let worker = command_worker("203.0.113.7", 3302);
-    assert!(worker_generation_matches(Some(&worker), 1));
-    assert!(!worker_generation_matches(Some(&worker), 2));
-    assert!(!worker_generation_matches(None, 1));
+fn stale_worker_event_is_rejected_by_dispatch() {
+    let mut state = CoreCmdsState::default();
+    state.workers.insert(7, command_worker("203.0.113.7", 3302));
+    state
+        .facts
+        .insert(7, core_facts("203.0.113.7:22".into(), 3302));
+    let event = || worker::Event::AddressChanged {
+        host: "0.0.0.0".into(),
+        port: 4402,
+    };
+    let endpoint = Some(("203.0.113.7".to_string(), 3302));
+    let mut reconnect = Vec::new();
+
+    let stale = state.apply_event(7, 2, event(), endpoint.clone(), &mut reconnect);
+    assert!(!stale.changed);
+    assert!(stale.address.is_none());
+    assert_eq!(state.facts.get(&7).unwrap().port, 3302);
+
+    let current = state.apply_event(7, 1, event(), endpoint, &mut reconnect);
+    assert_eq!(current.address, Some(("0.0.0.0".into(), 4402)));
+    assert!(reconnect.is_empty());
 }
 
 /// A successful address change must let the same worker accept a later change on the new port.
@@ -269,11 +285,23 @@ fn accepted_address_change_advances_worker_endpoint() {
     ));
 }
 
-/// Replacing a worker must not strand an unrelated RetryLogin phase forever.
+/// Endpoint replacement must clear old-core facts and release both running and finished results.
 #[test]
-fn worker_invalidation_releases_running_phases() {
+fn worker_invalidation_clears_endpoint_dependent_facts() {
     let mut state = CoreCmdsState::default();
     let mut facts = core_facts("203.0.113.7:22".into(), 3302);
+    facts.located = Some(located(true));
+    facts.info = Some(ServiceInfo {
+        located: located(true),
+        active: "active".into(),
+        uptime_s: Some(60),
+        memory: None,
+    });
+    facts.status = Some(login_error());
+    facts.log = Some(Default::default());
+    facts.key = Some(Zeroizing::new("TEST_CONNECTION_KEY".into()));
+    facts.exchanges = Some(Vec::new());
+    facts.checked_at = Some(Instant::now());
     facts.phases.insert(
         Cmd::RetryLogin,
         CmdPhase::Running {
@@ -290,14 +318,15 @@ fn worker_invalidation_releases_running_phases() {
     assert!(!state.workers.contains_key(&7));
     let facts = state.facts.get(&7).unwrap();
     assert!(facts.located.is_none());
-    assert!(matches!(
-        facts.phases.get(&Cmd::RetryLogin),
-        Some(CmdPhase::Idle)
-    ));
-    assert!(matches!(
-        facts.phases.get(&Cmd::Start),
-        Some(CmdPhase::Done)
-    ));
+    assert!(facts.info.is_none());
+    assert!(facts.status.is_none());
+    assert!(facts.log.is_none());
+    assert!(facts.key.is_none());
+    assert!(facts.exchanges.is_none());
+    assert!(facts.checked_at.is_none());
+    for cmd in [Cmd::RetryLogin, Cmd::Start] {
+        assert!(matches!(facts.phases.get(&cmd), Some(CmdPhase::Idle)));
+    }
 }
 
 /// Saving a different endpoint must invalidate the worker before any later command is queued.
@@ -359,18 +388,73 @@ fn retry_done_keeps_the_attempt_duration() {
     assert!(elapsed < Duration::from_secs(43));
 }
 
-/// Only a confirmed hot switch, not an exchange-list read, requests a feed identity refresh.
+/// The shared dispatch must retire old key results and queue the affected core's existing reconnect.
 #[test]
-fn exchange_switch_marks_the_completed_identity_change() {
+fn exchange_dispatch_resets_keys_and_requests_reconnect() {
+    let mut state = CoreCmdsState::default();
     let mut facts = core_facts("203.0.113.7:22".into(), 3302);
-    assert_eq!(facts.exchange_switched, None);
-
+    facts.phases.insert(Cmd::ApiKeys, CmdPhase::Done);
     facts.begin_exchange_attempt();
-    facts.apply(worker::Event::ExchangeSwitched);
-    assert_eq!(facts.exchange_switched, Some(1));
-
+    assert!(matches!(
+        facts.phases.get(&Cmd::ApiKeys),
+        Some(CmdPhase::Idle)
+    ));
+    facts
+        .phases
+        .insert(Cmd::ApiKeys, CmdPhase::Failed(CmdError::Timeout));
     facts.begin_exchange_attempt();
-    assert_eq!(facts.exchange_switched, None);
-    facts.apply(worker::Event::ExchangeSwitched);
-    assert_eq!(facts.exchange_switched, Some(2));
+    assert!(matches!(
+        facts.phases.get(&Cmd::ApiKeys),
+        Some(CmdPhase::Idle)
+    ));
+    state.facts.insert(7, facts);
+    state.workers.insert(7, command_worker("203.0.113.7", 3302));
+    let mut reconnect = Vec::new();
+
+    let effects = state.apply_event(7, 1, worker::Event::ExchangeSwitched, None, &mut reconnect);
+
+    assert!(effects.changed);
+    assert_eq!(reconnect, [7]);
+    assert_eq!(state.facts.get(&7).unwrap().exchange_switched, Some(2));
+}
+
+/// A newer login failure must retire the earlier successful Retry page and its duration.
+#[test]
+fn login_error_retires_completed_retry_result() {
+    let mut facts = core_facts("203.0.113.7:22".into(), 3302);
+    facts.phases.insert(Cmd::RetryLogin, CmdPhase::Done);
+    facts.retry_elapsed = Some(Duration::from_secs(42));
+
+    facts.apply(worker::Event::Status(login_error()));
+
+    assert!(matches!(
+        facts.phases.get(&Cmd::RetryLogin),
+        Some(CmdPhase::Idle)
+    ));
+    assert!(facts.retry_elapsed.is_none());
+}
+
+/// Status after a partial retarget must keep the owned installation available for Retry.
+#[test]
+fn retarget_recovery_survives_backend_info_refresh() {
+    let mut facts = core_facts("203.0.113.7:22".into(), 4402);
+    facts.located = Some(located(true));
+    facts.phases.insert(
+        Cmd::MoonProtoAddress,
+        CmdPhase::Failed(CmdError::Refused("retarget failed".into())),
+    );
+    let mut found = located(false);
+    found.active = Some(false);
+
+    facts.apply(worker::Event::Info(ServiceInfo {
+        located: found,
+        active: "inactive".into(),
+        uptime_s: None,
+        memory: None,
+    }));
+
+    let located = facts.located.as_ref().expect("location");
+    assert!(located.ours);
+    assert_eq!(located.active, Some(false));
+    assert!(facts.info.as_ref().is_some_and(|info| info.located.ours));
 }

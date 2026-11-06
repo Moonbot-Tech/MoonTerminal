@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use gpui::Context;
 use moon_core::config::{AppConfig, ServerConfig, parse_endpoint_override, target_from_key};
 use moon_remote::core_cmds::{Cmd, Login};
+use moon_remote::core_new::CoreState;
 use moon_remote::hosts::Hosts;
 use moon_remote::ssh::Target;
 
@@ -20,6 +21,15 @@ use crate::Backend;
 const POLL: Duration = Duration::from_millis(250);
 /// How long a status check suppresses another automatic status request.
 const STATUS_REFRESH: Duration = Duration::from_secs(60);
+
+/// Side effects left for the backend after the shared worker-event handler runs.
+#[derive(Default)]
+struct EventEffects {
+    /// Whether cached facts changed and observers should be notified.
+    changed: bool,
+    /// A current-worker address result that still needs endpoint persistence.
+    address: Option<(String, u16)>,
+}
 
 /// Resolve a saved core's current connection host and MoonProto port without DNS.
 pub(crate) fn core_host_port(server: &ServerConfig) -> Option<(String, u16)> {
@@ -277,48 +287,27 @@ impl Backend {
 
     /// Apply one current-generation worker event and return whether it changed a cached core.
     fn core_cmds_event(&mut self, uid: u64, generation: u64, event: worker::Event) -> bool {
-        if !worker_generation_matches(self.core_cmds.workers.get(&uid), generation) {
-            return false;
-        }
-        match event {
-            worker::Event::AddressChanged { host, port } => {
-                let endpoint = self
-                    .config
-                    .servers
-                    .iter()
-                    .find(|server| server.uid == uid)
-                    .and_then(core_host_port);
-                if !self
-                    .core_cmds
-                    .workers
-                    .get(&uid)
-                    .is_some_and(|worker| worker_endpoint_matches(worker, endpoint))
-                {
-                    return false;
-                }
-                let (changed, saved) = self.core_cmds_address_changed(uid, &host, port);
-                if saved && let Some(worker) = self.core_cmds.workers.get_mut(&uid) {
-                    worker.address_changed(port);
-                }
-                changed
+        let endpoint = self
+            .config
+            .servers
+            .iter()
+            .find(|server| server.uid == uid)
+            .and_then(core_host_port);
+        let mut effects = self.core_cmds.apply_event(
+            uid,
+            generation,
+            event,
+            endpoint,
+            &mut self.reconnect_request,
+        );
+        if let Some((host, port)) = effects.address.take() {
+            let (changed, saved) = self.core_cmds_address_changed(uid, &host, port);
+            if saved && let Some(worker) = self.core_cmds.workers.get_mut(&uid) {
+                worker.address_changed(port);
             }
-            worker::Event::ExchangeSwitched => {
-                let changed = self
-                    .core_cmds
-                    .facts
-                    .get_mut(&uid)
-                    .is_some_and(|facts| facts.apply(worker::Event::ExchangeSwitched));
-                if changed && !self.reconnect_request.contains(&uid) {
-                    self.reconnect_request.push(uid);
-                }
-                changed
-            }
-            event => self
-                .core_cmds
-                .facts
-                .get_mut(&uid)
-                .is_some_and(|facts| facts.apply(event)),
+            effects.changed |= changed;
         }
+        effects.changed
     }
 
     /// Save the current connect host with the new port through the completed core-move edit.
@@ -363,18 +352,61 @@ impl Backend {
 }
 
 impl CoreCmdsState {
-    /// Drop a replaced worker, invalidate its location, and release every unfinished command phase.
+    /// Route one worker event through generation and endpoint admission into facts and side effects.
+    fn apply_event(
+        &mut self,
+        uid: u64,
+        generation: u64,
+        event: worker::Event,
+        endpoint: Option<(String, u16)>,
+        reconnect_request: &mut Vec<u64>,
+    ) -> EventEffects {
+        if !worker_generation_matches(self.workers.get(&uid), generation) {
+            return EventEffects::default();
+        }
+        match event {
+            worker::Event::AddressChanged { host, port } => {
+                if !self
+                    .workers
+                    .get(&uid)
+                    .is_some_and(|worker| worker_endpoint_matches(worker, endpoint))
+                {
+                    return EventEffects::default();
+                }
+                EventEffects {
+                    address: Some((host, port)),
+                    ..EventEffects::default()
+                }
+            }
+            worker::Event::ExchangeSwitched => {
+                let changed = self
+                    .facts
+                    .get_mut(&uid)
+                    .is_some_and(|facts| facts.apply(worker::Event::ExchangeSwitched));
+                if changed && !reconnect_request.contains(&uid) {
+                    reconnect_request.push(uid);
+                }
+                EventEffects {
+                    changed,
+                    ..EventEffects::default()
+                }
+            }
+            event => EventEffects {
+                changed: self
+                    .facts
+                    .get_mut(&uid)
+                    .is_some_and(|facts| facts.apply(event)),
+                ..EventEffects::default()
+            },
+        }
+    }
+
+    /// Drop a replaced worker and every cached fact that belongs to its previous endpoint.
     fn invalidate_worker(&mut self, uid: u64) -> bool {
         let mut changed = self.workers.remove(&uid).is_some();
         if let Some(facts) = self.facts.get_mut(&uid) {
-            changed |= facts.located.take().is_some();
-            changed |= facts.checked_at.take().is_some();
-            for phase in facts.phases.values_mut() {
-                if matches!(phase, CmdPhase::Running { .. }) {
-                    *phase = CmdPhase::Idle;
-                    changed = true;
-                }
-            }
+            facts.invalidate_endpoint();
+            changed = true;
         }
         changed
     }
@@ -492,9 +524,15 @@ impl CoreFacts {
             }
             worker::Event::Located(located) => self.located = Some(located),
             worker::Event::Status(status) => {
+                let login_error = status.state == CoreState::LoginError;
                 self.status = Some(status);
                 self.checked_at = Some(Instant::now());
                 self.phases.insert(Cmd::Status, CmdPhase::Done);
+                if login_error && matches!(self.phases.get(&Cmd::RetryLogin), Some(CmdPhase::Done))
+                {
+                    self.phases.insert(Cmd::RetryLogin, CmdPhase::Idle);
+                    self.retry_elapsed = None;
+                }
             }
             worker::Event::Settling(status) => {
                 let since = match self.phases.get(&Cmd::RetryLogin) {
@@ -510,7 +548,16 @@ impl CoreFacts {
                 );
                 self.status = Some(status);
             }
-            worker::Event::Info(info) => {
+            worker::Event::Info(mut info) => {
+                let recovery = matches!(
+                    self.phases.get(&Cmd::MoonProtoAddress),
+                    Some(CmdPhase::Failed(CmdError::Refused(_)))
+                )
+                .then(|| self.located.clone())
+                .flatten();
+                if let Some(recovery) = recovery {
+                    worker::preserve_retarget_location(&recovery, &mut info);
+                }
                 self.located = Some(info.located.clone());
                 self.info = Some(info);
             }
@@ -532,10 +579,11 @@ impl CoreFacts {
         true
     }
 
-    /// Start a new confirmed exchange selection, retiring any earlier completion.
+    /// Start a new confirmed exchange selection, retiring earlier switch and key-save results.
     fn begin_exchange_attempt(&mut self) {
         self.exchange_attempt = self.exchange_attempt.wrapping_add(1);
         self.exchange_switched = None;
+        self.phases.insert(Cmd::ApiKeys, CmdPhase::Idle);
     }
 
     /// Advance the saved port while retaining the owned installation needed for retarget recovery.
@@ -544,6 +592,23 @@ impl CoreFacts {
         self.status = None;
         self.info = None;
         self.checked_at = None;
+    }
+
+    /// Clear every fact and command result whose identity belongs to the previous endpoint.
+    fn invalidate_endpoint(&mut self) {
+        self.located = None;
+        self.status = None;
+        self.info = None;
+        self.log = None;
+        self.key = None;
+        self.exchanges = None;
+        self.checked_at = None;
+        self.retry_elapsed = None;
+        self.exchange_attempt = 0;
+        self.exchange_switched = None;
+        for phase in self.phases.values_mut() {
+            *phase = CmdPhase::Idle;
+        }
     }
 }
 
