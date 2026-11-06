@@ -3,7 +3,7 @@ name: build
 permissions:
   contents: read
 
-# Eight jobs, seven of which gate a merge:
+# Seven jobs, all of which gate a merge:
 #   Windows .exe — the real release binary, uploaded as an artifact.
 #   Tests        — `cargo nextest run --workspace` plus doc-tests. Blocking: a red suite is a red PR.
 #   Clippy       — `cargo clippy --workspace --all-targets --locked -- -D warnings`. Blocking.
@@ -12,13 +12,10 @@ permissions:
 #   Audit        — cargo-deny over the committed lockfile. Blocking.
 #   Tour         — deterministic interactive and AI documentation. Blocking.
 #   Fmt          — `cargo fmt --all -- --check`. Blocking.
-#   macOS probe  — diagnostic only (`continue-on-error`). Compiles the chartdx Metal
-#                  backend on a native runner, which Windows cannot do at all: no
-#                  macOS SDK and no Apple linker. Reaches both architectures the release
-#                  .dmg ships, unevenly: arm64 is compiled, the Intel slice only
-#                  type-checked. Read its log; it never blocks.
+# The diagnostic macOS probe lives in macos-probe.yml so its runner-acquisition cancellation
+# cannot override `continue-on-error` and turn this gating workflow red.
 #
-# THE LOCKFILE CONTRACT, which the five compiling jobs implement in the same three steps.
+# THE LOCKFILE CONTRACT, which the four compiling jobs implement in the same three steps.
 # `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. Each job
 # then, in this order and no other:
 #   1. verifies the committed lock still agrees with the manifests (`cargo fetch --locked`),
@@ -49,7 +46,8 @@ permissions:
 # does not propose that raise: it is told to ignore this action in .github/dependabot.yml, because
 # the action is versioned by branches its author creates ahead of the Rust releases they name, so
 # its "latest" resolves to a toolchain rustup cannot download. Move all eight sites together —
-# five here, two in release.yml, and rust-toolchain.toml, which never re-runs these gates.
+# four here, one in macos-probe.yml, two in release.yml, and rust-toolchain.toml, which never
+# re-runs these gates.
 on:
   push:
     branches: [main]
@@ -219,48 +217,6 @@ jobs:
         run: cargo nextest run -p moon-station --profile ci --locked --target x86_64-unknown-linux-musl
       - name: Lint the station
         run: cargo clippy -p moon-station --all-targets --locked --target x86_64-unknown-linux-musl -- -D warnings
-
-  macos-probe:
-    name: macOS probe (arm64 build, x86_64 check) — diagnostic
-    runs-on: macos-15
-    if: github.event_name != 'schedule'
-    env:
-      # The floor release.yml builds both slices against, so the probe type-checks the Intel
-      # slice under the same one the .dmg ships rather than rustc's 10.12 default.
-      MACOSX_DEPLOYMENT_TARGET: "11.0"
-    # Probe: Metal backend compilation errors are expected. Do not fail the entire pipeline —
-    # read the job log to get a concrete list of what needs fixing.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.97.1
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The lockfile contract — see the header. This job never blocks, so a failure here is a
-      # diagnostic like the rest of it; the two gating jobs run the same three steps.
-      - name: Verify the committed lockfile agrees with the manifests
-        run: cargo fetch --locked
-      - name: Refresh MoonUI only
-        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
-      - name: Assert the refresh moved MoonUI and nothing else
-        shell: bash
-        run: bash .github/scripts/assert-only-moonui-moved.sh
-      - name: Probe-compile chartdx Metal backend
-        run: cargo build -p moon-ui-gpui --target aarch64-apple-darwin
-      # The release .dmg is universal, so an Intel-only break must not first appear inside the
-      # release run, which does not carry `continue-on-error` and would block the tag. `check`
-      # rather than `build`: what differs between the two Apple architectures is source-level —
-      # ABI-dependent FFI types (`objc`'s BOOL is c_schar here and bool on arm64), `target_arch`
-      # cfg, integer widths — and that is exactly what a check catches, at a quarter of the time
-      # and disk of a second full codegen on a 3-core runner. Both slices link the same SDK and
-      # frameworks, and the arm64 build above already proves that half. What a check cannot see —
-      # x86_64 codegen under the release profile's LTO, and the link — still happens first in the
-      # release run; that is the deliberate remainder, not an oversight.
-      - name: Probe-check the Intel slice
-        run: cargo check -p moon-ui-gpui --target x86_64-apple-darwin
 
   audit:
     name: Dependency audit (cargo-deny)
