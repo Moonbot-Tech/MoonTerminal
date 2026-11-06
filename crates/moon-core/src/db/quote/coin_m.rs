@@ -23,7 +23,9 @@
 //! Short of those, knowledge only grows: a core that owned COIN-M rows still owns them in history,
 //! so a proven core is never examined a second time.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rusqlite::Connection;
@@ -43,7 +45,7 @@ enum Span {
 }
 
 /// What this process has established about COIN-M ownership.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Knowledge {
     /// Examined rows per core, whether or not that core turned out to be COIN-M.
     examined: BTreeMap<i64, Span>,
@@ -52,6 +54,9 @@ struct Knowledge {
     legacy_swept: bool,
     /// Cores proven to own COIN-M rows.
     coin_m: BTreeSet<i64>,
+    /// Last replacement of each core's replica, including cores not currently proven COIN-M.
+    /// Keep this for the process: an old WAL may outlive a wipe and a later proof of the same UID.
+    forget_revisions: BTreeMap<i64, u64>,
 }
 
 /// Advanced whenever the proven set changes: money SQL built before and after it may differ.
@@ -60,6 +65,104 @@ static REVISION: AtomicU64 = AtomicU64::new(0);
 /// Whether the last pass left rows unexamined because a scan failed, so the next pass would
 /// examine them and might prove a core.
 static UNSETTLED: AtomicBool = AtomicBool::new(false);
+
+/// Serializes only WAL anchoring with invalidation publication and COMMIT, never discovery SQL.
+pub(in crate::db) fn publication_guard() -> std::sync::MutexGuard<'static, ()> {
+    static FENCE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    FENCE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A writer advances this after committing a wipe/catch-up, before releasing the publication fence.
+/// An older WAL may still prove its own rows, but must not put that proof back into live knowledge.
+static INVALIDATION_REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// Identify the replica invalidations a WAL snapshot is allowed to publish proof for.
+pub(in crate::db) fn invalidation_revision() -> u64 {
+    #[cfg(test)]
+    if !shared_test() {
+        return TEST_INVALIDATION_REVISION.with(std::cell::Cell::get);
+    }
+    INVALIDATION_REVISION.load(Ordering::Acquire)
+}
+
+/// Identify this committed invalidation before the writer exposes its new WAL to readers.
+fn advance_invalidation_revision() -> u64 {
+    #[cfg(test)]
+    if !shared_test() {
+        return TEST_INVALIDATION_REVISION.with(|revision| {
+            let next = revision.get().wrapping_add(1);
+            revision.set(next);
+            next
+        });
+    }
+    INVALIDATION_REVISION
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_INVALIDATION_REVISION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Only the isolated subprocess concurrency tests opt into the production process-wide cache.
+#[cfg(test)]
+fn shared_test() -> bool {
+    std::env::var_os("MOON_COIN_M_SHARED_TEST").is_some()
+}
+
+/// Lazy proof for one batch: discover its sources first, then keep every money builder on it.
+struct PinnedKnowledge {
+    revision: Option<u64>,
+    cores: Option<BTreeSet<i64>>,
+}
+
+thread_local! {
+    static PINNED: RefCell<Option<Rc<RefCell<PinnedKnowledge>>>> = const { RefCell::new(None) };
+}
+
+/// Thread-bound money input shared by all statements and nested readers of one batch.
+pub(in crate::db) struct ReadPin {
+    previous: Option<Rc<RefCell<PinnedKnowledge>>>,
+}
+
+impl Drop for ReadPin {
+    /// Restore the enclosing batch after a nested query, or release the outermost pin.
+    fn drop(&mut self) {
+        PINNED.with(|slot| *slot.borrow_mut() = self.previous.take());
+    }
+}
+
+/// Avoid taking the publication fence again for a query already inside a money batch.
+pub(in crate::db) fn is_pinned() -> bool {
+    PINNED.with(|slot| slot.borrow().is_some())
+}
+
+/// Let valuation's direct projections resolve proof before they build any money expression.
+pub(in crate::db) fn needs_discovery() -> bool {
+    PINNED.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|pin| pin.borrow().cores.is_none())
+    })
+}
+
+/// `None` denotes a caller-owned transaction whose WAL age is unknown: learn locally only.
+pub(in crate::db) fn pin(revision: Option<u64>) -> ReadPin {
+    let previous = PINNED.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let next = slot.clone().unwrap_or_else(|| {
+            Rc::new(RefCell::new(PinnedKnowledge {
+                revision,
+                cores: None,
+            }))
+        });
+        slot.replace(next)
+    });
+    ReadPin { previous }
+}
 
 /// Run `act` and advance [`REVISION`] if it changed the proven set.
 fn tracking<R>(known: &mut Knowledge, act: impl FnOnce(&mut Knowledge) -> R) -> R {
@@ -89,8 +192,7 @@ pub(in crate::db) fn knowledge_revision() -> Option<u64> {
 /// The lock is held across the SQL below on purpose: a second reader arriving mid-scan must WAIT
 /// and then find the rows examined, rather than duplicate a two-second scan or — worse — build its
 /// SQL from a half-learned set and value a liquidation at the wrong scale for one frame.
-#[cfg(not(test))]
-fn with<R>(act: impl FnOnce(&mut Knowledge) -> R) -> R {
+fn with_shared<R>(act: impl FnOnce(&mut Knowledge) -> R) -> R {
     use std::sync::{Mutex, OnceLock};
     static STATE: OnceLock<Mutex<Knowledge>> = OnceLock::new();
     // A panicking scan leaves plain sets of ids that cannot be inconsistent, so recovering the
@@ -102,6 +204,12 @@ fn with<R>(act: impl FnOnce(&mut Knowledge) -> R) -> R {
     act(&mut known)
 }
 
+#[cfg(not(test))]
+/// Use the shared cache for every production reader, with no test-thread isolation.
+fn with<R>(act: impl FnOnce(&mut Knowledge) -> R) -> R {
+    with_shared(act)
+}
+
 /// Test builds keep the knowledge per THREAD.
 ///
 /// Each test seeds its own fixture, and a verdict learned from one would silently correct
@@ -111,6 +219,9 @@ fn with<R>(act: impl FnOnce(&mut Knowledge) -> R) -> R {
 /// because the tests reading them start from a clean slate.
 #[cfg(test)]
 fn with<R>(act: impl FnOnce(&mut Knowledge) -> R) -> R {
+    if shared_test() {
+        return with_shared(act);
+    }
     use std::cell::RefCell;
     thread_local! {
         static STATE: RefCell<Knowledge> = RefCell::new(Knowledge::default());
@@ -128,7 +239,7 @@ pub(in crate::db) fn reset() {
 #[derive(Clone, Copy)]
 enum Invalidation {
     /// The core's rows were wiped and re-synced from id 1: span and verdict are both stale.
-    Forget(i64),
+    Forget(i64, u64),
     /// A catch-up settled, which may have written between ids already examined.
     Reexamine(i64),
 }
@@ -139,8 +250,7 @@ enum Invalidation {
 /// 1 819 ms, and the report WRITER publishes these signals from its own thread. Parking the writer
 /// on a reader's scan would stall the catch-up page ACKs — and the corruption barrier behind them
 /// — for the length of that scan. Nothing here ever holds this lock across SQL.
-#[cfg(not(test))]
-fn with_pending<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R {
+fn with_pending_shared<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R {
     use std::sync::{Mutex, OnceLock};
     static PENDING: OnceLock<Mutex<BTreeMap<i64, Invalidation>>> = OnceLock::new();
     let mut queue = PENDING
@@ -150,9 +260,18 @@ fn with_pending<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R
     act(&mut queue)
 }
 
+#[cfg(not(test))]
+/// Share the tiny invalidation queue without making the writer wait for discovery SQL.
+fn with_pending<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R {
+    with_pending_shared(act)
+}
+
 /// Per-thread queue, for the same reason [`with`] is per-thread in test builds.
 #[cfg(test)]
 fn with_pending<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R {
+    if shared_test() {
+        return with_pending_shared(act);
+    }
     use std::cell::RefCell;
     thread_local! {
         static PENDING: RefCell<BTreeMap<i64, Invalidation>> =
@@ -170,11 +289,15 @@ fn with_pending<R>(act: impl FnOnce(&mut BTreeMap<i64, Invalidation>) -> R) -> R
 ///     known: Knowledge to update.
 fn drain_pending(known: &mut Knowledge) {
     let queue = with_pending(std::mem::take);
+    if !queue.is_empty() {
+        UNSETTLED.store(true, Ordering::Release);
+    }
     for entry in queue.into_values() {
         match entry {
-            Invalidation::Forget(core) => {
+            Invalidation::Forget(core, revision) => {
                 known.examined.remove(&core);
                 known.coin_m.remove(&core);
+                known.forget_revisions.insert(core, revision);
                 // The proof may have come from the legacy table, whose one-shot sweep would never
                 // run again and could not restore it.
                 known.legacy_swept = false;
@@ -186,22 +309,26 @@ fn drain_pending(known: &mut Knowledge) {
     }
 }
 
-/// Forget one core entirely, after its replica rows were wiped.
+/// Forget one core entirely when its replica rows are wiped.
 ///
 /// `ReplicaRecreated` deletes the core's rows and re-syncs from id 1, so both halves of the
 /// knowledge are stale at once: the examined span describes rows that no longer exist, and the
 /// proof came from a database the core no longer serves.
 ///
+/// The writer queues this after COMMIT under [`publication_guard`]; no new WAL can observe the
+/// wipe with the old proof, and a rolled-back write cannot invalidate still-valid knowledge.
+///
 /// Args:
-///     core: Core whose replica was recreated.
+///     core: Core whose replica is being recreated.
 pub(in crate::db) fn forget_core(core: u64) {
     // One pending action per core: a wipe supersedes every earlier catch-up signal.
     with_pending(|queue| {
-        queue.insert(core as i64, Invalidation::Forget(core as i64));
+        let revision = advance_invalidation_revision();
+        queue.insert(core as i64, Invalidation::Forget(core as i64, revision));
     });
 }
 
-/// Re-examine one core after a catch-up settled.
+/// Re-examine one core when a catch-up settles, under the same publication rule as [`forget_core`].
 ///
 /// A catch-up writes INSIDE the examined span, not only above it: `ReportStart::Checkpoint`
 /// re-fetches the pages between the checkpoint and the local maximum, and a live upsert may
@@ -216,25 +343,39 @@ pub(in crate::db) fn forget_core(core: u64) {
 ///     core: Core whose sync just completed.
 pub(in crate::db) fn reexamine_core(core: u64) {
     with_pending(|queue| {
+        advance_invalidation_revision();
         queue
             .entry(core as i64)
             .or_insert(Invalidation::Reexamine(core as i64));
     });
 }
 
-/// Cores currently known to own COIN-M rows.
+/// The current batch's fixed COIN-M cores, or the live set outside a read batch.
 ///
 /// Returns:
 ///     The proven set, empty until [`learn`] finds one.
 pub(super) fn cores() -> BTreeSet<i64> {
-    with(|known| {
+    if let Some(cores) = PINNED.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|pin| pin.borrow().cores.clone())
+    }) {
+        return cores;
+    }
+    let cores = with(|known| {
         tracking(known, |known| {
             // A wiped core must lose its verdict before the next statement is built, not merely
             // before the next scan: the SQL this feeds rewrites money.
             drain_pending(known);
             known.coin_m.clone()
         })
-    })
+    });
+    PINNED.with(|slot| {
+        if let Some(pin) = slot.borrow().as_ref() {
+            pin.borrow_mut().cores = Some(cores.clone());
+        }
+    });
+    cores
 }
 
 /// Examine whatever rows of this reader's sources have not been examined yet.
@@ -254,9 +395,30 @@ pub(super) fn learn(
     sources: &[ReadSource],
     guards: impl Fn(&ReadSource) -> Vec<String>,
 ) {
+    let pin = PINNED.with(|slot| slot.borrow().clone());
+    if pin.as_ref().is_some_and(|pin| pin.borrow().cores.is_some()) {
+        return;
+    }
+    let revision = pin.as_ref().map_or_else(
+        || Some(invalidation_revision()),
+        |pin| pin.borrow().revision,
+    );
     with(|known| {
         tracking(known, |known| {
             drain_pending(known);
+            let mut candidate = known.clone();
+            if revision != Some(invalidation_revision()) {
+                // Spans from the live database say nothing about an older WAL. Positive proof
+                // does survive a catch-up or another core's wipe: only THIS core's replacement
+                // can make a later proof inapplicable to this snapshot.
+                candidate.examined.clear();
+                candidate.legacy_swept = false;
+                candidate.coin_m.retain(|core| {
+                    revision.is_some_and(|snapshot_revision| {
+                        known.forget_revisions.get(core).copied().unwrap_or(0) <= snapshot_revision
+                    })
+                });
+            }
             let mut settled = true;
             for src in sources {
                 if !src.cols.contains("core_uid") {
@@ -267,12 +429,22 @@ pub(super) fn learn(
                     continue;
                 }
                 settled &= if src.legacy {
-                    learn_legacy(conn, src, &predicates, known)
+                    learn_legacy(conn, src, &predicates, &mut candidate)
                 } else {
-                    learn_replica(conn, src, &predicates, known)
+                    learn_replica(conn, src, &predicates, &mut candidate)
                 };
             }
-            UNSETTLED.store(!settled, Ordering::Release);
+            if let Some(pin) = &pin {
+                pin.borrow_mut().cores = Some(candidate.coin_m.clone());
+            }
+            // The pending lock makes this check/publication indivisible from a writer's next
+            // invalidation, but is never held during the scan above.
+            with_pending(|_| {
+                if revision == Some(invalidation_revision()) {
+                    *known = candidate;
+                    UNSETTLED.store(!settled, Ordering::Release);
+                }
+            });
         })
     });
 }

@@ -39,6 +39,7 @@ pub fn query_chart_trade_history_for_cores(
     filter: Option<&ReportFilter>,
     limit: usize,
 ) -> ReadResult<ChartTradeHistory> {
+    let _money = super::super::pin_money_read(conn);
     const CONTEXT: &str = "reports: chart trade history";
     const REQUIRED_COLUMNS: &[&str] = &[
         "core_uid",

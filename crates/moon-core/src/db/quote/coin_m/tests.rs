@@ -5,6 +5,8 @@ use rusqlite::Connection;
 use super::super::learn_coin_m_cores;
 use super::*;
 
+mod batch;
+
 /// Columns the COIN-M rule needs, plus the row id that bounds an examined span.
 fn columns(bounded: bool) -> HashSet<String> {
     let mut out: HashSet<String> = ["core_uid", "fname", "coin"]
@@ -309,7 +311,7 @@ fn pending_invalidations_coalesce_without_weakening_a_wipe() {
     forget_core(77);
     reexamine_core(77);
     assert!(with_pending(|queue| {
-        matches!(queue.get(&77), Some(Invalidation::Forget(77))) && queue.len() == 1
+        matches!(queue.get(&77), Some(Invalidation::Forget(77, _))) && queue.len() == 1
     }));
     with_pending(|queue| queue.clear());
 }

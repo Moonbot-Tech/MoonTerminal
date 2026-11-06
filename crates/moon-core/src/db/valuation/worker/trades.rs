@@ -595,6 +595,10 @@ pub(in crate::db::valuation::worker) fn load_trades(
     conn: &Connection,
     events: &[OutboxEvent],
 ) -> ReadResult<Vec<Option<TradeInput>>> {
+    let _money = crate::db::pin_money_read(conn);
+    if crate::db::quote::coin_m::needs_discovery() {
+        crate::db::read_sources_res(conn)?;
+    }
     let mut loaded = vec![None; events.len()];
     for source in [TradeSource::Typed, TradeSource::Legacy] {
         let wanted = events
@@ -736,6 +740,10 @@ pub(in crate::db::valuation::worker) fn reconciliation_batch(
     after: Option<ReconcileCursor>,
     limit: usize,
 ) -> ReadResult<Option<Vec<TradeInput>>> {
+    let _money = crate::db::pin_money_read(conn);
+    if crate::db::quote::coin_m::needs_discovery() {
+        crate::db::read_sources_res(conn)?;
+    }
     let (table, columns, id_column) = match source_layout(conn, source)? {
         SourceLayout::Found {
             table,

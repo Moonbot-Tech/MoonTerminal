@@ -5,6 +5,7 @@ use super::*;
 /// Count profitable closed rows using the same settled money, grants and time axis as totals.
 /// Returns wins and all closed rows; missing profit is never counted as a win.
 pub fn query_report_wins(conn: &Connection, filter: &ReportFilter) -> ReadResult<(i64, i64)> {
+    let _money = super::super::pin_money_read(conn);
     const CTX: &str = "reports: wins";
     let filter = ReportFilter {
         rows: RowScope::Closed,
@@ -112,6 +113,7 @@ pub fn strategy_purge_rows(
     conn: &Connection,
     key: ReportStrategyKey,
 ) -> ReadResult<StrategyPurgeRows> {
+    let _money = super::super::pin_money_read(conn);
     const CTX: &str = "reports: strategy_purge_rows";
     let meta = StrategyMeta::without_mask(crate::db::analytics::strategies_attached(conn));
     let filter = ReportFilter {
@@ -178,6 +180,7 @@ pub fn strategy_purge_rows(
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<ReportTotals> {
+    let _money = super::super::pin_money_read(conn);
     let meta = report_strategy_meta(conn, f)
         .map_err(|error| read_fail("reports: resolve strategy mask", error))?;
     let sources = read_sources_res(conn)?;

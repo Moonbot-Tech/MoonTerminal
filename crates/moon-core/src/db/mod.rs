@@ -234,7 +234,7 @@ pub use report_writer::{read_state_revision, spawn_writer};
 
 mod reader_open;
 use reader_open::*;
-pub use reader_open::{AttachSet, open_reader, open_reader_with, read_snapshot};
+pub use reader_open::{AttachSet, ReportSnapshot, open_reader, open_reader_with, read_snapshot};
 
 mod report_meta;
 use report_meta::*;
@@ -264,6 +264,7 @@ struct ReadSource {
 /// An absent legacy table is omitted. Schema probe errors map to `Failed`; this
 /// function receives an open connection and therefore cannot return `NotReady`.
 fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
+    let _money = pin_money_read(conn);
     let mut out = vec![ReadSource {
         table: rep::TABLE,
         cols: rep::table_cols_res(conn)?,
@@ -280,9 +281,8 @@ fn read_sources_res(conn: &Connection) -> ReadResult<Vec<ReadSource>> {
         });
     }
     // Every money reader passes through here, and this is the last point that still holds BOTH a
-    // connection and the sources. The quote module's SQL builders are pure functions of the
-    // columns they are handed, so the one fact they cannot derive — which cores own COIN-M rows —
-    // is learned here instead of being threaded through every builder signature.
+    // connection and the sources. Learn the one fact columns cannot express — which cores own
+    // COIN-M rows — once for the pinned money batch, before any builder embeds it in SQL.
     quote::learn_coin_m_cores(conn, &out);
     Ok(out)
 }

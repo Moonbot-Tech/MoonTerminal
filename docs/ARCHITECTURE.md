@@ -634,8 +634,11 @@ of operations rests on one rule: **only the transaction that applied the map wri
 Query reads go through `open_reader` / `open_reader_with` and come back as a `ReportReader`. A
 process-wide permit (`db::reader_budget`) allows eight at once. The connection field is declared
 before the permit, so the descriptors close before the slot returns. The permit owns the budget:
-`read_snapshot` borrows a transaction from the caller's connection, so a shared worker cannot sit
-in its place. A reader that finds every slot taken waits up to three seconds. If one frees, the
+`read_snapshot` returns a `ReportSnapshot` borrowing the caller's connection and dereferencing to
+its transaction, so a shared worker cannot sit in its place. The snapshot also pins the COIN-M
+money interpretation across all statements and nested queries; an old WAL cannot republish proof
+invalidated by a committed replica reset. A reader that finds every slot taken waits up to three
+seconds. If one frees, the
 open continues. If the wait expires, the open fails as `FailKind::Exhausted`. A wait cancelled
 because the request was superseded is `FailKind::Other`, not exhaustion.
 

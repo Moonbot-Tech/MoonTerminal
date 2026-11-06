@@ -375,6 +375,7 @@ pub fn query_totals_sliced(
     base: &ReportFilter,
     slices: &[TotalsSlice],
 ) -> ReadResult<Vec<ReportTotals>> {
+    let _money = super::super::pin_money_read(conn);
     if one_pass_serves(base, slices) {
         let meta = report_strategy_meta(conn, base)
             .map_err(|error| read_fail("reports: resolve strategy mask", error))?;

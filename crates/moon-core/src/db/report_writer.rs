@@ -370,7 +370,7 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
                 thr_count += batch.len() as u64;
                 // Keep the owned batch until one whole attempt commits. ACK indices are
                 // recreated per attempt and become observable only after that commit.
-                let (ack_indices, publication, post_commit) =
+                let (ack_indices, publication, post_commit, money_publication) =
                     match commit_stateful_batch_until_success_prepared(
                         &conn,
                         &mut rep_state,
@@ -397,7 +397,13 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
                                     post_commit.push(action);
                                 }
                             }
-                            Ok((ack_indices, publication, post_commit))
+                            // Hold the reader's WAL-anchoring fence through COMMIT and the
+                            // following invalidation publication. Failed commits publish nothing.
+                            let money_publication = post_commit.iter().any(|action| matches!(action,
+                                PostCommit::SyncComplete { .. } | PostCommit::ReplicaReset { .. }
+                                    | PostCommit::CoreForgotten { .. }
+                            )).then(quote::coin_m::publication_guard);
+                            Ok((ack_indices, publication, post_commit, money_publication))
                         },
                         integrity::writer_should_stop,
                         |failed_rounds, error| {
@@ -421,6 +427,14 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
                             break;
                         }
                     };
+                for action in &post_commit {
+                    match action {
+                        PostCommit::SyncComplete { core_uid, .. } => quote::coin_m::reexamine_core(*core_uid),
+                        PostCommit::ReplicaReset { core_uid, .. } | PostCommit::CoreForgotten { core_uid, .. } => quote::coin_m::forget_core(*core_uid),
+                        _ => {}
+                    }
+                }
+                drop(money_publication);
                 let _ack_guard = integrity::writer_ack_guard();
                 // The background scan can publish damage while this transaction is committing.
                 // The publication barrier makes this check and every following ACK indivisible
@@ -440,19 +454,12 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
                     match action {
                         PostCommit::SyncComplete { core_uid, done } => {
                             rep::commit_sync_complete(core_uid, &done);
-                            // A catch-up lands rows BETWEEN the ids already stored, which the
-                            // COIN-M knowledge cannot notice on its own — it tracks the ends of
-                            // what it examined. This commit is the authoritative "look again".
-                            quote::coin_m::reexamine_core(core_uid);
                         }
                         PostCommit::ReplicaReset {
                             core_uid,
                             redeclare_history,
                         } => {
                             rep::commit_replica_reset(&rep_state, core_uid);
-                            // The core serves a different report database now, so everything
-                            // learned from the wiped rows — the span AND the verdict — is stale.
-                            quote::coin_m::forget_core(core_uid);
                             recreated_resyncs.push((core_uid, redeclare_history));
                             // A page read before the wipe names ids of the superseded database.
                             open_row_checks.retain(|(uid, ..)| *uid != core_uid);
@@ -474,7 +481,6 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
                             done,
                         } => {
                             rep::commit_replica_reset(&rep_state, core_uid);
-                            quote::coin_m::forget_core(core_uid);
                             if let Some(reports) = resync {
                                 recreated_resyncs.push((core_uid, reports));
                             }

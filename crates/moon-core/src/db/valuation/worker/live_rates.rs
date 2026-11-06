@@ -202,6 +202,7 @@ impl CurrentRateState {
 pub(in crate::db::valuation::worker) fn report_quote_ordinals(
     conn: &Connection,
 ) -> ReadResult<Vec<i64>> {
+    let _money = crate::db::pin_money_read(conn);
     const CTX: &str = "valuation: quote scan";
     let mut found = BTreeSet::new();
     for src in crate::db::read_sources_res(conn)? {

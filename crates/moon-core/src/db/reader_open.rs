@@ -202,9 +202,52 @@ pub fn open_reader() -> ReadResult<ReportReader> {
 /// inside the period. Read-only: dropping the transaction rolls back nothing.
 /// ATTACH cannot run inside a transaction, so callers attach first. Transaction
 /// creation errors map to `Failed`; this function cannot produce `NotReady`.
-pub fn read_snapshot(conn: &Connection) -> ReadResult<rusqlite::Transaction<'_>> {
-    conn.unchecked_transaction()
-        .map_err(|e| read_fail("отчёты: снимок для чтения", e))
+pub fn read_snapshot(conn: &Connection) -> ReadResult<ReportSnapshot<'_>> {
+    let _publication = quote::coin_m::publication_guard();
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|e| read_fail("отчёты: снимок для чтения", e))?;
+    // BEGIN is deferred. Read a schema cell now, under the same short fence as writer COMMIT,
+    // so this WAL snapshot cannot carry a new database beside an old invalidation revision.
+    transaction
+        .query_row("SELECT COUNT(*) FROM sqlite_schema", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|e| read_fail("отчёты: закрепление снимка", e))?;
+    let money = quote::coin_m::pin(Some(quote::coin_m::invalidation_revision()));
+    Ok(ReportSnapshot {
+        transaction,
+        _money: money,
+    })
+}
+
+/// A read-only transaction and the immutable money interpretation shared by its query batch.
+/// Dropping rolls back the read transaction before releasing its thread-bound money pin.
+pub struct ReportSnapshot<'connection> {
+    transaction: rusqlite::Transaction<'connection>,
+    _money: quote::coin_m::ReadPin,
+}
+
+impl<'connection> std::ops::Deref for ReportSnapshot<'connection> {
+    type Target = rusqlite::Transaction<'connection>;
+
+    /// Preserve callers requiring a transaction; its own Deref also exposes Connection reads.
+    fn deref(&self) -> &Self::Target {
+        &self.transaction
+    }
+}
+
+/// Protect a standalone public query too. Caller-owned old transactions learn only locally;
+/// `read_snapshot` supplies the age when it owns the WAL boundary. Nested calls inherit the pin.
+pub(in crate::db) fn pin_money_read(conn: &Connection) -> quote::coin_m::ReadPin {
+    if quote::coin_m::is_pinned() {
+        return quote::coin_m::pin(None);
+    }
+    let _publication = quote::coin_m::publication_guard();
+    quote::coin_m::pin(
+        conn.is_autocommit()
+            .then(quote::coin_m::invalidation_revision),
+    )
 }
 
 /// Run a multi-query read inside one pinned SQLite snapshot and one pinned current-rate snapshot.
