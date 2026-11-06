@@ -386,20 +386,22 @@ fn run_with(
                 Err(error) => fail(cmd, ssh_failure(error), emit),
             },
             CmdArgs::Exchange(name) => match runner.select_exchange(&located.dir, &name) {
-                Ok(()) => match runner.status(&located.dir) {
-                    Ok(status) => {
-                        emit(Event::Status(status));
-                        match runner.exchanges(&located.dir) {
-                            Ok(exchanges) => {
-                                emit(Event::Exchanges(exchanges));
-                                emit(Event::ExchangeSwitched);
-                                done(cmd, emit)
+                Ok(()) => {
+                    emit(Event::ExchangeSwitched);
+                    match runner.status(&located.dir) {
+                        Ok(status) => {
+                            emit(Event::Status(status));
+                            match runner.exchanges(&located.dir) {
+                                Ok(exchanges) => {
+                                    emit(Event::Exchanges(exchanges));
+                                    done(cmd, emit)
+                                }
+                                Err(error) => fail(cmd, ssh_failure(error), emit),
                             }
-                            Err(error) => fail(cmd, ssh_failure(error), emit),
                         }
+                        Err(error) => fail(cmd, ssh_failure(error), emit),
                     }
-                    Err(error) => fail(cmd, ssh_failure(error), emit),
-                },
+                }
                 Err(error) => fail(cmd, ssh_failure(error), emit),
             },
             _ => invalid_args(cmd, emit),

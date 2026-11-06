@@ -184,6 +184,15 @@ impl Backend {
                     },
                 );
             }
+            if matches!(
+                &request,
+                CmdRequest::Run {
+                    cmd: Cmd::SwitchExchange,
+                    args: CmdArgs::Exchange(_),
+                }
+            ) {
+                facts.begin_exchange_attempt();
+            }
             facts.phases.insert(
                 cmd,
                 CmdPhase::Running {
@@ -268,12 +277,7 @@ impl Backend {
 
     /// Apply one current-generation worker event and return whether it changed a cached core.
     fn core_cmds_event(&mut self, uid: u64, generation: u64, event: worker::Event) -> bool {
-        if !self
-            .core_cmds
-            .workers
-            .get(&uid)
-            .is_some_and(|worker| worker.generation == generation)
-        {
+        if !worker_generation_matches(self.core_cmds.workers.get(&uid), generation) {
             return false;
         }
         match event {
@@ -484,9 +488,6 @@ impl CoreFacts {
                         _ => {}
                     }
                 }
-                if cmd == Cmd::SwitchExchange && matches!(phase, CmdPhase::Running { .. }) {
-                    self.exchange_switched = false;
-                }
                 self.phases.insert(cmd, phase);
             }
             worker::Event::Located(located) => self.located = Some(located),
@@ -523,10 +524,18 @@ impl CoreFacts {
                 }
             }
             worker::Event::Exchanges(exchanges) => self.exchanges = Some(exchanges),
-            worker::Event::ExchangeSwitched => self.exchange_switched = true,
+            worker::Event::ExchangeSwitched => {
+                self.exchange_switched = Some(self.exchange_attempt);
+            }
             worker::Event::AddressChanged { .. } => return false,
         }
         true
+    }
+
+    /// Start a new confirmed exchange selection, retiring any earlier completion.
+    fn begin_exchange_attempt(&mut self) {
+        self.exchange_attempt = self.exchange_attempt.wrapping_add(1);
+        self.exchange_switched = None;
     }
 
     /// Advance the saved port while retaining the owned installation needed for retarget recovery.
@@ -536,6 +545,11 @@ impl CoreFacts {
         self.info = None;
         self.checked_at = None;
     }
+}
+
+/// Accept an event only from the worker generation currently registered for the core.
+fn worker_generation_matches(worker: Option<&CoreWorker>, generation: u64) -> bool {
+    worker.is_some_and(|worker| worker.generation == generation)
 }
 
 /// Check that an address event still targets the saved endpoint its worker was created for.
@@ -584,7 +598,8 @@ fn core_facts(target: String, port: u16) -> CoreFacts {
         phases: HashMap::new(),
         checked_at: None,
         retry_elapsed: None,
-        exchange_switched: false,
+        exchange_attempt: 0,
+        exchange_switched: None,
     }
 }
 

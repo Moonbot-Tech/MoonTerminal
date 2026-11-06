@@ -64,7 +64,8 @@ fn completed_exchange_switch_opens_api_keys_once(cx: &mut gpui::TestAppContext) 
         let mut view = CoreCmdsView::controls(1, Cmd::SwitchExchange, window, cx);
         let mut facts = super::pages::tests::facts();
         facts.phases.insert(Cmd::SwitchExchange, CmdPhase::Done);
-        facts.exchange_switched = true;
+        facts.exchange_attempt = 1;
+        facts.exchange_switched = Some(1);
         view.fixture = Some(facts);
         view.follow_exchange_switch(cx);
         assert_eq!(view.cmd, Cmd::ApiKeys);

@@ -56,7 +56,8 @@ pub(crate) struct CoreFacts {
     pub(crate) phases: HashMap<Cmd, CmdPhase>,
     pub(crate) checked_at: Option<Instant>,
     pub(crate) retry_elapsed: Option<Duration>,
-    pub(crate) exchange_switched: bool,
+    pub(crate) exchange_attempt: u64,
+    pub(crate) exchange_switched: Option<u64>,
 }
 
 impl std::fmt::Debug for CoreFacts {

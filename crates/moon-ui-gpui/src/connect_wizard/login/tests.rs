@@ -119,13 +119,16 @@ fn password_login() -> FirstAccess {
 /// A completion from the previous host must not clear or close the wizard's newer login flow.
 #[test]
 fn reused_login_flow_rejects_the_previous_completion() {
-    let mut state = LoginState::default();
-    state.running = true;
+    let mut state = LoginState {
+        running: true,
+        ..LoginState::default()
+    };
     let previous = state.generation;
     assert!(state.completion_current(previous));
 
     state.restart_flow();
+    state.running = true;
 
     assert!(!state.completion_current(previous));
-    assert!(!state.running);
+    assert!(state.completion_current(state.generation));
 }

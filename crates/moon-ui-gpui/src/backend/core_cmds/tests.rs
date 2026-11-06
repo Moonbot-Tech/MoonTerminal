@@ -6,7 +6,7 @@ use zeroize::Zeroizing;
 
 use super::{
     CmdArgs, CmdError, CmdPhase, CoreCmdsState, CoreWorker, MenuForm, core_facts, menu_form,
-    ssh_display_host, ssh_target_port, worker, worker_endpoint_matches,
+    ssh_display_host, ssh_target_port, worker, worker_endpoint_matches, worker_generation_matches,
 };
 
 /// Build a located core with only its installation ownership varied.
@@ -249,6 +249,15 @@ fn stale_worker_address_event_requires_the_original_endpoint() {
     assert!(!worker_endpoint_matches(&worker, None));
 }
 
+/// A replaced worker must not persist an address event even when its endpoint still matches.
+#[test]
+fn stale_generation_event_is_rejected_before_endpoint_handling() {
+    let worker = command_worker("203.0.113.7", 3302);
+    assert!(worker_generation_matches(Some(&worker), 1));
+    assert!(!worker_generation_matches(Some(&worker), 2));
+    assert!(!worker_generation_matches(None, 1));
+}
+
 /// A successful address change must let the same worker accept a later change on the new port.
 #[test]
 fn accepted_address_change_advances_worker_endpoint() {
@@ -354,9 +363,14 @@ fn retry_done_keeps_the_attempt_duration() {
 #[test]
 fn exchange_switch_marks_the_completed_identity_change() {
     let mut facts = core_facts("203.0.113.7:22".into(), 3302);
-    assert!(!facts.exchange_switched);
+    assert_eq!(facts.exchange_switched, None);
 
+    facts.begin_exchange_attempt();
     facts.apply(worker::Event::ExchangeSwitched);
+    assert_eq!(facts.exchange_switched, Some(1));
 
-    assert!(facts.exchange_switched);
+    facts.begin_exchange_attempt();
+    assert_eq!(facts.exchange_switched, None);
+    facts.apply(worker::Event::ExchangeSwitched);
+    assert_eq!(facts.exchange_switched, Some(2));
 }

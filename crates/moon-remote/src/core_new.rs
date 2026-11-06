@@ -361,7 +361,6 @@ pub(crate) fn mb_within(
     all.extend_from_slice(args);
     let out = privilege.run_raw(conn, &command("mb", &all), stdin, timeout)?;
     parse_reply(out.ok(), &out.stdout_text(), &out.stderr_text())
-        .map_err(|error| CoreRefusal::new(format!("{error:#}")).into())
 }
 
 /// The JSON reply of an `mb` command, or its refusal. The reply is the last line that is a JSON
@@ -390,7 +389,9 @@ pub(crate) fn parse_reply(
         Some(reply) if exited_ok && reply.get("ok") == Some(&serde_json::Value::Bool(true)) => {
             Ok(reply)
         }
-        Some(reply) => anyhow::bail!("the core refused: {}", said(Some(&reply))),
+        Some(reply) => {
+            Err(CoreRefusal::new(format!("the core refused: {}", said(Some(&reply)))).into())
+        }
         None if stderr.trim().is_empty() => {
             anyhow::bail!("the core gave no reply ({} bytes of output)", stdout.len())
         }

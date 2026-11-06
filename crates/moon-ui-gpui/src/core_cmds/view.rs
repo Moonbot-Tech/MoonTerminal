@@ -34,7 +34,7 @@ pub(super) struct CoreCmdsView {
     pub(super) log_picker: Entity<MoonSelectState<LogLines>>,
     pub(super) elapsed: Option<std::time::Duration>,
     pub(super) service_attempt: Option<Cmd>,
-    pub(super) exchange_handled: bool,
+    pub(super) exchange_handled: Option<u64>,
     pub(super) subscriptions: Vec<Subscription>,
     pub(super) hosts: moon_remote::hosts::Hosts,
     pub(super) nav_signature: Option<(MenuForm, Option<bool>, String)>,
@@ -158,7 +158,7 @@ impl CoreCmdsView {
             log_picker,
             elapsed: None,
             service_attempt: None,
-            exchange_handled: false,
+            exchange_handled: None,
             subscriptions,
             hosts: Default::default(),
             nav_signature: None,
@@ -208,6 +208,9 @@ impl CoreCmdsView {
         if matches!(cmd, Cmd::Start | Cmd::Stop | Cmd::Restart) {
             self.service_attempt = None;
         }
+        if cmd == Cmd::SwitchExchange {
+            self.exchange_handled = Some(self.exchange_attempt(cx));
+        }
         self.picker.update(cx, |picker, _| {
             picker.set_selected_value(&cmd);
         });
@@ -230,6 +233,18 @@ impl CoreCmdsView {
         cx.notify();
     }
 
+    /// Return the current exchange attempt from backend facts or the test fixture.
+    fn exchange_attempt(&self, cx: &App) -> u64 {
+        let attempt = self
+            .backend
+            .as_ref()
+            .and_then(|backend| backend.read(cx).core_cmds.facts.get(&self.uid))
+            .map(|facts| facts.exchange_attempt);
+        #[cfg(test)]
+        let attempt = attempt.or_else(|| self.fixture.as_ref().map(|facts| facts.exchange_attempt));
+        attempt.unwrap_or_default()
+    }
+
     /// Move a completed hot exchange switch to the promised API-key form exactly once.
     pub(super) fn follow_exchange_switch(&mut self, cx: &mut Context<Self>) {
         let completion = self
@@ -238,38 +253,32 @@ impl CoreCmdsView {
             .and_then(|backend| backend.read(cx).core_cmds.facts.get(&self.uid))
             .map(|facts| {
                 (
-                    matches!(
-                        facts.phases.get(&Cmd::SwitchExchange),
-                        Some(CmdPhase::Running { .. })
-                    ),
-                    matches!(facts.phases.get(&Cmd::SwitchExchange), Some(CmdPhase::Done))
-                        && facts.exchange_switched,
+                    facts.exchange_attempt,
+                    facts.exchange_switched,
+                    matches!(facts.phases.get(&Cmd::SwitchExchange), Some(CmdPhase::Done)),
                 )
             });
         #[cfg(test)]
         let completion = completion.or_else(|| {
             self.fixture.as_ref().map(|facts| {
                 (
-                    matches!(
-                        facts.phases.get(&Cmd::SwitchExchange),
-                        Some(CmdPhase::Running { .. })
-                    ),
-                    matches!(facts.phases.get(&Cmd::SwitchExchange), Some(CmdPhase::Done))
-                        && facts.exchange_switched,
+                    facts.exchange_attempt,
+                    facts.exchange_switched,
+                    matches!(facts.phases.get(&Cmd::SwitchExchange), Some(CmdPhase::Done)),
                 )
             })
         });
-        let Some((running, switched)) = completion else {
+        let Some((attempt, switched, done)) = completion else {
             return;
         };
-        if self.cmd == Cmd::SwitchExchange && running {
-            self.exchange_handled = false;
+        if self.cmd != Cmd::SwitchExchange
+            || !done
+            || switched != Some(attempt)
+            || self.exchange_handled == Some(attempt)
+        {
             return;
         }
-        if self.cmd != Cmd::SwitchExchange || !switched || self.exchange_handled {
-            return;
-        }
-        self.exchange_handled = true;
+        self.exchange_handled = Some(attempt);
         self.cmd = Cmd::ApiKeys;
         self.confirm = None;
         self.picker.update(cx, |picker, _| {
@@ -1001,7 +1010,8 @@ fn empty_facts() -> CoreFacts {
         phases: Default::default(),
         checked_at: None,
         retry_elapsed: None,
-        exchange_switched: false,
+        exchange_attempt: 0,
+        exchange_switched: None,
     }
 }
 
@@ -1046,6 +1056,7 @@ fn snapshot(facts: &CoreFacts, cmd: Cmd) -> CoreFacts {
             })
             .collect(),
         retry_elapsed: facts.retry_elapsed,
+        exchange_attempt: facts.exchange_attempt,
         exchange_switched: facts.exchange_switched,
     }
 }

@@ -44,6 +44,7 @@ struct FakeRunner {
     calls: RefCell<Vec<String>>,
     retarget_error: Option<String>,
     info_available: bool,
+    status_error: bool,
 }
 
 impl FakeRunner {
@@ -55,6 +56,7 @@ impl FakeRunner {
             calls: RefCell::new(Vec::new()),
             retarget_error: None,
             info_available: true,
+            status_error: false,
         }
     }
 
@@ -123,6 +125,9 @@ impl Runner for FakeRunner {
 
     fn status(&self, dir: &str) -> anyhow::Result<CoreStatus> {
         self.record(format!("status:{dir}"));
+        if self.status_error {
+            anyhow::bail!("status unavailable");
+        }
         Ok(status(CoreState::Ready))
     }
 
@@ -603,6 +608,27 @@ fn selected_exchange_refreshes_status_and_choices_before_done() {
             .any(|event| matches!(event, Event::ExchangeSwitched)),
         "a hot switch must request the terminal's identity refresh"
     );
+}
+
+/// A follow-up read failure must not hide that the core already changed exchange.
+#[test]
+fn selected_exchange_emits_switch_before_a_status_failure() {
+    let mut fake = FakeRunner::new();
+    fake.status_error = true;
+    let events = run(
+        &fake,
+        cached_snapshot(&fake),
+        CmdRequest::Run {
+            cmd: Cmd::SwitchExchange,
+            args: CmdArgs::Exchange("EX-XX".into()),
+        },
+    );
+
+    assert!(matches!(events.first(), Some(Event::ExchangeSwitched)));
+    assert!(matches!(
+        phase(&events, Cmd::SwitchExchange),
+        CmdPhase::Failed(CmdError::Ssh(_))
+    ));
 }
 
 /// A service refusal is not a transport failure and must not tear down the SSH session.
