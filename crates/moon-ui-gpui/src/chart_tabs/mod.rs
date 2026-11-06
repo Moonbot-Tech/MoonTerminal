@@ -1125,8 +1125,7 @@ impl ChartTabs {
     }
 
     /// Apply a tab-strip scale-dropdown selection only to this window's active tab.
-    /// `persist_scales` saves Main, Add, and detached scales but currently omits Custom tabs in the
-    /// strip; unlike the former toolbar dropdown, this does not change global `price_scale_rev`.
+    /// Save the active tab's scale without changing the global `price_scale_rev`.
     pub(crate) fn pick_active_scale(&mut self, pct: Option<f32>, cx: &mut Context<Self>) {
         self.set_active_scale(pct, cx);
         self.persist_scales(cx);
