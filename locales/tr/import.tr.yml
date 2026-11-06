@@ -1,9 +1,9 @@
-# Importing settings from MoonBot (Settings → General): button, preview dialog, and statuses.
+# Importing settings from Moonbot (Settings → General): button, preview dialog, and statuses.
 _version: 1
 
-import.button: "MoonBot'tan içe aktar"
-import.hint: "MoonBot'ta: Settings → General → Copy settings; sonra bu düğmeye basın — tam olarak neyin taşınacağını önizleme gösterir."
-import.title: "MoonBot ayar içe aktarma"
+import.button: "Moonbot'tan içe aktar"
+import.hint: "Moonbot'ta: Settings → General → Copy settings; sonra bu düğmeye basın — tam olarak neyin taşınacağını önizleme gösterir."
+import.title: "Moonbot ayar içe aktarma"
 import.loading: "Yükleniyor…"
 import.group.terminal: "Terminal"
 import.group.chart: "Grafik ve çizgiler"
@@ -15,13 +15,13 @@ import.col_light: "Açık tema"
 import.col_dark: "Koyu tema"
 import.group.hotkeys: "Kısayollar"
 import.same: "aynı"
-import.hotkeys_empty_note: "MoonBot'ta %{n} yuva daha atanmamış — boşlar taşınmaz (sizinkiler durur)."
+import.hotkeys_empty_note: "Moonbot'ta %{n} yuva daha atanmamış — boşlar taşınmaz (sizinkiler durur)."
 import.not_transferred_label: "Taşınmadı:"
 import.nothing: "Taşınacak bir şey yok — eşlenen değerlerin hepsi zaten aynı."
 import.apply: "Uygula"
 import.cancel: "İptal"
 import.applied: "İçe aktarılan öğe: %{n}. Gözden geçirip “Kaydet”e basın."
-import.clipboard_empty: "Pano boş — önce ayarları MoonBot'ta kopyalayın."
+import.clipboard_empty: "Pano boş — önce ayarları Moonbot'ta kopyalayın."
 
 import.preview.caption.ui_theme: "Arayüz teması"
 import.preview.caption.split_parts: "Split Order X: parça sayısı"

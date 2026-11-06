@@ -78,7 +78,7 @@ core_status.same.tz_off: "UTC"
 core_status.same.cpus: "Mantıksal CPU"
 core_status.same.api_key: "API anahtarı"
 core_status.same.api_quota: "API kotası"
-core_status.same.version: "MoonBot"
+core_status.same.version: "Moonbot"
 core_status.same.no_expiry: "süresiz"
 core_status.same.not_set: "ayarlanmamış"
 # Warnings-list columns.
@@ -110,16 +110,16 @@ core_status.col.ping: "Çekirdek ping"
 core_status.col.ping_exch: "Borsa ping"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
-# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# Moonbot build the core reported. The product noun IS the heading, so the cells hold
 # a bare number; it is a proper name and is not translated. BOTH views read this one key --
 # they would never legitimately differ, and two identical values are one translator edit away
 # from disagreeing. `core_status.col.startup` is shared the same way.
-core_status.col.version: "MoonBot"
-# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+core_status.col.version: "Moonbot"
+# Hover on a Moonbot cell whose core runs an older build than the newest one currently reported
 # across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
-# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# server what the latest Moonbot is. Both numbers arrive as typed builds and are dotted by
 # `util::fmt::core_build` at the call site.
-core_status.version_behind: "Eski MoonBot derlemesi: %{have}. Çekirdekleriniz arasındaki en yeni: %{newest}"
+core_status.version_behind: "Eski Moonbot derlemesi: %{have}. Çekirdekleriniz arasındaki en yeni: %{newest}"
 core_status.col.api_key: "API (g)"
 # Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
 # lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
@@ -289,7 +289,7 @@ core_status.fault.short.stalled: "adımda takıldı"
 core_status.fault.short.aborted: "durdu"
 core_status.fault.short.unknown: "belirsiz"
 core_status.fault.short.key_empty: "anahtar yapıştırılmadı"
-core_status.fault.short.key_unparsable: "MoonBot anahtarı değil"
+core_status.fault.short.key_unparsable: "Moonbot anahtarı değil"
 core_status.fault.short.endpoint_invalid: "geçersiz adres"
 core_status.fault.short.endpoint_unresolved: "ana bilgisayar bulunamadı"
 core_status.fault.reason.local_port: "Terminal kendi UDP portunu bağlayamadı (deneme: %{n})"
@@ -306,7 +306,7 @@ core_status.fault.reason.stalled: "Başlatma %{step} adımında durdu (%{done}/%
 core_status.fault.reason.aborted: "Terminal denemeyi kendisi durdurdu"
 core_status.fault.reason.unknown: "Neden belirlenemedi"
 core_status.fault.reason.key_empty: "Anahtar alanı boş — bağlanacak bir şey yok"
-core_status.fault.reason.key_unparsable: "Anahtar alanındaki değer bir MoonBot anahtarı değil — terminal okuyamadı"
+core_status.fault.reason.key_unparsable: "Anahtar alanındaki değer bir Moonbot anahtarı değil — terminal okuyamadı"
 core_status.fault.reason.endpoint_invalid: "Adres:port sütunundaki değer bir adres değil — terminal nereye bağlanacağını bilmiyor"
 core_status.fault.reason.endpoint_unresolved: "Adres:port sütunundaki ana bilgisayar adı bir adrese çözümlenemedi"
 core_status.fault.next.local_port: "Portu BU makinede bir şey tutuyor: bir VPN veya yerel güvenlik duvarı"
@@ -314,15 +314,15 @@ core_status.fault.next.no_response: "Çekirdeğin UDP portunu hem sağlayıcı p
 core_status.fault.next.unparsed: "Paketler terminale ulaştı: kapalı port değil. Günlüğü ve bu sayaçları desteğe gönderin"
 core_status.fault.next.try_mode: "Bu terminaldeki diğer çekirdekler %{mode} kipinde bağlandı — bunu %{mode} kipine almayı deneyin"
 core_status.fault.next.access: "Bu botun dışa aktardığı anahtarı yapıştırın ve çekirdekte Kernel (VPS) kipinin açık olduğunu denetleyin. Borsa hesabı MoonBonus referansına bağlı değilken etkin kalmaz"
-core_status.fault.next.unidentified: "Çekirdek yanıtlar ama uyumluluk denetimini geçmez. Sırayla bakın: Kernel (VPS) kipi açık mı, çekirdek aşırı yüklü mü, ve makinesindeki MoonBot'u güncelleyin"
+core_status.fault.next.unidentified: "Çekirdek yanıtlar ama uyumluluk denetimini geçmez. Sırayla bakın: Kernel (VPS) kipi açık mı, çekirdek aşırı yüklü mü, ve makinesindeki Moonbot'u güncelleyin"
 core_status.fault.next.syncing: "Bekleyin. Rakam ilerlemiyorsa başlangıç sütununun üzerine gelin: kanal kaybı orada görünür"
 core_status.fault.next.stalled: "Deneme kendiliğinden yinelenir. Aynı adım başarısız kalırsa başlangıç sütununun üzerine gelin ve günlüğü gönderin"
 core_status.fault.next.aborted: "Yapılacak bir şey yok"
 core_status.fault.next.unknown: "Bu satırı ve günlüğü desteğe gönderin"
-core_status.fault.next.key: "Anahtar sitede değil MoonBot'ta üretilir. MoonBot'ta: sol alttaki yeşil nokta (Info penceresi) → Moon Kernel satırı → Settings → Moon Proto penceresi, Settings sekmesi → Key: → Copy Key (anahtar yoksa New Key). Tamamını Anahtar alanına Yapıştır düğmesiyle yapıştırın ve Kaydet'e basın — çekirdek kendiliğinden bağlanır"
+core_status.fault.next.key: "Anahtar sitede değil Moonbot'ta üretilir. Moonbot'ta: sol alttaki yeşil nokta (Info penceresi) → Moon Kernel satırı → Settings → Moon Proto penceresi, Settings sekmesi → Key: → Copy Key (anahtar yoksa New Key). Tamamını Anahtar alanına Yapıştır düğmesiyle yapıştırın ve Kaydet'e basın — çekirdek kendiliğinden bağlanır"
 core_status.fault.next.endpoint_invalid: "Ayarlar → Bağlantılar'da Adres:port sütununu düzeltin (adres, adres:port ya da :port) ya da anahtarın adresini kullanmak için boşaltın ve Kaydet'e basın"
 core_status.fault.next.endpoint_unresolved: "Adda yazım hatası olmadığını ve bu bilgisayarda internetin ve DNS'in çalıştığını kontrol edin — terminal kendisi yeniden dener. Ya da ad yerine IP yazın"
-core_status.fault.core.legacy_named: "Çekirdek MoonBot %{server} bildiriyor ve protokol sürümü yok: bu terminalden eski"
+core_status.fault.core.legacy_named: "Çekirdek Moonbot %{server} bildiriyor ve protokol sürümü yok: bu terminalden eski"
 core_status.fault.core.legacy_silent: "Çekirdek protokol sürümü bildirmiyor: bu terminalden eski"
 core_status.fault.retrying: "yeniden bağlanıyor"
 core_status.fault.f.reason: "Neden"
@@ -354,13 +354,13 @@ core_status.problem_cat.network: "Ağ"
 core_status.problem_cat.other: "Diğer"
 
 # --- Problems mode: the three diagnostic actions ---
-# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+# The reset and the re-read mirror Moonbot's own Problems window; the test is ours.
 #
 # A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
 # channel end to end. It leaves a row behind that only the reset removes, which is why that pair
 # ships together.
 core_status.problems_test: "Kanalı dene"
-# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# Deliberately NOT Moonbot's "reset all", though it is the same command on the wire. Moonbot's
 # window belongs to one core, so "all" there means all of that core's findings; this panel spans a
 # fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
 # picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how

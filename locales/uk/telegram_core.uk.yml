@@ -127,7 +127,7 @@ telegram_core.logout: "Вийти"
 
 telegram_core.logout_title: "Вийти з Telegram на ядрі"
 
-telegram_core.logout_q: "Це вийде з облікового запису і скине спільні дані Telegram на машині цього ядра. Зачепить усі процеси MoonBot на тій машині, не лише це ядро."
+telegram_core.logout_q: "Це вийде з облікового запису і скине спільні дані Telegram на машині цього ядра. Зачепить усі процеси Moonbot на тій машині, не лише це ядро."
 
 telegram_core.premium: "Потрібен зовнішній крок Telegram. Скасуйте вхід, щоб повернутися до номера телефону."
 

@@ -38,8 +38,8 @@ report.col.emulator: "Эму"
 report.col.status: "Статус"
 report.col.sellreason: "Причина закрытия"
 report.col.comment: "Комментарий"
-# MoonBot's technical Report names stay identical in all seven locales. Existing tuner FieldSpec
-# labels are reused where the tuner and Report use the same MoonBot spelling.
+# Moonbot's technical Report names stay identical in all seven locales. Existing tuner FieldSpec
+# labels are reused where the tuner and Report use the same Moonbot spelling.
 report.col.btc1hdelta: "dBTC"
 report.col.exchange1hdelta: "dMarket"
 report.col.btc24hdelta: "d24BTC"

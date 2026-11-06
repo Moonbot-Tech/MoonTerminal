@@ -1,9 +1,9 @@
-# Importing settings from MoonBot (Settings → General): button, preview dialog, and statuses.
+# Importing settings from Moonbot (Settings → General): button, preview dialog, and statuses.
 _version: 1
 
-import.button: "Importar de MoonBot"
-import.hint: "En MoonBot: Ajustes → General → Copiar ajustes; luego pulsa este botón — la vista previa muestra qué se transferirá."
-import.title: "Importación de ajustes de MoonBot"
+import.button: "Importar de Moonbot"
+import.hint: "En Moonbot: Ajustes → General → Copiar ajustes; luego pulsa este botón — la vista previa muestra qué se transferirá."
+import.title: "Importación de ajustes de Moonbot"
 import.loading: "Cargando…"
 import.group.terminal: "Terminal"
 import.group.chart: "Gráfico y líneas"
@@ -15,13 +15,13 @@ import.col_light: "Tema claro"
 import.col_dark: "Tema oscuro"
 import.group.hotkeys: "Atajos"
 import.same: "coincide"
-import.hotkeys_empty_note: "%{n} ranuras más sin asignar en MoonBot — las vacías no se transfieren (las tuyas se conservan)."
+import.hotkeys_empty_note: "%{n} ranuras más sin asignar en Moonbot — las vacías no se transfieren (las tuyas se conservan)."
 import.not_transferred_label: "No transferido:"
 import.nothing: "Nada que transferir — todos los valores mapeados ya coinciden."
 import.apply: "Aplicar"
 import.cancel: "Cancelar"
 import.applied: "Elementos importados: %{n}. Revisa y pulsa «Guardar»."
-import.clipboard_empty: "El portapapeles está vacío — copia primero los ajustes en MoonBot."
+import.clipboard_empty: "El portapapeles está vacío — copia primero los ajustes en Moonbot."
 
 import.preview.caption.ui_theme: "Tema de la interfaz"
 import.preview.caption.split_parts: "Split Order X: número de partes"

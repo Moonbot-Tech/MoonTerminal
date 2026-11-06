@@ -34,7 +34,7 @@ core_move.step.composed_db: "Архив настроек готов для %{exc
 core_move.step.report_db: "База отчётов собрана: строк %{rows}, открытых %{open}."
 core_move.step.report_db_skipped: "В терминале нет сделок этого ядра: собирать базу отчётов не из чего."
 core_move.step.strategies_read: "Стратегии прочитаны: %{n}, папок: %{folders}."
-core_move.step.checked: "Сервер подходит для MoonBot, порт свободен."
+core_move.step.checked: "Сервер подходит для Moonbot, порт свободен."
 core_move.step.uploaded: "Настройки загружены."
 core_move.step.installed: "Новое ядро установлено, не запущено."
 core_move.step.stop_requested: "Прошу старое ядро остановиться…"

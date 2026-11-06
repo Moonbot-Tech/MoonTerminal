@@ -127,7 +127,7 @@ telegram_core.logout: "Cerrar sesión"
 
 telegram_core.logout_title: "Cerrar sesión de Telegram en el núcleo"
 
-telegram_core.logout_q: "Esto cierra la sesión y restablece los datos compartidos de Telegram en la máquina de ese núcleo. Afecta a todos los procesos MoonBot de esa máquina, no solo a este núcleo."
+telegram_core.logout_q: "Esto cierra la sesión y restablece los datos compartidos de Telegram en la máquina de ese núcleo. Afecta a todos los procesos Moonbot de esa máquina, no solo a este núcleo."
 
 telegram_core.premium: "Hace falta un paso externo de Telegram. Cancela el inicio de sesión para volver al número."
 

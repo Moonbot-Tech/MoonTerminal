@@ -148,7 +148,7 @@ toolbar.max_order: "Lệnh tối đa"
 toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Đòn bẩy tối đa"
-# Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
+# Row label for the exchange's cap on the whole position at the current leverage (Moonbot's <max. N>).
 toolbar.position_cap: "Trần vị thế"
 # Hover text for the position cap row.
 toolbar.position_cap_tip: "Trần của sàn trên CẢ vị thế coin này ở đòn bẩy ĐÃ ÁP DỤNG (cập nhật sau Áp dụng). Đòn bẩy thấp hơn thì trần cao hơn. Lệnh tối đa là trần riêng cho từng lệnh."
@@ -291,7 +291,7 @@ coin_menu.tbl_group: "Thêm vào danh sách chặn tạm"
 coin_menu.target_core: "Core «%{core}»"
 coin_menu.target_cores: "Core đã chọn (%{n})"
 coin_menu.target_strategy: "Chiến lược «%{name}»"
-# Ban lengths, matching the presets MoonBot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
+# Ban lengths, matching the presets Moonbot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
 coin_menu.tbl_hours: "%{n} giờ"
 coin_menu.tbl_days: "%{n} ngày"
 coin_menu.tbl_left: "%{symbol}: còn %{left}"

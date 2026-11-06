@@ -55,7 +55,7 @@ pub enum ImportError {
 impl std::fmt::Display for ImportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound => write!(f, "В тексте не найден блок настроек MoonBot (MBSC7)"),
+            Self::NotFound => write!(f, "В тексте не найден блок настроек Moonbot (MBSC7)"),
             Self::NewerFormat { found } => write!(
                 f,
                 "Формат MBSC{found} новее этой версии MoonTerminal; обновите Terminal"

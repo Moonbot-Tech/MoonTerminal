@@ -77,7 +77,7 @@ core_status.same.tz_off: "UTC"
 core_status.same.cpus: "CPUs lógicas"
 core_status.same.api_key: "Chave de API"
 core_status.same.api_quota: "Cota de API"
-core_status.same.version: "MoonBot"
+core_status.same.version: "Moonbot"
 core_status.same.no_expiry: "sem validade"
 core_status.same.not_set: "não definida"
 # Warnings-list columns.
@@ -109,16 +109,16 @@ core_status.col.ping: "Ping do núcleo"
 core_status.col.ping_exch: "Ping corr."
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
-# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# Moonbot build the core reported. The product noun IS the heading, so the cells hold
 # a bare number; it is a proper name and is not translated. BOTH views read this one key --
 # they would never legitimately differ, and two identical values are one translator edit away
 # from disagreeing. `core_status.col.startup` is shared the same way.
-core_status.col.version: "MoonBot"
-# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+core_status.col.version: "Moonbot"
+# Hover on a Moonbot cell whose core runs an older build than the newest one currently reported
 # across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
-# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# server what the latest Moonbot is. Both numbers arrive as typed builds and are dotted by
 # `util::fmt::core_build` at the call site.
-core_status.version_behind: "Build do MoonBot desatualizada: %{have}. A mais nova entre os seus núcleos é %{newest}"
+core_status.version_behind: "Build do Moonbot desatualizada: %{have}. A mais nova entre os seus núcleos é %{newest}"
 core_status.col.api_key: "API (d)"
 # Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
 # lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
@@ -288,7 +288,7 @@ core_status.fault.short.stalled: "parado num passo"
 core_status.fault.short.aborted: "interrompido"
 core_status.fault.short.unknown: "indeterminado"
 core_status.fault.short.key_empty: "chave não colada"
-core_status.fault.short.key_unparsable: "não é chave MoonBot"
+core_status.fault.short.key_unparsable: "não é chave Moonbot"
 core_status.fault.short.endpoint_invalid: "endereço inválido"
 core_status.fault.short.endpoint_unresolved: "host não encontrado"
 core_status.fault.reason.local_port: "O terminal não conseguiu abrir a própria porta UDP (tentativas: %{n})"
@@ -305,7 +305,7 @@ core_status.fault.reason.stalled: "A inicialização parou no passo %{step} (%{d
 core_status.fault.reason.aborted: "O terminal interrompeu a tentativa"
 core_status.fault.reason.unknown: "Não foi possível determinar a causa"
 core_status.fault.reason.key_empty: "O campo Chave está vazio — não há com o que conectar"
-core_status.fault.reason.key_unparsable: "O que está no campo Chave não é uma chave MoonBot — o terminal não conseguiu ler"
+core_status.fault.reason.key_unparsable: "O que está no campo Chave não é uma chave Moonbot — o terminal não conseguiu ler"
 core_status.fault.reason.endpoint_invalid: "O que está na coluna Endereço:porta não é um endereço — o terminal não sabe aonde se conectar"
 core_status.fault.reason.endpoint_unresolved: "O nome de host da coluna Endereço:porta não foi resolvido em um endereço"
 core_status.fault.next.local_port: "Algo NESTA máquina segura a porta: uma VPN ou um firewall local"
@@ -313,15 +313,15 @@ core_status.fault.next.no_response: "Abra a porta UDP do núcleo no painel da ho
 core_status.fault.next.unparsed: "Os pacotes chegaram ao terminal: não é uma porta fechada. Envie o log e estes contadores ao suporte"
 core_status.fault.next.try_mode: "Outros núcleos neste terminal conectaram bem no modo %{mode} — tente mudar este para %{mode}"
 core_status.fault.next.access: "Cole a chave exportada DESTE bot e confira se o modo Kernel (VPS) está ligado no núcleo. Ele fica inativo enquanto a conta da corretora não está sob a indicação MoonBonus"
-core_status.fault.next.unidentified: "O núcleo responde, mas não passa na checagem de compatibilidade. Confira, nesta ordem: se o modo Kernel (VPS) está ligado, se o núcleo está sobrecarregado, e atualize o MoonBot no host"
+core_status.fault.next.unidentified: "O núcleo responde, mas não passa na checagem de compatibilidade. Confira, nesta ordem: se o modo Kernel (VPS) está ligado, se o núcleo está sobrecarregado, e atualize o Moonbot no host"
 core_status.fault.next.syncing: "Espere. Se o número parar de se mover, passe o ponteiro na coluna de inicialização: ela mostra a perda do canal"
 core_status.fault.next.stalled: "A tentativa se repete sozinha. Se o mesmo passo continuar falhando, passe o ponteiro na coluna de inicialização e envie o log"
 core_status.fault.next.aborted: "Nada a fazer"
 core_status.fault.next.unknown: "Envie esta linha e o log ao suporte"
-core_status.fault.next.key: "A chave é feita no MoonBot, não no site. No MoonBot: o ponto verde embaixo à esquerda (janela Info) → a linha Moon Kernel → Settings → a janela Moon Proto, aba Settings → Key: → Copy Key (ainda sem chave — New Key). Cole-a inteira no campo Chave com o botão Colar e pressione Salvar — o núcleo conecta sozinho"
+core_status.fault.next.key: "A chave é feita no Moonbot, não no site. No Moonbot: o ponto verde embaixo à esquerda (janela Info) → a linha Moon Kernel → Settings → a janela Moon Proto, aba Settings → Key: → Copy Key (ainda sem chave — New Key). Cole-a inteira no campo Chave com o botão Colar e pressione Salvar — o núcleo conecta sozinho"
 core_status.fault.next.endpoint_invalid: "Corrija a coluna Endereço:porta em Configurações → Conexões (endereço, endereço:porta ou :porta), ou esvazie-a para usar o endereço da chave, e pressione Salvar"
 core_status.fault.next.endpoint_unresolved: "Verifique se o nome não tem erro de digitação e se este computador tem internet e DNS funcionando — o terminal tenta de novo sozinho. Ou digite o IP no lugar do nome"
-core_status.fault.core.legacy_named: "O núcleo informa MoonBot %{server} e nenhuma versão de protocolo: é anterior a este terminal"
+core_status.fault.core.legacy_named: "O núcleo informa Moonbot %{server} e nenhuma versão de protocolo: é anterior a este terminal"
 core_status.fault.core.legacy_silent: "O núcleo não informa versão de protocolo: é anterior a este terminal"
 core_status.fault.retrying: "reconectando"
 core_status.fault.f.reason: "Motivo"
@@ -353,13 +353,13 @@ core_status.problem_cat.network: "Rede"
 core_status.problem_cat.other: "Outro"
 
 # --- Problems mode: the three diagnostic actions ---
-# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+# The reset and the re-read mirror Moonbot's own Problems window; the test is ours.
 #
 # A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
 # channel end to end. It leaves a row behind that only the reset removes, which is why that pair
 # ships together.
 core_status.problems_test: "Testar o canal"
-# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# Deliberately NOT Moonbot's "reset all", though it is the same command on the wire. Moonbot's
 # window belongs to one core, so "all" there means all of that core's findings; this panel spans a
 # fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
 # picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how

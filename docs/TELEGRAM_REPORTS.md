@@ -202,7 +202,7 @@ to apply it. A terminal-hosted bot stores it in its own config through the globa
 
 The Card tab arranges fields into lines. Drag fields and lines to reorder them, hide fields in
 the tray, or restore them from it; the move and hide buttons and tray also work with the keyboard.
-"Coin first" is the default, matching the existing card. "Core first, as in MoonBot" starts with
+"Coin first" is the default, matching the existing card. "Core first, as in Moonbot" starts with
 `Name: <core>`. Without a saved layout, the coin hashtag is on and the core hashtag is off.
 Saved hashtag choices stay unchanged. The switches affect cards only: core down/back notices
 always keep their hashtags.

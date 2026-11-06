@@ -77,7 +77,7 @@ pub(super) fn handle(client: &MoonClient, core: CoreId, cmd: TelegramCmd) -> Opt
             crate::feed::core_label(core)
         ),
         Ok(()) if is_logout => log::warn!(
-            "core {} telegram logout sent — resets the shared Telegram account for every MoonBot \
+            "core {} telegram logout sent — resets the shared Telegram account for every Moonbot \
              process on that machine",
             crate::feed::core_label(core)
         ),

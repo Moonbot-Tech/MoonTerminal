@@ -34,7 +34,7 @@ core_move.step.composed_db: "Archivo de ajustes listo para %{exchange}, con la b
 core_move.step.report_db: "Base de informes reconstruida: filas %{rows}, abiertas %{open}."
 core_move.step.report_db_skipped: "Este terminal no tiene operaciones de este núcleo: no hay de qué reconstruir la base de informes."
 core_move.step.strategies_read: "Estrategias leídas: %{n}, carpetas: %{folders}."
-core_move.step.checked: "El servidor puede ejecutar MoonBot; el puerto está libre."
+core_move.step.checked: "El servidor puede ejecutar Moonbot; el puerto está libre."
 core_move.step.uploaded: "Ajustes subidos."
 core_move.step.installed: "El nuevo núcleo está instalado, sin iniciar."
 core_move.step.stop_requested: "Pidiendo al núcleo antiguo que se detenga…"

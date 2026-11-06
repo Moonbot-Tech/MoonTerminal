@@ -156,9 +156,9 @@ steps:
       en: Choose the version with the <code>V0</code> / <code>V1</code> / <code>V2</code> radio buttons.
       html: true
   - note:
-      ru: MoonBot по умолчанию создаёт ключ <code>V0</code>. Если не сменить версию до <code>Copy Key</code>,
+      ru: Moonbot по умолчанию создаёт ключ <code>V0</code>. Если не сменить версию до <code>Copy Key</code>,
         терминал прочитает из ключа <code>V0</code>.
-      en: MoonBot creates a <code>V0</code> key by default. Unless you change the version before <code>Copy
+      en: Moonbot creates a <code>V0</code> key by default. Unless you change the version before <code>Copy
         Key</code>, the terminal reads <code>V0</code> from the key.
       html: true
   - sub:
@@ -199,10 +199,10 @@ steps:
       html: true
   - note:
       ru: Проброс порта на роутере в этой схеме не нужен, а правило фаервола на машине с ядром нужно (шаг
-        выше). Проверка порта в MoonBot меряет доступность снаружи и может ругаться, хотя подключение из
+        выше). Проверка порта в Moonbot меряет доступность снаружи и может ругаться, хотя подключение из
         локальной сети работает.
       en: No router port forwarding is needed here, but the firewall rule on the core machine is (the step
-        above). MoonBot's port check measures reachability from outside and may complain even though the
+        above). Moonbot's port check measures reachability from outside and may complain even though the
         connection from the local network works.
   - note:
       ru: 'Та же колонка выручает, если в ключе неверный адрес или его нет (поле подсвечено жёлтым), или

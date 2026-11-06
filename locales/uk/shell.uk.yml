@@ -148,7 +148,7 @@ toolbar.max_order: "Макс. ордер"
 toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Макс. плече"
-# Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
+# Row label for the exchange's cap on the whole position at the current leverage (Moonbot's <max. N>).
 toolbar.position_cap: "Ліміт позиції"
 # Hover text for the position cap row.
 toolbar.position_cap_tip: "Межа біржі на ВСЮ позицію в цій монеті за ЗАСТОСОВАНОГО плеча (оновлюється після «Застосувати»). Менше плече — вища межа. Макс. ордер — окремий ліміт на один ордер."
@@ -291,7 +291,7 @@ coin_menu.tbl_group: "У тимчасовий ЧС"
 coin_menu.target_core: "Ядро «%{core}»"
 coin_menu.target_cores: "Вибрані ядра (%{n})"
 coin_menu.target_strategy: "Стратегія «%{name}»"
-# Ban lengths, matching the presets MoonBot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
+# Ban lengths, matching the presets Moonbot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
 coin_menu.tbl_hours: "%{n} год"
 coin_menu.tbl_days: "%{n} д"
 coin_menu.tbl_left: "%{symbol}: залишилось %{left}"

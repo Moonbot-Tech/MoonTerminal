@@ -78,7 +78,7 @@ core_status.same.tz_off: "UTC"
 core_status.same.cpus: "CPU logic"
 core_status.same.api_key: "Khóa API"
 core_status.same.api_quota: "Hạn mức API"
-core_status.same.version: "MoonBot"
+core_status.same.version: "Moonbot"
 core_status.same.no_expiry: "không thời hạn"
 core_status.same.not_set: "chưa đặt"
 # Warnings-list columns.
@@ -110,16 +110,16 @@ core_status.col.ping: "Ping core"
 core_status.col.ping_exch: "Ping sàn"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
-# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# Moonbot build the core reported. The product noun IS the heading, so the cells hold
 # a bare number; it is a proper name and is not translated. BOTH views read this one key --
 # they would never legitimately differ, and two identical values are one translator edit away
 # from disagreeing. `core_status.col.startup` is shared the same way.
-core_status.col.version: "MoonBot"
-# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+core_status.col.version: "Moonbot"
+# Hover on a Moonbot cell whose core runs an older build than the newest one currently reported
 # across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
-# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# server what the latest Moonbot is. Both numbers arrive as typed builds and are dotted by
 # `util::fmt::core_build` at the call site.
-core_status.version_behind: "Bản MoonBot cũ: %{have}. Bản mới nhất trong các core của bạn là %{newest}"
+core_status.version_behind: "Bản Moonbot cũ: %{have}. Bản mới nhất trong các core của bạn là %{newest}"
 core_status.col.api_key: "API (ngày)"
 # Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
 # lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
@@ -289,7 +289,7 @@ core_status.fault.short.stalled: "kẹt ở một bước"
 core_status.fault.short.aborted: "đã dừng"
 core_status.fault.short.unknown: "chưa xác định"
 core_status.fault.short.key_empty: "chưa dán khóa"
-core_status.fault.short.key_unparsable: "không phải khóa MoonBot"
+core_status.fault.short.key_unparsable: "không phải khóa Moonbot"
 core_status.fault.short.endpoint_invalid: "địa chỉ sai"
 core_status.fault.short.endpoint_unresolved: "không tìm thấy máy"
 core_status.fault.reason.local_port: "Terminal không chiếm được cổng UDP của mình (%{n} lần thử)"
@@ -306,7 +306,7 @@ core_status.fault.reason.stalled: "Khởi tạo dừng ở bước %{step} (%{do
 core_status.fault.reason.aborted: "Terminal tự dừng lần thử"
 core_status.fault.reason.unknown: "Không xác định được nguyên nhân"
 core_status.fault.reason.key_empty: "Ô Khóa trống — không có gì để nối"
-core_status.fault.reason.key_unparsable: "Trong ô Khóa không phải khóa MoonBot — terminal không đọc được"
+core_status.fault.reason.key_unparsable: "Trong ô Khóa không phải khóa Moonbot — terminal không đọc được"
 core_status.fault.reason.endpoint_invalid: "Giá trị trong cột Địa chỉ:cổng không phải địa chỉ — terminal không biết kết nối tới đâu"
 core_status.fault.reason.endpoint_unresolved: "Tên máy trong cột Địa chỉ:cổng không phân giải ra địa chỉ"
 core_status.fault.next.local_port: "Có thứ trên máy NÀY đang giữ cổng: VPN hoặc tường lửa cục bộ"
@@ -314,15 +314,15 @@ core_status.fault.next.no_response: "Mở cổng UDP của core cả trong bản
 core_status.fault.next.unparsed: "Gói đã tới terminal: đây không phải cổng đóng. Gửi nhật ký và các bộ đếm này cho hỗ trợ"
 core_status.fault.next.try_mode: "Các core khác trên terminal này nối được ở chế độ %{mode} — thử chuyển core này sang %{mode}"
 core_status.fault.next.access: "Dán khóa xuất từ ĐÚNG bot này, và kiểm tra chế độ Kernel (VPS) đang bật trên core. Nó vẫn tắt khi tài khoản sàn chưa nằm dưới giới thiệu MoonBonus"
-core_status.fault.next.unidentified: "Core trả lời nhưng không qua kiểm tra tương thích. Kiểm tra lần lượt: Kernel (VPS) đã bật chưa, core có quá tải không, và cập nhật MoonBot trên máy của nó"
+core_status.fault.next.unidentified: "Core trả lời nhưng không qua kiểm tra tương thích. Kiểm tra lần lượt: Kernel (VPS) đã bật chưa, core có quá tải không, và cập nhật Moonbot trên máy của nó"
 core_status.fault.next.syncing: "Hãy đợi. Nếu con số đứng yên, trỏ vào cột khởi động: ở đó thấy mất kênh"
 core_status.fault.next.stalled: "Lần thử tự lặp lại. Nếu cùng một bước cứ thất bại, trỏ vào cột khởi động và gửi nhật ký"
 core_status.fault.next.aborted: "Không cần làm gì"
 core_status.fault.next.unknown: "Gửi dòng này và nhật ký cho hỗ trợ"
-core_status.fault.next.key: "Khóa được tạo trong MoonBot, không phải trên trang web. Trong MoonBot: chấm xanh góc dưới trái (cửa sổ Info) → dòng Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings → Key: → Copy Key (chưa có khóa — New Key). Dán cả khóa vào ô Khóa bằng nút Dán và nhấn Lưu — core tự nối"
+core_status.fault.next.key: "Khóa được tạo trong Moonbot, không phải trên trang web. Trong Moonbot: chấm xanh góc dưới trái (cửa sổ Info) → dòng Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings → Key: → Copy Key (chưa có khóa — New Key). Dán cả khóa vào ô Khóa bằng nút Dán và nhấn Lưu — core tự nối"
 core_status.fault.next.endpoint_invalid: "Sửa cột Địa chỉ:cổng trong Cài đặt → Kết nối (địa chỉ, địa chỉ:cổng hoặc :cổng), hoặc xóa trống để dùng địa chỉ của khóa, rồi nhấn Lưu"
 core_status.fault.next.endpoint_unresolved: "Kiểm tra tên có gõ sai không và máy tính này có internet và DNS hoạt động không — terminal tự thử lại. Hoặc nhập IP thay cho tên"
-core_status.fault.core.legacy_named: "Core báo MoonBot %{server} và không có phiên bản giao thức: nó cũ hơn terminal này"
+core_status.fault.core.legacy_named: "Core báo Moonbot %{server} và không có phiên bản giao thức: nó cũ hơn terminal này"
 core_status.fault.core.legacy_silent: "Core không báo phiên bản giao thức: nó cũ hơn terminal này"
 core_status.fault.retrying: "đang kết nối lại"
 core_status.fault.f.reason: "Nguyên nhân"
@@ -354,13 +354,13 @@ core_status.problem_cat.network: "Mạng"
 core_status.problem_cat.other: "Khác"
 
 # --- Problems mode: the three diagnostic actions ---
-# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+# The reset and the re-read mirror Moonbot's own Problems window; the test is ours.
 #
 # A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
 # channel end to end. It leaves a row behind that only the reset removes, which is why that pair
 # ships together.
 core_status.problems_test: "Thử kênh"
-# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# Deliberately NOT Moonbot's "reset all", though it is the same command on the wire. Moonbot's
 # window belongs to one core, so "all" there means all of that core's findings; this panel spans a
 # fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
 # picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how

@@ -127,7 +127,7 @@ telegram_core.logout: "Sair"
 
 telegram_core.logout_title: "Sair do Telegram no núcleo"
 
-telegram_core.logout_q: "Isto sai da conta e zera os dados compartilhados do Telegram na máquina desse núcleo. Todos os processos MoonBot nessa máquina são afetados, não só este núcleo."
+telegram_core.logout_q: "Isto sai da conta e zera os dados compartilhados do Telegram na máquina desse núcleo. Todos os processos Moonbot nessa máquina são afetados, não só este núcleo."
 
 telegram_core.premium: "É preciso um passo externo do Telegram. Cancele o login para voltar ao número de telefone."
 

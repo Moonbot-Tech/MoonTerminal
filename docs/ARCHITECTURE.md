@@ -382,7 +382,7 @@ activating another group window, not a visual grouping key.
 ### The venue directory
 
 A core publishes two things about the exchange it is connected to: a platform ordinal
-(`ServerInfo::exchange_code`, the MoonBot `TBotPlatform` value) and a free-form UI name whose
+(`ServerInfo::exchange_code`, the Moonbot `TBotPlatform` value) and a free-form UI name whose
 spelling belongs to that core build — `Binance Quarterly`, `FBybit`, `Gate.io`. The ordinal is the
 identity; the name is a caption. `moon_core::venue` is the one table that turns the ordinal into
 everything the terminal decides about a venue: its brand (which logo), its market kind

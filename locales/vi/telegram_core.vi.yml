@@ -127,7 +127,7 @@ telegram_core.logout: "Đăng xuất"
 
 telegram_core.logout_title: "Đăng xuất Telegram trên core"
 
-telegram_core.logout_q: "Thao tác này đăng xuất và đặt lại dữ liệu tài khoản Telegram dùng chung trên máy của core đó. Mọi tiến trình MoonBot trên máy đó đều bị ảnh hưởng, không chỉ core này."
+telegram_core.logout_q: "Thao tác này đăng xuất và đặt lại dữ liệu tài khoản Telegram dùng chung trên máy của core đó. Mọi tiến trình Moonbot trên máy đó đều bị ảnh hưởng, không chỉ core này."
 
 telegram_core.premium: "Cần một bước Telegram bên ngoài. Hủy đăng nhập để quay lại số điện thoại."
 

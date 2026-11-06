@@ -1,9 +1,9 @@
-# Importing settings from MoonBot (Settings → General): button, preview dialog, and statuses.
+# Importing settings from Moonbot (Settings → General): button, preview dialog, and statuses.
 _version: 1
 
-import.button: "Импорт из MoonBot"
-import.hint: "В MoonBot: Настройки → Общие → Скопировать настройки; затем нажми эту кнопку — покажем, что именно будет перенесено."
-import.title: "Импорт настроек MoonBot"
+import.button: "Импорт из Moonbot"
+import.hint: "В Moonbot: Настройки → Общие → Скопировать настройки; затем нажми эту кнопку — покажем, что именно будет перенесено."
+import.title: "Импорт настроек Moonbot"
 import.loading: "Загрузка…"
 import.group.terminal: "Терминал"
 import.group.chart: "График и линии"
@@ -15,13 +15,13 @@ import.col_light: "Светлая тема"
 import.col_dark: "Тёмная тема"
 import.group.hotkeys: "Хоткеи"
 import.same: "совпадает"
-import.hotkeys_empty_note: "Ещё %{n} слотов в MoonBot не назначены — пустые не переносим (свои не стираем)."
+import.hotkeys_empty_note: "Ещё %{n} слотов в Moonbot не назначены — пустые не переносим (свои не стираем)."
 import.not_transferred_label: "Не перенесено:"
 import.nothing: "Переносить нечего — все сопоставимые значения уже совпадают."
 import.apply: "Применить"
 import.cancel: "Отмена"
 import.applied: "Импортировано пунктов: %{n}. Проверь и нажми «Сохранить»."
-import.clipboard_empty: "Буфер обмена пуст — сначала скопируй настройки в MoonBot."
+import.clipboard_empty: "Буфер обмена пуст — сначала скопируй настройки в Moonbot."
 
 import.preview.caption.ui_theme: "Тема UI"
 import.preview.caption.split_parts: "Split Order X: число частей"

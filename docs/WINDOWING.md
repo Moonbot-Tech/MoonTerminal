@@ -335,7 +335,7 @@ independent, and the separate taskbar button is suppressed by the shared mechani
 Trade windows follow that same ownership rule through `trade_window_options(...)`.
 
 Whether a group's detached charts FOLLOW its main window is decided by the cores, not by the
-terminal (#850): MoonBot's "Charts windows on top of other windows" checkbox,
+terminal (#850): Moonbot's "Charts windows on top of other windows" checkbox,
 `ChartsSettings.stay_on_top` (default on), projected as `CoreConfig.charts_stay_on_top`. The group
 follows when ANY of its cores has it on; a core whose settings have not arrived counts as on
 (`window::chart_follow::ChartFollow::for_group`). There is no terminal-side setting.
