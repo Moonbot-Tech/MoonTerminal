@@ -88,7 +88,7 @@ core_cmds.service.restart_why: "Dịch vụ sẽ dừng rồi chạy lại. Các
 core_cmds.service.restart_do: "Khởi động lại"
 core_cmds.service.stop_title: "Dừng dịch vụ"
 core_cmds.service.stop_confirm: "Dừng lõi %{core}?"
-core_cmds.service.stop_why: "Lõi sẽ dừng cho đến khi được khởi động lại. Các giao dịch mở sẽ không được giám sát. Dịch vụ tự chạy lại sau khi máy chủ khởi động lại."
+core_cmds.service.stop_why: "Lõi sẽ dừng cho đến khi được khởi động lại. Các giao dịch mở sẽ không được giám sát."
 core_cmds.service.stop_do: "Dừng"
 core_cmds.service.start_title: "Khởi động dịch vụ"
 core_cmds.service.start_do: "Khởi động"

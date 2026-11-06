@@ -41,6 +41,8 @@ pub(super) struct CoreCmdsView {
     #[cfg(test)]
     pub(super) fixture: Option<CoreFacts>,
     #[cfg(test)]
+    pub(super) sent: Vec<CmdRequest>,
+    #[cfg(test)]
     pub(super) fixture_form: Option<MenuForm>,
     #[cfg(test)]
     pub(super) fixture_version: Option<(String, Option<String>)>,
@@ -165,6 +167,8 @@ impl CoreCmdsView {
             #[cfg(test)]
             fixture: None,
             #[cfg(test)]
+            sent: Vec::new(),
+            #[cfg(test)]
             fixture_form: None,
             #[cfg(test)]
             fixture_version: None,
@@ -179,7 +183,7 @@ impl CoreCmdsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (form, active) = self
+        let facts = self
             .backend
             .as_ref()
             .and_then(|b| b.read(cx).core_cmds.facts.get(&self.uid))
@@ -191,8 +195,20 @@ impl CoreCmdsView {
                         .and_then(|i| i.located.active)
                         .or_else(|| f.located.as_ref().and_then(|l| l.active)),
                 )
+            });
+        #[cfg(test)]
+        let facts = facts.or_else(|| {
+            self.fixture.as_ref().map(|f| {
+                (
+                    form(f),
+                    f.info
+                        .as_ref()
+                        .and_then(|i| i.located.active)
+                        .or_else(|| f.located.as_ref().and_then(|l| l.active)),
+                )
             })
-            .unwrap_or((MenuForm::Checking, None));
+        });
+        let (form, active) = facts.unwrap_or((MenuForm::Checking, None));
         if !rail::available(form, active, cmd) && self.cmd != cmd {
             let current = self.cmd;
             self.picker.update(cx, |picker, _| {
@@ -207,9 +223,6 @@ impl CoreCmdsView {
         self.cmd = cmd;
         if matches!(cmd, Cmd::Start | Cmd::Stop | Cmd::Restart) {
             self.service_attempt = None;
-        }
-        if cmd == Cmd::SwitchExchange {
-            self.exchange_handled = Some(self.exchange_attempt(cx));
         }
         self.picker.update(cx, |picker, _| {
             picker.set_selected_value(&cmd);
@@ -230,19 +243,8 @@ impl CoreCmdsView {
         {
             self.run(window, cx);
         }
+        self.follow_exchange_switch(cx);
         cx.notify();
-    }
-
-    /// Return the current exchange attempt from backend facts or the test fixture.
-    fn exchange_attempt(&self, cx: &App) -> u64 {
-        let attempt = self
-            .backend
-            .as_ref()
-            .and_then(|backend| backend.read(cx).core_cmds.facts.get(&self.uid))
-            .map(|facts| facts.exchange_attempt);
-        #[cfg(test)]
-        let attempt = attempt.or_else(|| self.fixture.as_ref().map(|facts| facts.exchange_attempt));
-        attempt.unwrap_or_default()
     }
 
     /// Move a completed hot exchange switch to the promised API-key form exactly once.
@@ -287,7 +289,7 @@ impl CoreCmdsView {
     }
 
     /// Queue one typed request and notify backend observers without opening any network connection.
-    fn send(&self, request: CmdRequest, cx: &mut App) {
+    fn send(&mut self, request: CmdRequest, cx: &mut App) {
         if let Some(backend) = &self.backend {
             backend.update(cx, |backend, cx| {
                 if let CmdRequest::Run { cmd, .. } = &request
@@ -304,6 +306,9 @@ impl CoreCmdsView {
                 backend.core_cmds_send(self.uid, request);
                 cx.notify();
             });
+        } else {
+            #[cfg(test)]
+            self.sent.push(request);
         }
     }
 
@@ -325,9 +330,14 @@ impl CoreCmdsView {
 
     /// Validate form arguments and gate destructive operations before they reach the queue.
     fn run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(backend) = &self.backend
-            && let Some(facts) = backend.read(cx).core_cmds.facts.get(&self.uid)
-        {
+        let facts = self
+            .backend
+            .as_ref()
+            .and_then(|backend| backend.read(cx).core_cmds.facts.get(&self.uid))
+            .map(|facts| snapshot(facts, self.cmd));
+        #[cfg(test)]
+        let facts = facts.or_else(|| self.fixture.as_ref().map(|facts| snapshot(facts, self.cmd)));
+        if let Some(facts) = facts.as_ref() {
             let active = facts
                 .info
                 .as_ref()
@@ -336,7 +346,13 @@ impl CoreCmdsView {
             if !rail::available(self.state(facts, cx).form, active, self.cmd) {
                 return;
             }
-            if matches!(facts.phases.get(&self.cmd), Some(CmdPhase::Running { .. })) {
+            if matches!(facts.phases.get(&self.cmd), Some(CmdPhase::Running { .. }))
+                || (self.cmd == Cmd::ApiKeys
+                    && matches!(
+                        facts.phases.get(&Cmd::SwitchExchange),
+                        Some(CmdPhase::Running { .. })
+                    ))
+            {
                 return;
             }
         }
@@ -389,6 +405,21 @@ impl CoreCmdsView {
         );
     }
 
+    /// Whether the selected core currently has an unfinished request for `cmd`.
+    fn command_running(&self, cmd: Cmd, cx: &App) -> bool {
+        let running = self
+            .backend
+            .as_ref()
+            .and_then(|backend| backend.read(cx).core_cmds.facts.get(&self.uid))
+            .is_some_and(|facts| matches!(facts.phases.get(&cmd), Some(CmdPhase::Running { .. })));
+        #[cfg(test)]
+        let running = running
+            || self.fixture.as_ref().is_some_and(|facts| {
+                matches!(facts.phases.get(&cmd), Some(CmdPhase::Running { .. }))
+            });
+        running
+    }
+
     /// Dispatch one page action; confirmation alone is allowed to enqueue service/exchange changes.
     pub(super) fn act(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         match action {
@@ -406,6 +437,11 @@ impl CoreCmdsView {
             }
             Action::Run => self.run(window, cx),
             Action::Confirm => {
+                if matches!(self.confirm, Some(Confirm::Exchange { .. }))
+                    && self.command_running(Cmd::SwitchExchange, cx)
+                {
+                    return;
+                }
                 let Some(confirm) = self.confirm.take() else {
                     return;
                 };
@@ -419,7 +455,11 @@ impl CoreCmdsView {
                 self.send(CmdRequest::Run { cmd, args }, cx);
             }
             Action::CancelConfirm => self.confirm = None,
-            Action::Exchange { id, name } => self.confirm = Some(Confirm::Exchange { id, name }),
+            Action::Exchange { id, name } => {
+                if !self.command_running(Cmd::SwitchExchange, cx) {
+                    self.confirm = Some(Confirm::Exchange { id, name });
+                }
+            }
             Action::LogLines(lines) => {
                 self.log_lines = lines;
                 self.run(window, cx);
@@ -714,7 +754,13 @@ impl CoreCmdsView {
                                         .label(name)
                                         .variant(MoonButtonVariant::Ghost)
                                         .mono(false)
-                                        .disabled(current)
+                                        .disabled(
+                                            current
+                                                || matches!(
+                                                    facts.phases.get(&Cmd::SwitchExchange),
+                                                    Some(CmdPhase::Running { .. })
+                                                ),
+                                        )
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.act(action.clone(), window, cx)
                                         }))
@@ -1039,7 +1085,9 @@ fn snapshot(facts: &CoreFacts, cmd: Cmd) -> CoreFacts {
         phases: facts
             .phases
             .iter()
-            .filter(|(phase_cmd, _)| **phase_cmd == cmd)
+            .filter(|(phase_cmd, _)| {
+                **phase_cmd == cmd || (cmd == Cmd::ApiKeys && **phase_cmd == Cmd::SwitchExchange)
+            })
             .map(|(cmd, phase)| {
                 (
                     *cmd,

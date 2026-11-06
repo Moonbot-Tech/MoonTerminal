@@ -88,7 +88,7 @@ core_cmds.service.restart_why: "Служба остановится и запу�
 core_cmds.service.restart_do: "Перезапустить"
 core_cmds.service.stop_title: "Остановить службу"
 core_cmds.service.stop_confirm: "Остановить ядро %{core}?"
-core_cmds.service.stop_why: "Ядро перестанет работать, пока его не запустят снова. Открытые сделки останутся без присмотра. После перезагрузки сервера служба запустится сама."
+core_cmds.service.stop_why: "Ядро перестанет работать, пока его не запустят снова. Открытые сделки останутся без присмотра."
 core_cmds.service.stop_do: "Остановить"
 core_cmds.service.start_title: "Запустить службу"
 core_cmds.service.start_do: "Запустить"

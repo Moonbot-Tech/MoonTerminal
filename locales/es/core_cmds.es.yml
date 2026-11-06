@@ -88,7 +88,7 @@ core_cmds.service.restart_why: "El servicio se detendrá y volverá a iniciarse.
 core_cmds.service.restart_do: "Reiniciar"
 core_cmds.service.stop_title: "Detener servicio"
 core_cmds.service.stop_confirm: "¿Detener el núcleo %{core}?"
-core_cmds.service.stop_why: "El núcleo se detendrá hasta que se inicie de nuevo. Las operaciones abiertas quedarán sin vigilancia. El servicio se iniciará solo al reiniciar el servidor."
+core_cmds.service.stop_why: "El núcleo se detendrá hasta que se inicie de nuevo. Las operaciones abiertas quedarán sin vigilancia."
 core_cmds.service.stop_do: "Detener"
 core_cmds.service.start_title: "Iniciar servicio"
 core_cmds.service.start_do: "Iniciar"

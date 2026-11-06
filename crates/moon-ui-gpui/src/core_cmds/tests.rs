@@ -3,7 +3,7 @@
 use super::pages::Confirm;
 use super::view::CoreCmdsView;
 use super::{DEFAULT_SIZE, MIN_SIZE};
-use crate::backend::core_cmds::{CmdError, CmdPhase};
+use crate::backend::core_cmds::{CmdArgs, CmdError, CmdPhase, CmdRequest};
 use gpui::{FontWeight, px};
 use moon_core::config::{Language, UiThemeMode};
 use moon_remote::core_cmds::{Cmd, LogTail, ServiceInfo};
@@ -80,6 +80,100 @@ fn completed_exchange_switch_opens_api_keys_once(cx: &mut gpui::TestAppContext) 
     });
 }
 
+/// Reselecting an in-flight switch must not consume its later API-key handoff.
+#[gpui::test]
+fn reselected_exchange_switch_opens_api_keys_after_completion(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |window, cx| {
+        let mut view = CoreCmdsView::controls(1, Cmd::Status, window, cx);
+        let mut facts = super::pages::tests::facts();
+        facts.phases.insert(
+            Cmd::SwitchExchange,
+            CmdPhase::Running {
+                since: std::time::Instant::now(),
+                seen: None,
+            },
+        );
+        facts.exchange_attempt = 1;
+        view.fixture = Some(facts);
+        view.select(Cmd::SwitchExchange, false, window, cx);
+        assert!(view.sent.is_empty());
+        let facts = view.fixture.as_mut().expect("facts");
+        facts.phases.insert(Cmd::SwitchExchange, CmdPhase::Done);
+        facts.exchange_switched = Some(1);
+        view.follow_exchange_switch(cx);
+        assert_eq!(view.cmd, Cmd::ApiKeys);
+        view
+    });
+    cx.update(|app| {
+        let _ = handle.update(app, |_, window, _| window.remove_window());
+    });
+}
+
+/// A running switch must reject both another exchange and credentials for the displayed old one.
+#[gpui::test]
+fn running_exchange_switch_blocks_confirmation_and_api_keys(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |window, cx| {
+        let mut view = CoreCmdsView::controls(1, Cmd::SwitchExchange, window, cx);
+        let mut facts = super::pages::tests::facts();
+        facts.phases.insert(
+            Cmd::SwitchExchange,
+            CmdPhase::Running {
+                since: std::time::Instant::now(),
+                seen: None,
+            },
+        );
+        view.fixture = Some(facts);
+        view.confirm = Some(Confirm::Exchange {
+            id: "xbeta".into(),
+            name: "XBETA".into(),
+        });
+        view.act(super::pages::Action::Confirm, window, cx);
+        assert!(view.sent.is_empty());
+        view.select(Cmd::ApiKeys, false, window, cx);
+        for (input, value) in [
+            (&view.key_input, "TEST_API_KEY"),
+            (&view.secret_input, "TEST_API_SECRET"),
+        ] {
+            input.update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        view.act(super::pages::Action::Run, window, cx);
+        assert!(view.sent.is_empty());
+        view
+    });
+    cx.update(|app| {
+        let _ = handle.update(app, |_, window, _| window.remove_window());
+    });
+}
+
+/// Address submission must parse the same trimmed port that validation accepted.
+#[gpui::test]
+fn whitespace_port_submits_the_validated_address(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |window, cx| {
+        let mut view = CoreCmdsView::controls(1, Cmd::MoonProtoAddress, window, cx);
+        view.fixture = Some(super::pages::tests::facts());
+        view.port_input
+            .update(cx, |input, cx| input.set_value(" 3305 \n", window, cx));
+        view.act(super::pages::Action::Run, window, cx);
+        assert!(matches!(
+            view.sent.as_slice(),
+            [CmdRequest::Run {
+                cmd: Cmd::MoonProtoAddress,
+                args: CmdArgs::Address { port: 3305, .. },
+            }]
+        ));
+        view
+    });
+    cx.update(|app| {
+        let _ = handle.update(app, |_, window, _| window.remove_window());
+    });
+}
+
 /// Recreating the window must not replace the completed retry's duration with an unknown value.
 #[gpui::test]
 fn retry_state_uses_its_completed_phase_duration(cx: &mut gpui::TestAppContext) {
@@ -125,22 +219,10 @@ pub(super) fn record(selector: String, text: String, size: f32, weight: FontWeig
 fn required_text_selectors(scenario: usize) -> &'static [&'static str] {
     match scenario {
         13 | 17 | 25 => &["cc-confirm-title", "cc-confirm-why"],
-        0..=4
-        | 6..=9
-        | 11
-        | 14..=16
-        | 18..=20
-        | 22
-        | 23
-        | 26
-        | 29
-        | 30
-        | 33
-        | 35
-        | 36
-        | 40
-        | 43
-        | 44 => &["cc-state-title"],
+        0 | 1 | 2 | 4 | 6 | 7 | 9 | 16 | 20 | 40 | 43 | 44 => &["cc-state-title", "cc-state-why"],
+        3 | 8 | 11 | 14 | 15 | 18 | 19 | 22 | 23 | 26 | 29 | 30 | 33 | 35 | 36 => {
+            &["cc-state-title"]
+        }
         _ => &[],
     }
 }

@@ -2,9 +2,13 @@
 
 use super::*;
 
-/// Require both credentials, and disable repeat submission while a save is in progress.
+/// Require both credentials, and disable submission while a save or exchange switch is in progress.
 pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
     let running = matches!(phase(facts, view), CmdPhase::Running { .. });
+    let switching = matches!(
+        facts.phases.get(&Cmd::SwitchExchange),
+        Some(CmdPhase::Running { .. })
+    );
     let mut page = Page::new(Kind::Keys, title(view.cmd))
         .block(Block::Text(
             t!("core_cmds.keys.sub", exchange = exchange_name(facts)).to_string(),
@@ -16,7 +20,7 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
             t!("core_cmds.keys.saved").to_string(),
             String::new(),
         ));
-    } else if running {
+    } else if running || switching {
         page.body.push(Block::State(
             Tone::Run,
             t!("core_cmds.service.running").to_string(),
@@ -27,7 +31,7 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
         Button::new("core_cmds.common.cancel", Action::Close),
         Button::new("core_cmds.keys.save", Action::Run)
             .primary()
-            .enabled(view.key_filled && view.secret_filled && !running),
+            .enabled(view.key_filled && view.secret_filled && !running && !switching),
     ];
     page
 }

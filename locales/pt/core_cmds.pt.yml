@@ -88,7 +88,7 @@ core_cmds.service.restart_why: "O serviço vai parar e iniciar novamente. As ope
 core_cmds.service.restart_do: "Reiniciar"
 core_cmds.service.stop_title: "Parar serviço"
 core_cmds.service.stop_confirm: "Parar o núcleo %{core}?"
-core_cmds.service.stop_why: "O núcleo vai parar até ser iniciado novamente. As operações abertas ficarão sem supervisão. O serviço iniciará automaticamente após reiniciar o servidor."
+core_cmds.service.stop_why: "O núcleo vai parar até ser iniciado novamente. As operações abertas ficarão sem supervisão."
 core_cmds.service.stop_do: "Parar"
 core_cmds.service.start_title: "Iniciar serviço"
 core_cmds.service.start_do: "Iniciar"

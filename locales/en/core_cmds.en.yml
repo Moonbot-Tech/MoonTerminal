@@ -88,7 +88,7 @@ core_cmds.service.restart_why: "The service will stop and start again. Open trad
 core_cmds.service.restart_do: "Restart"
 core_cmds.service.stop_title: "Stop service"
 core_cmds.service.stop_confirm: "Stop core %{core}?"
-core_cmds.service.stop_why: "The core will stop until it is started again. Open trades will be unattended. The service will start automatically after a server reboot."
+core_cmds.service.stop_why: "The core will stop until it is started again. Open trades will be unattended."
 core_cmds.service.stop_do: "Stop"
 core_cmds.service.start_title: "Start service"
 core_cmds.service.start_do: "Start"

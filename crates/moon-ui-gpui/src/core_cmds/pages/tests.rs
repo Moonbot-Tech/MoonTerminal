@@ -125,6 +125,22 @@ fn api_keys_require_both_fields_and_an_idle_worker() {
             .expect("save")
             .enabled
     );
+    facts.phases.insert(Cmd::ApiKeys, CmdPhase::Idle);
+    facts.phases.insert(
+        Cmd::SwitchExchange,
+        CmdPhase::Running {
+            since: Instant::now(),
+            seen: None,
+        },
+    );
+    assert!(
+        !build(&facts, &state)
+            .footer_right
+            .last()
+            .expect("save")
+            .enabled,
+        "an in-flight exchange switch must block credentials for the old exchange"
+    );
 }
 
 /// Every command keeps its own page, and failures replace stale successful data.

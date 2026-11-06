@@ -88,7 +88,7 @@ core_cmds.service.restart_why: "Hizmet durup yeniden başlayacak. Açık işleml
 core_cmds.service.restart_do: "Yeniden başlat"
 core_cmds.service.stop_title: "Hizmeti durdur"
 core_cmds.service.stop_confirm: "%{core} çekirdeği durdurulsun mu?"
-core_cmds.service.stop_why: "Çekirdek tekrar başlatılana kadar çalışmayacak. Açık işlemler gözetimsiz kalacak. Sunucu yeniden açıldığında hizmet otomatik başlayacak."
+core_cmds.service.stop_why: "Çekirdek tekrar başlatılana kadar çalışmayacak. Açık işlemler gözetimsiz kalacak."
 core_cmds.service.stop_do: "Durdur"
 core_cmds.service.start_title: "Hizmeti başlat"
 core_cmds.service.start_do: "Başlat"
