@@ -38,6 +38,7 @@ pub(in crate::core_cmds) fn facts() -> CoreFacts {
         phases: Default::default(),
         checked_at: Some(Instant::now()),
         retry_elapsed: None,
+        retarget_recovery: false,
         exchange_attempt: 0,
         exchange_switched: None,
     }

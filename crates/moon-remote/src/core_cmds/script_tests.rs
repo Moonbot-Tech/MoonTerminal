@@ -96,8 +96,12 @@ record_order() {
     fi
 }
 add_allow() {
+    command=$1
     position=''
-    if test "$1" = insert; then
+    if test "$command" = prepend; then
+        position=1
+        shift 1
+    elif test "$command" = insert; then
         position=$2
         shift 2
     fi
@@ -110,18 +114,34 @@ add_allow() {
     fi
     comment=$(printf '%s\n' "$*" | sed -n 's/.* comment //p')
     if test "$source" = ::/0; then
+        if ! grep -q '^IPV6=yes' "$MB_TEST_ROOT/ufw.conf"; then
+            printf 'IPv6 support not enabled\n' >&2
+            exit 1
+        fi
+        if test "$command" = insert && grep -qv '(v6)' "$MB_TEST_ROOT/ufw_rules"; then
+            printf 'Invalid position\n' >&2
+            exit 1
+        fi
+        family=6
         rule="$port/udp (v6) ALLOW IN Anywhere (v6) # $comment"
         match="$port/udp (v6) ALLOW "
     else
+        family=4
         rule="$port/udp ALLOW IN Anywhere # $comment"
         match="$port/udp ALLOW "
     fi
     if grep -q -F "$match" "$MB_TEST_ROOT/ufw_rules"; then
         awk -v match="$match" -v rule="$rule" 'index($0, match) == 1 {$0 = rule} {print}' \
             "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept"
-    elif test "$position" = 1; then
+    elif test "$position" = 1 && test "$family" = 4; then
         printf '%s\n' "$rule" > "$MB_TEST_ROOT/ufw_rules.kept"
         cat "$MB_TEST_ROOT/ufw_rules" >> "$MB_TEST_ROOT/ufw_rules.kept"
+    elif test "$position" = 1; then
+        awk -v rule="$rule" '
+            !inserted && index($0, "(v6)") {print rule; inserted = 1}
+            {print}
+            END {if (!inserted) print rule}
+        ' "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept"
     else
         cat "$MB_TEST_ROOT/ufw_rules" > "$MB_TEST_ROOT/ufw_rules.kept"
         printf '%s\n' "$rule" >> "$MB_TEST_ROOT/ufw_rules.kept"
@@ -131,7 +151,7 @@ add_allow() {
     record_order "$@"
 }
 case ${1:-} in
-allow|insert)
+allow|insert|prepend)
     add_allow "$@"
     ;;
 delete)
@@ -259,6 +279,7 @@ impl Sandbox {
             sandbox.answer(name, "");
         }
         sandbox.answer("ufw_active", "0\n");
+        sandbox.answer("ufw.conf", "IPV6=yes\n");
         sandbox.answer_at(&sandbox.proc.join("uptime"), "100.00 0.00\n");
         Some(sandbox)
     }
@@ -331,6 +352,7 @@ impl Sandbox {
             .env("BASH_ENV", self.posix(&self.root.join("bash_env")))
             .env("MB_TEST_ROOT", self.posix(&self.root))
             .env("MB_PROC_ROOT", self.posix(&self.proc))
+            .env("MB_UFW_CONF", self.posix(&self.root.join("ufw.conf")))
             .output()
             .expect("run embedded core command script")
     }
@@ -798,7 +820,7 @@ fn retarget_opens_a_closed_new_port_without_owned_old_rule() {
         sandbox
             .read(&sandbox.root.join("ufw_calls"))
             .contains(&format!(
-                "insert 1 allow from 0.0.0.0/0 to any port 3305 proto udp comment MoonBot {dir_text}\n"
+                "prepend allow from 0.0.0.0/0 to any port 3305 proto udp comment MoonBot {dir_text}\n"
             ))
     );
     assert!(
@@ -828,8 +850,8 @@ fn retarget_does_not_claim_a_preexisting_user_rule() {
     assert_eq!(
         sandbox.read(&sandbox.root.join("ufw_rules")),
         format!(
-            "3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n\
-             3305/udp ALLOW IN Anywhere # user\n"
+            "3305/udp ALLOW IN Anywhere # user\n\
+             3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n"
         )
     );
     let calls = sandbox.read(&sandbox.root.join("ufw_calls"));
@@ -887,9 +909,9 @@ fn retarget_inserts_new_allows_ahead_of_a_broader_deny() {
     assert_eq!(
         sandbox.read(&sandbox.root.join("ufw_rules")),
         format!(
-            "3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n\
-             3305/udp ALLOW IN Anywhere # MoonBot {dir_text}\n\
-             3300:3399/udp DENY IN Anywhere\n"
+            "3305/udp ALLOW IN Anywhere # MoonBot {dir_text}\n\
+             3300:3399/udp DENY IN Anywhere\n\
+             3305/udp (v6) ALLOW IN Anywhere (v6) # MoonBot {dir_text}\n"
         )
     );
 }
@@ -1001,4 +1023,32 @@ fn retarget_does_not_claim_a_sibling_instances_rules() {
     assert_ok(&output);
     assert_eq!(sandbox.read(&marker), "3305\n");
     assert_eq!(sandbox.read(&sandbox.root.join("ufw_rules")), initial);
+}
+
+/// An IPv4-only UFW setup must open IPv4 without issuing a rejected IPv6 command.
+#[test]
+fn retarget_skips_ipv6_when_ufw_disables_it() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    let marker = dir.join(".moonterminal-move");
+    sandbox.answer_at(&marker, "3302\nkept\n");
+    sandbox.answer("ufw_active", "1\n");
+    sandbox.answer("ufw.conf", "IPV6=no\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["retarget", &dir_text, "3305"]);
+
+    assert_ok(&output);
+    assert_eq!(sandbox.read(&marker), "3305\nkept\nufw4\n");
+    assert_eq!(
+        sandbox.read(&sandbox.root.join("ufw_rules")),
+        format!("3305/udp ALLOW IN Anywhere # MoonBot {dir_text}\n")
+    );
+    assert!(
+        !sandbox
+            .read(&sandbox.root.join("ufw_calls"))
+            .contains("::/0")
+    );
 }

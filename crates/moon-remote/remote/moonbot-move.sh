@@ -31,6 +31,7 @@ trap 'exit 1' HUP INT TERM PIPE
 
 marker=.moonterminal-move
 PROC=${MB_PROC_ROOT:-/proc}
+UFW_CONF=${MB_UFW_CONF:-/etc/ufw/ufw.conf}
 
 # The service unit of an instance directory.
 unit_of() {
@@ -197,6 +198,11 @@ ufw_active() {
     command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status | grep -q '^Status: active'
 }
 
+# Whether UFW enables IPv6; an unreadable config retains UFW's default enabled behavior.
+ufw_ipv6() {
+    test ! -r "$UFW_CONF" || grep -q '^IPV6=yes' "$UFW_CONF"
+}
+
 # Whether UDP port $1 already has a general IPv4 allow.
 ufw_has_v4() {
     LC_ALL=C ufw status |
@@ -227,15 +233,15 @@ ufw_open() {
     new_ufw4=0
     new_ufw6=0
     if ! ufw_has_v4 "$1"; then
-        ufw insert 1 allow from 0.0.0.0/0 to any port "$1" proto udp comment "MoonBot $2" >/dev/null
+        ufw prepend allow from 0.0.0.0/0 to any port "$1" proto udp comment "MoonBot $2" >/dev/null
         new_ufw4=1
     elif ufw_has_our_comment "$1" 4 "$2"; then
         new_ufw4=1
     fi
-    if ! ufw_has_v6 "$1"; then
-        ufw insert 1 allow from ::/0 to any port "$1" proto udp comment "MoonBot $2" >/dev/null
+    if ufw_ipv6 && ! ufw_has_v6 "$1"; then
+        ufw prepend allow from ::/0 to any port "$1" proto udp comment "MoonBot $2" >/dev/null
         new_ufw6=1
-    elif ufw_has_our_comment "$1" 6 "$2"; then
+    elif ufw_ipv6 && ufw_has_our_comment "$1" 6 "$2"; then
         new_ufw6=1
     fi
 }

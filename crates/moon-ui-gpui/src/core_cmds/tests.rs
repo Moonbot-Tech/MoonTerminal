@@ -149,6 +149,43 @@ fn running_exchange_switch_blocks_confirmation_and_api_keys(cx: &mut gpui::TestA
     });
 }
 
+/// A queued switch counts as in-flight before the backend marks its phase Running.
+#[gpui::test]
+fn queued_exchange_switch_blocks_second_confirmation_and_api_keys(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |window, cx| {
+        let mut view = CoreCmdsView::controls(1, Cmd::SwitchExchange, window, cx);
+        view.fixture = Some(super::pages::tests::facts());
+        view.confirm = Some(Confirm::Exchange {
+            id: "xalpha".into(),
+            name: "XALPHA".into(),
+        });
+        view.act(super::pages::Action::Confirm, window, cx);
+        assert_eq!(view.sent.len(), 1);
+        view.confirm = Some(Confirm::Exchange {
+            id: "xbeta".into(),
+            name: "XBETA".into(),
+        });
+        view.act(super::pages::Action::Confirm, window, cx);
+        assert_eq!(view.sent.len(), 1);
+
+        view.select(Cmd::ApiKeys, false, window, cx);
+        for (input, value) in [
+            (&view.key_input, "TEST_API_KEY"),
+            (&view.secret_input, "TEST_API_SECRET"),
+        ] {
+            input.update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        view.act(super::pages::Action::Run, window, cx);
+        assert_eq!(view.sent.len(), 1);
+        view
+    });
+    cx.update(|app| {
+        let _ = handle.update(app, |_, window, _| window.remove_window());
+    });
+}
+
 /// Address submission must parse the same trimmed port that validation accepted.
 #[gpui::test]
 fn whitespace_port_submits_the_validated_address(cx: &mut gpui::TestAppContext) {

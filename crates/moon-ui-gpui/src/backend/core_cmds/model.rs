@@ -56,6 +56,8 @@ pub(crate) struct CoreFacts {
     pub(crate) phases: HashMap<Cmd, CmdPhase>,
     pub(crate) checked_at: Option<Instant>,
     pub(crate) retry_elapsed: Option<Duration>,
+    /// Whether old-marker replies must preserve ownership for an address-change recovery.
+    pub(crate) retarget_recovery: bool,
     pub(crate) exchange_attempt: u64,
     pub(crate) exchange_switched: Option<u64>,
 }

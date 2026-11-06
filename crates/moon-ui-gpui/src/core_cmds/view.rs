@@ -346,12 +346,8 @@ impl CoreCmdsView {
             if !rail::available(self.state(facts, cx).form, active, self.cmd) {
                 return;
             }
-            if matches!(facts.phases.get(&self.cmd), Some(CmdPhase::Running { .. }))
-                || (self.cmd == Cmd::ApiKeys
-                    && matches!(
-                        facts.phases.get(&Cmd::SwitchExchange),
-                        Some(CmdPhase::Running { .. })
-                    ))
+            if self.command_running(self.cmd, cx)
+                || (self.cmd == Cmd::ApiKeys && self.command_running(Cmd::SwitchExchange, cx))
             {
                 return;
             }
@@ -405,18 +401,25 @@ impl CoreCmdsView {
         );
     }
 
-    /// Whether the selected core currently has an unfinished request for `cmd`.
+    /// Whether the selected core has `cmd` queued or already marked running.
     fn command_running(&self, cmd: Cmd, cx: &App) -> bool {
-        let running = self
-            .backend
-            .as_ref()
-            .and_then(|backend| backend.read(cx).core_cmds.facts.get(&self.uid))
-            .is_some_and(|facts| matches!(facts.phases.get(&cmd), Some(CmdPhase::Running { .. })));
+        let running = self.backend.as_ref().is_some_and(|backend| {
+            let backend = backend.read(cx);
+            backend.core_cmds.pending.iter().any(|(uid, request)| {
+                *uid == self.uid
+                    && matches!(request, CmdRequest::Run { cmd: queued, .. } if *queued == cmd)
+            }) || backend.core_cmds.facts.get(&self.uid).is_some_and(|facts| {
+                matches!(facts.phases.get(&cmd), Some(CmdPhase::Running { .. }))
+            })
+        });
         #[cfg(test)]
         let running = running
             || self.fixture.as_ref().is_some_and(|facts| {
                 matches!(facts.phases.get(&cmd), Some(CmdPhase::Running { .. }))
-            });
+            })
+            || self.sent.iter().any(
+                |request| matches!(request, CmdRequest::Run { cmd: queued, .. } if *queued == cmd),
+            );
         running
     }
 
@@ -1056,6 +1059,7 @@ fn empty_facts() -> CoreFacts {
         phases: Default::default(),
         checked_at: None,
         retry_elapsed: None,
+        retarget_recovery: false,
         exchange_attempt: 0,
         exchange_switched: None,
     }
@@ -1104,6 +1108,7 @@ fn snapshot(facts: &CoreFacts, cmd: Cmd) -> CoreFacts {
             })
             .collect(),
         retry_elapsed: facts.retry_elapsed,
+        retarget_recovery: facts.retarget_recovery,
         exchange_attempt: facts.exchange_attempt,
         exchange_switched: facts.exchange_switched,
     }

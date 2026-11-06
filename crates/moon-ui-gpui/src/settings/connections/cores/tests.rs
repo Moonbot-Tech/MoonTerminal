@@ -403,6 +403,7 @@ fn body_with_status(
             phases: Default::default(),
             checked_at: None,
             retry_elapsed: None,
+            retarget_recovery: false,
             exchange_attempt: 0,
             exchange_switched: None,
         }),

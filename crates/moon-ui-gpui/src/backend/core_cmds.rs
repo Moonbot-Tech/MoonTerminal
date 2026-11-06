@@ -522,7 +522,10 @@ impl CoreFacts {
                 }
                 self.phases.insert(cmd, phase);
             }
-            worker::Event::Located(located) => self.located = Some(located),
+            worker::Event::Located(located) => {
+                self.located = Some(located);
+                self.retarget_recovery = false;
+            }
             worker::Event::Status(status) => {
                 let login_error = status.state == CoreState::LoginError;
                 self.status = Some(status);
@@ -549,17 +552,17 @@ impl CoreFacts {
                 self.status = Some(status);
             }
             worker::Event::Info(mut info) => {
-                let recovery = matches!(
-                    self.phases.get(&Cmd::MoonProtoAddress),
-                    Some(CmdPhase::Failed(CmdError::Refused(_)))
-                )
-                .then(|| self.located.clone())
-                .flatten();
-                if let Some(recovery) = recovery {
+                let ownership_confirmed = info.located.ours;
+                if self.retarget_recovery
+                    && let Some(recovery) = self.located.clone()
+                {
                     worker::preserve_retarget_location(&recovery, &mut info);
                 }
                 self.located = Some(info.located.clone());
                 self.info = Some(info);
+                if ownership_confirmed {
+                    self.retarget_recovery = false;
+                }
             }
             worker::Event::Log(log) => self.log = Some(log),
             worker::Event::Key(key) => {
@@ -592,9 +595,10 @@ impl CoreFacts {
         self.status = None;
         self.info = None;
         self.checked_at = None;
+        self.retarget_recovery = true;
     }
 
-    /// Clear every fact and command result whose identity belongs to the previous endpoint.
+    /// Clear old-core facts while keeping attempt IDs monotonic for windows that outlive the edit.
     fn invalidate_endpoint(&mut self) {
         self.located = None;
         self.status = None;
@@ -604,7 +608,7 @@ impl CoreFacts {
         self.exchanges = None;
         self.checked_at = None;
         self.retry_elapsed = None;
-        self.exchange_attempt = 0;
+        self.retarget_recovery = false;
         self.exchange_switched = None;
         for phase in self.phases.values_mut() {
             *phase = CmdPhase::Idle;
@@ -663,6 +667,7 @@ fn core_facts(target: String, port: u16) -> CoreFacts {
         phases: HashMap::new(),
         checked_at: None,
         retry_elapsed: None,
+        retarget_recovery: false,
         exchange_attempt: 0,
         exchange_switched: None,
     }

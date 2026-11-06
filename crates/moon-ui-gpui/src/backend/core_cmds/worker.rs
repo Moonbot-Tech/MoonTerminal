@@ -255,15 +255,19 @@ fn serve(
             request,
             &mut |event| {
                 match &event {
-                    Event::Located(_) | Event::Info(_) => {
-                        update_location(&mut located, &event, recover_address)
+                    Event::Located(_) => {
+                        update_location(&mut located, &event, recover_address);
+                        recover_address = false;
+                    }
+                    Event::Info(info) => {
+                        update_location(&mut located, &event, recover_address);
+                        if info.located.ours {
+                            recover_address = false;
+                        }
                     }
                     Event::AddressChanged { port: changed, .. } => {
                         port = *changed;
                         recover_address = true;
-                    }
-                    Event::Phase(Cmd::MoonProtoAddress, CmdPhase::Done) => {
-                        recover_address = false;
                     }
                     Event::Phase(_, CmdPhase::Failed(CmdError::Ssh(_))) => {
                         reconnect = true;

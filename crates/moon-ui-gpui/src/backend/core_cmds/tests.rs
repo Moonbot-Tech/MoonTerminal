@@ -302,6 +302,7 @@ fn worker_invalidation_clears_endpoint_dependent_facts() {
     facts.key = Some(Zeroizing::new("TEST_CONNECTION_KEY".into()));
     facts.exchanges = Some(Vec::new());
     facts.checked_at = Some(Instant::now());
+    facts.exchange_attempt = 3;
     facts.phases.insert(
         Cmd::RetryLogin,
         CmdPhase::Running {
@@ -324,6 +325,7 @@ fn worker_invalidation_clears_endpoint_dependent_facts() {
     assert!(facts.key.is_none());
     assert!(facts.exchanges.is_none());
     assert!(facts.checked_at.is_none());
+    assert_eq!(facts.exchange_attempt, 3, "window attempt IDs stay unique");
     for cmd in [Cmd::RetryLogin, Cmd::Start] {
         assert!(matches!(facts.phases.get(&cmd), Some(CmdPhase::Idle)));
     }
@@ -434,27 +436,42 @@ fn login_error_retires_completed_retry_result() {
     assert!(facts.retry_elapsed.is_none());
 }
 
-/// Status after a partial retarget must keep the owned installation available for Retry.
+/// Old-marker info must not discard recovery while Retry runs or after its Done arrives.
 #[test]
 fn retarget_recovery_survives_backend_info_refresh() {
-    let mut facts = core_facts("203.0.113.7:22".into(), 4402);
-    facts.located = Some(located(true));
-    facts.phases.insert(
-        Cmd::MoonProtoAddress,
-        CmdPhase::Failed(CmdError::Refused("retarget failed".into())),
-    );
-    let mut found = located(false);
-    found.active = Some(false);
+    for phase in [
+        CmdPhase::Running {
+            since: Instant::now(),
+            seen: None,
+        },
+        CmdPhase::Done,
+    ] {
+        let mut facts = core_facts("203.0.113.7:22".into(), 3302);
+        facts.located = Some(located(true));
+        facts.address_changed(4402);
+        facts.phases.insert(Cmd::MoonProtoAddress, phase);
+        let mut found = located(false);
+        found.active = Some(false);
 
-    facts.apply(worker::Event::Info(ServiceInfo {
-        located: found,
-        active: "inactive".into(),
-        uptime_s: None,
-        memory: None,
-    }));
+        facts.apply(worker::Event::Info(ServiceInfo {
+            located: found,
+            active: "inactive".into(),
+            uptime_s: None,
+            memory: None,
+        }));
 
-    let located = facts.located.as_ref().expect("location");
-    assert!(located.ours);
-    assert_eq!(located.active, Some(false));
-    assert!(facts.info.as_ref().is_some_and(|info| info.located.ours));
+        let cached = facts.located.as_ref().expect("location");
+        assert!(cached.ours);
+        assert_eq!(cached.active, Some(false));
+        assert!(facts.info.as_ref().is_some_and(|info| info.located.ours));
+        assert!(facts.retarget_recovery);
+
+        facts.apply(worker::Event::Info(ServiceInfo {
+            located: located(true),
+            active: "active".into(),
+            uptime_s: Some(1),
+            memory: None,
+        }));
+        assert!(!facts.retarget_recovery);
+    }
 }
