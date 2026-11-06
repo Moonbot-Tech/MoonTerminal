@@ -572,6 +572,7 @@ impl DetachedChartHost {
     /// only coin — and on a multi-coin window without an anchor it acts on nothing. A click has one:
     /// the chart's action layer passes the pane the press landed on, so a middle click on ETH in a
     /// window anchored on BTC panic-sells ETH, which is what was clicked, and not the anchor.
+    /// Global chart revisions notify their existing observers even on an otherwise idle core.
     pub(crate) fn dispatch_hotkey_at(
         &mut self,
         action: crate::hotkeys::HotkeyAction,
@@ -604,8 +605,9 @@ impl DetachedChartHost {
             }
             // Built-in Shift+Esc closes every group's Main charts.
             HotkeyAction::CloseAllCharts => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.close_all_charts_rev = b.close_all_charts_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }
@@ -627,8 +629,9 @@ impl DetachedChartHost {
             }
             // Application-global, like Shift+Esc: bump the revision every `ChartTabs` consumes.
             HotkeyAction::CenterChart => {
-                self.backend.update(cx, |b, _| {
+                self.backend.update(cx, |b, bcx| {
                     b.center_chart_rev = b.center_chart_rev.wrapping_add(1);
+                    bcx.notify();
                 });
                 true
             }
