@@ -81,7 +81,7 @@ pub fn compose(
     }
     anyhow::ensure!(
         names.iter().any(|n| n == BOT_CONFIG),
-        "the ZIP has no {BOT_CONFIG}: it is not a MoonBot settings snapshot"
+        "the ZIP has no {BOT_CONFIG}: it is not a Moonbot settings snapshot"
     );
     let exchange = match exchange {
         Some(name) => name.trim().to_owned(),

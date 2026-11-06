@@ -30,7 +30,7 @@ key space — splitting into files is purely organisational, by UI area:
 | `interface.<lang>.yml`       | the Interface tab (theme, `theme.toml`)                       |
 | `lines.<lang>.yml`           | Lines tab attributes; line names stay English literals        |
 | `general.<lang>.yml`         | the General tab                                               |
-| `import.<lang>.yml`          | MoonBot settings import on the General tab                    |
+| `import.<lang>.yml`          | Moonbot settings import on the General tab                    |
 | `storage.<lang>.yml`         | the Storage tab: reports, strategies, klines, replay prints   |
 | `connections.<lang>.yml`     | the Connections tab (cores, groups, statuses, columns, tooltips) |
 | `hotkeys.<lang>.yml`         | the Hotkeys tab                                               |

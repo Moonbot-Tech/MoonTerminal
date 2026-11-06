@@ -54,7 +54,7 @@ pub fn client_config(
     mode: Option<TransportMode>,
 ) -> anyhow::Result<ClientConfig> {
     let info = moonproto::parse_key_info(packet)
-        .ok_or_else(|| anyhow::anyhow!("not a MoonBot connection packet"))?;
+        .ok_or_else(|| anyhow::anyhow!("not a Moonbot connection packet"))?;
     let mode = mode
         .or_else(|| info.network.map(|n| n.transport_mode))
         .unwrap_or(TransportMode::V0);

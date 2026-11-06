@@ -127,7 +127,7 @@ telegram_core.logout: "Log out"
 
 telegram_core.logout_title: "Log out of Telegram on the core"
 
-telegram_core.logout_q: "This logs out and resets the shared Telegram account data on that core's machine. Every MoonBot process on that machine is affected, not just this core."
+telegram_core.logout_q: "This logs out and resets the shared Telegram account data on that core's machine. Every Moonbot process on that machine is affected, not just this core."
 
 telegram_core.premium: "An external Telegram step is required. Cancel login to return to the phone number."
 

@@ -127,7 +127,7 @@ telegram_core.logout: "Çıkış yap"
 
 telegram_core.logout_title: "Çekirdekteki Telegram'dan çıkış"
 
-telegram_core.logout_q: "Bu işlem, o çekirdeğin makinesinde Telegram hesabından çıkış yapar ve ortak Telegram hesap verisini sıfırlar. O makinedeki her MoonBot süreci etkilenir, yalnızca bu çekirdek değil."
+telegram_core.logout_q: "Bu işlem, o çekirdeğin makinesinde Telegram hesabından çıkış yapar ve ortak Telegram hesap verisini sıfırlar. O makinedeki her Moonbot süreci etkilenir, yalnızca bu çekirdek değil."
 
 telegram_core.premium: "Dış bir Telegram adımı gerekir. Telefon numarasına dönmek için girişi iptal edin."
 

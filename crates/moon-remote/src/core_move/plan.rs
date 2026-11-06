@@ -109,7 +109,7 @@ impl Plan {
                 let text = std::fs::read_to_string(path)
                     .with_context(|| format!("read {}", path.display()))?;
                 let packet = ConnectionPacket::parse(&text).ok_or_else(|| {
-                    anyhow::anyhow!("{} is not a MoonBot connection packet", path.display())
+                    anyhow::anyhow!("{} is not a Moonbot connection packet", path.display())
                 })?;
                 (packet, None)
             }
@@ -454,7 +454,7 @@ fn core_packet(pick: &str) -> anyhow::Result<(u64, ConnectionPacket)> {
         entry.name
     );
     let mut packet = ConnectionPacket::parse(entry.key.expose())
-        .ok_or_else(|| anyhow::anyhow!("core {:?}: its key is not a MoonBot packet", entry.name))?;
+        .ok_or_else(|| anyhow::anyhow!("core {:?}: its key is not a Moonbot packet", entry.name))?;
     if let Some(mode) = entry.transport {
         packet.mode = mode;
     }

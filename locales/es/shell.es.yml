@@ -148,7 +148,7 @@ toolbar.max_order: "Orden máx."
 toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Apalancamiento máx."
-# Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
+# Row label for the exchange's cap on the whole position at the current leverage (Moonbot's <max. N>).
 toolbar.position_cap: "Límite de posición"
 # Hover text for the position cap row.
 toolbar.position_cap_tip: "Límite del exchange para TODA la posición en esta moneda con el apalancamiento APLICADO. Menos apalancamiento lo eleva. Orden máx. es un límite aparte por orden."
@@ -291,7 +291,7 @@ coin_menu.tbl_group: "Añadir a la lista negra temporal"
 coin_menu.target_core: "Núcleo «%{core}»"
 coin_menu.target_cores: "Núcleos seleccionados (%{n})"
 coin_menu.target_strategy: "Estrategia «%{name}»"
-# Ban lengths, matching the presets MoonBot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
+# Ban lengths, matching the presets Moonbot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
 coin_menu.tbl_hours: "%{n} h"
 coin_menu.tbl_days: "%{n} d"
 coin_menu.tbl_left: "%{symbol}: quedan %{left}"

@@ -1,9 +1,9 @@
-# Importing settings from MoonBot (Settings → General): button, preview dialog, and statuses.
+# Importing settings from Moonbot (Settings → General): button, preview dialog, and statuses.
 _version: 1
 
-import.button: "Nhập từ MoonBot"
-import.hint: "Trong MoonBot: Cài đặt → Chung → Sao chép cài đặt; rồi nhấn nút này — bản xem trước cho thấy chính xác những gì sẽ được chuyển."
-import.title: "Nhập cài đặt MoonBot"
+import.button: "Nhập từ Moonbot"
+import.hint: "Trong Moonbot: Cài đặt → Chung → Sao chép cài đặt; rồi nhấn nút này — bản xem trước cho thấy chính xác những gì sẽ được chuyển."
+import.title: "Nhập cài đặt Moonbot"
 import.loading: "Đang tải…"
 import.group.terminal: "Terminal"
 import.group.chart: "Biểu đồ và đường"
@@ -15,13 +15,13 @@ import.col_light: "Chủ đề sáng"
 import.col_dark: "Chủ đề tối"
 import.group.hotkeys: "Phím tắt"
 import.same: "khớp"
-import.hotkeys_empty_note: "Còn %{n} ô chưa gán trong MoonBot — ô trống không được chuyển (ô của bạn được giữ)."
+import.hotkeys_empty_note: "Còn %{n} ô chưa gán trong Moonbot — ô trống không được chuyển (ô của bạn được giữ)."
 import.not_transferred_label: "Không chuyển:"
 import.nothing: "Không có gì để chuyển — mọi giá trị đã ánh xạ đều khớp."
 import.apply: "Áp dụng"
 import.cancel: "Hủy"
 import.applied: "Đã nhập %{n} mục. Xem lại rồi nhấn “Lưu”."
-import.clipboard_empty: "Clipboard trống — hãy sao chép cài đặt trong MoonBot trước."
+import.clipboard_empty: "Clipboard trống — hãy sao chép cài đặt trong Moonbot trước."
 
 import.preview.caption.ui_theme: "Chủ đề UI"
 import.preview.caption.split_parts: "Split Order X: số phần"

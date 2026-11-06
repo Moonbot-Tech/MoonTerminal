@@ -1,9 +1,9 @@
-# Importing settings from MoonBot (Settings → General): button, preview dialog, and statuses.
+# Importing settings from Moonbot (Settings → General): button, preview dialog, and statuses.
 _version: 1
 
-import.button: "Import from MoonBot"
-import.hint: "In MoonBot: Settings → General → Copy settings; then press this button — a preview shows what exactly will be transferred."
-import.title: "MoonBot settings import"
+import.button: "Import from Moonbot"
+import.hint: "In Moonbot: Settings → General → Copy settings; then press this button — a preview shows what exactly will be transferred."
+import.title: "Moonbot settings import"
 import.loading: "Loading…"
 import.group.terminal: "Terminal"
 import.group.chart: "Chart & lines"
@@ -15,13 +15,13 @@ import.col_light: "Light theme"
 import.col_dark: "Dark theme"
 import.group.hotkeys: "Hotkeys"
 import.same: "matches"
-import.hotkeys_empty_note: "%{n} more slots are unassigned in MoonBot — empty ones are not transferred (yours are kept)."
+import.hotkeys_empty_note: "%{n} more slots are unassigned in Moonbot — empty ones are not transferred (yours are kept)."
 import.not_transferred_label: "Not transferred:"
 import.nothing: "Nothing to transfer — all mapped values already match."
 import.apply: "Apply"
 import.cancel: "Cancel"
 import.applied: "Imported items: %{n}. Review and press “Save”."
-import.clipboard_empty: "Clipboard is empty — copy the settings in MoonBot first."
+import.clipboard_empty: "Clipboard is empty — copy the settings in Moonbot first."
 
 import.preview.caption.ui_theme: "UI theme"
 import.preview.caption.split_parts: "Split Order X: part count"

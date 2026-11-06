@@ -21,7 +21,7 @@ const POLL: Duration = Duration::from_millis(200);
 /// does serve one starts sending within seconds, so this leaves room for a slow first part.
 const FIRST_PART: Duration = Duration::from_secs(60);
 /// The pointer every failure ends with: the snapshot MoonBot saves by hand works on any build.
-const USE_ZIP: &str = "save the snapshot in MoonBot (VPS setup -> Get settings) and pass the ZIP";
+const USE_ZIP: &str = "save the snapshot in Moonbot (VPS setup -> Get settings) and pass the ZIP";
 /// Name prefix of the library's download target in the temp folder; the process id follows.
 const TEMP_PREFIX: &str = "moon-core-move-settings-";
 /// Age past which a target is a leftover of a killed run: a live one is never older than a

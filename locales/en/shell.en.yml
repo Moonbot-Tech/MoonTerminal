@@ -148,7 +148,7 @@ toolbar.max_order: "Max order"
 toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Max leverage"
-# Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
+# Row label for the exchange's cap on the whole position at the current leverage (Moonbot's <max. N>).
 toolbar.position_cap: "Position cap"
 # Hover text for the position cap row.
 toolbar.position_cap_tip: "The exchange's cap on the WHOLE position in this coin at the APPLIED leverage (updates after Apply). Lower leverage raises it. Max order is a separate per-order limit."
@@ -291,7 +291,7 @@ coin_menu.tbl_group: "Add to temporary blacklist"
 coin_menu.target_core: "Core «%{core}»"
 coin_menu.target_cores: "Selected cores (%{n})"
 coin_menu.target_strategy: "Strategy «%{name}»"
-# Ban lengths, matching the presets MoonBot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
+# Ban lengths, matching the presets Moonbot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
 coin_menu.tbl_hours: "%{n} h"
 coin_menu.tbl_days: "%{n} d"
 coin_menu.tbl_left: "%{symbol}: %{left} left"

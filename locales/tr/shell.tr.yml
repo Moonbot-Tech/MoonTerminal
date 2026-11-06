@@ -148,7 +148,7 @@ toolbar.max_order: "Maks. emir"
 toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Maks. kaldıraç"
-# Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
+# Row label for the exchange's cap on the whole position at the current leverage (Moonbot's <max. N>).
 toolbar.position_cap: "Pozisyon tavanı"
 # Hover text for the position cap row.
 toolbar.position_cap_tip: "UYGULANMIŞ kaldıraçta bu coindeki TÜM pozisyon için borsa tavanı (Uygula'dan sonra güncellenir). Kaldıraç düştükçe tavan yükselir. Maks. emir, emir başına ayrı bir sınırdır."
@@ -291,7 +291,7 @@ coin_menu.tbl_group: "Geçici kara listeye al"
 coin_menu.target_core: "Çekirdek «%{core}»"
 coin_menu.target_cores: "Seçili çekirdek (%{n})"
 coin_menu.target_strategy: "Strateji «%{name}»"
-# Ban lengths, matching the presets MoonBot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
+# Ban lengths, matching the presets Moonbot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
 coin_menu.tbl_hours: "%{n} sa"
 coin_menu.tbl_days: "%{n} g"
 coin_menu.tbl_left: "%{symbol}: %{left} kaldı"

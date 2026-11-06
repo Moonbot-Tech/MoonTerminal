@@ -34,7 +34,7 @@ core_move.step.composed_db: "Kho cài đặt đã sẵn sàng cho %{exchange}, k
 core_move.step.report_db: "Đã dựng lại cơ sở dữ liệu báo cáo: %{rows} dòng, %{open} đang mở."
 core_move.step.report_db_skipped: "Terminal này không có giao dịch nào của lõi này: không có gì để dựng lại cơ sở dữ liệu báo cáo."
 core_move.step.strategies_read: "Đã đọc chiến lược: %{n}, thư mục: %{folders}."
-core_move.step.checked: "Máy chủ chạy được MoonBot; cổng còn trống."
+core_move.step.checked: "Máy chủ chạy được Moonbot; cổng còn trống."
 core_move.step.uploaded: "Đã tải lên cài đặt."
 core_move.step.installed: "Lõi mới đã được cài, chưa chạy."
 core_move.step.stop_requested: "Đang yêu cầu lõi cũ dừng…"

@@ -77,7 +77,7 @@ core_status.same.tz_off: "UTC"
 core_status.same.cpus: "Логических CPU"
 core_status.same.api_key: "Ключ API"
 core_status.same.api_quota: "Квота API"
-core_status.same.version: "MoonBot"
+core_status.same.version: "Moonbot"
 core_status.same.no_expiry: "без срока"
 core_status.same.not_set: "не задан"
 # Warnings-list columns.
@@ -109,16 +109,16 @@ core_status.col.ping: "Пинг ядра"
 core_status.col.ping_exch: "Пинг биржи"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
-# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# Moonbot build the core reported. The product noun IS the heading, so the cells hold
 # a bare number; it is a proper name and is not translated. BOTH views read this one key --
 # they would never legitimately differ, and two identical values are one translator edit away
 # from disagreeing. `core_status.col.startup` is shared the same way.
-core_status.col.version: "MoonBot"
-# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+core_status.col.version: "Moonbot"
+# Hover on a Moonbot cell whose core runs an older build than the newest one currently reported
 # across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
-# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# server what the latest Moonbot is. Both numbers arrive as typed builds and are dotted by
 # `util::fmt::core_build` at the call site.
-core_status.version_behind: "Сборка MoonBot устарела: %{have}. Самая новая среди ваших ядер — %{newest}"
+core_status.version_behind: "Сборка Moonbot устарела: %{have}. Самая новая среди ваших ядер — %{newest}"
 core_status.col.api_key: "АПИ (дн)"
 # Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
 # lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
@@ -288,7 +288,7 @@ core_status.fault.short.stalled: "застряло на шаге"
 core_status.fault.short.aborted: "остановлено"
 core_status.fault.short.unknown: "не удалось определить"
 core_status.fault.short.key_empty: "ключ не вставлен"
-core_status.fault.short.key_unparsable: "не ключ MoonBot"
+core_status.fault.short.key_unparsable: "не ключ Moonbot"
 core_status.fault.short.endpoint_invalid: "неверный адрес"
 core_status.fault.short.endpoint_unresolved: "имя не найдено"
 core_status.fault.reason.local_port: "Терминал не смог занять свой UDP-порт (попыток: %{n})"
@@ -305,7 +305,7 @@ core_status.fault.reason.stalled: "Инициализация остановил
 core_status.fault.reason.aborted: "Терминал сам остановил попытку"
 core_status.fault.reason.unknown: "Причину определить не удалось"
 core_status.fault.reason.key_empty: "Поле «Ключ» пустое — подключаться нечем"
-core_status.fault.reason.key_unparsable: "В поле «Ключ» не ключ MoonBot — терминал не смог его прочитать"
+core_status.fault.reason.key_unparsable: "В поле «Ключ» не ключ Moonbot — терминал не смог его прочитать"
 core_status.fault.reason.endpoint_invalid: "В колонке «Адрес:порт» не адрес — терминал не знает, куда подключаться"
 core_status.fault.reason.endpoint_unresolved: "Имя хоста из колонки «Адрес:порт» не разрешилось в адрес"
 core_status.fault.next.local_port: "Порт держит что-то на ЭТОЙ машине: VPN или локальный фаервол"
@@ -313,15 +313,15 @@ core_status.fault.next.no_response: "Открой UDP-порт ядра и в п
 core_status.fault.next.unparsed: "Пакеты дошли до терминала: это не закрытый порт. Пришли лог и эти счётчики в поддержку"
 core_status.fault.next.try_mode: "Другие ядра на этом терминале подключились по режиму %{mode} — попробуй переключить это ядро на %{mode}"
 core_status.fault.next.access: "Вставь ключ, экспортированный ИМЕННО этим ботом, и проверь, что на ядре включён режим Kernel (VPS). Он остаётся неактивным, пока биржевой аккаунт не заведён под реферала MoonBonus"
-core_status.fault.next.unidentified: "Ядро отвечает, но не проходит проверку совместимости. Проверь по порядку: включён ли режим Kernel (VPS), не перегружено ли ядро, и обнови MoonBot на его машине"
+core_status.fault.next.unidentified: "Ядро отвечает, но не проходит проверку совместимости. Проверь по порядку: включён ли режим Kernel (VPS), не перегружено ли ядро, и обнови Moonbot на его машине"
 core_status.fault.next.syncing: "Подожди. Если цифра стоит на месте, наведись на колонку старта: там видны потери канала"
 core_status.fault.next.stalled: "Попытка повторится сама. Если шаг повторяется, наведись на колонку старта и пришли лог"
 core_status.fault.next.aborted: "Ничего делать не нужно"
 core_status.fault.next.unknown: "Пришли эту строку и лог в поддержку"
-core_status.fault.next.key: "Ключ создаётся в MoonBot, не на сайте. В MoonBot: зелёный кружок слева внизу (окно Info) → строка Moon Kernel → Settings → окно Moon Proto, вкладка Settings → Key: → Copy Key (ключа нет — New Key). Вставьте его в поле «Ключ» кнопкой «Вставить» целиком и нажмите «Сохранить» — ядро подключится само"
+core_status.fault.next.key: "Ключ создаётся в Moonbot, не на сайте. В Moonbot: зелёный кружок слева внизу (окно Info) → строка Moon Kernel → Settings → окно Moon Proto, вкладка Settings → Key: → Copy Key (ключа нет — New Key). Вставьте его в поле «Ключ» кнопкой «Вставить» целиком и нажмите «Сохранить» — ядро подключится само"
 core_status.fault.next.endpoint_invalid: "Исправьте колонку «Адрес:порт» в Настройках → Подключения (адрес, адрес:порт или :порт) или очистите её, чтобы взять адрес из ключа, и нажмите «Сохранить»"
 core_status.fault.next.endpoint_unresolved: "Проверьте имя на опечатку и что у этого компьютера работают интернет и DNS — терминал повторит попытку сам. Или впишите вместо имени IP"
-core_status.fault.core.legacy_named: "Ядро сообщает MoonBot %{server}, а версию протокола не сообщает: оно старее этого терминала"
+core_status.fault.core.legacy_named: "Ядро сообщает Moonbot %{server}, а версию протокола не сообщает: оно старее этого терминала"
 core_status.fault.core.legacy_silent: "Ядро не сообщает версию протокола: оно старее этого терминала"
 core_status.fault.retrying: "переподключение"
 core_status.fault.f.reason: "Причина"
@@ -353,13 +353,13 @@ core_status.problem_cat.network: "Сеть"
 core_status.problem_cat.other: "Прочее"
 
 # --- Problems mode: the three diagnostic actions ---
-# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+# The reset and the re-read mirror Moonbot's own Problems window; the test is ours.
 #
 # A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
 # channel end to end. It leaves a row behind that only the reset removes, which is why that pair
 # ships together.
 core_status.problems_test: "Проверить канал"
-# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# Deliberately NOT Moonbot's "reset all", though it is the same command on the wire. Moonbot's
 # window belongs to one core, so "all" there means all of that core's findings; this panel spans a
 # fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
 # picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how

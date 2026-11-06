@@ -199,7 +199,7 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
                 break;
             };
             println!(
-                "The old core keeps running ({} unfinished deals). Stop it in MoonBot; asking \
+                "The old core keeps running ({} unfinished deals). Stop it in Moonbot; asking \
                  again in {} s. Ctrl+C leaves the new core installed, not started.",
                 open_deals.map_or("?".to_owned(), |n| n.to_string()),
                 STOP_RETRY.as_secs()

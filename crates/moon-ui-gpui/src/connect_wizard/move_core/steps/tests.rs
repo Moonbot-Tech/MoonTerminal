@@ -112,7 +112,7 @@ fn titles_and_details_are_the_approved_words() {
     );
     assert_eq!(
         detail(&StepNote::ServerFits { port: 5160 }),
-        "Подходит для MoonBot, порт 5160 свободен"
+        "Подходит для Moonbot, порт 5160 свободен"
     );
     assert_eq!(detail(&StepNote::NotNeeded), "Не понадобилось");
     assert_eq!(clock(at(134)), "2:14");

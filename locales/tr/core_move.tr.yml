@@ -34,7 +34,7 @@ core_move.step.composed_db: "Ayar arşivi %{exchange} için, rapor veritabanıyl
 core_move.step.report_db: "Rapor veritabanı yeniden kuruldu: %{rows} satır, %{open} açık."
 core_move.step.report_db_skipped: "Bu terminalde bu çekirdeğin işlemi yok: rapor veritabanını yeniden kurmak için veri yok."
 core_move.step.strategies_read: "Stratejiler okundu: %{n}, klasör: %{folders}."
-core_move.step.checked: "Sunucu MoonBot'u çalıştırabilir; bağlantı noktası boş."
+core_move.step.checked: "Sunucu Moonbot'u çalıştırabilir; bağlantı noktası boş."
 core_move.step.uploaded: "Ayarlar yüklendi."
 core_move.step.installed: "Yeni çekirdek kuruldu, başlatılmadı."
 core_move.step.stop_requested: "Eski çekirdekten durması isteniyor…"

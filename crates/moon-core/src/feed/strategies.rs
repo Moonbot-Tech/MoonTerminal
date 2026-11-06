@@ -497,7 +497,7 @@ fn fields_from_known(
     }
     if !service.is_empty() {
         log::debug!(
-            "core {} {what}: dropped MoonBot service fields: {}",
+            "core {} {what}: dropped Moonbot service fields: {}",
             super::core_label(server_id),
             service.join(", ")
         );
