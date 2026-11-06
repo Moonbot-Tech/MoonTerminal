@@ -9,6 +9,7 @@ use super::{
 use crate::Backend;
 use crate::design;
 use crate::workspace::scope_marker;
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonButton, MoonPalette, v_flex};
 use rust_i18n::t;
@@ -251,6 +252,13 @@ impl Render for CoreStatusView {
                     .flex_none()
                     .border_b_1()
                     .border_color(rgb(p.border_soft))
+                    // Facet skin: the rule under the line fades toward the panel edges.
+                    .when(design::is_facet(cx), |el| {
+                        design::facet_bottom_rule(
+                            el,
+                            design::facet_ink(p, design::FACET_PANEL_RULE),
+                        )
+                    })
                     .child(line)
             });
 
@@ -293,10 +301,16 @@ impl Render for CoreStatusView {
             }))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
-            .bg(rgb(p.table_body))
+            // Facet skin: the body stays unfilled so the dock's own surface shows through, and
+            // the rules between the bands fade toward the panel edges.
+            .when(!design::is_facet(cx), |this| this.bg(rgb(p.table_body)))
             .child(strip)
             .child(core_bar)
-            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
+            .child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)),
+            ))
             .children(same)
             .child(
                 v_flex()
@@ -311,7 +325,11 @@ impl Render for CoreStatusView {
                 v_flex()
                     .w_full()
                     .flex_none()
-                    .child(div().w_full().h(px(1.0)).bg(rgb(p.border)))
+                    .child(design::panel_rule(
+                        cx,
+                        p,
+                        div().w_full().h(px(1.0)).bg(rgb(p.border)),
+                    ))
                     .child(el)
             }))
     }

@@ -82,6 +82,9 @@ impl Render for ChartTabs {
             .padding_left(8.0)
             .gap(4.0)
             .overflow_menu(true)
+            // Facet skin: the row below rules its whole width with one fading rule, so the
+            // strip's own, which would lie over it across the tabs, is turned off.
+            .bottom_rule(!design::is_facet(cx))
             .items(items)
             .on_click({
                 let tab_keys = tab_keys.clone();
@@ -195,6 +198,8 @@ impl Render for ChartTabs {
         // The active tab's layout control and adjacent scale dropdown are both per-tab.
         let popup_open = self.popup_shows(ChartPopup::Layout);
         let p_strip = MoonPalette::active(cx);
+        // Facet skin: the tab row carries no fill and closes on a fading rule; see the row below.
+        let facet = design::is_facet(cx);
         // MoonUI keys an inactive tab label off `text_muted` and exposes no per-tab colour prop,
         // so the lift is handed in as a palette. `render_with_theme`, never `render_with_palette`:
         // the latter substitutes default tokens and would silently drop the user's font delta and
@@ -553,13 +558,17 @@ impl Render for ChartTabs {
                 // toolbar the unpainted ancestors showed through, which in the dark theme reads as
                 // a black band around the figure combo and the gear. The same token here, once, on
                 // the container both of them sit in, so the seam is invisible in every theme.
+                //
+                // Facet skin: `MoonTabStrip` paints no fill there, and neither does the row, so
+                // tabs and toolbar stand on the window's own ground the way the rail beside them
+                // does.
                 h_flex()
                     .h(px(strip_h))
                     .w_full()
                     .min_w_0()
                     .relative()
                     .items_center()
-                    .bg(rgb(p_strip.shell_high))
+                    .when(!facet, |row| row.bg(rgb(p_strip.shell_high)))
                     // ...and the same for the hairline that closes the row against the chart:
                     // `MoonTabStrip` draws its own, `w_full` of ITS width, so it stopped at the
                     // seam too. Continued here in the strip's own idiom and values. It is the
@@ -568,6 +577,10 @@ impl Render for ChartTabs {
                     // identically, while the cluster (no background of its own, and every widget in
                     // it centred well above the last pixel) simply lets it through on the right.
                     // Nothing stacks, and no alpha is drawn twice.
+                    //
+                    // Facet skin: the line is a rule fading toward both ends of the ROW, in the
+                    // strip's own ink, and the only one: the strip's own rule is turned off there
+                    // (`bottom_rule`), so nothing adds up over the tabs.
                     .child(
                         div()
                             .absolute()
@@ -575,7 +588,16 @@ impl Render for ChartTabs {
                             .bottom(px(0.0))
                             .w_full()
                             .h(px(1.0))
-                            .bg(rgba_from(p_strip.border, 0.78)),
+                            .map(|line| {
+                                if facet {
+                                    line.child(moon_ui::fading_rule_h(design::facet_ink(
+                                        p_strip,
+                                        design::FACET_PANEL_RULE,
+                                    )))
+                                } else {
+                                    line.bg(rgba_from(p_strip.border, 0.78))
+                                }
+                            }),
                     )
                     .child(div().flex_1().min_w_0().h_full().child(strip))
                     .child(right_cluster),

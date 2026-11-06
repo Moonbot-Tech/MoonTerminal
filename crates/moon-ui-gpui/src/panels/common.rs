@@ -200,6 +200,8 @@ pub(crate) fn sound_dropdown(
 /// disabled state — a picker holding nothing, or an ordinal this build cannot name, has nothing to
 /// play and says so by going dim rather than by silently doing nothing when clicked.
 ///
+/// Under the Facet skin the live button takes MoonUI's raised surface.
+///
 /// Args:
 ///     id: Stable element identity.
 ///     sound: Sound stem to play, or `None` to render the button inert. A name the catalog does
@@ -231,6 +233,11 @@ pub(crate) fn sound_preview_button(
         .rounded(design::ui_px(cx, 5.0))
         .border_1()
         .border_color(rgb(p.border))
+        // Facet skin: a live button stands off its surface the way MoonUI's own buttons do; an
+        // inert one stays the flat outline, as theirs do.
+        .when(enabled && design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Raised, cx)
+        })
         .text_size(design::t_caption(cx))
         .text_color(rgb(if enabled { p.text_soft } else { p.text_dim }))
         .when(enabled, |el| {
@@ -765,6 +772,9 @@ pub(crate) fn strategy_query_tip(lead: impl std::fmt::Display) -> String {
 /// Hosts a caller-built data table in the shared table-body surface. The container fills available
 /// flex space and clips overflow; when `empty` is true, it adds an absolute placeholder row below
 /// the table header. `empty_msg` must already be localized by the caller.
+///
+/// Under the Facet skin the host adds no fill of its own; the table and the surface the panel
+/// sits on are what shows.
 pub(crate) fn data_table_host(
     host_id: impl Into<SharedString>,
     empty: bool,
@@ -780,7 +790,8 @@ pub(crate) fn data_table_host(
         .w_full()
         .min_h(px(0.0))
         .overflow_hidden()
-        .bg(rgb(p.table_body))
+        // Facet skin: the host adds no fill of its own behind the table.
+        .when(!design::is_facet(cx), |this| this.bg(rgb(p.table_body)))
         .child(table)
         .when(empty, |this| {
             this.child(

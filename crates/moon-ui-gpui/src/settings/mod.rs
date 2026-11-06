@@ -335,12 +335,14 @@ const LIVE_SCOPE_LABELS: [(&str, LiveScope); 2] = [
 ];
 
 /// Labels and values for the interface-theme selector, ordered light to dark so the list reads
-/// as a brightness ramp rather than as the order the themes happened to be written in. The
-/// experimental colour-role modes follow the reviewed three, as the same light-to-dark pair.
-pub(crate) const THEME_MODE_LABELS: [(&str, UiThemeMode); 5] = [
+/// as a brightness ramp rather than as the order the themes happened to be written in, with
+/// Obsidian, the second dark theme, after Dark. The experimental colour-role modes follow the
+/// reviewed four, as the same light-to-dark pair.
+pub(crate) const THEME_MODE_LABELS: [(&str, UiThemeMode); 6] = [
     ("iface.light_theme", UiThemeMode::Light),
     ("iface.graphite_theme", UiThemeMode::Graphite),
     ("iface.dark_theme", UiThemeMode::Dark),
+    ("iface.obsidian_theme", UiThemeMode::Obsidian),
     (
         "iface.light_experimental_theme",
         UiThemeMode::LightExperimental,

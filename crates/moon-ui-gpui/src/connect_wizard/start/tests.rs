@@ -43,6 +43,7 @@ fn new_more_fits_three_lines_at_wizard_minimum_width(cx: &mut gpui::TestAppConte
             UiThemeMode::Light,
             UiThemeMode::Dark,
             UiThemeMode::Graphite,
+            UiThemeMode::Obsidian,
             UiThemeMode::LightExperimental,
             UiThemeMode::DarkExperimental,
         ] {

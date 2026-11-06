@@ -15,7 +15,12 @@ fn presentation_installs_the_scale_as_window_zoom_only() {
     use moon_core::config::UiThemeMode;
     use moon_ui::MoonSize;
 
-    for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
+    for mode in [
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+        UiThemeMode::Light,
+    ] {
         let theme = super::moon_theme_config_for_presentation(mode, 1.5);
         for scale in [theme.dark.scale, theme.light.scale] {
             assert_eq!(scale.zoom, 1.5);
@@ -38,6 +43,29 @@ fn presentation_rejects_non_finite_and_non_positive_scales() {
         for scale in [theme.dark.scale, theme.light.scale] {
             assert_eq!(scale.zoom, 1.0);
         }
+    }
+}
+
+/// Catches `startup.rs:moon_theme_config_for_mode` installing a palette on the other side from
+/// the one its mode names. The chart picks its colour table from the MODE, while the order lines
+/// drawn over it follow the measured palette (`panels/chart/render.rs`); the two agree only while
+/// every mode's installed palette measures the way `UiThemeMode::is_light` answers. A mismatch
+/// would draw light-set lines over a dark-set chart with nothing else red.
+#[test]
+fn every_mode_installs_a_palette_on_the_side_it_names() {
+    use moon_core::config::UiThemeMode;
+    use moon_ui::MoonTheme;
+
+    for (mode, light) in [
+        (UiThemeMode::Dark, false),
+        (UiThemeMode::Graphite, false),
+        (UiThemeMode::Obsidian, false),
+        (UiThemeMode::DarkExperimental, false),
+        (UiThemeMode::Light, true),
+        (UiThemeMode::LightExperimental, true),
+    ] {
+        let theme = MoonTheme::from_config(super::moon_theme_config_for_mode(mode));
+        assert_eq!(theme.palette.is_light(), light, "{mode:?}");
     }
 }
 

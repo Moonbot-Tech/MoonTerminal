@@ -16,6 +16,7 @@
 //! list's length rather than that number — `choice_live` is given a POSITION, and a value outside
 //! the list has none — and keeps its value until an item is picked.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -535,6 +536,10 @@ fn header(
         .bg(rgb(p.shell_high))
         .border_1()
         .border_color(rgb(p.border))
+        // Facet skin: the bar is a raised control standing off the page.
+        .when(design::is_facet(cx), |this| {
+            design::facet_surface(this, moon_ui::MoonFacetKind::Raised, cx)
+        })
         .cursor_pointer()
         .on_click(move |_, _window, app| {
             view.update(app, |this, cx| this.set_view_section(section, cx));

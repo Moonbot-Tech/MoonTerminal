@@ -264,10 +264,11 @@ impl AddChartStack {
         let color = if self.arrival_core_color.unwrap_or(false) {
             let backend = self.backend.read(cx);
             let core_color = crate::core_color::core_color(&backend.config.servers, entry.core);
-            // Match the chart renderer, including a Settings preview and the shared dark/graphite
-            // set.
+            // Match the chart renderer: the same effective config (a Settings preview included)
+            // and the same mode-chosen chart table, so the shared dark/graphite set and
+            // Obsidian's own are each measured against the ground the chart really draws.
             let effective = backend.preview.as_ref().unwrap_or(&backend.config);
-            let background = effective.theme.get(palette.is_light()).bg;
+            let background = effective.chart_theme().bg;
             arrival_color::arrival_color(core_color, background, palette.accent)
         } else {
             palette.accent
@@ -1347,6 +1348,8 @@ impl Render for AddChartStack {
                     &tokens,
                     tile_gutter(false, s.charts.len()),
                     None,
+                    // These stacks mark no tile as selected.
+                    false,
                 );
                 // Fill width/height across the axis. Along the axis, use flex with a cap (COMPRESS
                 // down to size), fixed size without flex, or stretch (FIT). Horizontal uses the X

@@ -19,7 +19,7 @@ use rust_i18n::t;
 
 use super::{SettingsView, color_row};
 use crate::{Backend, design};
-use moon_core::config::{AppConfig, ChartTheme, UiThemeMode};
+use moon_core::config::{AppConfig, ChartColorSet, ChartTheme, UiThemeMode};
 use moon_core::util::fmt;
 
 /// Theme editor state with one retained control entity per field.
@@ -60,6 +60,11 @@ pub(super) struct Iface {
 ///
 /// Initialize from the current config or draft and write changes to the matching
 /// `Backend.preview.theme` entry for live application and backend notification, as in Lines.
+///
+/// Every editor on this page reads through `AppConfig::chart_theme` and writes through
+/// `chart_theme_mut`: the chart has three tables — dark, light and Obsidian's own — and those two
+/// resolve the same one the chart draws. Asking `is_light()` here instead would show and edit the
+/// dark table under the Obsidian theme, whose chart never reads it.
 fn color_field(
     backend: &Entity<Backend>,
     window: &mut Window,
@@ -69,18 +74,11 @@ fn color_field(
 ) -> Entity<MoonColorPickerState> {
     let cur = {
         let b = backend.read(cx);
-        let is_light = b
-            .preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .ui_theme_mode
-            .is_light();
-        get(b.preview.as_ref().unwrap_or(&b.config).theme.get(is_light))
+        get(b.preview.as_ref().unwrap_or(&b.config).chart_theme())
     };
     super::draft_color(window, cx, cur, move |p, c| {
-        let is_light = p.ui_theme_mode.is_light();
-        if get(p.theme.get(is_light)) != c {
-            set(p.theme.get_mut(is_light), c);
+        if get(p.chart_theme()) != c {
+            set(p.chart_theme_mut(), c);
             true
         } else {
             false
@@ -98,14 +96,11 @@ fn book_level_field(
     let init = {
         let b = backend.read(cx);
         let p = b.preview.as_ref().unwrap_or(&b.config);
-        let rgba = p
-            .theme
-            .get(p.ui_theme_mode.is_light())
-            .resolved_book_level(bid);
+        let rgba = p.chart_theme().resolved_book_level(bid);
         [rgba[0], rgba[1], rgba[2]].map(|v| (v * 255.0).round() as u8)
     };
     super::draft_color(window, cx, init, move |p, color| {
-        let theme = p.theme.get_mut(p.ui_theme_mode.is_light());
+        let theme = p.chart_theme_mut();
         let slot = if bid {
             &mut theme.book_level_bid
         } else {
@@ -127,7 +122,7 @@ fn book_wall_field(
     let init = {
         let b = backend.read(cx);
         let p = b.preview.as_ref().unwrap_or(&b.config);
-        let theme = p.theme.get(p.ui_theme_mode.is_light());
+        let theme = p.chart_theme();
         if bid { theme.book_bid } else { theme.book_ask }
     };
     let st = crate::controls::color_picker::shared_color_state(init, window, cx);
@@ -139,7 +134,7 @@ fn book_wall_field(
             let Some(p) = b.preview.as_mut() else {
                 return false;
             };
-            let theme = p.theme.get_mut(p.ui_theme_mode.is_light());
+            let theme = p.chart_theme_mut();
             let color = super::common::hsla_u8(*color);
             let (wall, level) = if bid {
                 (&mut theme.book_bid, theme.book_level_bid)
@@ -180,18 +175,11 @@ fn num_field(
 ) -> Entity<MoonSliderState> {
     let cur = {
         let b = backend.read(cx);
-        let is_light = b
-            .preview
-            .as_ref()
-            .unwrap_or(&b.config)
-            .ui_theme_mode
-            .is_light();
-        get(b.preview.as_ref().unwrap_or(&b.config).theme.get(is_light))
+        get(b.preview.as_ref().unwrap_or(&b.config).chart_theme())
     };
     super::draft_slider(cx, min, max, step, cur, move |p, f, _bcx| {
-        let is_light = p.ui_theme_mode.is_light();
-        if get(p.theme.get(is_light)) != f {
-            set(p.theme.get_mut(is_light), f);
+        if get(p.chart_theme()) != f {
+            set(p.chart_theme_mut(), f);
             true
         } else {
             false
@@ -374,7 +362,7 @@ impl SettingsView {
         let automatic = {
             let b = self.backend.read(cx);
             let draft = b.preview.as_ref().unwrap_or(&b.config);
-            let theme = draft.theme.get(draft.ui_theme_mode.is_light());
+            let theme = draft.chart_theme();
             if bid {
                 theme.book_level_bid.is_none()
             } else {
@@ -407,7 +395,7 @@ impl SettingsView {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.backend.update(cx, |b, bcx| {
                             if let Some(draft) = b.preview.as_mut() {
-                                let theme = draft.theme.get_mut(draft.ui_theme_mode.is_light());
+                                let theme = draft.chart_theme_mut();
                                 if bid {
                                     theme.book_level_bid = None;
                                 } else {
@@ -462,7 +450,7 @@ impl SettingsView {
         }
     }
 
-    /// The theme cards offered now: the three reviewed themes, plus the experimental ones while
+    /// The theme cards offered now: the four reviewed themes, plus the experimental ones while
     /// their checkbox is on or one of them is the current theme.
     fn theme_cards(&self, current: UiThemeMode, cx: &Context<Self>) -> Vec<AnyElement> {
         visible_modes(self.appearance_ui.show_experimental, current)
@@ -598,7 +586,8 @@ impl SettingsView {
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
                 d.ui_theme_mode,
-                d.theme.get(d.ui_theme_mode.is_light()).clone(),
+                // The same table the editors above write, so the preview shows what they edit.
+                d.chart_theme().clone(),
                 self.appearance_ui.show_experimental,
             )
         };
@@ -663,14 +652,19 @@ fn pick_theme(p: &mut AppConfig, mode: UiThemeMode) -> bool {
     true
 }
 
-/// The theme cards to show: the reviewed three always, the experimental ones when asked for or
+/// The theme cards to show: the reviewed four always, the experimental ones when asked for or
 /// when one of them is already in use (hiding the current theme would leave no card selected).
 fn visible_modes(show_experimental: bool, current: UiThemeMode) -> Vec<UiThemeMode> {
     let experimental = [
         UiThemeMode::LightExperimental,
         UiThemeMode::DarkExperimental,
     ];
-    let mut modes = vec![UiThemeMode::Light, UiThemeMode::Graphite, UiThemeMode::Dark];
+    let mut modes = vec![
+        UiThemeMode::Light,
+        UiThemeMode::Graphite,
+        UiThemeMode::Dark,
+        UiThemeMode::Obsidian,
+    ];
     if show_experimental || experimental.contains(&current) {
         modes.extend(experimental);
     }
@@ -678,11 +672,14 @@ fn visible_modes(show_experimental: bool, current: UiThemeMode) -> Vec<UiThemeMo
 }
 
 /// Locale key naming which chart colour set the page edits for `mode`.
+///
+/// Derived from the same [`ChartColorSet`] the editors and the chart resolve, so the note cannot
+/// name one table while the pickers write another.
 fn set_note_key(mode: UiThemeMode) -> &'static str {
-    if mode.is_light() {
-        "iface.set_note.light"
-    } else {
-        "iface.set_note.dark"
+    match ChartColorSet::for_mode(mode) {
+        ChartColorSet::Light => "iface.set_note.light",
+        ChartColorSet::Dark => "iface.set_note.dark",
+        ChartColorSet::Obsidian => "iface.set_note.obsidian",
     }
 }
 
@@ -692,6 +689,7 @@ fn theme_card_meta(mode: UiThemeMode) -> (&'static str, &'static str) {
         UiThemeMode::Light => ("theme-card-light", "iface.theme.light"),
         UiThemeMode::Graphite => ("theme-card-graphite", "iface.theme.graphite"),
         UiThemeMode::Dark => ("theme-card-dark", "iface.theme.dark"),
+        UiThemeMode::Obsidian => ("theme-card-obsidian", "iface.theme.obsidian"),
         UiThemeMode::LightExperimental => {
             ("theme-card-light-exp", "iface.light_experimental_theme")
         }
@@ -704,6 +702,7 @@ fn theme_card_meta(mode: UiThemeMode) -> (&'static str, &'static str) {
 fn card_palette(mode: UiThemeMode) -> MoonPalette {
     match mode {
         UiThemeMode::Graphite => MoonPalette::GRAPHITE,
+        UiThemeMode::Obsidian => MoonPalette::OBSIDIAN,
         mode if mode.is_light() => MoonPalette::LIGHT,
         _ => MoonPalette::default(),
     }

@@ -6,6 +6,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonDataTableState,
@@ -103,6 +104,10 @@ impl StrategiesView {
             .py(design::ui_px(cx, 4.0))
             .border_t_1()
             .border_color(moon(p.border))
+            // Facet skin: the rule that opens the trades pane fades toward its ends.
+            .when(design::is_facet(cx), |this| {
+                design::facet_top_rule(this, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .child(div().font_weight(FontWeight::SEMIBOLD).child(coin.clone()))
             .child(div().text_color(moon(p.text_soft)).child(summary))
             .child(div().flex_1())

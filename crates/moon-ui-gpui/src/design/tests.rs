@@ -590,3 +590,80 @@ fn the_dense_input_stands_as_tall_as_a_caption_line(cx: &mut gpui::TestAppContex
         "dense {dense}px is no denser than small {small}px"
     );
 }
+
+// --- Facet skin --------------------------------------------------------------------------------
+
+use super::{facet_lit, is_facet};
+
+/// `design/skin.rs:is_facet` must answer `true` for Obsidian and `false` for every theme that
+/// existed before skins did.
+///
+/// Every surface the terminal paints by hand forks on this one answer. Breakage: a second theme
+/// file naming the Facet skin, or `startup::moon_theme_config_for_mode` routing an older mode to
+/// the Obsidian config, would hand that theme gradient chrome, unfilled panel bodies and fading
+/// rules it was never designed with; Obsidian losing its skin would leave it flat.
+#[gpui::test]
+fn only_obsidian_paints_the_terminal_surfaces_faceted(cx: &mut gpui::TestAppContext) {
+    for (mode, faceted) in [
+        (UiThemeMode::Dark, false),
+        (UiThemeMode::Graphite, false),
+        (UiThemeMode::Light, false),
+        (UiThemeMode::DarkExperimental, false),
+        (UiThemeMode::LightExperimental, false),
+        (UiThemeMode::Obsidian, true),
+    ] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(mode, 1.0),
+                cx,
+            );
+        });
+        assert_eq!(
+            cx.update(|cx| is_facet(cx)),
+            faceted,
+            "{mode:?} must {} the Facet skin",
+            if faceted { "draw with" } else { "stay off" }
+        );
+    }
+}
+
+/// `design/skin.rs:facet_lit` must layer the highlight ink OVER the base and come back opaque.
+///
+/// Breakage: blending the other way round returns the base untouched, because an opaque colour
+/// laid over anything hides it — the two chrome rows would then lose their top light and render
+/// as one flat band of `shell`. The expected value is the plain mix of black and Obsidian's white
+/// `overlay` at the ink's alpha, worked out here rather than read back from the helper.
+#[test]
+fn facet_lit_layers_the_ink_over_an_opaque_base() {
+    let p = MoonPalette::OBSIDIAN;
+    assert_eq!(p.overlay, 0xFFFFFF, "the oracle below assumes a white ink");
+    let lit = gpui::Rgba::from(facet_lit(p, 0x000000, 0.5));
+    // `rgba_from` stores the alpha in eight bits, so one half arrives as 128/255.
+    let expected = 128.0 / 255.0;
+    for (name, channel) in [("red", lit.r), ("green", lit.g), ("blue", lit.b)] {
+        assert!(
+            (channel - expected).abs() < 0.01,
+            "{name} is {channel}, expected black lit half way to white ({expected})"
+        );
+    }
+    assert_eq!(
+        lit.a, 1.0,
+        "a lit colour fills a row over a no-fill window root"
+    );
+}
+
+/// Returning the opening ground on Facet exit leaves an Obsidian-started window on its old colour.
+/// Unrelated Flat-only transitions must keep their existing behaviour.
+#[test]
+fn facet_ground_follows_the_palette_under_facet_only() {
+    let (opened, obsidian) = (0xF4F4F4, MoonPalette::OBSIDIAN.shell);
+    let mut ground = super::FacetGround::new(opened, false);
+    assert_eq!(ground.update(false, 0x202020), None);
+    assert_eq!(ground.update(true, obsidian), Some(obsidian));
+    assert_eq!(ground.update(true, obsidian), None);
+    assert_eq!(ground.update(false, opened), Some(opened));
+    assert_eq!(ground.update(false, 0x202020), None);
+    let mut ground = super::FacetGround::new(obsidian, true);
+    assert_eq!(ground.update(false, opened), Some(opened));
+    assert_eq!(ground.update(false, opened), None);
+}

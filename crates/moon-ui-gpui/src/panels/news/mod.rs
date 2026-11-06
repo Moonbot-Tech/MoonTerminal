@@ -1202,6 +1202,18 @@ impl Panel for NewsView {
 }
 
 impl Render for NewsView {
+    /// Render the News panel: the control bar, the feed and the footer.
+    ///
+    /// The root fills itself with `table_body` and draws solid rules between the three bands.
+    /// Under the Facet skin it paints no fill, so the dock's surface shows through, and the rules
+    /// fade toward the panel edges.
+    ///
+    /// Args:
+    ///     window: Host window; the feed counts as read only while it is the active one.
+    ///     cx: View context used to read the backend and wire the controls.
+    ///
+    /// Returns:
+    ///     The complete News panel element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::NEWS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::NEWS_RENDER_US);
@@ -1311,11 +1323,21 @@ impl Render for NewsView {
             .overflow_hidden()
             .track_focus(&self.focus)
             .font_family(design::mono())
-            .bg(rgb(p.table_body))
+            // Facet skin: the body stays unfilled so the dock's own surface shows through, and
+            // the rules between the bands fade toward the panel edges.
+            .when(!design::is_facet(cx), |this| this.bg(rgb(p.table_body)))
             .child(controls)
-            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
+            .child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)),
+            ))
             .child(body)
-            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)))
+            .child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).flex_none().bg(rgb(p.border)),
+            ))
             .child(self.footer(p, cx))
     }
 }

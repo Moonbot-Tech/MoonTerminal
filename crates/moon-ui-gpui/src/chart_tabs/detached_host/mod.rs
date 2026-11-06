@@ -108,6 +108,9 @@ pub(crate) struct DetachedChartHost {
     /// The follow mode the taskbar policy was last applied for, so a checkbox change on a core
     /// resyncs this window's button without waiting for its next activation.
     taskbar_mode: crate::window::chart_follow::ChartFollow,
+    /// This window's clear colour, kept on the palette under the Facet skin, where the gaps
+    /// between chart tiles are unfilled and show it.
+    ground: crate::design::FacetGround,
 }
 
 impl DetachedChartHost {
@@ -445,6 +448,12 @@ impl DetachedChartHost {
             taskbar_hide,
             taskbar_hidden,
             taskbar_mode,
+            // The opener cleared this window with the palette's chart background just before
+            // building the host (`windowing::configure_chart_clear_color`).
+            ground: crate::design::FacetGround::new(
+                moon_ui::MoonPalette::active(cx).chart_bg,
+                crate::design::is_facet(cx),
+            ),
         }
     }
 

@@ -93,13 +93,22 @@ impl ProfitMonitorView {
                 .child(h_flex().w_full().justify_center().child(group_control))
         };
 
+        // Facet skin: the controls paint no fill, so the window backdrop runs under them, and
+        // the rule that closes them fades toward the window edges.
+        let facet = design::is_facet(cx);
         content
             .w_full()
             .px(design::ui_px(cx, 10.0))
             .py(design::ui_px(cx, 8.0))
-            .bg(moon(palette.shell_high))
+            .when(!facet, |this| this.bg(moon(palette.shell_high)))
             .border_b(px(1.0))
             .border_color(moon(palette.border))
+            .when(facet, |this| {
+                design::facet_bottom_rule(
+                    this,
+                    design::facet_ink(palette, design::FACET_CHROME_RULE),
+                )
+            })
             .into_any_element()
     }
 
@@ -327,7 +336,9 @@ impl Render for ProfitMonitorView {
         v_flex()
             .size_full()
             .relative()
-            .bg(moon(palette.shell))
+            // Under the Facet skin `MoonRoot` paints the window backdrop behind this view, and an
+            // opaque fill on the window root would cover it.
+            .when(!design::is_facet(cx), |this| this.bg(moon(palette.shell)))
             .text_color(moon(palette.text))
             .font_family(design::mono())
             .text_size(design::t_body(cx))

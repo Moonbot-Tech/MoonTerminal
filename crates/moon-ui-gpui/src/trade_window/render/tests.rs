@@ -64,6 +64,7 @@ fn trade_header_controls_fit_every_locale(cx: &mut gpui::TestAppContext) {
             UiThemeMode::Dark,
             UiThemeMode::Light,
             UiThemeMode::Graphite,
+            UiThemeMode::Obsidian,
             UiThemeMode::LightExperimental,
             UiThemeMode::DarkExperimental,
         ] {
@@ -81,7 +82,27 @@ fn trade_header_controls_fit_every_locale(cx: &mut gpui::TestAppContext) {
                     window.draw(cx).clear();
                 })
                 .unwrap();
-                let boxes = boxes.borrow();
+                let mut boxes = boxes.borrow().clone();
+                // Under the Facet skin the header's bottom border is a fading rule: one more
+                // child, out of flow, added after the row's own. It must lie along the row's
+                // bottom edge at full width — a rule that collapsed or drifted off that edge
+                // would leave the title bar open over the chart, and only under Obsidian.
+                if cx.update(|cx| crate::design::is_facet(cx)) {
+                    let rule = boxes
+                        .pop()
+                        .expect("the Facet header carries its bottom rule");
+                    let near = |a: Pixels, b: Pixels| (a - b).abs() <= px(0.5);
+                    assert!(
+                        near(rule.origin.x, px(0.0)) && near(rule.size.width, px(width)),
+                        "{locale}: the rule must span the header at width {width}: {rule:?}"
+                    );
+                    // The title fills the row's height, so its bottom is where the border row —
+                    // the one pixel the rule stands in for — begins.
+                    assert!(
+                        near(rule.size.height, px(1.0)) && near(rule.origin.y, boxes[0].bottom()),
+                        "{locale}: the rule must be the header's last pixel row: {rule:?}"
+                    );
+                }
                 let custom_controls = crate::design::show_custom_window_controls();
                 assert_eq!(boxes.len(), if custom_controls { 6 } else { 5 });
                 for bounds in boxes.iter() {

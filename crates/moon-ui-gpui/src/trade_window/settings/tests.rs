@@ -71,6 +71,7 @@ fn price_line_popup_rows_fit_every_locale(cx: &mut gpui::TestAppContext) {
             moon_core::config::UiThemeMode::Dark,
             moon_core::config::UiThemeMode::Light,
             moon_core::config::UiThemeMode::Graphite,
+            moon_core::config::UiThemeMode::Obsidian,
             moon_core::config::UiThemeMode::LightExperimental,
             moon_core::config::UiThemeMode::DarkExperimental,
         ] {

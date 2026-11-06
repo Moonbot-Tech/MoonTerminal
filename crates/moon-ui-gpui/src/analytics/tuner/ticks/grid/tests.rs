@@ -46,6 +46,7 @@ fn custom_ema_threshold_label_fits_all_locales(cx: &mut gpui::TestAppContext) {
         moon_core::config::UiThemeMode::Light,
         moon_core::config::UiThemeMode::Dark,
         moon_core::config::UiThemeMode::Graphite,
+        moon_core::config::UiThemeMode::Obsidian,
     ] {
         for zoom in [1.0, 1.5] {
             cx.update(|cx| {
@@ -118,6 +119,7 @@ fn custom_ema_scientific_current_fits_all_locales(cx: &mut gpui::TestAppContext)
         moon_core::config::UiThemeMode::Light,
         moon_core::config::UiThemeMode::Dark,
         moon_core::config::UiThemeMode::Graphite,
+        moon_core::config::UiThemeMode::Obsidian,
     ] {
         for zoom in [1.0, 1.5] {
             cx.update(|cx| {

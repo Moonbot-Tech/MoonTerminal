@@ -12,6 +12,7 @@
 //! and writes the fields; mouse movement is caught by an overlay in the shared tuner page so the
 //! cursor is not lost once it leaves the track.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonCheckbox, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -328,7 +329,11 @@ impl AnalyticsView {
             .px(design::ui_px(cx, 8.0))
             .py(design::ui_px(cx, 6.0))
             .border_t_1()
-            .border_color(moon(p.border));
+            .border_color(moon(p.border))
+            // Facet skin: the rule above the sliders fades toward the card's edges.
+            .when(design::is_facet(cx), |el| {
+                design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+            });
         for field in 0..3usize {
             col = col.child(self.time_slider_row(field, Some(prof.as_ref()), p, cx));
         }

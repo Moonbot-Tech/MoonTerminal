@@ -9,8 +9,8 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonVariant, MoonPalette, MoonTag, MoonTagRadius, MoonTagVariant, MoonTone,
-    h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonPalette, MoonTag, MoonTagRadius, MoonTagVariant, MoonTheme,
+    MoonTone, facet_glow, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -19,6 +19,15 @@ use crate::design;
 
 /// Click handler of a save-bar or header button.
 pub(super) type OnClick = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// Strength of the highlight ink in the fading rule under a page header, Facet skin only.
+const FACET_PAGE_RULE: f32 = 0.09;
+
+/// Opacity of the glow the dirty save bar's top rule casts, Facet skin only.
+const FACET_DIRTY_GLOW_ALPHA: f32 = 0.45;
+
+/// Blur radius of that glow, in design-reference pixels.
+const FACET_DIRTY_GLOW_BLUR: f32 = 8.0;
 
 /// What the header of one page shows.
 pub(super) struct PageHeader {
@@ -73,6 +82,8 @@ fn mode_label(mode: SaveMode) -> String {
 }
 
 /// Draw a page header.
+///
+/// Under the Facet skin the rule under the header fades toward both edges of the page.
 ///
 /// Args:
 ///     h: Title source, chip, description and actions.
@@ -175,6 +186,10 @@ pub(super) fn page_header(h: PageHeader, narrow: bool, cx: &App) -> AnyElement {
         .pb(design::ui_px(cx, 10.0))
         .border_b_1()
         .border_color(rgba_from(p.border, 1.0))
+        // Facet skin: the rule under the page header fades toward the edges of the page.
+        .when(design::is_facet(cx), |el| {
+            design::facet_bottom_rule(el, design::facet_ink(p, FACET_PAGE_RULE))
+        })
         .child(row)
         .into_any_element()
 }
@@ -199,6 +214,10 @@ pub(super) fn dirty_text(pages: &[Tab]) -> String {
 
 /// Draw the bar under a page body.
 ///
+/// Under the Flat skin a dirty bar is washed blue and a clean one takes the chrome fill. Under
+/// the Facet skin the bar paints no fill and its top edge is a fading rule, which turns blue and
+/// glows while the bar is dirty. The sentence and its colour are the same under either skin.
+///
 /// Args:
 ///     bar: Which bar the page asked for.
 ///     status: The last Save, paste or import outcome as `(text, is_error)`; it replaces the
@@ -217,6 +236,7 @@ pub(super) fn save_bar(
     cx: &App,
 ) -> Option<AnyElement> {
     let p = MoonPalette::active(cx);
+    let facet = design::is_facet(cx);
     let status = if matches!(&bar, SaveBar::Remote(_)) {
         None
     } else {
@@ -327,13 +347,32 @@ pub(super) fn save_bar(
             .px(design::ui_px(cx, super::render::BODY_PAD))
             .py(design::ui_px(cx, 8.0))
             .border_t_1()
-            .when(dirty, |el| {
+            .when(!facet && dirty, |el| {
                 el.bg(rgba_from(p.blue, 0.12))
                     .border_color(rgba_from(p.blue, 1.0))
             })
-            .when(!dirty, |el| {
+            .when(!facet && !dirty, |el| {
                 el.bg(rgba_from(p.shell_high, 1.0))
                     .border_color(rgba_from(p.border, 1.0))
+            })
+            // Facet skin: the bar paints no fill, so the window backdrop runs under it, and its
+            // top edge is a fading rule. A dirty bar says so with that rule alone: it turns blue
+            // and glows, where the Flat skin washes the whole bar.
+            .when(facet, |el| {
+                if dirty {
+                    design::facet_top_rule_lit(
+                        el,
+                        rgba_from(p.blue, 1.0),
+                        facet_glow(
+                            p.blue,
+                            FACET_DIRTY_GLOW_ALPHA,
+                            FACET_DIRTY_GLOW_BLUR,
+                            &MoonTheme::active_tokens(cx),
+                        ),
+                    )
+                } else {
+                    design::facet_top_rule(el, design::facet_ink(p, design::FACET_CHROME_RULE))
+                }
             })
             .child(
                 div()

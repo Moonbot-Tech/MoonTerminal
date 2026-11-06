@@ -1315,6 +1315,10 @@ impl AnalyticsView {
                         .bg(moon(p.panel_high))
                         .border_1()
                         .border_color(moon(p.border))
+                        // Facet skin: the dialog floats above the window as a popup surface.
+                        .when(design::is_facet(cx), |el| {
+                            design::facet_surface(el, moon_ui::MoonFacetKind::Popup, cx)
+                        })
                         .overflow_hidden()
                         .occlude()
                         .child(

@@ -91,11 +91,13 @@ impl Render for ChartPanel {
                 .chart
                 .active_target()
                 .and_then(|(core, _)| b.prospective_order_usd(core));
-            // Select chart-theme and line-style sets from the active light/dark theme. The light
-            // set is complete in theme.toml `[light]`, with no runtime palette overrides, so its
-            // colors are editable in the same way as the dark set.
+            // Line styles have two sets and follow the active light/dark palette. The chart theme
+            // has three — `[dark]`, `[light]`, `[obsidian]` — and a light/dark answer cannot name
+            // the third, so it is chosen by the interface MODE of the same effective config (the
+            // Settings draft while one is open). Every table is complete in theme.toml, with no
+            // runtime palette overrides, so each is editable in the same way.
             let orders = eff.orders.get(palette.is_light()).clone();
-            let theme = eff.theme.get(palette.is_light()).clone();
+            let theme = eff.chart_theme().clone();
             // Candles use the panel's per-tab override, or the default of the KIND of tab this
             // panel sits on — the main chart, a torn-off window, or a comparison. Resolving the
             // base field here instead would draw Main's default on every chart in the application

@@ -364,6 +364,13 @@ impl StrategiesView {
                             .pr(design::ui_px(app, design::MOON_SCROLLBAR_OVERLAY_W))
                             .border_b_1()
                             .border_color(moon(p.border))
+                            // Facet skin: the rule under a section heading fades toward its ends.
+                            .when(design::is_facet(app), |this| {
+                                design::facet_bottom_rule(
+                                    this,
+                                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                                )
+                            })
                             .child(
                                 div()
                                     .flex_1()

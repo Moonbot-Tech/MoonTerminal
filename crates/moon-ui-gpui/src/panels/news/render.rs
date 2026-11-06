@@ -240,6 +240,10 @@ pub(super) fn news_card(
         .border_b_1()
         .border_color(rgb(p.border))
         .overflow_hidden()
+        // Facet skin: the rule under an item fades toward the panel edges.
+        .when(design::is_facet(cx), |row| {
+            design::facet_bottom_rule(row, design::facet_ink(p, design::FACET_PANEL_RULE))
+        })
         .when_some(flash, |this, f| this.child(f))
         .when_some(rail, |this, r| this.child(r))
         .child(meta)
@@ -311,6 +315,10 @@ fn latency_block(
         .bg(rgb(p.gutter))
         .border_1()
         .border_color(rgb(p.border))
+        // Facet skin: `gutter` is the recessed token, and a well is the faceted recess.
+        .when(design::is_facet(cx), |block| {
+            design::facet_surface(block, moon_ui::MoonFacetKind::Well, cx)
+        })
         .text_size(design::t_caption(cx))
         // The terminal row keeps its clock reading only — no delta, see above.
         .children(row(

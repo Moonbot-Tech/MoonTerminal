@@ -471,6 +471,10 @@ pub(super) fn render_tab_strip(
         .py(design::ui_px(cx, 4.0))
         .border_b_1()
         .border_color(rgb(p.border))
+        // Facet skin: the rule under the tabs fades toward the popup's edges.
+        .when(design::is_facet(cx), |strip| {
+            design::facet_bottom_rule(strip, design::facet_ink(p, design::FACET_PANEL_RULE))
+        })
         .child(
             MoonSegmentedControl::new(SharedString::from(format!("{id}-tabs")))
                 .accent(MoonAccent::Blue)

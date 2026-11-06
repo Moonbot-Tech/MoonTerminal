@@ -84,6 +84,7 @@ fn positive_below_fact_is_danger(cx: &mut gpui::TestAppContext) {
         moon_core::config::UiThemeMode::Light,
         moon_core::config::UiThemeMode::Dark,
         moon_core::config::UiThemeMode::Graphite,
+        moon_core::config::UiThemeMode::Obsidian,
     ] {
         cx.update(|cx| {
             moon_ui::MoonTheme::install_config(

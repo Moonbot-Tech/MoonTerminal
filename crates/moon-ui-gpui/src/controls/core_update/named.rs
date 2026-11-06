@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_core::feed::{CORE_UPDATE_ALL_WORD, CORE_UPDATE_COMMAND_WORD, UpdateTarget};
 use moon_core::session::CoreId;
@@ -242,8 +243,10 @@ pub(crate) fn open_named_dialog(
             .close_button(true)
             .overlay(true)
             .overlay_closable(true)
-            .bg(moon(p.shell_high))
-            .border_color(moon(p.border))
+            // Facet skin: no override, so MoonUI's popup surface shows.
+            .when(!design::is_facet(cx), |dialog| {
+                dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+            })
             .rounded(design::r_container(cx))
             .text_color(moon(p.text))
             .header(
@@ -252,6 +255,13 @@ pub(crate) fn open_named_dialog(
                     .py_2()
                     .border_b_1()
                     .border_color(moon(p.border))
+                    // Facet skin: the rule under the title fades toward the dialog's edges.
+                    .when(design::is_facet(cx), |header| {
+                        design::facet_bottom_rule(
+                            header,
+                            design::facet_ink(p, design::FACET_PANEL_RULE),
+                        )
+                    })
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(t!("core_update.menu.named").to_string()),
             )

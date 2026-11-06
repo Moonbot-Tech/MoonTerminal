@@ -226,7 +226,12 @@ impl Render for Probe {
 /// A mode-specific width regression must move the right column or the detail beyond its host.
 #[gpui::test]
 fn all_axes_share_column_and_write_header_geometry(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),

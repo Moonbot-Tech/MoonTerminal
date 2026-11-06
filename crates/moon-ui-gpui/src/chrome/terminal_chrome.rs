@@ -41,6 +41,9 @@ fn gear_trigger() -> MoonButton {
 ///
 /// `chrome_width` is the window width and controls priority-based ticker collapse on narrow windows.
 ///
+/// The row fills itself, because the group window's root paints nothing: `shell_high` under the
+/// Flat skin, and under Facet the upper half of a top-lit band that the toolbar row completes.
+///
 /// Args:
 ///     group: Group whose header is being rendered.
 ///     backend: Backend providing core, balance, and ticker state.
@@ -161,6 +164,15 @@ pub fn header(
         // internally, so the seams line up.
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .bg(rgb(p.shell_high))
+        // Facet skin: the header is the upper half of one top-lit band whose lower half is the
+        // toolbar. Still opaque — the group window's root paints no fill behind this row.
+        // The band also carries the window's ambient light, which a tool window has in its
+        // backdrop; the layer goes in first, so the row's contents paint over it.
+        .when(design::is_facet(cx), |row| {
+            row.relative()
+                .bg(design::facet_header_fill(p))
+                .child(design::facet_band_lights(design::FacetBandRow::Header, cx))
+        })
         // The brand carries its OWN trailing separator, so the groups below add only the seams
         // after them. Its wordmark is the FIRST thing this row gives up on a narrow window
         // (`design::header_wordmark_visible`), and the space goes to the readouts that carry

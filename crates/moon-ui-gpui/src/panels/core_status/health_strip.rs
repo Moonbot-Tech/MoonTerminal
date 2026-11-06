@@ -5,6 +5,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, MoonTag, MoonTagRadius, MoonTagVariant, MoonTone, h_flex};
 use rust_i18n::t;
@@ -149,6 +150,10 @@ pub(super) fn health_strip(
         .py(design::ui_px(cx, 10.0))
         .border_b_1()
         .border_color(rgb(p.border))
+        // Facet skin: the rule under the strip fades toward the panel edges.
+        .when(design::is_facet(cx), |strip| {
+            design::facet_bottom_rule(strip, design::facet_ink(p, design::FACET_PANEL_RULE))
+        })
         .child(
             h_flex()
                 .debug_selector(|| "cs-health-verdict".into())

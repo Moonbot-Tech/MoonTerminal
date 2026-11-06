@@ -385,6 +385,15 @@ fn tile(
         .rounded(design::ui_px(cx, 6.0))
         .border_1()
         .border_color(border)
+        // Facet skin: the tile is a card resting on the pane. A warning tile keeps its amber
+        // edge over the card's fill.
+        .when(design::is_facet(cx), |this| {
+            let card = design::facet_surface(this, moon_ui::MoonFacetKind::Card, cx);
+            match warn {
+                true => card.border_color(border),
+                false => card,
+            }
+        })
         .child(
             div()
                 .truncate()
@@ -445,6 +454,9 @@ fn block(
     let p = MoonPalette::active(cx);
     let empty = lines.is_empty();
     let link = filter.label();
+    // Facet skin: the block is a card resting on the pane, and the rule under its heading fades
+    // toward the card's edges.
+    let facet = design::is_facet(cx);
     v_flex()
         .id(id)
         .debug_selector(move || id.into())
@@ -453,6 +465,9 @@ fn block(
         .rounded(design::ui_px(cx, 6.0))
         .border_1()
         .border_color(moon(p.border))
+        .when(facet, |this| {
+            design::facet_surface(this, moon_ui::MoonFacetKind::Card, cx)
+        })
         .child(
             h_flex()
                 .w_full()
@@ -463,6 +478,9 @@ fn block(
                 .py(design::ui_px(cx, 8.0))
                 .border_b_1()
                 .border_color(moon(p.border))
+                .when(facet, |this| {
+                    design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_PANEL_RULE))
+                })
                 .child(
                     div()
                         .flex_1()
@@ -608,6 +626,15 @@ pub(super) fn quick_chip(
             false => moon(p.border),
         })
         .bg(moon_alpha(p.panel, 0.74))
+        // Facet skin: the chip stands off the pane as a raised control. The one in force keeps
+        // its accent edge over the raised fill.
+        .when(design::is_facet(cx), |this| {
+            let chip = design::facet_surface(this, moon_ui::MoonFacetKind::Raised, cx);
+            match active {
+                true => chip.border_color(moon(p.accent)),
+                false => chip,
+            }
+        })
         .cursor_pointer()
         .text_size(design::t_caption(cx))
         .text_color(match active {

@@ -6,6 +6,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState, MoonPalette, h_flex,
@@ -246,7 +247,7 @@ pub(in crate::analytics::tuner) fn filter_bar_el(
         .px(design::ui_px(cx, 8.0))
         .py(design::ui_px(cx, 6.0))
         .gap(design::ui_px(cx, 6.0))
-        .bg(moon(p.table_head))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
         .child(controls)
         .child(chips)
         .into_any_element()

@@ -137,7 +137,12 @@ impl Render for IdentityWidthProbe {
 /// A long core must not truncate beside a mostly empty name column on a wide table.
 #[gpui::test]
 fn strategy_and_core_share_spare_width_without_stretching_metrics(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),
@@ -267,7 +272,12 @@ fn strategy_metric_width_cache_follows_language_changes(cx: &mut gpui::TestAppCo
 /// Every numeric column must retain header alignment and fit its full value on a wide host.
 #[gpui::test]
 fn all_strategy_metrics_fit_and_align(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),
@@ -371,7 +381,12 @@ impl Render for StatusFloorProbe {
 /// Long localized status labels must never paint into the preceding numeric column.
 #[gpui::test]
 fn strategy_status_chips_stay_inside_compressed_columns(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),
@@ -474,7 +489,12 @@ impl Render for ColumnSpacingProbe {
 /// The date must retain the same minimum whitespace as measured right-aligned numeric cells.
 #[gpui::test]
 fn pf_and_lastedit_have_visible_separation_in_every_mode(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),
@@ -1222,6 +1242,7 @@ fn toolbar_and_filter_share_an_edge_in_every_mode(cx: &mut gpui::TestAppContext)
         UiThemeMode::Light,
         UiThemeMode::Dark,
         UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
         UiThemeMode::LightExperimental,
         UiThemeMode::DarkExperimental,
     ] {

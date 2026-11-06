@@ -241,6 +241,9 @@ pub(super) fn ordered_server_grid(
 }
 
 /// One server card.
+///
+/// A flat `table_body` box under the Flat skin, MoonUI's card surface under Facet. Under either
+/// skin a warning or the selection colours the card's edge.
 fn server_card(
     group: &ServerStatusGroup,
     ip_masked: bool,
@@ -264,6 +267,8 @@ fn server_card(
     } else {
         design::moon(p.border)
     };
+    // Whether `border` says something about this card rather than being the plain edge.
+    let marked = group.has_warn() || selected;
     let cpu_text = cpu_load(group.system_cpu_percent, group.logical_cpu_count);
     let ram_text = memory_free(group.process_memory_mb, group.free_physical_memory_mb);
     let parts = group_build_parts(&group.version);
@@ -308,6 +313,16 @@ fn server_card(
         .border_color(border)
         .rounded(design::ui_px(cx, 6.0))
         .bg(rgb(p.table_body))
+        // Facet skin: MoonUI's card surface at the same radius. A warning and the selection
+        // keep their own edge colour, which is what tells those cards from the rest.
+        .when(design::is_facet(cx), |card| {
+            let card = design::facet_surface(card, moon_ui::MoonFacetKind::Card, cx);
+            if marked {
+                card.border_color(border)
+            } else {
+                card
+            }
+        })
         .on_click(move |_, _, app| {
             let Some(view) = select_view.upgrade() else {
                 return;

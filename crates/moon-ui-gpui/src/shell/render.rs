@@ -213,6 +213,9 @@ impl Render for Shell {
         };
         let chrome_width = f32::from(window.viewport_size().width);
         let p = MoonPalette::active(cx);
+        // Facet skin: the Auto rail, the chart tab strip and the gaps between chart tiles paint
+        // no fill, so the window's clear colour is what stands there and has to follow the theme.
+        self.ground.sync(p.shell, window, cx);
 
         // Reconcile an orphaned metric popup before building content for the remaining open one.
         // The toolbar's `MoonPopover` owns the box and trigger-relative position. Keeping the metric

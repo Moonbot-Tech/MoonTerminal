@@ -4,10 +4,17 @@
 //! `orders.toml`), so the file is self-contained and portable regardless of the recipient's
 //! selected UI mode. Colors are specified in sRGB (like the palette/UI inputs); shaders
 //! convert them to linear values (see [[srgb-shader-colors]]).
+//!
+//! A third table, `[obsidian]`, belongs to the Obsidian interface theme alone: its panels are
+//! near-black, and the dark set's grey chart ground reads as a lighter box inside them. Which
+//! table an interface mode draws is decided in ONE place, [`ChartColorSet::for_mode`]. Order
+//! styles, line styles and badges are NOT part of this split — they keep their two sets, and
+//! Obsidian draws the dark one there.
 
 use serde::{Deserialize, Serialize};
 
 use super::paths;
+use super::schema::UiThemeMode;
 use crate::palette;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -226,6 +233,34 @@ impl ChartTheme {
         t
     }
 
+    /// Default set of the Obsidian interface theme: the dark default on a near-black ground.
+    ///
+    /// Only the SURFACES move — the chart ground, the grid drawn on it, the two backdrops that sat
+    /// on the same grey, the order-book halves and the engine's bootstrap panel colour. Candles,
+    /// lines, ticks, walls and every label keep the dark values, which were chosen to carry on a
+    /// dark ground.
+    ///
+    /// Also what serde substitutes for an ABSENT `[obsidian]` table, so a `theme.toml` written
+    /// before the table existed loads as if it had always carried these values.
+    ///
+    /// Caveat, shared with the light set: a table that IS present but names only some keys takes
+    /// the rest from [`ChartTheme::default`], the DARK values, not from here. "Copy" and every
+    /// save write whole tables, so only a hand-made file reaches that.
+    pub fn default_obsidian() -> Self {
+        Self {
+            bg: [8, 9, 11],
+            grid: [22, 24, 28],
+            // Equal to `book_bg`, as in the other two sets: the profile's backdrop and the spread
+            // gap were one colour before they were split, and a fresh set keeps them together.
+            hvol_bg: [8, 9, 11],
+            book_bg: [8, 9, 11],
+            book_bg_ask: [28, 13, 12],
+            book_bg_bid: [10, 24, 16],
+            panel_bg: [13, 15, 18],
+            ..Self::default()
+        }
+    }
+
     /// Moonbot light defaults. Background/grid use values from the light MoonUI palette
     /// (chart_bg 0xFFFFFF / row_line 0xECEFF2). The renderer used to override them from the
     /// palette on the fly; now they are simply editable defaults in the light set.
@@ -412,21 +447,75 @@ fn retire_theme(
     changed
 }
 
-/// Chart theme SEPARATELY for dark and light UI modes (per theme, like
-/// [`super::OrdersStyleSet`]). Stored in one `theme.toml` with `[dark]`/`[light]` tables;
-/// `ui_theme_mode` selects the active set.
+/// Which of the chart colour tables in `theme.toml` an interface mode draws.
+///
+/// The chart is the one per-mode colour table with THREE entries; orders, lines and badges keep
+/// two and are still chosen by [`UiThemeMode::is_light`]. A bool cannot name the third table, so
+/// everything that shows or edits chart colours asks [`Self::for_mode`] instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ChartColorSet {
+    /// The `[dark]` table: Dark, Graphite and the experimental dark mode.
+    Dark,
+    /// The `[light]` table: Light and the experimental light mode.
+    Light,
+    /// The `[obsidian]` table: the Obsidian interface theme and nothing else.
+    Obsidian,
+}
+
+impl ChartColorSet {
+    /// The table `mode` draws.
+    ///
+    /// Spelled as an exhaustive match on purpose: a seventh interface mode must not compile until
+    /// someone decides which chart table it draws, rather than land on dark by falling through.
+    ///
+    /// Args:
+    ///     mode: Interface theme the user chose.
+    ///
+    /// Returns:
+    ///     `Obsidian` for [`UiThemeMode::Obsidian`] only, `Light` for the two light modes, `Dark`
+    ///     for the rest.
+    pub const fn for_mode(mode: UiThemeMode) -> Self {
+        match mode {
+            UiThemeMode::Light | UiThemeMode::LightExperimental => Self::Light,
+            UiThemeMode::Obsidian => Self::Obsidian,
+            UiThemeMode::Dark | UiThemeMode::Graphite | UiThemeMode::DarkExperimental => Self::Dark,
+        }
+    }
+}
+
+impl From<UiThemeMode> for ChartColorSet {
+    /// Same mapping as [`ChartColorSet::for_mode`].
+    fn from(mode: UiThemeMode) -> Self {
+        Self::for_mode(mode)
+    }
+}
+
+/// Chart theme SEPARATELY per chart colour set (per theme, like [`super::OrdersStyleSet`], but
+/// with a third entry). Stored in one `theme.toml` with `[dark]`/`[light]`/`[obsidian]` tables;
+/// `ui_theme_mode` selects the active one through [`ChartColorSet::for_mode`].
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ChartThemeSet {
     /// Which palette generation this file's colours belong to; see [`CURRENT_PALETTE_REV`].
     ///
-    /// Declared FIRST because it must serialise before the two tables — TOML takes every key after
+    /// Declared FIRST because it must serialise before the tables — TOML takes every key after
     /// a table header as belonging to that table. Not user-facing and absent from Settings: it
     /// records what the app already did, it is not a choice anyone makes.
+    ///
+    /// It describes the `dark` and `light` tables ONLY. `obsidian` was born after every retired
+    /// colour and after the `hvol_bg` split, so no generation ever has anything to carry across
+    /// in it.
     #[serde(default = "absent_palette_rev")]
     pub palette_rev: u32,
     pub dark: ChartTheme,
     pub light: ChartTheme,
+    /// The Obsidian interface theme's own table.
+    ///
+    /// An ABSENT table loads as [`ChartTheme::default_obsidian`] and is NOT a reason to rewrite
+    /// the file: a `theme.toml` from before the table existed stays byte-for-byte as the user
+    /// left it until the set is saved for some other reason, and only then gains the table.
+    #[serde(default = "ChartTheme::default_obsidian")]
+    pub obsidian: ChartTheme,
 }
 
 impl Default for ChartThemeSet {
@@ -435,8 +524,20 @@ impl Default for ChartThemeSet {
             palette_rev: CURRENT_PALETTE_REV,
             dark: ChartTheme::default(),
             light: ChartTheme::default_light(),
+            obsidian: ChartTheme::default_obsidian(),
         }
     }
+}
+
+/// Whether `text` is a `theme.toml` in the TABLE shape rather than the legacy flat one.
+///
+/// The one discriminator for that question: [`ChartThemeSet::resolve`] and
+/// [`super::theme_legacy`] must never disagree about which shape a file is in, so both call this.
+/// `[obsidian` is listed with the other two so a hand-made file carrying only that table is read
+/// as a set and keeps it, instead of being taken for a flat theme and rewritten without it. No
+/// flat file can contain any of the three markers — it has no tables at all.
+pub(super) fn has_set_tables(text: &str) -> bool {
+    text.contains("[dark") || text.contains("[light") || text.contains("[obsidian")
 }
 
 impl ChartThemeSet {
@@ -450,6 +551,10 @@ impl ChartThemeSet {
     /// still have it there after a restart.
     ///
     /// See [`retire_theme`] for the per-field rule.
+    ///
+    /// The `obsidian` table is left alone on purpose: it never shipped a colour that was later
+    /// retired, and it was created with its own `hvol_bg`, so neither step has anything to do
+    /// there — and running the `hvol_bg` inheritance over it would erase a backdrop the user set.
     ///
     /// Returns:
     ///     Whether anything changed, which is what decides if `theme.toml` is written back.
@@ -477,10 +582,49 @@ impl ChartThemeSet {
         true
     }
 
-    /// Set for the active mode: `light=true` → light, otherwise dark.
+    /// The table for one chart colour set.
+    ///
+    /// The accessor for anything that SHOWS or EDITS chart colours: it is the only one that can
+    /// reach the `obsidian` table.
+    pub fn for_set(&self, set: ChartColorSet) -> &ChartTheme {
+        match set {
+            ChartColorSet::Dark => &self.dark,
+            ChartColorSet::Light => &self.light,
+            ChartColorSet::Obsidian => &self.obsidian,
+        }
+    }
+
+    /// Mutable counterpart of [`Self::for_set`].
+    pub fn for_set_mut(&mut self, set: ChartColorSet) -> &mut ChartTheme {
+        match set {
+            ChartColorSet::Dark => &mut self.dark,
+            ChartColorSet::Light => &mut self.light,
+            ChartColorSet::Obsidian => &mut self.obsidian,
+        }
+    }
+
+    /// The table the interface `mode` draws; see [`ChartColorSet::for_mode`].
+    pub fn for_mode(&self, mode: UiThemeMode) -> &ChartTheme {
+        self.for_set(ChartColorSet::for_mode(mode))
+    }
+
+    /// Mutable counterpart of [`Self::for_mode`].
+    pub fn for_mode_mut(&mut self, mode: UiThemeMode) -> &mut ChartTheme {
+        self.for_set_mut(ChartColorSet::for_mode(mode))
+    }
+
+    /// The `light` or `dark` table by a bare light/dark answer: `light=true` → light, otherwise
+    /// dark.
+    ///
+    /// NOT the way to pick what a chart draws — a bool cannot name `obsidian`, so under the
+    /// Obsidian theme this hands back the dark table the user is not looking at. It stays for
+    /// callers that genuinely know only light/dark: the Moonbot import, whose source has exactly
+    /// those two styles. Everything else goes through [`Self::for_mode`] or [`Self::for_set`].
     pub fn get(&self, light: bool) -> &ChartTheme {
         if light { &self.light } else { &self.dark }
     }
+
+    /// Mutable counterpart of [`Self::get`], with the same restriction.
     pub fn get_mut(&mut self, light: bool) -> &mut ChartTheme {
         if light {
             &mut self.light
@@ -489,10 +633,10 @@ impl ChartThemeSet {
         }
     }
 
-    /// Reads `theme.toml`. The new format uses `[dark]`/`[light]` tables. An OLD flat
-    /// `ChartTheme` (effectively a dark theme; light mode overrode it with defaults) becomes
-    /// `dark`, while `light` takes the light default; the file is immediately saved again.
-    /// Missing files receive defaults; unreadable or malformed originals are never replaced.
+    /// Reads `theme.toml`. The new format uses `[dark]`/`[light]`/`[obsidian]` tables. An OLD
+    /// flat `ChartTheme` (effectively a dark theme; light mode overrode it with defaults) becomes
+    /// `dark`, while `light` and `obsidian` take their defaults; the file is immediately saved
+    /// again. Missing files receive defaults; unreadable or malformed originals are never replaced.
     pub fn load() -> Self {
         let path = paths::theme_path();
         let Ok(text) = super::toml_io::read_config_text(&path, "theme.toml") else {
@@ -533,10 +677,12 @@ impl ChartThemeSet {
         let Some(text) = text else {
             return Ok((Self::default(), true));
         };
-        if text.contains("[dark") || text.contains("[light") {
+        if has_set_tables(text) {
             let mut set: Self = toml::from_str(text)?;
             // This branch never re-saved before, so it still writes only when the palette
             // generation actually moved. An already-migrated or fully custom file costs no write.
+            // That includes a file with no `[obsidian]` table: serde has already filled it with
+            // the default above, and an absent table is deliberately NOT a reason to write.
             let moved = set.retire_old_defaults();
             return Ok((set, moved));
         }
@@ -555,6 +701,8 @@ impl ChartThemeSet {
             palette_rev: CURRENT_PALETTE_REV,
             dark: flat,
             light: ChartTheme::default_light(),
+            // A flat file predates the table, so there is nothing of the user's to keep here.
+            obsidian: ChartTheme::default_obsidian(),
         };
         Ok((set, true))
     }
@@ -572,7 +720,9 @@ impl ChartThemeSet {
     /// Parses theme.toml text (clipboard paste / file contents). Validates using distinctive
     /// theme keys; serde ignores unknown fields and would silently produce the default for a
     /// foreign file. An old flat `ChartTheme` (effectively dark) replaces `dark` in `current`
-    /// (as in the load migration). `None` means the text is not a chart theme.
+    /// (as in the load migration). A table the text does not carry — `[obsidian]` in every paste
+    /// made before that table existed — keeps the value `current` holds. `None` means the text is
+    /// not a chart theme.
     pub fn parse_share(text: &str, current: &Self) -> Option<Self> {
         const KEYS: [&str; 4] = ["bg", "cross", "book_bid", "panel_bg"];
         let v: toml::Value = toml::from_str(text).ok()?;
@@ -581,20 +731,25 @@ impl ChartThemeSet {
                 .and_then(|x| x.as_table())
                 .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
         };
-        if table_has("dark") || table_has("light") {
+        let sent_dark = table_has("dark");
+        let sent_light = table_has("light");
+        let sent_obsidian = table_has("obsidian");
+        if sent_dark || sent_light || sent_obsidian {
             let mut set: Self = toml::from_str(text).ok()?;
             // The condition above is an OR, so ONE table is enough to land here. serde fills the
-            // other from the SHIPPED default rather than from the user's live theme, which
-            // silently discards the side they never sent — the exact loss the flat branch below
-            // was written to avoid. Restore it the same way. (Pre-dates the palette work; the
-            // "Copy" button always emits both tables, so only a hand-made paste reaches it.)
-            let sent_dark = table_has("dark");
-            let sent_light = table_has("light");
+            // others from the SHIPPED defaults rather than from the user's live theme, which
+            // silently discards the sides they never sent — the exact loss the flat branch below
+            // was written to avoid. Restore them the same way. (Pre-dates the palette work; the
+            // "Copy" button always emits every table, so only a hand-made paste — or one copied
+            // by a build older than the `[obsidian]` table — reaches it.)
             if !sent_dark {
                 set.dark = current.dark.clone();
             }
             if !sent_light {
                 set.light = current.light.clone();
+            }
+            if !sent_obsidian {
+                set.obsidian = current.obsidian.clone();
             }
             // Carried across on the PASTED file's own generation — a paste is "load this file",
             // and `load` would do it on the next launch anyway. Only the sides actually sent are
@@ -622,16 +777,20 @@ impl ChartThemeSet {
             // The generation the PASTED side now sits at: carried up to the current one just
             // above, or already past it when the file came from a newer build.
             let sent_rev = pasted_rev.max(CURRENT_PALETTE_REV);
-            set.palette_rev = if sent_dark && sent_light {
-                sent_rev
-            } else {
+            // `obsidian` takes no part in this: the generation describes `dark` and `light` only
+            // (see the field), so whether that table was sent changes nothing below.
+            set.palette_rev = match (sent_dark, sent_light) {
+                (true, true) => sent_rev,
+                // Neither generation-bearing side came from the paste — an `[obsidian]`-only
+                // text. Both live sides are exactly what they were, and so is their generation.
+                (false, false) => current.palette_rev,
                 // MIXED set: one side from the paste, one from the live theme, and they may sit at
                 // DIFFERENT generations. `palette_rev` describes the whole set, so it has to be the
                 // OLDER of the two — the set is only as migrated as its least migrated half.
                 // Stamping the pasted side's generation over an older live side would tell a future
                 // build that the live side needs nothing, and it would keep its stale colours
                 // forever, which is the one failure this marker exists to prevent.
-                sent_rev.min(current.palette_rev)
+                _ => sent_rev.min(current.palette_rev),
             };
             return Some(set);
         }
@@ -654,6 +813,8 @@ impl ChartThemeSet {
                 palette_rev: CURRENT_PALETTE_REV,
                 dark: flat,
                 light: current.light.clone(),
+                // A flat theme is one dark table: the user's Obsidian colours were never sent.
+                obsidian: current.obsidian.clone(),
             });
         }
         None

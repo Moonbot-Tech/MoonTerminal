@@ -10,6 +10,7 @@
 //! for every core, the verdict's tolerances — goes into the tooltip beside the counts, with the
 //! numbers the model runs under.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::tuner::ticks::verify::Unjudged;
 use moon_core::db::tuner::ticks::{ModelSettings, Verdict};
@@ -296,6 +297,10 @@ pub(super) fn accuracy_footer_el(text: String, p: MoonPalette, cx: &App) -> Stat
         .py(design::ui_px(cx, 4.0))
         .border_t_1()
         .border_color(moon(p.border))
+        // Facet skin: the rule above the footer fades toward the card's edges.
+        .when(design::is_facet(cx), |el| {
+            design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+        })
         .min_w_0()
         .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
         .text_size(design::t_caption(cx))

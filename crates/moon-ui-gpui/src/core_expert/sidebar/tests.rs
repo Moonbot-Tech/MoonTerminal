@@ -153,6 +153,7 @@ fn expert_rail_keeps_names_chips_and_chrome_inside_in_every_locale(cx: &mut gpui
             UiThemeMode::Light,
             UiThemeMode::Dark,
             UiThemeMode::Graphite,
+            UiThemeMode::Obsidian,
             UiThemeMode::LightExperimental,
             UiThemeMode::DarkExperimental,
         ] {

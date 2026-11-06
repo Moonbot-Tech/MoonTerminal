@@ -473,8 +473,16 @@ impl CoreStatusView {
             .items_start()
             .gap(warn_cfg_metrics(cx).w(COL_GAP))
             .py(design::ui_px(cx, 5.0))
-            // Only a separator BETWEEN rows — the first row has no line above it.
-            .when(!first, |el| el.border_t_1().border_color(rgb(p.border)))
+            // Only a separator BETWEEN rows — the first row has no line above it. Under the
+            // Facet skin it fades toward the popup's edges.
+            .when(!first, |el| {
+                let el = el.border_t_1().border_color(rgb(p.border));
+                if design::is_facet(cx) {
+                    design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+                } else {
+                    el
+                }
+            })
             .child(name_col)
             .child(self.cell(
                 ON_W,

@@ -98,6 +98,9 @@ fn restored_report_bounds(
 
 /// Build the Report title bar with width reset and native window controls.
 ///
+/// Under the Facet skin the bar paints no fill, so the window backdrop shows through it, and its
+/// bottom border becomes a rule that fades toward the window edges.
+///
 /// Args:
 ///     p: Active MoonUI palette.
 ///     table_state: Retained table state reset by the header action.
@@ -124,7 +127,12 @@ pub(super) fn report_header(
         .pr(design::ui_px(cx, 6.0))
         .border_b_1()
         .border_color(rgb(p.border))
-        .bg(rgb(p.shell_high))
+        // Facet skin: the bar paints no fill, so the window backdrop's top light shows through,
+        // and its bottom border becomes a rule that fades toward the window edges.
+        .when(!design::is_facet(cx), |this| this.bg(rgb(p.shell_high)))
+        .when(design::is_facet(cx), |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("report-titlebar-title", 0.0)
                 .title_cluster(title, cx)

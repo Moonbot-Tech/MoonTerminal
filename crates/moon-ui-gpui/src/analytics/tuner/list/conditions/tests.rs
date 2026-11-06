@@ -217,6 +217,7 @@ fn editor_rows_and_footer_fit_all_locales(cx: &mut gpui::TestAppContext) {
         UiThemeMode::Light,
         UiThemeMode::Dark,
         UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
         UiThemeMode::LightExperimental,
         UiThemeMode::DarkExperimental,
     ] {
@@ -317,6 +318,7 @@ fn chips_wrap_without_clipping_numeric_drafts(cx: &mut gpui::TestAppContext) {
         UiThemeMode::Light,
         UiThemeMode::Dark,
         UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
         UiThemeMode::LightExperimental,
         UiThemeMode::DarkExperimental,
     ] {

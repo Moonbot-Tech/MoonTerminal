@@ -899,6 +899,10 @@ impl AnalyticsView {
                 .gap(design::ui_px(cx, 2.0))
                 .border_t_1()
                 .border_color(moon(p.border))
+                // Facet skin: the rule above the pinned block fades toward the card's edges.
+                .when(design::is_facet(cx), |el| {
+                    design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+                })
                 .text_size(design::t_caption(cx))
                 // The composed set sits in the SAME pinned block as the held-back figure, and
                 // above it, deliberately. "Four fields chosen" reads as an achievement on its
@@ -1214,6 +1218,16 @@ impl AnalyticsView {
             .bg(moon_alpha(p.table_head, if sub { 0.35 } else { 0.6 }))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.7))
+            // Facet skin: the heading is lit from its top edge instead of filled, under a rule
+            // that fades toward the card's edges. A subgroup is lit more weakly, as it is filled
+            // more palely under the Flat skin.
+            .when(design::is_facet(cx), |el| {
+                let sheen = design::FACET_SECTION_SHEEN * if sub { 0.6 } else { 1.0 };
+                design::facet_top_rule(
+                    el.bg(design::facet_sheen(p, sheen)),
+                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                )
+            })
             .text_size(design::t_caption(cx))
             .child(
                 div()

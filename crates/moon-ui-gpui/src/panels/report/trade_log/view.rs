@@ -113,8 +113,10 @@ pub(super) fn open_dialog(entity: Entity<TradeLog>, window: &mut Window, cx: &mu
             .close_button(true)
             .overlay(true)
             .overlay_closable(true)
-            .bg(moon(p.shell_high))
-            .border_color(moon(p.border))
+            // Facet skin: no override, so MoonUI's popup surface shows.
+            .when(!design::is_facet(cx), |dialog| {
+                dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+            })
             .rounded(design::r_container(cx))
             .text_color(moon(p.text))
             .header(
@@ -123,6 +125,13 @@ pub(super) fn open_dialog(entity: Entity<TradeLog>, window: &mut Window, cx: &mu
                     .py_2()
                     .border_b_1()
                     .border_color(moon(p.border))
+                    // Facet skin: the rule under the title fades toward the dialog's edges.
+                    .when(design::is_facet(cx), |header| {
+                        design::facet_bottom_rule(
+                            header,
+                            design::facet_ink(p, design::FACET_PANEL_RULE),
+                        )
+                    })
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title),
             )

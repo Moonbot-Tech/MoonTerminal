@@ -530,6 +530,12 @@ impl Render for DragChip {
             .bg(moon(p.shell_high))
             .border_1()
             .border_color(moon(p.blue))
+            // Facet skin: the chip floats over the window, so it takes MoonUI's popup surface,
+            // and keeps the blue edge that marks it as the thing being carried.
+            .when(design::is_facet(cx), |this| {
+                design::facet_surface(this, moon_ui::MoonFacetKind::Popup, cx)
+                    .border_color(moon(p.blue))
+            })
             .text_color(moon(p.text))
             // Raw GPUI text, already scaled on the body-text channel.
             .text_size(design::t_body_step_px(cx, self.step))

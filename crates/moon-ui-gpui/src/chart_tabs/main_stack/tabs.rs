@@ -56,7 +56,8 @@ impl MainChartStack {
         // Tiled, the tab row above says which chart is selected; the card repeats it with an accent
         // frame so the answer is also where the user's eyes already are. Fullscreen shows only the
         // selected chart, so there is nothing to distinguish it from.
-        let border = if !fullscreen && Some(ix) == self.active && self.charts.len() > 1 {
+        let selected = !fullscreen && Some(ix) == self.active && self.charts.len() > 1;
+        let border = if selected {
             rgb(palette.accent)
         } else {
             border
@@ -71,6 +72,7 @@ impl MainChartStack {
             tokens,
             tile_gutter(fullscreen, self.charts.len()),
             trailing,
+            selected,
         )
         .on_mouse_up(
             MouseButton::Right,

@@ -691,6 +691,9 @@ impl ScreenerView {
             design::t_body(cx),
             p.text_muted,
         );
+        // Facet skin: the bar paints no fill, so the window backdrop runs under it, and its top
+        // edge is a rule that fades toward the window edges.
+        let facet = design::is_facet(cx);
         h_flex()
             .flex_none()
             .w_full()
@@ -698,9 +701,12 @@ impl ScreenerView {
             .px(design::ui_px(cx, 8.0))
             .gap(design::ui_px(cx, 8.0))
             .items_center()
-            .bg(moon(p.shell_high))
+            .when(!facet, |this| this.bg(moon(p.shell_high)))
             .border_t(px(1.0))
             .border_color(moon_alpha(p.border, 1.0))
+            .when(facet, |this| {
+                design::facet_top_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+            })
             .child(self.source_combo(cx))
             .child(label(column_title("market")))
             .child(
@@ -767,7 +773,9 @@ impl Render for ScreenerView {
         v_flex()
             .size_full()
             .relative()
-            .bg(moon(p.shell))
+            // Under the Facet skin `MoonRoot` paints the window backdrop behind this view, and an
+            // opaque fill on the window root would cover it.
+            .when(!design::is_facet(cx), |this| this.bg(moon(p.shell)))
             .text_color(moon(p.text))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
@@ -845,7 +853,11 @@ pub(super) fn matches_coin_filter(entry: &Entry, filter_uc: &str) -> bool {
 pub(super) mod tests;
 
 /// Build the window header with native minimize, maximize, and close controls.
+///
+/// Under the Facet skin the header paints no fill of its own, so the window backdrop's top light
+/// shows through it, and its bottom border becomes a rule that fades toward the window edges.
 fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .id("screener-window-header")
         .relative()
@@ -855,9 +867,12 @@ fn screener_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(moon(p.shell_high))
+        .when(!facet, |this| this.bg(moon(p.shell_high)))
         .border_b(px(1.0))
         .border_color(moon_alpha(p.border, 1.0))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("screener-titlebar-title", 0.0)
                 .title_cluster(t!("screener.window_title").to_string(), cx)

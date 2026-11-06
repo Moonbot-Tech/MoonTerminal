@@ -240,7 +240,7 @@ fn header_row(cols: Cols, unit: &str, p: MoonPalette, cx: &App) -> Div {
         .font_family(design::ui_font())
         .text_size(design::t_caption(cx))
         .text_color(moon(p.text_soft))
-        .bg(moon(p.table_head))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
         .child(
             div()
                 .w(px(cols.name))
@@ -700,6 +700,10 @@ pub(in crate::analytics) fn cores_el(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: the cores card rests on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
         .child(header)
         .children(conc.map(|c| concentration_el(cores, c, colors, p, cx)))
         .child(

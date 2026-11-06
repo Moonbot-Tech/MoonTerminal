@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::analytics::{Summary, TopTrade};
 use moon_ui::{MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex};
@@ -36,6 +37,10 @@ fn card(selector: &'static str, cx: &App, p: MoonPalette) -> Div {
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: a side-column card rests on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
 }
 
 /// Card title in the shared title face.
@@ -133,7 +138,11 @@ pub(in crate::analytics) fn insights_el(
         .debug_selector(|| "sum-ins-list".into())
         .w_full()
         .border_t_1()
-        .border_color(moon(p.border));
+        .border_color(moon(p.border))
+        // Facet skin: the rule that opens the list fades toward the card's edges.
+        .when(design::is_facet(cx), |el| {
+            design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+        });
     if items.is_empty() {
         list = list.child(
             div()
@@ -397,7 +406,7 @@ pub(in crate::analytics) fn trades_el(
                 .font_family(design::ui_font())
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_soft))
-                .bg(moon(p.table_head))
+                .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
                 .child(
                     div()
                         .w(closed_w)

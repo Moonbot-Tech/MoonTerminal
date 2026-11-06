@@ -89,6 +89,7 @@ fn every_auto_face_has_one_primary_and_fits_narrow_and_default_widths(
     for mode in [
         UiThemeMode::Light,
         UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
         UiThemeMode::LightExperimental,
         UiThemeMode::DarkExperimental,
         UiThemeMode::Dark,

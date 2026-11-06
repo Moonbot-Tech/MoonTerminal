@@ -317,6 +317,7 @@ pub(crate) fn moon_theme_config_for_mode(mode: UiThemeMode) -> MoonThemeConfig {
     let mut theme = match mode {
         UiThemeMode::Dark => MoonThemeConfig::moon_terminal(),
         UiThemeMode::Graphite => MoonThemeConfig::moon_graphite(),
+        UiThemeMode::Obsidian => MoonThemeConfig::moon_obsidian(),
         UiThemeMode::Light => MoonThemeConfig::moon_light(),
         // One config carries both colour modes, dark roles on the dark side and light roles on
         // the light side; `theme.mode` below picks the side.
@@ -324,10 +325,12 @@ pub(crate) fn moon_theme_config_for_mode(mode: UiThemeMode) -> MoonThemeConfig {
             MoonThemeConfig::moon_color_modes()
         }
     };
-    // Graphite is a dark theme, just a softer one, so it takes MoonUI's dark side. Everything
-    // downstream that asks "is this light?" measures the palette rather than reading this field.
+    // Graphite is a dark theme, just a softer one, so it takes MoonUI's dark side, and Obsidian
+    // is dark outright. Everything downstream that asks "is this light?" measures the palette
+    // rather than reading this field.
     theme.mode = match mode {
         UiThemeMode::Dark | UiThemeMode::Graphite => ThemeMode::Dark,
+        UiThemeMode::Obsidian => ThemeMode::Dark,
         UiThemeMode::Light => ThemeMode::Light,
         UiThemeMode::DarkExperimental => ThemeMode::Dark,
         UiThemeMode::LightExperimental => ThemeMode::Light,

@@ -641,6 +641,9 @@ impl StrategiesView {
     pub(super) fn versions_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let border = moon(p.border);
+        // Facet skin: the pane, folded or open, is a rail on the window backdrop — no fill of
+        // its own, its right edge a rule that fades toward the top and the bottom of the window.
+        let facet = design::is_facet(cx);
         // Taken ONCE: two rows built off different `now_ms` values in the same frame could land
         // on opposite sides of a minute boundary.
         let now_ms = moon_core::util::now_unix_ms_i64();
@@ -659,9 +662,12 @@ impl StrategiesView {
                 .w(design::ui_px(cx, 22.0))
                 .flex_none()
                 .h_full()
-                .bg(moon(p.shell_high))
+                .when(!facet, |this| this.bg(moon(p.shell_high)))
                 .border_r_1()
                 .border_color(border)
+                .when(facet, |this| {
+                    design::facet_right_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+                })
                 .items_center()
                 .pt(design::ui_px(cx, 12.0))
                 .gap(design::ui_px(cx, 6.0))
@@ -685,12 +691,15 @@ impl StrategiesView {
             .w(px(self.panels.versions_w))
             .flex_none()
             .h_full()
-            .bg(moon(p.shell_high))
+            .when(!facet, |this| this.bg(moon(p.shell_high)))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .line_height(design::line_px(cx, 14.0))
             .border_r_1()
             .border_color(border)
+            .when(facet, |this| {
+                design::facet_right_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+            })
             .px(design::ui_px(cx, VERSIONS_PANE_PADDING))
             .py(design::ui_px(cx, 12.0))
             .gap(design::ui_px(cx, 7.0))
@@ -727,7 +736,11 @@ impl StrategiesView {
                     .text_color(moon(p.text_muted))
                     .child(t!("strat.versions_order").to_string()),
             )
-            .child(div().w_full().h(px(1.0)).bg(border));
+            .child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).bg(border),
+            ));
 
         let hint = |s: String| div().mt_2().text_color(moon(p.text_muted)).child(s);
         // Same rule as the sections column: with nothing selected this pane has nothing to list and
@@ -818,7 +831,11 @@ impl StrategiesView {
             // The visual break between "live" and "the snapshots of live" (defect 3).
             list = list
                 .child(live_row)
-                .child(div().w_full().h(px(1.0)).bg(border))
+                .child(design::panel_rule(
+                    cx,
+                    p,
+                    div().w_full().h(px(1.0)).bg(border),
+                ))
                 .child(
                     div()
                         .font_family(design::ui_font())

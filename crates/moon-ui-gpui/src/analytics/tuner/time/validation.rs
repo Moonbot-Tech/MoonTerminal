@@ -89,6 +89,10 @@ pub(super) fn summary(
             .gap(design::ui_px(cx, 2.0))
             .border_t_1()
             .border_color(moon(p.border))
+            // Facet skin: the rule above the result fades toward the card's edges.
+            .when(design::is_facet(cx), |el| {
+                design::facet_top_rule(el, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .text_size(design::t_caption(cx))
             .children(result_line(result).map(|line| {
                 div()

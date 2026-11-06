@@ -20,6 +20,7 @@ fn zoom_is_installed_on_the_window_not_the_tokens() {
     for mode in [
         UiThemeMode::Dark,
         UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
         UiThemeMode::Light,
         UiThemeMode::DarkExperimental,
         UiThemeMode::LightExperimental,
@@ -62,7 +63,12 @@ fn experimental_modes_install_moonui_colour_roles_on_their_own_side() {
         assert_eq!(theme.colors, Some(roles));
         assert_eq!(theme.palette, roles.to_palette());
     }
-    for mode in [UiThemeMode::Dark, UiThemeMode::Graphite, UiThemeMode::Light] {
+    for mode in [
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+        UiThemeMode::Light,
+    ] {
         let theme = MoonTheme::from_config(crate::startup::moon_theme_config_for_mode(mode));
         assert_eq!(
             theme.colors, None,

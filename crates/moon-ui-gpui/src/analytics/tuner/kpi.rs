@@ -6,6 +6,7 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -724,7 +725,7 @@ pub(super) fn kpi_matrix_body_with(
         .line_height(heading_line_height)
         .font_family(design::ui_font())
         .text_color(moon(p.text_soft))
-        .bg(moon(p.table_head))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
         .child(
             div()
                 .flex_1()

@@ -366,3 +366,31 @@ fn graphite_chart_theme_uses_the_existing_dark_chart_set() {
     config.ui_theme_mode = UiThemeMode::Graphite;
     assert_eq!(config.chart_theme(), &config.theme.dark);
 }
+
+/// Catches `config/mod.rs:AppConfig::chart_theme` or `chart_theme_mut` choosing the table by
+/// `is_light()` again. Obsidian is dark by that answer, so the chart would draw the dark set's grey
+/// ground inside near-black panels, and every Appearance picker would write into `[dark]` — a
+/// table the Obsidian chart never reads — while the pair disagreeing would show one set's colour
+/// and store it in the other.
+#[test]
+fn obsidian_chart_theme_reads_and_writes_its_own_table() {
+    let mut config = AppConfig::blank(None);
+    config.ui_theme_mode = UiThemeMode::Obsidian;
+    config.theme.dark.bg = [1, 1, 1];
+    config.theme.light.bg = [2, 2, 2];
+    config.theme.obsidian.bg = [3, 3, 3];
+    let (dark, light) = (config.theme.dark.clone(), config.theme.light.clone());
+
+    assert_eq!(config.chart_theme().bg, [3, 3, 3]);
+
+    config.chart_theme_mut().grid = [9, 9, 9];
+    assert_eq!(config.theme.obsidian.grid, [9, 9, 9]);
+    assert_eq!(
+        config.theme.dark, dark,
+        "the dark table must stay untouched"
+    );
+    assert_eq!(
+        config.theme.light, light,
+        "the light table must stay untouched"
+    );
+}

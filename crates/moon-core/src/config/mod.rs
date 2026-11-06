@@ -135,7 +135,7 @@ pub use telegram_layout::{
     CardField, CardLayout, GroupRowStyle, MessageLayout, ReportColumn, ReportLayout, TotalPlace,
     TotalSeparation,
 };
-pub use theme::{ChartTheme, ChartThemeSet};
+pub use theme::{ChartColorSet, ChartTheme, ChartThemeSet};
 // Keep the counter private to `config` so external code cannot construct or replace it.
 use uid_counter::UidCounter;
 
@@ -1000,9 +1000,21 @@ impl AppConfig {
     /// `max(0, 0 + 1) == 1` (`reconcile::next_free_uid`), so 1 is "nothing has ever been issued".
     const FIRST_ISSUED_UID: u64 = 1;
 
-    /// Chart theme for the active UI mode's colour set; Graphite uses the dark entry.
+    /// Chart theme for the active UI mode's colour set; Graphite uses the dark entry and Obsidian
+    /// its own.
+    ///
+    /// Chosen by the MODE through [`ChartColorSet::for_mode`], never by `is_light()`: a bool
+    /// cannot name the `[obsidian]` table and would hand the Obsidian theme the dark one.
     pub fn chart_theme(&self) -> &ChartTheme {
-        self.theme.get(self.ui_theme_mode.is_light())
+        self.theme.for_mode(self.ui_theme_mode)
+    }
+
+    /// Mutable counterpart of [`Self::chart_theme`]: the table the Appearance editors write.
+    ///
+    /// The editors and the chart must resolve the SAME table, or a picker would show one set's
+    /// colour and write it into another; going through this pair is what keeps them together.
+    pub fn chart_theme_mut(&mut self) -> &mut ChartTheme {
+        self.theme.for_mode_mut(self.ui_theme_mode)
     }
 
     /// A group is meaningful only while at least one core references it. Do not save orphans,

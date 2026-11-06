@@ -213,6 +213,7 @@ fn livefix_unclosed_body_label_fits_without_overpainting_values(cx: &mut gpui::T
         moon_core::config::UiThemeMode::Light,
         moon_core::config::UiThemeMode::Dark,
         moon_core::config::UiThemeMode::Graphite,
+        moon_core::config::UiThemeMode::Obsidian,
     ] {
         cx.update(|cx| {
             moon_ui::MoonTheme::install_config(

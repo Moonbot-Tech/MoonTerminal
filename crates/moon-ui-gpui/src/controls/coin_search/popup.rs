@@ -9,6 +9,9 @@ use super::*;
 /// the accumulated selection. `selected` contains the currently checked markets. In single-selection
 /// mode, `on_toggle` and `on_open_new` are never called.
 ///
+/// The dropdown draws its own frame: a flat `panel_high` box under the Flat skin, MoonUI's popup
+/// surface under Facet. A host that nests the list inside a popup of its own strips that frame.
+///
 /// Args:
 ///     id: Stable popup identity used for the scroll container and child controls.
 ///     results: Query matches, or the list the open tab resolved.
@@ -258,6 +261,11 @@ where
         }
     }
 
+    // Facet skin: the frame is MoonUI's popup surface, whose gradient settles to `card` at the
+    // bottom, so that is the colour the list fades into there; the rules above and below the
+    // list fade toward the popup's edges.
+    let facet = design::is_facet(cx);
+    let fade_to = if facet { p.card } else { p.panel_high };
     // The fade is anchored outside the scroll content and has no input handlers, so it signals
     // continuation without becoming another row or taking wheel/click interaction from the list.
     let list = div()
@@ -275,8 +283,8 @@ where
                     .h(design::ui_px(cx, COIN_LIST_FADE_H))
                     .bg(linear_gradient(
                         180.0,
-                        linear_color_stop(design::moon_alpha(p.panel_high, 0.0), 0.0),
-                        linear_color_stop(design::moon_alpha(p.panel_high, 1.0), 1.0),
+                        linear_color_stop(design::moon_alpha(fade_to, 0.0), 0.0),
+                        linear_color_stop(design::moon_alpha(fade_to, 1.0), 1.0),
                     )),
             )
         });
@@ -296,6 +304,9 @@ where
             .py(design::ui_px(cx, 6.0))
             .border_t_1()
             .border_color(rgb(p.border))
+            .when(facet, |footer| {
+                design::facet_top_rule(footer, design::facet_ink(p, design::FACET_PANEL_RULE))
+            })
             .child(
                 MoonButton::new(SharedString::from(format!("{id}-open-new")))
                     .label(label)
@@ -322,6 +333,9 @@ where
         .border_1()
         .border_color(rgb(p.border))
         .rounded(design::r_button(cx))
+        .when(facet, |frame| {
+            design::facet_surface(frame, moon_ui::MoonFacetKind::Popup, cx)
+        })
         // Intercept mouse_down across the popup. A checkbox reacts on_change rather than
         // mouse_down, so the event would otherwise reach the dismiss layer underneath and close
         // the list. A pick row has its own earlier mouse-down handler with stop_propagation.

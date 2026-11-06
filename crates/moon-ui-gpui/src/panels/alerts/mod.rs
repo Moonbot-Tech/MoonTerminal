@@ -57,6 +57,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonDataTableState, MoonInputEvent, MoonInputState, MoonPalette, Panel, PanelEvent,
@@ -893,6 +894,18 @@ impl Panel for AlertsPanel {
 }
 
 impl Render for AlertsPanel {
+    /// Render the Alerts panel: the toolbar, the alert table and the playback bar.
+    ///
+    /// The root fills itself with `table_body` and draws a solid rule under the toolbar. Under
+    /// the Facet skin it paints no fill, so the dock's surface shows through, and the rule fades
+    /// toward the panel edges.
+    ///
+    /// Args:
+    ///     _window: Host window; unused.
+    ///     cx: Panel context used to read the backend and wire the controls.
+    ///
+    /// Returns:
+    ///     The complete Alerts panel element tree.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::ALERTS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::ALERTS_RENDER_US);
@@ -916,14 +929,19 @@ impl Render for AlertsPanel {
             .size_full()
             // The same surface every other table panel sits on. It used to be `shell`, which is
             // half a tone off and reads as a different panel next to Orders or Report.
-            .bg(moon(p.table_body))
+            // Under the Facet skin it stays unfilled, like theirs, so the dock's surface shows.
+            .when(!design::is_facet(cx), |this| this.bg(moon(p.table_body)))
             .text_color(moon(p.text))
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .track_focus(&self.focus)
             .child(self.toolbar(cx))
             // The hairline Orders and Report draw between their filters and their table.
-            .child(div().w_full().h(px(1.0)).flex_none().bg(moon(p.border)))
+            .child(design::panel_rule(
+                cx,
+                p,
+                div().w_full().h(px(1.0)).flex_none().bg(moon(p.border)),
+            ))
             .child(body)
             .child(self.bottom_bar(p, cx))
     }

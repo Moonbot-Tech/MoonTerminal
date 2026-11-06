@@ -253,4 +253,7 @@ pub(crate) struct Shell {
     /// Holds what was TOGGLED away from the default, not what is open, so an opening popup needs no
     /// seeding; see `controls::coin_search::group_is_open`.
     ticker_expanded: std::collections::HashSet<crate::controls::coin_search::CoinGroupKey>,
+    /// This window's clear colour, kept on the palette under the Facet skin, where the Auto rail,
+    /// the chart tab strip and the gaps between chart tiles are unfilled and show it.
+    ground: crate::design::FacetGround,
 }

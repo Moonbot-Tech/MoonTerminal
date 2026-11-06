@@ -836,6 +836,9 @@ const CELL_PAD_RIGHT: f32 = 8.0;
 /// would paint the content box only and leave a 20 px gap at every column boundary — the band would
 /// read as dashes rather than as a stripe.
 ///
+/// Under the Facet skin the band is lit from its top edge instead of filled, and the rule under it
+/// fades toward the table's edges — the treatment the Assets heading and the Auto rail's take.
+///
 /// Args:
 ///     section: The heading's identity, caption, brand and member count.
 ///     logos_ready: Whether the off-thread logo prewarm has landed.
@@ -899,6 +902,14 @@ fn section_row(
                 .bg(rgb(p.panel_head))
                 .border_b_1()
                 .border_color(rgb(p.border_soft))
+                // Facet skin: the band is lit from its top edge instead of filled, over a rule
+                // that fades toward the table's edges.
+                .when(design::is_facet(cx), |banner| {
+                    design::facet_bottom_rule(
+                        banner.bg(design::facet_sheen(p, design::FACET_SECTION_SHEEN)),
+                        design::facet_ink(p, design::FACET_PANEL_RULE),
+                    )
+                })
                 .items_center()
                 .pl(px(CELL_PAD_LEFT))
                 .pr(px(CELL_PAD_RIGHT))

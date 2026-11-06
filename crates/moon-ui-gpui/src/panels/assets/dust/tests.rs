@@ -117,6 +117,7 @@ fn localized_dust_label_fits_narrow_and_wide_headers(cx: &mut gpui::TestAppConte
             UiThemeMode::Dark,
             UiThemeMode::Light,
             UiThemeMode::Graphite,
+            UiThemeMode::Obsidian,
             UiThemeMode::LightExperimental,
             UiThemeMode::DarkExperimental,
         ] {

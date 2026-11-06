@@ -170,12 +170,17 @@ fn migrating_defaults_stay_pinned_to_the_reviewed_palette() {
     assert_eq!(light.book_ask, [240, 137, 137]);
 }
 
-/// `theme.rs:ChartTheme::default` and `default_light` must ship `hvol_bg` equal to `book_bg`: that
-/// is the field the profile's backdrop read before it had its own, so a fresh install must draw
-/// exactly what the previous version drew.
+/// `theme.rs:ChartTheme::default`, `default_light` and `default_obsidian` must ship `hvol_bg`
+/// equal to `book_bg`: that is the field the profile's backdrop read before it had its own, so a
+/// fresh install must draw exactly what the previous version drew — and the Obsidian set, which
+/// moves both, must move them together.
 #[test]
 fn fresh_hvol_backdrop_matches_the_book_background_it_used_to_borrow() {
-    for theme in [ChartTheme::default(), ChartTheme::default_light()] {
+    for theme in [
+        ChartTheme::default(),
+        ChartTheme::default_light(),
+        ChartTheme::default_obsidian(),
+    ] {
         assert_eq!(theme.hvol_bg, theme.book_bg);
     }
 }
@@ -550,4 +555,379 @@ book_level_ask = [102, 255, 51]
     let (reset, _) = ChartThemeSet::resolve(Some(&saved)).unwrap();
     assert_eq!(reset.dark.book_level_bid, None);
     assert_eq!(reset.dark.resolved_book_level(true), [1.0; 4]);
+}
+
+// --- The Obsidian chart table ------------------------------------------------------------------
+
+/// The seven surfaces the Obsidian set moves off the dark default, as reviewed.
+const OBSIDIAN_OVERRIDES: [(&str, [u8; 3]); 7] = [
+    ("bg", [8, 9, 11]),
+    ("book_bg", [8, 9, 11]),
+    ("book_bg_ask", [28, 13, 12]),
+    ("book_bg_bid", [10, 24, 16]),
+    ("grid", [22, 24, 28]),
+    ("hvol_bg", [8, 9, 11]),
+    ("panel_bg", [13, 15, 18]),
+];
+
+/// One theme as its stored TOML table, so two themes can be compared key by key without the test
+/// having to name every field — and so a field added later is compared without anyone remembering.
+fn theme_table(theme: &ChartTheme) -> toml::Table {
+    toml::from_str(&toml::to_string(theme).expect("a chart theme serializes"))
+        .expect("a serialized chart theme parses back")
+}
+
+/// A complete `theme.toml` exactly as a build from before the `[obsidian]` table wrote it: the
+/// generation stamp and the two tables, nothing else.
+fn two_table_file(dark: &ChartTheme, light: &ChartTheme) -> String {
+    format!(
+        "palette_rev = {CURRENT_PALETTE_REV}\n\n[dark]\n{}\n[light]\n{}",
+        toml::to_string_pretty(dark).expect("dark theme serializes"),
+        toml::to_string_pretty(light).expect("light theme serializes"),
+    )
+}
+
+/// `theme.rs:ChartTheme::default_obsidian` must differ from the dark default in the seven
+/// reviewed surfaces and in nothing else. An eighth override — a candle or a label drifting along
+/// with the ground — would restyle the Obsidian chart beyond what was reviewed, and a dropped one
+/// would leave a grey zone inside the near-black panels.
+#[test]
+fn obsidian_defaults_are_the_dark_defaults_with_only_the_reviewed_surfaces_moved() {
+    let dark = theme_table(&ChartTheme::default());
+    let obsidian = theme_table(&ChartTheme::default_obsidian());
+    assert_eq!(
+        dark.keys().collect::<Vec<_>>(),
+        obsidian.keys().collect::<Vec<_>>(),
+        "the two sets must store the same keys"
+    );
+
+    // Keyed maps on both sides, so the comparison does not depend on the order either was built in.
+    let moved: std::collections::BTreeMap<String, toml::Value> = obsidian
+        .iter()
+        .filter(|(key, value)| dark.get(key.as_str()) != Some(*value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+
+    let expected: std::collections::BTreeMap<String, toml::Value> = OBSIDIAN_OVERRIDES
+        .iter()
+        .map(|(key, rgb)| {
+            let channels = rgb
+                .iter()
+                .map(|channel| toml::Value::Integer(i64::from(*channel)))
+                .collect();
+            ((*key).to_string(), toml::Value::Array(channels))
+        })
+        .collect();
+    assert_eq!(moved, expected);
+}
+
+/// `theme.rs:ChartColorSet::for_mode` and the `for_mode` accessors must hand each interface mode
+/// its own table: Obsidian the third one and ONLY Obsidian, the two light modes the light one,
+/// everything else dark. Routing Obsidian through `is_light()` again draws the dark set's grey
+/// ground inside its near-black panels; routing Graphite to the new table restyles a theme nobody
+/// asked to change.
+#[test]
+fn every_interface_mode_draws_its_own_chart_table() {
+    let set = ChartThemeSet {
+        dark: ChartTheme {
+            bg: [1, 1, 1],
+            ..ChartTheme::default()
+        },
+        light: ChartTheme {
+            bg: [2, 2, 2],
+            ..ChartTheme::default_light()
+        },
+        obsidian: ChartTheme {
+            bg: [3, 3, 3],
+            ..ChartTheme::default_obsidian()
+        },
+        ..ChartThemeSet::default()
+    };
+    for (mode, color_set, bg) in [
+        (UiThemeMode::Dark, ChartColorSet::Dark, [1, 1, 1]),
+        (UiThemeMode::Graphite, ChartColorSet::Dark, [1, 1, 1]),
+        (
+            UiThemeMode::DarkExperimental,
+            ChartColorSet::Dark,
+            [1, 1, 1],
+        ),
+        (UiThemeMode::Light, ChartColorSet::Light, [2, 2, 2]),
+        (
+            UiThemeMode::LightExperimental,
+            ChartColorSet::Light,
+            [2, 2, 2],
+        ),
+        (UiThemeMode::Obsidian, ChartColorSet::Obsidian, [3, 3, 3]),
+    ] {
+        assert_eq!(ChartColorSet::for_mode(mode), color_set, "{mode:?}");
+        assert_eq!(ChartColorSet::from(mode), color_set, "{mode:?}");
+        assert_eq!(set.for_mode(mode).bg, bg, "{mode:?}");
+        assert_eq!(set.for_set(color_set).bg, bg, "{mode:?}");
+    }
+    // The bool accessor is kept for callers that know only light/dark, and still means that.
+    assert_eq!(set.get(false).bg, [1, 1, 1]);
+    assert_eq!(set.get(true).bg, [2, 2, 2]);
+}
+
+/// `theme.rs:ChartThemeSet::for_mode_mut` must write the table `for_mode` reads and no other. A
+/// mutable accessor that resolved Obsidian to the dark table would have every Appearance picker
+/// show the Obsidian colour and write it into `[dark]`.
+#[test]
+fn editing_through_a_mode_writes_only_that_modes_table() {
+    for (mode, changed) in [
+        (UiThemeMode::Dark, [true, false, false]),
+        (UiThemeMode::Graphite, [true, false, false]),
+        (UiThemeMode::DarkExperimental, [true, false, false]),
+        (UiThemeMode::Light, [false, true, false]),
+        (UiThemeMode::LightExperimental, [false, true, false]),
+        (UiThemeMode::Obsidian, [false, false, true]),
+    ] {
+        let before = ChartThemeSet::default();
+        let mut set = before.clone();
+
+        set.for_mode_mut(mode).bg = [9, 9, 9];
+
+        assert_eq!(set.for_mode(mode).bg, [9, 9, 9], "{mode:?}");
+        assert_eq!(
+            [
+                set.dark != before.dark,
+                set.light != before.light,
+                set.obsidian != before.obsidian,
+            ],
+            changed,
+            "{mode:?} must edit exactly its own table"
+        );
+    }
+}
+
+/// `theme.rs:ChartThemeSet::resolve` must load a file written before the `[obsidian]` table
+/// existed to the very dark and light values it held, hand it the default Obsidian table, and NOT
+/// ask for a write-back. Making the absent table a reason to save would rewrite every existing
+/// user's `theme.toml` on the first launch of this build.
+#[test]
+fn a_two_table_file_loads_its_dark_and_light_unchanged_and_is_not_rewritten() {
+    let dark = ChartTheme {
+        bg: [1, 2, 3],
+        grid_alpha: 0.37,
+        book_level_bid: Some([4, 5, 6]),
+        ..ChartTheme::default()
+    };
+    let light = ChartTheme {
+        grid: [7, 8, 9],
+        price_line_px: 2.3,
+        ..ChartTheme::default_light()
+    };
+    let text = two_table_file(&dark, &light);
+    assert!(
+        !text.contains("obsidian"),
+        "the fixture must be a file from before the table existed"
+    );
+
+    let (set, write_back) = ChartThemeSet::resolve(Some(&text)).unwrap();
+
+    assert_eq!(set.dark, dark);
+    assert_eq!(set.light, light);
+    assert_eq!(set.obsidian, ChartTheme::default_obsidian());
+    assert_eq!(set.palette_rev, CURRENT_PALETTE_REV);
+    assert!(
+        !write_back,
+        "an absent [obsidian] table must not rewrite the user's file"
+    );
+}
+
+/// `theme.rs:ChartThemeSet` must keep filling the keys a hand-trimmed two-table file leaves out
+/// exactly as it always has — from the DARK default, on the light side too. The new table's own
+/// default must not leak into either, and the sparse file must still cost no write.
+#[test]
+fn a_sparse_two_table_file_still_fills_missing_keys_from_the_dark_default() {
+    let text = format!(
+        "palette_rev = {CURRENT_PALETTE_REV}\n\n[dark]\nbg = [1, 2, 3]\n\n[light]\ngrid = [4, 5, 6]\n"
+    );
+
+    let (set, write_back) = ChartThemeSet::resolve(Some(&text)).unwrap();
+
+    assert_eq!(
+        set.dark,
+        ChartTheme {
+            bg: [1, 2, 3],
+            ..ChartTheme::default()
+        }
+    );
+    assert_eq!(
+        set.light,
+        ChartTheme {
+            grid: [4, 5, 6],
+            ..ChartTheme::default()
+        }
+    );
+    assert_eq!(set.obsidian, ChartTheme::default_obsidian());
+    assert!(!write_back);
+}
+
+/// `theme.rs:ChartThemeSet::resolve` must read a file that carries only an `[obsidian]` table as
+/// a set. Left out of the shape check, such a file is taken for a legacy flat theme and rewritten
+/// at once with the table gone.
+#[test]
+fn an_obsidian_only_file_is_read_as_a_set_and_keeps_its_table() {
+    let (set, _) = ChartThemeSet::resolve(Some("[obsidian]\nbg = [40, 41, 42]\n")).unwrap();
+
+    assert_eq!(set.obsidian.bg, [40, 41, 42]);
+    assert_eq!(set.dark, ChartTheme::default());
+    assert_eq!(set.light, ChartTheme::default_light());
+}
+
+/// `theme.rs:ChartThemeSet::to_share_string` is the text `save` writes, and it must carry all
+/// three tables back through both readers: the load path without asking for another write, and
+/// the paste path over an unrelated live set.
+#[test]
+fn a_saved_set_round_trips_all_three_tables() {
+    let set = ChartThemeSet {
+        dark: ChartTheme {
+            bg: [1, 2, 3],
+            ..ChartTheme::default()
+        },
+        light: ChartTheme {
+            grid: [7, 8, 9],
+            ..ChartTheme::default_light()
+        },
+        obsidian: ChartTheme {
+            bg: [4, 5, 6],
+            cross_alpha: 0.25,
+            book_level_ask: Some([10, 11, 12]),
+            ..ChartTheme::default_obsidian()
+        },
+        ..ChartThemeSet::default()
+    };
+    let saved = set.to_share_string().expect("a three-table set serializes");
+
+    let (loaded, write_back) = ChartThemeSet::resolve(Some(&saved)).unwrap();
+    assert_eq!(loaded, set);
+    assert!(!write_back);
+
+    let pasted = ChartThemeSet::parse_share(&saved, &ChartThemeSet::default())
+        .expect("a three-table theme parses");
+    assert_eq!(pasted, set);
+}
+
+/// `theme.rs:ChartThemeSet::parse_share` must keep the live Obsidian table when the pasted text
+/// has none — every theme copied by a build older than the table. Without the restoration serde
+/// fills it from the shipped default and a paste of someone's dark/light theme silently resets the
+/// user's own Obsidian colours.
+#[test]
+fn sharing_a_two_table_text_keeps_the_live_obsidian_table() {
+    let mut current = ChartThemeSet::default();
+    current.obsidian.bg = [3, 17, 251];
+    let live_obsidian = current.obsidian.clone();
+    let text = two_table_file(
+        &ChartTheme {
+            bg: [11, 22, 33],
+            ..ChartTheme::default()
+        },
+        &ChartTheme {
+            bg: [220, 221, 222],
+            ..ChartTheme::default_light()
+        },
+    );
+
+    let parsed = ChartThemeSet::parse_share(&text, &current).expect("a two-table theme parses");
+
+    assert_eq!(parsed.dark.bg, [11, 22, 33]);
+    assert_eq!(parsed.light.bg, [220, 221, 222]);
+    assert_eq!(parsed.obsidian, live_obsidian);
+    assert_ne!(parsed.obsidian, ChartTheme::default_obsidian());
+    assert_eq!(parsed.palette_rev, CURRENT_PALETTE_REV);
+}
+
+/// `theme.rs:ChartThemeSet::parse_share` must take the Obsidian table from a text that carries
+/// one; restoring the live table unconditionally would make the third table impossible to share.
+#[test]
+fn sharing_a_three_table_text_replaces_the_live_obsidian_table() {
+    let mut current = ChartThemeSet::default();
+    current.obsidian.bg = [3, 17, 251];
+    let sent = ChartThemeSet {
+        obsidian: ChartTheme {
+            bg: [40, 41, 42],
+            ..ChartTheme::default_obsidian()
+        },
+        ..ChartThemeSet::default()
+    };
+    let text = sent
+        .to_share_string()
+        .expect("a three-table set serializes");
+
+    let parsed = ChartThemeSet::parse_share(&text, &current).expect("a three-table theme parses");
+
+    assert_eq!(parsed.obsidian, sent.obsidian);
+}
+
+/// `theme.rs:ChartThemeSet::parse_share` must accept a text carrying only `[obsidian]`, keep both
+/// live sides, and keep THEIR generation. Folding this case into the mixed-set rule would stamp a
+/// newer live pair down to the current generation although neither side came from the paste.
+#[test]
+fn sharing_an_obsidian_only_table_keeps_both_live_sides_and_their_generation() {
+    let mut current = ChartThemeSet {
+        palette_rev: CURRENT_PALETTE_REV + 2,
+        ..ChartThemeSet::default()
+    };
+    current.dark.bg = [251, 17, 3];
+    current.light.bg = [3, 17, 251];
+    let text = "[obsidian]\nbg = [40, 41, 42]\n";
+
+    let parsed = ChartThemeSet::parse_share(text, &current).expect("an obsidian-only theme parses");
+
+    assert_eq!(parsed.obsidian.bg, [40, 41, 42]);
+    assert_eq!(parsed.dark, current.dark);
+    assert_eq!(parsed.light, current.light);
+    assert_eq!(parsed.palette_rev, current.palette_rev);
+}
+
+/// `theme.rs:ChartThemeSet::parse_share` must keep the live Obsidian table when a legacy FLAT
+/// theme is pasted: a flat theme is one dark table, and the user's Obsidian colours were never
+/// part of it.
+#[test]
+fn sharing_a_flat_legacy_theme_keeps_the_live_obsidian_table() {
+    let flat = ChartTheme {
+        bg: [10, 20, 30],
+        ..ChartTheme::default()
+    };
+    let text = toml::to_string_pretty(&flat).expect("flat themes serialize");
+    let mut current = ChartThemeSet::default();
+    current.obsidian.bg = [3, 17, 251];
+
+    let parsed = ChartThemeSet::parse_share(&text, &current).expect("a flat theme parses");
+
+    assert_eq!(parsed.dark, flat);
+    assert_eq!(parsed.obsidian, current.obsidian);
+}
+
+/// The palette carry-over belongs to `[dark]` and `[light]` alone. The Obsidian table never
+/// shipped a colour that was later retired and was born with its own `hvol_bg`, so on an older
+/// generation neither the load path nor the paste path may touch it — running it through
+/// `retire_theme` would swap a colour the user picked that happens to equal a retired dark
+/// default, and overwrite the profile backdrop they chose with `book_bg`.
+#[test]
+fn an_older_generation_never_carries_the_obsidian_table_across() {
+    let retired = RETIRED_DARK
+        .first()
+        .expect("the dark migration has a frozen generation");
+    let text = format!(
+        "palette_rev = 2\n\n[dark]\nbg = [11, 22, 33]\nbook_bg = [7, 8, 9]\n\n[obsidian]\nbg = [40, 41, 42]\nbook_bg = [7, 8, 9]\nhvol_bg = [1, 2, 3]\ncandle_up = {:?}\n",
+        retired.candle_up
+    );
+
+    let (loaded, write_back) = ChartThemeSet::resolve(Some(&text)).unwrap();
+    assert!(write_back, "the dark side did move a generation");
+    assert_eq!(
+        loaded.dark.hvol_bg,
+        [7, 8, 9],
+        "the fixture must be old enough for the split to run on the dark side"
+    );
+    assert_eq!(loaded.obsidian.hvol_bg, [1, 2, 3]);
+    assert_eq!(loaded.obsidian.candle_up, retired.candle_up);
+
+    let pasted = ChartThemeSet::parse_share(&text, &ChartThemeSet::default())
+        .expect("an older dark-and-obsidian theme parses");
+    assert_eq!(pasted.dark.hvol_bg, [7, 8, 9]);
+    assert_eq!(pasted.obsidian.hvol_bg, [1, 2, 3]);
+    assert_eq!(pasted.obsidian.candle_up, retired.candle_up);
 }

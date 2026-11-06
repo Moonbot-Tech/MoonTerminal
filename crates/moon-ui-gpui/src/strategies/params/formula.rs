@@ -25,6 +25,9 @@ impl StrategiesView {
             }
         }
         let p = MoonPalette::active(cx);
+        // Facet skin: a snippet is a raised chip, and the helper a rail on the window backdrop
+        // whose left edge is a rule that fades toward both ends.
+        let facet = design::is_facet(cx);
         let snippets = formula_snippets();
         let mut list = v_flex().w_full().gap_1();
         for (label, detail, insert) in snippets {
@@ -37,6 +40,9 @@ impl StrategiesView {
                     .border_1()
                     .border_color(moon(p.border))
                     .bg(moon(p.panel))
+                    .when(facet, |this| {
+                        design::facet_surface(this, moon_ui::MoonFacetKind::Raised, cx)
+                    })
                     .px(design::ui_px(cx, 8.0))
                     .py(design::ui_px(cx, 6.0))
                     .cursor_pointer()
@@ -68,9 +74,12 @@ impl StrategiesView {
                 .gap(design::ui_px(cx, 10.0))
                 .px(design::ui_px(cx, 16.0))
                 .py(design::ui_px(cx, 14.0))
-                .bg(moon(p.shell_high))
+                .when(!facet, |this| this.bg(moon(p.shell_high)))
                 .border_l_1()
                 .border_color(moon(p.border))
+                .when(facet, |this| {
+                    design::facet_left_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+                })
                 .child(
                     div()
                         .text_size(design::t_body(cx))

@@ -4,6 +4,7 @@
 //! core ID through `Backend::set_header_ticker`. Its overlay and dismiss layers follow the other
 //! header popups.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use moon_ui::{MoonInput, MoonPalette, MoonWindowFrame, v_flex};
@@ -53,6 +54,9 @@ impl Shell {
     }
 
     /// Build the right-anchored ticker popup and its full-window dismiss layer.
+    ///
+    /// The box is a flat `panel_high` frame under the Flat skin and MoonUI's popup surface under
+    /// Facet, where the result list inside it gives up its own frame.
     ///
     /// Both elements are `None` when the popup is closed or `chrome_width` hides the ticker trigger.
     pub(super) fn ticker_popup_layers(
@@ -114,6 +118,16 @@ impl Shell {
             },
             |_, _| {},
         );
+        // Facet skin: the box below is the popup surface, so the list inside it gives up the
+        // frame and shadow it would cast as a popup of its own and reads as part of that box.
+        let facet = design::is_facet(cx);
+        let list = if facet {
+            list.bg(transparent_black())
+                .border_color(transparent_black())
+                .shadow(Vec::new())
+        } else {
+            list
+        };
 
         // Anchored to the window's RIGHT edge and offset inward past everything that stands to the
         // ticker's right in the header cluster (see `terminal_chrome`): the divider, the gaps, the
@@ -194,10 +208,16 @@ impl Shell {
                     // same value as `shell_high`, so that token would leave only a 1px border to
                     // separate the popup from the strip behind it. The anchored popovers survive it
                     // because they drop a shadow, which this hand-positioned box has no way to draw.
+                    //
+                    // Facet skin: MoonUI's popup surface — gradient fill, lit edge and the cast
+                    // shadow that sets it off the chrome — at the same radius.
                     .bg(rgb(p.panel_high))
                     .border_1()
                     .border_color(rgb(p.border))
                     .rounded(design::r_button(cx))
+                    .when(facet, |popup| {
+                        design::facet_surface(popup, moon_ui::MoonFacetKind::Popup, cx)
+                    })
                     .child(
                         div()
                             .text_size(design::t_caption(cx))

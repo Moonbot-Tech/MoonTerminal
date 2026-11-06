@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use chrono::Datelike;
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -551,6 +552,10 @@ pub(super) fn kpi_tile(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: a summary tile is a card resting on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
         .child(
             div()
                 .text_size(design::t_caption(cx))

@@ -2,6 +2,7 @@
 //! one row per strategy group, and the sortable column header. The controls it renders
 //! under — filters, sort state, column masks — live in the parent (`list`).
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MOON_SCROLLBAR_TRACK, MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonPalette,
@@ -401,6 +402,10 @@ fn strat_list_frame(
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: the strategy list is a card resting on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
         .overflow_hidden()
         .child(toolbar)
         .child(filter_bar)
@@ -499,7 +504,7 @@ fn strategy_row(
         .items_center()
         .justify_between()
         .cursor_pointer()
-        .bg(moon(p.table_body))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_body)))
         .border_t_1()
         .border_color(moon_alpha(p.border, 0.6))
         .child(
@@ -711,7 +716,7 @@ impl AnalyticsView {
             .justify_between()
             .text_size(design::t_caption(cx))
             .text_color(moon(p.text_soft))
-            .bg(moon(p.table_head))
+            .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
             .child(sortable(
                 "an-hdr-name".into(),
                 t!("analytics.col.strategy").to_string(),

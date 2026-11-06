@@ -12,10 +12,11 @@ use super::{
 use crate::settings::general::probe_host::{all_open, host, stub};
 use crate::settings::layout_probe::{ProbeSpec, sweep};
 
-const ALL_MODES: [UiThemeMode; 5] = [
+const ALL_MODES: [UiThemeMode; 6] = [
     UiThemeMode::Light,
     UiThemeMode::Graphite,
     UiThemeMode::Dark,
+    UiThemeMode::Obsidian,
     UiThemeMode::LightExperimental,
     UiThemeMode::DarkExperimental,
 ];
@@ -50,7 +51,12 @@ fn experimental_cards_stay_hidden_until_checked() {
     let hidden = visible_modes(false, UiThemeMode::Dark);
     assert_eq!(
         hidden,
-        vec![UiThemeMode::Light, UiThemeMode::Graphite, UiThemeMode::Dark]
+        vec![
+            UiThemeMode::Light,
+            UiThemeMode::Graphite,
+            UiThemeMode::Dark,
+            UiThemeMode::Obsidian,
+        ]
     );
     let shown = visible_modes(true, UiThemeMode::Dark);
     assert!(experimental.iter().all(|mode| shown.contains(mode)));
@@ -62,17 +68,23 @@ fn experimental_cards_stay_hidden_until_checked() {
     }
 }
 
-/// Catches the colour-set note drifting from the set the editors write: it follows `is_light()`
-/// for all five modes.
+/// Catches the colour-set note drifting from the chart table the editors write. The chart has
+/// three tables, so the note has three keys: Obsidian names its own set, and a note still chosen by
+/// `is_light()` would tell an Obsidian user they are editing the set "shared by Dark and Graphite"
+/// while the pickers write `[obsidian]`.
 #[test]
-fn the_set_note_follows_is_light_for_every_mode() {
-    for mode in ALL_MODES {
-        let want = if mode.is_light() {
-            "iface.set_note.light"
-        } else {
-            "iface.set_note.dark"
-        };
-        assert_eq!(set_note_key(mode), want, "{mode:?}");
+fn the_set_note_names_the_chart_table_of_every_mode() {
+    let want = [
+        (UiThemeMode::Light, "iface.set_note.light"),
+        (UiThemeMode::LightExperimental, "iface.set_note.light"),
+        (UiThemeMode::Dark, "iface.set_note.dark"),
+        (UiThemeMode::Graphite, "iface.set_note.dark"),
+        (UiThemeMode::DarkExperimental, "iface.set_note.dark"),
+        (UiThemeMode::Obsidian, "iface.set_note.obsidian"),
+    ];
+    assert_eq!(want.len(), ALL_MODES.len(), "every mode must be listed");
+    for (mode, key) in want {
+        assert_eq!(set_note_key(mode), key, "{mode:?}");
     }
 }
 

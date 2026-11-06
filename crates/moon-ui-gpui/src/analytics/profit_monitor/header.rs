@@ -93,17 +93,23 @@ pub(super) fn settings_trigger(open: bool) -> impl IntoElement {
 ///     cx: Render context.
 ///
 /// Returns:
-///     Title cluster and native-looking controls.
+///     Title cluster and native-looking controls. Under the Facet skin the bar paints no fill
+///     of its own, so the window backdrop's top light shows through it, and its bottom border
+///     becomes a rule that fades toward the window edges.
 pub(super) fn window_header(palette: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .w_full()
         .h(design::fit_h_px(cx, HEADER_HEIGHT, 14.0, 9.0))
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(moon(palette.shell_high))
+        .when(!facet, |this| this.bg(moon(palette.shell_high)))
         .border_b(px(1.0))
         .border_color(moon_alpha(palette.border, 1.0))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(palette, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("profit-monitor-title", 0.0)
                 .title_cluster(t!("profit_monitor.window_title").to_string(), cx)

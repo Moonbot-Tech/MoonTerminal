@@ -12,6 +12,7 @@ fn figure_menu_labels_fit_every_locale(cx: &mut gpui::TestAppContext) {
         UiThemeMode::Dark,
         UiThemeMode::Light,
         UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
         UiThemeMode::LightExperimental,
         UiThemeMode::DarkExperimental,
     ] {

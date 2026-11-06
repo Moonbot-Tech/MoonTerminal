@@ -121,7 +121,12 @@ impl Render for HourProbe {
 /// Removing either label from normal-width bars fails; narrow bars retain profit before count.
 #[gpui::test]
 fn livefix_every_hour_has_profit_and_count_labels(cx: &mut gpui::TestAppContext) {
-    for theme in [UiThemeMode::Light, UiThemeMode::Dark, UiThemeMode::Graphite] {
+    for theme in [
+        UiThemeMode::Light,
+        UiThemeMode::Dark,
+        UiThemeMode::Graphite,
+        UiThemeMode::Obsidian,
+    ] {
         cx.update(|cx| {
             MoonTheme::install_config(
                 crate::startup::moon_theme_config_for_presentation(theme, 1.0),

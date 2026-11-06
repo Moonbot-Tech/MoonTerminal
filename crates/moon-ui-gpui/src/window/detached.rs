@@ -557,6 +557,11 @@ impl Render for DetachedWindow {
             )
         };
         let p = MoonPalette::active(cx);
+        // Facet skin: `MoonRoot` paints the window backdrop behind this view, and the panels
+        // hosted here leave their bodies unfilled to show it. A fill on this root or on the
+        // title bar would cover it, so both go unpainted and the bar's bottom border becomes a
+        // rule that fades toward the window edges.
+        let facet = crate::design::is_facet(cx);
         let title = format!(
             "{} · {}",
             crate::persistence::panel_meta::panel_title(&self.panel),
@@ -564,7 +569,7 @@ impl Render for DetachedWindow {
         );
         v_flex()
             .size_full()
-            .bg(rgb(p.shell))
+            .when(!facet, |this| this.bg(rgb(p.shell)))
             .text_color(rgb(p.text))
             .child(
                 h_flex()
@@ -579,7 +584,13 @@ impl Render for DetachedWindow {
                     .pr(crate::design::ui_px(cx, 6.0))
                     .border_b_1()
                     .border_color(rgb(p.border))
-                    .bg(rgb(p.shell_high))
+                    .when(!facet, |this| this.bg(rgb(p.shell_high)))
+                    .when(facet, |this| {
+                        crate::design::facet_bottom_rule(
+                            this,
+                            crate::design::facet_ink(p, crate::design::FACET_CHROME_RULE),
+                        )
+                    })
                     .child(
                         MoonWindowFrame::detached_panel("detached-panel-title-drag", 0.0)
                             .title_cluster(title, cx)

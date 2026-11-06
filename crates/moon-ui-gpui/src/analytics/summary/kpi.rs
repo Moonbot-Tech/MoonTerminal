@@ -5,6 +5,7 @@
 //! Values never truncate: every value cell has a minimum width equal to its measured text.
 //! Labels wrap, group captions may shorten, and each comparison part stays on one line.
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, Bounds, Div, FontWeight, InteractiveElement, IntoElement, ParentElement,
     PathBuilder, Pixels, StatefulInteractiveElement, Styled, canvas, div, px,
@@ -316,6 +317,10 @@ fn group(i: usize, title: String, p: MoonPalette, cx: &App) -> Div {
         .bg(moon(p.panel))
         .border_1()
         .border_color(moon(p.border))
+        // Facet skin: the group is a card resting on the window.
+        .when(design::is_facet(cx), |el| {
+            design::facet_surface(el, moon_ui::MoonFacetKind::Card, cx)
+        })
         .rounded(design::ui_px(cx, 6.0))
         .px(design::ui_px(cx, 12.0))
         .pt(design::ui_px(cx, 10.0))
@@ -490,9 +495,14 @@ fn tile(
         .gap(design::ui_px(cx, 3.0))
         .px(design::ui_px(cx, 10.0))
         .py(design::ui_px(cx, 8.0))
-        .bg(moon(p.panel_head))
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.panel_head)))
         .border_1()
         .border_color(moon(p.border_soft))
+        // Facet skin: a tile inside the group card is an outline only — no fill of its own, so
+        // the card's gradient runs under it, and a lit hairline for its edge.
+        .when(design::is_facet(cx), |el| {
+            el.border_color(design::facet_ink(p, design::FACET_PANEL_RULE))
+        })
         .rounded(design::ui_px(cx, 5.0))
         .child(
             div()

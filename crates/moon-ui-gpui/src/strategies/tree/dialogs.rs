@@ -1014,13 +1014,17 @@ impl StrategiesView {
                     .unwrap_or(true);
                 let ok_danger = view.read(cx).op.as_ref().is_some_and(op_ok_is_danger);
 
+                // Facet skin: the fill and the border are not overridden, so MoonUI's popup
+                // surface shows, and the rule under the title fades toward the dialog's edges.
+                let facet = design::is_facet(cx);
                 dialog
                     .w(px(tree_op_dialog_width(window, cx)))
                     .close_button(close_button)
                     .overlay(true)
                     .overlay_closable(true)
-                    .bg(moon(p.shell_high))
-                    .border_color(moon(p.border))
+                    .when(!facet, |dialog| {
+                        dialog.bg(moon(p.shell_high)).border_color(moon(p.border))
+                    })
                     .rounded(design::r_container(cx))
                     .text_color(moon(p.text))
                     .header(
@@ -1029,6 +1033,12 @@ impl StrategiesView {
                             .py_2()
                             .border_b_1()
                             .border_color(moon(p.border))
+                            .when(facet, |header| {
+                                design::facet_bottom_rule(
+                                    header,
+                                    design::facet_ink(p, design::FACET_PANEL_RULE),
+                                )
+                            })
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(title),
                     )

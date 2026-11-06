@@ -30,6 +30,7 @@ mod measure;
 mod rem_scope;
 mod rules;
 mod scale;
+mod skin;
 mod table;
 mod window;
 
@@ -41,6 +42,7 @@ pub use measure::*;
 pub use rem_scope::*;
 pub use rules::*;
 pub use scale::*;
+pub use skin::*;
 pub use table::*;
 pub use window::*;
 

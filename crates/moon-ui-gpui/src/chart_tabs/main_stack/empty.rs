@@ -36,6 +36,7 @@
 //! delivers. The reading itself belongs to `crowd::service`, one per terminal, which closes
 //! whatever no screen and no rule is asking for.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, Window, div, px, rgb,
@@ -720,6 +721,10 @@ pub(super) struct EmptyFrame {
 /// may be anchored to the same cell, where they stack, and a screen that placed the brand itself
 /// and left the tables to place themselves could never stack one with the other.
 ///
+/// The screen fills itself with the chart background under the Flat skin. Under Facet it paints
+/// no fill: an empty Main renders no chart, so nothing lies beneath the scene for a plate to
+/// hide, and the window's own ground stands behind the blocks.
+///
 /// Args:
 ///     stack: The stack, for the corner control and the saved anchors.
 ///     frame: What is on, where it goes and which form it takes, resolved once by the caller.
@@ -780,7 +785,12 @@ pub(super) fn empty_screen(
     div()
         .relative()
         .size_full()
-        .bg(rgb(palette.chart_bg))
+        // Facet skin: no plate. Nothing lies under an empty Main for one to hide — the stack
+        // renders no chart, so there is no own pass beneath the scene — and the window's own
+        // ground, which `Shell` keeps on the theme, stands behind the blocks instead.
+        .when(!design::is_facet(cx), |screen| {
+            screen.bg(rgb(palette.chart_bg))
+        })
         .child(place::frame(frame_id, blocks, places, form, cx))
         .child(settings)
         .into_any_element()

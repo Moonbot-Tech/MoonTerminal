@@ -154,10 +154,14 @@ impl Render for ConnectWizardView {
                 scroll: self.log_scroll.clone(),
             });
         }
+        // Under the Facet skin `MoonRoot` paints the window backdrop behind this view: the root
+        // and the step rail paint no fill over it, and the rail's edge is a rule that fades
+        // toward the top and the bottom of the window.
+        let facet = design::is_facet(cx);
         v_flex()
             .size_full()
             .relative()
-            .bg(rgba_from(p.shell, 1.0))
+            .when(!facet, |this| this.bg(rgba_from(p.shell, 1.0)))
             .font_family(design::ui_font())
             .text_size(design::t_body(cx))
             .line_height(design::line_px(cx, 14.0))
@@ -175,9 +179,15 @@ impl Render for ConnectWizardView {
                                 .w(design::ui_px(cx, RAIL_W))
                                 .h_full()
                                 .p(design::ui_px(cx, 16.0))
-                                .bg(rgba_from(p.shell_high, 1.0))
+                                .when(!facet, |this| this.bg(rgba_from(p.shell_high, 1.0)))
                                 .border_r(px(1.0))
                                 .border_color(rgba_from(p.border, 1.0))
+                                .when(facet, |this| {
+                                    design::facet_right_rule(
+                                        this,
+                                        design::facet_ink(p, design::FACET_CHROME_RULE),
+                                    )
+                                })
                                 .child(
                                     MoonSteps::new("cw-steps")
                                         .steps(steps)
@@ -285,12 +295,16 @@ pub(super) fn buttons(cx: &App) -> Div {
 }
 
 /// The footer: going back on the left, going on on the right.
+///
+/// Under the Facet skin the footer paints no fill, so the window backdrop runs under it, and its
+/// top edge is a rule that fades toward the window edges.
 pub(super) fn footer(
     left: Vec<AnyElement>,
     right: Vec<AnyElement>,
     p: MoonPalette,
     cx: &App,
 ) -> Div {
+    let facet = design::is_facet(cx);
     h_flex()
         .flex_none()
         .w_full()
@@ -299,15 +313,22 @@ pub(super) fn footer(
         .gap(design::ui_px(cx, 8.0))
         .px(design::ui_px(cx, 18.0))
         .py(design::ui_px(cx, 10.0))
-        .bg(rgba_from(p.shell_high, 1.0))
+        .when(!facet, |this| this.bg(rgba_from(p.shell_high, 1.0)))
         .border_t(px(1.0))
         .border_color(rgba_from(p.border, 1.0))
+        .when(facet, |this| {
+            design::facet_top_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(buttons(cx).children(left))
         .child(buttons(cx).children(right))
 }
 
 /// The draggable window header.
+///
+/// Under the Facet skin the header paints no fill of its own, so the window backdrop's top light
+/// shows through it, and its bottom border becomes a rule that fades toward the window edges.
 fn header(p: MoonPalette, cx: &App) -> impl IntoElement {
+    let facet = design::is_facet(cx);
     h_flex()
         .id("cw-window-header")
         .relative()
@@ -317,9 +338,12 @@ fn header(p: MoonPalette, cx: &App) -> impl IntoElement {
         .justify_between()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        .bg(rgba_from(p.shell_high, 1.0))
+        .when(!facet, |this| this.bg(rgba_from(p.shell_high, 1.0)))
         .border_b(px(1.0))
         .border_color(rgba_from(p.border, 1.0))
+        .when(facet, |this| {
+            design::facet_bottom_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
+        })
         .child(
             MoonWindowFrame::tool("cw-titlebar-title", 0.0)
                 .title_cluster(t!("connect_wizard.window_title").to_string(), cx)

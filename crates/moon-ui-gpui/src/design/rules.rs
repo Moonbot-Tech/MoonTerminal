@@ -34,8 +34,19 @@ pub fn vline(cx: &App, height: f32, color: u32) -> impl IntoElement {
 /// where one group ends and the next begins because spacing inside and between groups is identical.
 /// `border_hover` is one step stronger in both palettes (about 1.5:1 dark and 1.7:1 light), which
 /// reads as a boundary without reading as a frame.
+///
+/// Under the Facet skin the rule keeps its footprint — one pixel wide, [`CHROME_RULE_H`] tall,
+/// never shrinking — and its colour, and fades toward both ends instead of ending square.
 pub fn chrome_divider(cx: &App, p: MoonPalette) -> impl IntoElement {
-    vline(cx, CHROME_RULE_H, p.border_hover)
+    if is_facet(cx) {
+        return div()
+            .flex_none()
+            .w(px(1.0))
+            .h(ui_px(cx, CHROME_RULE_H))
+            .child(moon_ui::fading_rule_v(moon(p.border_hover)))
+            .into_any_element();
+    }
+    vline(cx, CHROME_RULE_H, p.border_hover).into_any_element()
 }
 
 pub fn status_dot(color: u32, cx: &App) -> impl IntoElement {
