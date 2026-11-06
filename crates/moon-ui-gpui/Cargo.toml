@@ -148,7 +148,8 @@ libc = "0.2"
 backtrace = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-wgpu = { git = "https://github.com/zed-industries/wgpu.git", rev = "357a0c56e0070480ad9daea5d2eaa83150b79e88" }
+# Must resolve to MoonUI's wgpu package: raw GPU pointers carry Rust objects, not a C ABI.
+wgpu = { version = "29.0.1" }
 x11 = { version = "2.21", features = ["xlib", "xtest"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

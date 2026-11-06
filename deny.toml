@@ -49,7 +49,6 @@ unknown-git = "deny"
 allow-git = [
     "https://github.com/Moonbot-Tech/MoonUI",
     "https://github.com/Moonbot-Tech/MoonProtoBeta",
-    "https://github.com/zed-industries/wgpu",
     "https://github.com/zed-industries/async-process",
     "https://github.com/zed-industries/font-kit",
     "https://github.com/zed-industries/xim-rs",

@@ -38,6 +38,12 @@ The chart is drawn via a GPU own-pass on top of MoonUI/GPUI:
 This is not the old `egui + wgpu offscreen + readback` and not a shared-texture bridge between
 different renderers. CPU readback is not used for the live chart.
 
+The raw canvas API borrows the runtime's GPU objects. On Linux, producer and consumer must
+resolve to the **same Cargo `wgpu` package**, including source and version: these pointers
+refer to Rust types, not a stable C ABI. `lockfile_contract` checks both direct dependency
+edges, including local MoonUI override builds. The terminal uses MoonUI's registry source;
+switching either side to a fork requires switching both sides together.
+
 Key contract: the chart itself decides whether a frame is needed (`gpu_canvas.frame()`), and can
 prepare data for that same frame without a top-down `cx.notify()` of the whole window. Shell/Orders must not
 repaint at live-scroll, mousemove, or present frequency.

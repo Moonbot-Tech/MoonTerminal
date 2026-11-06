@@ -636,6 +636,11 @@ fn draw_pipeline_range(
     pass.draw(0..vertices, first..last);
 }
 
+/// Borrow MoonUI's GPU objects for this prepare call.
+///
+/// # Safety
+/// The objects must originate from the same wgpu package as this consumer. The lockfile
+/// contract test checks both dependency edges; matching API versions alone is insufficient.
 unsafe fn borrow_wgpu_prepare<'a>(
     gpu: &RawGpuAccess,
 ) -> Option<(
@@ -656,6 +661,11 @@ unsafe fn borrow_wgpu_prepare<'a>(
     ))
 }
 
+/// Borrow MoonUI's active render pass, under the same package and lifetime contract as prepare.
+///
+/// # Safety
+/// The producer and consumer must use the same wgpu package, and the pass must remain active
+/// for the borrow. Neither the pass nor the device/queue references may escape the draw call.
 unsafe fn borrow_wgpu_draw<'a>(
     gpu: &RawGpuAccess,
 ) -> Option<(
