@@ -229,6 +229,7 @@ fn serve(
             match SshRunner::open(&target, &login) {
                 Ok(opened) => runner = Some(opened),
                 Err(error) => {
+                    located = None;
                     send(Event::Phase(cmd, CmdPhase::Failed(ssh_failure(error))));
                     log::info!("core-cmds {uid} {cmd:?}: failed");
                     continue;
@@ -245,10 +246,15 @@ fn serve(
             request,
             &mut |event| {
                 match &event {
-                    Event::Located(found) => located = Some(found.clone()),
-                    Event::Info(info) => located = Some(info.located.clone()),
+                    Event::Located(_) | Event::Info(_) => update_location(&mut located, &event),
                     Event::AddressChanged { port: changed, .. } => port = *changed,
-                    Event::Phase(_, CmdPhase::Failed(CmdError::Ssh(_))) => reconnect = true,
+                    Event::Phase(_, CmdPhase::Failed(CmdError::Ssh(_))) => {
+                        reconnect = true;
+                        update_location(&mut located, &event);
+                    }
+                    Event::Phase(_, CmdPhase::Failed(CmdError::NoCore { .. })) => {
+                        update_location(&mut located, &event);
+                    }
                     _ => {}
                 }
                 send(event);
@@ -402,15 +408,14 @@ fn run_with(
                 Ok(host) => match runner.set_moonproto_address(&located.dir, host, port) {
                     Ok((key, retarget)) => {
                         emit(Event::Key(key));
+                        emit(Event::AddressChanged {
+                            host: host.to_string(),
+                            port,
+                        });
                         if let Some(error) = retarget {
-                            fail(cmd, CmdError::Ssh(error), emit)
+                            fail(cmd, CmdError::Refused(error), emit)
                         } else {
-                            done(cmd, emit);
-                            emit(Event::AddressChanged {
-                                host: host.to_string(),
-                                port,
-                            });
-                            true
+                            done(cmd, emit)
                         }
                     }
                     Err(error) => fail(cmd, ssh_failure(error), emit),
@@ -426,6 +431,18 @@ fn run_with(
             }
             Err(error) => fail(cmd, ssh_failure(error), emit),
         },
+    }
+}
+
+/// Keep the worker's identity cache current and force a fresh locate after stale-core failures.
+fn update_location(located: &mut Option<Located>, event: &Event) {
+    match event {
+        Event::Located(found) => *located = Some(found.clone()),
+        Event::Info(info) => *located = Some(info.located.clone()),
+        Event::Phase(_, CmdPhase::Failed(CmdError::NoCore { .. } | CmdError::Ssh(_))) => {
+            *located = None;
+        }
+        _ => {}
     }
 }
 

@@ -368,6 +368,14 @@ iface.theme.obsidian: es tr pt vi
 
 # English in every language: names, tickers and terms kept on purpose (locales/README.md,
 # "Deliberately NOT translated"). A line here that should be translated is a gap too.
+# Core commands: protocol/API labels, units, and the native cognates Exchange (es) and Port (tr).
+core_cmds.addr.ip: ru es uk tr pt vi
+core_cmds.addr.port: tr
+core_cmds.keys.key: ru uk
+core_cmds.keys.secret: ru
+core_cmds.status.kv_exchange: es
+core_cmds.status.kv_moonproto: ru es uk tr pt vi
+core_cmds.status.memory_mb: es tr pt vi
 analytics.col.pf: ru es uk tr pt vi
 analytics.col.profit_pct: ru es uk tr pt vi
 analytics.metric.pct: ru es uk tr pt vi

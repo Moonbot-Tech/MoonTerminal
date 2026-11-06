@@ -395,11 +395,46 @@ impl CoreCmdsView {
         cx.notify();
     }
 
-    /// Integration hook for the following batch's existing fleet Updates route.
-    pub(crate) fn on_open_updates(&mut self, _: &mut Window, _: &mut Context<Self>) {}
+    /// Open the existing fleet Updates surface from the command window's button handler.
+    pub(crate) fn on_open_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(backend) = &self.backend {
+            crate::panels::open_updates(backend, self.uid, window, cx);
+        }
+    }
 
-    /// Integration hook for the following batch's provider-login wizard branch.
-    pub(crate) fn on_add_login(&mut self, _: &mut Window, _: &mut Context<Self>) {}
+    /// Open the provider-login wizard for this core's IP from its no-login page.
+    pub(crate) fn on_add_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(backend) = self.backend.clone() else {
+            return;
+        };
+        let ip = {
+            let b = backend.read(cx);
+            b.core_cmds_facts(self.uid)
+                .map(|facts| target_host(&facts.target).to_string())
+                .filter(|host| !host.is_empty())
+                .or_else(|| {
+                    let server = b
+                        .config
+                        .servers
+                        .iter()
+                        .find(|server| server.uid == self.uid)?;
+                    let endpoint =
+                        moon_core::config::parse_endpoint_override(&server.endpoint_override)
+                            .ok()?;
+                    moon_core::config::target_from_key(server.key.expose(), endpoint.as_ref())
+                        .map(|target| target.host.to_string())
+                })
+        };
+        if let Some(ip) = ip {
+            crate::connect_wizard::open_login(
+                backend,
+                Some(window.window_handle()),
+                window.display(cx).map(|display| display.id()),
+                ip,
+                cx,
+            );
+        }
+    }
 
     /// Build the non-secret state used by both the production renderer and tests.
     pub(super) fn state(&self, facts: &CoreFacts, cx: &App) -> ViewState {

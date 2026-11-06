@@ -12,6 +12,7 @@
 //! assembly. [`endpoints`] derives endpoint text and duplicate peers from every draft key.
 
 mod columns;
+mod core_menu;
 mod cores;
 mod endpoints;
 mod entries;

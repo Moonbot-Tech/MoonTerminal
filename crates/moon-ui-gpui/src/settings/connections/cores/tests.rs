@@ -185,6 +185,7 @@ impl Probed for Host {
 fn row(key: u64, name: &str, addr: &str, feeds_on: u8, dot: CoreDot) -> CoreListRow {
     CoreListRow {
         row_key: key,
+        uid: key,
         draft_index: key as usize,
         core_id: key as _,
         name: name.to_string(),
@@ -291,6 +292,7 @@ fn model() -> CoresModel {
 fn card() -> CoreCard {
     CoreCard {
         draft_index: 3,
+        uid: 3,
         name: "VEGA ~ F-BB / SUB 13".into(),
         active: true,
         key_bad: true,
@@ -333,6 +335,21 @@ fn inputs(window: &mut Window, cx: &mut App) -> Inputs {
 
 /// The page body as the live page builds it, from the synthetic model.
 fn body(window: &mut Window, cx: &mut App, fields: &Inputs) -> AnyElement {
+    body_with_status(
+        window,
+        cx,
+        fields,
+        moon_remote::core_new::CoreState::LoginError,
+    )
+}
+
+/// Draw the production card with a server-reported status, including Ready with a stale reason.
+fn body_with_status(
+    window: &mut Window,
+    cx: &mut App,
+    fields: &Inputs,
+    state: moon_remote::core_new::CoreState,
+) -> AnyElement {
     let size = window.viewport_size();
     let (width, height) = (f32::from(size.width), f32::from(size.height));
     let narrow = crate::settings::nav::nav_hidden(width, cx);
@@ -363,6 +380,29 @@ fn body(window: &mut Window, cx: &mut App, fields: &Inputs) -> AnyElement {
             color: &fields.color,
         },
         plain_dot(CoreDot::Bad, cx),
+        Some(&crate::backend::core_cmds::CoreFacts {
+            target: "203.0.113.7".into(),
+            port: 3302,
+            located: None,
+            status: Some(moon_remote::core_new::CoreStatus {
+                state,
+                exchange: "EX-XX".into(),
+                exchange_name: "CORE_A".into(),
+                has_api_keys: true,
+                login_error: "429 Too Many Requests".into(),
+                moonproto_enabled: true,
+                moonproto_listening: true,
+                moonproto_error: String::new(),
+                moonproto_port: 3302,
+                emulator: None,
+            }),
+            info: None,
+            log: None,
+            key: None,
+            exchanges: None,
+            phases: Default::default(),
+            checked_at: None,
+        }),
         &open,
         &act,
         cx,
@@ -402,6 +442,8 @@ fn the_cores_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 "cores-list".into(),
                 "core-card".into(),
                 "core-card-foot".into(),
+                "core-card-login-error".into(),
+                "core-card-login-retry".into(),
                 "core-bad-key".into(),
                 // The widest card row: a card narrower than its controls pushes these out.
                 "core-card-key".into(),
@@ -423,6 +465,60 @@ fn the_cores_page_fits_the_body(cx: &mut gpui::TestAppContext) {
             ..Default::default()
         },
     );
+    sweep(
+        cx,
+        |window, cx: &mut Context<Host>, (width, _)| {
+            let fields = inputs(window, cx);
+            Host {
+                scroll: ScrollHandle::new(),
+                width,
+                build: Rc::new(move |window, cx| body(window, cx, &fields)),
+            }
+        },
+        |_| ProbeSpec {
+            container: "core-card",
+            inside: vec![
+                "core-card-login-error".into(),
+                "core-card-login-retry".into(),
+            ],
+            wraps: vec![
+                (
+                    "core-card-login-title".into(),
+                    rust_i18n::t!("core_cmds.banner.title").to_string(),
+                ),
+                (
+                    "core-card-login-reason".into(),
+                    rust_i18n::t!("core_cmds.banner.reason", reason = "429 Too Many Requests")
+                        .to_string(),
+                ),
+            ],
+            ..Default::default()
+        },
+    );
+}
+
+/// A cached error reason must not keep the red banner visible after the status becomes Ready.
+#[gpui::test]
+fn ready_core_has_no_login_error_banner(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let _locale = crate::test_locale::force("en");
+    let handle = cx.open_window(gpui::size(px(860.0), px(620.0)), |window, cx| {
+        let fields = inputs(window, cx);
+        Host {
+            scroll: ScrollHandle::new(),
+            width: 860.0,
+            build: Rc::new(move |window, cx| {
+                body_with_status(window, cx, &fields, moon_remote::core_new::CoreState::Ready)
+            }),
+        }
+    });
+    let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    assert!(visual.debug_bounds("core-card").is_some());
+    assert!(visual.debug_bounds("core-card-login-error").is_none());
+    assert!(visual.debug_bounds("core-card-login-retry").is_none());
 }
 
 /// Catches the mockup's split regressing in a wide window: the list squeezed to a narrow column

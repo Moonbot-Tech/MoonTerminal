@@ -53,6 +53,7 @@ impl std::fmt::Display for NeedsAdminPassword {
 impl std::error::Error for NeedsAdminPassword {}
 
 /// What the provider gave for the first login. Used for the setup only, never stored.
+#[derive(Clone)]
 pub enum FirstAccess {
     Password {
         user: String,

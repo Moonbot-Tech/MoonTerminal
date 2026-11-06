@@ -11,11 +11,12 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonContextMenuWindowExt as _, MoonInput,
     MoonInputState, MoonMenuItem, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSelect,
-    MoonWindowExt as _, h_flex, rgba_from, v_flex,
+    MoonTone, MoonWindowExt as _, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
 use super::SettingsView;
+use super::core_menu::{self, MenuCmd, MenuRow};
 use super::cores::{
     CardInputs, CoreAct, CoreAction, CoreCard, ListParts, core_card, cores_empty, cores_list,
     cores_split, deletes,
@@ -25,6 +26,7 @@ use super::tab::{apply_group_transport, group_icon, icon_picker_grid, sorted_gro
 use super::table::{
     apply_pasted_key, feed_count, feed_get, feed_set, set_core_active, set_for_station, status_dot,
 };
+use crate::backend::core_cmds::{MenuForm, menu_form};
 use crate::design;
 use crate::settings::Tab;
 use crate::settings::common::column_row;
@@ -95,8 +97,49 @@ impl SettingsView {
         match action {
             CoreAction::Select(key) => {
                 self.conn_selected = Some(key);
+                let uid = self
+                    .conn
+                    .iter()
+                    .position(|row| row.row_key == key)
+                    .and_then(|i| {
+                        let b = self.backend.read(cx);
+                        let server = b.preview.as_ref().unwrap_or(&b.config).servers.get(i)?;
+                        let host = command_host(server)?;
+                        (core_menu::eligible(&host) && b.core_cmds_login_for(&host).is_some())
+                            .then_some(server.uid)
+                    });
+                if let Some(uid) = uid {
+                    self.backend
+                        .update(cx, |b, _| b.core_cmds_request_status(uid));
+                }
                 cx.notify();
             }
+            CoreAction::CoreMenu(uid) => self.open_core_menu(uid, window, cx),
+            CoreAction::CoreCmd(uid, cmd) => crate::core_cmds::open_on(
+                self.backend.clone(),
+                Some(window.window_handle()),
+                window.display(cx).map(|display| display.id()),
+                uid,
+                cmd,
+                false,
+                cx,
+            ),
+            CoreAction::BannerRetry(uid) => crate::core_cmds::open_on(
+                self.backend.clone(),
+                Some(window.window_handle()),
+                window.display(cx).map(|display| display.id()),
+                uid,
+                moon_remote::core_cmds::Cmd::RetryLogin,
+                true,
+                cx,
+            ),
+            CoreAction::AddLogin(ip) => crate::connect_wizard::open_login(
+                self.backend.clone(),
+                Some(window.window_handle()),
+                window.display(cx).map(|display| display.id()),
+                ip,
+                cx,
+            ),
             CoreAction::GroupActive(name, on) => {
                 self.backend.update(cx, |b, bcx| {
                     if let Some(g) = b
@@ -223,6 +266,95 @@ impl SettingsView {
             CoreAction::AskDelete => self.ask_delete_core(window, cx),
             CoreAction::DeleteConfirmed(_) => {}
         }
+    }
+
+    /// Open the core's command menu from a click handler, preserving draft selection and inputs.
+    fn open_core_menu(&mut self, uid: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((name, ip, form, active)) = ({
+            let b = self.backend.read(cx);
+            b.config
+                .servers
+                .iter()
+                .find(|server| server.uid == uid)
+                .and_then(|server| {
+                    let ip = command_host(server)?;
+                    if !core_menu::eligible(&ip) {
+                        return None;
+                    }
+                    let facts = b.core_cmds_facts(uid);
+                    let located = facts.and_then(|facts| facts.located.as_ref());
+                    let form = menu_form(b.core_cmds_login_for(&ip).is_some(), located);
+                    let active = facts
+                        .and_then(|f| f.info.as_ref())
+                        .and_then(|i| i.located.active)
+                        .or_else(|| located.and_then(|l| l.active));
+                    Some((server.name.clone(), ip, form, active))
+                })
+        }) else {
+            return;
+        };
+        if form == MenuForm::Checking {
+            self.backend
+                .update(cx, |b, _| b.core_cmds_request_status(uid));
+        }
+        let mut rows = vec![MenuRow::Caption(
+            t!("core_cmds.menu.caption", core = name, ip = ip).to_string(),
+        )];
+        rows.extend(core_menu::core_menu_rows(form, active));
+        let weak = cx.entity().downgrade();
+        let mut items = Vec::new();
+        for row in rows {
+            match row {
+                MenuRow::Caption(caption) => items.push(MoonMenuItem::label(caption)),
+                MenuRow::Separator => items.push(MoonMenuItem::separator()),
+                MenuRow::Note(key) => {
+                    // MoonUI labels are single-line: keep each sentence in its own inert row.
+                    let text = t!(key).to_string();
+                    let mut sentences = text.split(". ").peekable();
+                    while let Some(sentence) = sentences.next() {
+                        let label = if sentences.peek().is_some() {
+                            format!("{sentence}.")
+                        } else {
+                            sentence.to_string()
+                        };
+                        items.push(MoonMenuItem::label(label));
+                    }
+                }
+                MenuRow::Item {
+                    id,
+                    label_key,
+                    action,
+                    enabled,
+                    hint_key,
+                    accent,
+                } => {
+                    let action = match action {
+                        MenuCmd::Run(cmd) => CoreAction::CoreCmd(uid, cmd),
+                        MenuCmd::AddLogin => CoreAction::AddLogin(ip.clone()),
+                    };
+                    let weak = weak.clone();
+                    let mut item = MoonMenuItem::with_key(id, t!(label_key).to_string())
+                        .disabled(!enabled)
+                        .tone(if accent {
+                            MoonTone::Accent
+                        } else {
+                            MoonTone::Default
+                        })
+                        .on_click(move |_, window, app| {
+                            window.close_context_menu(app);
+                            let _ = weak.update(app, |this, cx| {
+                                this.on_core_action(action.clone(), window, cx)
+                            });
+                        });
+                    if let Some(key) = hint_key {
+                        item = item.right_label(t!(key).to_string());
+                    }
+                    items.push(item);
+                }
+            }
+        }
+        let at = window.mouse_position();
+        window.open_fitted_moon_context_menu(cx, "cores-core-menu", at, items, 240.0, 560.0);
     }
 
     /// The "⋯" menu of a group: its icon, one transport mode for every core, a new core.
@@ -512,6 +644,7 @@ impl SettingsView {
                 let addr = endpoints.get(i).map(|e| e.text.clone()).unwrap_or_default();
                 Some(CoreListRow {
                     row_key: row.row_key,
+                    uid: s.uid,
                     draft_index: i,
                     core_id: s.id,
                     name: s.name.clone(),
@@ -646,6 +779,7 @@ impl SettingsView {
             });
             let card = CoreCard {
                 draft_index: i,
+                uid: s.uid,
                 name: s.name.clone(),
                 active: s.active,
                 // A synthetic core has no key at all, so nothing was rejected.
@@ -671,7 +805,16 @@ impl SettingsView {
             };
             let dot = dot(&sel, cx);
             let open = |key: &'static str| self.more_open.contains(key);
-            Some(core_card(&card, &inputs, dot, &open, &act, cx))
+            let backend = self.backend.read(cx);
+            Some(core_card(
+                &card,
+                &inputs,
+                dot,
+                backend.core_cmds_facts(s.uid),
+                &open,
+                &act,
+                cx,
+            ))
         });
 
         let selects = self.cores_selects(&act, cx);
@@ -773,4 +916,11 @@ impl SettingsView {
             ))
             .into_any_element()
     }
+}
+
+/// Resolve an endpoint without DNS so menu eligibility cannot admit hostnames or loopback.
+fn command_host(server: &ServerConfig) -> Option<String> {
+    let endpoint = moon_core::config::parse_endpoint_override(&server.endpoint_override).ok()?;
+    moon_core::config::target_from_key(server.key.expose(), endpoint.as_ref())
+        .map(|target| target.host.to_string())
 }

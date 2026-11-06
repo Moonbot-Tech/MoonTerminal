@@ -12,7 +12,6 @@ use gpui::Context;
 use moon_core::config::{parse_endpoint_override, target_from_key};
 use moon_remote::core_cmds::{Cmd, Login};
 use moon_remote::hosts::Hosts;
-use moon_remote::setup::FirstAccess;
 use moon_remote::ssh::Target;
 
 use crate::Backend;
@@ -22,7 +21,6 @@ const POLL: Duration = Duration::from_millis(250);
 /// How long a status check suppresses another automatic status request.
 const STATUS_REFRESH: Duration = Duration::from_secs(60);
 
-#[allow(dead_code)] // frozen methods are called by the later window and Connections batches
 impl Backend {
     /// Queue `req` for the command worker associated with core `uid`.
     pub(crate) fn core_cmds_send(&mut self, uid: u64, req: CmdRequest) {
@@ -31,7 +29,24 @@ impl Backend {
 
     /// Store a confirmed provider login for `ip` for the rest of this terminal session.
     pub(crate) fn core_cmds_add_login(&mut self, ip: String, login: SessionLogin) {
-        self.core_cmds.logins.insert(ip, login);
+        self.core_cmds.logins.insert(ip.clone(), login);
+        let uids: Vec<_> = self
+            .config
+            .servers
+            .iter()
+            .filter_map(|server| {
+                let endpoint = parse_endpoint_override(&server.endpoint_override).ok()?;
+                let target = target_from_key(server.key.expose(), endpoint.as_ref())?;
+                (target.host.to_string() == ip).then_some(server.uid)
+            })
+            .collect();
+        for uid in uids {
+            self.core_cmds.workers.remove(&uid);
+            if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
+                facts.checked_at = None;
+            }
+            self.core_cmds.request_status(uid);
+        }
     }
 
     /// Return the cached server facts for core `uid`, if a request has created them.
@@ -46,31 +61,19 @@ impl Backend {
 
     /// Prefer a confirmed session login, then fall back to the administrator pinned for `ip`.
     pub(crate) fn core_cmds_login_for(&self, ip: &str) -> Option<Login> {
+        let hosts = Hosts::load(&Hosts::path()).unwrap_or_default();
+        self.core_cmds_login_from(ip, &hosts)
+    }
+
+    /// Choose a session or administrator login using one already loaded host snapshot.
+    fn core_cmds_login_from(&self, ip: &str, hosts: &Hosts) -> Option<Login> {
         if let Some(login) = self.core_cmds.logins.get(ip) {
-            let first = match &login.first {
-                FirstAccess::Password { user, password } => FirstAccess::Password {
-                    user: user.clone(),
-                    password: password.clone(),
-                },
-                FirstAccess::Key {
-                    user,
-                    key,
-                    sudo_password,
-                } => FirstAccess::Key {
-                    user: user.clone(),
-                    key: key.clone(),
-                    sudo_password: sudo_password.clone(),
-                },
-            };
             return Some(Login::Provider {
-                first,
+                first: login.first.clone(),
                 pin: login.pin.clone(),
             });
         }
-        Hosts::load(&Hosts::path())
-            .ok()?
-            .admin_by_ip(ip)
-            .map(|_| Login::Admin)
+        hosts.admin_by_ip(ip).map(|_| Login::Admin)
     }
 
     /// Start the persistent 250 ms drain for all per-core command workers.
@@ -102,26 +105,28 @@ impl Backend {
         let mut changed = false;
         for (uid, request) in std::mem::take(&mut self.core_cmds.pending) {
             changed = true;
-            if matches!(request, CmdRequest::Forget) {
-                self.core_cmds.workers.remove(&uid);
-                self.core_cmds.facts.remove(&uid);
-                continue;
-            }
             let cmd = match &request {
                 CmdRequest::Run { cmd, .. } => *cmd,
                 CmdRequest::Refresh => Cmd::Status,
-                CmdRequest::Forget => unreachable!(),
+                CmdRequest::Forget => {
+                    self.core_cmds.forget_key(uid);
+                    continue;
+                }
             };
             let config = self.core_cmds_worker_config(uid);
             let Some((target, display, port, login)) = config else {
-                if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
-                    facts.phases.insert(
-                        cmd,
-                        CmdPhase::Failed(CmdError::Ssh(
-                            "no SSH login is available for this server".into(),
-                        )),
-                    );
-                }
+                let (target, port) = self
+                    .config
+                    .servers
+                    .iter()
+                    .find(|s| s.uid == uid)
+                    .and_then(|server| {
+                        let endpoint = parse_endpoint_override(&server.endpoint_override).ok()?;
+                        let core = target_from_key(server.key.expose(), endpoint.as_ref())?;
+                        Some((core.host.to_string(), core.port))
+                    })
+                    .unwrap_or_default();
+                self.core_cmds.no_login(uid, cmd, target, port);
                 continue;
             };
             let facts = self
@@ -183,7 +188,8 @@ impl Backend {
         let endpoint = parse_endpoint_override(&server.endpoint_override).ok()?;
         let core = target_from_key(server.key.expose(), endpoint.as_ref())?;
         let host = core.host.to_string();
-        let login = self.core_cmds_login_for(&host)?;
+        let hosts = Hosts::load(&Hosts::path()).unwrap_or_default();
+        let login = self.core_cmds_login_from(&host, &hosts)?;
         let fallback = format!("{host}:22");
         let display = match &login {
             Login::Provider { .. } => self
@@ -193,14 +199,10 @@ impl Backend {
                 .map(|login| login.target.clone())
                 .filter(|target| !target.is_empty())
                 .unwrap_or(fallback),
-            Login::Admin => Hosts::load(&Hosts::path())
-                .ok()
-                .and_then(|hosts| {
-                    hosts
-                        .admin_by_ip(&host)
-                        .and_then(|host| host.admin.as_deref())
-                        .map(|admin| format!("{admin}@{host}:22"))
-                })
+            Login::Admin => hosts
+                .admin_by_ip(&host)
+                .and_then(|host| host.admin.as_deref())
+                .map(|admin| format!("{admin}@{host}:22"))
                 .unwrap_or(fallback),
         };
         Some((Target { host, port: 22 }, display, core.port, login))
@@ -268,6 +270,28 @@ impl Backend {
 }
 
 impl CoreCmdsState {
+    /// Hide only the connection key and cancel its reveal so late results cannot expose it.
+    fn forget_key(&mut self, uid: u64) {
+        if let Some(facts) = self.facts.get_mut(&uid) {
+            facts.key = None;
+            facts.phases.insert(Cmd::ConnectionKey, CmdPhase::Idle);
+        }
+    }
+
+    /// Record a first-request refusal even when no worker configuration could be constructed.
+    fn no_login(&mut self, uid: u64, cmd: Cmd, target: String, port: u16) {
+        let facts = self
+            .facts
+            .entry(uid)
+            .or_insert_with(|| core_facts(target, port));
+        facts.phases.insert(
+            cmd,
+            CmdPhase::Failed(CmdError::Refused(
+                rust_i18n::t!("core_cmds.error.no_login").to_string(),
+            )),
+        );
+    }
+
     /// Queue one status check unless a recent or pending check already covers this core.
     fn request_status(&mut self, uid: u64) {
         let fresh = self.facts.get(&uid).is_some_and(|facts| {
@@ -306,6 +330,12 @@ impl CoreFacts {
     fn apply(&mut self, event: worker::Event) -> bool {
         match event {
             worker::Event::Phase(cmd, phase) => {
+                if cmd == Cmd::ConnectionKey
+                    && matches!(phase, CmdPhase::Running { .. })
+                    && !matches!(self.phases.get(&cmd), Some(CmdPhase::Running { .. }))
+                {
+                    return false;
+                }
                 self.phases.insert(cmd, phase);
             }
             worker::Event::Located(located) => self.located = Some(located),
@@ -333,7 +363,14 @@ impl CoreFacts {
                 self.info = Some(info);
             }
             worker::Event::Log(log) => self.log = Some(log),
-            worker::Event::Key(key) => self.key = Some(key),
+            worker::Event::Key(key) => {
+                if matches!(
+                    self.phases.get(&Cmd::ConnectionKey),
+                    Some(CmdPhase::Running { .. })
+                ) {
+                    self.key = Some(key);
+                }
+            }
             worker::Event::Exchanges(exchanges) => self.exchanges = Some(exchanges),
             worker::Event::AddressChanged { .. } => return false,
         }

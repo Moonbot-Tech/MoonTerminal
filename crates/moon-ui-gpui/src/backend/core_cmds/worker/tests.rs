@@ -42,6 +42,7 @@ struct FakeRunner {
     locate_result: LocateResult,
     wait_status: CoreStatus,
     calls: RefCell<Vec<String>>,
+    retarget_error: Option<String>,
 }
 
 impl FakeRunner {
@@ -51,6 +52,7 @@ impl FakeRunner {
             locate_result: LocateResult::Found(located(true)),
             wait_status: status(CoreState::Ready),
             calls: RefCell::new(Vec::new()),
+            retarget_error: None,
         }
     }
 
@@ -160,7 +162,10 @@ impl Runner for FakeRunner {
         port: u16,
     ) -> anyhow::Result<(Zeroizing<String>, Option<String>)> {
         self.record(format!("set_moonproto_address:{dir}:{host}:{port}"));
-        Ok((Zeroizing::new("TEST_CONNECTION_KEY".into()), None))
+        Ok((
+            Zeroizing::new("TEST_CONNECTION_KEY".into()),
+            self.retarget_error.clone(),
+        ))
     }
 
     fn moonproto_key(&self, dir: &str) -> anyhow::Result<Zeroizing<String>> {
@@ -406,5 +411,112 @@ fn switch_exchange_without_selection_lists_exchanges() {
             .borrow()
             .iter()
             .any(|call| call.starts_with("select_exchange:"))
+    );
+}
+
+/// A retarget refusal follows a successful core move, so saving the new endpoint cannot be skipped.
+#[test]
+fn retarget_failure_saves_address_and_refuses_without_ssh_failure() {
+    let mut fake = FakeRunner::new();
+    fake.retarget_error = Some("retarget refused".into());
+    let events = run(
+        &fake,
+        cached_snapshot(&fake),
+        CmdRequest::Run {
+            cmd: Cmd::MoonProtoAddress,
+            args: CmdArgs::Address {
+                host: "203.0.113.7".into(),
+                port: 4402,
+            },
+        },
+    );
+    let address = events
+        .iter()
+        .position(|event| {
+            matches!(event,
+                Event::AddressChanged { host, port: 4402 } if host == "203.0.113.7"
+            )
+        })
+        .expect("the core already moved");
+    let failure = events
+        .iter()
+        .position(|event| {
+            matches!(event,
+                Event::Phase(Cmd::MoonProtoAddress, CmdPhase::Failed(CmdError::Refused(reason)))
+                    if reason == "retarget refused"
+            )
+        })
+        .expect("retarget failure remains a core refusal");
+    assert!(address < failure);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::Phase(_, CmdPhase::Failed(CmdError::Ssh(_)))))
+    );
+}
+
+/// Retaining a failed location skips discovery after a core is removed or the SSH session dies.
+#[test]
+fn no_core_and_ssh_failures_invalidate_location_before_next_request() {
+    for error in [
+        CmdError::NoCore { port: 3302 },
+        CmdError::Ssh("closed".into()),
+    ] {
+        let fake = FakeRunner::new();
+        let mut location = Some(located(true));
+        update_location(
+            &mut location,
+            &Event::Phase(Cmd::Status, CmdPhase::Failed(error)),
+        );
+        let events = run(
+            &fake,
+            FactsSnapshot {
+                port: 3302,
+                located: location,
+            },
+            CmdRequest::Refresh,
+        );
+        assert_eq!(
+            fake.calls.borrow().first().map(String::as_str),
+            Some("locate:3302")
+        );
+        assert!(matches!(phase(&events, Cmd::Status), CmdPhase::Done));
+    }
+}
+
+/// Service information carries a new active state and unit which the following Start must use.
+#[test]
+fn info_refreshes_cached_active_state_and_unit() {
+    let fake = FakeRunner::new();
+    let mut found = located(true);
+    found.active = Some(false);
+    found.unit = "UNIT_02.service".into();
+    let mut location = Some(located(true));
+    update_location(
+        &mut location,
+        &Event::Info(ServiceInfo {
+            located: found.clone(),
+            active: "inactive".into(),
+            uptime_s: None,
+            memory: None,
+        }),
+    );
+    assert_eq!(location.as_ref().unwrap().active, Some(false));
+    run(
+        &fake,
+        FactsSnapshot {
+            port: 3302,
+            located: location,
+        },
+        CmdRequest::Run {
+            cmd: Cmd::Start,
+            args: CmdArgs::None,
+        },
+    );
+    assert!(
+        fake.calls
+            .borrow()
+            .iter()
+            .any(|call| call == "service:start:3302:UNIT_02.service")
     );
 }
