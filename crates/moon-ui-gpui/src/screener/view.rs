@@ -17,7 +17,7 @@ use rust_i18n::t;
 
 use moon_core::session::CoreId;
 
-use crate::panels::{RenderGate, data_table_host};
+use crate::panels::data_table_host;
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
@@ -75,7 +75,8 @@ pub struct ScreenerView {
     /// Order this table last observed. A resize or a header click notifies the same observer
     /// as a drag, and must not write an order that did not move.
     col_order_cache: Vec<SharedString>,
-    gate: RenderGate,
+    /// One trailing refresh coalesces feed events without losing their final publication.
+    refresh_task: Option<Task<()>>,
     focus: FocusHandle,
 }
 
@@ -162,16 +163,14 @@ impl ScreenerView {
         })
         .detach();
 
-        // Market-only feed changes publish new snapshots without notifying `Backend`. Notifications
-        // caused by other UI-state events provide opportunities to sample the latest snapshots. With
-        // a constant signature, the gate accepts at most one rebuild per wall-clock second when such
-        // notifications occur; there is no independent timer.
+        // Both order/session changes and market-only updates affect the prepared rows.
         cx.observe(&backend, |this, _, cx| {
-            let now = moon_chart::paint::now_unix_ms();
-            if this.gate.should_notify(0, now) {
-                this.rebuild(cx);
-                cx.notify();
-            }
+            this.request_refresh(cx);
+        })
+        .detach();
+        let market_data_revision = backend.read(cx).market_data_revision();
+        cx.observe(&market_data_revision, |this, _, cx| {
+            this.request_refresh(cx);
         })
         .detach();
 
@@ -215,15 +214,29 @@ impl ScreenerView {
             visible_cols,
             table_state,
             col_order_cache,
-            gate: RenderGate::default(),
+            refresh_task: None,
             focus: cx.focus_handle(),
         };
         this.rebuild(cx);
         this
     }
 
+    /// Publish the latest snapshot within one second, even if no further events arrive.
+    fn request_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.refresh_task.is_some() {
+            return;
+        }
+        self.refresh_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            let _ = this.update(cx, |this, cx| this.rebuild(cx));
+        }));
+    }
+
     /// Prepare a coherent feed publication off-thread; the current controls remain immediate.
     fn rebuild(&mut self, cx: &mut Context<Self>) {
+        self.refresh_task = None;
         crate::diag::bump(&crate::diag::SCREENER_REBUILD);
         self.filter_cached(cx);
         let b = self.backend.read(cx);
