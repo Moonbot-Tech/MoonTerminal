@@ -26,6 +26,8 @@ pub struct Pane {
     pub market: String,
     pub source: PaneSource,
     pub view: ChartView,
+    /// Measured price-axis gutter in chart-design pixels, shared by drawing and navigation.
+    pub price_axis_width: f32,
     /// Requirement 2: a user-pinned AddToChart panel does not close on TTL.
     ///
     /// This does not affect Manual panels, which already live indefinitely. The flag is session-only
@@ -146,6 +148,7 @@ impl Container {
             market: market.to_string(),
             source: PaneSource::Manual,
             view,
+            price_axis_width: moon_chart::PRICE_AXIS_W,
             pinned: false,
         });
         true
@@ -184,6 +187,7 @@ impl Container {
                         ttl_ms,
                     },
                     view,
+                    price_axis_width: moon_chart::PRICE_AXIS_W,
                     pinned: false,
                 });
                 true

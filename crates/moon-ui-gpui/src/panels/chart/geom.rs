@@ -278,6 +278,11 @@ impl ChartPanel {
             // The same zone the engine lays out, gated by this panel's role.
             self.hvol_zone_spec(),
             self.last_ppp,
+            self.chart.with_container(|container| {
+                container
+                    .pane(0)
+                    .map_or(moon_chart::PRICE_AXIS_W, |pane| pane.price_axis_width)
+            }),
         )
     }
 

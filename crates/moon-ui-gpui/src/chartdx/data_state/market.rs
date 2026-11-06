@@ -170,6 +170,7 @@ impl ChartDataState {
                 self.price_axis_pos,
                 self.hvol_zone_spec(),
                 self.last_ppp,
+                pane.price_axis_width,
             );
             let (chart_area, glass_area, hvol_area) = (areas.plot, areas.glass, areas.hvol);
             let plot_h = chart_area.h;
@@ -1785,14 +1786,20 @@ impl ChartDataState {
             let bubbles = self.chart_graphics.trade_kind == moon_core::config::TradeKind::Bubbles;
             // The exchange's tick is asked for until it arrives, at most once a retry period, with
             // the book's own spacing standing in meanwhile; `LadderTick` holds the rules. The ladder
-            // and the trade clusters both bucket by it, so either one asks.
-            if (ladder_wanted || bubbles) && pr.price_tick.due(now as i64) {
+            // and trade clusters bucket by it; visible price labels also need its precision.
+            if pr.price_tick.due(now as i64) {
+                let previous_tick = pr.price_tick.tick();
                 let exact = source.price_tick(pane.core, &pane.market);
                 pr.price_tick.record(now as i64, exact, || {
+                    // Labels have a magnitude fallback; only grid consumers need to scan the book.
+                    if !ladder_wanted && !bubbles {
+                        return None;
+                    }
                     source.with_orderbook_view(pane.core, &pane.market, |data| {
                         data.and_then(|(book, _)| book.infer_tick())
                     })
                 });
+                text_changed |= pr.price_tick.tick() != previous_tick;
             }
             let ladder_grid = if ladder_wanted {
                 let min_row_px = crate::chartdx::text::label_line_px(self.theme.label_font_delta)

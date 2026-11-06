@@ -161,12 +161,20 @@ impl GpuCanvasDriver for ChartCanvasDriver {
         }
     }
 
+    /// Publish measured axis geometry only after the RenderState borrow and text pass complete.
     fn prepare_text(&mut self, ctx: &mut GpuCanvasTextContext<'_>) -> anyhow::Result<()> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.state.borrow_mut().prepare_text(ctx)
         }));
         match result {
-            Ok(result) => result,
+            Ok(result) => {
+                if let Some(width) = result?
+                    && let Some(data) = self.data.upgrade()
+                {
+                    data.borrow_mut().set_price_axis_width(width);
+                }
+                Ok(())
+            }
             Err(e) => {
                 let msg = e
                     .downcast_ref::<&str>()

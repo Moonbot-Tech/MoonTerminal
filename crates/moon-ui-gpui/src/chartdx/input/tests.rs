@@ -107,7 +107,7 @@ fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
         )],
         ..Default::default()
     };
-    let (width, _) = input.plot_metrics_for(Some(0), 900.0, 1.0);
+    let (width, _) = input.plot_metrics_for(Some(0), 900.0, 1.0, &container);
     for precise in [false, true] {
         container
             .view_mut(0)
@@ -195,7 +195,7 @@ fn time_zoom_records_the_window_and_a_pan_does_not() {
         (recorded - 99_000.0).abs() > 1.0,
         "wheel zoom left the sentinel width in place ({recorded})"
     );
-    let (plot_w, _) = input.plot_metrics_for(Some(0), 900.0, 1.0);
+    let (plot_w, _) = input.plot_metrics_for(Some(0), 900.0, 1.0, &container);
     let view_window = container.view_mut(0).unwrap().visible_x(plot_w).1;
     assert!(
         (recorded - view_window).abs() < 1.0,
@@ -279,17 +279,17 @@ fn plain_wheel_keeps_live_and_ctrl_wheel_lets_go() {
         pane_rects: vec![(0, rect)],
         ..Default::default()
     };
-    let plot = input.areas_of(&rect, 1.0).plot;
+    let mut container = Container::new(ContainerKind::Main);
+    container.open_manual(42, "TESTUSDT", now_unix_ms());
+    let plot = input.areas_of(&rect, 1.0, moon_chart::PRICE_AXIS_W).plot;
     input.last_ptr = (plot.x + plot.w * 0.5, plot.y + plot.h * 0.5);
-    let (plot_w, cursor_x) = input.plot_metrics_for(Some(0), 900.0, 1.0);
+    let (plot_w, cursor_x) = input.plot_metrics_for(Some(0), 900.0, 1.0, &container);
     assert!(
         (cursor_x - plot_w * 0.5).abs() < 1.0,
         "the pointer is not at mid-plot ({cursor_x} vs {})",
         plot_w * 0.5
     );
 
-    let mut container = Container::new(ContainerKind::Main);
-    container.open_manual(42, "TESTUSDT", now_unix_ms());
     let now = now_unix_ms();
     {
         let view = container.view_mut(0).unwrap();
@@ -340,4 +340,86 @@ fn plain_wheel_keeps_live_and_ctrl_wheel_lets_go() {
         "ctrl wheel left the anchor at {}",
         view.right_time_ms
     );
+}
+/// Measured Geist Mono axis labels must fit without leaving navigation on the old 56px gutter.
+#[test]
+fn measured_price_axis_width_is_shared_and_settles() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(measured_price_axis_geometry)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Drive real frame/sync with an empty market, comparing pending text with applied input geometry.
+fn measured_price_axis_geometry() {
+    use gpui::{Bounds, GpuFrameDecision, GpuFrameInfo, point, px, size};
+    use moon_core::market::{MarketDataSource, MarketStore};
+    crate::test_locale::warm();
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let mut engine =
+        crate::chartdx::ChartEngine::new(0.0, moon_core::config::ChartTheme::default());
+    engine.open(1, "TINYUSDT");
+    engine.set_historical(true);
+    engine.set_follow(false, 1_000.0);
+    engine.set_scene_visible(true);
+    engine.set_market_source(Some(MarketDataSource::new(MarketStore::shared(0.0))));
+    let mut data = engine.data.borrow_mut();
+    data.orderbook_enabled = false;
+    let frame = || GpuFrameInfo {
+        now: std::time::Instant::now(),
+        bounds: Bounds::new(point(px(0.0), px(0.0)), size(px(900.0), px(400.0))),
+        scale_factor: 1.0,
+        content_zoom: 1.0,
+        presentable: true,
+    };
+    data.frame(frame());
+    assert!(!data.view_dirty);
+    // Bundled GeistMono-Regular.ttf: ASCII advance600/1000em at11.5px. Seven ordinary chars fit.
+    assert!(!data.set_price_axis_width(48.3 + 4.0));
+    assert_eq!(data.pending_price_axis_width, None);
+    assert!(!data.view_dirty);
+    // The actual font measures "12.34 sat" at62.1px: its ink began9.41px outside the old canvas.
+    assert!(data.set_price_axis_width(62.1 + 4.0));
+    assert_eq!(data.pending_price_axis_width, Some(67.0));
+    let rect = moon_chart::view::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 900.0,
+        h: 400.0,
+    };
+    let input = super::ChartInput {
+        pane_rects: vec![(0, rect)],
+        last_ptr: (97.0, 50.0),
+        price_axis_pos: crate::persistence::chart_persist::PriceAxisPos::Left,
+        ..Default::default()
+    };
+    assert_eq!(engine.state.borrow().panes[0].view.bounds[0], 56.0);
+    assert_eq!(
+        input.plot_metrics_for(Some(0), rect.w, 1.0, &engine.container.borrow()),
+        (844.0, 41.0),
+        "pending text must not publish next frame geometry to input"
+    );
+    data.frame(frame());
+    assert_eq!(data.pending_price_axis_width, None);
+    assert_eq!(engine.state.borrow().panes[0].view.bounds[0], 67.0);
+    let width = engine.container.borrow().pane(0).unwrap().price_axis_width;
+    assert_eq!(width, 67.0);
+    let plot = input.areas_of(&rect, 1.0, width).plot;
+    assert!(
+        plot.x - 4.0 - 62.1 >= rect.x,
+        "the complete label stays inside the canvas"
+    );
+    assert_eq!(
+        input.plot_metrics_for(Some(0), rect.w, 1.0, &engine.container.borrow()),
+        (833.0, 30.0)
+    );
+    assert!(!data.set_price_axis_width(62.1 + 4.0));
+    assert_eq!(data.pending_price_axis_width, None);
+    assert!(
+        !data.view_dirty,
+        "an unchanged measurement owns no new geometry work"
+    );
+    assert!(matches!(data.frame(frame()), GpuFrameDecision::Skip));
 }

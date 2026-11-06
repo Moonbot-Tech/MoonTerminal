@@ -2,6 +2,29 @@
 
 use super::time_label_target;
 
+/// Axis and cursor prices must remain readable below the former four-decimal floor.
+#[test]
+fn microprices_use_satoshis_and_preserve_the_market_grid() {
+    assert_eq!(super::format_price(0.00000012, Some(1e-8)), "12 sat");
+    assert_eq!(super::format_price(0.0000001234, Some(1e-10)), "12.34 sat");
+    assert_eq!(super::format_price(0.0000000001, Some(1e-10)), "0.01 sat");
+    assert_eq!(super::format_price(0.00001, Some(1e-8)), "1000 sat");
+    assert_eq!(super::format_price(0.00001234, Some(1e-8)), "0.00001234");
+    assert_eq!(super::format_price(-0.00000012, Some(1e-8)), "-12 sat");
+}
+
+/// Known ticks retain exchange precision; an unavailable tick must not turn microprices into zero.
+#[test]
+fn price_labels_share_grid_precision_and_an_unknown_tick_fallback() {
+    assert_eq!(super::format_price(12.345, Some(0.005)), "12.345");
+    assert_eq!(super::format_price(1200.0, Some(0.01)), "1200.00");
+    assert_eq!(super::format_price(0.0000001234, None), "12.34 sat");
+    assert_eq!(super::format_price(0.0000000001, None), "0.0100 sat");
+    assert_eq!(super::format_price(0.00001234, None), "0.00001234");
+    assert_eq!(super::format_price(1500.0, None), "1500.0");
+    assert_eq!(super::format_price(-12.345, Some(0.005)), "-12.345");
+}
+
 /// A wide plot must retain enough round time labels to use its available horizontal space.
 ///
 /// Breakage this pins: removing the width divisor or restoring the former fixed target would

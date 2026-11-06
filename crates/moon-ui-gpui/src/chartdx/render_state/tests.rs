@@ -91,6 +91,32 @@ fn frame_info() -> GpuFrameInfo {
     }
 }
 
+/// The GPU cursor plate must reserve the satoshi text's width before shaping has measured it.
+#[test]
+fn microprice_cursor_plate_fits_the_satoshi_label() {
+    let engine = ChartEngine::new(0.0, ChartTheme::default());
+    let mut state = engine.state.borrow_mut();
+    let mut pane = PaneRender::new();
+    pane.active = true;
+    pane.pane_bounds = [0.0, 0.0, 320.0, 200.0];
+    pane.view.bounds = [50.0, 0.0, 200.0, 200.0];
+    pane.view.price_to_px = 1e20;
+    pane.view.view_price0 = 0.0000001234;
+    pane.price_axis_pos = crate::persistence::chart_persist::PriceAxisPos::Right;
+    pane.price_tick.record(0, Some(1e-10), || None);
+    state.panes.push(pane);
+    // Outside the time plot, inside the price plot: only the price plate is drawn.
+    state.cursor = Some(crate::chartdx::hits::CursorState {
+        pane: 0,
+        local: [10.0, 100.0],
+    });
+    state.sync_readout_params();
+    let rects = &state.panes[0].readout_rects;
+    assert_eq!(rects.len(), 1);
+    // Nine monospace characters in "12.34 sat", plus the existing five-pixel padding per side.
+    assert_eq!(rects[0].dst[2], 9.0 * 8.5 + 10.0);
+}
+
 /// Restoring expiry clearing or unbounded pacing loses the stroke or keeps a quiet chart busy.
 #[test]
 fn arrival_frame_retains_color_settles_and_clears() {

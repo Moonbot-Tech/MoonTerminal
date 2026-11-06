@@ -53,6 +53,34 @@ pub fn price_decimals(price: f32) -> usize {
     }
 }
 
+/// Format an axis or cursor price with the market grid and MoonBot's small-price unit.
+///
+/// At or below `0.00001`, MoonBot prints price × 10^8 and removes eight decimal places.
+/// This is a display unit only, including for non-BTC markets. Until the tick arrives, keep
+/// the ordinary magnitude format, but give small prices four significant digits (up to the
+/// same twelve-decimal limit as the ladder) instead of rounding them to zero.
+pub fn format_price(price: f32, tick: Option<f64>) -> String {
+    let decimals = tick
+        .filter(|tick| tick.is_finite() && *tick > 0.0)
+        .map(crate::ladder::tick_decimals)
+        .unwrap_or_else(|| {
+            let magnitude = price.abs();
+            if magnitude > 0.0 && magnitude < 1.0 {
+                (3.0 - magnitude.log10().floor())
+                    .clamp(4.0, crate::ladder::MAX_TICK_DECIMALS as f32) as usize
+            } else {
+                price_decimals(price)
+            }
+        });
+    if price.abs() <= 0.00001 {
+        let satoshis = f64::from(price) * 1e8;
+        let decimals = decimals.saturating_sub(8);
+        format!("{satoshis:.decimals$} sat")
+    } else {
+        format!("{price:.decimals$}")
+    }
+}
+
 /// "Nice" time interval in seconds that fits approximately `target` labels.
 pub fn nice_time_step(window_sec: f64, target: f64) -> f64 {
     const STEPS: [f64; 16] = [

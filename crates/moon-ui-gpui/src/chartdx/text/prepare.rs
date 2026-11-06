@@ -1,12 +1,15 @@
 //! Main `prepare_text` implementation for axes, order-line labels, and cursor readouts.
 
-use moon_chart::axes::price_decimals;
+use moon_chart::axes::{format_price, price_decimals};
 use moon_chart::figures::LabelValue as FigLabelValue;
 use moon_chart::order_geometry::PlotEdge;
 use moon_core::figures::LabelPlace as FigLabelPlace;
 use rust_i18n::t;
 
 use super::*;
+
+/// The price label's existing inset from the plot or pane edge.
+const PRICE_AXIS_PAD_X: f32 = 4.0;
 
 impl RenderState {
     /// Prepares axis, order, cursor, and corner-caption text runs for the current frame.
@@ -18,14 +21,14 @@ impl RenderState {
     ///     ctx: Text context used to measure and retain GPU text runs.
     ///
     /// Returns:
-    ///     `Ok(())` after all visible pane text has been prepared.
+    ///     The widest measured price-axis label including its side padding, or none when hidden.
     ///
     /// Errors:
     ///     Propagates failures from measuring or drawing retained text runs.
     pub(crate) fn prepare_text(
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<f32>> {
         self.caption_fit_memo.begin_pass(
             crate::design::mono().as_ref(),
             ctx.scale_factor(),
@@ -44,6 +47,7 @@ impl RenderState {
         let caption_fg = color(self.caption_label);
         let mut firetest_text_drawn = false;
         let mut readout_metrics_changed = false;
+        let mut price_axis_width = 0.0_f32;
         // A shot is in flight. Read ONCE, outside the pane loop, so every pane in a multi-pane
         // chart makes the same choice within one frame.
         let shot_caption = self.shot_caption_active();
@@ -232,9 +236,9 @@ impl RenderState {
             let axis_hidden = matches!(price_axis_pos, PriceAxisPos::Hide);
             let axis_on_right = matches!(price_axis_pos, PriceAxisPos::Right);
             let axis_label_x = if axis_on_right {
-                pane_right - 4.0
+                pane_right - PRICE_AXIS_PAD_X
             } else {
-                plot_left - 4.0
+                plot_left - PRICE_AXIS_PAD_X
             };
 
             // Configured captions. Everything about WHICH figures appear here, in what order and
@@ -780,7 +784,7 @@ impl RenderState {
 
                 if !axis_hidden && cy_log >= plot_top && cy_log <= plot_bottom {
                     let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
-                    let label = format!("{price:.dec$}");
+                    let label = format_price(price, self.panes[idx].price_tick.tick());
                     let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
                     let line_h = metrics.line_height.as_f32();
@@ -1007,8 +1011,10 @@ impl RenderState {
                     && !overlaps_readout
                     && (last_y - y).abs() >= min_v_gap
                 {
-                    let label = format!("{price:.dec$}");
-                    self.draw_text(ctx, &label, axis_label_x, y, 1.0, 0.5, ink)?;
+                    let label = format_price(price, self.panes[idx].price_tick.tick());
+                    let metrics = self.draw_text(ctx, &label, axis_label_x, y, 1.0, 0.5, ink)?;
+                    price_axis_width =
+                        price_axis_width.max(metrics.width.as_f32() + PRICE_AXIS_PAD_X);
                     last_y = y;
                 }
             }
@@ -1082,6 +1088,6 @@ impl RenderState {
                 run.clear();
             }
         }
-        Ok(())
+        Ok((price_axis_width > 0.0).then_some(price_axis_width))
     }
 }

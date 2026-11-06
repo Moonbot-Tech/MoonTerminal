@@ -940,11 +940,9 @@ impl RenderState {
 
             if !axis_hidden && cy_log >= plot_top && cy_log <= plot_bottom {
                 let price_to_px = pr.view.price_to_px / sf;
-                let price_range = plot_h / price_to_px.max(1e-6);
                 let y_min = pr.view.view_price0;
-                let dec = moon_chart::axes::price_decimals(y_min + price_range * 0.5);
                 let price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
-                let label = format!("{price:.dec$}");
+                let label = moon_chart::axes::format_price(price, pr.price_tick.tick());
                 let text_w = readout_text_width(&label, pr.readout_price_width);
                 let line_h = pr.readout_price_line_h.max(1.0);
                 let x = if axis_on_right {

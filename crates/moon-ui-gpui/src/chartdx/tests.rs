@@ -22,6 +22,7 @@ fn areas(pane: Rect, broom: bool, book: bool, axis: PriceAxisPos) -> PaneAreas {
         axis,
         None,
         1.0,
+        moon_chart::PRICE_AXIS_W,
     )
 }
 
@@ -56,6 +57,7 @@ fn the_overlaid_hvol_zone_leaves_the_plot_whole_and_sits_on_its_left_edge() {
             axis,
             None,
             1.0,
+            moon_chart::PRICE_AXIS_W,
         );
         let on = pane_layout(
             PANE,
@@ -68,6 +70,7 @@ fn the_overlaid_hvol_zone_leaves_the_plot_whole_and_sits_on_its_left_edge() {
             axis,
             hvol_overlay(),
             1.0,
+            moon_chart::PRICE_AXIS_W,
         );
         for (a, b) in [(on.plot, off.plot), (on.glass, off.glass)] {
             assert_eq!((a.x, a.y, a.w, a.h), (b.x, b.y, b.w, b.h), "{case}");
@@ -99,6 +102,7 @@ fn the_overlaid_hvol_zone_leaves_the_plot_whole_and_sits_on_its_left_edge() {
         PriceAxisPos::Right,
         wide,
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     assert!(
         a.plot.w < moon_chart::hvol::ZONE_MIN_PX,
@@ -232,6 +236,7 @@ fn the_time_axis_gutter_shortens_both_areas() {
         PriceAxisPos::Left,
         None,
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     let without = pane_layout(
         PANE,
@@ -244,6 +249,7 @@ fn the_time_axis_gutter_shortens_both_areas() {
         PriceAxisPos::Left,
         None,
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     assert_eq!(with.plot.h, with.glass.h);
     assert_eq!(without.plot.h, PANE.h);
@@ -265,6 +271,7 @@ fn the_reserved_gutters_follow_the_pixel_scale() {
         PriceAxisPos::Left,
         None,
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     let two = pane_layout(
         PANE,
@@ -277,6 +284,7 @@ fn the_reserved_gutters_follow_the_pixel_scale() {
         PriceAxisPos::Left,
         None,
         2.0,
+        moon_chart::PRICE_AXIS_W,
     );
     assert_eq!(two.plot.x - PANE.x, (one.plot.x - PANE.x) * 2.0);
     assert_eq!(PANE.h - two.plot.h, (PANE.h - one.plot.h) * 2.0);
@@ -321,6 +329,7 @@ fn the_hvol_zone_sits_at_the_left_edge_and_tiles_with_the_plot_and_the_book() {
             axis,
             hvol(),
             1.0,
+            moon_chart::PRICE_AXIS_W,
         );
         let case = format!("axis={axis:?}");
         assert_eq!(a.hvol.w, (PANE.w * 0.2).round(), "{case}");
@@ -361,6 +370,7 @@ fn the_hvol_zone_keeps_its_width_across_the_book_toggle_and_vanishes_when_crampe
         PriceAxisPos::Left,
         hvol(),
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     let no_book = pane_layout(
         PANE,
@@ -373,6 +383,7 @@ fn the_hvol_zone_keeps_its_width_across_the_book_toggle_and_vanishes_when_crampe
         PriceAxisPos::Left,
         hvol(),
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     assert_eq!(with_book.hvol.w, no_book.hvol.w);
     assert_eq!(no_book.plot.x + no_book.plot.w, PANE.x + PANE.w);
@@ -389,6 +400,7 @@ fn the_hvol_zone_keeps_its_width_across_the_book_toggle_and_vanishes_when_crampe
         PriceAxisPos::Left,
         hvol(),
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     assert_eq!(a.hvol.w, 0.0, "30 px is under the zone's floor");
     assert_eq!(a.plot.x, cramped.x + moon_chart::PRICE_AXIS_W);
@@ -404,6 +416,7 @@ fn the_hvol_zone_keeps_its_width_across_the_book_toggle_and_vanishes_when_crampe
         PriceAxisPos::Left,
         hvol(),
         1.0,
+        moon_chart::PRICE_AXIS_W,
     );
     assert_eq!(broom.hvol.w, 0.0, "the broom owns the whole pane");
     assert_eq!(broom.glass.w, PANE.w);
@@ -546,6 +559,7 @@ fn configured_book_width_preserves_automatic_layout_rules() {
             PriceAxisPos::Left,
             None,
             1.0,
+            moon_chart::PRICE_AXIS_W,
         );
         assert_eq!(
             a.glass.w, expected,

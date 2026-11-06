@@ -45,6 +45,7 @@ pub(crate) struct BookLayout {
 ///     price_axis_pos: Configured per-tab price-axis position.
 ///     hvol: The horizontal volumes' width, `None` when they are off.
 ///     pixel_scale: Device pixels per chart-design pixel (the platform factor, excluding UI zoom).
+///     price_axis_width: Measured gutter in chart-design pixels, at least the default width.
 ///
 /// Returns:
 ///     The pane's [`PaneAreas`].
@@ -55,6 +56,7 @@ pub(crate) fn pane_layout(
     price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
     hvol: Option<moon_chart::hvol::HvolZoneSpec>,
     pixel_scale: f32,
+    price_axis_width: f32,
 ) -> PaneAreas {
     use crate::persistence::chart_persist::PriceAxisPos;
     let axis_pos = if book.only {
@@ -65,7 +67,7 @@ pub(crate) fn pane_layout(
     let price_axis_w = if matches!(axis_pos, PriceAxisPos::Hide) {
         0.0
     } else {
-        moon_chart::PRICE_AXIS_W * pixel_scale
+        price_axis_width.max(moon_chart::PRICE_AXIS_W) * pixel_scale
     };
     let book_width = moon_core::config::book_width::normalize(book.width_px);
     let glass_cap = rect.w * 0.5;
