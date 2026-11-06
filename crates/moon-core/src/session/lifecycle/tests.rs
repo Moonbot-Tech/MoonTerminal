@@ -328,3 +328,30 @@ fn detects_drain_marks_sound_inputs() {
     tx.send(FeedMsg::Detects(Vec::new())).unwrap();
     assert!(session.drain().sound_inputs);
 }
+
+/// Health samples belong to the telemetry consumer, even when their metrics change.
+#[test]
+fn telemetry_drain_retains_every_sample_without_waking_unrelated_views() {
+    let (mut session, tx) = super::trade_sound_tests::fixture();
+    for (stamp, cpu, revision) in [(1000, 10, 1), (2000, 10, 1), (3000, 20, 2)] {
+        tx.send(FeedMsg::SysStatus(crate::feed::CoreSysStatus {
+            updated_ms: stamp,
+            process_cpu_percent: Some(cpu),
+            ..Default::default()
+        }))
+        .unwrap();
+        let stats = session.drain();
+        assert!(stats.any);
+        assert!(!stats.ui_state, "telemetry must use its own publication");
+        let core = session.store.core(1).unwrap();
+        assert_eq!(core.sys.updated_ms, stamp);
+        assert_eq!(core.sys.process_cpu_percent, Some(cpu));
+        assert_eq!(core.sys_rev, revision);
+    }
+    tx.send(FeedMsg::Status(crate::feed::ConnStatus::Ready))
+        .unwrap();
+    assert!(
+        session.drain().ui_state,
+        "connection changes still wake their consumers"
+    );
+}

@@ -129,6 +129,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         );
     }
     let report_revision = cx.new(|_| crate::ReportRevision);
+    let core_status_revision = cx.new(|_| crate::CoreStatusRevision);
     let market_data_revision = cx.new(|_| crate::MarketDataRevision);
     let display_time_revision = cx.new(|_| crate::DisplayTimeRevision);
     let workspace_revision = cx.new(|_| crate::workspace::WorkspaceRevision::default());
@@ -186,6 +187,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         reports,
         valuation,
         report_revision: report_revision.clone(),
+        core_status_revision,
         report_axes: Default::default(),
         market_data_revision: market_data_revision.clone(),
         display_time_revision: display_time_revision.clone(),
@@ -816,7 +818,11 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     b.pump_sounds();
                     let now_ms_f = moon_chart::paint::now_unix_ms();
                     let now_ms = now_ms_f as i64;
+                    let telemetry_tick = b.warn.tick_due(now_ms);
                     b.tick_core_warnings(now_ms);
+                    if telemetry_tick {
+                        b.core_status_revision.update(cx, |_, cx| cx.notify());
+                    }
                     // Idle auto-return to Live. Same clock as the warnings tick, hung off this
                     // 100 ms loop rather than a per-chart timer, so a parked chart does not become
                     // a new repaint source: only the transition dirties.

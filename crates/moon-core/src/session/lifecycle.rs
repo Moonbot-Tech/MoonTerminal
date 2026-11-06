@@ -845,6 +845,13 @@ impl SessionManager {
                             stats.ui_state = true;
                         }
                     }
+                    telemetry @ FeedMsg::SysStatus(_) => {
+                        // The warning sampler reads every sample and publishes its own UI edge.
+                        // A health ping is not a change to orders, charts, or account controls.
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            core.apply(telemetry);
+                        }
+                    }
                     other => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             core.apply(other);

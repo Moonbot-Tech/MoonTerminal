@@ -125,6 +125,8 @@ struct Backend {
     valuation: Option<moon_core::db::valuation::ValuationHandle>,
     /// Dedicated wake channel for report-derived consumers.
     report_revision: Entity<ReportRevision>,
+    /// Dedicated wake channel for the warning engine's completed telemetry samples.
+    core_status_revision: Entity<CoreStatusRevision>,
     /// Current report axis per display zone, keyed by fleet offsets and configured identities.
     report_axes: std::cell::RefCell<
         Vec<(
@@ -732,6 +734,9 @@ struct Backend {
 
 /// Notification-only entity for committed report revisions.
 struct ReportRevision;
+
+/// Notification-only entity for core telemetry, history, and elapsed status time.
+struct CoreStatusRevision;
 
 /// Notification-only entity for retained market-data revisions.
 struct MarketDataRevision;

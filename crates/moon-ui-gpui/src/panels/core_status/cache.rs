@@ -459,6 +459,38 @@ impl WarnReadCache {
 }
 
 impl CoreStatusView {
+    /// Keep hidden-tab badges current without constructing rows, groups or warning history.
+    pub(super) fn refresh_sample(&mut self, cx: &mut Context<Self>) {
+        if !self.sample_gate.defer_if_inactive() {
+            self.rebuild_cache(cx);
+            cx.notify();
+            return;
+        }
+        let b = self.backend.read(cx);
+        let now = moon_core::util::now_unix_ms_i64();
+        let has_warn = self.effective_scope(b).ids().iter().copied().any(|id| {
+            let core = b.session.store().core(id);
+            let server_warn = core.and_then(|core| core.endpoint).is_some_and(|endpoint| {
+                b.warn.server_cpu_warn(endpoint.address)
+                    || b.warn.server_conn_warn(endpoint.address)
+            });
+            server_warn
+                || b.warn.core_mem_warn(id)
+                || b.warn.core_ping_warn(id)
+                || b.warn.core_exch_warn(id)
+                || (b.warn.core_api_warn(id)
+                    && model::ApiKeyState::of(core.and_then(|core| core.api_expiry), now)
+                        .days()
+                        .is_some())
+        });
+        let unseen = self.count_unseen_problems(b);
+        if (self.has_warn, self.unseen_problems) != (has_warn, unseen) {
+            self.has_warn = has_warn;
+            self.unseen_problems = unseen;
+            cx.notify();
+        }
+    }
+
     /// Collect filtered core rows for the group scope in canonical order.
     ///
     /// Args:
@@ -606,8 +638,7 @@ impl CoreStatusView {
             let _ = this.update(cx, |this, cx| match result {
                 Ok(episodes) => {
                     if this.warn_reads.apply(sequence, episodes) {
-                        this.rebuild_cache(cx);
-                        cx.notify();
+                        this.refresh_sample(cx);
                     }
                 }
                 Err(_) => this.warn_reads.fail(sequence),
@@ -706,10 +737,8 @@ impl CoreStatusView {
         let visible: Vec<Option<CoreId>> =
             self.cached_rows.iter().map(|row| Some(row.id)).collect();
         self.core_selection.retain_visible(&visible);
-        // `workspace_revision`'s observer (`mod.rs::new`) calls this unconditionally on every
-        // change, with no signature gate ahead of it -- unlike the backend observer's 1 s/rev
-        // gate above -- so recomputing the marker here keeps it exactly as fresh as the rows and
-        // groups it is drawn beside.
+        // Workspace changes refresh active panels immediately; hidden panels catch up on
+        // activation. Rebuild the marker with the same rows so both share one scope.
         self.cached_scope_marker = self.scope_marker(backend.read(cx));
     }
 

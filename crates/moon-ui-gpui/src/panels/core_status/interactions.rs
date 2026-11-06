@@ -1213,6 +1213,7 @@ impl CoreStatusView {
             core_update::replaces_test_note(letters.iter().map(String::as_str))
         };
         let input = named.then(|| core_update::build_name_input(None, window, cx));
+        let initial_focus = input.clone();
         window.open_unique_moon_dialog(
             "core-status-fleet-update-confirm",
             cx,
@@ -1380,6 +1381,9 @@ impl CoreStatusView {
                     )
             },
         );
+        if let Some(input) = initial_focus {
+            input.update(cx, |input, cx| input.focus(window, cx));
+        }
     }
 }
 

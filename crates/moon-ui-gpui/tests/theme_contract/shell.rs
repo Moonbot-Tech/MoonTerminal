@@ -1411,17 +1411,23 @@ fn core_status_tree_renderer_holds_a_weak_owner() {
     );
 }
 
-/// `core_status/mod.rs` must keep telemetry repaints throttled to at most once per second and show
-/// CPU AVERAGED over the window, not the last flickering sample. Removing the throttle floods the
-/// panel with repaints; dropping the average makes the number unreadable.
+/// Publishing status on every backend drain floods the panel with telemetry repaints. The shared
+/// warning-engine clock owns that throttle; bypassing its CPU average makes the number flicker.
 #[test]
 fn core_status_throttles_repaints_and_averages_cpu() {
-    let text = read_src("panels/core_status/mod.rs");
-
+    let text = code_only(&read_src("panels/core_status/mod.rs"));
+    let boot = code_only(&read_src("startup/boot.rs"));
+    let sample = braced_body(&boot, "if telemetry_tick {");
+    assert!(boot.contains("let telemetry_tick = b.warn.tick_due(now_ms)"));
+    assert!(sample.contains("b.core_status_revision.update(cx, |_, cx| cx.notify())"));
+    let observer = braced_body(&text, "cx.observe(&core_status_revision,");
+    assert!(observer.contains("this.refresh_sample(cx)"));
+    let backend_observer = braced_body(&text, "cx.observe(&backend,");
+    assert!(braced_body(backend_observer, "if !update_changed").contains("return;"));
     assert!(
-        text.contains("now - this.last_repaint_ms < 1000") && text.contains("return;"),
-        "Core Status must gate ALL telemetry work to at most once per second (early-return on \
-         faster drains), not just the repaint"
+        backend_observer.find("if !update_changed").unwrap()
+            < backend_observer.find("this.refresh_sample(cx)").unwrap(),
+        "ordinary backend drains must not bypass the telemetry clock; only update transitions may refresh immediately"
     );
     // Detection and CPU averaging moved to the backend engine; the panel must read the smoothed
     // value from it rather than the raw last sample. `collect` lives in the cache-pipeline module.
