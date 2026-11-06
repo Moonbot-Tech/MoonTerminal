@@ -279,6 +279,13 @@ const ORDER_CANCEL_LAG: StageDef = StageDef::new(
 /// `Fail` below is what would happen if it ever stopped doing so, because a run that reaches the
 /// end and neither passes nor fails is worse than a loud one.
 const COOLDOWN_STAGE: StageDef = StageDef::new(Phase::Cooldown, "cooldown", |runtime, _, cx| {
+    if runtime
+        .application_probe
+        .as_ref()
+        .is_some_and(|probe| probe.is_pending())
+    {
+        return StageStep::Stay;
+    }
     if let Some(probe) = &runtime.application_probe
         && let Err(error) = probe.verify()
     {
@@ -298,7 +305,12 @@ const COOLDOWN_STAGE: StageDef = StageDef::new(Phase::Cooldown, "cooldown", |run
     runtime.evaluate_and_exit();
     StageStep::Fail("verdict returned without ending the run".to_string())
 })
-.dwell(COOLDOWN);
+.dwell(COOLDOWN)
+// Cover both bounded Screener waits and the deferred Report check without extending healthy runs.
+.deadline(
+    Duration::from_secs(12),
+    "application event probes did not complete",
+);
 
 /// The full `chart-smoke` run: the perf measurement, then every runtime contract, in order.
 pub(super) const CHART_SMOKE: &[StageDef] = &[

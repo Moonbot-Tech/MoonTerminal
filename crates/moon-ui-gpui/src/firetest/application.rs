@@ -2,9 +2,13 @@
 
 use super::logging::firetest_info;
 use crate::Backend;
-use gpui::{AppContext, Context};
+use gpui::{AppContext, AsyncApp, Context, Entity};
 use moon_ui::Panel;
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 /// Completion results survive until the common FireTest verdict.
 #[derive(Clone, Default)]
@@ -14,6 +18,12 @@ impl Probe {
     /// Retain each independent failure rather than letting later callbacks overwrite it.
     fn record(&self, result: Result<(), String>) {
         self.0.borrow_mut().push(result);
+    }
+
+    /// Let the common stage await outstanding callbacks, but report an existing failure at once.
+    pub(super) fn is_pending(&self) -> bool {
+        let results = self.0.borrow();
+        results.len() < 4 && results.iter().all(Result::is_ok)
     }
 
     /// A missing callback is a failure, including a task that silently stopped.
@@ -76,9 +86,7 @@ pub(super) fn start(backend: &Backend, group: String, cx: &mut Context<Backend>)
             market_revision.update(cx, |_, cx| cx.notify());
         }
         cx.spawn(async move |cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(1100))
-                .await;
+            wait_for_screener_refresh(&screener, before_screener, cx).await;
             let before_catalog = cx.update(|cx| {
                 let status_result = window
                     .update(cx, |_, window, cx| {
@@ -108,9 +116,7 @@ pub(super) fn start(backend: &Backend, group: String, cx: &mut Context<Backend>)
                 catalog.update(cx, |_, cx| cx.notify());
                 before_catalog
             });
-            cx.background_executor()
-                .timer(Duration::from_millis(1100))
-                .await;
+            wait_for_screener_refresh(&screener, before_catalog, cx).await;
             cx.update(|cx| {
                 let refreshes = screener.read(cx).firetest_prepare_sequence() - before_catalog;
                 result.record(if refreshes == 1 {
@@ -128,4 +134,21 @@ pub(super) fn start(backend: &Backend, group: String, cx: &mut Context<Backend>)
         .detach();
     });
     probe
+}
+
+/// Wait for the consumer, not elapsed time since notification: GPU recovery can delay the
+/// first poll of its one-second timer. Missing delivery still fails the exact-count check.
+async fn wait_for_screener_refresh(
+    screener: &Entity<crate::screener::ScreenerView>,
+    before: u64,
+    cx: &mut AsyncApp,
+) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cx.update(|cx| screener.read(cx).firetest_prepare_sequence() == before)
+        && Instant::now() < deadline
+    {
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
+    }
 }

@@ -307,6 +307,7 @@ fn the_columns_match_the_run_they_replaced() {
                 "gpu_recovery",
                 "native GPU recovery did not restore both dense consumers"
             ),
+            ("cooldown", "application event probes did not complete"),
         ]
     );
 }
@@ -349,14 +350,14 @@ fn a_stage_that_can_wait_forever_declares_a_timeout() {
     // that hangs when it never gets what it waits for. Those must carry a deadline; the two storms
     // are the exception, bounded by `config.storm` inside `await_storm`.
     //
-    // The guard's limit, stated rather than hidden: it cannot see a DWELLING row whose `run`
-    // answers `Stay` forever, because "can this function wait" is not in the table. Today none
-    // does — every dwelling row answers `Next` or `Fail` on its first acting tick.
+    // Cooldown also polls asynchronous application probes after its dwell. Its deadline must
+    // reject a missing callback instead of hanging the run. Other dwelling rows do not wait.
     for stage in CHART_SMOKE.iter().chain(ORDER_CANCEL_LAG_PLAN.iter()) {
-        if stage.min_dwell.is_zero() && stage.timeout.is_none() {
+        if (stage.min_dwell.is_zero() || stage.phase == Phase::Cooldown) && stage.timeout.is_none()
+        {
             assert!(
                 matches!(stage.phase, Phase::Storm | Phase::StaticTextStorm),
-                "{} polls the app with neither a dwell nor a deadline; a stuck run would hang \
+                "{} polls the app without a deadline; a stuck run would hang \
                  instead of going red",
                 stage.name
             );
