@@ -267,6 +267,7 @@ pub(crate) fn run(
     let mut last_tick = Instant::now();
     let mut last_book = Instant::now();
     let mut last_health = Instant::now();
+    let dense_history = crate::fixture::active().and_then(|fixture| fixture.dense_history());
 
     loop {
         let mut commanded = false;
@@ -287,10 +288,28 @@ pub(crate) fn run(
             last_health = Instant::now();
             account::send_health(server.uid, tx);
         }
+        if dense_history.is_some_and(|history| {
+            history
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .frozen()
+        }) {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        }
         if last_tick.elapsed() >= tick_dt {
             last_tick = Instant::now();
             for (i, m) in markets.iter().enumerate() {
-                price[i] *= 1.0 + (rng.unit() - 0.5) * 0.0004;
+                if let Some(history) = dense_history {
+                    price[i] = f64::from(
+                        history
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .last_price(),
+                    );
+                } else {
+                    price[i] *= 1.0 + (rng.unit() - 0.5) * 0.0004;
+                }
                 let side = if rng.unit() < 0.5 {
                     Side::Buy
                 } else {

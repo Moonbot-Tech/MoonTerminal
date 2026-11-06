@@ -558,7 +558,13 @@ impl MarketDataSource {
                 // freshly opened live chart shows. The candles are read from one window before
                 // that so the first samples have something behind them.
                 const BENCH_SPLIT_DEPTH_MS: i64 = 42 * 60_000;
-                let from = window.0.max(window.1 - BENCH_SPLIT_DEPTH_MS);
+                // The generated six-hour fixture owns its whole history. Applying the archived
+                // bench's 42-minute seam to its right-hand prefetch would exclude every trade.
+                let from = if fixture.dense_history().is_some() {
+                    window.0
+                } else {
+                    window.0.max(window.1 - BENCH_SPLIT_DEPTH_MS)
+                };
                 let candles = fixture.candles(&cache, 60_000, from - tf_ms.max(60_000), window.1);
                 *out = synthetic_sides(&candles, tf_ms, step_ms, from, window.1);
                 return Some(true);
