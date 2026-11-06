@@ -449,6 +449,7 @@ impl SettingsView {
                 let reports = b.reports.as_ref().map(|h| &h.tx);
                 b.session.reconcile(&b.config, reports);
                 b.session.set_market_mode(b.config.market_mode);
+                b.market_catalog_revision.update(bcx, |_, cx| cx.notify());
                 if b.reconcile_open_main_request_group() {
                     bcx.notify();
                 }
@@ -477,8 +478,10 @@ impl SettingsView {
         } else if mode_changed {
             // Apply market mode live. Cores stay connected and the coordinator reselects providers
             // on its next tick.
-            self.backend
-                .update(cx, |b, _| b.session.set_market_mode(b.config.market_mode));
+            self.backend.update(cx, |b, bcx| {
+                b.session.set_market_mode(b.config.market_mode);
+                b.market_catalog_revision.update(bcx, |_, cx| cx.notify());
+            });
         }
 
         // A bundle or split edit alone does not reach `structural_sig` (both are presentation), so

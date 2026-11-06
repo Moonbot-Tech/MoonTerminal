@@ -50,9 +50,14 @@ impl Backend {
     /// Return the revision entity notified after retained market data changes.
     ///
     /// Returns:
-    ///     A narrow wake channel for catalog-sensitive consumers such as Auto chart retargeting.
+    ///     The price-data wake channel used by consumers such as Screener.
     pub(crate) fn market_data_revision(&self) -> gpui::Entity<crate::MarketDataRevision> {
         self.market_data_revision.clone()
+    }
+
+    /// Wake catalog-sensitive consumers without searching market aliases on every price update.
+    pub(crate) fn market_catalog_revision(&self) -> gpui::Entity<crate::MarketCatalogRevision> {
+        self.market_catalog_revision.clone()
     }
 
     /// Return the terminal's one reader of the crowd's public statistics.

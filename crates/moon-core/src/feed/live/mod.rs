@@ -326,7 +326,9 @@ pub(super) fn run(
     let client_epoch = client_slot.set(Some(client.clone()));
     let _client_slot_guard = ClientSlotGuard {
         slot: client_slot.clone(),
+        tx,
     };
+    let _ = tx.send(FeedMsg::MarketCatalogChanged);
 
     // Typed report-database replica: declare catch-up immediately. It remains an intent that the
     // library sends after connection and repeats on its own after a hard reconnect. Where it
@@ -1119,6 +1121,7 @@ pub(super) fn run(
         }
         if catalog_changed {
             client_slot.note_catalog_change();
+            let _ = tx.send(FeedMsg::MarketCatalogChanged);
         }
         if let Some(profile) = station {
             events.retain(|event| profile.keeps(event));

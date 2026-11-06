@@ -214,6 +214,7 @@ pub struct SessionManager {
     identity_respawns: identity_respawn::IdentityRespawnGate,
 }
 
+/// Coalesced feed changes, separated by the consumers that need to wake.
 #[derive(Clone, Debug, Default)]
 pub struct DrainStats {
     /// At least one feed message was applied to session state.
@@ -221,6 +222,8 @@ pub struct DrainStats {
     /// Retained market data changed. Visible charts pull this from `gpu_canvas.frame()`;
     /// this flag must not trigger account/order overlay sync.
     pub market_data: bool,
+    /// A market catalog or client lifetime changed, independently of prices and open charts.
+    pub market_catalog: bool,
     /// Account/order overlays changed. These still live in `CoreStore` and need a narrow
     /// sync into visible chart userdata.
     pub order_lines_data: bool,

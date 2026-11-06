@@ -137,6 +137,8 @@ struct Backend {
     >,
     /// Dedicated wake channel for consumers that must retry after retained market data changes.
     market_data_revision: Entity<MarketDataRevision>,
+    /// Rare catalog/client/provider changes, separate from retained price updates.
+    market_catalog_revision: Entity<MarketCatalogRevision>,
     /// Dedicated wake channel for surfaces whose civil-time meaning follows the header clock.
     display_time_revision: Entity<DisplayTimeRevision>,
     /// Dedicated wake channel for every effective workspace-scope transition.
@@ -740,6 +742,9 @@ struct CoreStatusRevision;
 
 /// Notification-only entity for retained market-data revisions.
 struct MarketDataRevision;
+
+/// Notification-only entity for changes to the available market catalogs and their routing.
+struct MarketCatalogRevision;
 
 /// Notification-only entity for a changed application-wide display zone.
 struct DisplayTimeRevision;

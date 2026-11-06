@@ -131,7 +131,7 @@ fn prune_coin_selection_to_scope(
 }
 
 /// Retry identity for one unresolved Auto chart target.
-type AutoWorkspaceChartAttempt = (CoreId, Option<(CoreId, u64)>, Option<(CoreId, String)>);
+type AutoWorkspaceChartAttempt = (CoreId, Option<(CoreId, String)>);
 
 /// Tracks only successfully applied Auto targets while deduplicating unresolved retries.
 #[derive(Debug, Default)]
@@ -164,7 +164,6 @@ impl AutoWorkspaceChartState {
     ///
     /// Args:
     ///     next: Current concrete Auto selection, or `None` for Classic/Overview.
-    ///     market_revision: Cheap target-core catalog revision used to retry after feed readiness.
     ///     current_target: Current Main core and market, included so an initially empty Main retries.
     ///
     /// Returns:
@@ -173,7 +172,6 @@ impl AutoWorkspaceChartState {
     fn candidate(
         &mut self,
         next: Option<CoreId>,
-        market_revision: Option<(CoreId, u64)>,
         current_target: Option<(CoreId, String)>,
     ) -> Option<CoreId> {
         let Some(target_core) = next else {
@@ -191,12 +189,17 @@ impl AutoWorkspaceChartState {
         if !main_matches {
             self.applied_core = None;
         }
-        let attempt = (target_core, market_revision, current_target);
+        let attempt = (target_core, current_target);
         if self.last_attempt.as_ref() == Some(&attempt) {
             return None;
         }
         self.last_attempt = Some(attempt);
         Some(target_core)
+    }
+
+    /// A coalesced reconnect may reuse catalog counters, but its event still re-arms a failed lookup.
+    fn catalog_changed(&mut self) {
+        self.last_attempt = None;
     }
 
     /// Commit a target only after Main has accepted its resolved market.
@@ -597,8 +600,8 @@ impl ChartTabs {
             this.drain_default_clears(cx);
             // Shift+middle-click in this window applies its scale to every stack and persists it.
             this.drain_x_sync(cx);
-            // A target core's catalog can become ready without another workspace-selection edge.
-            // The retry tracker makes this cheap unless its snapshot revision actually changed.
+            // Main or the selected core can change through ordinary Backend requests. An unchanged
+            // failed target stays parked here; only the catalog channel re-arms catalog lookup.
             this.sync_auto_workspace_chart(cx);
             // The tool-settings panel belongs to an ARMED tool. Disarming — through the picker's
             // Cursor entry or a per-tool hotkey — closes it HERE, before the signature early return
@@ -637,10 +640,11 @@ impl ChartTabs {
             this.sync_auto_workspace_chart(cx);
         })
         .detach();
-        let market_data_revision = backend.read(cx).market_data_revision();
-        cx.observe(&market_data_revision, |this, _revision, cx| {
+        let market_catalog_revision = backend.read(cx).market_catalog_revision();
+        cx.observe(&market_catalog_revision, |this, _revision, cx| {
             // A failed rail retarget must wake when its target catalog becomes resolvable even if
             // no unrelated Backend or workspace state changes.
+            this.auto_workspace_chart_state.catalog_changed();
             this.sync_auto_workspace_chart(cx);
         })
         .detach();
@@ -809,18 +813,10 @@ impl ChartTabs {
             self.close_chart_popup(ChartPopup::Coin, cx);
         }
         let current_target = self.main.read(cx).active_target(cx);
-        let market_revision = next.and_then(|core| {
-            self.backend
-                .read(cx)
-                .session
-                .market_source()
-                .snapshot_revision(core)
-        });
-        let Some(target_core) = self.auto_workspace_chart_state.candidate(
-            next,
-            market_revision,
-            current_target.clone(),
-        ) else {
+        let Some(target_core) = self
+            .auto_workspace_chart_state
+            .candidate(next, current_target.clone())
+        else {
             return;
         };
         let Some((current_core, current_market)) = current_target else {

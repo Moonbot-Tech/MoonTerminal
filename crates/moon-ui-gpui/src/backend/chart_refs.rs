@@ -1,6 +1,7 @@
 //! Retained chart text, market, and orderbook subscriptions.
 
 use crate::Backend;
+use gpui::Context;
 use moon_core::session::CoreId;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -164,7 +165,8 @@ impl Backend {
         }
     }
 
-    pub(crate) fn sync_open_markets_if_due(&mut self) {
+    /// Reconcile provider demand and wake catalog consumers only when the routing changes.
+    pub(crate) fn sync_open_markets_if_due(&mut self, cx: &mut Context<Self>) {
         let now = Instant::now();
         // The 1s fallback is intentional: provider-side linger/drop/failover is
         // wall-clock based. The hot path itself is the boolean dirty flag; we no
@@ -173,8 +175,12 @@ impl Backend {
         if self.desired_open_dirty || due {
             self.desired_open_dirty = false;
             self.last_open_sync = now;
-            self.session
-                .set_open(&self.desired, &self.desired_orderbook);
+            if self
+                .session
+                .set_open(&self.desired, &self.desired_orderbook)
+            {
+                self.market_catalog_revision.update(cx, |_, cx| cx.notify());
+            }
             // A full feed respawn (SessionManager::reconnect) mints a new command channel. Markets
             // are re-queued here every second; ChartText is last-writer and would otherwise stay
             // in chart_text_sent without ever reaching the new thread.

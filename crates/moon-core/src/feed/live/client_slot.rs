@@ -2,13 +2,17 @@
 
 use super::*;
 
-pub(super) struct ClientSlotGuard {
+/// Clear the published client before waking consumers of its market catalog.
+pub(super) struct ClientSlotGuard<'a> {
     pub(super) slot: SharedMoonClient,
+    pub(super) tx: &'a FeedTx,
 }
 
-impl Drop for ClientSlotGuard {
+impl Drop for ClientSlotGuard<'_> {
+    /// Catalog consumers must see the cleared slot, including on an early connection error.
     fn drop(&mut self) {
         self.slot.set(None);
+        let _ = self.tx.send(FeedMsg::MarketCatalogChanged);
     }
 }
 

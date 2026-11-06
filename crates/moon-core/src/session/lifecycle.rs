@@ -737,6 +737,7 @@ impl SessionManager {
                     FeedMsg::ChartArchiveAnswered { market, epoch } => {
                         self.market_source.archive_answered(sess.id, &market, epoch);
                     }
+                    FeedMsg::MarketCatalogChanged => stats.market_catalog = true,
                     FeedMsg::MarketDataChanged(markets) => {
                         if !markets.is_empty() {
                             self.market_source.mark_dirty(sess.id, &markets);

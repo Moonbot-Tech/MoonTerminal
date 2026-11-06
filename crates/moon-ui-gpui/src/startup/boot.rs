@@ -131,6 +131,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let report_revision = cx.new(|_| crate::ReportRevision);
     let core_status_revision = cx.new(|_| crate::CoreStatusRevision);
     let market_data_revision = cx.new(|_| crate::MarketDataRevision);
+    let market_catalog_revision = cx.new(|_| crate::MarketCatalogRevision);
     let display_time_revision = cx.new(|_| crate::DisplayTimeRevision);
     let workspace_revision = cx.new(|_| crate::workspace::WorkspaceRevision::default());
     let auto_workspace_layout_revision =
@@ -190,6 +191,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         core_status_revision,
         report_axes: Default::default(),
         market_data_revision: market_data_revision.clone(),
+        market_catalog_revision,
         display_time_revision: display_time_revision.clone(),
         workspace_revision: workspace_revision.clone(),
         auto_workspace_layout_revision: auto_workspace_layout_revision.clone(),
@@ -658,6 +660,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     if drain.market_data {
                         b.market_data_revision.update(cx, |_, cx| cx.notify());
                     }
+                    if drain.market_catalog {
+                        b.market_catalog_revision.update(cx, |_, cx| cx.notify());
+                    }
                     if drain.report_traces {
                         b.adopt_traces(cx);
                     }
@@ -771,7 +776,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     b.adopt_traces(cx);
                     b.maybe_diag_open_first_market(cx);
                     b.refresh_header_ticker_default(false);
-                    b.sync_open_markets_if_due();
+                    b.sync_open_markets_if_due(cx);
                     b.sync_manual_settings();
                     // Background-originated correction, not a user press: goes through the 250 ms
                     // coalescing gate `flush_backend_notify` flushes below on the same tick, rather

@@ -1615,6 +1615,7 @@ impl CoreData {
             | FeedMsg::IdentityStale(_)
             | FeedMsg::CoreBase { .. }
             | FeedMsg::MarketDataChanged(_)
+            | FeedMsg::MarketCatalogChanged
             | FeedMsg::ChartArchiveAnswered { .. }
             | FeedMsg::TradeSounds(_)
             | FeedMsg::TradeOpened { .. }

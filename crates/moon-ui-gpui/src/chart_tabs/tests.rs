@@ -54,11 +54,11 @@ fn auto_market_selection_prefers_exact_then_pair_then_coin() {
 /// Recording `applied_core` inside `chart_tabs/mod.rs:AutoWorkspaceChartState::candidate` must
 /// fail: an initially unavailable target catalog would consume the rail click and never retry.
 #[test]
-fn auto_chart_target_commits_only_after_success_and_retries_new_catalog_revisions() {
+fn auto_chart_target_commits_only_after_success_and_retries_catalog_events() {
     let current = Some((7, "BTCUSDT".to_string()));
     let mut restored = AutoWorkspaceChartState::seeded(Some(41), current.clone());
     assert_eq!(
-        restored.candidate(Some(41), Some((41, 1)), current.clone()),
+        restored.candidate(Some(41), current.clone()),
         Some(41),
         "a persisted selection must not suppress retargeting when Main belongs to another core"
     );
@@ -66,42 +66,41 @@ fn auto_chart_target_commits_only_after_success_and_retries_new_catalog_revision
     let restored_target = Some((41, "BTCUSDT".to_string()));
     let mut matching = AutoWorkspaceChartState::seeded(Some(41), restored_target.clone());
     assert_eq!(
-        matching.candidate(Some(41), Some((41, 1)), restored_target.clone()),
+        matching.candidate(Some(41), restored_target.clone()),
         None,
         "an actually matching restored Main target must not be replayed"
     );
     assert_eq!(
-        matching.candidate(Some(41), Some((41, 2)), current.clone()),
+        matching.candidate(Some(41), current.clone()),
         Some(41),
         "moving Main away from the selected Auto core must re-arm retargeting"
     );
 
     let mut pending = AutoWorkspaceChartState::default();
+    assert_eq!(pending.candidate(Some(41), current.clone()), Some(41));
     assert_eq!(
-        pending.candidate(Some(41), Some((41, 1)), current.clone()),
-        Some(41)
-    );
-    assert_eq!(
-        pending.candidate(Some(41), Some((41, 1)), current.clone()),
+        pending.candidate(Some(41), current.clone()),
         None,
         "one unresolved snapshot must not be searched on every backend notification"
     );
-    assert_eq!(
-        pending.candidate(Some(41), Some((41, 2)), current.clone()),
-        Some(41),
-        "catalog readiness must retry the same selected core until Main accepts it"
-    );
+    // Initial list and a full slot replacement can have identical counters. Both events must retry.
+    for _ in 0..2 {
+        pending.catalog_changed();
+        assert_eq!(pending.candidate(Some(41), current.clone()), Some(41));
+        assert_eq!(pending.candidate(Some(41), current.clone()), None);
+    }
     pending.commit(41);
+    pending.catalog_changed();
     assert_eq!(
-        pending.candidate(Some(41), Some((41, 3)), Some((41, "BTCUSDT".to_string())),),
+        pending.candidate(Some(41), Some((41, "BTCUSDT".to_string())),),
         None,
         "focus-only revisions must not replace a successfully applied target"
     );
-    assert_eq!(pending.candidate(None, None, None), None);
+    assert_eq!(pending.candidate(None, None), None);
     assert_eq!(pending.applied_core, None);
 }
 
-/// Removing the market-data notification in the coordination loop or the `ChartTabs` observer must
+/// Removing the catalog notification in the feed drain or the `ChartTabs` observer must
 /// fail: a selected core whose catalog becomes ready later would remain stuck behind the previous
 /// chart.
 ///
@@ -109,19 +108,23 @@ fn auto_chart_target_commits_only_after_success_and_retries_new_catalog_revision
 /// is matched without its leading indentation — the code is one nesting level shallower there and
 /// nothing about this contract depends on how deeply it sits.
 #[test]
-fn market_data_revisions_wake_pending_auto_chart_retargets() {
+fn catalog_revisions_wake_pending_auto_chart_retargets_without_price_walks() {
     let main = include_str!("../main.rs");
     let startup = include_str!("../startup/boot.rs");
     let backend = include_str!("../backend/workspace_entities.rs");
     let chart_tabs = include_str!("mod.rs");
-    assert!(main.contains("market_data_revision: Entity<MarketDataRevision>"));
+    assert!(main.contains("market_catalog_revision: Entity<MarketCatalogRevision>"));
     assert!(startup.contains(
-        "if drain.market_data {\n                        b.market_data_revision.update(cx, |_, cx| cx.notify());"
+        "if drain.market_catalog {\n                        b.market_catalog_revision.update(cx, |_, cx| cx.notify());"
     ));
-    assert!(backend.contains("pub(crate) fn market_data_revision("));
+    assert!(backend.contains("pub(crate) fn market_catalog_revision("));
     assert!(chart_tabs.contains(
-        "cx.observe(&market_data_revision, |this, _revision, cx| {\n            // A failed rail retarget must wake"
+        "cx.observe(&market_catalog_revision, |this, _revision, cx| {\n            // A failed rail retarget must wake"
     ));
+    let chart = include_str!("../panels/chart/construct.rs");
+    assert!(!chart.contains("cx.observe(&market_data_revision"));
+    assert!(!chart_tabs.contains("cx.observe(&market_data_revision"));
+    assert!(chart_tabs.contains("this.auto_workspace_chart_state.catalog_changed();"));
 }
 
 /// Replacing `main_stack.rs:replace_or_focus`'s indexed insertion with `push` must fail: selecting
