@@ -327,7 +327,20 @@ impl SettingsView {
         save_outcome(&security, write)
     }
 
-    /// Caption the localized dropdowns again after a save switched the interface language.
+    /// Caption the localized dropdowns again when the interface language moved since last time.
+    ///
+    /// Asked on every render because the language has more than one way to move, and a saved
+    /// choice here is only one of them. A string compare, and the settings window draws rarely.
+    pub(super) fn captions_sync(&mut self, cx: &mut Context<Self>) {
+        let locale = rust_i18n::locale();
+        if *locale == *self.captions_locale {
+            return;
+        }
+        self.captions_locale = locale.to_string();
+        self.relabel_selects(cx);
+    }
+
+    /// Build the localized dropdowns' captions in the current language.
     ///
     /// Their captions are copied into each select's state when the window opens, while the row
     /// labels beside them go through `t!` on every render, so without this the window shows a
@@ -368,7 +381,6 @@ impl SettingsView {
         if lang_changed {
             rust_i18n::set_locale(after.language.code());
             crate::window::titles::follow_locale(cx);
-            self.relabel_selects(cx);
         }
         self.backend.update(cx, |b, bcx| {
             b.reconcile_telegram(&before.telegram);
