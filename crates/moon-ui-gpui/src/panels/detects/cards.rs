@@ -56,6 +56,9 @@ pub(super) fn card(
     is_light: bool,
     cx: &App,
 ) -> Div {
+    // A picture of the interface should not differ from the last one by how long the run has been going.
+    #[cfg(uidoc)]
+    let secs = crate::uidoc::steady_age(secs);
     card_sized(
         it,
         secs,
