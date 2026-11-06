@@ -1,14 +1,14 @@
 //! PIN-row interaction and narrow-window layout in every shipped locale.
 
 use gpui::{
-    Bounds, Context, InteractiveElement, IntoElement, Modifiers, ParentElement, Pixels, Render,
-    Styled, VisualTestContext, Window, div, px,
+    AppContext, Bounds, Context, InteractiveElement, IntoElement, Modifiers, ParentElement, Pixels,
+    Render, Styled, VisualTestContext, Window, div, px,
 };
 use moon_core::{
     config::{Language, UiThemeMode},
     feed::CoreTelegramState,
 };
-use moon_ui::{MoonPalette, MoonTheme, h_flex, v_flex};
+use moon_ui::{MoonPalette, MoonTheme, Root, h_flex, v_flex};
 use rust_i18n::t;
 
 use crate::{
@@ -72,8 +72,9 @@ impl Render for Host {
 
 /// Open and paint the PIN host at the expert window's real minimum dimensions.
 fn open_pin_window(cx: &mut gpui::TestAppContext, pin: Option<&'static str>) -> VisualTestContext {
-    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |_, _| Host {
-        pin,
+    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |window, cx| {
+        let host = cx.new(|_| Host { pin });
+        Root::new(host, window, cx)
     });
     let mut visual = VisualTestContext::from_window(handle.into(), cx);
     for _ in 0..3 {
@@ -161,7 +162,7 @@ fn absent_pin_has_no_copy_button(cx: &mut gpui::TestAppContext) {
 }
 
 /// Clicking the production MoonButton must put the exact snapshot text, not a placeholder or a
-/// reformatted value, on the clipboard.
+/// reformatted value, on the clipboard and confirm the action through the existing notification layer.
 #[gpui::test]
 fn copy_button_writes_the_exact_pin(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
@@ -176,5 +177,8 @@ fn copy_button_writes_the_exact_pin(cx: &mut gpui::TestAppContext) {
         .and_then(|item| item.text())
         .expect("PIN copied to clipboard");
     assert_eq!(copied, PIN);
+    let notifications =
+        visual.update(|window, app| Root::read(window, app).notification_count(app));
+    assert_eq!(notifications, 1, "copy gave no success notification");
     visual.update(|window, _| window.remove_window());
 }

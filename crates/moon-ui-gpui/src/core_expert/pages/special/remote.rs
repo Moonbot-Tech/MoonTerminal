@@ -11,7 +11,8 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonPalette, h_flex, v_flex,
+    MoonAlert, MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonNotification,
+    MoonPalette, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -268,8 +269,14 @@ pub(super) fn pin(rm: &RemoteCtx<'_>, p: MoonPalette, cx: &App) -> AnyElement {
                         .variant(MoonButtonVariant::Neutral)
                         // Keep the full localized label beside the PIN at the window minimum.
                         .padding_x(4.0)
-                        .on_click(move |_, _window, app| {
+                        .on_click(move |_, window, app| {
                             app.write_to_clipboard(ClipboardItem::new_string(pin.clone()));
+                            window.push_notification(
+                                MoonNotification::success(
+                                    t!("core_expert.remote_pin_copied").to_string(),
+                                ),
+                                app,
+                            );
                         })
                         .render(),
                 )
