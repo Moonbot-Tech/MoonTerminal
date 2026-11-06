@@ -20,8 +20,8 @@ pub(super) type ProviderLogin = fn(&Target, &FirstAccess, &str) -> anyhow::Resul
 
 /// State of the login-only branch.
 pub(super) struct LoginState {
-    /// Server IP used as the session-login key.
-    pub(super) ip: String,
+    /// Identity of the current wizard flow; completions may mutate only this generation.
+    pub(super) generation: u64,
     /// Whether a confirmed login is running off the UI thread.
     pub(super) running: bool,
     /// Network seam; tests replace it with a success or refusal stub.
@@ -32,10 +32,23 @@ impl Default for LoginState {
     /// Build the production login state using the real provider-login call.
     fn default() -> Self {
         Self {
-            ip: String::new(),
+            generation: 0,
             running: false,
             call: provider_login,
         }
+    }
+}
+
+impl LoginState {
+    /// Invalidate any running login before another branch or host reuses the wizard.
+    pub(super) fn restart_flow(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.running = false;
+    }
+
+    /// Whether an asynchronous completion still belongs to the active login flow.
+    pub(super) fn completion_current(&self, generation: u64) -> bool {
+        self.running && self.generation == generation
     }
 }
 
@@ -109,7 +122,7 @@ impl ConnectWizardView {
         self.error = None;
         self.login.running = true;
         cx.notify();
-        let ip = self.login.ip.clone();
+        let generation = self.login.generation;
         let call = self.login.call;
         cx.spawn(async move |view, cx| {
             let (target, first, pin, result) = cx
@@ -119,9 +132,12 @@ impl ConnectWizardView {
                 })
                 .await;
             let _ = view.update_in(cx, |this, window, cx| {
+                if !this.login.completion_current(generation) {
+                    return;
+                }
                 this.login.running = false;
                 let backend = this.backend.clone();
-                match finish_login(ip, target, first, pin, result, |ip, login| {
+                match finish_login(target, first, pin, result, |ip, login| {
                     backend.update(cx, |backend, cx| {
                         backend.core_cmds_add_login(ip, login);
                         cx.notify();
@@ -147,13 +163,12 @@ impl ConnectWizardView {
             return;
         }
         self.server.login_only = false;
-        self.login.ip.clear();
+        self.login.restart_flow();
     }
 }
 
-/// Store a successful login and return the localized error for a failed one.
+/// Store a successful login under its authenticated host and return any localized refusal.
 fn finish_login(
-    ip: String,
     target: Target,
     first: FirstAccess,
     pin: String,
@@ -164,7 +179,7 @@ fn finish_login(
         return Err(login_failure(&error, &first));
     }
     store(
-        ip,
+        target.host.clone(),
         SessionLogin {
             target: target.addr(),
             first,

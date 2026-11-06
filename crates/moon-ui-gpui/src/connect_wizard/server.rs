@@ -251,12 +251,6 @@ impl ServerFields {
             .update(cx, |state, cx| state.set_value(host, window, cx));
     }
 
-    /// Return the current host input for login request verification.
-    #[cfg(test)]
-    pub(super) fn host_value(&self, cx: &App) -> String {
-        text(&self.host, cx)
-    }
-
     /// Put a picked key file's path into its field.
     pub(super) fn set_key_path<V: 'static>(
         &self,

@@ -1,6 +1,13 @@
 //! Provider login normalization regressions for the shared server step.
 
-use super::effective_login;
+use super::{ServerFields, effective_login, text};
+
+impl ServerFields {
+    /// Return the current host input for login request verification in test builds.
+    pub(crate) fn host_value(&self, cx: &gpui::App) -> String {
+        text(&self.host, cx)
+    }
+}
 
 /// Rejecting empty input again would make the root placeholder unusable for newcomers.
 #[test]

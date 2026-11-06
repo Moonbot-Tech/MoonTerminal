@@ -276,8 +276,7 @@ impl ConnectWizardView {
         self.server.fingerprint_ok = false;
         self.server.login_only = true;
         self.server.set_host(&ip, window, cx);
-        self.login.ip = ip;
-        self.login.running = false;
+        self.login.restart_flow();
         cx.notify();
     }
 
@@ -513,7 +512,6 @@ pub(crate) fn open_move(
 }
 
 /// Open the login-only wizard for core server commands with `ip` already filled in.
-#[allow(dead_code)] // Called by the core-commands UI integration batch.
 pub(crate) fn open_login(
     backend: Entity<Backend>,
     owner: Option<AnyWindowHandle>,

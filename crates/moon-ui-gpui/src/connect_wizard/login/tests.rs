@@ -6,7 +6,7 @@ use moon_remote::setup::FirstAccess;
 use moon_remote::ssh::{OpenError, Target};
 use zeroize::Zeroizing;
 
-use super::{ProviderLogin, finish_login};
+use super::{LoginState, ProviderLogin, finish_login};
 use crate::connect_wizard::server::ServerFields;
 
 /// Render only the shared server fields, without constructing the application backend.
@@ -69,14 +69,9 @@ fn successful_login_stores_host_and_confirmed_pin() {
     let first = password_login();
     let result = call(&target, &first, "HOST_KEY");
     let mut stored = None;
-    finish_login(
-        "203.0.113.7".into(),
-        target,
-        first,
-        "HOST_KEY".into(),
-        result,
-        |ip, login| stored = Some((ip, login)),
-    )
+    finish_login(target, first, "HOST_KEY".into(), result, |ip, login| {
+        stored = Some((ip, login))
+    })
     .expect("stubbed login succeeds");
     let (ip, login) = stored.expect("successful login must be stored");
     assert_eq!(ip, "203.0.113.7");
@@ -102,14 +97,9 @@ fn refused_login_stores_nothing_and_shows_refusal() {
     let first = password_login();
     let result = call(&target, &first, "HOST_KEY");
     let mut stored = false;
-    let error = finish_login(
-        "203.0.113.7".into(),
-        target,
-        first,
-        "HOST_KEY".into(),
-        result,
-        |_, _| stored = true,
-    )
+    let error = finish_login(target, first, "HOST_KEY".into(), result, |_, _| {
+        stored = true
+    })
     .expect_err("stubbed login is refused");
     assert!(!stored);
     assert_eq!(
@@ -124,4 +114,18 @@ fn password_login() -> FirstAccess {
         user: "root".into(),
         password: Zeroizing::new("NEUTRAL_PASSWORD".into()),
     }
+}
+
+/// A completion from the previous host must not clear or close the wizard's newer login flow.
+#[test]
+fn reused_login_flow_rejects_the_previous_completion() {
+    let mut state = LoginState::default();
+    state.running = true;
+    let previous = state.generation;
+    assert!(state.completion_current(previous));
+
+    state.restart_flow();
+
+    assert!(!state.completion_current(previous));
+    assert!(!state.running);
 }
