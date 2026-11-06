@@ -994,8 +994,9 @@ vertex MOut marker_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     // The gem is taller than wide; every other marker keeps its square quad.
     float2 half_ext = (mk.m.x >= 1.5) ? float2(half_w, half_sz) : float2(half_sz, half_sz);
     float2 local = CORNERS_ALT[vid] * half_ext;
-    // Price-anchored markers keep their historical reach (order lines extend into the book zone).
-    float2 xclip = bottom ? float2(cv.bounds.x, cv.bounds.x + cv.bounds.z) : float2(-1e30, 1e30);
+    // Trade arrows share the plot-only hit area; order endpoint crosses may reach the book.
+    bool plot_only = bottom || (mk.m.x > 3.5 && mk.m.x < 5.5);
+    float2 xclip = plot_only ? float2(cv.bounds.x, cv.bounds.x + cv.bounds.z) : float2(-1e30, 1e30);
     float2 wedge = float2(mk.m.z, max(mk.m.w, 1.0));
     return { to_clip(center + local, cv.resolution), mk.color, local, mk.m.x, half_w, half_sz, xclip, wedge };
 }

@@ -263,6 +263,20 @@ Failure writes `result=FAIL FIRETEST FAIL ... reasons=...` or
 
 The test is deliberately red on regressions of the form “on mousemove someone again did a top-down render, notify, a heavy query, an allocating render path or an expensive GPU frame”. A screenshot is not a criterion of this test; FireTest checks behaviour and load.
 
+## Chart gutter pixels
+
+On Windows, the dense run checks the real userdata pass immediately before its existing GPU recovery
+captures. It submits diagnostic trade arrows and segments across the plot edges under the scissor
+already installed by the production renderer, then compares native target pixels. Geometry must not
+change the price/time gutters or a carved volume zone; trade arrows must stay out of the book;
+visible arrows and order-line continuations into the book must still draw. The next normal base blit
+removes the diagnostic geometry. No market records or saved layout are changed.
+
+`[firetest] chart_clip=PASS native_pixels=true charts=2 ...` qualifies this DX11 userdata check.
+It does not claim a pixel check of every other layer, GPUI text or the Metal/wgpu renderers. Native
+unit coverage also runs left/right price-gutter and book-disabled layouts. Cursor readouts, axis
+labels, horizontal volumes and the arrival border keep their separate, intentional drawing areas.
+
 
 ## Native frame-debt check
 

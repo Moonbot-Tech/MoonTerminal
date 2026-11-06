@@ -57,6 +57,8 @@ pub(crate) use pane_layout::{BookLayout, PaneAreas, pane_layout};
 use pane_render::PaneRender;
 use render_state::{RenderState, UdScratch};
 #[cfg(windows)]
+mod clip_probe;
+#[cfg(windows)]
 pub mod gpu;
 #[cfg(windows)]
 pub mod grid;

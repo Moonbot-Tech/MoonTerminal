@@ -137,3 +137,29 @@ fn quiet_book_survives_device_replacement() {
         "device recovery lost retained levels"
     );
 }
+
+/// Native pixels must respect both axis gutters while an extended order still reaches the book.
+#[test]
+fn userdata_clips_gutters_but_preserves_order_extensions() {
+    for (left, plot_width, book_width) in [(50., 210., 60.), (0., 210., 60.), (50., 270., 0.)] {
+        let engine = book_chart();
+        {
+            let mut state = engine.state.borrow_mut();
+            let pane = &mut state.panes[0];
+            pane.view.bounds = [left, 0., plot_width, 175.];
+            pane.view.time_to_px = 1.;
+            pane.view.pad = plot_width + book_width;
+            pane.orderbook_view = pane.view;
+            pane.orderbook_view.bounds = [left + plot_width, 0., book_width, 175.];
+            state.firetest_capture = Some(crate::chartdx::recovery_probe::Capture::CheckClip);
+        }
+        draw(&engine, &TestTarget::new(320, 200), 1);
+        let state = engine.state.borrow();
+        let Some(crate::chartdx::recovery_probe::Capture::ClipChecked(result)) =
+            &state.firetest_capture
+        else {
+            panic!("native pass did not execute the clip probe");
+        };
+        result.as_ref().unwrap();
+    }
+}

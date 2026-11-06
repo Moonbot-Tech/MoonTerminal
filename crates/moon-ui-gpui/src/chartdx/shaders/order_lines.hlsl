@@ -216,8 +216,9 @@ MOut marker_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float2 px = center + corner * half_ext;
     MOut o; o.pos = float4(to_clip(px), 0, 1); o.color = mk.color; o.local = corner * half_ext;
     o.shape = mk.m.x; o.thick = half_w; o.sz = half_sz;
-    // Price-anchored markers keep their historical reach (order lines extend into the book zone).
-    o.xclip = bottom ? float2(cv_bounds.x, cv_bounds.x + cv_bounds.z) : float2(-1e30, 1e30);
+    // Trade arrows share the plot-only hit area; order endpoint crosses may reach the book.
+    bool plot_only = bottom || (mk.m.x > 3.5 && mk.m.x < 5.5);
+    o.xclip = plot_only ? float2(cv_bounds.x, cv_bounds.x + cv_bounds.z) : float2(-1e30, 1e30);
     o.wedge = float2(mk.m.z, max(mk.m.w, 1.0));
     return o;
 }

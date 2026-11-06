@@ -24,6 +24,29 @@ impl PartialEq for ChartDataHandle {
 }
 
 impl ChartDataHandle {
+    /// Exercise the real chart pass with geometry crossing each gutter, without changing market data.
+    #[cfg(windows)]
+    pub(crate) fn firetest_request_clip_check(&self) -> Result<(), String> {
+        let inner = self.inner.upgrade().ok_or("clip chart was dropped")?;
+        let render = inner.borrow().render.clone();
+        let mut render = render.borrow_mut();
+        render.firetest_capture = Some(super::recovery_probe::Capture::CheckClip);
+        render.needs_present = true;
+        Ok(())
+    }
+
+    /// Wait for the native pass to finish its pixel assertions.
+    #[cfg(windows)]
+    pub(crate) fn firetest_clip_check(&self) -> Result<bool, String> {
+        let inner = self.inner.upgrade().ok_or("clip chart was dropped")?;
+        let render = inner.borrow().render.clone();
+        match &render.borrow().firetest_capture {
+            Some(super::recovery_probe::Capture::ClipChecked(result)) => {
+                result.clone().map(|()| true)
+            }
+            _ => Ok(false),
+        }
+    }
     /// Park the real camera before the diagnostic snapshots; no synthetic replacement renderer.
     #[cfg(windows)]
     pub(crate) fn firetest_park_recovery_camera(&self) -> Result<(), String> {

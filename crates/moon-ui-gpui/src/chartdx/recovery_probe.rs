@@ -64,6 +64,8 @@ impl RecoveryImage {
 pub(in crate::chartdx) enum Capture {
     Requested,
     Ready(Result<Arc<RecoveryImage>, String>),
+    CheckClip,
+    ClipChecked(Result<(), String>),
 }
 
 /// Read a clipped chart rectangle from the actual draw target using a staging texture.

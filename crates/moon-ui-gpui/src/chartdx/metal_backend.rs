@@ -1015,11 +1015,10 @@ impl MetalLayers {
         }
         self.draw_cached_book(device, encoder, orderbook_view);
         self.draw_price_lines_layer(device, encoder, view);
-        // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
-        // the whole pane, as the crosshair and the volume readout live in the zone.
-        let pane_sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
-        encoder.set_scissor_rect(userdata_scissor(pane_sc, &self.hvol_style));
+        // Content excludes the axes; cursor readouts below intentionally include them.
+        encoder.set_scissor_rect(sc);
         self.draw_user_layers(encoder);
+        let pane_sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
         encoder.set_scissor_rect(pane_sc);
         self.draw_cursor_layer(encoder, cursor_params, readout_rects);
         Ok(())
@@ -2278,35 +2277,16 @@ fn scissor_rect(
     width: u32,
     height: u32,
 ) -> MTLScissorRect {
-    let x = view.bounds[0].floor().max(0.0) as u64;
-    let y = view.bounds[1].floor().max(0.0) as u64;
-    let r = (orderbook_view.bounds[0] + orderbook_view.bounds[2])
-        .ceil()
-        .clamp(x as f32 + 1.0, width.max(1) as f32) as u64;
-    let b = (view.bounds[1] + view.bounds[3])
-        .ceil()
-        .clamp(y as f32 + 1.0, height.max(1) as f32) as u64;
+    let clip = view.content_clip(orderbook_view);
+    let x = clip[0].floor().max(0.0) as u64;
+    let y = clip[1].floor().max(0.0) as u64;
+    let r = clip[2].ceil().clamp(x as f32 + 1.0, width.max(1) as f32) as u64;
+    let b = clip[3].ceil().clamp(y as f32 + 1.0, height.max(1) as f32) as u64;
     MTLScissorRect {
         x,
         y,
         width: (r - x).max(1),
         height: (b - y).max(1),
-    }
-}
-
-/// The pane scissor less a horizontal-volume zone carved out at its left edge, for the user
-/// layers; see `HvolStyleGpu::user_clip_left`.
-fn userdata_scissor(pane: MTLScissorRect, hvol: &HvolStyleGpu) -> MTLScissorRect {
-    let Some(edge) = hvol.user_clip_left() else {
-        return pane;
-    };
-    let right = pane.x + pane.width;
-    let left = (edge.ceil().max(0.0) as u64).clamp(pane.x, right - 1);
-    MTLScissorRect {
-        x: left,
-        y: pane.y,
-        width: right - left,
-        height: pane.height,
     }
 }
 

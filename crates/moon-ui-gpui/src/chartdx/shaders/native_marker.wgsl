@@ -110,8 +110,8 @@ fn marker_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: 
     out.shape = mk.m.x;
     out.thick = half_w;
     out.sz = half_sz;
-    // Price-anchored markers keep their historical reach (order lines extend into the book zone).
-    if bottom {
+    // Trade arrows share the plot-only hit area; order endpoint crosses may reach the book.
+    if bottom || (mk.m.x > 3.5 && mk.m.x < 5.5) {
         out.xclip = vec2<f32>(cv.bounds.x, cv.bounds.x + cv.bounds.z);
     } else {
         out.xclip = vec2<f32>(-1e30, 1e30);

@@ -40,12 +40,10 @@ impl WgpuLayers {
             self.draw_cached_combo(device, queue, pass, view);
         }
         self.draw_price_lines_layer(pass);
-        // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
-        // the whole pane, as the crosshair and the volume readout live in the zone.
-        let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
-        let user_sc = userdata_scissor(sc, &self.hvol_style);
-        pass.set_scissor_rect(user_sc.0, user_sc.1, user_sc.2, user_sc.3);
+        // Content excludes the axes; cursor readouts below intentionally include them.
+        pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
         self.draw_user_layers(pass);
+        let sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
         pass.set_scissor_rect(sc.0, sc.1, sc.2, sc.3);
         self.draw_cursor_layer(pass, cursor_params, readout_rects);
         Ok(())
@@ -693,31 +691,12 @@ fn scissor_rect(
     width: u32,
     height: u32,
 ) -> (u32, u32, u32, u32) {
-    let l = view.bounds[0].floor().max(0.0) as u32;
-    let t = view.bounds[1].floor().max(0.0) as u32;
-    let r = (orderbook_view.bounds[0] + orderbook_view.bounds[2])
-        .ceil()
-        .clamp(l as f32 + 1.0, width.max(1) as f32) as u32;
-    let b = (view.bounds[1] + view.bounds[3])
-        .ceil()
-        .clamp(t as f32 + 1.0, height.max(1) as f32) as u32;
+    let clip = view.content_clip(orderbook_view);
+    let l = clip[0].floor().max(0.0) as u32;
+    let t = clip[1].floor().max(0.0) as u32;
+    let r = clip[2].ceil().clamp(l as f32 + 1.0, width.max(1) as f32) as u32;
+    let b = clip[3].ceil().clamp(t as f32 + 1.0, height.max(1) as f32) as u32;
     (l, t, (r - l).max(1), (b - t).max(1))
-}
-
-/// The pane scissor less the horizontal-volume zone at its left edge, for the user layers.
-/// The pane scissor less a horizontal-volume zone carved out at its left edge, for the user
-/// layers; see `HvolStyleGpu::user_clip_left`.
-fn userdata_scissor(
-    pane: (u32, u32, u32, u32),
-    hvol: &crate::chartdx::HvolStyleGpu,
-) -> (u32, u32, u32, u32) {
-    let Some(edge) = hvol.user_clip_left() else {
-        return pane;
-    };
-    let (l, t, w, h) = pane;
-    let right = l + w;
-    let left = (edge.ceil().max(0.0) as u32).clamp(l, right - 1);
-    (left, t, right - left, h)
 }
 
 fn bounds_scissor(bounds: [f32; 4], width: u32, height: u32) -> (u32, u32, u32, u32) {

@@ -24,6 +24,8 @@ pub(super) struct DenseRun {
 #[derive(Clone)]
 enum RecoveryCheck {
     #[cfg(windows)]
+    Clip,
+    #[cfg(windows)]
     Baseline(Option<[std::sync::Arc<crate::chartdx::RecoveryImage>; 2]>),
     AfterReset {
         completed: u8,
@@ -163,8 +165,9 @@ impl DenseRun {
                 {
                     self.candle.firetest_park_recovery_camera()?;
                     self.hybrid.firetest_park_recovery_camera()?;
-                    self.request_images()?;
-                    self.recovery = Some(RecoveryCheck::Baseline(None));
+                    self.candle.firetest_request_clip_check()?;
+                    self.hybrid.firetest_request_clip_check()?;
+                    self.recovery = Some(RecoveryCheck::Clip);
                 }
                 #[cfg(not(windows))]
                 {
@@ -177,6 +180,17 @@ impl DenseRun {
                         before: current,
                     });
                 }
+            }
+            #[cfg(windows)]
+            Some(RecoveryCheck::Clip) => {
+                if !self.candle.firetest_clip_check()? || !self.hybrid.firetest_clip_check()? {
+                    return Ok(false);
+                }
+                firetest_info(
+                    "[firetest] chart_clip=PASS native_pixels=true charts=2 gutters=clear arrows=plot order_extension=book",
+                );
+                self.request_images()?;
+                self.recovery = Some(RecoveryCheck::Baseline(None));
             }
             #[cfg(windows)]
             Some(RecoveryCheck::Baseline(previous)) => {
