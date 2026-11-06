@@ -1,5 +1,8 @@
 //! CPU regressions for arrival opacity, repaint termination, and explicit clearing.
 
+#[cfg(windows)]
+mod d3d;
+
 use super::{arrival_alpha, arrival_present_due};
 use crate::chartdx::{ChartEngine, PaneRender};
 use gpui::{Bounds, GpuFrameDecision, GpuFrameInfo, point, px, size};

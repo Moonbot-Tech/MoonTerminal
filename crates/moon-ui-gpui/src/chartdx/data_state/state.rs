@@ -635,8 +635,7 @@ impl ChartDataState {
         }
     }
 
-    /// Prepare the panes whose deferred tick-eviction rebake fell due. A quiet market runs no
-    /// market sync, and the rebake that erases evicted history must not wait for the next tick.
+    /// Prepare deferred tick-eviction and book bakes even when no further market revision arrives.
     fn tick_eviction_rebakes(&mut self, now: Instant) {
         if !self.scene_visible {
             return;
@@ -654,7 +653,8 @@ impl ChartDataState {
             st.needs_present = true;
         }
         // A book update held back by the data throttle bakes once the throttle expires, even when
-        // no further revision arrives; the book is outside the base, so only a present follows.
+        // no further revision arrives. DX11 invalidates its containing base when the book bakes;
+        // Metal composites the book separately and needs only a present.
         for pr in st.panes.iter_mut() {
             if pr.active && pr.layers.book_bake_due(now) {
                 pr.gpu_prepare_dirty = true;

@@ -1048,6 +1048,7 @@ impl RenderState {
         }
     }
 
+    /// Upload pending layers and propagate changed inner textures to their containing base cache.
     pub(super) fn prepare_gpu(&mut self, gpu: &RawGpuAccess) -> anyhow::Result<()> {
         let width = gpu.width();
         let height = gpu.height();
@@ -1080,7 +1081,7 @@ impl RenderState {
                     view.resolution = res;
                     orderbook_view.resolution = res;
                     crate::diag::bump(&crate::diag::CHART_GPU_PREPARE);
-                    pr.layers.prepare_d3d(
+                    self.base_dirty |= pr.layers.prepare_d3d(
                         &view,
                         &orderbook_view,
                         &pr.book_style,
