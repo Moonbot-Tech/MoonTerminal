@@ -173,6 +173,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         telegram,
         station,
         core_moves: Default::default(),
+        core_cmds: Default::default(),
+        connect_login_request: None,
+        core_status_updates_request: None,
         wizard_move_request: None,
         core_new: None,
         connect_wizard_window: None,
@@ -377,6 +380,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     #[cfg(uidoc)]
     crate::uidoc::note_backend(backend.clone());
     backend.update(cx, |b, cx| b.station_recover(cx));
+    backend.update(cx, |b, cx| b.core_cmds_track(cx));
     // One off-thread read of the station, so its Settings pages open filled. After recovery: an
     // outstanding hand-over's read already runs and this one then stands down.
     backend.update(cx, |b, cx| b.station_prefetch(cx));

@@ -218,6 +218,8 @@ impl CoreDot {
 pub(crate) struct CoreListRow {
     /// The row's per-session identity (`ConnRow::row_key`), the selection key.
     pub(crate) row_key: u64,
+    /// Durable server identity used by commands, independent of the draft row key.
+    pub(crate) uid: u64,
     /// Position in `preview.servers` and `SettingsView.conn`.
     pub(crate) draft_index: usize,
     pub(crate) core_id: CoreId,

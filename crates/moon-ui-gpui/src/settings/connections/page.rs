@@ -11,11 +11,12 @@ use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonContextMenuWindowExt as _, MoonInput,
     MoonInputState, MoonMenuItem, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSelect,
-    MoonWindowExt as _, h_flex, rgba_from, v_flex,
+    MoonTone, MoonWindowExt as _, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
 use super::SettingsView;
+use super::core_menu::{self, MenuCmd, MenuRow};
 use super::cores::{
     CardInputs, CoreAct, CoreAction, CoreCard, ListParts, core_card, cores_empty, cores_list,
     cores_split, deletes,
@@ -25,6 +26,7 @@ use super::tab::{apply_group_transport, group_icon, icon_picker_grid, sorted_gro
 use super::table::{
     apply_pasted_key, feed_count, feed_get, feed_set, set_core_active, set_for_station, status_dot,
 };
+use crate::backend::core_cmds::{MenuForm, core_host_port, menu_form};
 use crate::design;
 use crate::settings::Tab;
 use crate::settings::common::column_row;
@@ -95,8 +97,50 @@ impl SettingsView {
         match action {
             CoreAction::Select(key) => {
                 self.conn_selected = Some(key);
+                let uid = self
+                    .conn
+                    .iter()
+                    .position(|row| row.row_key == key)
+                    .and_then(|i| {
+                        let b = self.backend.read(cx);
+                        let uid = b.preview.as_ref().unwrap_or(&b.config).servers.get(i)?.uid;
+                        let server = b.config.servers.iter().find(|server| server.uid == uid)?;
+                        let (host, _) = core_host_port(server)?;
+                        (core_menu::eligible(&host) && b.core_cmds_login_for(&host).is_some())
+                            .then_some(uid)
+                    });
+                if let Some(uid) = uid {
+                    self.backend
+                        .update(cx, |b, _| b.core_cmds_request_status(uid));
+                }
                 cx.notify();
             }
+            CoreAction::CoreMenu(uid) => self.open_core_menu(uid, window, cx),
+            CoreAction::CoreCmd(uid, cmd) => crate::core_cmds::open_on(
+                self.backend.clone(),
+                Some(window.window_handle()),
+                window.display(cx).map(|display| display.id()),
+                uid,
+                cmd,
+                false,
+                cx,
+            ),
+            CoreAction::BannerRetry(uid) => crate::core_cmds::open_on(
+                self.backend.clone(),
+                Some(window.window_handle()),
+                window.display(cx).map(|display| display.id()),
+                uid,
+                moon_remote::core_cmds::Cmd::RetryLogin,
+                true,
+                cx,
+            ),
+            CoreAction::AddLogin(ip) => crate::connect_wizard::open_login(
+                self.backend.clone(),
+                Some(window.window_handle()),
+                window.display(cx).map(|display| display.id()),
+                ip,
+                cx,
+            ),
             CoreAction::GroupActive(name, on) => {
                 self.backend.update(cx, |b, bcx| {
                     if let Some(g) = b
@@ -223,6 +267,139 @@ impl SettingsView {
             CoreAction::AskDelete => self.ask_delete_core(window, cx),
             CoreAction::DeleteConfirmed(_) => {}
         }
+    }
+
+    /// Open the core's command menu from a click handler, preserving draft selection and inputs.
+    fn open_core_menu(&mut self, uid: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((name, ip, form, active)) = ({
+            let b = self.backend.read(cx);
+            b.config
+                .servers
+                .iter()
+                .find(|server| server.uid == uid)
+                .and_then(|server| {
+                    let (ip, _) = core_host_port(server)?;
+                    if !core_menu::eligible(&ip) {
+                        return None;
+                    }
+                    let facts = b.core_cmds_facts(uid);
+                    let located = facts.and_then(|facts| facts.located.as_ref());
+                    let form = menu_form(b.core_cmds_login_for(&ip).is_some(), located);
+                    let active = facts
+                        .and_then(|f| f.info.as_ref())
+                        .and_then(|i| i.located.active)
+                        .or_else(|| located.and_then(|l| l.active));
+                    Some((server.name.clone(), ip, form, active))
+                })
+        }) else {
+            return;
+        };
+        if form == MenuForm::Checking {
+            self.backend
+                .update(cx, |b, _| b.core_cmds_request_status(uid));
+        }
+        self.core_menu_open = Some((uid, form));
+        let mut rows = vec![MenuRow::Caption(
+            t!("core_cmds.menu.caption", core = name, ip = ip).to_string(),
+        )];
+        rows.extend(core_menu::core_menu_rows(form, active));
+        let weak = cx.entity().downgrade();
+        let mut items = Vec::new();
+        for row in rows {
+            match row {
+                MenuRow::Caption(caption) => items.push(MoonMenuItem::label(caption)),
+                MenuRow::Separator => items.push(MoonMenuItem::separator()),
+                MenuRow::Note(key) => {
+                    items.push(MoonMenuItem::label(t!(key).to_string()));
+                }
+                MenuRow::Item {
+                    id,
+                    label_key,
+                    action,
+                    enabled,
+                    hint_key,
+                    accent,
+                } => {
+                    let action = match action {
+                        MenuCmd::Run(cmd) => CoreAction::CoreCmd(uid, cmd),
+                        MenuCmd::AddLogin => CoreAction::AddLogin(ip.clone()),
+                    };
+                    let weak = weak.clone();
+                    let mut item = MoonMenuItem::with_key(id, t!(label_key).to_string())
+                        .disabled(!enabled)
+                        .tone(if accent {
+                            MoonTone::Accent
+                        } else {
+                            MoonTone::Default
+                        })
+                        .on_click(move |_, window, app| {
+                            window.close_context_menu(app);
+                            let _ = weak.update(app, |this, cx| {
+                                this.core_menu_open = None;
+                                this.on_core_action(action.clone(), window, cx)
+                            });
+                        });
+                    if let Some(key) = hint_key {
+                        item = item.right_label(t!(key).to_string());
+                    }
+                    items.push(item);
+                }
+            }
+        }
+        let at = window.mouse_position();
+        let dismiss = weak.clone();
+        window.open_fitted_moon_context_menu_with_dismiss(
+            cx,
+            "cores-core-menu",
+            at,
+            items,
+            240.0..=560.0,
+            move |window, app| {
+                window.close_context_menu(app);
+                let _ = dismiss.update(app, |this, _| this.core_menu_open = None);
+            },
+        );
+    }
+
+    /// Reopen a checking menu once its asynchronous ownership answer arrives.
+    pub(in crate::settings) fn sync_core_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((uid, previous)) = self.core_menu_open else {
+            return;
+        };
+        let current = self
+            .backend
+            .read(cx)
+            .config
+            .servers
+            .iter()
+            .find_map(|server| {
+                if server.uid != uid {
+                    return None;
+                }
+                let (ip, _) = core_host_port(server)?;
+                let located = self
+                    .backend
+                    .read(cx)
+                    .core_cmds_facts(uid)
+                    .and_then(|facts| facts.located.as_ref());
+                Some(menu_form(
+                    self.backend.read(cx).core_cmds_login_for(&ip).is_some(),
+                    located,
+                ))
+            });
+        let Some(current) = current else {
+            self.core_menu_open = None;
+            return;
+        };
+        if !core_menu::needs_reopen(previous, current) {
+            return;
+        }
+        self.core_menu_open = Some((uid, current));
+        reopen_core_menu(uid, window, cx);
     }
 
     /// The "⋯" menu of a group: its icon, one transport mode for every core, a new core.
@@ -512,6 +689,7 @@ impl SettingsView {
                 let addr = endpoints.get(i).map(|e| e.text.clone()).unwrap_or_default();
                 Some(CoreListRow {
                     row_key: row.row_key,
+                    uid: s.uid,
                     draft_index: i,
                     core_id: s.id,
                     name: s.name.clone(),
@@ -646,6 +824,7 @@ impl SettingsView {
             });
             let card = CoreCard {
                 draft_index: i,
+                uid: s.uid,
                 name: s.name.clone(),
                 active: s.active,
                 // A synthetic core has no key at all, so nothing was rejected.
@@ -671,7 +850,16 @@ impl SettingsView {
             };
             let dot = dot(&sel, cx);
             let open = |key: &'static str| self.more_open.contains(key);
-            Some(core_card(&card, &inputs, dot, &open, &act, cx))
+            let backend = self.backend.read(cx);
+            Some(core_card(
+                &card,
+                &inputs,
+                dot,
+                backend.core_cmds_facts(s.uid),
+                &open,
+                &act,
+                cx,
+            ))
         });
 
         let selects = self.cores_selects(&act, cx);
@@ -773,4 +961,35 @@ impl SettingsView {
             ))
             .into_any_element()
     }
+}
+
+/// A view that can rebuild its core-command context menu after ownership discovery.
+pub(super) trait CoreMenuReopen: 'static + Sized {
+    /// Close the current menu model and open rows for `uid` with newly discovered facts.
+    fn reopen_core_menu(&mut self, uid: u64, window: &mut Window, cx: &mut Context<Self>);
+}
+
+impl CoreMenuReopen for SettingsView {
+    /// Rebuild the production Settings menu after its asynchronous ownership answer.
+    fn reopen_core_menu(&mut self, uid: u64, window: &mut Window, cx: &mut Context<Self>) {
+        SettingsView::open_core_menu(self, uid, window, cx);
+    }
+}
+
+/// Replace an open menu after the current frame, when MoonUI can safely rebuild its Root overlay.
+pub(super) fn reopen_core_menu<T: CoreMenuReopen>(
+    uid: u64,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    let weak = cx.entity().downgrade();
+    let handle = window.window_handle();
+    cx.defer(move |app| {
+        let _ = handle.update(app, |_, window, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                window.close_context_menu(cx);
+                this.reopen_core_menu(uid, window, cx);
+            });
+        });
+    });
 }

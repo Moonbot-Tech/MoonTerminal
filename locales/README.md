@@ -58,6 +58,7 @@ key space — splitting into files is purely organisational, by UI area:
 | `core_update.<lang>.yml`     | the Core Status update queue, separate from `update.<lang>.yml` |
 | `core_expert.<lang>.yml`     | the Core settings — expert mode window (Moonbot tabs, page states) |
 | `core_move.<lang>.yml`       | a core moved onto a Linux server: its steps, outcomes, the card button |
+| `core_cmds.<lang>.yml`       | Linux core commands: menu, login banner, command window and results |
 | `connect_wizard.<lang>.yml`  | the connect wizard: a new core, a move, a core by its key, Moonbot for Windows |
 | `sounds.<lang>.yml`          | own sounds: the folder block on the Trade sounds tab, the Sound not found toast, the no file mark |
 | `trade_sounds.<lang>.yml`    | the Trade sounds tab: entry and exit sounds per exchange      |

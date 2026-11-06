@@ -461,6 +461,8 @@ pub struct SettingsView {
     /// Row key of the core whose card the Cores page shows. Re-validated by every rebuild of the
     /// core rows (`rebuild_conn`) and on every frame (`valid_selection`).
     conn_selected: Option<u64>,
+    /// Core and captured ownership form of the open server-command context menu.
+    core_menu_open: Option<(u64, crate::backend::core_cmds::MenuForm)>,
     /// The backend's count of rows changed outside this window, as the Connections fields last
     /// showed it (`Backend::servers_changed_outside`).
     servers_changed_seen: u64,
@@ -909,6 +911,7 @@ impl SettingsView {
             icons: IconSet::discover(),
             picking: None,
             conn_selected: None,
+            core_menu_open: None,
             servers_changed_seen,
             last_sig: initial_sig,
             draft_dirty: initial_dirty,

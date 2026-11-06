@@ -385,6 +385,7 @@ impl SettingsView {
             crate::window::titles::follow_locale(cx);
         }
         self.backend.update(cx, |b, bcx| {
+            b.core_cmds_reconcile(before);
             b.reconcile_telegram(&before.telegram);
             bcx.notify();
         });

@@ -9,8 +9,10 @@
 
 use std::rc::Rc;
 
+use crate::backend::core_cmds::CoreFacts;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_remote::core_cmds::Cmd;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
     MoonColorPickerState, MoonDisclosure, MoonDisclosureDirection, MoonDropdown, MoonInput,
@@ -32,6 +34,14 @@ use moon_core::config::{TotalMode, TransportVersion, WorkspaceMembership};
 pub(crate) enum CoreAction {
     /// Show this core's card.
     Select(u64),
+    /// Open server commands for the saved core identity.
+    CoreMenu(u64),
+    /// Open the command window without starting a modifying command.
+    CoreCmd(u64, Cmd),
+    /// Add a confirmed SSH login for this IP.
+    AddLogin(String),
+    /// Start an exchange-login retry for the core shown by the banner.
+    BannerRetry(u64),
     /// Switch a window group on or off.
     GroupActive(String, bool),
     /// Bring a group's main window up.
@@ -371,6 +381,8 @@ fn core_item(
     cx: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(cx);
+    let menu_act = act.clone();
+    let uid = row.uid;
     let tag = feeds_partial(row.feeds_on).then(|| {
         div()
             .id(("cores-feeds-tag", row.row_key))
@@ -399,6 +411,10 @@ fn core_item(
         })
         .when(!row.active, |el| el.opacity(0.6))
         .on_click(on(act, CoreAction::Select(row.row_key)))
+        .on_mouse_down(MouseButton::Right, move |_, window, cx| {
+            cx.stop_propagation();
+            menu_act(CoreAction::CoreMenu(uid), window, cx);
+        })
         .child(
             h_flex()
                 .flex_none()
@@ -519,6 +535,8 @@ pub(crate) fn cores_list(
 pub(crate) struct CoreCard {
     /// Draft index of the core.
     pub(crate) draft_index: usize,
+    /// Saved identity used by the login-retry action.
+    pub(crate) uid: u64,
     pub(crate) name: String,
     pub(crate) active: bool,
     /// The key cannot be read: the card says so above the fields.
@@ -693,6 +711,7 @@ pub(crate) fn total_label(m: TotalMode) -> String {
 ///     card: What the card shows.
 ///     inputs: The core's text fields and color picker.
 ///     dot: The status dot for the header.
+///     facts: Cached SSH status for the login-error banner.
 ///     open: Whether a disclosure or long help (by key) is unfolded.
 ///     act: Runs what the user clicks.
 ///     cx: Application context.
@@ -703,6 +722,7 @@ pub(crate) fn core_card(
     card: &CoreCard,
     inputs: &CardInputs<'_>,
     dot: AnyElement,
+    facts: Option<&CoreFacts>,
     open: &dyn Fn(&'static str) -> bool,
     act: &CoreAct,
     cx: &App,
@@ -1104,6 +1124,64 @@ pub(crate) fn core_card(
         ))
         .children(advanced)
         .child(footer)
+        .when_some(
+            facts
+                .and_then(|f| f.status.as_ref())
+                .filter(|status| status.state == moon_remote::core_new::CoreState::LoginError),
+            |el, status| {
+                el.child(
+                    h_flex()
+                        .id("core-card-login-error")
+                        .debug_selector(|| "core-card-login-error".into())
+                        .w_full()
+                        .min_w_0()
+                        .flex_wrap()
+                        .gap(design::ui_px(cx, 10.0))
+                        .items_center()
+                        .mt(design::ui_px(cx, 8.0))
+                        .py(design::ui_px(cx, 8.0))
+                        .px(design::ui_px(cx, 10.0))
+                        .rounded(design::ui_px(cx, 6.0))
+                        .bg(rgba_from(p.red, 0.10))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w(design::ui_px(cx, 200.0))
+                                .font_family(design::ui_font())
+                                .child(
+                                    div()
+                                        .debug_selector(|| "core-card-login-title".into())
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgba_from(p.red, 1.0))
+                                        .child(t!("core_cmds.banner.title").to_string()),
+                                )
+                                .child(
+                                    div()
+                                        .debug_selector(|| "core-card-login-reason".into())
+                                        .child(
+                                            t!(
+                                                "core_cmds.banner.reason",
+                                                reason = status.login_error
+                                            )
+                                            .to_string(),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .debug_selector(|| "core-card-login-retry".into())
+                                .child(
+                                    MoonButton::new("core-card-login-retry")
+                                        .variant(MoonButtonVariant::Blue)
+                                        .label(t!("core_cmds.banner.retry").to_string())
+                                        .on_click(on(act, CoreAction::BannerRetry(card.uid)))
+                                        .render(),
+                                ),
+                        ),
+                )
+            },
+        )
         .into_any_element()
 }
 

@@ -127,6 +127,7 @@ impl ConnectWizardView {
             Branch::NewCore => "cw-opt-new",
             Branch::ByKey => "cw-opt-key",
             Branch::Move => "cw-opt-move",
+            Branch::Login => "cw-opt-login",
         };
         MoonSelectableCard::new(id)
             .selected(self.choice == branch)

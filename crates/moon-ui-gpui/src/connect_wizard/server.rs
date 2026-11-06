@@ -46,12 +46,14 @@ pub(super) struct ServerFields {
     pub(super) by_key: bool,
     /// The user ticked that the host key matches the provider's.
     pub(super) fingerprint_ok: bool,
+    /// Whether this form logs in only, hiding and skipping the install destination fields.
+    pub(super) login_only: bool,
 }
 
 impl ServerFields {
     /// Empty fields, the instance folder prefilled with `dir`.
-    pub(super) fn new<V: 'static>(dir: &str, window: &mut Window, cx: &mut Context<V>) -> Self {
-        let input = |masked: bool, value: &str, window: &mut Window, cx: &mut Context<V>| {
+    pub(super) fn new(dir: &str, window: &mut Window, cx: &mut App) -> Self {
+        let input = |masked: bool, value: &str, window: &mut Window, cx: &mut App| {
             let state = cx.new(|cx| MoonInputState::new(window, cx).masked(masked));
             if !value.is_empty() {
                 let value = value.to_owned();
@@ -75,6 +77,7 @@ impl ServerFields {
             port: input(false, DEFAULT_PROTO_PORT, window, cx),
             by_key: false,
             fingerprint_ok: false,
+            login_only: false,
         }
     }
 
@@ -90,15 +93,33 @@ impl ServerFields {
         Ok(target)
     }
 
+    /// The provider credentials for a session-only login, with no install destination validation.
+    pub(super) fn login_credentials(
+        &self,
+        target: Target,
+        cx: &App,
+    ) -> Result<(Target, FirstAccess), String> {
+        if target.host.parse::<Ipv4Addr>().is_err() {
+            return Err(t!("connect_wizard.server.need_ipv4").to_string());
+        }
+        let typed_login = text(&self.login, cx);
+        let login = effective_login(&typed_login)
+            .ok_or_else(|| t!("connect_wizard.server.need_login").to_string())?;
+        let key = self
+            .by_key
+            .then(|| (text(&self.key_path, cx), secret(&self.passphrase, cx)));
+        let first = job::first_access(login.to_owned(), secret(&self.password, cx), key)
+            .map_err(|e| format!("{e:#}"))?;
+        Ok((target, first))
+    }
+
     /// The whole step as an install takes it, against the host key the user confirmed.
     pub(super) fn access(&self, target: Target, cx: &App) -> Result<ServerAccess, String> {
         let public_ip = target
             .host
             .parse::<Ipv4Addr>()
             .map_err(|_| t!("connect_wizard.server.need_ipv4").to_string())?;
-        let typed_login = text(&self.login, cx);
-        let login = effective_login(&typed_login)
-            .ok_or_else(|| t!("connect_wizard.server.need_login").to_string())?;
+        let (target, first) = self.login_credentials(target, cx)?;
         let dir = text(&self.dir, cx);
         if dir.is_empty() || dir.contains(char::is_whitespace) {
             return Err(t!("connect_wizard.server.need_dir").to_string());
@@ -108,11 +129,6 @@ impl ServerFields {
             .ok()
             .filter(|port| *port > 0)
             .ok_or_else(|| t!("connect_wizard.server.need_port").to_string())?;
-        let key = self
-            .by_key
-            .then(|| (text(&self.key_path, cx), secret(&self.passphrase, cx)));
-        let first = job::first_access(login.to_owned(), secret(&self.password, cx), key)
-            .map_err(|e| format!("{e:#}"))?;
         Ok(ServerAccess {
             target,
             first,
@@ -203,20 +219,22 @@ impl ServerFields {
                 true,
                 cx,
             ))
-            .child(field(
-                "cw-dir",
-                t!("connect_wizard.server.dir"),
-                &self.dir,
-                false,
-                cx,
-            ))
-            .child(field(
-                "cw-port",
-                t!("connect_wizard.server.port"),
-                &self.port,
-                false,
-                cx,
-            ))
+            .when(!self.login_only, |form| {
+                form.child(field(
+                    "cw-dir",
+                    t!("connect_wizard.server.dir"),
+                    &self.dir,
+                    false,
+                    cx,
+                ))
+                .child(field(
+                    "cw-port",
+                    t!("connect_wizard.server.port"),
+                    &self.port,
+                    false,
+                    cx,
+                ))
+            })
     }
 
     /// Offer `dir` as the instance folder.
@@ -224,6 +242,13 @@ impl ServerFields {
         let dir = dir.to_owned();
         self.dir
             .update(cx, |state, cx| state.set_value(dir, window, cx));
+    }
+
+    /// Prefill the server address supplied by a login-only opener.
+    pub(super) fn set_host(&self, host: &str, window: &mut Window, cx: &mut App) {
+        let host = host.to_owned();
+        self.host
+            .update(cx, |state, cx| state.set_value(host, window, cx));
     }
 
     /// Put a picked key file's path into its field.

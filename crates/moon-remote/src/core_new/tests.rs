@@ -64,6 +64,14 @@ fn a_refusal_carries_the_cores_own_words() {
     )
     .unwrap_err();
     assert!(format!("{err:#}").contains("command channel is unavailable"));
+    assert!(err.is::<CoreRefusal>());
+}
+
+/// A shell location failure must invalidate cached location rather than become a core refusal.
+#[test]
+fn a_shell_location_failure_is_not_a_core_refusal() {
+    let err = parse_reply(false, "", "cd: /missing: No such directory").unwrap_err();
+    assert!(!err.is::<CoreRefusal>());
 }
 
 #[test]

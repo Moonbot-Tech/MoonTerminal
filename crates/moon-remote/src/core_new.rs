@@ -9,7 +9,8 @@
 //!
 //! The package and the service go on through the same server-side script as a moved core
 //! (`remote/moonbot-move.sh`, step `install-fresh`), so [`crate::core_move::check`] and
-//! [`crate::core_move::remove`] serve both. The commands reach only an instance that script made.
+//! [`crate::core_move::remove`] serve both. Reconfiguring commands reach only an instance that
+//! script made; hand-installed cores accept only status and login retry.
 
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
@@ -127,6 +128,30 @@ impl CoreStatus {
         )
     }
 }
+
+/// A refusal or unreadable reply returned by an established core command channel.
+#[derive(Debug)]
+pub struct CoreRefusal {
+    reason: String,
+}
+
+impl CoreRefusal {
+    /// Preserve the core's own safe failure description for the command window.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for CoreRefusal {
+    /// Show the core's reason rather than classifying it as an SSH transport failure.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for CoreRefusal {}
 
 /// The exchange keys `mb --set-api-keys` takes. They travel as JSON on stdin only.
 pub enum ApiKeys {
@@ -313,7 +338,7 @@ pub fn wait_settled(
 }
 
 /// Run one `mb` command in `dir` and return its JSON reply.
-fn mb(
+pub(crate) fn mb(
     conn: &Conn,
     privilege: &Privilege,
     dir: &str,
@@ -324,7 +349,7 @@ fn mb(
 }
 
 /// [`mb`] with its own deadline.
-fn mb_within(
+pub(crate) fn mb_within(
     conn: &Conn,
     privilege: &Privilege,
     dir: &str,
@@ -364,7 +389,9 @@ pub(crate) fn parse_reply(
         Some(reply) if exited_ok && reply.get("ok") == Some(&serde_json::Value::Bool(true)) => {
             Ok(reply)
         }
-        Some(reply) => anyhow::bail!("the core refused: {}", said(Some(&reply))),
+        Some(reply) => {
+            Err(CoreRefusal::new(format!("the core refused: {}", said(Some(&reply)))).into())
+        }
         None if stderr.trim().is_empty() => {
             anyhow::bail!("the core gave no reply ({} bytes of output)", stdout.len())
         }

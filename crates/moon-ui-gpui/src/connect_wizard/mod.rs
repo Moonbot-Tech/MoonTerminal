@@ -12,6 +12,7 @@ mod by_key;
 mod done;
 #[cfg(windows)]
 mod download;
+mod login;
 mod move_core;
 mod new_core;
 mod render;
@@ -48,6 +49,8 @@ pub(crate) enum Branch {
     ByKey,
     /// A connected core moved to a Linux server.
     Move,
+    /// A provider login remembered for core server commands in this terminal session.
+    Login,
 }
 
 /// The wizard's view.
@@ -89,6 +92,8 @@ pub(crate) struct ConnectWizardView {
     move_at_server: bool,
     /// Whether the move's technical log is unfolded.
     move_log_open: bool,
+    /// The session-only provider login branch and its injectable network call.
+    login: login::LoginState,
     /// A folder name for the server step, set where no window is at hand to set it.
     pending_dir: Option<String>,
     #[cfg(windows)]
@@ -132,6 +137,7 @@ impl ConnectWizardView {
             move_uid: None,
             move_at_server: false,
             move_log_open: false,
+            login: login::LoginState::default(),
             pending_dir: None,
             #[cfg(windows)]
             download: download::Download::default(),
@@ -214,6 +220,7 @@ impl ConnectWizardView {
     fn next_from_start(&mut self, cx: &mut Context<Self>) {
         self.error = None;
         self.branch = Some(self.choice);
+        self.leave_login();
         cx.notify();
     }
 
@@ -226,6 +233,7 @@ impl ConnectWizardView {
         self.error = None;
         self.branch = Some(Branch::Move);
         self.choice = Branch::Move;
+        self.leave_login();
         self.move_at_server = true;
         // A host key ticked for another flow is never this core's confirmation.
         self.server.fingerprint_ok = false;
@@ -245,6 +253,26 @@ impl ConnectWizardView {
         cx.notify();
     }
 
+    /// Take a core command's login request and prefill its reduced server form.
+    fn take_login_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ip) = self
+            .backend
+            .update(cx, |b, _| b.connect_login_request.take())
+        else {
+            return;
+        };
+        self.backend
+            .update(cx, |b, bcx| b.core_new_prepare_login(bcx));
+        self.error = None;
+        self.branch = Some(Branch::Login);
+        // A host key ticked for another flow is never this login's confirmation.
+        self.server.fingerprint_ok = false;
+        self.server.login_only = true;
+        self.server.set_host(&ip, window, cx);
+        self.login.restart_flow();
+        cx.notify();
+    }
+
     /// Back to the start screen, dropping an install that is over. From the move branch it is
     /// always the start screen: a running install is one choice away there.
     fn back_to_start(&mut self, cx: &mut Context<Self>) {
@@ -253,6 +281,7 @@ impl ConnectWizardView {
         self.move_at_server = false;
         if self.branch == Some(Branch::Move) {
             self.branch = None;
+            self.leave_login();
             cx.notify();
             return;
         }
@@ -268,6 +297,7 @@ impl ConnectWizardView {
         if self.backend.read(cx).core_new.is_none() {
             self.branch = None;
         }
+        self.leave_login();
         cx.notify();
     }
 
@@ -293,6 +323,10 @@ impl ConnectWizardView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.branch == Some(Branch::Login) {
+            self.login_server(target, pin, window, cx);
+            return;
+        }
         let access = match self.server.access(target, cx) {
             Ok(access) => access,
             Err(error) => {
@@ -467,6 +501,25 @@ pub(crate) fn open_move(
     // No window took the request: it must not surface in a later, unrelated opening.
     if backend.read(cx).connect_wizard_window.is_none() {
         backend.update(cx, |b, _| b.wizard_move_request = None);
+    }
+}
+
+/// Open the login-only wizard for core server commands with `ip` already filled in.
+pub(crate) fn open_login(
+    backend: Entity<Backend>,
+    owner: Option<AnyWindowHandle>,
+    owner_display: Option<DisplayId>,
+    ip: String,
+    cx: &mut App,
+) {
+    backend.update(cx, |b, bcx| {
+        b.connect_login_request = Some(ip);
+        bcx.notify();
+    });
+    open(backend.clone(), owner, owner_display, cx);
+    // No window took the request: it must not surface in a later, unrelated opening.
+    if backend.read(cx).connect_wizard_window.is_none() {
+        backend.update(cx, |b, _| b.connect_login_request = None);
     }
 }
 

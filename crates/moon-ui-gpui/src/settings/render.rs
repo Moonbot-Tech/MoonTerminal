@@ -85,6 +85,7 @@ impl Render for SettingsView {
             (chrome_width - nav::nav_w(cx)).max(0.0)
         };
         self.storage_note_tab(self.active);
+        self.sync_core_menu(window, cx);
         let parts = match self.active {
             Tab::Cores => self.cores_page(narrow, body_width, cx),
             Tab::TgBot => self.tg_bot_page(body_width, cx),

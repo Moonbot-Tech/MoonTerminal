@@ -264,6 +264,13 @@ impl Backend {
         }
     }
 
+    /// Reset a replaceable install probe or waiting job before the wizard switches to login-only.
+    pub(crate) fn core_new_prepare_login(&mut self, cx: &mut Context<Self>) {
+        if reset_core_new_for_login(&mut self.core_new) {
+            cx.notify();
+        }
+    }
+
     /// Drop an install that is over, so the wizard starts afresh. The worker, if alive, ends
     /// with its channel and forgets the provider's login.
     pub(crate) fn core_new_forget(&mut self, cx: &mut Context<Self>) {
@@ -605,6 +612,17 @@ impl Backend {
         cx.notify();
         Ok(())
     }
+}
+
+/// Cancel a probe or non-busy install whose state must not leak into a login-only wizard.
+fn reset_core_new_for_login(job: &mut Option<NewJob>) -> bool {
+    let replace = job
+        .as_ref()
+        .is_some_and(|job| !job.phase.busy() || matches!(job.phase, NewPhase::Probing));
+    if replace {
+        *job = None;
+    }
+    replace
 }
 
 /// A core's `--status` state in the user's words.

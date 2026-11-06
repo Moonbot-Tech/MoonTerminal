@@ -83,6 +83,17 @@ impl Hosts {
         self.hosts.iter().find(|h| h.addr == addr)
     }
 
+    /// Find a verified administrator by the IPv4 host part of its pinned `host:port` address.
+    pub fn admin_by_ip(&self, ip: &str) -> Option<&Host> {
+        self.hosts.iter().find(|host| {
+            host.admin.is_some()
+                && host
+                    .addr
+                    .rsplit_once(':')
+                    .is_some_and(|(host, _port)| host == ip)
+        })
+    }
+
     /// Forget `addr`: its pinned key and administrator. The way back to a server that was
     /// reinstalled — it presents a new host key, which the pin refuses.
     pub fn forget(&mut self, addr: &str) -> bool {
