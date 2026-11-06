@@ -169,6 +169,8 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
 raw-window-handle = "0.6"
 
 [dev-dependencies]
+# Validate the native Linux shaders on every test host, before wgpu creates a live pipeline.
+naga = { version = "29.0.1", features = ["wgsl-in"] }
 # `test-support` is what makes `gpui::TestAppContext` / `gpui::VisualTestContext` -- and with them
 # `#[gpui::test]` and a real headless `draw()` -- nameable from this crate's tests. GPUI gates both
 # behind `cfg(any(test, feature = "test-support"))`, so without this line a test can only assert on

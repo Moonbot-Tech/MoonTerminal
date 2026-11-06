@@ -67,6 +67,11 @@ fn price_y(price: f32) -> f32 {
     return cv.bounds.y + cv.bounds.w - (price - cv.view_price0) * cv.price_to_px;
 }
 
+// Candle bodies, wicks and volume hills share the same pixel-to-clip transform.
+fn to_clip(px: vec2<f32>, resolution: vec2<f32>) -> vec4<f32> {
+    return vec4<f32>(px.x / resolution.x * 2.0 - 1.0, 1.0 - px.y / resolution.y * 2.0, 0.0, 1.0);
+}
+
 fn cull_out() -> CandleOut {
     var o: CandleOut;
     o.pos = vec4<f32>(2.0, 2.0, 0.0, 1.0);
@@ -155,8 +160,6 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     }
 
     let px = p0 + corner * sz;
-    let ndc = vec2<f32>(px.x / cv.resolution.x * 2.0 - 1.0,
-                        1.0 - px.y / cv.resolution.y * 2.0);
 
     var base = cs.down;
     if cd.c >= cd.o {
@@ -174,7 +177,7 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     }
 
     var o: CandleOut;
-    o.pos = vec4<f32>(ndc, 0.0, 1.0);
+    o.pos = to_clip(px, cv.resolution);
     o.uv = corner;
     o.size_px = sz;
     if part == 0u && outline {
