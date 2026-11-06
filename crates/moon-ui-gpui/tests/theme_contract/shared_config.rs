@@ -2,7 +2,7 @@
 
 use super::support::*;
 
-/// Rejects a second `send_shared_config` call outside `feed/live/shared_config.rs::drive`.
+/// Rejects a second `send_shared_config` call outside the sequence's common transport boundary.
 ///
 /// Adding `MoonClient::settings().send_shared_config` anywhere else makes this test red: two
 /// producers can build full snapshots from different bases, silently reverting each other's
@@ -14,11 +14,11 @@ fn shared_config_has_one_live_sequence_writer() {
         .join("moon-core")
         .join("src");
     let shared_config = read_core_src("feed/live/shared_config.rs");
-    let drive = code_only(braced_body(&shared_config, "pub(super) fn drive("));
+    let transmit = code_only(braced_body(&shared_config, "fn transmit("));
     assert_eq!(
-        drive.matches("send_shared_config(").count(),
+        transmit.matches("send_shared_config(").count(),
         1,
-        "SharedConfigSequence::drive must contain its one full-config send"
+        "SharedConfigSequence::transmit must contain its one full-config send"
     );
 
     let mut sources = Vec::new();

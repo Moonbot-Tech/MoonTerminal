@@ -28,6 +28,7 @@ use crate::feed::{
     minutes_to_day_fraction,
 };
 
+mod automation;
 mod field_mask;
 mod from_proto;
 mod satisfaction;
@@ -86,6 +87,8 @@ impl Default for SentAsk {
 
 /// Per-core serializer for safe-share configuration writes.
 pub(in crate::feed) struct SharedConfigSequence {
+    /// The same writer holds ordinary edits until an automation patch is observed or times out.
+    automation: Option<automation::PendingAutomation>,
     queue: VecDeque<QueuedEdit>,
     waiting_for_echo: bool,
     /// When the packet being waited on was sent, for [`ECHO_TIMEOUT`].
@@ -183,6 +186,7 @@ impl SharedConfigSequence {
     /// Create an empty serializer for a newly connected client.
     pub(in crate::feed) fn new() -> Self {
         Self {
+            automation: None,
             queue: VecDeque::new(),
             waiting_for_echo: false,
             sent_at: None,
@@ -200,6 +204,7 @@ impl SharedConfigSequence {
     /// intent, and the reconnected core republishes its snapshot, which is exactly the base the
     /// next plan needs.
     pub(in crate::feed) fn prepare_reconnect(&mut self) {
+        self.cancel_automation("connection changed before settings confirmation");
         self.waiting_for_echo = false;
         self.sent_at = None;
         self.pending_confirmation = None;
@@ -254,6 +259,9 @@ impl SharedConfigSequence {
     /// Allow the next plan after a `SharedConfigUpdated` echo.
     pub(super) fn observe_update(&mut self) {
         self.waiting_for_echo = false;
+        if let Some(pending) = &mut self.automation {
+            pending.updated = true;
+        }
     }
 
     /// Report every non-empty TEXT field of the core's safe-share snapshot to `channels.settings`,
@@ -442,6 +450,7 @@ impl SharedConfigSequence {
     /// describe the instance that went away, and applying them to its replacement would write a
     /// page the user never saw for this core.
     pub(in crate::feed) fn forget_queue(&mut self) {
+        self.cancel_automation("core changed before settings confirmation");
         self.queue.clear();
         self.waiting_for_echo = false;
         self.sent_at = None;
@@ -464,6 +473,11 @@ impl SharedConfigSequence {
         server_id: u64,
         events: &mut Vec<CoreConfigEditEvent>,
     ) {
+        if self.automation_pending() {
+            self.drive_automation(client);
+            // Re-enter through the compact-idle gate before starting a queued ordinary edit.
+            return;
+        }
         // Both checks precede `build_shared_config`, which CLONES the retained snapshot: the feed
         // loop drives this on every iteration, and a core that stops echoing would otherwise make
         // that clone repeat for the rest of the session.
@@ -507,7 +521,7 @@ impl SharedConfigSequence {
             SequenceAction::Idle => {}
             SequenceAction::Send { config, ask } => {
                 let (edit_count, touched) = (ask.edit_count, ask.touched);
-                match client.settings().send_shared_config(&config) {
+                match self.transmit(client, &config) {
                     Ok(()) => {
                         let wanted = core_config_from_proto(&config);
                         self.observe_send_success(&config, ask);
@@ -538,6 +552,15 @@ impl SharedConfigSequence {
                 }
             }
         }
+    }
+
+    /// Keep full imports from ordinary edits and automation behind the same sequence owner.
+    fn transmit(
+        &self,
+        client: &MoonClient,
+        config: &SharedConfig,
+    ) -> Result<(), moonproto::MoonClientError> {
+        client.settings().send_shared_config(config)
     }
 
     /// Select the next action and discard edits the core already reflects.

@@ -4,7 +4,7 @@
 //! the code: the station crate itself, the bot and Mini App it runs (`moon-tg`, shared with the
 //! terminal), the tape recorder, and the narrow client that recorder owns. A red test here is a
 //! station that can now do something it was never meant to — subscribe to every market, trade
-//! outside the Mini App's commands, or hold a raw `MoonClient` past the narrow link.
+//! outside the Mini App's commands or the MCP authorization bridge, or hold a raw `MoonClient`.
 //!
 //! Comments are stripped before anything is searched, so a doc line that NAMES a forbidden call
 //! (explaining why it is forbidden) is not a violation.
@@ -26,7 +26,7 @@ fn capabilities_are_available_without_config_credentials_or_a_running_service() 
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
-        "core_endpoint_override=yes"
+        "core_endpoint_override=yes\nmcp_https=yes"
     );
 }
 
@@ -164,10 +164,9 @@ fn the_station_crate_never_touches_moonproto_directly() {
     }
 }
 
-/// Breakage guarded: trading reaching the station anywhere but the one module that is to own it
-/// (phase 10, `tg::trade`, and only with a full key and trading switched on).
+/// Raw TradeLink stays in the Mini App adapter; MCP uses the separate guarded automation API.
 #[test]
-fn trading_stays_inside_tg_trade() {
+fn raw_trade_link_stays_inside_tg_trade() {
     let allowed = workspace().join("crates/moon-station/src/tg/trade");
     for (path, code) in station_sources() {
         if path.starts_with(&allowed) || path == allowed.with_extension("rs") {
@@ -206,10 +205,33 @@ const TG_HOST_SESSION_CALLS: [&str; 2] = ["panic_sell_market", "store"];
 #[test]
 fn the_station_calls_only_its_share_of_the_session() {
     let tg_host = workspace().join("crates/moon-station/src/tg.rs");
+    let mcp_bridge = workspace().join("crates/moon-station/src/mcp/bridge.rs");
+    let mcp_capture = workspace().join("crates/moon-station/src/mcp/capture.rs");
     for (path, code) in station_sources() {
         let mut allowed: BTreeSet<String> = SESSION_CALLS.iter().map(|s| s.to_string()).collect();
         if path == tg_host {
             allowed.extend(TG_HOST_SESSION_CALLS.iter().map(|s| s.to_string()));
+        }
+        if path == mcp_bridge {
+            allowed.extend(
+                [
+                    "sessions",
+                    "store",
+                    "automation_market",
+                    "automation_orders",
+                    "automation_positions",
+                    "automation_preview",
+                    "automation_schema",
+                    "automation_settings",
+                    "automation_strategies",
+                    "automation_strategy_resolution",
+                    "automation_submit",
+                ]
+                .map(str::to_string),
+            );
+        }
+        if path == mcp_capture {
+            allowed.extend(["sessions", "store", "automation_logs"].map(str::to_string));
         }
         let called = methods_called_on(&code, "session", false);
         let extra: Vec<_> = called.difference(&allowed).collect();

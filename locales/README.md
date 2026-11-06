@@ -63,6 +63,7 @@ key space — splitting into files is purely organisational, by UI area:
 | `sounds.<lang>.yml`          | own sounds: the folder block on the Trade sounds tab, the Sound not found toast, the no file mark |
 | `trade_sounds.<lang>.yml`    | the Trade sounds tab: entry and exit sounds per exchange      |
 | `station.<lang>.yml`         | the Station tab (remote server login and host-key errors)     |
+| `station_mcp.<lang>.yml`     | Station HTTPS setup, AI permissions, consent and revocation  |
 
 A new UI section → a new area file in every language folder; we name the key `<area>.<...>` (dot as the separator).
 

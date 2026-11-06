@@ -12,6 +12,7 @@
 pub mod account;
 pub mod alert_blob;
 pub mod applog;
+pub mod automation;
 mod backup_store;
 pub mod backups;
 pub mod coin_naming;

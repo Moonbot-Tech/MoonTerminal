@@ -22,6 +22,8 @@
 //! `station.toml` it also runs the bot (`tg.rs`, over `moon-tg`), and with the Mini App on, the
 //! account the Mini App shows: orders, balances, strategies and the cores' health
 //! (`feed::station::Profile::Account`).
+//! The independent `[mcp]` service also selects Account and exposes scoped AI tools through
+//! loopback HTTP behind HTTPS; its owner consent stays on the private control API.
 //!
 //! It never elects a market provider — the terminal does that from its open charts — so no core
 //! is asked to keep every market's trades; only the pairs of trades in progress are selected.
@@ -58,6 +60,7 @@ mod auto_update;
 mod cores;
 mod heap;
 mod host;
+mod mcp;
 mod pull;
 mod release;
 mod signals;
@@ -95,6 +98,7 @@ static HEAP: heap::Tracking = heap::Tracking;
 fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("capabilities") {
         println!("core_endpoint_override=yes");
+        println!("mcp_https=yes");
         return Ok(());
     }
     // The API's client: no log, no data root — one exchange with the running station.
@@ -146,6 +150,7 @@ fn main() -> anyhow::Result<()> {
     // The bot's menu, as the terminal last delivered it, says whether Control is shown: that
     // needs the account's orders, strategies and run state, as the Mini App does.
     let profile = station.profile(tg::control_shown(&data_root));
+    let mcp_config = station.mcp.clone();
     let telegram = station.telegram;
     let auto_update = auto_update::AutoUpdate::start(station.auto_update, data_root.clone());
     let mut skipped_cores = station.skipped_cores;
@@ -210,6 +215,15 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut groups = groups_of(&cfg);
+    let mut mcp = mcp_config
+        .as_ref()
+        .and_then(|config| match mcp::Mcp::start(config) {
+            Ok(service) => Some(service),
+            Err(e) => {
+                log::error!("MCP not started: {e:#}");
+                None
+            }
+        });
     // The load `status` reports is kept from the start, whether or not anyone asks.
     let mut host = host::HostWatch::start(process_started, data_root.clone());
     let mut last_diag = Instant::now();
@@ -218,6 +232,7 @@ fn main() -> anyhow::Result<()> {
     loop {
         if signals.stop_requested() {
             log::info!("stopping");
+            drop(mcp.take());
             // The bot's long poll winds down while the tape recorder files its last writes; the
             // join comes after, so neither waits on the other.
             if let Some(bot) = bot.as_mut() {
@@ -242,6 +257,11 @@ fn main() -> anyhow::Result<()> {
                     skipped_cores = reloaded.skipped_cores;
                     listed = reloaded.listed;
                     auto_update.set(reloaded.auto_update);
+                    if reloaded.mcp != mcp_config {
+                        log::warn!(
+                            "[mcp] changed: restart the station to apply its listener and feed profile"
+                        );
+                    }
                     if !same_bot(reloaded.telegram.as_ref(), telegram.as_ref()) {
                         log::warn!(
                             "[telegram] changed: it takes effect on the next start, not a reload"
@@ -281,6 +301,9 @@ fn main() -> anyhow::Result<()> {
             }
         }
         let bot_took = bot_started.elapsed();
+        if let Some(mcp) = &mut mcp {
+            mcp.tick(&session, &cfg);
+        }
         let station = StationNow {
             session: &session,
             groups: &groups,
@@ -296,7 +319,33 @@ fn main() -> anyhow::Result<()> {
             bot.answer_status(&cfg, |bot| station.status(Some(bot)));
         }
         if let Some(api) = &api {
-            api.drain(|request| answer(request, bot.as_mut(), &mut cfg, &station));
+            api.drain(|request| {
+                if let Request::Mcp(request) = request {
+                    let cores = listed
+                        .iter()
+                        .map(|core| moon_core::station_api::mcp::CoreInfo {
+                            uid: core.uid,
+                            name: core.name.clone(),
+                        })
+                        .collect();
+                    return match &mcp {
+                        Some(mcp) => mcp
+                            .admin(request, cores)
+                            .map(Answer::Mcp)
+                            .map_err(|e| e.to_string())
+                            .into(),
+                        None if matches!(
+                            request,
+                            moon_core::station_api::mcp::AdminRequest::Status
+                        ) =>
+                        {
+                            Reply::Ok(Answer::Mcp(Default::default()))
+                        }
+                        None => Reply::Err("MCP is not configured or failed to start".into()),
+                    };
+                }
+                answer(request, bot.as_mut(), &mut cfg, &station)
+            });
         }
         // A committed report page wakes the valuation, as the terminal's coordination tick does.
         let committed = reports.immediate_commit_dirty.swap(false, Ordering::AcqRel)
@@ -439,6 +488,7 @@ fn answer(
 ) -> Reply {
     const NO_BOT: &str = "the station runs no bot";
     let answer = match request {
+        Request::Mcp(_) => Err("MCP administration is answered by its independent service".into()),
         Request::Status => Ok(Answer::Status(
             station.status(bot.map(|bot| bot.status(cfg))),
         )),

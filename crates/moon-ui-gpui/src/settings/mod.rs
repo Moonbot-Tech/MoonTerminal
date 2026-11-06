@@ -29,6 +29,7 @@ mod render;
 mod security;
 mod share;
 mod sound_folder;
+mod station_mcp;
 mod storage;
 pub(crate) use storage::trades_cleanup_startup;
 /// Open for the core move window, which takes the station form's address parser and progress
@@ -74,6 +75,7 @@ pub(crate) enum Tab {
     StCores,
     StTape,
     StMaint,
+    StMcp,
     Appearance,
     Lines,
     Badges,
@@ -86,7 +88,7 @@ pub(crate) enum Tab {
 
 impl Tab {
     /// Every page in navigation order.
-    pub(crate) const ALL: [Tab; 17] = [
+    pub(crate) const ALL: [Tab; 18] = [
         Tab::Cores,
         Tab::TgBot,
         Tab::TgNotify,
@@ -96,6 +98,7 @@ impl Tab {
         Tab::StCores,
         Tab::StTape,
         Tab::StMaint,
+        Tab::StMcp,
         Tab::Appearance,
         Tab::Lines,
         Tab::Badges,
@@ -118,6 +121,7 @@ impl Tab {
             Tab::StCores => "st-cores",
             Tab::StTape => "st-tape",
             Tab::StMaint => "st-maint",
+            Tab::StMcp => "st-mcp",
             Tab::Appearance => "appearance",
             Tab::Lines => "lines",
             Tab::Badges => "badges",
@@ -141,6 +145,7 @@ impl Tab {
             Tab::StCores => t!("settings.page.st_cores.title"),
             Tab::StTape => t!("settings.page.st_tape.title"),
             Tab::StMaint => t!("settings.page.st_maint.title"),
+            Tab::StMcp => t!("station_mcp.title"),
             Tab::Appearance => t!("settings.page.appearance.title"),
             Tab::Lines => t!("settings.page.lines.title"),
             Tab::Badges => t!("settings.page.badges.title"),
@@ -165,6 +170,7 @@ impl Tab {
             Tab::StCores => t!("settings.page.st_cores.desc"),
             Tab::StTape => t!("settings.page.st_tape.desc"),
             Tab::StMaint => t!("settings.page.st_maint.desc"),
+            Tab::StMcp => t!("station_mcp.description"),
             Tab::Appearance => t!("settings.page.appearance.desc"),
             Tab::Lines => t!("settings.page.lines.desc"),
             Tab::Badges => t!("settings.page.badges.desc"),
@@ -189,6 +195,7 @@ impl Tab {
             Tab::StCores => t!("settings.page.st_cores.keywords"),
             Tab::StTape => t!("settings.page.st_tape.keywords"),
             Tab::StMaint => t!("settings.page.st_maint.keywords"),
+            Tab::StMcp => t!("station_mcp.keywords"),
             Tab::Appearance => t!("settings.page.appearance.keywords"),
             Tab::Lines => t!("settings.page.lines.keywords"),
             Tab::Badges => t!("settings.page.badges.keywords"),
@@ -206,7 +213,9 @@ impl Tab {
         match self {
             Tab::Cores => NavGroup::Connections,
             Tab::TgBot | Tab::TgNotify | Tab::TgMessages | Tab::TgCore => NavGroup::Telegram,
-            Tab::StOverview | Tab::StCores | Tab::StTape | Tab::StMaint => NavGroup::Station,
+            Tab::StOverview | Tab::StCores | Tab::StTape | Tab::StMaint | Tab::StMcp => {
+                NavGroup::Station
+            }
             Tab::Appearance | Tab::Lines | Tab::Badges => NavGroup::Appearance,
             Tab::Hotkeys => NavGroup::Control,
             Tab::General | Tab::Security | Tab::Storage | Tab::Sounds => NavGroup::Common,
@@ -220,9 +229,12 @@ impl Tab {
     pub(crate) fn save_mode(self, station: bool) -> SaveMode {
         match self {
             // TgCore's settings live in the core itself, not in the terminal's config.
-            Tab::StOverview | Tab::StCores | Tab::StTape | Tab::StMaint | Tab::TgCore => {
-                SaveMode::Remote
-            }
+            Tab::StOverview
+            | Tab::StCores
+            | Tab::StTape
+            | Tab::StMaint
+            | Tab::StMcp
+            | Tab::TgCore => SaveMode::Remote,
             Tab::TgBot | Tab::TgMessages | Tab::TgNotify if station => SaveMode::Remote,
             Tab::Storage | Tab::Sounds | Tab::TgNotify => SaveMode::Live,
             Tab::Cores
@@ -494,6 +506,7 @@ pub struct SettingsView {
     security: security::SecurityEd,
     /// Telegram tab editor; see [`telegram`].
     telegram: telegram::TelegramEd,
+    mcp: station_mcp::McpEd,
 }
 
 impl SettingsView {
@@ -550,6 +563,7 @@ impl SettingsView {
         let conn = connections::build_conn(&backend, window, cx);
         let security_ed = security::build(&backend, window, cx);
         let telegram_ed = telegram::build(&backend, window, cx);
+        let mcp = station_mcp::McpEd::new(window, cx);
 
         // The zoom slider reinstalls the draft theme only on release; dragging keeps its percentage caption live.
         let ui_zoom = general::build_zoom(&backend, cx);
@@ -931,6 +945,7 @@ impl SettingsView {
             import: None,
             security: security_ed,
             telegram: telegram_ed,
+            mcp,
         }
     }
 }
@@ -1279,6 +1294,7 @@ fn page_sig(cfg: &AppConfig, tab: Tab) -> Option<u64> {
         | Tab::StCores
         | Tab::StTape
         | Tab::StMaint
+        | Tab::StMcp
         | Tab::Security
         | Tab::Storage
         | Tab::Sounds => return None,
@@ -1303,7 +1319,7 @@ fn dirty_pages(saved: &AppConfig, draft: &AppConfig) -> TabSet {
 #[derive(Clone, Debug)]
 struct SavedPageSigs {
     sig: u64,
-    pages: [Option<u64>; 17],
+    pages: [Option<u64>; Tab::ALL.len()],
 }
 
 impl SavedPageSigs {

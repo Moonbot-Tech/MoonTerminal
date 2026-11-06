@@ -13,6 +13,7 @@
 //! holds of what the terminal lacks. Nothing here deletes data.
 
 use serde::{Deserialize, Serialize};
+pub mod mcp;
 use sha2::{Digest, Sha256};
 
 use crate::config::telegram_access::TelegramChatAccess;
@@ -28,7 +29,7 @@ use std::collections::BTreeMap;
 /// ones it carries (`TelegramStatus`, `MiniAppStatus`, `TelegramChatAccess`): they have no
 /// fallback for a variant or field they do not know. The terminal refuses a station of another
 /// version ([`CtlOutput::hello`]) before it reads the reply.
-pub const PROTO_VERSION: u32 = 2;
+pub const PROTO_VERSION: u32 = 3;
 /// The socket's name in the station's runtime directory.
 pub const SOCKET_FILE: &str = "api.sock";
 /// The socket of the service (`RuntimeDirectory=moon-station` in its unit).
@@ -66,6 +67,9 @@ pub struct CtlOutput {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd")]
 pub enum Request {
+    /// MCP owner controls, available only over this private administrative socket.
+    #[serde(rename = "mcp")]
+    Mcp(mcp::AdminRequest),
     /// The station's cores and its bot.
     #[serde(rename = "status")]
     Status,
@@ -133,6 +137,7 @@ impl From<Result<Answer, String>> for Reply {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Answer {
+    Mcp(mcp::AdminState),
     Status(Status),
     Pairing(PairingCode),
     Access(Access),

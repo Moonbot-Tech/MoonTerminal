@@ -49,7 +49,8 @@ fn order_inputs_ok(market: &str, price: f64, size: f64) -> bool {
 }
 
 impl SessionManager {
-    fn send_core_cmd(&self, core: CoreId, cmd: CoreCmd, action: &str) -> Result<()> {
+    /// Queue a typed command without exposing the transport handle to other application layers.
+    pub(crate) fn send_core_cmd(&self, core: CoreId, cmd: CoreCmd, action: &str) -> Result<()> {
         let Some(s) = self.sessions.iter().find(|s| s.id == core) else {
             return Err(anyhow!("ядро {core} недоступно для команды: {action}"));
         };

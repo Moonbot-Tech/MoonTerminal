@@ -24,6 +24,7 @@ use crate::hosts::Hosts;
 use crate::script::{self, STEP_TIMEOUT};
 use crate::ssh::Target;
 
+pub mod mcp;
 mod session;
 pub use session::AdminConn;
 

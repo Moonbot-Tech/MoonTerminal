@@ -41,7 +41,8 @@
 //! `moon-remote telegram`). `mini_app` also opens the Mini App — and with it switches the station
 //! to its account profile (`feed::station::Profile::Account`): orders, balances, strategies and
 //! the core's health reach it, as the Mini App's tabs need. Without `[telegram]`, or with the Mini
-//! App off, the station stays light. The zone and the language are the bot's; the chats paired
+//! App off, the station stays light unless `[mcp]` enables the independent AI account feed.
+//! The zone and the language are the bot's; the chats paired
 //! with it, its menu and the zone the terminal pushes from its header clock are the station's own
 //! state (`telegram.json` in the data root), not this file's. Once the terminal has pushed a zone
 //! it wins over the one here, which stays the zone of a station no terminal pushed to.
@@ -86,6 +87,7 @@ struct StationFile {
     #[serde(default)]
     tape: Tape,
     telegram: Option<TelegramSection>,
+    mcp: Option<crate::mcp::Config>,
     #[serde(default)]
     update: UpdateSection,
 }
@@ -158,6 +160,8 @@ impl Telegram {
 
 /// What the station runs with: the cores, the tape window and the bot.
 pub struct Station {
+    /// Independent HTTPS/MCP endpoint; its owner permissions live in the private auth store.
+    pub mcp: Option<crate::mcp::Config>,
     /// Persisted allocation floor, raised from all configured identities.
     pub core_uid_high_water: u64,
     /// Every configured core, including entries with unavailable credentials.
@@ -176,6 +180,9 @@ impl Station {
     /// the bot's Control section shown (`control`) — and a bot to read it, since without its
     /// token nobody reads that account. Chosen once, at the start.
     pub fn profile(&self, control: bool) -> Profile {
+        if self.mcp.is_some() {
+            return Profile::Account;
+        }
         match &self.telegram {
             Some(telegram) if (telegram.mini_app || control) && telegram.token.is_some() => {
                 Profile::Account
@@ -352,6 +359,7 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         .transpose()
         .context("[telegram]")?;
     let mut station = Station {
+        mcp: file.mcp,
         core_uid_high_water: file
             .core_uid_high_water
             .max(seen.into_iter().max().unwrap_or(0)),
@@ -433,6 +441,7 @@ fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
         })
         .collect();
     Ok(Station {
+        mcp: None,
         core_uid_high_water: config
             .servers
             .iter()
@@ -468,6 +477,7 @@ fn terminal_config_with(text: &str) -> anyhow::Result<Option<Station>> {
     );
     let mut station = terminal_config(Path::new(""))?;
     station.tape = file.tape;
+    station.mcp = file.mcp;
     station.auto_update = file.update.auto.unwrap_or(true);
     // The same floor a normal start applies: the file's, the terminal's uids, the report history.
     station.core_uid_high_water =
