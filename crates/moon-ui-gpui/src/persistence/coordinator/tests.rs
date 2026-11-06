@@ -24,14 +24,14 @@ fn detects_coordinator(
         writes: writes.clone(),
         entered,
         release,
-        fail_layout_once: Arc::new(AtomicBool::new(false)),
+        fail_write_once: Arc::new(AtomicBool::new(false)),
         fail_detects_once,
     };
     let fallback = RecordingSink {
         writes,
         entered: None,
         release: None,
-        fail_layout_once: Arc::new(AtomicBool::new(false)),
+        fail_write_once: Arc::new(AtomicBool::new(false)),
         fail_detects_once: false,
     };
     PersistenceCoordinator::with_sinks(Box::new(sink), Box::new(fallback))
@@ -94,7 +94,7 @@ struct RecordingSink {
     writes: Arc<Mutex<Vec<String>>>,
     entered: Option<Arc<Barrier>>,
     release: Option<Arc<Barrier>>,
-    fail_layout_once: Arc<AtomicBool>,
+    fail_write_once: Arc<AtomicBool>,
     fail_detects_once: bool,
 }
 
@@ -117,7 +117,7 @@ impl PersistenceSink for RecordingSink {
         if let Some(release) = self.release.take() {
             release.wait();
         }
-        !self.fail_layout_once.swap(false, Ordering::SeqCst)
+        !self.fail_write_once.swap(false, Ordering::SeqCst)
     }
 
     /// Record one paired Classic write.
@@ -165,6 +165,45 @@ impl PersistenceSink for RecordingSink {
         }
         !std::mem::take(&mut self.fail_detects_once)
     }
+
+    /// Record the immutable chart list instead of touching the user's files.
+    fn save_charts(&mut self, charts: &[ChartTabSpec]) -> bool {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("charts:{}", charts.len()));
+        !self.fail_write_once.swap(false, Ordering::SeqCst)
+    }
+
+    /// Record drawing persistence without accessing the user's figure file.
+    fn save_figures(&mut self, _figures: &FigureSnapshot) -> bool {
+        self.writes.lock().unwrap().push("figures".into());
+        !self.fail_write_once.swap(false, Ordering::SeqCst)
+    }
+
+    /// Record the badge revision to distinguish edits made during an in-flight save.
+    fn save_badges(&mut self, badges: &TabBadgeSettings) -> bool {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("badges:{}", badges.rev()));
+        !self.fail_write_once.swap(false, Ordering::SeqCst)
+    }
+
+    /// Record the captured history length.
+    fn save_updates(&mut self, updates: &CoreUpdateHistory) -> bool {
+        self.writes
+            .lock()
+            .unwrap()
+            .push(format!("updates:{}", updates.records.len()));
+        !self.fail_write_once.swap(false, Ordering::SeqCst)
+    }
+
+    /// Record config ordering without reading or replacing real credentials.
+    fn save_config(&mut self, _config: &ConfigSnapshot) -> bool {
+        self.writes.lock().unwrap().push("config".into());
+        !self.fail_write_once.swap(false, Ordering::SeqCst)
+    }
 }
 
 /// Build one layout snapshot identified by its Auto rail width.
@@ -197,7 +236,7 @@ fn detached(panel: &str) -> DetachedSpec {
 ///     writes: Ordered sink call log.
 ///     entered: Optional barrier reached after the first write begins.
 ///     release: Optional barrier that holds the first write until the test releases it.
-///     fail_layout_once: One-shot layout failure switch.
+///     fail_write_once: One-shot layout failure switch.
 ///
 /// Returns:
 ///     Test coordinator using the injected sink.
@@ -205,23 +244,23 @@ fn coordinator(
     writes: Arc<Mutex<Vec<String>>>,
     entered: Option<Arc<Barrier>>,
     release: Option<Arc<Barrier>>,
-    fail_layout_once: Arc<AtomicBool>,
+    fail_write_once: Arc<AtomicBool>,
 ) -> PersistenceCoordinator {
     let fallback_writes = writes.clone();
-    let fallback_failure = fail_layout_once.clone();
+    let fallback_failure = fail_write_once.clone();
     PersistenceCoordinator::with_sinks(
         Box::new(RecordingSink {
             writes,
             entered,
             release,
-            fail_layout_once,
+            fail_write_once,
             fail_detects_once: false,
         }),
         Box::new(RecordingSink {
             writes: fallback_writes,
             entered: None,
             release: None,
-            fail_layout_once: fallback_failure,
+            fail_write_once: fallback_failure,
             fail_detects_once: false,
         }),
     )
@@ -333,9 +372,7 @@ fn failure_acknowledgement_selects_the_class_for_retry() {
         acknowledgement.failed(),
         PersistenceClasses {
             layout: true,
-            classic: false,
-            auto: false,
-            detects: false,
+            ..Default::default()
         }
     );
     assert!(coordinator.dispatch(PersistenceSnapshot::empty().with_layout(layout(200.0))));
@@ -397,4 +434,161 @@ fn shutdown_retries_failed_final_classes_through_the_fallback_sink() {
         *writes.lock().unwrap(),
         vec!["layout:Some(500.0)", "layout:Some(500.0)"]
     );
+}
+
+/// Build all regular autosave classes with a chart count that identifies the captured generation.
+fn workspace_snapshot(count: u32) -> PersistenceSnapshot {
+    let charts = (0..count)
+        .map(|num| ChartTabSpec::new("test".into(), num, moon_core::config::ChartBucket::Shared))
+        .collect();
+    PersistenceSnapshot::empty()
+        .with_charts(charts)
+        .with_figures(moon_core::figures::FigureStore::default().snapshot())
+        .with_badges(TabBadgeSettings::default())
+        .with_updates(CoreUpdateHistory::default())
+        .with_config(
+            moon_core::config::AppConfig::headless(Vec::new())
+                .persistence_snapshot()
+                .unwrap(),
+        )
+}
+
+/// A stalled save cannot block dispatch, grow a queue, or overwrite the final charts on quit.
+#[test]
+fn workspace_autosave_coalesces_and_quit_writes_latest_after_blocked_io() {
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let mut coordinator = coordinator(
+        writes.clone(),
+        Some(entered.clone()),
+        Some(release.clone()),
+        Arc::new(AtomicBool::new(false)),
+    );
+    // The first sink call remains blocked while the application submits a later edit.
+    assert!(coordinator.dispatch(workspace_snapshot(1).with_layout(layout(100.0))));
+    entered.wait();
+    assert!(!coordinator.dispatch(workspace_snapshot(2)));
+    assert!(coordinator.poll().is_none());
+    let shutdown = std::thread::spawn(move || coordinator.shutdown(workspace_snapshot(3)));
+    release.wait();
+    assert_eq!(
+        shutdown.join().unwrap().failed(),
+        PersistenceClasses::default()
+    );
+    assert_eq!(
+        *writes.lock().unwrap(),
+        [
+            "layout:Some(100.0)",
+            "charts:1",
+            "figures",
+            "badges:0",
+            "updates:0",
+            "config",
+            "charts:3",
+            "figures",
+            "badges:0",
+            "updates:0",
+            "config",
+        ]
+    );
+}
+
+/// Every newly asynchronous class must acknowledge errors and allow retry without another edit.
+#[test]
+fn every_workspace_class_reports_failure_and_retries() {
+    let all = workspace_snapshot(1);
+    for selected in [
+        PersistenceClasses {
+            charts: true,
+            ..Default::default()
+        },
+        PersistenceClasses {
+            figures: true,
+            ..Default::default()
+        },
+        PersistenceClasses {
+            badges: true,
+            ..Default::default()
+        },
+        PersistenceClasses {
+            updates: true,
+            ..Default::default()
+        },
+        PersistenceClasses {
+            config: true,
+            ..Default::default()
+        },
+    ] {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let mut coordinator =
+            coordinator(writes.clone(), None, None, Arc::new(AtomicBool::new(true)));
+        let snapshot = all.clone().retain_classes(selected);
+        assert!(coordinator.dispatch(snapshot.clone()));
+        assert_eq!(wait_for_ack(&mut coordinator).failed(), selected);
+        assert!(coordinator.dispatch(snapshot));
+        assert_eq!(
+            wait_for_ack(&mut coordinator).failed(),
+            PersistenceClasses::default()
+        );
+        assert_eq!(writes.lock().unwrap().len(), 2);
+    }
+}
+
+/// Layout changes must not starve drawings, and a closed autosave window must keep edits pending.
+#[test]
+fn workspace_admission_is_independent_of_layout_and_limited_to_one_second() {
+    let mut coordinator = coordinator(
+        Arc::new(Mutex::new(Vec::new())),
+        None,
+        None,
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert!(coordinator.dispatch(PersistenceSnapshot::empty().with_layout(layout(100.0))));
+    wait_for_ack(&mut coordinator);
+    assert!(coordinator.admit_autosave(Instant::now()));
+    assert!(coordinator.dispatch(workspace_snapshot(1)));
+    wait_for_ack(&mut coordinator);
+    let accepted = coordinator.last_autosave.unwrap();
+    assert!(!coordinator.admit_autosave(accepted + Duration::from_millis(999)));
+    assert!(coordinator.admit_autosave(accepted + Duration::from_secs(1)));
+}
+
+/// Explicit config/key changes cannot overtake an older automatic snapshot and be rolled back by it.
+#[test]
+fn deliberate_write_follows_the_pending_autosave_and_does_not_consume_future_acks() {
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let mut coordinator = coordinator(
+        writes.clone(),
+        Some(entered.clone()),
+        Some(release.clone()),
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert!(coordinator.dispatch(workspace_snapshot(1).with_layout(layout(100.0))));
+    entered.wait();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let manual_writes = writes.clone();
+    let manual = std::thread::spawn(move || {
+        let ack = coordinator.finish_pending().unwrap();
+        assert_eq!(ack.failed(), PersistenceClasses::default());
+        manual_writes.lock().unwrap().push("manual".into());
+        done_tx.send(()).unwrap();
+        assert!(!coordinator.has_pending_config());
+        assert!(coordinator.poll().is_none());
+        assert!(coordinator.dispatch(workspace_snapshot(2)));
+        assert_eq!(
+            wait_for_ack(&mut coordinator).failed(),
+            PersistenceClasses::default()
+        );
+    });
+    let completed_while_blocked = done_rx.recv_timeout(Duration::from_millis(30)).is_ok();
+    release.wait();
+    manual.join().unwrap();
+    assert!(!completed_while_blocked);
+    let writes = writes.lock().unwrap();
+    let manual = writes.iter().position(|write| write == "manual").unwrap();
+    assert_eq!(writes[manual - 1], "config");
+    assert_eq!(writes[manual + 1], "charts:2");
 }

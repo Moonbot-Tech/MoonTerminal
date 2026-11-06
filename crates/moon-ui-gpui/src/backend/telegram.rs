@@ -64,6 +64,7 @@ impl TgHost for GuiTgHost<'_, '_> {
 
     fn save_paired_chat(&mut self, chat_id: i64) -> bool {
         let backend = &mut *self.backend;
+        backend.finish_pending_persistence();
         let mut candidate = backend.config.clone();
         let newly_paired = candidate.telegram.pair_chat(chat_id);
         if candidate.save_telegram().is_err() {
@@ -79,6 +80,7 @@ impl TgHost for GuiTgHost<'_, '_> {
 
     fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool {
         let backend = &mut *self.backend;
+        backend.finish_pending_persistence();
         let before = backend.config.telegram.bot.clone();
         let mut candidate = backend.config.clone();
         candidate.telegram.bot = bot.clone();
@@ -106,6 +108,7 @@ impl TgHost for GuiTgHost<'_, '_> {
 
     fn save_mini_app(&mut self, on: bool) -> Option<bool> {
         let backend = &mut *self.backend;
+        backend.finish_pending_persistence();
         let before = backend.config.telegram.clone();
         let mut candidate = backend.config.clone();
         candidate.telegram.mini_app_enabled = on;
@@ -126,6 +129,7 @@ impl TgHost for GuiTgHost<'_, '_> {
 
     fn save_cleared_pairing(&mut self) -> bool {
         let backend = &mut *self.backend;
+        backend.finish_pending_persistence();
         let mut candidate = backend.config.clone();
         candidate.telegram.clear_pairing();
         if candidate.save_telegram().is_err() {

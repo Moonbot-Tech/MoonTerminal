@@ -522,6 +522,7 @@ impl Backend {
                 key,
                 color,
             ));
+        self.finish_pending_persistence();
         candidate.save()?;
         let row = candidate
             .servers
@@ -568,6 +569,7 @@ impl Backend {
         {
             return Ok(());
         }
+        self.finish_pending_persistence();
         candidate.save()?;
         self.config = candidate;
         rust_i18n::set_locale(self.config.language.code());
@@ -587,6 +589,7 @@ impl Backend {
     ) -> anyhow::Result<()> {
         let mut candidate = self.config.clone();
         candidate.servers.retain(|s| s.uid != uid);
+        self.finish_pending_persistence();
         candidate.save()?;
         self.config = candidate;
         if let Some(preview) = self.preview.as_mut() {

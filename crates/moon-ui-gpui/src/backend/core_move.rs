@@ -456,6 +456,7 @@ impl Backend {
             point(&mut candidate.servers),
             "the core is no longer in the settings"
         );
+        self.finish_pending_persistence();
         candidate.save()?;
         self.config = candidate;
         if let Some(preview) = self.preview.as_mut() {

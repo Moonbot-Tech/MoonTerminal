@@ -36,6 +36,13 @@ pub struct FigureStore {
     pub dirty: bool,
 }
 
+/// Owned local drawings captured without serializing or touching the filesystem on the UI thread.
+#[derive(Clone)]
+pub struct FigureSnapshot {
+    by_key: HashMap<FigureKey, Vec<Figure>>,
+    unknown: HashMap<FigureKey, Vec<serde_json::Value>>,
+}
+
 impl FigureStore {
     pub fn rev(&self) -> u64 {
         self.rev
@@ -418,20 +425,48 @@ impl FigureStore {
         Ok(store)
     }
 
-    /// Saves to `figures.json` non-fatally and clears `dirty`. Server alerts (`from_server`)
-    /// are NOT persisted because they are managed by the core.
+    /// Save local figures, clearing dirty only after a successful write so transient failures retry.
+    /// Server alerts remain core-managed and are not persisted.
     pub fn save(&mut self) {
-        match serde_json::to_string_pretty(&self.to_persist()) {
-            Ok(s) => {
-                if let Err(e) =
-                    write_file_atomic(&paths::figures_path(), s.as_bytes(), "figures.json")
-                {
-                    log::warn!("не записал figures.json: {e}");
-                }
-            }
-            Err(e) => log::warn!("не сериализовал figures.json: {e}"),
+        if self.snapshot().save() {
+            self.dirty = false;
         }
-        self.dirty = false;
+    }
+
+    /// Copy only persisted drawings; server alerts stay with the live core-owned collection.
+    pub fn snapshot(&self) -> FigureSnapshot {
+        FigureSnapshot {
+            by_key: self
+                .by_key
+                .iter()
+                .filter_map(|(key, figures)| {
+                    let local: Vec<_> = figures
+                        .iter()
+                        .filter(|figure| !figure.from_server)
+                        .cloned()
+                        .collect();
+                    (!local.is_empty()).then(|| (key.clone(), local))
+                })
+                .collect(),
+            unknown: self.unknown.clone(),
+        }
+    }
+}
+
+impl FigureSnapshot {
+    /// Serialize and atomically replace the captured drawings on the persistence worker.
+    pub fn save(&self) -> bool {
+        let result = serde_json::to_string_pretty(&self.to_persist())
+            .map_err(anyhow::Error::from)
+            .and_then(|text| {
+                write_file_atomic(&paths::figures_path(), text.as_bytes(), "figures.json")
+            });
+        if let Err(error) = result {
+            log::warn!("figures.json save failed: {error}");
+            false
+        } else {
+            true
+        }
     }
 
     /// Builds the persisted form: local figures only, one entry per chart, plus every figure this
@@ -446,9 +481,6 @@ impl FigureStore {
             .filter_map(|key| {
                 let mut figures: Vec<serde_json::Value> = Vec::new();
                 for f in self.by_key.get(key).into_iter().flatten() {
-                    if f.from_server {
-                        continue;
-                    }
                     match serde_json::to_value(f) {
                         Ok(v) => figures.push(v),
                         Err(e) => log::warn!("figures.json: фигура {} не сериализуется: {e}", f.id),

@@ -357,6 +357,7 @@ pub(super) fn slot_settings_content(
                             let pulled = pull_backend.update(app, |b, cx| {
                                 let pulled = b.pull_strat_slots_from_core(core);
                                 if pulled {
+                                    b.finish_pending_persistence();
                                     if let Err(error) = b.config.save() {
                                         log::warn!("save pulled strategy slots failed: {error}");
                                     } else {

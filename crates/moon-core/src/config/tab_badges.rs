@@ -77,17 +77,18 @@ impl TabBadgeSettings {
         }
     }
 
-    /// Persist atomically; serialize/write failures are non-fatal and only logged.
-    pub fn save(&self) {
-        match serde_json::to_string_pretty(self) {
-            Ok(s) => {
-                if let Err(e) =
-                    write_file_atomic(&paths::tab_badges_path(), s.as_bytes(), "tab_badges.json")
-                {
-                    log::warn!("tab_badges.json save failed: {e}");
-                }
-            }
-            Err(e) => log::warn!("tab_badges.json serialize failed: {e}"),
+    /// Persist atomically, returning success so callers retain dirty state after a failed write.
+    pub fn save(&self) -> bool {
+        let result = serde_json::to_string_pretty(self)
+            .map_err(anyhow::Error::from)
+            .and_then(|s| {
+                write_file_atomic(&paths::tab_badges_path(), s.as_bytes(), "tab_badges.json")
+            });
+        if let Err(error) = result {
+            log::warn!("tab_badges.json save failed: {error}");
+            false
+        } else {
+            true
         }
     }
 

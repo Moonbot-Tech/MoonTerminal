@@ -29,7 +29,7 @@ const BACKGROUND_REVISION_INTERVAL: Duration = Duration::from_secs(60);
 ///
 /// Returns:
 ///     Nothing; failures mark the complete affected authority dirty for a later full snapshot.
-fn apply_persistence_ack(backend: &mut Backend, acknowledgement: PersistenceAck) {
+pub(crate) fn apply_persistence_ack(backend: &mut Backend, acknowledgement: PersistenceAck) {
     let failed = acknowledgement.failed();
     if failed.layout {
         backend.layout_dirty = true;
@@ -43,6 +43,21 @@ fn apply_persistence_ack(backend: &mut Backend, acknowledgement: PersistenceAck)
     }
     if failed.detects {
         backend.detects_view_dirty = true;
+    }
+    if failed.charts {
+        backend.chart_specs_dirty = true;
+    }
+    if failed.figures {
+        backend.figures.borrow_mut().dirty = true;
+    }
+    if failed.badges {
+        backend.tab_badges_dirty = true;
+    }
+    if failed.updates {
+        backend.core_updates_dirty = true;
+    }
+    if failed.config {
+        backend.config_dirty = true;
     }
 }
 
@@ -59,7 +74,10 @@ fn apply_persistence_ack(backend: &mut Backend, acknowledgement: PersistenceAck)
 ///
 /// Returns:
 ///     Nothing; accepted work completes asynchronously and is polled on a later tick.
-fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut PersistenceCoordinator) {
+pub(crate) fn dispatch_live_persistence(
+    backend: &mut Backend,
+    coordinator: &mut PersistenceCoordinator,
+) {
     if let Some(acknowledgement) = coordinator.poll() {
         apply_persistence_ack(backend, acknowledgement);
     }
@@ -79,6 +97,28 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
         .then(|| backend.auto_dock_topology.clone())
         .flatten();
     let save_auto = auto_topology.is_some();
+    let autosave_due = (backend.chart_specs_dirty
+        || backend.figures.borrow().dirty
+        || backend.tab_badges_dirty
+        || backend.core_updates_dirty
+        || backend.config_dirty)
+        && coordinator.admit_autosave(Instant::now());
+    let save_charts = autosave_due && backend.chart_specs_dirty;
+    let save_figures = autosave_due && backend.figures.borrow().dirty;
+    let save_badges = autosave_due && backend.tab_badges_dirty;
+    let save_updates = autosave_due && backend.core_updates_dirty;
+    let config = if autosave_due && backend.config_dirty {
+        match backend.config.persistence_snapshot() {
+            Ok(config) => Some(config),
+            Err(error) => {
+                log::warn!("config autosave snapshot failed: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let save_config = config.is_some();
     let mut snapshot = PersistenceSnapshot::empty();
     if save_layout {
         snapshot = snapshot.with_layout(backend.layout.clone());
@@ -92,7 +132,29 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
     if let Some(topology) = auto_topology {
         snapshot = snapshot.with_auto(topology);
     }
-    if snapshot.is_empty() {
+    if save_charts {
+        snapshot = snapshot.with_charts(backend.chart_specs.clone());
+    }
+    if save_figures {
+        snapshot = snapshot.with_figures(backend.figures.borrow().snapshot());
+    }
+    if save_badges {
+        snapshot = snapshot.with_badges(backend.tab_badges.clone());
+    }
+    if save_updates {
+        snapshot = snapshot.with_updates(moon_core::config::CoreUpdateHistory {
+            records: backend
+                .session
+                .core_update_history()
+                .iter()
+                .cloned()
+                .collect(),
+        });
+    }
+    if let Some(config) = config {
+        snapshot = snapshot.with_config(config);
+    }
+    if !coordinator.dispatch(snapshot) {
         return;
     }
 
@@ -109,20 +171,20 @@ fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut Persistenc
     if save_auto {
         backend.auto_dock_dirty = false;
     }
-    if !coordinator.dispatch(snapshot) {
-        if save_layout {
-            backend.layout_dirty = true;
-        }
-        if save_detects {
-            backend.detects_view_dirty = true;
-        }
-        if save_classic {
-            backend.dock_dirty = true;
-            backend.detached_dirty = true;
-        }
-        if save_auto {
-            backend.auto_dock_dirty = true;
-        }
+    if save_charts {
+        backend.chart_specs_dirty = false;
+    }
+    if save_figures {
+        backend.figures.borrow_mut().dirty = false;
+    }
+    if save_badges {
+        backend.tab_badges_dirty = false;
+    }
+    if save_updates {
+        backend.core_updates_dirty = false;
+    }
+    if save_config {
+        backend.config_dirty = false;
     }
 }
 

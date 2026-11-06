@@ -411,19 +411,29 @@ name is what left Binance COIN-M (code 6, reports `Binance Quarterly`) with no b
 test in `tests/theme_contract/naming.rs` sweeps the whole crate to keep `reported` out of every
 surface but the formatter.
 
-All three layout classes — `layout.toml`, the shared `auto_dock.json` and the joint Classic snapshot —
-are serialized by one persistence worker. The live GPUI contour only passes immutable snapshots and
-accepts acknowledgements: an accepted enqueue clears dirty, and a new mutation or a failed ack
-sets it again. Quit places
+One serial persistence worker writes layout, shared Auto/Classic topology, detection preferences,
+chart tabs, local figures, tab badges, core update history, and automatic config changes.
+The live GPUI contour captures immutable values and accepts acknowledgements; serialization,
+comparison with existing files, encryption, writes, sync and rename stay on the worker.
+An accepted enqueue clears dirty, and a later edit or failed acknowledgement sets it again.
+Only one request can be in flight; edits during a slow write coalesce in the live authority.
+Workspace/config snapshots are admitted at most once per second, independently of the existing
+layout cadence. Config normalization assigns durable IDs on the UI thread before capture, and
+figure snapshots retain unknown local figures without copying server-owned geometry.
+
+Rare deliberate writes (Settings, key changes, pairing, station handover and core setup) first
+finish the preceding snapshot, so an older autosave cannot overwrite their result. Quit places
 the final full snapshot behind the write already in flight, joins the worker and uses a synchronous
-fallback only for the classes the worker could not confirm.
+fallback only for the classes the worker could not confirm. These explicit commit/exit boundaries
+can wait for disk; routine trading updates do not.
 
 Config loaders distinguish missing files from unreadable or malformed originals. Falling back in
 memory protects that exact config path in the shared atomic writer until restart, so delayed saves
 and cloned models cannot replace bytes that were never loaded. Repair the original and restart to
 resume persistence; merely clearing a temporary sharing violation does not make an empty fallback
 authoritative. A successful existing quarantine remains writable because its original was preserved.
-Theme/order-style and hotkey migrations use the same rule.
+Theme/order-style and hotkey migrations use the same rule. Figure and tab-badge saves retain pending
+edits after a failed write; the coordination gates retry at their existing one-second cadence.
 
 The Strategies gear popup resolves two optional `layout.toml` booleans: venue grouping defaults
 ON and active-only visibility defaults OFF. Explicit strategy reveals clear active-only through the

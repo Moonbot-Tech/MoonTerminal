@@ -590,7 +590,7 @@ fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
     // save and panels that write straight through all bypass the dirty-flag mechanism. What it
     // does pin is that both debounced flushes are gated as a WHOLE: a guard per `*_dirty` branch
     // is one that a newly persisted thing can be added without.
-    let startup = read_startup();
+    let startup = code_only(&read_src("startup/boot.rs"));
     let main_rs = read_src("main.rs");
 
     assert!(
@@ -614,19 +614,25 @@ fn a_diagnostic_run_cannot_flush_the_debounced_workspace_state() {
     //
     // Scope, not presence. A guard wrapping a single `*_dirty` branch would satisfy a bare
     // `contains`, which is exactly the per-file form the rule above forbids — so the guarded block
-    // is sliced out and every saver has to be found INSIDE it.
+    // is sliced out and the single worker-dispatch call must stay INSIDE it. The worker now owns
+    // all automatic file writes; the UI loop must never regain any of the old synchronous savers.
     let guarded = braced_body(&startup, "if b.persist_allowed {");
+    let dispatch = "dispatch_live_persistence(b, &mut coord_persistence.borrow_mut())";
+    assert!(guarded.contains(dispatch));
+    assert_eq!(startup.matches(dispatch).count(), 1);
+    let live = braced_body(
+        &startup,
+        "let (show_reqs, open_debug_10) = coord_backend.update(",
+    );
     for saver in [
-        "dispatch_live_persistence(b, &mut coord_persistence.borrow_mut())",
         "chart_persist::save_all",
         "b.tab_badges.save()",
         "b.figures.borrow_mut().save()",
         "b.config.save()",
     ] {
         assert!(
-            guarded.contains(saver),
-            "{saver} must sit inside the `if b.persist_allowed` block: a debounced save outside it \
-             writes the developer's workspace during a --debug-script run"
+            !live.contains(saver) && !quit.contains(saver),
+            "{saver} bypasses the gated serial worker and can write the developer's workspace during a diagnostic"
         );
     }
     assert!(
@@ -1358,6 +1364,14 @@ fn detached_chart_state_uses_the_existing_geometry_and_flush_paths() {
 
     let startup = fs::read_to_string(root.join("startup/boot.rs")).unwrap();
     let quit = code_only(braced_body(&startup, "cx.on_app_quit(move |cx|"));
-    assert!(quit.contains("chart_persist::save_all(&b.chart_specs)"));
-    assert!(startup.contains("if b.chart_specs_dirty {"));
+    assert!(quit.contains(".with_charts(b.chart_specs.clone())"));
+    assert!(quit.contains(".shutdown(final_persistence)"));
+    assert!(!quit.contains("chart_specs_dirty"));
+    let dispatch = code_only(&read_src("startup.rs"));
+    let dispatch = braced_body(&dispatch, "fn dispatch_live_persistence(");
+    assert!(dispatch.contains("let save_charts = autosave_due && backend.chart_specs_dirty"));
+    assert!(
+        braced_body(dispatch, "if save_charts {")
+            .contains("snapshot.with_charts(backend.chart_specs.clone())")
+    );
 }

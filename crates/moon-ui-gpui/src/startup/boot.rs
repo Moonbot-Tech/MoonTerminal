@@ -27,39 +27,6 @@ use moon_core::config::{AppConfig, WindowLayout};
 use moon_core::metrics::MetricsSnapshot;
 use moon_core::session::{CoreId, SessionManager};
 
-/// Coalesces streamed edits while bounding the pending write window to one second.
-const SAVE_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Leading-edge admission that leaves pending edits dirty until the next write window.
-struct SaveGate {
-    /// Monotonic time of the last admitted write.
-    last_write: Option<Instant>,
-    /// Minimum spacing between admitted writes.
-    min: Duration,
-}
-
-impl SaveGate {
-    /// Starts without a prior write so the first edit is persisted immediately.
-    fn new(min: Duration) -> Self {
-        Self {
-            last_write: None,
-            min,
-        }
-    }
-
-    /// Admits a write at `now` only when the previous write's window has elapsed.
-    fn admit(&mut self, now: Instant) -> bool {
-        if self
-            .last_write
-            .is_some_and(|last| now.duration_since(last) < self.min)
-        {
-            return false;
-        }
-        self.last_write = Some(now);
-        true
-    }
-}
-
 /// Startup state gathered before the configuration was available.
 pub(super) struct BootInput {
     /// Whether boot should show the one-time recovery notification.
@@ -200,6 +167,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let telegram_wake = feed_wake_tx.clone();
     telegram.set_work_waker(std::sync::Arc::new(move || telegram_wake.notify()));
     let backend = cx.new(|_| Backend {
+        persistence: persistence.clone(),
         telegram,
         station,
         core_moves: Default::default(),
@@ -560,10 +528,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     })
     .detach();
 
-    // On application exit, set quitting and save charts.json IMMEDIATELY. When quit begins, the
-    // windows have not been removed yet, so detached=Some; otherwise closing detached windows
-    // during exit repins them (detached -> None) and they are not restored. quitting also
-    // suppresses repin draining (drain_chart_repin) so it cannot clear detached.
+    // Capture chart state as quit begins, before removing windows can clear detached=Some.
+    // The serial worker flushes this final snapshot before exit; quitting suppresses repin
+    // draining so later window-close events cannot replace it with an attached chart state.
     let app_quit_backend = backend.clone();
     let app_quit_persistence = persistence.clone();
     cx.on_app_quit(move |cx| {
@@ -577,45 +544,31 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             if !b.persist_allowed {
                 return PersistenceSnapshot::empty();
             }
-            if b.config_dirty {
-                if let Err(e) = b.config.save() {
-                    log::warn!("config save (quit) failed: {e}");
-                } else {
-                    b.config_dirty = false;
-                }
-            }
-            chart_persist::save_all(&b.chart_specs);
-            if b.tab_badges_dirty {
-                b.tab_badges.save();
-                b.tab_badges_dirty = false;
-            }
             // D4: no dangling "updating" row survives a restart. This is the ONLY place that
             // closes out an in-flight campaign gracefully -- `on_app_quit` is itself skipped by
             // `std::process::exit`, so a crash, a forced termination, or a power loss still drops
             // the queue with no `Abandoned` record (see `SessionManager::abandon_core_updates`).
-            let abandoned = b
-                .session
+            b.session
                 .abandon_core_updates(moon_chart::paint::now_unix_ms() as i64);
-            if abandoned > 0 || b.core_updates_dirty {
-                let history = moon_core::config::CoreUpdateHistory {
-                    records: b.session.core_update_history().iter().cloned().collect(),
-                };
-                if let Err(e) = history.save() {
-                    log::warn!("core update history save (quit) failed: {e}");
-                } else {
-                    b.core_updates_dirty = false;
-                }
-            }
-            if b.figures.borrow().dirty {
-                b.figures.borrow_mut().save();
-            }
             // The full final authorities supersede any debounced snapshot already in flight.
             // The serial worker receives this request behind prior work, so no second writer
             // can race the same atomic temp paths during shutdown.
             let mut snapshot = PersistenceSnapshot::empty()
                 .with_layout(b.layout.clone())
                 .with_detects(b.detects_view.clone())
-                .with_classic(b.dock_states.clone(), b.detached.clone());
+                .with_classic(b.dock_states.clone(), b.detached.clone())
+                .with_charts(b.chart_specs.clone())
+                .with_figures(b.figures.borrow().snapshot())
+                .with_badges(b.tab_badges.clone())
+                .with_updates(moon_core::config::CoreUpdateHistory {
+                    records: b.session.core_update_history().iter().cloned().collect(),
+                });
+            if b.config_dirty || b.persistence.borrow().has_pending_config() {
+                match b.config.persistence_snapshot() {
+                    Ok(config) => snapshot = snapshot.with_config(config),
+                    Err(error) => log::warn!("config snapshot (quit) failed: {error}"),
+                }
+            }
             if b.auto_dock_automatic_persistence_allowed
                 && let Some(topology) = b.auto_dock_topology.clone()
             {
@@ -737,10 +690,6 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         let mut frame_timings = gpui::FrameTimingCollector::new();
         // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
         let mut last_assets_rev_sum: u64 = 0;
-        let mut chart_gate = SaveGate::new(SAVE_INTERVAL);
-        let mut config_gate = SaveGate::new(SAVE_INTERVAL);
-        let mut figures_gate = SaveGate::new(SAVE_INTERVAL);
-        let mut badges_gate = SaveGate::new(SAVE_INTERVAL);
         loop {
             // How late this wake-up lands is the measurement, not an implementation detail: the
             // timer is a BACKGROUND one, but this task runs on the foreground executor, so
@@ -946,47 +895,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // the dirty-flag mechanism entirely. `order-cancel-lag` in particular
                     // places a real order that lands permanently in `reports.sqlite`.
                     if b.persist_allowed {
-                        let now = Instant::now();
                         {
-                            // Writes config and layout files from THIS thread, into the folder
-                            // beside the executable — which may be synchronised or on a share.
+                            // Only capture and enqueue here: a synchronised folder may stall I/O.
                             let _persist_us = crate::diag::scope(&crate::diag::PERSIST_DISPATCH_US);
                             dispatch_live_persistence(b, &mut coord_persistence.borrow_mut());
-                        }
-                        if b.chart_specs_dirty {
-                            let admitted = chart_gate.admit(now);
-                            if admitted {
-                                chart_persist::save_all(&b.chart_specs);
-                                b.chart_specs_dirty = false;
-                            }
-                        }
-                        if b.tab_badges_dirty && badges_gate.admit(now) {
-                            b.tab_badges.save();
-                            b.tab_badges_dirty = false;
-                        }
-                        if b.core_updates_dirty {
-                            // The single capped authority is `SessionManager`; this only borrows
-                            // a snapshot to persist. A `Backend`-side copy would be a second,
-                            // possibly-diverging store -- see `CoreUpdateHistory`'s own docs.
-                            let history = moon_core::config::CoreUpdateHistory {
-                                records: b.session.core_update_history().iter().cloned().collect(),
-                            };
-                            if let Err(e) = history.save() {
-                                log::warn!("core update history save failed: {e}");
-                            } else {
-                                b.core_updates_dirty = false;
-                            }
-                        }
-                        if b.figures.borrow().dirty && figures_gate.admit(now) {
-                            b.figures.borrow_mut().save();
-                        }
-                        if b.config_dirty && config_gate.admit(now) {
-                            // Resizing can dirty config every tick; retain the last edit until the
-                            // next admitted write, while isolated edits write on their first tick.
-                            if let Err(e) = b.config.save() {
-                                log::warn!("config save (debounced) failed: {e}");
-                            }
-                            b.config_dirty = false;
                         }
                     }
                     b.flush_backend_notify(cx);

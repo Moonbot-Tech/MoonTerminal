@@ -55,6 +55,8 @@ pub mod book_width;
 pub mod endpoint_override;
 mod key_endpoint;
 mod migrate;
+mod persistence;
+pub use persistence::ConfigSnapshot;
 mod reconcile;
 mod schema;
 mod station_cores;
@@ -866,6 +868,13 @@ impl AppConfig {
         self.save_impl()
     }
 
+    /// Normalize the live authority before capturing it for the serial background writer.
+    /// Callers must order deliberate writes after any earlier snapshot still in flight.
+    pub fn persistence_snapshot(&mut self) -> anyhow::Result<ConfigSnapshot> {
+        self.prepare_save()?;
+        Ok(ConfigSnapshot(Box::new(self.clone())))
+    }
+
     /// Replace only the encrypted aggregate, preserving the validated saved server secrets.
     ///
     /// Pairing must not report failure after its authorization has already reached disk in a
@@ -912,6 +921,12 @@ impl AppConfig {
     /// This is the general config write point; the Telegram-only path enforces the same read
     /// guard. It covers Settings, the timer drain, the exit write, and migration.
     fn save_impl(&mut self) -> anyhow::Result<()> {
+        self.prepare_save()?;
+        self.write_prepared()
+    }
+
+    /// Apply all in-memory save normalization before a snapshot leaves its owner; performs no I/O.
+    fn prepare_save(&mut self) -> anyhow::Result<()> {
         if self.settings_unreadable {
             anyhow::bail!(
                 "settings.toml не был прочитан при старте — запись запрещена, чтобы не \
@@ -926,7 +941,11 @@ impl AppConfig {
         // Deliberately NOT pruned like `prune_orphan_groups` above — a saved core group keeps a
         // member whose core is currently gone.
         core_groups::sanitize_core_groups(&mut self.core_groups);
-        self.validate()?;
+        self.validate()
+    }
+
+    /// Write a validated immutable authority without assigning identities on a discarded copy.
+    fn write_prepared(&self) -> anyhow::Result<()> {
         let (sf, meta) = reconcile::split(
             &self.servers,
             &self.groups,

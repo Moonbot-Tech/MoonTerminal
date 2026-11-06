@@ -357,8 +357,8 @@ impl Shell {
 
         // Inline order-size editor opened by double-clicking an F1-F6 button. Every valid positive
         // Change updates the group's USD-equivalent preset immediately and schedules a
-        // debounced save, so a hotkey or click before Enter uses the text already typed. Blur or
-        // Enter performs a direct config save; empty, nonnumeric, or nonpositive input is ignored.
+        // background save, so a hotkey or click before Enter uses the text already typed. Blur or
+        // Enter retains the same autosave path; empty, nonnumeric, or nonpositive input is ignored.
         let size_input = cx.new(|cx| MoonInputState::new(window, cx));
         cx.subscribe(&size_input, |this, inp, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
@@ -390,11 +390,6 @@ impl Shell {
             {
                 this.backend.update(cx, |b, bcx| {
                     b.set_order_size_value(&group, ix, v);
-                    if let Err(error) = b.config.save() {
-                        log::warn!("save order size failed: {error}");
-                    } else {
-                        b.config_dirty = false;
-                    }
                     bcx.notify();
                 });
             }

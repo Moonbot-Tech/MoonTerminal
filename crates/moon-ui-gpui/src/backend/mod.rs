@@ -11,6 +11,7 @@ mod favorites;
 mod figures;
 mod manual_trading;
 mod open_request;
+mod persistence;
 mod problem_sound;
 mod quiet;
 pub(crate) mod server_chart;

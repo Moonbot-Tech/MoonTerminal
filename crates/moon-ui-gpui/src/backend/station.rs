@@ -1277,6 +1277,7 @@ impl Backend {
         };
         let (translated, unmapped) =
             returned_to_terminal(&self.config, &returned, &self.station.returned_cores);
+        self.finish_pending_persistence();
         let restored = match save_returned_bot(
             &mut self.config,
             &mut self.preview,
@@ -1359,6 +1360,7 @@ impl Backend {
         }
         let mut candidate = self.config.clone();
         forget_bot(&mut candidate.telegram);
+        self.finish_pending_persistence();
         candidate.save_telegram()?;
         self.config = candidate;
         if let Some(draft) = self.preview.as_mut() {

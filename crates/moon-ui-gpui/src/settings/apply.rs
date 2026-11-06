@@ -282,6 +282,8 @@ impl SettingsView {
     ///     [`SaveOutcome::Saved`] only when the config reached disk and any password change was
     ///     accepted; the window must stay open on anything else.
     pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> SaveOutcome {
+        self.backend
+            .update(cx, |backend, _| backend.finish_pending_persistence());
         // Passwords FIRST. Applying them only changes key material in memory; the config write
         // below is what puts the resulting key slots on disk. Running it afterwards would leave
         // the passwords for a write that already happened, and quitting there would lose them with

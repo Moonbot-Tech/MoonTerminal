@@ -79,10 +79,7 @@ fn startup_detects_and_persists_an_untouched_profiles_system_zone() {
 fn live_layout_classic_and_auto_persistence_only_dispatch_to_the_worker() {
     let startup = code_only(&read_startup());
     let coordinator = code_only(&read_src("persistence/coordinator.rs"));
-    let dispatch = braced_body(
-        &startup,
-        "fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut PersistenceCoordinator)",
-    );
+    let dispatch = braced_body(&startup, "fn dispatch_live_persistence(");
     assert!(
         dispatch.contains("coordinator.poll()")
             && dispatch.contains("coordinator.is_in_flight()")
@@ -112,10 +109,7 @@ fn live_layout_classic_and_auto_persistence_only_dispatch_to_the_worker() {
 #[test]
 fn failed_or_stale_background_persistence_keeps_dirty_state_for_retry() {
     let startup = code_only(&read_startup());
-    let dispatch = braced_body(
-        &startup,
-        "fn dispatch_live_persistence(backend: &mut Backend, coordinator: &mut PersistenceCoordinator)",
-    );
+    let dispatch = braced_body(&startup, "fn dispatch_live_persistence(");
     let apply = braced_body(
         &startup,
         "fn apply_persistence_ack(backend: &mut Backend, acknowledgement: PersistenceAck)",
@@ -133,9 +127,10 @@ fn failed_or_stale_background_persistence_keeps_dirty_state_for_retry() {
     assert!(
         dispatch.find("coordinator.poll()").unwrap()
             < dispatch.find("coordinator.is_in_flight()").unwrap()
-            && dispatch.find("backend.layout_dirty = false;").unwrap()
-                < dispatch.find("coordinator.dispatch(snapshot)").unwrap(),
-        "an acknowledgement is consumed before dispatch, while accepted snapshot flags are cleared before later mutations can be observed"
+            && dispatch.find("coordinator.dispatch(snapshot)").unwrap()
+                < dispatch.find("backend.layout_dirty = false;").unwrap()
+            && braced_body(dispatch, "if !coordinator.dispatch(snapshot)").contains("return;"),
+        "consume acknowledgements before dispatch; clear flags only after the worker accepts the snapshot, before returning to the event loop"
     );
     let after_poll = dispatch
         .split_once("if let Some(acknowledgement) = coordinator.poll() {")

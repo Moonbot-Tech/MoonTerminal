@@ -91,6 +91,8 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 /// Shared backend stored in one `Entity`, drained by coordination loops, and notifying UI observers.
 struct Backend {
+    /// The one ordered autosave worker, also drained before deliberate config/key writes.
+    persistence: std::rc::Rc<std::cell::RefCell<persistence::coordinator::PersistenceCoordinator>>,
     /// Optional Telegram service, joined before application owners disappear.
     telegram: moon_tg::TelegramState,
     /// The station's server work (Settings -> Telegram -> Bot on a server): outlives the window.
@@ -504,8 +506,8 @@ struct Backend {
     /// two DEBOUNCED flush sites in `startup.rs` — the coordinator tick and the quit hook. It does
     /// NOT gate anything that bypasses the dirty-flag mechanism: the report DB writer, `strat_db`,
     /// `AppConfig::load`'s own uid save and schema-upgrade backup, `applog::purge_old`, the
-    /// one-shot chart-id remap that runs before this struct exists, the direct `config.save()` in
-    /// `shell/init.rs`, or panels that write straight through (`news_tag_settings`, the Settings
+    /// one-shot chart-id remap that runs before this struct exists, or panels that write straight
+    /// through (`news_tag_settings`, the Settings
     /// window's snapshot save). `order-cancel-lag` in particular
     /// places a real order that lands permanently in the developer's `reports.sqlite`. Those are
     /// separate holes; closing them needs a different mechanism.
@@ -712,8 +714,8 @@ struct Backend {
     /// instants, so nothing depends on this value having seen every minute.
     quiet_last_min: u16,
     /// Configuration changed in memory and awaiting a debounced save.
-    /// Frequent edits such as mouse-wheel order-size changes write to disk once per coordination
-    /// tick; the drain calls `config.save()` and clears this flag.
+    /// Frequent edits such as mouse-wheel order-size changes enqueue at most once per second;
+    /// later edits and failed acknowledgements keep the latest state pending.
     config_dirty: bool,
     /// Whether `on_app_quit` is shutting down the application.
     /// Detached windows must not repin while exiting, or their detached state would be cleared and

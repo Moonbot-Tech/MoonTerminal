@@ -186,6 +186,68 @@ fn preserve_config_fixture<T>(
     );
 }
 
+/// Failed atomic writes must retain figure edits and report badge failure for the next save window.
+#[test]
+fn figures_and_badges_retry_after_transient_write_failure() {
+    const ROOT: &str = "MOON_SAVE_RETRY_TEST_ROOT";
+    let Some(root) = std::env::var_os(ROOT) else {
+        let root = std::env::temp_dir().join(format!("moon-save-retry-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "config::tests::figures_and_badges_retry_after_transient_write_failure",
+                "--nocapture",
+            ])
+            .env(ROOT, &root)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    assert!(super::paths::set_data_dir_override(root.into()));
+    use crate::figures::tools::HLine;
+    use crate::figures::{DrawStyle, Figure, FigureKind, FigureStore};
+    let mut figures = FigureStore::default();
+    figures.add(
+        1,
+        "BTCUSDT",
+        Figure::new(
+            FigureKind::HLine(HLine { price: 42.0 }),
+            DrawStyle::default(),
+            0.0,
+        ),
+    );
+    let path = super::paths::figures_path();
+    std::fs::create_dir_all(&path).unwrap();
+    figures.save();
+    assert!(figures.dirty, "a failed write must leave the edit pending");
+    std::fs::remove_dir(path).unwrap();
+    figures.save();
+    assert!(!figures.dirty);
+    assert_eq!(
+        FigureStore::load().figures(1, "BTCUSDT")[0].kind,
+        FigureKind::HLine(HLine { price: 42.0 })
+    );
+
+    let mut badges = super::TabBadgeSettings::default();
+    badges.set_counters_visible("Orders", false);
+    let path = super::paths::tab_badges_path();
+    std::fs::create_dir_all(&path).unwrap();
+    assert!(
+        !badges.save(),
+        "the coordinator must be told to retain dirty"
+    );
+    std::fs::remove_dir(path).unwrap();
+    assert!(badges.save());
+    assert!(!super::TabBadgeSettings::load().counters_visible("Orders"));
+}
+
 /// Regression target: removing `ensure_server_group_configs` from
 /// `AppConfig::build_plaintext_config` leaves the environment-backed core without durable
 /// group-local Size, TP, or SL state.
