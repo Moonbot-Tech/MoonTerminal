@@ -49,6 +49,8 @@ core_cmds.status.ready_why: "El núcleo ha accedido al exchange y está operando
 core_cmds.status.login_error: "Error de acceso al exchange"
 core_cmds.status.login_error_why: "El exchange respondió: %{reason}. El núcleo espera y no reintenta el acceso solo."
 core_cmds.status.other_state: "Estado del núcleo: %{state}"
+core_cmds.status.moonproto_disabled: "MoonProto desactivado"
+core_cmds.status.moonproto_not_listening: "MoonProto no está escuchando"
 core_cmds.status.loading: "Consultando el núcleo…"
 core_cmds.status.loading_why: "Conectando a %{ip} por SSH."
 core_cmds.status.checked_now: "Comprobado ahora mismo"

@@ -129,6 +129,30 @@ impl CoreStatus {
     }
 }
 
+/// A refusal or unreadable reply returned by an established core command channel.
+#[derive(Debug)]
+pub struct CoreRefusal {
+    reason: String,
+}
+
+impl CoreRefusal {
+    /// Preserve the core's own safe failure description for the command window.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for CoreRefusal {
+    /// Show the core's reason rather than classifying it as an SSH transport failure.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for CoreRefusal {}
+
 /// The exchange keys `mb --set-api-keys` takes. They travel as JSON on stdin only.
 pub enum ApiKeys {
     Pair {
@@ -337,6 +361,7 @@ pub(crate) fn mb_within(
     all.extend_from_slice(args);
     let out = privilege.run_raw(conn, &command("mb", &all), stdin, timeout)?;
     parse_reply(out.ok(), &out.stdout_text(), &out.stderr_text())
+        .map_err(|error| CoreRefusal::new(format!("{error:#}")).into())
 }
 
 /// The JSON reply of an `mb` command, or its refusal. The reply is the last line that is a JSON

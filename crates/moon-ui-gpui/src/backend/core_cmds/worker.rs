@@ -28,6 +28,7 @@ pub(crate) enum Event {
     Log(LogTail),
     Key(Zeroizing<String>),
     Exchanges(Vec<Exchange>),
+    ExchangeSwitched,
     AddressChanged { host: String, port: u16 },
 }
 
@@ -277,16 +278,6 @@ fn serve(
     }
 }
 
-/// Execute one request against a fake or real runner and collect its events.
-#[cfg(test)]
-fn run(runner: &dyn Runner, facts_snapshot: FactsSnapshot, request: CmdRequest) -> Vec<Event> {
-    let mut events = Vec::new();
-    run_with(runner, facts_snapshot, request, &mut |event| {
-        events.push(event);
-    });
-    events
-}
-
 /// Execute one request, publishing facts and progress as they arrive.
 fn run_with(
     runner: &dyn Runner,
@@ -401,6 +392,7 @@ fn run_with(
                         match runner.exchanges(&located.dir) {
                             Ok(exchanges) => {
                                 emit(Event::Exchanges(exchanges));
+                                emit(Event::ExchangeSwitched);
                                 done(cmd, emit)
                             }
                             Err(error) => fail(cmd, ssh_failure(error), emit),
@@ -522,9 +514,9 @@ fn invalid_args(cmd: Cmd, emit: &mut dyn FnMut(Event)) -> bool {
     )
 }
 
-/// Convert transport errors to SSH failures without reconnecting after a service refusal.
+/// Preserve core and service refusals; only transport and location failures become SSH errors.
 fn ssh_failure(error: anyhow::Error) -> CmdError {
-    if error.is::<ServiceFailed>() {
+    if error.is::<ServiceFailed>() || error.is::<core_new::CoreRefusal>() {
         CmdError::Refused(error.to_string())
     } else {
         CmdError::Ssh(format!("{error:#}"))

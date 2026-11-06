@@ -13,7 +13,7 @@ mod status;
 pub(super) mod tests;
 mod update;
 
-pub(super) use addr::valid_address;
+pub(super) use addr::{address_port, valid_address};
 
 use crate::backend::core_cmds::{CmdPhase, CoreFacts, MenuForm};
 use moon_remote::core_cmds::{Cmd, LogLines};
@@ -32,6 +32,7 @@ pub(super) struct ViewState {
     pub address_valid: bool,
     pub revealed: bool,
     pub confirm: Option<Confirm>,
+    pub service_attempted: bool,
     pub elapsed: String,
 }
 
@@ -112,7 +113,9 @@ pub(super) enum Block {
     State(Tone, String, String),
     Kv(Vec<(&'static str, String)>),
     Log(Vec<String>),
-    LogControls,
+    LogControls {
+        enabled: bool,
+    },
     Confirm {
         danger: bool,
         title: String,

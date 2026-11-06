@@ -49,6 +49,8 @@ core_cmds.status.ready_why: "Ядро ввійшло на біржу й торг
 core_cmds.status.login_error: "Помилка входу на біржу"
 core_cmds.status.login_error_why: "Біржа відповіла: %{reason}. Ядро чекає й саме вхід не повторює."
 core_cmds.status.other_state: "Стан ядра: %{state}"
+core_cmds.status.moonproto_disabled: "MoonProto вимкнено"
+core_cmds.status.moonproto_not_listening: "MoonProto не прослуховує порт"
 core_cmds.status.loading: "Запитую ядро…"
 core_cmds.status.loading_why: "Заходжу на сервер %{ip} через SSH."
 core_cmds.status.checked_now: "Перевірено щойно"

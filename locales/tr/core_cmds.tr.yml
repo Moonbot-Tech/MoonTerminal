@@ -49,6 +49,8 @@ core_cmds.status.ready_why: "Çekirdek borsaya giriş yaptı ve işlem yapıyor.
 core_cmds.status.login_error: "Borsa giriş hatası"
 core_cmds.status.login_error_why: "Borsa yanıtı: %{reason}. Çekirdek bekliyor ve girişi kendiliğinden yinelemez."
 core_cmds.status.other_state: "Çekirdek durumu: %{state}"
+core_cmds.status.moonproto_disabled: "MoonProto devre dışı"
+core_cmds.status.moonproto_not_listening: "MoonProto dinlemiyor"
 core_cmds.status.loading: "Çekirdek sorgulanıyor…"
 core_cmds.status.loading_why: "%{ip} sunucusuna SSH ile bağlanılıyor."
 core_cmds.status.checked_now: "Az önce denetlendi"

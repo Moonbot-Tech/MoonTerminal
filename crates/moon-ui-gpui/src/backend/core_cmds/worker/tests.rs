@@ -154,10 +154,14 @@ impl Runner for FakeRunner {
     fn set_api_keys(
         &self,
         dir: &str,
-        _key: Zeroizing<String>,
-        _secret: Zeroizing<String>,
+        key: Zeroizing<String>,
+        secret: Zeroizing<String>,
     ) -> anyhow::Result<()> {
-        self.record(format!("set_api_keys:{dir}"));
+        self.record(format!(
+            "set_api_keys:{dir}:{}:{}",
+            key.as_str(),
+            secret.as_str()
+        ));
         Ok(())
     }
 
@@ -194,6 +198,15 @@ fn cached_snapshot(fake: &FakeRunner) -> FactsSnapshot {
         port: 3302,
         located: Some(fake.located()),
     }
+}
+
+/// Execute one request against the fake runner and collect its events.
+fn run(runner: &dyn Runner, facts_snapshot: FactsSnapshot, request: CmdRequest) -> Vec<Event> {
+    let mut events = Vec::new();
+    run_with(runner, facts_snapshot, request, &mut |event| {
+        events.push(event);
+    });
+    events
 }
 
 /// Return the terminal phase emitted for `cmd`.
@@ -405,6 +418,11 @@ fn every_command_reaches_its_runner_method() {
             "{cmd:?} did not call {expected}"
         );
         assert!(matches!(phase(&events, cmd), CmdPhase::Done), "{cmd:?}");
+        if cmd == Cmd::ApiKeys {
+            assert!(fake.calls.borrow().iter().any(|call| {
+                call == "set_api_keys:/root/moonbot-a:TEST_API_KEY:TEST_API_SECRET"
+            }));
+        }
     }
 }
 
@@ -579,6 +597,12 @@ fn selected_exchange_refreshes_status_and_choices_before_done() {
         phase(&events, Cmd::SwitchExchange),
         CmdPhase::Done
     ));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ExchangeSwitched)),
+        "a hot switch must request the terminal's identity refresh"
+    );
 }
 
 /// A service refusal is not a transport failure and must not tear down the SSH session.
@@ -586,4 +610,14 @@ fn selected_exchange_refreshes_status_and_choices_before_done() {
 fn service_failure_is_a_refusal_not_an_ssh_failure() {
     let error = ssh_failure(ServiceFailed { tail: Vec::new() }.into());
     assert!(matches!(error, CmdError::Refused(_)));
+}
+
+/// An answered core command must show its own refusal rather than an unreachable-server message.
+#[test]
+fn core_command_failure_is_a_refusal_not_an_ssh_failure() {
+    let error =
+        ssh_failure(core_new::CoreRefusal::new("exit 1: command socket unavailable").into());
+    assert!(
+        matches!(error, CmdError::Refused(reason) if reason == "exit 1: command socket unavailable")
+    );
 }

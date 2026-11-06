@@ -9,10 +9,11 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
         Button::new("core_cmds.common.copy", Action::CopyLog)
             .enabled(facts.log.as_ref().is_some_and(|l| !l.lines.is_empty())),
     ];
+    let running = matches!(phase(facts, view), CmdPhase::Running { .. });
     let mut page = Page::new(Kind::Log, title(view.cmd))
-        .block(Block::LogControls)
+        .block(Block::LogControls { enabled: !running })
         .block(Block::Buttons(buttons));
-    if matches!(phase(facts, view), CmdPhase::Running { .. }) {
+    if running {
         page.body.push(Block::State(
             Tone::Run,
             t!("core_cmds.service.running").to_string(),

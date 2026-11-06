@@ -402,6 +402,8 @@ fn body_with_status(
             exchanges: None,
             phases: Default::default(),
             checked_at: None,
+            retry_elapsed: None,
+            exchange_switched: false,
         }),
         &open,
         &act,

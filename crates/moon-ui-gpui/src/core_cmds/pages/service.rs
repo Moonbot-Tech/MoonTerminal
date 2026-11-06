@@ -14,7 +14,7 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
                 String::new(),
             ));
         }
-        CmdPhase::Done if view.confirm.is_none() => {
+        CmdPhase::Done if view.confirm.is_none() && view.service_attempted => {
             page.kind = Kind::Done;
             let state = facts
                 .info

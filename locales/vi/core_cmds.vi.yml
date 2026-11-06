@@ -49,6 +49,8 @@ core_cmds.status.ready_why: "Lõi đã đăng nhập vào sàn và đang giao d�
 core_cmds.status.login_error: "Lỗi đăng nhập sàn"
 core_cmds.status.login_error_why: "Sàn phản hồi: %{reason}. Lõi đang chờ và không tự thử đăng nhập lại."
 core_cmds.status.other_state: "Trạng thái lõi: %{state}"
+core_cmds.status.moonproto_disabled: "MoonProto đã tắt"
+core_cmds.status.moonproto_not_listening: "MoonProto không lắng nghe"
 core_cmds.status.loading: "Đang truy vấn lõi…"
 core_cmds.status.loading_why: "Đang kết nối máy chủ %{ip} qua SSH."
 core_cmds.status.checked_now: "Vừa kiểm tra"

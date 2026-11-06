@@ -298,6 +298,7 @@ impl SettingsView {
             self.backend
                 .update(cx, |b, _| b.core_cmds_request_status(uid));
         }
+        self.core_menu_open = Some((uid, form));
         let mut rows = vec![MenuRow::Caption(
             t!("core_cmds.menu.caption", core = name, ip = ip).to_string(),
         )];
@@ -334,6 +335,7 @@ impl SettingsView {
                         .on_click(move |_, window, app| {
                             window.close_context_menu(app);
                             let _ = weak.update(app, |this, cx| {
+                                this.core_menu_open = None;
                                 this.on_core_action(action.clone(), window, cx)
                             });
                         });
@@ -345,7 +347,68 @@ impl SettingsView {
             }
         }
         let at = window.mouse_position();
-        window.open_fitted_moon_context_menu(cx, "cores-core-menu", at, items, 240.0, 560.0);
+        let dismiss = weak.clone();
+        window.open_fitted_moon_context_menu_with_dismiss(
+            cx,
+            "cores-core-menu",
+            at,
+            items,
+            240.0..=560.0,
+            move |window, app| {
+                window.close_context_menu(app);
+                let _ = dismiss.update(app, |this, _| this.core_menu_open = None);
+            },
+        );
+    }
+
+    /// Reopen a checking menu once its asynchronous ownership answer arrives.
+    pub(in crate::settings) fn sync_core_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((uid, previous)) = self.core_menu_open else {
+            return;
+        };
+        let current = self
+            .backend
+            .read(cx)
+            .config
+            .servers
+            .iter()
+            .find_map(|server| {
+                if server.uid != uid {
+                    return None;
+                }
+                let (ip, _) = core_host_port(server)?;
+                let located = self
+                    .backend
+                    .read(cx)
+                    .core_cmds_facts(uid)
+                    .and_then(|facts| facts.located.as_ref());
+                Some(menu_form(
+                    self.backend.read(cx).core_cmds_login_for(&ip).is_some(),
+                    located,
+                ))
+            });
+        let Some(current) = current else {
+            self.core_menu_open = None;
+            return;
+        };
+        if !core_menu::needs_reopen(previous, current) {
+            return;
+        }
+        self.core_menu_open = Some((uid, current));
+        let weak = cx.entity().downgrade();
+        let handle = window.window_handle();
+        cx.defer(move |app| {
+            let _ = handle.update(app, |_, window, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    window.close_context_menu(cx);
+                    this.open_core_menu(uid, window, cx);
+                });
+            });
+        });
     }
 
     /// The "⋯" menu of a group: its icon, one transport mode for every core, a new core.

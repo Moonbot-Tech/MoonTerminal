@@ -33,6 +33,8 @@ pub(super) struct CoreCmdsView {
     pub(super) picker: Entity<MoonSelectState<Cmd>>,
     pub(super) log_picker: Entity<MoonSelectState<LogLines>>,
     pub(super) elapsed: Option<std::time::Duration>,
+    pub(super) service_attempt: Option<Cmd>,
+    pub(super) exchange_handled: bool,
     pub(super) subscriptions: Vec<Subscription>,
     pub(super) hosts: moon_remote::hosts::Hosts,
     pub(super) nav_signature: Option<(MenuForm, Option<bool>, String)>,
@@ -65,8 +67,10 @@ impl CoreCmdsView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut view = Self::controls(uid, cmd, window, cx);
-        view.subscriptions
-            .push(cx.observe(&backend, |_, _, cx| cx.notify()));
+        view.subscriptions.push(cx.observe(&backend, |this, _, cx| {
+            this.follow_exchange_switch(cx);
+            cx.notify();
+        }));
         view.hosts = match moon_remote::hosts::Hosts::load(&moon_remote::hosts::Hosts::path()) {
             Ok(hosts) => hosts,
             Err(error) => {
@@ -153,6 +157,8 @@ impl CoreCmdsView {
             picker,
             log_picker,
             elapsed: None,
+            service_attempt: None,
+            exchange_handled: false,
             subscriptions,
             hosts: Default::default(),
             nav_signature: None,
@@ -196,8 +202,12 @@ impl CoreCmdsView {
         }
         if self.cmd != cmd {
             self.clear_keys(window, cx);
+            self.elapsed = None;
         }
         self.cmd = cmd;
+        if matches!(cmd, Cmd::Start | Cmd::Stop | Cmd::Restart) {
+            self.service_attempt = None;
+        }
         self.picker.update(cx, |picker, _| {
             picker.set_selected_value(&cmd);
         });
@@ -218,6 +228,53 @@ impl CoreCmdsView {
             self.run(window, cx);
         }
         cx.notify();
+    }
+
+    /// Move a completed hot exchange switch to the promised API-key form exactly once.
+    pub(super) fn follow_exchange_switch(&mut self, cx: &mut Context<Self>) {
+        let completion = self
+            .backend
+            .as_ref()
+            .and_then(|backend| backend.read(cx).core_cmds.facts.get(&self.uid))
+            .map(|facts| {
+                (
+                    matches!(
+                        facts.phases.get(&Cmd::SwitchExchange),
+                        Some(CmdPhase::Running { .. })
+                    ),
+                    matches!(facts.phases.get(&Cmd::SwitchExchange), Some(CmdPhase::Done))
+                        && facts.exchange_switched,
+                )
+            });
+        #[cfg(test)]
+        let completion = completion.or_else(|| {
+            self.fixture.as_ref().map(|facts| {
+                (
+                    matches!(
+                        facts.phases.get(&Cmd::SwitchExchange),
+                        Some(CmdPhase::Running { .. })
+                    ),
+                    matches!(facts.phases.get(&Cmd::SwitchExchange), Some(CmdPhase::Done))
+                        && facts.exchange_switched,
+                )
+            })
+        });
+        let Some((running, switched)) = completion else {
+            return;
+        };
+        if self.cmd == Cmd::SwitchExchange && running {
+            self.exchange_handled = false;
+            return;
+        }
+        if self.cmd != Cmd::SwitchExchange || !switched || self.exchange_handled {
+            return;
+        }
+        self.exchange_handled = true;
+        self.cmd = Cmd::ApiKeys;
+        self.confirm = None;
+        self.picker.update(cx, |picker, _| {
+            picker.set_selected_value(&Cmd::ApiKeys);
+        });
     }
 
     /// Queue one typed request and notify backend observers without opening any network connection.
@@ -277,6 +334,9 @@ impl CoreCmdsView {
         if matches!(self.cmd, Cmd::Restart | Cmd::Stop) {
             return;
         }
+        if self.cmd == Cmd::Start {
+            self.service_attempt = Some(self.cmd);
+        }
         if self.cmd == Cmd::SwitchExchange {
             self.send(
                 CmdRequest::Run {
@@ -304,7 +364,9 @@ impl CoreCmdsView {
                 if !pages::valid_address(&host, &port) {
                     return;
                 }
-                let port = port.parse::<u16>().expect("validated address port");
+                let Some(port) = pages::address_port(&port) else {
+                    return;
+                };
                 CmdArgs::Address { host, port }
             }
             _ => CmdArgs::None,
@@ -342,6 +404,9 @@ impl CoreCmdsView {
                     Confirm::Service(cmd) => (cmd, CmdArgs::None),
                     Confirm::Exchange { id, .. } => (Cmd::SwitchExchange, CmdArgs::Exchange(id)),
                 };
+                if matches!(cmd, Cmd::Start | Cmd::Stop | Cmd::Restart) {
+                    self.service_attempt = Some(cmd);
+                }
                 self.send(CmdRequest::Run { cmd, args }, cx);
             }
             Action::CancelConfirm => self.confirm = None,
@@ -451,6 +516,7 @@ impl CoreCmdsView {
             .unwrap_or((version, latest));
         let elapsed = match facts.phases.get(&self.cmd) {
             Some(CmdPhase::Running { since, .. }) => Some(since.elapsed()),
+            _ if self.cmd == Cmd::RetryLogin => facts.retry_elapsed.or(self.elapsed),
             _ => self.elapsed,
         };
         let elapsed = elapsed
@@ -485,6 +551,7 @@ impl CoreCmdsView {
             ),
             revealed: self.revealed,
             confirm: self.confirm.clone(),
+            service_attempted: self.service_attempt == Some(self.cmd),
             elapsed,
         }
     }
@@ -520,13 +587,17 @@ impl CoreCmdsView {
             }
             Block::Kv(rows) => chrome::kv_block(rows, cx).into_any_element(),
             Block::Log(lines) => chrome::mono_block(lines, cx).into_any_element(),
-            Block::LogControls => h_flex()
+            Block::LogControls { enabled } => h_flex()
                 .w_full()
                 .flex_wrap()
                 .gap(px(8.0))
                 .items_center()
                 .child(t!("core_cmds.log.last").to_string())
-                .child(MoonSelect::new(&self.log_picker).id("cc-log-lines"))
+                .child(
+                    MoonSelect::new(&self.log_picker)
+                        .id("cc-log-lines")
+                        .disabled(!enabled),
+                )
                 .into_any_element(),
             Block::Confirm {
                 danger,
@@ -929,6 +1000,8 @@ fn empty_facts() -> CoreFacts {
         exchanges: None,
         phases: Default::default(),
         checked_at: None,
+        retry_elapsed: None,
+        exchange_switched: false,
     }
 }
 
@@ -972,6 +1045,8 @@ fn snapshot(facts: &CoreFacts, cmd: Cmd) -> CoreFacts {
                 )
             })
             .collect(),
+        retry_elapsed: facts.retry_elapsed,
+        exchange_switched: facts.exchange_switched,
     }
 }
 

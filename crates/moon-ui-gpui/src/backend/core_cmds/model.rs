@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use moon_remote::core_cmds::{Cmd, Located, LogLines, LogTail, ServiceInfo};
 use moon_remote::core_new::{CoreState, CoreStatus, Exchange};
@@ -12,7 +12,6 @@ use moon_remote::ssh::Target;
 use zeroize::Zeroizing;
 
 /// The command menu's form for the current login and location knowledge.
-#[allow(dead_code)] // used from batch 3
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MenuForm {
     Ours,
@@ -23,7 +22,6 @@ pub(crate) enum MenuForm {
 }
 
 /// A core command failure suitable for the command window.
-#[allow(dead_code)] // used from batch 3
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CmdError {
     Ssh(String),
@@ -34,7 +32,6 @@ pub(crate) enum CmdError {
 }
 
 /// The lifecycle of one command for a core.
-#[allow(dead_code)] // used from batch 3
 #[derive(Debug)]
 pub(crate) enum CmdPhase {
     Idle,
@@ -47,7 +44,6 @@ pub(crate) enum CmdPhase {
 }
 
 /// Cached server facts and command results for one configured core.
-#[allow(dead_code)] // used from batch 3
 pub(crate) struct CoreFacts {
     pub(crate) target: String,
     pub(crate) port: u16,
@@ -59,6 +55,8 @@ pub(crate) struct CoreFacts {
     pub(crate) exchanges: Option<Vec<Exchange>>,
     pub(crate) phases: HashMap<Cmd, CmdPhase>,
     pub(crate) checked_at: Option<Instant>,
+    pub(crate) retry_elapsed: Option<Duration>,
+    pub(crate) exchange_switched: bool,
 }
 
 impl std::fmt::Debug for CoreFacts {
@@ -80,7 +78,6 @@ impl std::fmt::Debug for CoreFacts {
 }
 
 /// A request queued for a core's command worker.
-#[allow(dead_code)] // used from batch 3
 #[derive(Debug)]
 pub(crate) enum CmdRequest {
     Run { cmd: Cmd, args: CmdArgs },
@@ -89,7 +86,6 @@ pub(crate) enum CmdRequest {
 }
 
 /// Arguments for a core command, with secret material held in zeroizing storage.
-#[allow(dead_code)] // used from batch 3
 pub(crate) enum CmdArgs {
     None,
     Log(LogLines),
@@ -126,7 +122,6 @@ impl std::fmt::Debug for CmdArgs {
 }
 
 /// A provider login held only for this terminal session.
-#[allow(dead_code)] // used from batch 3
 pub(crate) struct SessionLogin {
     pub(crate) target: String,
     pub(crate) first: FirstAccess,
@@ -152,6 +147,13 @@ pub(crate) struct CoreWorker {
     pub sender: mpsc::Sender<CmdRequest>,
 }
 
+impl CoreWorker {
+    /// Keep the worker's endpoint identity in step with an accepted MoonProto address change.
+    pub(crate) fn address_changed(&mut self, port: u16) {
+        self.port = port;
+    }
+}
+
 /// Backend-owned queues, cached facts, host metadata, logins, and worker channels.
 #[derive(Default)]
 pub(crate) struct CoreCmdsState {
@@ -164,7 +166,6 @@ pub(crate) struct CoreCmdsState {
 }
 
 /// Choose the menu form from login presence and the cached installation identity.
-#[allow(dead_code)] // used from batch 3
 pub(crate) fn menu_form(has_login: bool, located: Option<&Located>) -> MenuForm {
     if !has_login {
         return MenuForm::NoLogin;

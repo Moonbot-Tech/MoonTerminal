@@ -55,6 +55,50 @@ fn navigation_keeps_disclosure_until_explicit_hide(cx: &mut gpui::TestAppContext
     });
 }
 
+/// A hot switch must open its promised key form once, not on every later repaint.
+#[gpui::test]
+fn completed_exchange_switch_opens_api_keys_once(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |window, cx| {
+        let mut view = CoreCmdsView::controls(1, Cmd::SwitchExchange, window, cx);
+        let mut facts = super::pages::tests::facts();
+        facts.phases.insert(Cmd::SwitchExchange, CmdPhase::Done);
+        facts.exchange_switched = true;
+        view.fixture = Some(facts);
+        view.follow_exchange_switch(cx);
+        assert_eq!(view.cmd, Cmd::ApiKeys);
+
+        view.cmd = Cmd::SwitchExchange;
+        view.follow_exchange_switch(cx);
+        assert_eq!(view.cmd, Cmd::SwitchExchange);
+        view
+    });
+    cx.update(|app| {
+        let _ = handle.update(app, |_, window, _| window.remove_window());
+    });
+}
+
+/// Recreating the window must not replace the completed retry's duration with an unknown value.
+#[gpui::test]
+fn retry_state_uses_its_completed_phase_duration(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let handle = cx.open_window(gpui::size(px(MIN_SIZE.0), px(MIN_SIZE.1)), |window, cx| {
+        let mut view = CoreCmdsView::controls(1, Cmd::RetryLogin, window, cx);
+        let mut facts = super::pages::tests::facts();
+        facts.phases.insert(Cmd::RetryLogin, CmdPhase::Done);
+        facts.retry_elapsed = Some(std::time::Duration::from_secs(42));
+        let state = view.state(&facts, cx);
+        assert_eq!(state.elapsed, "0:42");
+        view.fixture = Some(facts);
+        view
+    });
+    cx.update(|app| {
+        let _ = handle.update(app, |_, window, _| window.remove_window());
+    });
+}
+
 thread_local! {
     /// Text emitted by the real builders, keyed by its layout selector.
     static TEXTS: RefCell<BTreeMap<String, ProbeText>> = const { RefCell::new(BTreeMap::new()) };
@@ -74,6 +118,30 @@ pub(super) fn record(selector: String, text: String, size: f32, weight: FontWeig
             .borrow_mut()
             .insert(selector, ProbeText { text, size, weight });
     });
+}
+
+/// Required state or confirmation text for each scenario that promises it.
+fn required_text_selectors(scenario: usize) -> &'static [&'static str] {
+    match scenario {
+        13 | 17 | 25 => &["cc-confirm-title", "cc-confirm-why"],
+        0..=4
+        | 6..=9
+        | 11
+        | 14..=16
+        | 18..=20
+        | 22
+        | 23
+        | 26
+        | 29
+        | 30
+        | 33
+        | 35
+        | 36
+        | 40
+        | 43
+        | 44 => &["cc-state-title"],
+        _ => &[],
+    }
 }
 
 /// Test the real view, including narrow navigation, forms, secrets, and failure footers.
@@ -105,6 +173,9 @@ fn all_command_states_fit_locales_themes_and_window_sizes(cx: &mut gpui::TestApp
                         view.fixture = Some(facts);
                         view.confirm = confirm;
                         view.revealed = revealed;
+                        if matches!(scenario, 15 | 19 | 23) {
+                            view.service_attempt = Some(cmd);
+                        }
                         if scenario == 37 || scenario == 38 {
                             view.fixture_version =
                                 Some(("7.84".into(), (scenario == 38).then(|| "7.85".into())));
@@ -218,11 +289,21 @@ fn all_command_states_fit_locales_themes_and_window_sizes(cx: &mut gpui::TestApp
                     });
                     assert!(need <= available + 0.5, "{context}: title clipped");
                     let texts = TEXTS.with(|texts| std::mem::take(&mut *texts.borrow_mut()));
+                    for selector in required_text_selectors(scenario) {
+                        assert!(
+                            texts.contains_key(*selector),
+                            "{context}/{selector}: required text was not built"
+                        );
+                        assert!(
+                            visual.debug_bounds(selector).is_some(),
+                            "{context}/{selector}: required text is not visible"
+                        );
+                    }
                     for (selector, spec) in texts {
                         let selector = Box::leak(selector.into_boxed_str());
-                        let Some(bounds) = visual.debug_bounds(selector) else {
-                            continue;
-                        };
+                        let bounds = visual
+                            .debug_bounds(selector)
+                            .unwrap_or_else(|| panic!("{context}/{selector}: text has no bounds"));
                         let need = visual.update(|window, _| {
                             let runs = [gpui::TextRun {
                                 len: spec.text.len(),

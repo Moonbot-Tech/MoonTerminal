@@ -100,6 +100,11 @@ pub(crate) fn core_menu_rows(form: MenuForm, active: Option<bool>) -> Vec<MenuRo
     rows
 }
 
+/// Whether an open menu captured while checking must be rebuilt with discovered ownership.
+pub(crate) fn needs_reopen(previous: MenuForm, current: MenuForm) -> bool {
+    previous == MenuForm::Checking && current != MenuForm::Checking
+}
+
 /// Offer server commands for non-loopback literal IPv4 hosts, including LAN addresses.
 pub(crate) fn eligible(addr_host: &str) -> bool {
     addr_host

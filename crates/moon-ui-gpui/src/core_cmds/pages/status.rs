@@ -25,6 +25,26 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
             )
             .to_string(),
         )
+    } else if !status.moonproto_enabled {
+        (
+            Tone::Warn,
+            t!("core_cmds.status.moonproto_disabled").to_string(),
+            if status.moonproto_error.is_empty() {
+                t!("core_cmds.status.unknown").to_string()
+            } else {
+                status.moonproto_error.clone()
+            },
+        )
+    } else if !status.moonproto_listening {
+        (
+            Tone::Bad,
+            t!("core_cmds.status.moonproto_not_listening").to_string(),
+            if status.moonproto_error.is_empty() {
+                t!("core_cmds.status.unknown").to_string()
+            } else {
+                status.moonproto_error.clone()
+            },
+        )
     } else if status.state == CoreState::Ready {
         (
             Tone::Ok,

@@ -26,7 +26,6 @@ mod ip_cell;
 mod layout_fixture;
 mod mode;
 mod model;
-#[allow(dead_code)] // The core-commands UI integration batch calls open_updates.
 mod open;
 mod ordering;
 mod panel;
@@ -48,7 +47,6 @@ mod updates_pane;
 mod version_mark;
 mod warnings;
 
-#[allow(unused_imports)] // Re-exported for the core-commands UI integration batch.
 pub(crate) use open::open_updates;
 pub(crate) use presentation::connection_status_text;
 pub(crate) use startup::{problem_diagnostic_text, startup_diagnostic_text};

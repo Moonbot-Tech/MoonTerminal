@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
-use moon_core::config::{ServerConfig, parse_endpoint_override, target_from_key};
+use moon_core::config::{AppConfig, ServerConfig, parse_endpoint_override, target_from_key};
 use moon_remote::core_cmds::{Cmd, Login};
 use moon_remote::hosts::Hosts;
 use moon_remote::ssh::Target;
@@ -49,10 +49,7 @@ impl Backend {
             })
             .collect();
         for uid in uids {
-            self.core_cmds.workers.remove(&uid);
-            if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
-                facts.checked_at = None;
-            }
+            self.core_cmds.invalidate_worker(uid);
             self.core_cmds.request_status(uid);
         }
     }
@@ -65,6 +62,11 @@ impl Backend {
     /// Queue a status request unless a successful answer is less than 60 seconds old.
     pub(crate) fn core_cmds_request_status(&mut self, uid: u64) {
         self.core_cmds.request_status(uid);
+    }
+
+    /// Invalidate command workers whose saved endpoint changed or disappeared.
+    pub(crate) fn core_cmds_reconcile(&mut self, before: &AppConfig) -> bool {
+        self.core_cmds.reconcile_workers(before, &self.config)
     }
 
     /// Prefer a confirmed session login, then fall back to the cached administrator for `ip`.
@@ -126,6 +128,7 @@ impl Backend {
             };
             let config = self.core_cmds_worker_config(uid);
             let Some((target, display, port, login)) = config else {
+                self.core_cmds.invalidate_worker(uid);
                 let (target, port) = self
                     .config
                     .servers
@@ -142,10 +145,7 @@ impl Backend {
                     || worker.port != port
             });
             if endpoint_changed {
-                self.core_cmds.workers.remove(&uid);
-                if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
-                    facts.located = None;
-                }
+                self.core_cmds.invalidate_worker(uid);
             }
             let facts = self
                 .core_cmds
@@ -197,7 +197,7 @@ impl Backend {
                 .get(&uid)
                 .is_some_and(|worker| worker.sender.send(request).is_ok());
             if !sent {
-                self.core_cmds.workers.remove(&uid);
+                self.core_cmds.invalidate_worker(uid);
                 if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
                     facts.phases.insert(
                         cmd,
@@ -278,7 +278,36 @@ impl Backend {
         }
         match event {
             worker::Event::AddressChanged { host, port } => {
-                self.core_cmds_address_changed(uid, &host, port)
+                let endpoint = self
+                    .config
+                    .servers
+                    .iter()
+                    .find(|server| server.uid == uid)
+                    .and_then(core_host_port);
+                if !self
+                    .core_cmds
+                    .workers
+                    .get(&uid)
+                    .is_some_and(|worker| worker_endpoint_matches(worker, endpoint))
+                {
+                    return false;
+                }
+                let (changed, saved) = self.core_cmds_address_changed(uid, &host, port);
+                if saved && let Some(worker) = self.core_cmds.workers.get_mut(&uid) {
+                    worker.address_changed(port);
+                }
+                changed
+            }
+            worker::Event::ExchangeSwitched => {
+                let changed = self
+                    .core_cmds
+                    .facts
+                    .get_mut(&uid)
+                    .is_some_and(|facts| facts.apply(worker::Event::ExchangeSwitched));
+                if changed && !self.reconnect_request.contains(&uid) {
+                    self.reconnect_request.push(uid);
+                }
+                changed
             }
             event => self
                 .core_cmds
@@ -289,7 +318,12 @@ impl Backend {
     }
 
     /// Save the current connect host with the new port through the completed core-move edit.
-    fn core_cmds_address_changed(&mut self, uid: u64, _listen_host: &str, port: u16) -> bool {
+    fn core_cmds_address_changed(
+        &mut self,
+        uid: u64,
+        _listen_host: &str,
+        port: u16,
+    ) -> (bool, bool) {
         let connect_host = self
             .config
             .servers
@@ -309,6 +343,7 @@ impl Backend {
                 .ok_or_else(|| anyhow::anyhow!("the current core address is unavailable"))?;
             self.core_move_switch(uid, &format!("{host}:{port}"))
         })();
+        let saved = result.is_ok();
         if let Some(facts) = self.core_cmds.facts.get_mut(&uid) {
             if let Err(error) = result {
                 facts.phases.insert(
@@ -316,18 +351,50 @@ impl Backend {
                     CmdPhase::Failed(CmdError::Ssh(format!("{error:#}"))),
                 );
             } else {
-                facts.port = port;
-                facts.located = None;
-                facts.status = None;
-                facts.info = None;
-                facts.checked_at = None;
+                facts.address_changed(port);
             }
         }
-        true
+        (true, saved)
     }
 }
 
 impl CoreCmdsState {
+    /// Drop a replaced worker, invalidate its location, and release every unfinished command phase.
+    fn invalidate_worker(&mut self, uid: u64) -> bool {
+        let mut changed = self.workers.remove(&uid).is_some();
+        if let Some(facts) = self.facts.get_mut(&uid) {
+            changed |= facts.located.take().is_some();
+            changed |= facts.checked_at.take().is_some();
+            for phase in facts.phases.values_mut() {
+                if matches!(phase, CmdPhase::Running { .. }) {
+                    *phase = CmdPhase::Idle;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    /// Invalidate workers whose endpoint differs between two saved configuration snapshots.
+    fn reconcile_workers(&mut self, before: &AppConfig, after: &AppConfig) -> bool {
+        let endpoint = |config: &AppConfig, uid| {
+            config
+                .servers
+                .iter()
+                .find(|server| server.uid == uid)
+                .and_then(core_host_port)
+        };
+        let changed: Vec<_> = self
+            .workers
+            .keys()
+            .copied()
+            .filter(|uid| endpoint(before, *uid) != endpoint(after, *uid))
+            .collect();
+        changed
+            .into_iter()
+            .fold(false, |changed, uid| self.invalidate_worker(uid) | changed)
+    }
+
     /// Refresh the cached host pins once per active backend tick or confirmed login.
     fn refresh_hosts(&mut self) {
         self.hosts = Hosts::load(&Hosts::path()).unwrap_or_default();
@@ -405,6 +472,21 @@ impl CoreFacts {
                 {
                     return false;
                 }
+                if cmd == Cmd::RetryLogin {
+                    match &phase {
+                        CmdPhase::Running { .. } => self.retry_elapsed = None,
+                        CmdPhase::Done => {
+                            self.retry_elapsed = match self.phases.get(&cmd) {
+                                Some(CmdPhase::Running { since, .. }) => Some(since.elapsed()),
+                                _ => None,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+                if cmd == Cmd::SwitchExchange && matches!(phase, CmdPhase::Running { .. }) {
+                    self.exchange_switched = false;
+                }
                 self.phases.insert(cmd, phase);
             }
             worker::Event::Located(located) => self.located = Some(located),
@@ -441,10 +523,24 @@ impl CoreFacts {
                 }
             }
             worker::Event::Exchanges(exchanges) => self.exchanges = Some(exchanges),
+            worker::Event::ExchangeSwitched => self.exchange_switched = true,
             worker::Event::AddressChanged { .. } => return false,
         }
         true
     }
+
+    /// Advance the saved port while retaining the owned installation needed for retarget recovery.
+    fn address_changed(&mut self, port: u16) {
+        self.port = port;
+        self.status = None;
+        self.info = None;
+        self.checked_at = None;
+    }
+}
+
+/// Check that an address event still targets the saved endpoint its worker was created for.
+fn worker_endpoint_matches(worker: &CoreWorker, endpoint: Option<(String, u16)>) -> bool {
+    endpoint.is_some_and(|(host, port)| worker.target.host == host && worker.port == port)
 }
 
 /// Read the SSH port from a decorated `user@host:port` login target.
@@ -487,6 +583,8 @@ fn core_facts(target: String, port: u16) -> CoreFacts {
         exchanges: None,
         phases: HashMap::new(),
         checked_at: None,
+        retry_elapsed: None,
+        exchange_switched: false,
     }
 }
 

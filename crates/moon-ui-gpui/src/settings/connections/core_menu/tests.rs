@@ -1,6 +1,6 @@
 //! Exact approved command groups, service guards and eligible server addresses.
 
-use super::{MenuCmd, MenuForm, MenuRow, core_menu_rows, eligible};
+use super::{MenuCmd, MenuForm, MenuRow, core_menu_rows, eligible, needs_reopen};
 use moon_remote::core_cmds::Cmd;
 
 /// The ownership forms must preserve all approved rows and withhold only reconfiguration.
@@ -101,6 +101,16 @@ fn addresses_allow_lan_ipv4_but_reject_loopback_ipv6_and_names() {
     ] {
         assert!(!eligible(host), "{host}");
     }
+}
+
+/// Discovery must reopen the captured Checking menu with its newly known ownership.
+#[test]
+fn ownership_discovery_reopens_the_checking_menu() {
+    for form in [MenuForm::Ours, MenuForm::Hand, MenuForm::NoLogin] {
+        assert!(needs_reopen(MenuForm::Checking, form));
+    }
+    assert!(!needs_reopen(MenuForm::Checking, MenuForm::Checking));
+    assert!(!needs_reopen(MenuForm::Ours, MenuForm::Hand));
 }
 
 /// Long localized notes must remain whole inside the menu's 560 px fitted-width ceiling.
