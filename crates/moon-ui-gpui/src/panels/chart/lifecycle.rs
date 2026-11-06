@@ -38,7 +38,8 @@ impl ChartPanel {
     /// the press that caused this close, so a close no press explains leaves nothing behind and
     /// blocks nothing. Written without a notify; nothing renders from it.
     pub(super) fn note_chart_closed(&mut self, cx: &mut Context<Self>) {
-        let now = now_unix_ms();
+        // The plain clock, as the press it is compared with was stamped by.
+        let now = moon_chart::paint::now_unix_ms();
         let Some(pos) = self.click_series.fresh_press_pos(now) else {
             return;
         };
@@ -95,7 +96,8 @@ impl ChartPanel {
         // manual by construction.
         if !self.historical {
             let follow = self.chart.follow();
-            let now = now_unix_ms();
+            // The plain clock, as `Backend::tick_auto_live` compares this stamp on.
+            let now = moon_chart::paint::now_unix_ms();
             // Under the per-chart Live scope a gesture stays on this chart: the toolbar flag is
             // the clock alone and only the toolbar writes it (#688).
             let per_chart = self.chart.live_per_chart();

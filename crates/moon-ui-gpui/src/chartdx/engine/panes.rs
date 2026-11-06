@@ -10,7 +10,7 @@ impl ChartEngine {
             .borrow_mut()
             .open_manual(core, market, self.epoch);
         if created {
-            self.seat_new_pane(moon_chart::paint::now_unix_ms());
+            self.seat_new_pane(crate::chartdx::now_unix_ms());
         }
         self.data.borrow_mut().mark_view_dirty();
     }

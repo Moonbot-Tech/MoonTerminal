@@ -127,7 +127,8 @@ impl Backend {
     /// is the only dirtying: a tick that decides nothing notifies nothing.
     ///
     /// Args:
-    ///     now_ms: Current Unix time in milliseconds, the same clock the views stamp against.
+    ///     now_ms: Current Unix time in milliseconds, the clock `last_live_chart_interaction_ms` is
+    ///         stamped on: `moon_chart::paint::now_unix_ms`, not the chart's own.
     ///
     /// Returns:
     ///     Whether Live was restored on this tick.

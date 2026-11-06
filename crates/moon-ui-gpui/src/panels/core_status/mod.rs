@@ -83,6 +83,9 @@ pub struct CoreStatusView {
     last_history_rev: u64,
     /// Defers sampled table snapshots while hidden, preserving one activation catch-up.
     sample_gate: crate::panels::RenderGate,
+    /// The language last consumed alongside the revisions: rows hold translated text, and after a
+    /// language change they would read in the old one until the next sample.
+    last_locale: String,
     /// Whether any server currently has a warning; drives the dock-tab badge.
     has_warn: bool,
     /// Whether this instance is a detached window (vs a dock tab). Only a window renders the chart.
@@ -269,13 +272,16 @@ impl CoreStatusView {
         cx.observe(&backend, |this, backend, cx| {
             let update_rev = backend.read(cx).session.core_update_rev();
             let history_rev = backend.read(cx).session.core_update_history_rev();
-            let update_changed =
-                update_rev != this.last_update_rev || history_rev != this.last_history_rev;
+            let locale = rust_i18n::locale();
+            let update_changed = update_rev != this.last_update_rev
+                || history_rev != this.last_history_rev
+                || this.last_locale.as_str() != &*locale;
             if !update_changed {
                 return;
             }
             this.last_update_rev = update_rev;
             this.last_history_rev = history_rev;
+            this.last_locale = locale.to_string();
             this.refresh_sample(cx);
         })
         .detach();
@@ -414,6 +420,7 @@ impl CoreStatusView {
             last_update_rev: 0,
             last_history_rev: 0,
             sample_gate: crate::panels::RenderGate::default(),
+            last_locale: rust_i18n::locale().to_string(),
             has_warn: false,
             detached,
             chart_window: ChartWindow::default(),

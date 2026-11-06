@@ -108,7 +108,6 @@ use gpui::{
     Pixels, RawGpuAccess,
 };
 use moon_chart::axes::AxisSnapshot;
-use moon_chart::paint::now_unix_ms;
 use moon_chart::view::Rect;
 use moon_core::config::{ChartTheme, OrdersStyle};
 use moon_core::data::PriceLinePoint;
@@ -132,6 +131,27 @@ use types::{
 };
 
 const CHART_PHOTO_BACKGROUND_ENABLED: bool = false;
+
+/// The wall clock a chart places itself by: its time origin, camera, live edge and "now" lines.
+///
+/// One name for all of them, because every one of them moves the pixels: a scene run holds this
+/// still so that a chart comes out the same whenever in the run it is photographed. Code asking how
+/// much time has passed (a double click, a recheck period) reads
+/// `moon_chart::paint::now_unix_ms` instead: on a held clock that time would never pass. What moves
+/// a single chart when time has passed (its own idle return to Live, a pane's TTL) stays on this
+/// one: in a scene run it does not fire, which is what a picture needs.
+#[cfg(not(uidoc))]
+pub(crate) fn now_unix_ms() -> f64 {
+    moon_chart::paint::now_unix_ms()
+}
+
+/// The wall clock a chart places itself by, held still while a scene run is on.
+///
+/// See the ordinary build's twin above for what belongs on this clock and what does not.
+#[cfg(uidoc)]
+pub(crate) fn now_unix_ms() -> f64 {
+    crate::uidoc::steady_chart_ms(moon_chart::paint::now_unix_ms())
+}
 
 #[derive(Clone)]
 struct ChartCanvasDriver {

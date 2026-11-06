@@ -1226,7 +1226,9 @@ impl Render for NewsView {
             self.mark_read(cx);
         }
         let p = MoonPalette::active(cx);
-        let now = moon_chart::paint::now_unix_ms() as i64;
+        // Only what a card prints as its age. On the charts' clock, so that a picture of this panel
+        // reads the same whenever in a scene run it is taken.
+        let now = crate::chartdx::now_unix_ms() as i64;
         let translate = self.translate;
         let settings = self.backend.read(cx).news_tag_settings.clone();
         let expanded = self.expanded.clone();

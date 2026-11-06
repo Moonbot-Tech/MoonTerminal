@@ -46,8 +46,8 @@ use rust_i18n::t;
 use crate::Backend;
 use crate::chartdx::ChartEngine;
 use crate::chartdx::input;
+use crate::chartdx::now_unix_ms;
 use moon_chart::container::ContainerKind;
-use moon_chart::paint::now_unix_ms;
 use moon_core::config::{ChartBucket, ChartTheme, OrdersStyleSet};
 use moon_core::session::CoreId;
 

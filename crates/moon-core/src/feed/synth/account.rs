@@ -75,15 +75,16 @@ const SAMPLE_NEWS: [(&str, &str, &str); 4] = [
 ///     market: The market the core is serving, which its position and orders sit on.
 ///     price: Its starting price, which order lines are placed around.
 ///     strategy: Id and name of a strategy of this core, for its orders; empty when it has none.
+///     now: The moment everything here is stamped with, in Unix milliseconds.
 ///     tx: The feed's channel to the terminal.
 pub(super) fn send_account_state(
     core_uid: u64,
     market: &str,
     price: f64,
     strategy: &(u64, String),
+    now: f64,
     tx: &FeedTx,
 ) {
-    let now = now_ms();
     let _ = tx.send(FeedMsg::Assets(assets(core_uid, market, price)));
     let _ = tx.send(FeedMsg::TransferAssets(transfer_assets(core_uid)));
     let _ = tx.send(FeedMsg::License(license(core_uid, now)));

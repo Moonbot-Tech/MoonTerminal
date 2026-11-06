@@ -615,7 +615,7 @@ impl ChartDataState {
         let mut st = self.render.borrow_mut();
         let Some(clock) = st
             .chart_labels
-            .countdown_clock_ms(tf_ms, moon_core::util::time::now_unix_ms_i64())
+            .countdown_clock_ms(tf_ms, now_unix_ms() as i64)
         else {
             return;
         };
