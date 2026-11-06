@@ -278,12 +278,47 @@ impl ChartPanel {
             // The same zone the engine lays out, gated by this panel's role.
             self.hvol_zone_spec(),
             self.last_ppp,
-            self.chart.with_container(|container| {
-                container
-                    .pane(0)
-                    .map_or(moon_chart::PRICE_AXIS_W, |pane| pane.price_axis_width)
-            }),
+            self.pane_price_axis_width(0),
         )
+    }
+
+    /// Return the price gutter this pane is actually laid out with, in logical pixels.
+    ///
+    /// The gutter widens to fit measured labels, so overlays and hit tests beside it must read
+    /// this rather than the `PRICE_AXIS_W` minimum.
+    ///
+    /// Args:
+    ///     pane: Engine pane index.
+    ///
+    /// Returns:
+    ///     The measured width, or the minimum when the pane does not exist.
+    pub(super) fn pane_price_axis_width(&self, pane: usize) -> f32 {
+        self.chart.with_container(|container| {
+            container
+                .pane(pane)
+                .map_or(moon_chart::PRICE_AXIS_W, |pane| pane.price_axis_width)
+        })
+    }
+
+    /// Return the width of the left strip whose wheel input scrolls an AddToChart stack.
+    ///
+    /// A left axis's gutter is measured. With the axis anywhere else the strip stays at its fixed
+    /// width, because the measured gutter does not sit on this edge.
+    ///
+    /// Args:
+    ///     pane: Engine pane index.
+    ///
+    /// Returns:
+    ///     The strip width in logical pixels.
+    pub(super) fn stack_scroll_strip_width(&self, pane: usize) -> f32 {
+        if matches!(
+            self.price_axis_pos,
+            crate::persistence::chart_persist::PriceAxisPos::Left
+        ) {
+            self.pane_price_axis_width(pane)
+        } else {
+            moon_chart::PRICE_AXIS_W
+        }
     }
 
     pub(super) fn local_plot_rect(&self, pane: usize) -> Option<moon_chart::view::Rect> {

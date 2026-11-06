@@ -105,10 +105,15 @@ pub(in crate::chartdx) fn fmt_pct(v: f32) -> String {
     format!("{v:+.2}%")
 }
 
-/// Format figure values with axis precision and the percent ruler's localized duration spelling.
+/// Format figure values with the axis's own price format and the percent ruler's localized
+/// duration spelling.
+///
+/// Args:
+///     value: The figure label to render.
+///     tick: The pane's price grid, so a price reads exactly like the axis beside it.
 fn figure_label_text(
     value: &moon_chart::figures::LabelValue,
-    decimals: usize,
+    tick: Option<f64>,
 ) -> Option<std::borrow::Cow<'_, str>> {
     use moon_chart::figures::LabelValue;
     use std::borrow::Cow;
@@ -117,7 +122,7 @@ fn figure_label_text(
         |from: f64, to: f64| (from != 0.0).then(|| fmt_pct(((to / from - 1.0) * 100.0) as f32));
     Some(match value {
         LabelValue::Ready(s) => Cow::Borrowed(s),
-        LabelValue::Price(p) => Cow::Owned(format!("{p:.decimals$}")),
+        LabelValue::Price(p) => Cow::Owned(moon_chart::axes::format_price(*p, tick)),
         LabelValue::PctDelta { from, to } => Cow::Owned(pct(*from, *to)?),
         LabelValue::RectSpan {
             duration_ms,

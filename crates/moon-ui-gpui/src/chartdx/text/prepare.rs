@@ -1,6 +1,6 @@
 //! Main `prepare_text` implementation for axes, order-line labels, and cursor readouts.
 
-use moon_chart::axes::{format_price, price_decimals};
+use moon_chart::axes::format_price;
 use moon_chart::figures::LabelValue as FigLabelValue;
 use moon_chart::order_geometry::PlotEdge;
 use moon_core::figures::LabelPlace as FigLabelPlace;
@@ -308,12 +308,10 @@ impl RenderState {
             }
 
             let price_to_px = view.price_to_px / sf;
-            let price_range = plot_h / price_to_px.max(1e-6);
             let y_min = view.view_price0;
             let line_y = |price: f32| -> f32 {
                 ((plot_bottom * sf) - (price - y_min) * view.price_to_px).round() / sf
             };
-            let dec = price_decimals(y_min + price_range * 0.5);
             let time_to_px = (view.time_to_px / sf).max(moon_chart::view::MIN_PX_PER_MS);
             let window_ms = plot_w as f64 / time_to_px as f64;
             let left_unix = epoch_ms + view.view_time0 as f64;
@@ -605,7 +603,8 @@ impl RenderState {
                 // A ratio level's text was rendered once at the geometry rebuild — its format is
                 // pure and deliberately unlike the axis. A price and a percentage are formatted
                 // HERE, where the axis's own precision lives.
-                let Some(text) = figure_label_text(&label.text, dec) else {
+                let tick = self.panes[idx].price_tick.tick();
+                let Some(text) = figure_label_text(&label.text, tick) else {
                     continue;
                 };
                 let (x, ax, dy, ay) = match label.place {

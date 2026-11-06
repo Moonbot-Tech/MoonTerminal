@@ -59,21 +59,27 @@ pub fn price_decimals(price: f32) -> usize {
 /// This is a display unit only, including for non-BTC markets. Until the tick arrives, keep
 /// the ordinary magnitude format, but give small prices four significant digits (up to the
 /// same twelve-decimal limit as the ladder) instead of rounding them to zero.
-pub fn format_price(price: f32, tick: Option<f64>) -> String {
+///
+/// Generic over the width because a figure stores its price as `f64`: narrowing that to `f32`
+/// would misprint the last tick on large prices, while an `f32` axis value widens exactly.
+pub fn format_price(price: impl Into<f64>, tick: Option<f64>) -> String {
+    let price: f64 = price.into();
     let decimals = tick
         .filter(|tick| tick.is_finite() && *tick > 0.0)
         .map(crate::ladder::tick_decimals)
         .unwrap_or_else(|| {
-            let magnitude = price.abs();
+            // Counted in `f32` for every caller: 0.01f32 widens to just under 0.01, so `log10` on
+            // the widened value would add a digit to what the axis prints before its tick arrives.
+            let magnitude = (price as f32).abs();
             if magnitude > 0.0 && magnitude < 1.0 {
                 (3.0 - magnitude.log10().floor())
                     .clamp(4.0, crate::ladder::MAX_TICK_DECIMALS as f32) as usize
             } else {
-                price_decimals(price)
+                price_decimals(price as f32)
             }
         });
     if price.abs() <= 0.00001 {
-        let satoshis = f64::from(price) * 1e8;
+        let satoshis = price * 1e8;
         let decimals = decimals.saturating_sub(8);
         format!("{satoshis:.decimals$} sat")
     } else {

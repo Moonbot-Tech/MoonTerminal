@@ -215,17 +215,19 @@ impl Render for ChartPanel {
         // gpu_canvas cursor/readout directly and does not notify the GPUI tree.
         // Put the pin at the graph area's top-left plot edge, clear of the configured price-axis
         // gutter, only on TTL-enabled AddToChart panes. Pinning cancels automatic closure. Fields are
-        // (idx, pinned, left_px, top_px). PRICE_AXIS_W is logical while pane rects use device px.
+        // (idx, pinned, left_px, top_px). The gutter width is logical while pane rects use device px.
         // Pin/lock/broom buttons sit at the plot's LEFT edge, so offset only for a left-side axis.
         // With a right/hidden axis or broom mode, the plot begins at the slot edge with no offset.
-        let axis_off = if matches!(
+        let left_axis = matches!(
             self.price_axis_pos,
             crate::persistence::chart_persist::PriceAxisPos::Left
-        ) && !self.orderbook_only
-        {
-            moon_chart::PRICE_AXIS_W
-        } else {
-            0.0
+        ) && !self.orderbook_only;
+        let axis_off = |idx: usize| {
+            if left_axis {
+                self.pane_price_axis_width(idx)
+            } else {
+                0.0
+            }
         };
         let pin_btns: Vec<(usize, bool, f32, f32)> = axis_panes
             .iter()
@@ -234,7 +236,7 @@ impl Render for ChartPanel {
                 (
                     *idx,
                     self.chart.pane_pinned(*idx),
-                    rect.x / sf + axis_off,
+                    rect.x / sf + axis_off(*idx),
                     rect.y / sf,
                 )
             })
@@ -247,7 +249,7 @@ impl Render for ChartPanel {
         let lock_btns: Vec<(usize, f32, f32)> = if self.compare_eligible {
             axis_panes
                 .iter()
-                .map(|(idx, rect, _)| (*idx, rect.x / sf + axis_off, rect.y / sf))
+                .map(|(idx, rect, _)| (*idx, rect.x / sf + axis_off(*idx), rect.y / sf))
                 .collect()
         } else {
             Vec::new()
@@ -257,7 +259,7 @@ impl Render for ChartPanel {
         let broom_btns: Vec<(usize, f32, f32)> = if self.compare_eligible && compare_anchor {
             axis_panes
                 .iter()
-                .map(|(idx, rect, _)| (*idx, rect.x / sf + axis_off, rect.y / sf))
+                .map(|(idx, rect, _)| (*idx, rect.x / sf + axis_off(*idx), rect.y / sf))
                 .collect()
         } else {
             Vec::new()

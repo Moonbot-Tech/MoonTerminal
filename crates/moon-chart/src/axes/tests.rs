@@ -23,6 +23,8 @@ fn price_labels_share_grid_precision_and_an_unknown_tick_fallback() {
     assert_eq!(super::format_price(0.00001234, None), "0.00001234");
     assert_eq!(super::format_price(1500.0, None), "1500.0");
     assert_eq!(super::format_price(-12.345, Some(0.005)), "-12.345");
+    // An axis value just under a power of ten once widened must not gain a digit.
+    assert_eq!(super::format_price(0.01_f32, None), "0.01000");
 }
 
 /// A wide plot must retain enough round time labels to use its available horizontal space.
