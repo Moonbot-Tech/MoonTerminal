@@ -106,6 +106,17 @@ Industry standard / tech metrics we leave as they are in every language:
     three-letter city codes in the header clock (WAW · NYC · TYO …) — they are like tickers;
     the city NAMES themselves we do translate, they live in `city.<lang>.yml`
 
+Two lists beside the dictionaries keep this honest, both checked by
+`crates/moon-ui-gpui/tests/theme_contract/translations.rs`:
+
+- `same-as-english.txt`: every key whose value equals English in some language. Its first section is
+  the likely gaps, translated elsewhere and English here; its second is English everywhere.
+- `literal-ui-text.txt`: every string written straight into a label or a tooltip, without `t!`.
+
+A new case fails the test until it is translated or listed, and a translated one fails until its line
+goes, so the lists can only be worked through. The same test fails on a `t!` naming a key no dictionary
+has, which would draw the key itself.
+
 ## Glyph icons on buttons (the rule for wiring `t!` up later)
 
 Glyphs (`⚙ ▶ ⏸ ↩ + ■ 🔍 ▾`) we **do not store** in dictionary values — the dictionary holds only

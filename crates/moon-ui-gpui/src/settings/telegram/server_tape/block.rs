@@ -379,7 +379,7 @@ pub(super) fn server_tape_block(
                             .child(
                                 MoonButton::new("server-tape-confirm-cancel")
                                     .ghost()
-                                    .label(t!("common.cancel").to_string())
+                                    .label(t!("dialogs.cancel").to_string())
                                     .on_click(move |_, window, app| cancel(window, app))
                                     .render(),
                             ),
