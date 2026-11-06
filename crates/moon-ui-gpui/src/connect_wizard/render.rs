@@ -72,6 +72,7 @@ impl Screen {
 impl Render for ConnectWizardView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.take_move_request(cx);
+        self.take_login_request(window, cx);
         if let Some(dir) = self.pending_dir.take() {
             self.server.set_dir(&dir, window, cx);
         }
@@ -82,6 +83,7 @@ impl Render for ConnectWizardView {
             Some(Branch::NewCore) => self.new_core_screen(window, cx),
             Some(Branch::ByKey) => self.by_key_screen(cx),
             Some(Branch::Move) => self.move_screen(cx),
+            Some(Branch::Login) => self.login_screen(window, cx),
         };
         let (steps, current) = self.rail(cx);
         let show_rail = chrome_width >= design::ui_value(cx, RAIL_MIN_WINDOW_W);
@@ -235,6 +237,7 @@ impl ConnectWizardView {
                 t!("connect_wizard.rail.move").to_string(),
                 t!("connect_wizard.rail.done").to_string(),
             ],
+            Branch::Login => vec![first, t!("connect_wizard.rail.server").to_string()],
         };
         let current = match self.branch {
             None => 0,
@@ -277,6 +280,7 @@ impl ConnectWizardView {
                     Some(_) => 3,
                 }
             }
+            Some(Branch::Login) => 1,
         };
         (steps, current)
     }

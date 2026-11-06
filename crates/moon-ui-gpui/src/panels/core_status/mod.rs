@@ -26,6 +26,8 @@ mod ip_cell;
 mod layout_fixture;
 mod mode;
 mod model;
+#[allow(dead_code)] // The core-commands UI integration batch calls open_updates.
+mod open;
 mod ordering;
 mod panel;
 mod presentation;
@@ -46,6 +48,8 @@ mod updates_pane;
 mod version_mark;
 mod warnings;
 
+#[allow(unused_imports)] // Re-exported for the core-commands UI integration batch.
+pub(crate) use open::open_updates;
 pub(crate) use presentation::connection_status_text;
 pub(crate) use startup::{problem_diagnostic_text, startup_diagnostic_text};
 
@@ -267,6 +271,7 @@ impl CoreStatusView {
         // Update transitions remain immediate. Other status, history, and age changes are read
         // from the dedicated sample above, independent of general backend notifications.
         cx.observe(&backend, |this, backend, cx| {
+            this.take_updates_request(cx);
             let update_rev = backend.read(cx).session.core_update_rev();
             let history_rev = backend.read(cx).session.core_update_history_rev();
             let update_changed =
@@ -461,7 +466,66 @@ impl CoreStatusView {
         // the one surface still showing every core.
         this.adopt_broadcast_core_filter(cx);
         this.rebuild_cache(cx);
+        this.take_updates_request(cx);
         this
+    }
+
+    /// Consume this group's Updates request once, persist the mode, and reveal the docked panel.
+    fn take_updates_request(&mut self, cx: &mut Context<Self>) {
+        let group = self.group.clone();
+        let mut requested_mode = self.mode;
+        let uid = self.backend.update(cx, |backend, _| {
+            let mine = backend.core_status_updates_request.is_some_and(|uid| {
+                backend
+                    .config
+                    .servers
+                    .iter()
+                    .any(|server| server.uid == uid && server.group == group)
+            });
+            open::apply_updates_request(
+                &mut backend.core_status_updates_request,
+                &mut requested_mode,
+                mine,
+            )
+        });
+        let Some(uid) = uid else {
+            return;
+        };
+        self.set_mode(requested_mode, cx);
+        let selected = {
+            let backend = self.backend.read(cx);
+            let updates = self.frame_updates(backend);
+            open::updates_row_for_core(
+                updates.live_rows.iter().map(|row| row.id),
+                updates.history.iter().map(|record| record.core),
+                uid,
+            )
+        };
+        self.updates_table_state
+            .update(cx, |state, cx| state.select_row(selected, cx));
+        cx.notify();
+
+        // Construction drains before `Panel::on_added_to` supplies the dock, so resolve it deferred.
+        let view = cx.entity().downgrade();
+        let backend = self.backend.clone();
+        cx.defer(move |app| {
+            let Some(view) = view.upgrade() else {
+                return;
+            };
+            let dock = view.read(app).dock.clone().and_then(|dock| dock.upgrade());
+            let Some(dock) = dock else {
+                return;
+            };
+            let Some(handle) = backend.read(app).group_windows.get(&group).copied() else {
+                return;
+            };
+            let _ = handle.update(app, |_, window, app| {
+                window.activate_window();
+                dock.update(app, |dock, cx| {
+                    dock.activate_panel_by_name("CoreStatus", window, cx);
+                });
+            });
+        });
     }
 
     /// Reconstruct a dock tab from `docks.json` using the `:dock` width context.
