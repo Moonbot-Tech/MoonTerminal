@@ -20,7 +20,7 @@
 #                                                 no running or installed core can be located
 #   retarget <instance dir> <new udp port>      — move the marker and its recorded firewall rule
 #   mb      <instance dir> <arguments…>         — one command of the core's own CLI; stdin passes
-#                                                 through
+#                                                 through; runs as the account the core runs as
 #   remove  <instance dir>                      — stop and delete an instance this script made
 # The work dir holds state.zip (settings archive), key (MoonProto connection packet) and, when
 # the move added it, ini-flag; install deletes it.
@@ -288,6 +288,39 @@ resolve_dir() {
     *) dir="/root/$1" ;;
     esac
     realpath -m -- "$dir"
+}
+
+# Print "<uid> <gid>" of the account a command of instance $1 must run under, nothing for root.
+# A core's command channel answers only the account the core runs as, so a running core decides.
+# A core running as root gets root: its service already runs these files as root, so a command
+# adds no reach. Without a running core nothing proves root is needed, so whoever owns the directory
+# or a program file runs it. The caller stands inside the instance and this reads it relatively, so
+# whoever owns a directory above cannot swap it after the check. An owner it cannot read fails
+# rather than means root.
+command_account() {
+    root_core=0
+    for exe in "$PROC"/[0-9]*/exe; do
+        target=$(readlink "$exe") || continue
+        target=${target% (deleted)}
+        test "${target##*/}" = MoonBot || continue
+        test "$(realpath -m -- "$target")" = "$1/MoonBot" || continue
+        ids=$(awk '$1 == "Uid:" { uid = $2 } $1 == "Gid:" { gid = $2 } END { print uid, gid }' \
+            "${exe%/exe}/status") || continue
+        case $ids in
+        '0 '*) root_core=1 ;;
+        [0-9]*' '[0-9]*) printf '%s\n' "$ids"; return 0 ;;
+        esac
+    done
+    test "$root_core" = 0 || return 0
+    for path in . ./MoonBot ./mb ./lib ./libmoonbot_sqlite.so; do
+        test -e "$path" || continue
+        uid=$(ls -ldLn -- "$path" | awk '{ print $3 }')
+        case $uid in
+        0) ;;
+        ''|*[!0-9]*) echo "Cannot tell who owns $path" >&2; return 1 ;;
+        *) printf '%s %s\n' "$uid" "$(id -g "$uid" 2>/dev/null || echo "$uid")"; return 0 ;;
+        esac
+    done
 }
 
 step=$1
@@ -597,10 +630,16 @@ mb)
         *) echo "$dest was not installed by MoonTerminal" >&2; exit 1 ;;
         esac
     fi
-    # The wrapper finds its instance by the working directory and runs as root, without the
-    # service's library path: system tools it calls must not see the core's libraries.
     cd "$dest"
-    exec ./mb "$@"
+    account=$(command_account "$dest")
+    if test -z "$account"; then
+        # The wrapper finds its instance by the working directory and runs as root, without the
+        # service's library path: system tools it calls must not see the core's libraries.
+        exec ./mb "$@"
+    fi
+    # The wrapper refuses everyone but root, so another account runs its program directly.
+    exec setpriv --reuid="${account% *}" --regid="${account#* }" --clear-groups --no-new-privs \
+        -- env -i PATH="$PATH" ./MoonBot "$@"
     ;;
 start)
     dest=$(resolve_dir "$1")
