@@ -774,6 +774,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     if crate::backend::station::prices_pull::tick() {
                         b.price_imports.update(cx, |_, cx| cx.notify());
                     }
+                    // The strategy version history shared with the station, both ways.
+                    crate::backend::station::strategies_sync::tick(b);
                     // A core removed from the session cannot answer what was asked of it; the
                     // drain edge does not fire for a removal, so the slow tick settles those.
                     // Nothing to walk while no ask is out.

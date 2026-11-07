@@ -440,6 +440,26 @@ fn kept_by(code: &str, filter: &str) -> (BTreeSet<String>, String) {
     (kept, body)
 }
 
+/// Breakage guarded: the strategy version archive following anything but the account profile. A
+/// gate back on "not a station" leaves every new terminal without history and the MCP's tools
+/// without an archive; one dropped altogether starts a writer on the light station, which holds
+/// no strategies to write and promises to keep none.
+#[test]
+fn the_strategy_archive_follows_the_account_profile() {
+    let feed = code(&workspace().join("crates/moon-core/src/feed/live/mod.rs"));
+    let gate = "if account\n                    && pending_strat_db_delivery.is_none()";
+    assert!(
+        feed.contains(gate),
+        "the feed exports strategies to the archive on the account path alone"
+    );
+    let pull = code(&workspace().join("crates/moon-station/src/pull.rs"));
+    assert_eq!(
+        pull.matches("keeps_strategies().and_then").count(),
+        3,
+        "every archive request refuses on a station that keeps none"
+    );
+}
+
 /// Breakage guarded: the station mode's event filters letting another class of core event in —
 /// the light station anything past reports, the Mini App's station anything past the account its
 /// tabs show — each of which starts a store or a queue the station was measured without

@@ -2696,10 +2696,10 @@ pub(super) fn run(
                 }
                 // The database cursor is separate from the UI cursor: schema defaults can arrive
                 // after an unchanged strategy set, and a full writer queue must leave the set due
-                // for retry. Dumps are incomplete until defaults are available. The strategy
-                // version archive is the terminal's: a station keeps no `strategies.sqlite`, even
-                // the one that takes strategies for the Mini App.
-                if station.is_none()
+                // for retry. Dumps are incomplete until defaults are available. A station with the
+                // account profile keeps the archive too: it watches all the time, so it is where a
+                // new terminal fills its history from (`strat_db::sync`).
+                if account
                     && pending_strat_db_delivery.is_none()
                     && strategy_db_export_due(
                         !strat_schema_defaults.is_empty(),

@@ -13,10 +13,10 @@
 //! that moved, so the moment a coin entered a list is recoverable exactly, without replaying
 //! whole snapshots.
 //!
-//! WHAT THE DATE MEANS, precisely: the moment the TERMINAL OBSERVED that edit. It is not
-//! "when the user added the coin" and the two can differ — the writer stamps `valid_from`
-//! with its own clock, and it flags versions that span server edits it never saw
-//! (`ver_gap`).
+//! WHAT THE DATE MEANS, precisely: the moment the edit was OBSERVED, by the terminal or by the
+//! station it syncs with, whichever came first. It is not "when the user added the coin" and
+//! the two can differ — the writer stamps `valid_from` with its own clock, and it flags versions
+//! that span server edits it never saw (`ver_gap`).
 //!
 //! A coin whose addition predates the terminal's first sight of the strategy has no such
 //! moment, and gets `before_ms` instead — a BOUND: "it was already listed by then". The two

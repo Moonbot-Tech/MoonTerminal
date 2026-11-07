@@ -114,6 +114,25 @@ pub enum Request {
     /// Sent only to a station whose status says it answers it ([`Status::prices_pull`]).
     #[serde(rename = "prices.fetch")]
     PricesFetch { items: Vec<TapeWant> },
+    /// One page of the summary of every strategy the station's archive holds, from just after
+    /// `after` on. Sent only to a station whose status says it answers it
+    /// ([`Status::strategies_sync`]), as are the next two.
+    #[serde(rename = "strategies.index")]
+    StrategiesIndex { after: Option<StrategyKey> },
+    /// One page of one strategy's version chain, from just after `after_from` on.
+    #[serde(rename = "strategies.fetch")]
+    StrategiesFetch {
+        core_uid: u64,
+        strategy_id: i64,
+        after_from: Option<i64>,
+    },
+    /// One page of a chain for the station to merge into its archive once the last has come.
+    #[serde(rename = "strategies.put")]
+    StrategiesPut {
+        core_uid: u64,
+        strategy_id: i64,
+        page: StrategyChainPage,
+    },
 }
 
 /// What the station answers: the answer, or why there is none.
@@ -145,6 +164,84 @@ pub enum Answer {
     Traces(Traces),
     PriceIndex(PriceIndex),
     Prices(Prices),
+    StrategyIndex(StrategyIndex),
+    StrategyChain(StrategyChainPage),
+    /// A page of [`Request::StrategiesPut`] was taken; `merged` once the chain's last has been.
+    StrategyPut {
+        merged: bool,
+    },
+}
+
+/// One strategy in an archive, in the core's identity as that archive knows it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct StrategyKey {
+    pub core_uid: u64,
+    /// The signed form the reports store it in.
+    pub strategy_id: i64,
+}
+
+/// What one archive holds of one strategy: enough to tell two chains that settled from two that
+/// have not, without reading a version.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategySummary {
+    pub core_uid: u64,
+    pub strategy_id: i64,
+    pub versions: u32,
+    pub first_from: i64,
+    pub last_from: i64,
+}
+
+/// The answer to [`Request::StrategiesIndex`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyIndex {
+    /// Ascending by core, then strategy.
+    pub strategies: Vec<StrategySummary>,
+    /// `None`: everything was listed; otherwise ask again with `after` set to it.
+    pub resume: Option<StrategyKey>,
+}
+
+/// A strategy's head as one archive holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyHead {
+    pub name: String,
+    pub kind: String,
+    pub kind_ordinal: u8,
+    pub folder_path: String,
+    pub is_short: bool,
+    pub checked: bool,
+    pub server_ver: i32,
+    pub server_ms: i64,
+    pub deleted: bool,
+    /// The sender's name for the core, for a receiver with none of its own.
+    pub core_name: String,
+}
+
+/// One version of a strategy as it crosses between archives. The diff is not here: it depends on
+/// the chain it ends up in, so the receiver builds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyVersion {
+    pub valid_from: i64,
+    pub valid_to: Option<i64>,
+    pub change_kind: String,
+    pub origin: Option<String>,
+    pub ver_gap: bool,
+    pub server_ver: i32,
+    pub server_ms: i64,
+    pub checked_at: i64,
+    /// The full dump, kept byte for byte.
+    pub raw_json: String,
+}
+
+/// One page of a strategy's chain, in either direction.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StrategyChainPage {
+    /// On a chain's first page only. `None` there: the archive holds no such strategy.
+    pub head: Option<StrategyHead>,
+    /// [`StrategyVersion`]s as JSON, gzipped, in base64 (`strat_db::sync::pack`): a chain's
+    /// neighbouring versions are nearly alike, so this is what fits a chain in a frame.
+    pub versions: String,
+    /// `None` on the chain's last page; otherwise ask again from just after it.
+    pub resume: Option<i64>,
 }
 
 /// Stretches of one market a client lacks: of its tape ([`Request::TapeFetch`]) or of its
@@ -377,6 +474,12 @@ pub struct Status {
     /// misreads the other, and an older station is never sent a request it cannot parse.
     #[serde(default)]
     pub prices_pull: bool,
+    /// The station keeps a strategy version archive and exchanges it ([`Request::StrategiesIndex`]
+    /// and the two after it). `false` from an older station and from the `Reports` profile, which
+    /// keeps no strategies; an added field with a default, so an older station is never sent a
+    /// request it cannot parse.
+    #[serde(default)]
+    pub strategies_sync: bool,
 }
 
 /// Counts and last-pass progress for the station's automatic closed-trade tape catch-up.

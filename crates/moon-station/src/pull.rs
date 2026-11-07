@@ -1,10 +1,11 @@
 //! What a terminal pulls from the station (STATION.md §4.9): the recorder's tape around closed
-//! trades, the order traces archived at each close, and the market-list prices around trades.
+//! trades, the order traces archived at each close, and the market-list prices around trades —
+//! and what it exchanges with it, the strategy version archive.
 //!
-//! All of them are reads of the station's own files and need nothing of the main loop, so the
-//! API's thread answers them itself ([`answer_directly`]): a terminal pulling a month of tape does
-//! not hold up the cores' drain. An answer never outgrows a frame — the tape and the prices stop
-//! at [`TAPE_REPLY_BUDGET`], the price listing at [`PRICE_INDEX_BUDGET`], and say where to go on.
+//! All of them work on the station's own files and need nothing of the main loop, so the API's
+//! thread answers them itself ([`answer_directly`]): a terminal pulling a month of tape does not
+//! hold up the cores' drain. An answer never outgrows a frame — the tape, the prices and a chain
+//! stop at [`TAPE_REPLY_BUDGET`], the listings at [`PRICE_INDEX_BUDGET`], and say where to go on.
 
 use moon_core::db::order_traces::TraceEntry;
 use moon_core::market::price_recorder::remote as prices;
@@ -13,6 +14,7 @@ use moon_core::station_api::{
     Answer, MAX_TAPE_ITEMS, MAX_TAPE_SPANS, MAX_TRACE_UIDS, PRICE_INDEX_BUDGET, Reply, Request,
     TAPE_REPLY_BUDGET, Tape, TapePiece, TapeResume, TapeWant, Traces, TradeTraces,
 };
+use moon_core::strat_db::sync as strategies;
 
 /// JSON around one piece's prints: its item, bounds and field names.
 const PIECE_OVERHEAD: usize = 96;
@@ -36,10 +38,44 @@ pub fn answer_directly(request: &Request) -> Option<Reply> {
                     .map(Answer::Prices)
                     .map_err(|e| format!("read the prices: {e}"))
             }),
+            Request::StrategiesIndex { after } => keeps_strategies().and_then(|()| {
+                strategies::index(after.as_ref(), PRICE_INDEX_BUDGET)
+                    .map(Answer::StrategyIndex)
+                    .map_err(|e| format!("list the strategies: {e:#}"))
+            }),
+            Request::StrategiesFetch {
+                core_uid,
+                strategy_id,
+                after_from,
+            } => keeps_strategies().and_then(|()| {
+                strategies::chain_page(*core_uid, *strategy_id, *after_from, TAPE_REPLY_BUDGET)
+                    .map(Answer::StrategyChain)
+                    .map_err(|e| format!("read the strategy's versions: {e:#}"))
+            }),
+            Request::StrategiesPut {
+                core_uid,
+                strategy_id,
+                page,
+            } => keeps_strategies().and_then(|()| {
+                strategies::receive_page(*core_uid, *strategy_id, page.clone())
+                    .map(|merged| Answer::StrategyPut {
+                        merged: merged.is_some(),
+                    })
+                    .map_err(|e| format!("merge the strategy's versions: {e:#}"))
+            }),
             _ => return None,
         }
         .into(),
     )
+}
+
+/// Refuse the archive's requests on a station that keeps none. Its status already says so, and a
+/// terminal asks only after reading it; this stops a stray request creating the file there.
+fn keeps_strategies() -> Result<(), String> {
+    match moon_core::feed::station::profile() {
+        Some(profile) if profile.runs_account() => Ok(()),
+        _ => Err("this station keeps no strategy archive".to_owned()),
+    }
 }
 
 /// The recorder's tape inside the wanted stretches.

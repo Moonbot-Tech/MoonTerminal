@@ -25,11 +25,11 @@
 //!
 //! [`Profile::Account`] — the station that hosts the Mini App: everything above, plus the account
 //! the Mini App shows and commands, taken the terminal's way — orders, balances and their repairs,
-//! strategies, the core's health and run state (the Ready-time requests), the Assets publications
-//! with the periodic price refresh they are priced by.
+//! strategies with their version archive (`strategies.sqlite`, exchanged with terminals by
+//! `strat_db::sync`), the core's health and run state (the Ready-time requests), the Assets
+//! publications with the periodic price refresh they are priced by.
 //! Still off: the full-size rings, the core's own Telegram, the API-key poll, transfer assets,
-//! trade sounds, the strategy version archive (`strategies.sqlite`) and the kline recorder —
-//! nothing the Mini App shows.
+//! trade sounds and the kline recorder — nothing the Mini App shows.
 //!
 //! What the core pushes regardless — orders, balances, `arb` — still arrives at a light station
 //! and is parsed by moonproto; only the core or the library can stop that (§9, question 28).

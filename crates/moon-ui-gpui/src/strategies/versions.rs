@@ -124,6 +124,28 @@ impl VersionsState {
     }
 }
 
+/// Whether a selected version's stamp still names a version after the list was read again.
+///
+/// A sync with the station can move a stamp to the moment the station saw that version first, and
+/// the row that takes a vanished stamp's place cannot be told from a stamp alone: a version only
+/// the station held may sit there. So a vanished selection is closed rather than guessed, since
+/// the pane and Restore act on it. An empty list says nothing: that is also a failed read.
+///
+/// Args:
+///     selected: The selected stamp.
+///     stamps: The list's stamps, in any order.
+///
+/// Returns:
+///     Whether the selection may stay.
+fn selection_survives(selected: i64, mut stamps: impl Iterator<Item = i64>) -> bool {
+    let mut empty = true;
+    let found = stamps.any(|stamp| {
+        empty = false;
+        stamp == selected
+    });
+    found || empty
+}
+
 impl StrategiesView {
     /// Return whether a persisted snapshot is being viewed, making the parameter panes read-only.
     pub(super) fn viewing_version(&self) -> bool {
@@ -176,6 +198,14 @@ impl StrategiesView {
                     this.versions.inflight = false;
                     if this.versions.key == Some((core, id)) {
                         this.versions.list = list;
+                        if let Some(selected) = this.versions.sel
+                            && !selection_survives(
+                                selected,
+                                this.versions.list.iter().map(|v| v.valid_from),
+                            )
+                        {
+                            this.versions.clear_selection();
+                        }
                         // A deleted strategy has no live mode, so open its latest known version immediately.
                         if this.versions.pending_latest.take() == Some((core, id))
                             && let Some(vf) = this.versions.list.first().map(|v| v.valid_from)
@@ -1061,3 +1091,6 @@ impl StrategiesView {
         btn.render().into_any_element()
     }
 }
+
+#[cfg(test)]
+mod tests;

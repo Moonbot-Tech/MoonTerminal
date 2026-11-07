@@ -37,6 +37,7 @@ pub(crate) mod job;
 pub(crate) mod prices_pull;
 pub(crate) mod pull;
 mod recovery;
+pub(crate) mod strategies_sync;
 pub(crate) mod text;
 pub(crate) mod uid_translation;
 

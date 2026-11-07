@@ -21,11 +21,14 @@
 //!
 //! Writes happen when a server snapshot is received (in the feed loop, not on a local edit):
 //! the server is the source of truth, so this also captures edits from other clients/MoonBot.exe.
+//! The one other way in is the sync with a station ([`merge`]), on the same writer.
 //! Dumps arrive normalized: the server omits fields whose values equal schema defaults, so the
 //! feed materializes defaults before sending them, preventing phantom versions from "vanished" fields.
 
 pub mod backup;
+pub mod merge;
 pub mod stats;
+pub mod sync;
 mod write;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -100,6 +103,15 @@ pub enum StratMsg {
         /// One-shot result, `None` when the purge failed; see [`StratMsg::Forget`].
         done: SyncSender<Option<ForgetOutcome>>,
     },
+    /// Merge another observer's chain of one strategy; see [`merge::merge_chain`].
+    ///
+    /// Handled here because only the writer may change the rows its head mirror describes. One
+    /// strategy per message, so the core's sets are not held up behind a whole archive.
+    MergeChain {
+        chain: Box<merge::IncomingChain>,
+        /// One-shot result. The receiver may be gone: a merge is safe to have happened unasked.
+        done: SyncSender<Result<merge::MergeOutcome, String>>,
+    },
 }
 
 /// Channel capacity: sets arrive from the core at no more than 1 Hz and are small. If the
@@ -128,6 +140,8 @@ impl StratSink {
                     StratMsg::Forget { .. } | StratMsg::ForgetCore { .. } => log::warn!(
                         "стратегии(db): очередь writer'а полна — забывание НЕ выполнено и не будет повторено"
                     ),
+                    // Never sent through here: `merge_chain` waits for room instead.
+                    StratMsg::MergeChain { .. } => {}
                 }
                 false
             }
@@ -171,6 +185,32 @@ impl StratSink {
             .then_some(rx)
     }
 
+    /// Queue one chain to merge, waiting for room in the queue: unlike a full set, nothing carries
+    /// a dropped chain's content again until the next pass.
+    ///
+    /// Args:
+    ///     chain: What came in.
+    ///
+    /// Returns:
+    ///     A receiver for the one-shot result. A timeout means "not known yet", as for
+    ///     [`Self::forget`]; merging again is harmless.
+    ///
+    /// Errors:
+    ///     The writer is gone.
+    pub fn merge_chain(
+        &self,
+        chain: merge::IncomingChain,
+    ) -> anyhow::Result<Receiver<Result<merge::MergeOutcome, String>>> {
+        let (done, rx) = std::sync::mpsc::sync_channel(1);
+        self.tx
+            .send(StratMsg::MergeChain {
+                chain: Box::new(chain),
+                done,
+            })
+            .map_err(|_| anyhow::anyhow!("the strategy archive's writer is gone"))?;
+        Ok(rx)
+    }
+
     /// Increases after each write that changes rows, allowing version-history readers to
     /// reload on generation changes without polling the database.
     pub fn generation(&self) -> u64 {
@@ -184,6 +224,9 @@ impl StratSink {
 static SINK: OnceLock<Option<StratSink>> = OnceLock::new();
 /// Built-in history bound applied independently on each strategy version insertion.
 pub const MAX_VERSIONS_PER_STRATEGY: i64 = 4096;
+/// `strategy_forgotten.strategy_id` of a mark that covers a whole core. A manual trade's id, which
+/// no strategy has.
+const WHOLE_CORE: i64 = 0;
 
 /// Channel to the writer; `None` means the database is unavailable.
 pub fn sink() -> Option<StratSink> {
@@ -307,6 +350,19 @@ fn spawn_writer() -> Option<StratSink> {
                         };
                         let _ = done.try_send(outcome);
                     }
+                    StratMsg::MergeChain { chain, done } => {
+                        let (core_uid, strategy_id) = (chain.core_uid, chain.strategy_id);
+                        let outcome = merge::merge_chain(&conn, &mut state, *chain);
+                        if let Ok(merge::MergeOutcome { changed: true, .. }) = outcome {
+                            gen_writer.fetch_add(1, Ordering::Relaxed);
+                        }
+                        let _ = done.try_send(outcome.map_err(|error| {
+                            log::error!(
+                                "стратегии(db): цепочка {strategy_id} ядра {core_uid} не слита: {error:#}"
+                            );
+                            format!("{error:#}")
+                        }));
+                    }
                 }
             }
             log::info!("стратегии(db): writer завершён");
@@ -320,9 +376,16 @@ fn spawn_writer() -> Option<StratSink> {
 
 /// Tables in this store keyed by `core_uid`. `version_stats` is created lazily on the first
 /// stats read, so its absence is an ordinary state rather than a damaged schema.
-const CORE_UID_TABLES: [&str; 3] = ["strategies", "strategy_versions", "version_stats"];
+const CORE_UID_TABLES: [&str; 4] = [
+    "strategies",
+    "strategy_versions",
+    "version_stats",
+    // After a whole core's purge this mark is all that is left of its uid; a new core given that
+    // uid would have its older history refused by the sync.
+    "strategy_forgotten",
+];
 
-/// Highest `core_uid` this store has ever recorded, across all three keyed tables.
+/// Highest `core_uid` this store has ever recorded, across all its keyed tables.
 ///
 /// Version history is the single copy and is never purged when a server is deleted, so a uid
 /// surviving here must not be reissued — a new core would otherwise inherit the deleted one's
