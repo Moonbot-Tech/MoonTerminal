@@ -14,6 +14,8 @@ feature — a row in the map, a new user word — a row in the dictionary.
    strategies, screener, news, connections, core_status, core_run,
    core_expert (the Core settings window; its shared `core_settings.*` keys sit in shell),
    core_move (a core moved onto a Linux server: steps and outcomes),
+   core_cmds (a Linux core's server commands: the right-click menu, the login banner, the Core
+   commands window and its results),
    connect_wizard (the connect wizard: a new core, a move, a core by its key, Moonbot for Windows),
    dialogs, crowd, assets, trade_window, station, telegram and telegram_*.
 2. The dictionary below — users' words that are not in the labels.
@@ -33,8 +35,8 @@ feature — a row in the map, a new user word — a row in the dictionary.
   `moon-core::telegram`.
 - `crates/moon-station` — headless server: report replication, order traces,
   trade tape and market-price recording, and optional Telegram bot/Mini App hosting.
-- `crates/moon-remote` — Linux server setup and station administration over SSH,
-  used by the terminal and the `moon-remote` command-line tool.
+- `crates/moon-remote` — Linux server setup, station administration and a Linux core's
+  server commands (`core_cmds`: find its service by its MoonProto port, control it) over SSH, used by the terminal and the `moon-remote` command-line tool.
 - `crates/moon-ui-gpui` — panels and windows: chartdx (render state, shaders
   DX11/native/Metal, texts), panels/, settings/, analytics/, strategies/,
   chart_tabs/.
@@ -153,7 +155,12 @@ core updates from the terminal (multi-select, a named build).
 
 **Connections**: a core = key + address, core colour, MoonProto transport mode
 per-core (a hint for “the one that works” from the user's bots' experience),
-servers.enc bound to the machine, moved with a password.
+servers.enc bound to the machine, moved with a password. A core on a Linux server (a
+non-loopback literal IPv4 address) has server commands on its right-click menu: status, retry the
+exchange login, log, restart/stop/start its service, and — only for a core MoonTerminal installed —
+change exchange, API keys, show the connection key, MoonProto address, update; without a server
+login the menu offers to add one; when the server's status reports a failed exchange login, the
+core's card shows a banner with Retry.
 
 **Other**: Screener (deltas in Moonbot ranges), the news panel
 (per-core feed, tag filters, jump to a coin), Log (core lines, addresses
