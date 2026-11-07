@@ -122,6 +122,12 @@ impl Backend {
         answers: &mpsc::Receiver<(u64, u64, worker::Event)>,
         cx: &mut Context<Self>,
     ) {
+        // A scene photographs invented results: a request would reach no server and overwrite them.
+        #[cfg(uidoc)]
+        if crate::uidoc::station_staged() && !self.core_cmds.pending.is_empty() {
+            self.core_cmds.pending.clear();
+            cx.notify();
+        }
         if !self.core_cmds.pending.is_empty() {
             self.core_cmds.refresh_hosts();
         }
