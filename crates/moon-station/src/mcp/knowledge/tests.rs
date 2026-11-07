@@ -50,6 +50,7 @@ fn live_public_snapshot_loads_as_one_complete_revision() {
     );
 }
 
+/// Exact parameter names must outrank examples and keep citations tied to the cached revision.
 #[test]
 fn exact_parameter_index_wins_and_context_links_keep_the_source_revision() {
     let snapshot=Snapshot { revision:"a".repeat(40),checked_ms:1,documents:BTreeMap::from([
@@ -75,6 +76,7 @@ fn exact_parameter_index_wins_and_context_links_keep_the_source_revision() {
     assert!(snapshot.read("../../mcp-auth.json", 1, 10).is_err());
 }
 
+/// Documentation discovery must stay within the public reference tree and literal paths.
 #[test]
 fn public_snapshot_cannot_fetch_private_materials_or_url_traversal() {
     for path in [

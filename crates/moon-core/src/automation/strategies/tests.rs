@@ -2,6 +2,7 @@
 
 use super::*;
 
+/// UI precision and JavaScript number limits must not change model-visible strategy values.
 #[test]
 fn exact_values_survive_unrelated_strategy_fields_and_javascript_integer_limits() {
     assert_eq!(

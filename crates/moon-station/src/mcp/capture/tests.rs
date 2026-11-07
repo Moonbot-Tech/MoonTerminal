@@ -2,6 +2,7 @@
 
 use super::*;
 
+/// Secret-labelled lines must be removed before storage without erasing useful order evidence.
 #[test]
 fn credential_lines_are_removed_but_order_diagnostics_remain_readable() {
     let cfg = AppConfig::headless(Vec::new());
