@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use moon_core::diagnostics::STRATEGY_SYNC_TARGET as LOG;
 use moon_core::station_api::{StrategySummary, TAPE_REPLY_BUDGET};
 use moon_core::strat_db::{merge::IncomingChain, sync};
 
@@ -236,7 +237,7 @@ fn pass(
     let pull = moon_remote::station::pull::Pull::open(target)?;
     let status = pull.status()?;
     if !status.strategies_sync {
-        log::info!("station: strategy history skipped, this station keeps no archive");
+        log::info!(target: LOG, "station: strategy history skipped, this station keeps no archive");
         return Ok(());
     }
     let listing = status.cores.unwrap_or_default();
@@ -321,6 +322,7 @@ fn pass(
         }
     }
     log::info!(
+        target: LOG,
         "station: strategy history, {} differed, {} taken here, {} sent, {} failed, {} core(s) unmatched",
         count.differed,
         count.taken,
