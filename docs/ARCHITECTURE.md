@@ -1094,9 +1094,11 @@ then recheck on the ActiveLib runtime thread. New-order tickets are not exactly 
 server UIDs by the current wire protocol, so a send receipt never claims an exchange fill.
 
 Settings use the SDK's SharedConfig JSON catalog and exact-field patching, preserving unedited
-values and opaque tails. They share SharedConfigSequence with ordinary edits and hold compact
-writes while waiting for a new full snapshot. Unknown outcomes are not retried automatically.
-There is no server-side CAS, multi-core transaction or full-import rollback guarantee.
+float bits and opaque tails. They share SharedConfigSequence with ordinary full edits and start
+only while compact writes are idle. Later compact writes and manual orders keep the existing
+one-way priority; an MCP observation never holds them behind a full-settings echo. Confirmation
+requires a new full snapshot. Unknown outcomes are not retried automatically. There is no
+server-side CAS, multi-core transaction or full-import rollback guarantee.
 
 Diagnostic leases union their log subscriptions and expire without a connected chat. Logs are
 bounded and redacted before model-visible storage. Core-local forwarding time and UTC reception

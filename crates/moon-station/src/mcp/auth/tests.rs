@@ -96,6 +96,7 @@ impl Drop for Fixture {
     }
 }
 
+/// A valid code cannot be stolen through another browser, redirect, verifier or core selection.
 #[test]
 fn consent_is_bound_to_browser_redirect_pkce_and_exact_core_scope() {
     let mut f = Fixture::new();
@@ -141,6 +142,7 @@ fn consent_is_bound_to_browser_redirect_pkce_and_exact_core_scope() {
     assert!(!persisted.contains(&tokens.refresh_token));
 }
 
+/// Replaying a consumed refresh revokes both issued tokens and work that has not executed yet.
 #[test]
 fn refresh_replay_revokes_new_tokens_and_already_queued_principals() {
     let mut f = Fixture::new();
@@ -287,6 +289,7 @@ fn settings_permission_does_not_authorize_runtime_trading_start() {
     assert_eq!(f.0.status().grants[0].last_access_ms, Some(1004));
 }
 
+/// Re-enabling after restart requires fresh owner consent rather than reviving previous authority.
 #[test]
 fn disabling_access_survives_restart_and_cannot_resurrect_old_tokens() {
     let mut f = Fixture::new();
@@ -308,6 +311,7 @@ fn disabling_access_survives_restart_and_cannot_resurrect_old_tokens() {
     );
 }
 
+/// Public registration cannot send an authorization code over an unsafe callback.
 #[test]
 fn registrations_cannot_introduce_insecure_or_fragment_redirects() {
     let mut f = Fixture::new();

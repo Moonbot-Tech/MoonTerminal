@@ -89,6 +89,7 @@ impl Drop for Fixture {
     }
 }
 
+/// Exercise the complete HTTP handshake so transport context cannot bypass private consent.
 #[tokio::test]
 async fn oauth_consent_unlocks_mcp_and_revocation_blocks_it_again() {
     let f = Fixture::new();
@@ -256,6 +257,7 @@ async fn oauth_consent_unlocks_mcp_and_revocation_blocks_it_again() {
     );
 }
 
+/// Browser cross-origin requests and invented public approval routes grant no authority.
 #[tokio::test]
 async fn foreign_browser_origins_cannot_register_or_authorize() {
     let f = Fixture::new();
