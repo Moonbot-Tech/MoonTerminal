@@ -173,8 +173,10 @@ async fn oauth_consent_unlocks_mcp_and_revocation_blocks_it_again() {
         .admin(
             moon_core::station_api::mcp::AdminRequest::Approve {
                 code: code.into(),
-                cores: vec![7],
-                scopes: vec![Scope::Read, Scope::Trading],
+                access: vec![moon_core::station_api::mcp::CoreAccess {
+                    core: 7,
+                    scopes: vec![Scope::Read, Scope::Trading],
+                }],
             },
             &[7],
             auth::now(),

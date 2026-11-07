@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use moon_core::station_api::mcp::{
-    AdminRequest, AdminState, AuditEntry, GrantInfo, PendingConsent, Scope,
+    AdminRequest, AdminState, AuditEntry, CoreAccess, GrantInfo, PendingConsent, Scope,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -62,12 +62,46 @@ struct Grant {
     refresh_hash: Option<String>,
 }
 
+/// Put a consent's permissions in order and refuse what no grant may hold.
+///
+/// Args:
+///     access: The owner's choice.
+///     known_cores: The cores the Station is configured with.
+///
+/// Returns:
+///     The permissions sorted by core, each core's own sorted and without repeats.
+fn normalized_access(mut access: Vec<CoreAccess>, known_cores: &[u64]) -> Result<Vec<CoreAccess>> {
+    access.sort_by_key(|entry| entry.core);
+    ensure!(
+        !access.is_empty() && access.iter().all(|entry| known_cores.contains(&entry.core)),
+        "select configured cores"
+    );
+    // Two rows for one core would leave its permissions to whichever a reader finds.
+    ensure!(
+        access.windows(2).all(|pair| pair[0].core != pair[1].core),
+        "each core may appear once"
+    );
+    for entry in &mut access {
+        entry.scopes.sort_unstable();
+        entry.scopes.dedup();
+        ensure!(
+            entry.scopes.contains(&Scope::Read),
+            "read permission is required on every selected core"
+        );
+    }
+    Ok(access)
+}
+
 /// Only short-lived access hashes are retained; refresh lineage is authenticated by its grant key.
 #[derive(Clone, Serialize, Deserialize)]
 struct Token {
     grant: String,
     expires_ms: i64,
 }
+
+/// Journal entries in one status reply: all that the owner's page draws. With an entry's own bounds
+/// (`automation::journal`) the newest of them fit one control-channel frame, unlike the whole store.
+const AUDIT_SHOWN: usize = 30;
 
 /// Only durable authorization state is saved; in-progress browser flows die on restart.
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -79,6 +113,27 @@ struct Disk {
     grants: BTreeMap<String, Grant>,
     tokens: BTreeMap<String, Token>,
     audit: VecDeque<AuditEntry>,
+}
+
+impl Disk {
+    /// Add a journal entry, dropping the oldest past the journal's bound.
+    fn push_audit(&mut self, entry: AuditEntry) {
+        self.audit.push_back(entry);
+        while self.audit.len() > 256 {
+            self.audit.pop_front();
+        }
+    }
+
+    /// Operations live in memory, so nothing can finish an entry left mid-way by a restart. It may
+    /// or may not have reached the core: say so instead of showing a stale state as the current one.
+    fn settle_interrupted(&mut self) {
+        for entry in &mut self.audit {
+            let state = entry.outcome.split(':').next().unwrap_or_default();
+            if matches!(state, "admitted" | "queued_in_runtime") {
+                entry.outcome = "unknown".into();
+            }
+        }
+    }
 }
 
 /// Browser flow bound to a cookie, PKCE challenge, exact registered redirect and owner-entered code.
@@ -143,11 +198,12 @@ impl Auth {
 
     /// An unreadable existing store fails closed instead of silently replacing its permissions.
     pub fn open(path: PathBuf) -> Result<Self> {
-        let disk = match std::fs::read(&path) {
+        let mut disk: Disk = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).context("read MCP authorization store")?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Disk::default(),
             Err(e) => return Err(e.into()),
         };
+        disk.settle_interrupted();
         Ok(Self {
             disk,
             path,
@@ -413,7 +469,7 @@ impl Auth {
             .context("authorization revoked")?;
         let scope = saved
             .info
-            .scopes
+            .all_scopes()
             .iter()
             .map(|s| s.as_str())
             .collect::<Vec<_>>()
@@ -476,7 +532,9 @@ impl Auth {
         })
     }
 
-    /// Recheck identity, permission and exact core scope at the point where work executes.
+    /// Recheck identity, permission and exact core scope at the point where work executes. The
+    /// permission must hold on every named core; with none named, on at least one, which is how
+    /// the calls that only establish who is asking use it.
     pub fn check(
         &self,
         who: &Principal,
@@ -500,14 +558,20 @@ impl Auth {
             .context("authorization revoked")?
             .info;
         ensure!(
-            grant.scopes.contains(&scope),
+            !cores.is_empty() || grant.all_scopes().contains(&scope),
             "permission denied: {}",
             scope.as_str()
         );
-        ensure!(
-            cores.iter().all(|c| grant.cores.contains(c)),
-            "core is outside the authorization"
-        );
+        for core in cores {
+            let scopes = grant
+                .scopes_on(*core)
+                .context("core is outside the authorization")?;
+            ensure!(
+                scopes.contains(&scope),
+                "permission denied on core {core}: {}",
+                scope.as_str()
+            );
+        }
         Ok(grant.clone())
     }
 
@@ -546,25 +610,58 @@ impl Auth {
                 self.pending.remove(&request_id);
             }
             AdminRequest::Revoke { grant_id } => self.revoke(&grant_id)?,
-            AdminRequest::Approve {
-                code,
-                mut cores,
-                mut scopes,
+            AdminRequest::SetAccess {
+                grant_id,
+                expected,
+                access,
             } => {
+                ensure!(self.disk.enabled, "MCP is disabled");
+                let access = normalized_access(access, known_cores)?;
+                let mut next = self.disk.clone();
+                let grant = next
+                    .grants
+                    .get_mut(&grant_id)
+                    .context("authorization revoked")?;
+                ensure!(
+                    grant.info.access == expected,
+                    "these permissions changed elsewhere; refresh and try again"
+                );
+                if let Some(requested) = &grant.info.requested {
+                    ensure!(
+                        access
+                            .iter()
+                            .flat_map(|entry| &entry.scopes)
+                            .all(|s| requested.contains(s)),
+                        "grant exceeds requested scopes"
+                    );
+                }
+                let summary =
+                    moon_core::automation::journal::access_change(&grant.info.access, &access);
+                if !summary.changes.is_empty() {
+                    grant.info.access = access;
+                    let client_name = grant.info.client_name.clone();
+                    next.push_audit(AuditEntry {
+                        at_ms: at,
+                        grant_id,
+                        action: "access_change".into(),
+                        cores: Vec::new(),
+                        outcome: "applied".into(),
+                        operation: String::new(),
+                        client_name,
+                        subject: None,
+                        changes: summary.changes,
+                        changes_omitted: summary.omitted,
+                    });
+                    self.save(next)?;
+                }
+            }
+            AdminRequest::Approve { code, access } => {
                 ensure!(self.disk.enabled, "MCP is disabled");
                 ensure!(
                     self.disk.grants.len() < 32,
                     "too many authorizations; revoke an unused client"
                 );
-                cores.sort_unstable();
-                cores.dedup();
-                scopes.sort_unstable();
-                scopes.dedup();
-                ensure!(
-                    !cores.is_empty() && cores.iter().all(|c| known_cores.contains(c)),
-                    "select configured cores"
-                );
-                ensure!(scopes.contains(&Scope::Read), "read permission is required");
+                let access = normalized_access(access, known_cores)?;
                 let normalized = code.trim().to_ascii_uppercase();
                 let (id, pending) = self
                     .pending
@@ -572,7 +669,10 @@ impl Auth {
                     .find(|(_, p)| p.owner_code == normalized && p.approved.is_none())
                     .context("unknown or already used consent code")?;
                 ensure!(
-                    scopes.iter().all(|s| pending.info.scopes.contains(s)),
+                    access
+                        .iter()
+                        .flat_map(|entry| &entry.scopes)
+                        .all(|s| pending.info.scopes.contains(s)),
                     "grant exceeds requested scopes"
                 );
                 let id = id.clone();
@@ -585,10 +685,10 @@ impl Auth {
                     info: GrantInfo {
                         id: grant_id.clone(),
                         client_name: pending.info.client_name.clone(),
-                        cores,
-                        scopes,
+                        access,
                         created_ms: at,
                         last_access_ms: None,
+                        requested: Some(pending.info.scopes.clone()),
                     },
                 };
                 let authorization = Code {
@@ -621,18 +721,42 @@ impl Auth {
                 .map(|p| p.info.clone())
                 .collect(),
             grants: self.disk.grants.values().map(|g| g.info.clone()).collect(),
-            audit: self.disk.audit.iter().rev().cloned().collect(),
+            audit: self
+                .disk
+                .audit
+                .iter()
+                .rev()
+                .take(AUDIT_SHOWN)
+                .cloned()
+                .collect(),
             ..AdminState::default()
         }
     }
 
-    /// Record command admission/result without leaking financial data into the owner audit view.
-    pub fn audit(&mut self, entry: AuditEntry) -> Result<()> {
+    /// Record an applied action in the owner's change journal, before it is dispatched. The
+    /// client's name is copied in, because the grant may be revoked long before the entry ages out.
+    pub fn audit(&mut self, mut entry: AuditEntry) -> Result<()> {
         let mut next = self.disk.clone();
-        next.audit.push_back(entry);
-        while next.audit.len() > 256 {
-            next.audit.pop_front();
+        if let Some(grant) = next.grants.get(&entry.grant_id) {
+            entry.client_name = grant.info.client_name.clone();
         }
+        next.push_audit(entry);
+        self.save(next)
+    }
+
+    /// Move an operation's journal entry to its latest state, one line per action. An entry aged
+    /// out of the bounded journal is simply gone.
+    pub fn audit_outcome(&mut self, operation: &str, outcome: &str) -> Result<()> {
+        let mut next = self.disk.clone();
+        let Some(entry) = next
+            .audit
+            .iter_mut()
+            .rev()
+            .find(|entry| entry.operation == operation)
+        else {
+            return Ok(());
+        };
+        entry.outcome = outcome.to_owned();
         self.save(next)
     }
 }

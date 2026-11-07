@@ -133,13 +133,8 @@ impl Owner {
                 json!({"kind":"operation_receipt","operation_id":id,"result":result}),
             ));
             if let Ok(mut auth) = shared.auth.lock() {
-                if let Err(e) = auth.audit(AuditEntry {
-                    at_ms: auth::now(),
-                    grant_id: operation.who.grant_id.clone(),
-                    action: operation.action.name().into(),
-                    cores: vec![operation.core],
-                    outcome: result["status"].as_str().unwrap_or("unknown").into(),
-                }) {
+                let outcome = result["status"].as_str().unwrap_or("unknown");
+                if let Err(e) = auth.audit_outcome(id, outcome) {
                     log::error!("MCP audit receipt could not be saved: {e}");
                 }
             }
@@ -209,14 +204,15 @@ impl Owner {
                 let cores: Vec<_> = cfg
                     .servers
                     .iter()
-                    .filter(|server| grant.cores.contains(&server.id))
-                    .map(|server| {
+                    .filter_map(|server| {
+                        let scopes = grant.scopes_on(server.id)?;
                         let mut state = core_status(session, server.id);
                         state["name"] = json!(server.name);
-                        state
+                        state["permissions"] = json!(scopes);
+                        Some(state)
                     })
                     .collect();
-                json!({"cores":cores,"permissions":grant.scopes,"now_ms":auth::now(),"log_observations_started":false,
+                json!({"cores":cores,"now_ms":auth::now(),"log_observations_started":false,
                     "workflow":"For a deeper diagnosis use logs_start, wait the requested interval, logs_get, and relevant MoonDoc sections. Keep facts separate from hypotheses."})
             }
             "core_state" => state(
@@ -350,7 +346,7 @@ impl Owner {
                     .iter()
                     .filter(|e| {
                         e.seq > after
-                            && grant.cores.contains(&e.core)
+                            && grant.scopes_on(e.core).is_some()
                             && e.grant.as_ref().is_none_or(|id| *id == who.grant_id)
                     })
                     .take(100)
@@ -424,6 +420,8 @@ impl Owner {
                 .ok()
                 .is_some_and(|auth| auth.check(&principal, scope, &[core], auth::now()).is_ok())
         }));
+        let summary =
+            moon_core::automation::journal::summarize(&operation.action, &operation.expected);
         shared
             .auth
             .lock()
@@ -433,10 +431,15 @@ impl Owner {
                 grant_id: who.grant_id.clone(),
                 action: operation.action.name().into(),
                 cores: vec![core],
-                outcome: format!("admitted:{id}"),
+                outcome: "admitted".into(),
+                operation: id.to_owned(),
+                client_name: String::new(),
+                subject: summary.subject,
+                changes: summary.changes,
+                changes_omitted: summary.omitted,
             })?;
         let (reply, receipt) = mpsc::sync_channel(2);
-        session.automation_submit(
+        let submitted = session.automation_submit(
             core,
             Submission {
                 action: operation.action.clone(),
@@ -445,7 +448,16 @@ impl Owner {
                 authorization,
                 reply,
             },
-        )?;
+        );
+        if let Err(error) = submitted {
+            // Nothing reached the core: "admitted" would stay in the journal forever otherwise.
+            if let Ok(mut auth) = shared.auth.lock() {
+                if let Err(e) = auth.audit_outcome(id, "rejected") {
+                    log::error!("MCP audit receipt could not be saved: {e}");
+                }
+            }
+            return Err(error);
+        }
         operation.submitted = true;
         operation.expires = Instant::now() + Duration::from_secs(120);
         operation.receipt = Some(receipt);
