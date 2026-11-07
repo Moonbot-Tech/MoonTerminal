@@ -195,6 +195,28 @@ pub(crate) fn backup_due_at(now_ms: i64, topology_generation: u64) -> anyhow::Re
     )
 }
 
+/// Save a snapshot right now, outside the daily schedule, beside the scheduled ones.
+///
+/// Published under a `-manual` name, which the pruning treats like any other snapshot.
+///
+/// Returns:
+///     The snapshot's directory.
+pub(crate) fn snapshot_now() -> anyhow::Result<PathBuf> {
+    // Assembly and the daily compaction exclude each other, as for a scheduled snapshot.
+    let _guard = crate::backups::STRATEGY_MAINTENANCE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let backups = paths::strategies_backups_dir();
+    let (store, staging) = assemble_snapshot(&paths::strategies_db_path(), &backups)?;
+    let name = format!(
+        "{}-manual",
+        utc_stamp_compact(crate::util::now_unix_ms_i64())
+    );
+    match store.publish_exact(&staging, &name, is_completed_snapshot)? {
+        ExactPublication::Created(path) | ExactPublication::Existing(path) => Ok(path),
+    }
+}
+
 /// Return whether the existing strategy database contains at least one durable head row.
 pub(crate) fn source_has_strategy_rows() -> bool {
     let path = paths::strategies_db_path();

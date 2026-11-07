@@ -475,6 +475,8 @@ impl StationNow<'_> {
             cores: Some(self.listed.to_vec()),
             core_uid_high_water: Some(self.core_uid_high_water),
             prices_pull: true,
+            strategies_sync: moon_core::feed::station::profile()
+                .is_some_and(moon_core::feed::station::Profile::runs_account),
         }
     }
 }
@@ -511,7 +513,10 @@ fn answer(
         Request::TapeFetch { .. }
         | Request::TracesFetch { .. }
         | Request::PricesIndex { .. }
-        | Request::PricesFetch { .. } => Err("the pull is answered off the main loop".to_owned()),
+        | Request::PricesFetch { .. }
+        | Request::StrategiesIndex { .. }
+        | Request::StrategiesFetch { .. }
+        | Request::StrategiesPut { .. } => Err("the pull is answered off the main loop".to_owned()),
     };
     Reply::from(answer)
 }

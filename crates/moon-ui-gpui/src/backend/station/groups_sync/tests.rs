@@ -150,6 +150,7 @@ fn groups_sync_deferral_waits_for_a_fresh_listing_despite_retained_core_cache() 
         station_version: "synthetic".into(),
         core_uid_high_water: Some(11),
         prices_pull: false,
+        strategies_sync: false,
         cores_total: 1,
         cores_ready: 1,
         cores: Some(listing.clone()),

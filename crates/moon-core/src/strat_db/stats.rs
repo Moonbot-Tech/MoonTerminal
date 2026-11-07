@@ -490,9 +490,9 @@ pub enum VersionAt {
 ///
 /// The latest `valid_from` at or before the instant wins, whether or not its `valid_to` has been
 /// closed since: a version closed by the strategy's deletion still IS the version that was in
-/// effect for a trade that entered before that deletion. Boundaries are the terminal's own
-/// observation times (see the `write` module header), so the answer is "by the terminal's
-/// record", not proof of what the core was running.
+/// effect for a trade that entered before that deletion. Boundaries are observation times, this
+/// terminal's or its station's whichever came first (see the `write` module header), so the
+/// answer is "by the record", not proof of what the core was running.
 ///
 /// Args:
 ///     core_uid: Core that owns the strategy.

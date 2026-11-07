@@ -39,11 +39,14 @@ use super::config::DiagCfg;
 /// [`CORE_MOVE_TARGET`] is the fourth: a core moved to a server logs a few dozen lines per move,
 /// and once its window is closed they are the only account of what the move did.
 /// [`PRICE_PULL_TARGET`] is the fifth: the price pull from the station writes one line per run,
-/// the only sign it ran and what it filed.
+/// the only sign it ran and what it filed. [`STRATEGY_SYNC_TARGET`] is the sixth, for the same
+/// reason: a pass that goes through says nothing else, and without its line a finished one reads as
+/// a hung one.
 pub const DEFAULT_BASE_FILTER: &str = "warn,moonterminal::panels::chart=info,\
     moonterminal::analytics::tuner::ticks=info,moon_tg=info,\
     moonterminal::backend::core_move=info,\
-    moonterminal::backend::station::prices_pull=info,moon_gpui=info,moon_core=info";
+    moonterminal::backend::station::prices_pull=info,\
+    moonterminal::backend::station::strategies_sync=info,moon_gpui=info,moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
 const BALANCES_TARGET: &str = "moon_core::feed::live";
@@ -172,3 +175,8 @@ pub const CORE_MOVE_TARGET: &str = "moonterminal::backend::core_move";
 /// raised to `info` by [`DEFAULT_BASE_FILTER`]. Named beside the directive for the reason
 /// [`TICKS_AXIS_TARGET`] is.
 pub const PRICE_PULL_TARGET: &str = "moonterminal::backend::station::prices_pull";
+
+/// Explicit `target:` of the terminal's strategy history pass — its outcome once per pass — raised
+/// to `info` by [`DEFAULT_BASE_FILTER`]. Named beside the directive for the reason
+/// [`TICKS_AXIS_TARGET`] is.
+pub const STRATEGY_SYNC_TARGET: &str = "moonterminal::backend::station::strategies_sync";

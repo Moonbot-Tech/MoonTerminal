@@ -777,8 +777,9 @@ fn fv_json(v: &FieldValue) -> serde_json::Value {
 }
 
 /// Builds a normalized strategy dump for strat_db: the kind's schema defaults overridden by
-/// explicit snapshot fields. `serde_json::Map` keys are sorted (BTreeMap), making serialization
-/// canonical and content comparison stable.
+/// explicit snapshot fields. One feed builds a strategy's map the same way every time, which keeps
+/// the writer's content hash stable; the key order itself is not canonical, see
+/// `strat_db::merge::Contents`.
 pub(super) fn strat_db_dump(
     s: &StrategySnapshot,
     defaults: &std::collections::HashMap<u8, Vec<(String, FieldValue)>>,

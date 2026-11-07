@@ -303,6 +303,17 @@ fn core_move_lines_pass_the_base_filter() {
     );
 }
 
+/// Regression target: logging the strategy history pass without a raised target. Its line was
+/// filtered away, and a pass that had finished read as one that had hung.
+#[test]
+fn strategy_sync_lines_pass_the_base_filter() {
+    let spec = compose(&DiagCfg::default(), None);
+    assert!(
+        allows(&spec, STRATEGY_SYNC_TARGET, log::Level::Info),
+        "the pass's info line must reach the log: {spec}"
+    );
+}
+
 /// The price pull logs with `PRICE_PULL_TARGET` as its explicit target; its once-per-run line must
 /// pass the base filter while the rest of the station backend stays at `warn`.
 #[test]

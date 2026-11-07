@@ -10,8 +10,9 @@
 //!
 //! Temporal validity uses `valid_from`/`valid_to` (Unix milliseconds): a range join on `buydate`
 //! attributes each trade to a locally observed snapshot-validity window. Because `valid_from` is
-//! the local observation time, this attribution does not prove which parameters were active when
-//! the position opened.
+//! the local observation time (or an earlier observer's, once a sync with a station has merged the
+//! two, see `merge`), this attribution does not prove which parameters were active when the
+//! position opened.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -25,16 +26,33 @@ use crate::util::now_unix_ms_i64 as now_ms;
 
 /// Cached head-row hashes used to skip no-op updates when each small change resends the full set.
 /// Toggling one checkbox must not update 500 rows.
-struct Head {
-    content_hash: i64,
-    head_hash: i64,
-    deleted: bool,
-    server_ver: i32,
+pub(super) struct Head {
+    pub(super) content_hash: i64,
+    pub(super) head_hash: i64,
+    pub(super) deleted: bool,
+    pub(super) server_ver: i32,
 }
 
 pub(super) struct State {
-    ignore: HashSet<String>,
-    heads: HashMap<(i64, i64), Head>,
+    pub(super) ignore: HashSet<String>,
+    pub(super) heads: HashMap<(i64, i64), Head>,
+}
+
+/// Remember, in the same transaction as a purge, that history before now was forgotten here.
+///
+/// A sync would otherwise bring back from the station what the user was just told cannot be
+/// restored. The mark is this machine's alone: the station's copy is its own.
+fn mark_forgotten(
+    tx: &rusqlite::Transaction<'_>,
+    uid: i64,
+    strategy_id: i64,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO strategy_forgotten (core_uid, strategy_id, at_ms)
+         VALUES (?1, ?2, ?3)",
+        rusqlite::params![uid, strategy_id, now_ms()],
+    )?;
+    Ok(())
 }
 
 /// Purge deleted strategies and their whole version history, irreversibly.
@@ -104,6 +122,7 @@ pub(super) fn forget(
                 if msg.contains("no such table") => {}
             Err(e) => return Err(e),
         }
+        mark_forgotten(&tx, uid, *id)?;
         purged.push(*id);
     }
 
@@ -149,6 +168,7 @@ pub(super) fn forget_core(
         Err(rusqlite::Error::SqliteFailure(_, Some(ref msg))) if msg.contains("no such table") => {}
         Err(e) => return Err(e),
     }
+    mark_forgotten(&tx, uid, super::WHOLE_CORE)?;
     tx.commit()?;
     st.heads.retain(|(core, _), _| *core != uid);
     Ok(super::ForgetOutcome { heads, versions })
@@ -199,7 +219,14 @@ pub(super) fn init(conn: &Connection, cfg: &StrategiesStoreCfg) -> rusqlite::Res
         -- idx_sv_lookup duplicated the UNIQUE constraint's implicit index (the same columns;
         -- SQLite can scan it in descending order), adding needless cost to every version insert.
         DROP INDEX IF EXISTS idx_sv_lookup;
-        CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        -- What the user purged on this machine, so a sync does not bring it back. Strategy id 0
+        -- stands for the whole core: no core strategy has it, id 0 meaning a manual trade.
+        CREATE TABLE IF NOT EXISTS strategy_forgotten (
+            core_uid     INTEGER NOT NULL,
+            strategy_id  INTEGER NOT NULL,
+            at_ms        INTEGER NOT NULL,
+            PRIMARY KEY (core_uid, strategy_id));",
     )?;
     // Load the head-row cache from disk so the writer does not query every strategy.
     let mut heads = HashMap::new();
@@ -330,6 +357,30 @@ pub(super) fn apply_full_set(
                     }
                 }
             };
+            if change_kind == "restored" && n_changed == 0 && prev.is_some() {
+                // The same content under another hash: a head a sync created hashed the incoming
+                // row's key order. It is the restore without a change that the shortcut above
+                // handles, not a version of its own.
+                tx.execute(
+                    "UPDATE strategy_versions SET valid_to=NULL
+                     WHERE core_uid=?1 AND strategy_id=?2 AND valid_from=(
+                        SELECT MAX(valid_from) FROM strategy_versions
+                        WHERE core_uid=?1 AND strategy_id=?2)",
+                    rusqlite::params![uid, d.strategy_id],
+                )?;
+                upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
+                st.heads.insert(
+                    key,
+                    Head {
+                        content_hash,
+                        head_hash,
+                        deleted: false,
+                        server_ver: d.server_ver,
+                    },
+                );
+                writes += 1;
+                continue;
+            }
             if change_kind == "params" && n_changed == 0 && prev.is_some() {
                 // For a false-positive hash change, update the cache and head without a version.
                 upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
@@ -477,7 +528,7 @@ fn upsert_head(
 }
 
 /// Copies a dump without ignored fields or `__` metadata for version-content comparisons.
-fn strip(m: &Map<String, Value>, ignore: &HashSet<String>) -> Map<String, Value> {
+pub(super) fn strip(m: &Map<String, Value>, ignore: &HashSet<String>) -> Map<String, Value> {
     m.iter()
         .filter(|(k, _)| !k.starts_with("__") && !ignore.contains(k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -491,7 +542,7 @@ struct FilteredFields<'a> {
 }
 
 impl serde::Serialize for FilteredFields<'_> {
-    /// Serialize the same key-sorted object as the former cloned `Value::Object`.
+    /// Serialize the same object as the former cloned `Value::Object`, in the map's own key order.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -507,8 +558,10 @@ impl serde::Serialize for FilteredFields<'_> {
     }
 }
 
-/// Computes a canonical content hash without cloning or stripping the source fields.
-fn hash_of(fields: &Map<String, Value>, ignore: &HashSet<String>) -> i64 {
+/// Computes a content hash without cloning or stripping the source fields. It follows the map's key
+/// order, which `preserve_order` leaves as written, so it is only comparable within one writer's
+/// own feed; a mismatch with an empty content diff is handled as no change in [`apply_full_set`].
+pub(super) fn hash_of(fields: &Map<String, Value>, ignore: &HashSet<String>) -> i64 {
     let s = serde_json::to_string(&FilteredFields { fields, ignore }).unwrap_or_default();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     s.hash(&mut h);
@@ -530,7 +583,7 @@ fn head_hash_of(d: &StratDump) -> i64 {
 
 /// Builds a content diff as `{"Field": {"old": ..., "new": ...}}`; added fields have
 /// `old=null`, and removed fields have `new=null`.
-fn diff_maps(
+pub(super) fn diff_maps(
     prev_raw: &str,
     new_stripped: &Map<String, Value>,
     ignore: &HashSet<String>,

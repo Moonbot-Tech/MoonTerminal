@@ -163,8 +163,8 @@ Rules that are easy to break unnoticed:
 - **`uid` is issued from a durable counter** `SettingsFile::next_uid`, not as "max + 1":
   otherwise a deleted server's uid would go to a new one together with its history.
 - **The counter is raised to a "floor" on every start** — the maximum uid that any
-  durable store has ever seen: `reports.sqlite` and `strategies.sqlite` (three tables each
-  keyed by `core_uid`), `order_traces.sqlite`, plus `layout.toml`, `charts.json` and `figures.json`. The counter appeared
+  durable store has ever seen: `reports.sqlite` (three tables keyed by `core_uid`), `strategies.sqlite`
+  (four), `order_traces.sqlite`, plus `layout.toml`, `charts.json` and `figures.json`. The counter appeared
   only in schema v15, and before that it was seeded from SURVIVING servers, while the deleted core's rows
   are never cleaned. The floor is computed by `startup::observed_uid_floor` and passed into `AppConfig::load`
   as a number — no "config → DB" dependency arises. What is easy to break:
@@ -1059,6 +1059,33 @@ sent and forgotten: neither a setting, nor a draft, nor a log line. Mirror types
 `Debug` by hand so `{:?}` does not leak a secret. `refresh()` on exactly three triggers — tab
 activation, section expand, core pick — plus once after `Connected { fresh: false }`;
 login / QR / code / reset / logout do not repeat themselves.
+
+## Strategy version history between a station and its terminals
+
+A core keeps only a strategy's current state, so its history exists only with those who watched
+it. A station with the account profile writes `strategies.sqlite` too, from the same feed path a
+terminal's does, so an edit made anywhere reaches it through the core within about a second, with
+no terminal involved. The light profile has no strategies and keeps no archive; its status says so
+(`Status::strategies_sync`), and nothing is asked of it.
+
+The terminal runs a pass on its own (`backend/station/strategies_sync.rs`), 90 s after start, then
+every 6 hours and when its core list changes: there is no setting and no button. A station's
+listing of each strategy's version count and first and last `valid_from` tells which chains differ.
+For those the terminal fetches the station's chain, merges it on its writer and, when the merged
+chain holds what the station lacks, sends it back to be merged the same way. Core identities cross
+only through a unique address match (`station_uid_for`). A fresh terminal so fills from the station,
+and a station learns what it missed while down and everything from before it existed.
+
+Nothing on a version identifies it across observers: `valid_from` is the observer's clock and
+`server_ver` repeats across contents. `strat_db::merge` therefore aligns two chains the way a diff
+aligns two texts, by content and never by clock, the station's chain always first so both sides
+resolve a tie alike. A row both hold takes the earlier `valid_from`, which is the closer one to the
+edit, and only `valid_from`, `valid_to` and a moved row's diff change: a stored dump is kept byte for
+byte and no version is dropped. Since this is the only thing that writes into a terminal's only copy
+of its history from outside its own feed, the first merge is preceded by a snapshot, and a failed
+snapshot stops the pass. What the user purges in Settings is marked in `strategy_forgotten` on that
+machine and does not come back; the station's copy is its own. A station takes no daily snapshots of
+its archive: the terminals hold the same history, and each has them.
 
 ## Station MCP: public tools and private owner consent
 

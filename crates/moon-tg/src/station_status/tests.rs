@@ -64,6 +64,7 @@ fn status(host: Option<Host>) -> Status {
         auto_update: None,
         core_uid_high_water: None,
         prices_pull: false,
+        strategies_sync: false,
         cores: None,
     }
 }

@@ -36,7 +36,7 @@ use std::time::Duration;
 pub use config::DiagCfg;
 pub use filter::{
     CHART_INPUT_TARGET, CORE_MOVE_TARGET, DEFAULT_BASE_FILTER, HOTKEYS_TARGET, PRICE_PULL_TARGET,
-    TELEGRAM_TARGET, TICKS_AXIS_TARGET, filter_string,
+    STRATEGY_SYNC_TARGET, TELEGRAM_TARGET, TICKS_AXIS_TARGET, filter_string,
 };
 
 use crate::config::paths;

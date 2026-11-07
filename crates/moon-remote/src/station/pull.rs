@@ -7,7 +7,8 @@ use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::trade_cache::decode_prints;
 use moon_core::station_api::{
     Answer, MAX_TAPE_ITEMS, MAX_TAPE_SPANS, MAX_TRACE_UIDS, PriceHeld, PriceKey, PricePiece,
-    Request, TapeResume, TapeWant, TradeTraces,
+    Request, Status, StrategyChainPage, StrategyHead, StrategySummary, StrategyVersion, TapeResume,
+    TapeWant, TradeTraces,
 };
 
 use super::api::call;
@@ -128,6 +129,98 @@ impl Pull {
 }
 
 impl Pull {
+    /// The station's status, for what it can do and the cores it has.
+    pub fn status(&self) -> anyhow::Result<Status> {
+        match call(&self.conn, &Request::Status)? {
+            Answer::Status(status) => Ok(status),
+            other => anyhow::bail!("the station answered {other:?} to a status request"),
+        }
+    }
+
+    /// The summary of every strategy the station's archive holds, all pages.
+    pub fn strategy_index(&self) -> anyhow::Result<Vec<StrategySummary>> {
+        let mut held = Vec::new();
+        let mut after = None;
+        loop {
+            let index = match call(
+                &self.conn,
+                &Request::StrategiesIndex {
+                    after: after.clone(),
+                },
+            )? {
+                Answer::StrategyIndex(index) => index,
+                other => anyhow::bail!("the station answered {other:?} to a strategy listing"),
+            };
+            held.extend(index.strategies);
+            let Some(resume) = index.resume else {
+                return Ok(held);
+            };
+            // A station that stops without getting further would loop this forever.
+            anyhow::ensure!(
+                after.as_ref().is_none_or(|was| resume > *was),
+                "the station's strategy listing did not get further ({resume:?})"
+            );
+            after = Some(resume);
+        }
+    }
+
+    /// One strategy's whole chain on the station, all pages.
+    pub fn strategy_chain(
+        &self,
+        core_uid: u64,
+        strategy_id: i64,
+    ) -> anyhow::Result<(Option<StrategyHead>, Vec<StrategyVersion>)> {
+        let mut head = None;
+        let mut versions = Vec::new();
+        let mut after_from = None;
+        loop {
+            let page = match call(
+                &self.conn,
+                &Request::StrategiesFetch {
+                    core_uid,
+                    strategy_id,
+                    after_from,
+                },
+            )? {
+                Answer::StrategyChain(page) => page,
+                other => anyhow::bail!("the station answered {other:?} to a chain request"),
+            };
+            head = head.or(page.head);
+            versions.extend(moon_core::strat_db::sync::unpack(&page.versions)?);
+            let Some(resume) = page.resume else {
+                return Ok((head, versions));
+            };
+            anyhow::ensure!(
+                after_from.is_none_or(|was| resume > was),
+                "the station's chain did not get further ({resume})"
+            );
+            after_from = Some(resume);
+        }
+    }
+
+    /// Hand the station one page of a chain to merge.
+    ///
+    /// Returns:
+    ///     Whether the chain's merge has run: the answer to its last page.
+    pub fn strategy_put(
+        &self,
+        core_uid: u64,
+        strategy_id: i64,
+        page: StrategyChainPage,
+    ) -> anyhow::Result<bool> {
+        match call(
+            &self.conn,
+            &Request::StrategiesPut {
+                core_uid,
+                strategy_id,
+                page,
+            },
+        )? {
+            Answer::StrategyPut { merged } => Ok(merged),
+            other => anyhow::bail!("the station answered {other:?} to a chain page"),
+        }
+    }
+
     /// Whether the station answers the price requests: its status says so. An older station
     /// would refuse them unparsed, so it is never sent one.
     pub fn prices_supported(&self) -> anyhow::Result<bool> {
