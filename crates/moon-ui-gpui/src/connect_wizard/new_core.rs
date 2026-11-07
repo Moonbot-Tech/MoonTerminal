@@ -36,9 +36,11 @@ impl ConnectWizardView {
                 job.proto_port,
                 job.uid,
                 job.address(),
+                job.dir.is_some(),
+                job.dir.is_some() && !job.exchanges.is_empty(),
             )
         });
-        let Some((phase, status, public_ip, port, uid, address)) = job else {
+        let Some((phase, status, public_ip, port, uid, address, installed, can_pick)) = job else {
             return self.server_form_screen(cx);
         };
         let _ = window;
@@ -79,7 +81,7 @@ impl ConnectWizardView {
                 screen.with_log()
             }
             NewPhase::Stuck { status, error } => {
-                self.stuck_screen(status.as_ref(), error, &public_ip, uid.is_some(), cx)
+                self.stuck_screen(status.as_ref(), error, &public_ip, installed, can_pick, cx)
             }
             NewPhase::Connecting { .. } => waiting(
                 t!("connect_wizard.connect.title"),
@@ -478,12 +480,18 @@ impl ConnectWizardView {
     }
 
     /// The core stopped on its login, or a step failed with the core on the server.
+    ///
+    /// `installed`: the core is on the server, so a new login can be retried — the retry reads the
+    /// exchange's key and the exchange list again, adding the row when it is still missing.
+    /// `can_pick`: the core runs and listed its exchanges, so the exchange and keys can be given
+    /// again — also before any row exists, since the row comes with the picked exchange's key.
     fn stuck_screen(
         &mut self,
         status: Option<&CoreStatus>,
         error: Option<String>,
         public_ip: &str,
-        has_row: bool,
+        installed: bool,
+        can_pick: bool,
         cx: &mut Context<Self>,
     ) -> Screen {
         let state = status.map(|s| &s.state);
@@ -495,7 +503,7 @@ impl ConnectWizardView {
         };
         let p = MoonPalette::active(cx);
         let mut screen = Screen::new(title);
-        if has_row {
+        if installed {
             screen = screen.sub(t!("connect_wizard.stuck.sub"));
         }
         if let Some(status) = status {
@@ -537,35 +545,34 @@ impl ConnectWizardView {
                 .child(note(t!("connect_wizard.stuck.reason_rights"), cx))
                 .child(note(t!("connect_wizard.stuck.reason_copy"), cx));
         }
-        if self.fixing_keys {
+        if self.fixing_keys && can_pick {
             screen = screen.child(self.keys_form(public_ip, cx));
         }
         screen = screen.left(self.remove_button(cx));
-        if has_row {
-            if self.fixing_keys {
-                screen = screen.right(self.send_keys_button(cx));
-            } else {
-                screen = screen
-                    .right(
-                        MoonButton::new("cw-retry")
-                            .size(design::CONTROL_TIER)
-                            .label(t!("connect_wizard.check_again").to_string())
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.command(NewCommand::Retry, cx)),
-                            )
-                            .render(),
-                    )
-                    .right(
-                        MoonButton::new("cw-fix-keys")
-                            .primary()
-                            .size(design::CONTROL_TIER)
-                            .label(t!("connect_wizard.stuck.fix_keys").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.fixing_keys = true;
-                                cx.notify();
-                            }))
-                            .render(),
-                    );
+        if self.fixing_keys && can_pick {
+            screen = screen.right(self.send_keys_button(cx));
+        } else {
+            if installed {
+                screen = screen.right(
+                    MoonButton::new("cw-retry")
+                        .size(design::CONTROL_TIER)
+                        .label(t!("connect_wizard.check_again").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| this.command(NewCommand::Retry, cx)))
+                        .render(),
+                );
+            }
+            if can_pick {
+                screen = screen.right(
+                    MoonButton::new("cw-fix-keys")
+                        .primary()
+                        .size(design::CONTROL_TIER)
+                        .label(t!("connect_wizard.stuck.fix_keys").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.fixing_keys = true;
+                            cx.notify();
+                        }))
+                        .render(),
+                );
             }
         }
         screen.with_log()

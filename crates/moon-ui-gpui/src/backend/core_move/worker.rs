@@ -229,7 +229,7 @@ fn run_move(
         &core_move::Install {
             dir: &form.dir,
             proto_port: form.proto_port,
-            package_url: core_move::TEST_PACKAGE,
+            package_url: core_move::RELEASE_PACKAGE,
             archive: &plan.archive.bytes,
             key_packet: &plan.packet_text,
             ini_flag_added: plan.archive.ini_flag_added,

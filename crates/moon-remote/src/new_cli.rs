@@ -8,12 +8,14 @@
 //! moon-remote --data <dir> core-new-status    --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-new-exchanges --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-new-keys      --host <h> ... --dir <instance dir> --exchange <id>
+//!             [--public-ip <ipv4>] [--proto-port <udp>]
 //! moon-remote --data <dir> core-new-retry     --host <h> ... --dir <instance dir>
 //! ```
 //!
-//! `core-new` installs the package and the service, starts the core on its own default settings,
-//! turns on its MoonProto server and prints the connection key (or writes it to `--key-out`).
-//! With `--exchange` it goes on as `core-new-keys`. The exchange keys are asked without echo, or
+//! `core-new` installs MoonBot's Linux release and the service, starts the core on its own default
+//! settings, turns on its MoonProto server and prints the connection key (or writes it to
+//! `--key-out`). With `--exchange` the exchange is selected first and the key printed is that
+//! exchange's own: MoonBot keeps MoonProto settings per exchange. The exchange keys are asked without echo, or
 //! taken from `MOON_REMOTE_API_KEY` / `MOON_REMOTE_API_SECRET`, and reach the core on stdin only.
 //! `core-move-remove --dir` takes the instance out again.
 
@@ -55,9 +57,14 @@ pub fn run(command: &str, target: Target, args: &mut Args) -> anyhow::Result<()>
         "core-new-keys" => {
             let dir = required(args, "--dir")?;
             let exchange = required(args, "--exchange")?;
+            let host = public_ip(&target, args)?;
+            let port = match args.value("--proto-port")? {
+                Some(port) => Some(port.parse::<u16>().context("--proto-port")?),
+                None => None,
+            };
             let (conn, privilege) = connect(&target, args)?;
             args.done()?;
-            give_keys(&conn, &privilege, &dir, &exchange)
+            give_keys(&conn, &privilege, &dir, &exchange, host, port)
         }
         "core-new-retry" => {
             let dir = required(args, "--dir")?;
@@ -78,15 +85,10 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
         .context("--proto-port")?;
     let package = args
         .value("--package")?
-        .unwrap_or_else(|| core_move::TEST_PACKAGE.to_owned());
+        .unwrap_or_else(|| core_move::RELEASE_PACKAGE.to_owned());
     let key_out = args.value("--key-out")?;
     let exchange = args.value("--exchange")?;
-    let public_ip = match args.value("--public-ip")? {
-        Some(ip) => ip.parse::<Ipv4Addr>().context("--public-ip")?,
-        None => target.host.parse::<Ipv4Addr>().map_err(|_| {
-            anyhow::anyhow!("--host is not an IPv4 address: give the server's --public-ip")
-        })?,
-    };
+    let public_ip = public_ip(&target, args)?;
     let (conn, privilege) = connect(&target, args)?;
     args.done()?;
 
@@ -101,22 +103,23 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
     // Everything past the install leaves a running core behind on failure: say how to go on.
     let installed_dir = installed.dir.clone();
     let after = || -> anyhow::Result<()> {
+        let dir = installed.dir.as_str();
+        core_new::wait_initialized(&conn, &privilege, dir, None, core_new::SETTLE_TIMEOUT)?;
+        let Some(exchange) = &exchange else {
+            let key = core_new::setup_moonproto(&conn, &privilege, dir, public_ip, proto_port)?;
+            show_key(&key, key_out.as_deref())?;
+            print_status(&core_new::status(&conn, &privilege, dir)?);
+            return Ok(());
+        };
+        // The exchange goes first: its MoonProto settings are its own, and the key printed is
+        // the one this exchange hands out.
+        known_exchange(&conn, &privilege, dir, exchange)?;
+        let keys = typed_keys()?;
         let key =
-            core_new::setup_moonproto(&conn, &privilege, &installed.dir, public_ip, proto_port)?;
-        match &key_out {
-            Some(path) => {
-                std::fs::write(path, key.as_bytes()).with_context(|| format!("write {path}"))?;
-                println!("connection key written to {path}");
-            }
-            None => println!("connection key:\n{}", key.as_str()),
-        }
-        match &exchange {
-            Some(exchange) => give_keys(&conn, &privilege, &installed.dir, exchange),
-            None => {
-                print_status(&core_new::status(&conn, &privilege, &installed.dir)?);
-                Ok(())
-            }
-        }
+            core_new::switch_exchange(&conn, &privilege, dir, exchange, public_ip, proto_port)?;
+        show_key(&key, key_out.as_deref())?;
+        core_new::set_api_keys(&conn, &privilege, dir, &keys)?;
+        settle(&conn, &privilege, dir)
     };
     after().with_context(|| {
         format!(
@@ -126,20 +129,76 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
     })
 }
 
-/// Select `exchange`, give it the keys the user types, and wait for the login to settle.
-fn give_keys(conn: &Conn, privilege: &Privilege, dir: &str, exchange: &str) -> anyhow::Result<()> {
+/// The server's public address: `--public-ip`, or `--host` when that is an IPv4 address.
+fn public_ip(target: &Target, args: &mut Args) -> anyhow::Result<Ipv4Addr> {
+    match args.value("--public-ip")? {
+        Some(ip) => ip.parse::<Ipv4Addr>().context("--public-ip"),
+        None => target.host.parse::<Ipv4Addr>().map_err(|_| {
+            anyhow::anyhow!("--host is not an IPv4 address: give the server's --public-ip")
+        }),
+    }
+}
+
+/// Switch to `exchange` with its MoonProto server at `host:port`, give it the keys the user types,
+/// and wait for the login to settle. The exchange keeps its own MoonProto settings, so its
+/// connection key is printed: it may not be the one the previous exchange handed out. Without
+/// `port` the core's current MoonProto port is kept.
+fn give_keys(
+    conn: &Conn,
+    privilege: &Privilege,
+    dir: &str,
+    exchange: &str,
+    host: Ipv4Addr,
+    port: Option<u16>,
+) -> anyhow::Result<()> {
+    known_exchange(conn, privilege, dir, exchange)?;
+    let port = match port {
+        Some(port) => port,
+        None => match core_new::status(conn, privilege, dir)?.moonproto_port {
+            0 => anyhow::bail!("the core reports no MoonProto port: give --proto-port"),
+            port => port,
+        },
+    };
+    let keys = typed_keys()?;
+    let key = core_new::switch_exchange(conn, privilege, dir, exchange, host, port)?;
+    show_key(&key, None)?;
+    core_new::set_api_keys(conn, privilege, dir, &keys)?;
+    settle(conn, privilege, dir)
+}
+
+/// Refuse an exchange id the core does not list, before anything is typed or changed.
+fn known_exchange(
+    conn: &Conn,
+    privilege: &Privilege,
+    dir: &str,
+    exchange: &str,
+) -> anyhow::Result<()> {
     let known = core_new::exchanges(conn, privilege, dir)?;
     anyhow::ensure!(
         known.iter().any(|ex| ex.id == exchange),
         "the core knows no exchange {exchange:?}: core-new-exchanges lists them"
     );
-    let keys = ApiKeys::Pair {
+    Ok(())
+}
+
+/// The exchange key pair, from the environment or typed without echo.
+fn typed_keys() -> anyhow::Result<ApiKeys> {
+    Ok(ApiKeys::Pair {
         api_key: secret("MOON_REMOTE_API_KEY", "API key: ")?,
         api_secret: secret("MOON_REMOTE_API_SECRET", "API secret: ")?,
-    };
-    core_new::select_exchange(conn, privilege, dir, exchange)?;
-    core_new::set_api_keys(conn, privilege, dir, &keys)?;
-    settle(conn, privilege, dir)
+    })
+}
+
+/// Print the connection key, or write it to `key_out`.
+fn show_key(key: &str, key_out: Option<&str>) -> anyhow::Result<()> {
+    match key_out {
+        Some(path) => {
+            std::fs::write(path, key.as_bytes()).with_context(|| format!("write {path}"))?;
+            println!("connection key written to {path}");
+        }
+        None => println!("connection key:\n{key}"),
+    }
+    Ok(())
 }
 
 /// Wait for the login to settle, printing each status that differs from the one before.

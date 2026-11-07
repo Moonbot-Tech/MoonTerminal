@@ -19,6 +19,7 @@ fn job(phase: NewPhase) -> Option<NewJob> {
         proto_port: 0,
         dir: None,
         uid: None,
+        row_error: None,
         commands: None,
         _task: Task::ready(()),
     })

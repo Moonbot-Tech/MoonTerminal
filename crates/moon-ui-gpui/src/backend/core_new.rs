@@ -8,8 +8,10 @@
 //! keeping the provider's login in memory only for as long as the install lives. Both report
 //! through a channel the backend drains on a timer.
 //!
-//! Once the core hands out its connection key, the backend adds the core's row to the settings
-//! ([`Backend::wizard_add_row`]); once the core is logged in, the wizard waits until this
+//! Once the core hands out its connection key — after the user picked the exchange, since MoonBot
+//! keeps MoonProto settings per exchange — the backend adds the core's row to the settings
+//! ([`Backend::wizard_add_row`]), and points it at the new key when another exchange is picked
+//! later ([`Backend::wizard_set_key`]); once the core is logged in, the wizard waits until this
 //! terminal is connected to it — the one check that the core can be reached from outside.
 
 #[cfg(test)]
@@ -112,6 +114,10 @@ pub(crate) struct NewJob {
     pub(crate) dir: Option<String>,
     /// The core's row in the settings, once it was added.
     pub(crate) uid: Option<u64>,
+    /// Why the row could not be added or pointed at the exchange's key. The worker goes on with
+    /// the login meanwhile, so this outlives the phases it passes through and decides where the
+    /// settled login lands: a core this terminal has no row for cannot be connected to.
+    row_error: Option<String>,
     /// The worker's command channel, while it lives.
     commands: Option<mpsc::Sender<NewCommand>>,
     /// The drain of the running thread's channel, held so it is not cancelled.
@@ -145,6 +151,7 @@ impl NewJob {
             proto_port: 5160,
             dir: Some("mbcore".to_string()),
             uid: Some(1),
+            row_error: None,
             commands: None,
             _task: Task::ready(()),
         }
@@ -170,12 +177,15 @@ pub(super) enum Event {
     /// A progress line, already in the user's language.
     Line(String),
     Checked(ServerCheck),
-    /// The core is installed and handed out its connection key; it offers these exchanges.
+    /// The core is installed and initialized; it offers these exchanges.
     Installed {
         dir: String,
-        key: Zeroizing<String>,
         exchanges: Vec<Exchange>,
     },
+    /// The picked exchange's connection key: the row is added with it, or follows it.
+    Key(Zeroizing<String>),
+    /// The exchanges the core offers, read again by a retry.
+    Exchanges(Vec<Exchange>),
     /// A step began: the worker is busy until its result.
     Busy(NewPhase),
     /// One `--status` while the core settles.
@@ -245,6 +255,11 @@ impl Backend {
         if let Some(commands) = job.commands.as_ref()
             && commands.send(command).is_ok()
         {
+            // A new login attempt: the last status describes the previous one, perhaps on
+            // another exchange, and must not stand beside this attempt's error.
+            if matches!(busy, NewPhase::LoggingIn) {
+                job.status = None;
+            }
             job.phase = busy;
             cx.notify();
         }
@@ -354,6 +369,7 @@ impl Backend {
             proto_port,
             dir: None,
             uid: None,
+            row_error: None,
             commands,
             _task: task,
         });
@@ -380,7 +396,10 @@ impl Backend {
             Event::Installed { dir, .. } => {
                 log::info!(target: CORE_MOVE_TARGET, "core install: installed in {dir}")
             }
-            Event::Busy(_) | Event::Status(_) => {}
+            Event::Key(_) => {
+                log::info!(target: CORE_MOVE_TARGET, "core install: the exchange's connection key arrived")
+            }
+            Event::Busy(_) | Event::Status(_) | Event::Exchanges(_) => {}
             Event::Settled(status) => log::info!(
                 target: CORE_MOVE_TARGET,
                 "core install: settled {:?} listening={} {}",
@@ -408,18 +427,29 @@ impl Backend {
             Event::Checked(check) => job.phase = NewPhase::Checked { check },
             Event::Busy(phase) => job.phase = phase,
             Event::Status(status) => job.status = Some(status),
-            Event::Installed {
-                dir,
-                key,
-                exchanges,
-            } => {
-                job.dir = Some(dir.clone());
+            Event::Installed { dir, exchanges } => {
+                job.dir = Some(dir);
                 job.exchanges = exchanges;
-                match self.wizard_add_row(dir.rsplit('/').next().unwrap_or(&dir), &key, cx) {
-                    Ok(uid) => {
-                        if let Some(job) = self.core_new.as_mut() {
+                job.phase = NewPhase::Keys;
+            }
+            Event::Exchanges(exchanges) => job.exchanges = exchanges,
+            Event::Key(key) => {
+                let added = match (job.uid, job.dir.clone()) {
+                    (Some(uid), _) => self.wizard_set_key(uid, &key, cx).map(|()| None),
+                    (None, dir) => {
+                        let dir = dir.unwrap_or_default();
+                        let base = dir.rsplit('/').next().unwrap_or(&dir).to_owned();
+                        self.wizard_add_row(&base, &key, cx).map(Some)
+                    }
+                };
+                let Some(job) = self.core_new.as_mut() else {
+                    return;
+                };
+                match added {
+                    Ok(added) => {
+                        job.row_error = None;
+                        if let Some(uid) = added {
                             job.uid = Some(uid);
-                            job.phase = NewPhase::Keys;
                             push_line(
                                 &mut job.lines,
                                 t!("connect_wizard.line.row_added").to_string(),
@@ -427,22 +457,16 @@ impl Backend {
                         }
                     }
                     Err(e) => {
-                        log::warn!(target: CORE_MOVE_TARGET, "core install: the row was not added: {e:#}");
-                        if let Some(job) = self.core_new.as_mut() {
-                            job.phase = NewPhase::Stuck {
-                                status: None,
-                                error: Some(
-                                    t!("connect_wizard.row_failed", reason = format!("{e:#}"))
-                                        .to_string(),
-                                ),
-                            };
-                        }
+                        log::warn!(target: CORE_MOVE_TARGET, "core install: the row was not saved: {e:#}");
+                        job.row_error = Some(
+                            t!("connect_wizard.row_failed", reason = format!("{e:#}")).to_string(),
+                        );
                     }
                 }
             }
             Event::Settled(status) => {
-                let ready = status.connectable();
                 let uid = job.uid;
+                let ready = status.connectable() && job.row_error.is_none() && uid.is_some();
                 job.status = Some(status.clone());
                 job.phase = if ready {
                     NewPhase::Connecting {
@@ -451,7 +475,7 @@ impl Backend {
                 } else {
                     NewPhase::Stuck {
                         status: Some(status),
-                        error: None,
+                        error: job.row_error.clone(),
                     }
                 };
                 // The session may have backed off while the core was not logged in yet.
@@ -549,6 +573,45 @@ impl Backend {
         self.session.reconcile(&self.config, reports);
         cx.notify();
         Ok(row.uid)
+    }
+
+    /// Point the wizard's core row `uid` at connection key `key` — the key of the exchange the
+    /// user picked again after a failed login, which MoonBot may keep apart from the previous
+    /// exchange's. Saved like [`Backend::wizard_add_row`], into an open Settings draft too; an
+    /// unchanged key changes nothing, so the session does not reconnect for no reason.
+    pub(crate) fn wizard_set_key(
+        &mut self,
+        uid: u64,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        let key = key.trim();
+        let point = |servers: &mut Vec<moon_core::config::ServerConfig>| -> Option<bool> {
+            let row = servers.iter_mut().find(|s| s.uid == uid)?;
+            if row.key.expose() == key {
+                return Some(false);
+            }
+            row.key = moon_core::config::Secret::new(key);
+            row.transport = moon_core::config::seeded_transport(row.transport, key);
+            Some(true)
+        };
+        let mut candidate = self.config.clone();
+        match point(&mut candidate.servers) {
+            None => anyhow::bail!("the core is no longer in the settings"),
+            Some(false) => return Ok(()),
+            Some(true) => {}
+        }
+        self.finish_pending_persistence();
+        candidate.save()?;
+        self.config = candidate;
+        if let Some(preview) = self.preview.as_mut() {
+            point(&mut preview.servers);
+        }
+        self.servers_changed_outside = self.servers_changed_outside.wrapping_add(1);
+        let reports = self.reports.as_ref().map(|h| &h.tx);
+        self.session.reconcile(&self.config, reports);
+        cx.notify();
+        Ok(())
     }
 
     /// The wizard's language or theme pick: applied at once to every window and saved, as a saved
