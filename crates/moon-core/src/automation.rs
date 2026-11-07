@@ -4,6 +4,7 @@
 //! normal feed queue and validate their preview again there, immediately before submission.
 
 pub mod ids;
+pub mod journal;
 mod read;
 pub mod reports;
 pub(crate) mod settings;
@@ -118,7 +119,7 @@ impl Action {
         }
     }
 
-    /// Name used in bounded audit records, excluding parameters and financial information.
+    /// The action's stable name in the change journal; [`journal::summarize`] says what it changed.
     pub fn name(&self) -> &'static str {
         match self {
             Self::StrategyEdit { .. } => "strategy_edit",

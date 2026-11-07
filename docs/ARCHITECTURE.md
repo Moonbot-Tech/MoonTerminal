@@ -1098,7 +1098,13 @@ the Terminal before enabling authorization. No DNS-registration service is requi
 
 OAuth registration is public; approval is not. The browser's code must be entered in the
 Terminal's Station AI-access page through the existing pinned SSH/control-socket channel.
-The owner selects explicit core IDs and read/strategies/trading/settings scopes. Each HTTP
+The owner selects explicit core IDs and, per core, read/strategies/trading/settings scopes: read is
+required on every selected core, and a write permission on one core gives nothing on another. OAuth's
+single `scope` value is the union of them and grants nothing by itself. The owner can change a
+connected client's permissions from the same page, up to what it requested when it connected, with
+no new consent code: tokens name a grant, so the next call reads the new permissions. A change made
+elsewhere since the owner last read them is refused, not overwritten. The change
+is recorded in the owner's journal. Each HTTP
 request, queued owner call and feed mutation rechecks current authorization. Access tokens are opaque,
 stored as hashes, audience-bound, short-lived and revocable. Refresh credentials carry a grant-bound
 HMAC and expiry; one current hash and a private verification key per grant detect valid-token reuse

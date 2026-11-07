@@ -832,6 +832,9 @@ impl SettingsView {
         let initial_saved = SavedPageSigs::of(&backend.read(cx).config);
         let initial_pages = backend_dirty_pages(backend.read(cx), initial_dirty, &initial_saved);
         cx.observe(&backend, |this, backend, cx| {
+            if this.mcp.settle(backend.read(cx).station.mcp.as_ref()) {
+                cx.notify();
+            }
             let b = backend.read(cx);
             let sig = settings_sig(b);
             // The dirty flag is a SECOND repaint trigger, not a consequence of the first:

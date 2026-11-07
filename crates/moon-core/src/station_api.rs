@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 /// ones it carries (`TelegramStatus`, `MiniAppStatus`, `TelegramChatAccess`): they have no
 /// fallback for a variant or field they do not know. The terminal refuses a station of another
 /// version ([`CtlOutput::hello`]) before it reads the reply.
-pub const PROTO_VERSION: u32 = 3;
+pub const PROTO_VERSION: u32 = 4;
 /// The socket's name in the station's runtime directory.
 pub const SOCKET_FILE: &str = "api.sock";
 /// The socket of the service (`RuntimeDirectory=moon-station` in its unit).

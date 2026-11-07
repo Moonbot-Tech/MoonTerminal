@@ -368,6 +368,10 @@ iface.theme.obsidian: es tr pt vi
 
 # English in every language: names, tickers and terms kept on purpose (locales/README.md,
 # "Deliberately NOT translated"). A line here that should be translated is a gap too.
+# Panic Sell is a Moonbot term, kept in every language (locales/README.md).
+station_mcp.action.panic_sell: ru es uk tr pt vi
+# The menu path in Claude's own interface, spelled as that interface shows it.
+station_mcp.path_claude: ru es uk tr pt vi
 # Core commands: protocol/API labels, units, and the native cognates Exchange (es) and Port (tr).
 core_cmds.addr.ip: ru es uk tr pt vi
 core_cmds.addr.port: tr
