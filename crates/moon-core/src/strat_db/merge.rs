@@ -18,7 +18,7 @@
 //! observation, `valid_to`, and the diff when the predecessor changed. The one bound on that is the
 //! retention every insert applies (`MAX_VERSIONS_PER_STRATEGY`, newest kept).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, ensure};
 use rusqlite::{Connection, params};
@@ -275,7 +275,11 @@ impl Row {
 /// Assigns one number per distinct version content, under this store's `ignore_fields`.
 ///
 /// Compared as the canonical text rather than through `hash_of`: `DefaultHasher` promises nothing
-/// across builds, and two machines compare here.
+/// across builds, and two machines compare here. Canonical means sorted keys, and sorted here: a
+/// dependency turns on `serde_json`'s `preserve_order` in some builds and not in others, so a parsed
+/// map keeps whatever order the row was written in, and imported rows have their own. Left to the
+/// map, one content reads as two, and every first sighting by a new station becomes an edit with an
+/// empty diff.
 #[derive(Default)]
 struct Contents {
     seen: HashMap<String, u32>,
@@ -285,8 +289,9 @@ impl Contents {
     fn link(&mut self, row: &Row, state: &State) -> Link {
         let text = match serde_json::from_str::<Value>(&row.raw_json) {
             Ok(Value::Object(fields)) => {
-                serde_json::to_string(&Value::Object(strip(&fields, &state.ignore)))
-                    .unwrap_or_else(|_| row.raw_json.clone())
+                let stripped = strip(&fields, &state.ignore);
+                let sorted: BTreeMap<&String, &Value> = stripped.iter().collect();
+                serde_json::to_string(&sorted).unwrap_or_else(|_| row.raw_json.clone())
             }
             _ => row.raw_json.clone(),
         };
@@ -449,14 +454,26 @@ fn build_rows(
 
 /// Close each row at its successor, and the newest as this strategy's state says.
 ///
+/// A stored row whose successor did not change keeps its stored end: that end can be earlier than
+/// the successor's start, when the strategy was deleted and restored between them, and that gap is
+/// history a merge has no reason to rewrite.
+///
 /// Args:
 ///     rows: The merged rows.
+///     kept: Whether row `i` keeps its stored end.
 ///     local_last: `valid_to` of this store's newest row before the merge.
 ///     locally_deleted: `Some(deleted)` when this store has the head, whose word it keeps.
-fn close_ranges(rows: &mut [Row], local_last: Option<i64>, locally_deleted: Option<bool>) {
+fn close_ranges(
+    rows: &mut [Row],
+    kept: impl Fn(usize) -> bool,
+    local_last: Option<i64>,
+    locally_deleted: Option<bool>,
+) {
     let starts: Vec<i64> = rows.iter().map(|row| row.valid_from).collect();
-    for (row, next) in rows.iter_mut().zip(starts.iter().skip(1)) {
-        row.valid_to = Some(*next);
+    for (index, (row, next)) in rows.iter_mut().zip(starts.iter().skip(1)).enumerate() {
+        if !kept(index) {
+            row.valid_to = Some(*next);
+        }
     }
     if let Some(last) = rows.last_mut() {
         last.valid_to = match locally_deleted {
@@ -544,6 +561,15 @@ pub(super) fn merge_chain(
     let existing = state.heads.get(&(core_uid, strategy_id));
     close_ranges(
         &mut rows,
+        |index| {
+            let (this, next) = (own(&planned[index]), planned.get(index + 1));
+            match (this, next.map(|row| (own(row), row.valid_from))) {
+                (Some(this), Some((Some(following), start))) => {
+                    following == this + 1 && local[following].valid_from == start
+                }
+                _ => false,
+            }
+        },
         local.last().and_then(|row| row.valid_to),
         existing.map(|head| head.deleted),
     );

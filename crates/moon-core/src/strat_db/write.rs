@@ -357,6 +357,30 @@ pub(super) fn apply_full_set(
                     }
                 }
             };
+            if change_kind == "restored" && n_changed == 0 && prev.is_some() {
+                // The same content under another hash: a head a sync created hashed the incoming
+                // row's key order. It is the restore without a change that the shortcut above
+                // handles, not a version of its own.
+                tx.execute(
+                    "UPDATE strategy_versions SET valid_to=NULL
+                     WHERE core_uid=?1 AND strategy_id=?2 AND valid_from=(
+                        SELECT MAX(valid_from) FROM strategy_versions
+                        WHERE core_uid=?1 AND strategy_id=?2)",
+                    rusqlite::params![uid, d.strategy_id],
+                )?;
+                upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
+                st.heads.insert(
+                    key,
+                    Head {
+                        content_hash,
+                        head_hash,
+                        deleted: false,
+                        server_ver: d.server_ver,
+                    },
+                );
+                writes += 1;
+                continue;
+            }
             if change_kind == "params" && n_changed == 0 && prev.is_some() {
                 // For a false-positive hash change, update the cache and head without a version.
                 upsert_head(&tx, uid, core_name, d, content_hash, head_hash, now)?;
@@ -518,7 +542,7 @@ struct FilteredFields<'a> {
 }
 
 impl serde::Serialize for FilteredFields<'_> {
-    /// Serialize the same key-sorted object as the former cloned `Value::Object`.
+    /// Serialize the same object as the former cloned `Value::Object`, in the map's own key order.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -534,7 +558,9 @@ impl serde::Serialize for FilteredFields<'_> {
     }
 }
 
-/// Computes a canonical content hash without cloning or stripping the source fields.
+/// Computes a content hash without cloning or stripping the source fields. It follows the map's key
+/// order, which `preserve_order` leaves as written, so it is only comparable within one writer's
+/// own feed; a mismatch with an empty content diff is handled as no change in [`apply_full_set`].
 pub(super) fn hash_of(fields: &Map<String, Value>, ignore: &HashSet<String>) -> i64 {
     let s = serde_json::to_string(&FilteredFields { fields, ignore }).unwrap_or_default();
     let mut h = std::collections::hash_map::DefaultHasher::new();

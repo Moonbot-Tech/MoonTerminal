@@ -435,14 +435,14 @@ fn a_deleted_strategy_never_closes_before_its_newest_row_starts() {
         changed_json: None,
     };
     let mut rows = [row(100), row(300)];
-    close_ranges(&mut rows, Some(200), Some(true));
+    close_ranges(&mut rows, |_| false, Some(200), Some(true));
     assert_eq!(rows[0].valid_to, Some(300));
     assert_eq!(rows[1].valid_to, Some(300), "not the older 200");
     let mut rows = [row(100), row(150)];
-    close_ranges(&mut rows, Some(200), Some(true));
+    close_ranges(&mut rows, |_| false, Some(200), Some(true));
     assert_eq!(rows[1].valid_to, Some(200), "the moment it went stands");
     let mut rows = [row(100)];
-    close_ranges(&mut rows, Some(50), Some(false));
+    close_ranges(&mut rows, |_| false, Some(50), Some(false));
     assert_eq!(rows[0].valid_to, None, "a live strategy's newest is open");
 }
 
@@ -456,6 +456,148 @@ fn a_version_stamped_far_ahead_is_refused() {
     // A wrong clock within reason is still history.
     let ahead = crate::util::now_unix_ms_i64() + 3_600_000;
     assert!(merge_chain(&conn, &mut state, incoming(vec![version(ahead, 1)], true)).is_ok());
+}
+
+/// A dump written by hand-picked key order, as the archive's imported rows are: `serde_json` keeps
+/// insertion order in this workspace, so the order survives a parse.
+fn raw_version(valid_from: i64, raw_json: &str) -> StrategyVersion {
+    StrategyVersion {
+        raw_json: raw_json.to_owned(),
+        ..version(valid_from, 0)
+    }
+}
+
+/// Regression target: comparing dumps as text. A dependency turns on `preserve_order`, the terminal's
+/// imported rows keep their own key order, and every first sighting by a new station then read as an
+/// edit: 612 strategies on a real archive gained a version with an empty diff.
+#[test]
+fn the_same_dump_in_another_key_order_is_the_same_version() {
+    let (conn, mut state) = setup();
+    let imported = raw_version(100, r#"{"Zeta":1,"TakeProfit":2,"Alpha":true}"#);
+    merge_chain(&conn, &mut state, incoming(vec![imported], false)).unwrap();
+    let seen_by_station = raw_version(5000, r#"{"Alpha":true,"TakeProfit":2,"Zeta":1}"#);
+    let outcome = merge_chain(&conn, &mut state, incoming(vec![seen_by_station], true)).unwrap();
+    assert!(
+        !outcome.changed,
+        "one version, and it stays at the earlier time"
+    );
+    assert!(
+        outcome.other_lacks,
+        "the station should learn that earlier time"
+    );
+    assert_eq!(chain_len(&conn), 1);
+}
+
+/// The same when the two dumps differ only in a field this store ignores.
+#[test]
+fn a_dump_differing_in_an_ignored_field_is_the_same_version() {
+    let (conn, mut state) = setup();
+    let first = raw_version(100, r#"{"Comment":"old","TakeProfit":2}"#);
+    merge_chain(&conn, &mut state, incoming(vec![first], false)).unwrap();
+    let second = raw_version(5000, r#"{"TakeProfit":2,"Comment":"new"}"#);
+    merge_chain(&conn, &mut state, incoming(vec![second], true)).unwrap();
+    assert_eq!(chain_len(&conn), 1);
+}
+
+/// A chain that already holds such a false version loses it on the next merge, on either side, so a
+/// station that took one from an earlier build settles with a terminal that has none.
+#[test]
+fn a_neighbour_with_the_same_content_folds_away() {
+    let (conn, mut state) = setup();
+    let clean = vec![raw_version(100, r#"{"TakeProfit":2,"Alpha":true}"#)];
+    merge_chain(&conn, &mut state, incoming(clean.clone(), false)).unwrap();
+    let doubled = vec![
+        raw_version(100, r#"{"TakeProfit":2,"Alpha":true}"#),
+        raw_version(5000, r#"{"Alpha":true,"TakeProfit":2}"#),
+    ];
+    let outcome = merge_chain(&conn, &mut state, incoming(doubled, true)).unwrap();
+    assert!(!outcome.changed);
+    assert!(
+        outcome.other_lacks,
+        "the sender's false version must go too"
+    );
+    // And the side holding it folds it when the clean chain arrives.
+    let (holder, mut holder_state) = setup();
+    let doubled = vec![
+        raw_version(100, r#"{"TakeProfit":2,"Alpha":true}"#),
+        raw_version(5000, r#"{"Alpha":true,"TakeProfit":2}"#),
+    ];
+    let mut raw = incoming(doubled, false);
+    raw.from_station = false;
+    insert_as_is(&holder, &mut holder_state, raw);
+    let outcome = merge_chain(&holder, &mut holder_state, incoming(clean, false)).unwrap();
+    assert!(outcome.changed);
+    assert_eq!(chain_len(&holder), 1);
+}
+
+/// A window a stored row closed itself, when its strategy was deleted and later restored, is history:
+/// a merge that keeps its neighbour keeps it.
+#[test]
+fn a_stored_gap_between_two_kept_rows_stays() {
+    let (conn, mut state) = setup();
+    merge_chain(
+        &conn,
+        &mut state,
+        incoming(vec![version(100, 1), version(300, 2)], false),
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE strategy_versions SET valid_to=200 WHERE valid_from=100",
+        [],
+    )
+    .unwrap();
+    merge_chain(
+        &conn,
+        &mut state,
+        incoming(
+            vec![version(100, 1), version(300, 2), version(400, 3)],
+            false,
+        ),
+    )
+    .unwrap();
+    let stored = chain(&conn);
+    assert_eq!(stored[0].1, Some(200), "the gap is still there");
+    assert_eq!(
+        stored[1].1,
+        Some(400),
+        "the row with a new successor closes at it"
+    );
+}
+
+/// Rows of the stored chain, for a count that does not parse their dumps.
+fn chain_len(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM strategy_versions WHERE core_uid=?1 AND strategy_id=?2",
+        params![CORE as i64, STRATEGY],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// Store a chain exactly as given, the way an earlier build left it, past the merge's folding.
+fn insert_as_is(conn: &Connection, state: &mut State, chain: IncomingChain) {
+    for row in &chain.versions {
+        conn.execute(
+            "INSERT INTO strategy_versions (core_uid, strategy_id, valid_from, change_kind, raw_json)
+             VALUES (?1, ?2, ?3, 'params', ?4)",
+            params![CORE as i64, STRATEGY, row.valid_from, row.raw_json],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO strategies (core_uid, strategy_id, name, kind) VALUES (?1, ?2, 'Main', 'Drops')",
+        params![CORE as i64, STRATEGY],
+    )
+    .unwrap();
+    state.heads.insert(
+        (CORE as i64, STRATEGY),
+        Head {
+            content_hash: 0,
+            head_hash: 0,
+            deleted: false,
+            server_ver: 0,
+        },
+    );
 }
 
 /// Moving a version's `valid_from` must not leave statistics keyed by the old one.

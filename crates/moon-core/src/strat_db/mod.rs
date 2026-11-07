@@ -53,8 +53,10 @@ pub struct StratDump {
     pub server_ver: i32,
     /// Server time of the latest edit (Unix milliseconds from `last_date`).
     pub server_ms: i64,
-    /// Complete normalized field dump. `serde_json::Map` is a BTreeMap, so keys are sorted
-    /// and serialization is canonical (yielding a stable content hash).
+    /// Complete normalized field dump. Its key order is not canonical: `serde_json::Map` keeps the
+    /// feed's insertion order in builds where a dependency turns on `preserve_order`, and sorts
+    /// otherwise. The content hash is stable for one build's feed; to compare dumps from elsewhere,
+    /// see `merge::Contents`.
     pub fields: serde_json::Map<String, serde_json::Value>,
     /// Heuristic classification that the edit likely responds to our command, based on the feed's
     /// recent-send ring.

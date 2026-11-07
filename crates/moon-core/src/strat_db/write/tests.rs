@@ -218,6 +218,40 @@ fn setup() -> (Connection, State) {
     (conn, st)
 }
 
+/// Regression target: only the `params` branch tolerating a hash that differs with nothing changed.
+/// A head a sync created carries the hash of the incoming row's key order, so restoring that strategy
+/// unchanged would add a `restored` version with an empty diff.
+#[test]
+fn restoring_unchanged_content_under_another_hash_adds_no_version() {
+    const CORE: u64 = 9;
+    let (conn, mut state) = setup();
+    apply_full_set(&conn, &mut state, CORE, "C", true, &[dump(1, "A", 5, "")]).unwrap();
+    // Gone from the core's set: soft-deleted, its range closed.
+    apply_full_set(&conn, &mut state, CORE, "C", false, &[dump(2, "B", 5, "")]).unwrap();
+    state
+        .heads
+        .get_mut(&(CORE as i64, 1))
+        .expect("the deleted head")
+        .content_hash ^= 1;
+    apply_full_set(
+        &conn,
+        &mut state,
+        CORE,
+        "C",
+        false,
+        &[dump(1, "A", 5, ""), dump(2, "B", 5, "")],
+    )
+    .unwrap();
+    let (count, open): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), SUM(valid_to IS NULL) FROM strategy_versions WHERE strategy_id=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((count, open), (1, 1), "the one version, reopened");
+}
+
 /// Regression target: deleting `idx_strat_sid` creation or legacy `idx_sv_lookup` cleanup from
 /// `write.rs:init` breaks the `has(...)` or query-plan assertion and would make upgraded databases
 /// retain extra version-write overhead or lose indexed tuner lookups by strategy ID.
