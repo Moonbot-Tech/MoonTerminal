@@ -10,7 +10,8 @@
 //! The package and the service go on through the same server-side script as a moved core
 //! (`remote/moonbot-move.sh`, step `install-fresh`), so [`crate::core_move::check`] and
 //! [`crate::core_move::remove`] serve both. Reconfiguring commands reach only an instance that
-//! script made; hand-installed cores accept only status and login retry.
+//! script made; hand-installed cores accept only status and login retry. A command runs under the
+//! account the core runs as, the only one its command channel answers.
 
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};

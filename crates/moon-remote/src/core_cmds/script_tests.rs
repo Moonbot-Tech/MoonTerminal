@@ -88,6 +88,10 @@ case "$*" in
 esac
 "#;
 
+const SETPRIV_STUB: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$MB_TEST_ROOT/setpriv_calls"
+"#;
+
 const UFW_STUB: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MB_TEST_ROOT/ufw_calls"
 record_order() {
@@ -188,12 +192,22 @@ const SUDO_STUB: &str = r#"#!/bin/sh
 exit 0
 "#;
 
+/// Functions, because Git Bash puts its own tools ahead of the fake ones on `PATH`. `ls` reports the
+/// owner recorded in `owners` for a path's last component, and root otherwise, so a fixture can
+/// describe any account without a root shell and on every host.
 const BASH_ENV: &str = r#"readlink() {
     case ${1:-} in
     */cwd) cat "$MB_TEST_ROOT/readlink_cwd" ;;
     */exe) cat "$MB_TEST_ROOT/readlink_exe" ;;
     *) return 1 ;;
     esac
+}
+ls() {
+    for path; do :; done
+    test "$path" != . || path=$PWD
+    name=${path##*/}
+    entry=$(awk -v name="$name" '$1 == name { print $2, 1, $3, $4; exit }' "$MB_TEST_ROOT/owners")
+    printf '%s 0 Jan 1 00:00 %s\n' "${entry:-drwxr-xr-x 1 0 0}" "$path"
 }
 "#;
 
@@ -249,6 +263,7 @@ impl Sandbox {
             ("systemd-escape", SYSTEMD_ESCAPE_STUB),
             ("ufw", UFW_STUB),
             ("sudo", SUDO_STUB),
+            ("setpriv", SETPRIV_STUB),
         ] {
             sandbox.executable(&sandbox.bin.join(name), body);
         }
@@ -275,6 +290,8 @@ impl Sandbox {
             "memory_current",
             "readlink_cwd",
             "readlink_exe",
+            "owners",
+            "setpriv_calls",
         ] {
             sandbox.answer(name, "");
         }
@@ -567,6 +584,144 @@ fn mb_allows_only_status_and_retry_on_unmarked_directory() {
     }
     let refused = sandbox.run(&["mb", &dir, "--exchange", "X"]);
     assert!(!refused.status.success());
+}
+
+/// An instance whose wrapper leaves a trace when it runs, which here means running as root.
+fn instance_with_wrapper(sandbox: &Sandbox, name: &str) -> String {
+    let dir = sandbox.instance(name);
+    sandbox.executable(
+        &dir.join("mb"),
+        "#!/bin/sh\n: > \"$MB_TEST_ROOT/wrapper_ran\"\n",
+    );
+    sandbox.posix(&dir)
+}
+
+/// Record a process running the program of `dir` under the given account.
+fn running_core(sandbox: &Sandbox, dir: &str, uid: u32, gid: u32) {
+    let process = sandbox.proc.join("123");
+    sandbox.answer_at(&process.join("exe"), "");
+    sandbox.answer_at(
+        &process.join("status"),
+        &format!(
+            "Name:\tMoonBot\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\nGid:\t{gid}\t{gid}\t{gid}\t{gid}\n"
+        ),
+    );
+    sandbox.answer("readlink_exe", &format!("{dir}/MoonBot\n"));
+}
+
+/// Assert the command went through `setpriv` under this account and the root-run wrapper stayed out.
+fn assert_ran_as(sandbox: &Sandbox, uid: u32, gid: u32, command: &str) {
+    assert!(
+        !sandbox.root.join("wrapper_ran").exists(),
+        "the wrapper ran as root"
+    );
+    let calls = sandbox.read(&sandbox.root.join("setpriv_calls"));
+    let drop_to = format!("--reuid={uid} --regid={gid} --clear-groups --no-new-privs -- env -i ");
+    assert!(
+        calls.starts_with(&drop_to) && calls.ends_with(&format!(" ./MoonBot {command}\n")),
+        "{calls}"
+    );
+}
+
+/// Assert the command went through the root-run wrapper and `setpriv` stayed out.
+fn assert_ran_as_root(sandbox: &Sandbox) {
+    assert!(sandbox.root.join("wrapper_ran").exists());
+    assert_eq!(sandbox.read(&sandbox.root.join("setpriv_calls")), "");
+}
+
+/// Root's commands reach no other account's core, and root would run what that account can replace.
+#[test]
+fn mb_runs_under_the_account_of_a_running_core() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = instance_with_wrapper(&sandbox, "moonbot-a");
+    running_core(&sandbox, &dir, 54321, 54322);
+
+    assert_ok(&sandbox.run(&["mb", &dir, "--status"]));
+
+    assert_ran_as(&sandbox, 54321, 54322, "--status");
+}
+
+/// A core running as root answers root alone, wherever it lives and whoever owns the path to it.
+#[test]
+fn mb_keeps_root_for_a_core_running_as_root() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = instance_with_wrapper(&sandbox, "moonbot-a");
+    running_core(&sandbox, &dir, 0, 0);
+    sandbox.answer("owners", "moonbot-a drwx------ 54321 54321\n");
+
+    assert_ok(&sandbox.run(&["mb", &dir, "--status"]));
+
+    assert_ran_as_root(&sandbox);
+}
+
+/// Stopping a core must not turn the files its account can replace into a root-run command.
+#[test]
+fn mb_without_a_running_core_runs_under_the_owner_of_the_program() {
+    for owners in [
+        "moonbot-a drwx------ 54321 54321\n",
+        "mb -rwxr-xr-x 54321 0\n",
+    ] {
+        let Some(sandbox) = Sandbox::new() else {
+            return;
+        };
+        let dir = instance_with_wrapper(&sandbox, "moonbot-a");
+        sandbox.answer("owners", owners);
+
+        assert_ok(&sandbox.run(&["mb", &dir, "--status"]));
+
+        // The group comes from the account, or falls back to its uid, not from the file's column.
+        assert_ran_as(&sandbox, 54321, 54321, "--status");
+    }
+}
+
+/// A root-owned core below a user's home or a group-writable /usr/local worked and must go on.
+#[test]
+fn mb_without_a_running_core_keeps_root_for_root_owned_files() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = instance_with_wrapper(&sandbox, "moonbot-a");
+    sandbox.answer("owners", "root drwxrwsr-x 54321 54321\n");
+
+    assert_ok(&sandbox.run(&["mb", &dir, "--status"]));
+
+    assert_ran_as_root(&sandbox);
+}
+
+/// Treating an unreadable owner as "nobody" would run the wrapper as root on a failed check.
+#[test]
+fn mb_runs_nothing_when_the_owner_cannot_be_read() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = instance_with_wrapper(&sandbox, "moonbot-a");
+    sandbox.answer("owners", "moonbot-a drwx------ unreadable 0\n");
+
+    let refused = sandbox.run(&["mb", &dir, "--status"]);
+
+    assert!(!refused.status.success());
+    assert!(!sandbox.root.join("wrapper_ran").exists());
+    assert_eq!(sandbox.read(&sandbox.root.join("setpriv_calls")), "");
+}
+
+/// The directory's owner can write the marker too, so a marker must not buy a root-run command.
+#[test]
+fn mb_marker_does_not_keep_root_for_another_accounts_directory() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.answer_at(&dir.join(".moonterminal-move"), "3302\n");
+    let dir = sandbox.posix(&dir);
+    sandbox.answer("owners", "moonbot-a drwx------ 54321 54321\n");
+
+    assert_ok(&sandbox.run(&["mb", &dir, "--exchange", "X"]));
+
+    assert_ran_as(&sandbox, 54321, 54321, "--exchange X");
 }
 
 /// Accepting a systemd action outside the frozen whitelist could run an unintended operation.
