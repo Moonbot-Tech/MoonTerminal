@@ -98,12 +98,7 @@ impl CoreCmdsView {
         let secret_input = input(true, window, cx);
         let host_input = input(false, window, cx);
         let port_input = input(false, window, cx);
-        key_input.update(cx, |s, cx| {
-            s.set_placeholder(t!("core_cmds.keys.key_ph").to_string(), window, cx)
-        });
-        secret_input.update(cx, |s, cx| {
-            s.set_placeholder(t!("core_cmds.keys.secret_ph").to_string(), window, cx)
-        });
+        set_key_placeholders(&key_input, &secret_input, window, cx);
         host_input.update(cx, |s, cx| s.set_value("0.0.0.0", window, cx));
         port_input.update(cx, |s, cx| s.set_value(String::new(), window, cx));
         let choices: Vec<_> = rail::RAIL
@@ -1034,6 +1029,22 @@ pub(super) fn target_host(target: &str) -> &str {
         })
 }
 
+/// Write the API-key fields' hints in the current language, at creation and on every change of it:
+/// an input keeps the hint it was given, so a window left open would go on showing the old language.
+fn set_key_placeholders<V: 'static>(
+    key_input: &Entity<MoonInputState>,
+    secret_input: &Entity<MoonInputState>,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) {
+    key_input.update(cx, |s, cx| {
+        s.set_placeholder(t!("core_cmds.keys.key_ph").to_string(), window, cx)
+    });
+    secret_input.update(cx, |s, cx| {
+        s.set_placeholder(t!("core_cmds.keys.secret_ph").to_string(), window, cx)
+    });
+}
+
 /// Build localized log-count labels for initial display and every locale revision.
 fn log_choices() -> Vec<MoonSelectItem<LogLines>> {
     [
@@ -1150,6 +1161,7 @@ impl Render for CoreCmdsView {
                 picker.set_items(log_choices(), cx);
                 picker.set_selected_value(&self.log_lines);
             });
+            set_key_placeholders(&self.key_input, &self.secret_input, window, cx);
             self.nav_signature = Some(signature);
         }
         if let Some(CmdPhase::Running { since, .. }) = facts.phases.get(&self.cmd) {
