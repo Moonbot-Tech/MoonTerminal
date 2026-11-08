@@ -191,7 +191,7 @@ impl Captures {
         let selected = select(&capture.rows, read.contains);
         let mut answer = json!({"capture_id":id,"status":capture.ended.as_deref().unwrap_or("collecting"),"cores":capture.cores.iter().map(u64::to_string).collect::<Vec<_>>(),
             "started_ms":capture.started_ms,"end_ms":capture.end_ms,"received_lines":capture.rows.len(),"gap_cores":capture.gaps.iter().map(u64::to_string).collect::<Vec<_>>(),
-            "data_is_untrusted":true,
+            "data_is_untrusted":true,"time_axes":{"received_ms":"UTC","server_time_ms":"core_local"},
             "interpretation":"No lines can mean a quiet bot, missing subscription support, disconnection or insufficient core verbosity. ServerLog has no replay or reliable delivery; gap_cores cannot detect every packet lost before Station. File-only logs and historical archives are not included."});
         if let Some(needle) = read.contains {
             answer["contains"] = json!(needle);
@@ -199,7 +199,7 @@ impl Captures {
         }
         if read.summary {
             // Paged like the lines are, so every distinct line stays reachable.
-            let groups = summarize(&selected);
+            let groups = summarize(&selected, capture.cores.len() > 1);
             let page: Vec<_> = groups
                 .iter()
                 .skip(read.offset)
@@ -217,17 +217,32 @@ impl Captures {
                 .collect();
             answer["offset"] = json!(read.offset);
             answer["next_offset"] = json!(read.offset + rows.len());
-            answer["lines"] = json!(rows);
+            answer["lines"] = json!(
+                rows.iter()
+                    .map(|row| compact(row, capture.cores.len() > 1))
+                    .collect::<Vec<_>>()
+            );
         }
         Ok(answer)
     }
 }
 
-/// Most distinct lines one summary page holds. With `SUMMARY_TEXT` this keeps a page of long lines
-/// well under the answer budget; the rest is reached by `next_offset`.
-const SUMMARY_PAGE: usize = 50;
-/// Characters of a pattern and of its sample a summary keeps; the full line is one `contains` away.
-const SUMMARY_TEXT: usize = 400;
+/// Most distinct lines one summary page holds; the rest is reached by `next_offset`. A summary is
+/// read to see what a log is busy with, which the first page answers.
+const SUMMARY_PAGE: usize = 20;
+/// Characters of a sample a summary keeps; the full line is one `contains` away.
+const SUMMARY_TEXT: usize = 300;
+
+/// One captured line as an answer carries it. The time axes are stated once in the answer, not on
+/// every line, and the core only when the observation has more than one: measured live, the
+/// labels were about 110 bytes of every line.
+fn compact(row: &Value, several_cores: bool) -> Value {
+    let mut line = json!({"received_ms":row["received_ms"],"server_time_ms":row["server_time_ms"],"text":row["text"]});
+    if several_cores {
+        line["core"] = row["core"].clone();
+    }
+    line
+}
 
 /// How `logs_get` reads an observation.
 pub(super) struct Read<'a> {
@@ -276,7 +291,10 @@ fn pattern(text: &str) -> String {
 }
 
 /// One entry per distinct pattern, most frequent first, with a real line as its sample.
-fn summarize(rows: &[&Value]) -> Vec<Value> {
+///
+/// The folded pattern itself is not returned: it repeats the sample with its digits replaced, and
+/// on a live log it doubled the page.
+fn summarize(rows: &[&Value], several_cores: bool) -> Vec<Value> {
     struct Group<'a> {
         count: usize,
         first: &'a Value,
@@ -309,11 +327,19 @@ fn summarize(rows: &[&Value]) -> Vec<Value> {
     });
     groups
         .into_iter()
-        .map(|(pattern, group)| {
-            let clip = |text: &str| text.chars().take(SUMMARY_TEXT).collect::<String>();
-            json!({"pattern":clip(&pattern),"count":group.count,"sample":clip(group.first["text"].as_str().unwrap_or_default()),
-            "first_received_ms":group.first["received_ms"],"last_received_ms":group.last["received_ms"],
-            "cores":group.cores})
+        .map(|(_, group)| {
+            let sample: String = group.first["text"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(SUMMARY_TEXT)
+                .collect();
+            let mut entry = json!({"count":group.count,"sample":sample,
+            "first_received_ms":group.first["received_ms"],"last_received_ms":group.last["received_ms"]});
+            if several_cores {
+                entry["cores"] = json!(group.cores);
+            }
+            entry
         })
         .collect()
 }

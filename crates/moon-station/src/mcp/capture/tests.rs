@@ -29,9 +29,8 @@ fn a_summary_folds_numbers_and_counts_repeats() {
         line("1", 40, "Order 44 cancelled at 0.1300"),
     ];
     let refs: Vec<&Value> = rows.iter().collect();
-    let groups = summarize(&refs);
+    let groups = summarize(&refs, true);
     assert_eq!(groups.len(), 2);
-    assert_eq!(groups[0]["pattern"], "Order # cancelled at #.#");
     assert_eq!(groups[0]["count"], 3);
     assert_eq!(
         groups[0]["sample"], "Order 42 cancelled at 0.1234",
@@ -41,6 +40,21 @@ fn a_summary_folds_numbers_and_counts_repeats() {
     assert_eq!(groups[0]["last_received_ms"], 40);
     assert_eq!(groups[0]["cores"], json!(["1", "2"]));
     assert_eq!(groups[1]["count"], 1);
+    // One core: the list of cores says nothing and is left out.
+    let single = summarize(&refs, false);
+    assert!(single[0].get("cores").is_none());
+}
+
+/// Regression target: repeating the time-axis labels and the core on every line, about 110 bytes of
+/// each one on a live log.
+#[test]
+fn a_line_carries_only_what_differs_from_line_to_line() {
+    let row = json!({"core":"1","server_time_ms":5,"server_time_axis":"core_local","received_ms":6,"received_time_axis":"UTC","text":"x"});
+    assert_eq!(
+        compact(&row, false),
+        json!({"received_ms":6,"server_time_ms":5,"text":"x"})
+    );
+    assert_eq!(compact(&row, true)["core"], "1");
 }
 
 /// Secret-labelled lines must be removed before storage without erasing useful order evidence.
