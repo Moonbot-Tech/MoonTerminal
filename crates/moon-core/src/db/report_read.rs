@@ -58,6 +58,10 @@ mod passes;
 use passes::*;
 pub use passes::{query_mini_trades, query_notify_trades, query_reports};
 
+/// One streamed pass over closed trades, for aggregates that must not hold rows.
+mod stream;
+pub use stream::{archive_strategy_names, scan_closed_trades};
+
 /// chart items for report reads.
 mod chart;
 pub use chart::{

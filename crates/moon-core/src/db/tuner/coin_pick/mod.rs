@@ -15,7 +15,7 @@ use crate::symbol::{CoinMask, coin_match_key};
 mod batch;
 mod whitelist;
 pub use batch::{
-    BatchProgress, KeyedTrade, ManualLists, PickSettings, coin_picks_from_rows,
+    BatchProgress, KeyedTrade, ManualLists, PickSettings, coin_picks_from_rows, saved_lists_for,
     suggest_coins_by_strategy,
 };
 

@@ -218,6 +218,25 @@ pub(super) fn read_keyed(
     Ok((rows, saved_lists(conn, &pairs)?))
 }
 
+/// Saved lists of the given strategies, keyed as the caller keys them, from the strategy database
+/// attached to `conn`.
+///
+/// The same read the batch pick makes, for a caller that gathered its trades through another pass
+/// and must fit them against exactly the lists the tuner would.
+///
+/// Args:
+///     conn: Report reader with the strategy database attached as `strat` when present.
+///     pairs: Caller key to stored `(core_uid, strategy_id)`.
+///
+/// Errors:
+///     A strategy database that is attached but unreadable.
+pub fn saved_lists_for(
+    conn: &rusqlite::Connection,
+    pairs: &HashMap<String, (i64, i64)>,
+) -> ReadResult<HashMap<String, ManualLists>> {
+    saved_lists(conn, pairs)
+}
+
 /// Every strategy's saved lists from the attached strategy database, in the read's snapshot.
 ///
 /// An absent strategy database means no strategy has lists, as in the strategy table. A

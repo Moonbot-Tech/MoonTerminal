@@ -9,6 +9,7 @@ mod read;
 pub mod reports;
 pub(crate) mod settings;
 mod strategies;
+pub mod strategy_history;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, mpsc};
