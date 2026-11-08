@@ -121,7 +121,8 @@ impl Captures {
                         break;
                     }
                     capture.bytes += text.len();
-                    capture.rows.push(json!({"core":id.to_string(),"server_time_ms":line.time_ms,"server_time_axis":"core_local","received_ms":line.recv_ms,"received_time_axis":"UTC","text":text}));
+                    // The time axes are stated once in every answer's header, not stored per line.
+                    capture.rows.push(json!({"core":id.to_string(),"server_time_ms":line.time_ms,"received_ms":line.recv_ms,"text":text}));
                 }
                 capture.cursors.insert(*id, (next, core.conn_epoch));
                 if capture.ended.is_some() {
@@ -198,8 +199,16 @@ impl Captures {
             answer["matched_lines"] = json!(selected.len());
         }
         if read.summary {
-            // Paged like the lines are, so every distinct line stays reachable.
-            let groups = summarize(&selected, capture.cores.len() > 1);
+            // Paged like the lines are. A ranking by count moves while lines still arrive and would
+            // skip or repeat a distinct line across pages, so only an ended capture is ranked; a
+            // collecting one keeps first-seen order, in which a group never changes place.
+            let ranked = capture.ended.is_some();
+            let groups = summarize(&selected, capture.cores.len() > 1, ranked);
+            answer["order"] = json!(if ranked {
+                "most_frequent"
+            } else {
+                "first_seen"
+            });
             let page: Vec<_> = groups
                 .iter()
                 .skip(read.offset)
@@ -290,11 +299,17 @@ fn pattern(text: &str) -> String {
     out
 }
 
-/// One entry per distinct pattern, most frequent first, with a real line as its sample.
+/// One entry per distinct pattern, with a real line as its sample.
 ///
 /// The folded pattern itself is not returned: it repeats the sample with its digits replaced, and
 /// on a live log it doubled the page.
-fn summarize(rows: &[&Value], several_cores: bool) -> Vec<Value> {
+///
+/// Args:
+///     rows: The selected lines, in arrival order.
+///     several_cores: Whether each entry names the cores it came from.
+///     ranked: Most frequent first; otherwise by first appearance, the order that stays put while
+///         lines are still arriving.
+fn summarize(rows: &[&Value], several_cores: bool, ranked: bool) -> Vec<Value> {
     struct Group<'a> {
         count: usize,
         first: &'a Value,
@@ -317,9 +332,14 @@ fn summarize(rows: &[&Value], several_cores: bool) -> Vec<Value> {
         }
     }
     let mut groups: Vec<_> = groups.into_iter().collect();
-    // Most frequent first; equal counts by first appearance, so the order is the same every read.
+    // Equal counts, and the unranked order, by first appearance, so the order is the same every read.
     groups.sort_by(|(_, a), (_, b)| {
-        b.count.cmp(&a.count).then_with(|| {
+        let by_count = if ranked {
+            b.count.cmp(&a.count)
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        by_count.then_with(|| {
             a.first["received_ms"]
                 .as_i64()
                 .cmp(&b.first["received_ms"].as_i64())

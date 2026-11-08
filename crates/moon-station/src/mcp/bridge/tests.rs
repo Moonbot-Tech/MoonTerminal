@@ -13,6 +13,35 @@ fn a_strategy_read_keeps_only_the_named_fields() {
     assert_eq!(strategy["id"], "7", "the rest of the strategy stays");
 }
 
+/// Regression target: the overview repeating every core's full status, 9.5 KB for 28 cores read
+/// first in every conversation.
+#[test]
+fn an_overview_row_carries_only_departures_from_normal() {
+    let healthy = json!({"core":"1","connection":"Ready","stale":false,"connection_epoch":3,"version":"7.73","trading":true,
+        "runtime_started":true,"autodetect":false,"cpu_percent":4.0,"memory_mb":300,"transport_round_trip_ms":40,
+        "exchange_order_latency_ms":90,"strategy_count":12,"report_sync":null,"problems":0});
+    assert_eq!(
+        brief(&healthy),
+        json!({"core":"1","connection":"Ready","trading":true,"problems":0})
+    );
+    let mut troubled = healthy.clone();
+    troubled["stale"] = json!(true);
+    troubled["runtime_started"] = json!(false);
+    troubled["report_sync"] = json!("ReportSyncProgress { rows: 5 }");
+    let row = brief(&troubled);
+    assert_eq!(row["stale"], true);
+    assert_eq!(row["runtime_started"], false);
+    assert_eq!(row["report_catch_up"], true);
+    // A core Station has no state for keeps its unknowns as null rather than dropping out.
+    let unavailable = brief(&json!({"core":"2","connection":"unavailable","stale":true}));
+    assert_eq!(unavailable["connection"], "unavailable");
+    assert!(unavailable["trading"].is_null());
+    assert!(
+        unavailable.get("runtime_started").is_none(),
+        "unknown is not stopped"
+    );
+}
+
 /// Every named field present: nothing to explain.
 #[test]
 fn nothing_absent_says_nothing() {

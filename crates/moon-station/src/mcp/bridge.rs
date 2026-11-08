@@ -206,7 +206,7 @@ impl Owner {
                     .iter()
                     .filter_map(|server| {
                         let scopes = grant.scopes_on(server.id)?;
-                        let mut state = core_status(session, server.id);
+                        let mut state = brief(&core_status(session, server.id));
                         state["name"] = json!(server.name);
                         state["permissions"] = json!(scopes);
                         Some(state)
@@ -515,6 +515,30 @@ fn core_status(session: &SessionManager, id: u64) -> Value {
         "cpu_percent":core.sys.process_cpu_percent,"memory_mb":core.sys.used_memory_mb,"transport_round_trip_ms":core.sys.round_trip_ms,
         "exchange_order_latency_ms":core.sys.order_api_latency_ms,"strategy_count":core.strategies.len(),"report_sync":core.report_sync.as_ref().map(|p|format!("{p:?}")),
         "problems":core.problems.supported.then_some(core.problems.items.len())})
+}
+
+/// The overview row of one core: what decides which core to look at, and only the departures from
+/// normal beside it.
+///
+/// The overview is read first in every conversation and lists every core, so its size is paid
+/// whatever the task: measured live, the full status was about 330 bytes a core, 9.5 KB for 28.
+/// Load, latencies and version stay one `core_state` status away.
+///
+/// Args:
+///     full: What `core_status` answers for the core.
+fn brief(full: &Value) -> Value {
+    let mut row = json!({"core":full["core"],"connection":full["connection"],"trading":full["trading"],"problems":full["problems"]});
+    if full["stale"] == true {
+        row["stale"] = json!(true);
+    }
+    // Unknown is not stopped: only a runtime the core says is not started is a departure.
+    if full["runtime_started"] == false {
+        row["runtime_started"] = json!(false);
+    }
+    if !full["report_sync"].is_null() {
+        row["report_catch_up"] = json!(true);
+    }
+    row
 }
 
 /// Keep only the named fields of a strategy read, and say which named ones the core did not send.
