@@ -17,7 +17,8 @@ feature — a row in the map, a new user word — a row in the dictionary.
    core_cmds (a Linux core's server commands: the right-click menu, the login banner, the Core
    commands window and its results),
    connect_wizard (the connect wizard: a new core, a move, a core by its key, Moonbot for Windows),
-   dialogs, crowd, assets, trade_window, station, telegram and telegram_*.
+   station_mcp (the Station's AI access: HTTPS setup, per-core AI permissions, consent and the
+   change log), dialogs, crowd, assets, trade_window, station, telegram and telegram_*.
 2. The dictionary below — users' words that are not in the labels.
 3. `docs/ARCHITECTURE.md` — chapters on the mechanics (Rendering, Data Path, manual
    trading, Core order, Classic/Auto, venue directory, editing strategies,
@@ -34,7 +35,9 @@ feature — a row in the map, a new user word — a row in the dictionary.
   shared by the terminal and the station through `TgHost`; transport stays in
   `moon-core::telegram`.
 - `crates/moon-station` — headless server: report replication, order traces,
-  trade tape and market-price recording, and optional Telegram bot/Mini App hosting.
+  trade tape and market-price recording, the strategy version archive (Account profile), optional
+  Telegram bot/Mini App hosting, and an optional MCP service that lets an owner-approved AI client
+  work with its cores.
 - `crates/moon-remote` — Linux server setup, station administration and a Linux core's
   server commands (`core_cmds`: find its service by its MoonProto port, control it) over SSH, used by the terminal and the `moon-remote` command-line tool.
 - `crates/moon-ui-gpui` — panels and windows: chartdx (render state, shaders
@@ -140,7 +143,9 @@ axis that replays every closed trade on its recorded tape of prints and searches
 the strategy's entry and exit fields (MoonShot corridor, MoonHook take, sell line,
 SellByCustomEMA formula thresholds, stops, delta modifiers) on the trades the model reproduces, a check
 on held-out data, writing thresholds back into the core's strategy; history of
-strategy versions with each version's profit; a strategy-name mask everywhere.
+strategy versions with each version's profit (a station with the Account profile keeps the archive
+too and exchanges it with its terminals on its own, so a fresh terminal gets the whole history); a
+strategy-name mask everywhere.
 
 **Strategies**: a tree with file-manager operations, order and folders —
 as on the core, human labels under Moonbot field names (on by
@@ -180,6 +185,14 @@ strategies, traces and warnings the databases hold — deleted connections
 included — on the Connections tree; delete them per core, a connected core's
 reports download again), one instance per install folder, FireTest
 (`chart-smoke`) — the built-in chart bench.
+
+**AI access (Station)**: Settings → Station → AI access sets up trusted HTTPS on the server and
+gives the address to paste into Claude or ChatGPT as an MCP connector; the owner approves each
+client with the code from its authorization page and grants access per core — read on every
+selected core, strategies, trading and settings on the cores ticked; a client's permissions change
+from its card, access is revoked per client or all at once, and the change log records every
+applied action and every permission change made from a client's card (reads show only as the last
+contact time).
 
 **Your own sounds**: the `sounds/` folder next to the exe (on macOS — in the data directory),
 drop a `.wav` — it appears in every sound list (strategies, trade
