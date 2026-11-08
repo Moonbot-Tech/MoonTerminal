@@ -35,6 +35,8 @@ mod archive_probe;
 mod capture;
 mod client_settings;
 mod commands;
+// The format a new strategy is sent in; the automation create stamps through it too.
+pub(crate) use commands::revision_stamp;
 mod convert;
 mod deadline;
 mod default_settings;

@@ -376,7 +376,7 @@ fn the_cores_own_published_order_retires_the_queued_one() {
 }
 
 /// A created or restored strategy travels with the revision the core stamps on the ones it holds,
-/// so its echo resolves on the fields; an empty core keeps the `0` it always got.
+/// so its echo resolves on the fields.
 #[test]
 fn a_new_strategy_carries_the_cores_revision_stamp() {
     let mut full = vec![placed(1, ""), placed(2, "a")];
@@ -386,13 +386,21 @@ fn a_new_strategy_carries_the_cores_revision_stamp() {
     assert_eq!(revision_stamp(&full), 12);
     full[1].strategy_ver = 17;
     assert_eq!(revision_stamp(&full), 17);
-    assert_eq!(revision_stamp(&[]), 0);
 }
 
-/// Neither creation site sends the literal `0` any more — the stamp reaches both the paste/create
-/// batch and the restore of a deleted strategy.
+/// #1286: the first strategy on a core that holds none is sent as current MoonBot format 12, not
+/// `0`. Sent as `0`, the core converted it as a pre-format-7 file and a MoonShot arrived with its
+/// `TriggerKeyBuy` reset to 0. The literal is the format MoonBot 7.7x stamps on every strategy,
+/// written here rather than read from the constant so the test cannot follow a wrong edit to it.
 #[test]
-fn both_creation_sites_send_the_revision_stamp() {
+fn the_first_strategy_on_an_empty_core_is_sent_in_the_current_format() {
+    assert_eq!(revision_stamp(&[]), 12);
+}
+
+/// Every creation site sends the revision stamp — the paste/create batch, the restore of a deleted
+/// strategy, and the automation create, which used to send moonproto's editor format 1 (#1286).
+#[test]
+fn every_creation_site_sends_the_revision_stamp() {
     let create = command_arm(
         SRC,
         "Ok(CoreCmd::CreateStrategies",
@@ -403,7 +411,14 @@ fn both_creation_sites_send_the_revision_stamp() {
         "Ok(CoreCmd::RestoreStrategy",
         "Ok(CoreCmd::MoveStrategies",
     );
-    for (name, arm) in [("create", create), ("restore", restore)] {
+    // The automation create builds its snapshot through moonproto's editor, which stamps format 1.
+    let automation = include_str!("../../../automation/strategies.rs");
+    let automation = command_arm(automation, "StrategyEditor::new(", "Action::StrategyDelete");
+    for (name, arm) in [
+        ("create", create),
+        ("restore", restore),
+        ("automation create", automation),
+    ] {
         assert!(
             arm.contains("revision_stamp(full)"),
             "{name} arm lost the stamp"
