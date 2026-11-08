@@ -63,6 +63,9 @@ pub struct MarketLimits {
     /// The exchange's cap on the WHOLE position in this coin at the CURRENT leverage, in the quote
     /// currency (MoonBot's `<max. N>`), or `None` when the core has not stated one.
     ///
+    /// Per ACCOUNT, unlike the two fields above: it is read from the consumer core's own snapshot,
+    /// never from the market-data provider, because each account carries its own leverage.
+    ///
     /// Unlike `max_order` it is leverage-dependent: lowering leverage raises it. See
     /// [`position_cap`].
     pub position_cap: Option<f64>,

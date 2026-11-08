@@ -127,10 +127,7 @@ impl Shell {
                         moon_ui::MoonNotification::success(action)
                             .title(rust_i18n::t!("shell.engine_toast.ok", core = core).to_string())
                     } else {
-                        let mut err = r.error_msg.clone();
-                        if err.is_empty() {
-                            err = format!("code {}", r.error_code);
-                        }
+                        let err = engine_error_text(&r.error_msg, r.error_code);
                         moon_ui::MoonNotification::error(format!("{action}: {err}"))
                             .title(
                                 rust_i18n::t!("shell.engine_toast.fail", core = core).to_string(),
@@ -557,6 +554,29 @@ fn strategy_edit_toast_notification(
             t!("shell.strat_edit_timeout", coin = coin).to_string(),
         )
         .autohide(false),
+    }
+}
+
+/// The reason a failed Engine-action toast prints: the core's message, or its code when the
+/// message says nothing.
+///
+/// "Says nothing" includes a bare placeholder such as `*`, not only an empty string: on
+/// 2026-11-08 a Binance core rejected a leverage change with `-4421 "Subaccounts are restricted
+/// from using leverage greater than 5x."` in its own log, yet sent the terminal `code=400 msg=*`,
+/// and the toast read "…: *". A code at least tells the user the exchange refused.
+///
+/// Args:
+///     msg: Error text from the core's Engine-action event.
+///     code: Error code from the same event.
+///
+/// Returns:
+///     The text to append after the action label.
+fn engine_error_text(msg: &str, code: i32) -> String {
+    let msg = msg.trim();
+    if msg.chars().any(char::is_alphanumeric) {
+        msg.to_string()
+    } else {
+        format!("code {code}")
     }
 }
 

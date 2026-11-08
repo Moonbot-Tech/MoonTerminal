@@ -580,7 +580,8 @@ impl MarketDataSource {
 
     /// Return the live MoonProto client for the specific core, not its market-data provider.
     ///
-    /// The screener uses this for account fields that belong to the individual core.
+    /// Every reader of an ACCOUNT field goes through this — the screener, `market_figures` and
+    /// `market_limits`'s position cap — because those differ between cores sharing one provider.
     pub(crate) fn core_client(
         &self,
         core: CoreId,
@@ -999,14 +1000,25 @@ impl MarketDataSource {
     /// so the Screener's `Max.Order` column and the trading toolbar cannot disagree about one
     /// coin's cap.
     ///
+    /// TWO snapshots, for the same reason as [`Self::market_figures`]: the order cap and the
+    /// maximum leverage are venue facts and come from the deduplicated PROVIDER, while the
+    /// position cap is an ACCOUNT fact — the core's `bn_max_value`, refreshed from that core's own
+    /// balance rows and tied to that account's current leverage. Reading it from the provider
+    /// printed one account's cap beside another account's leverage: on 2026-11-08 every Binance
+    /// futures core showed the provider's 480 000 000 (at x5) while F1–F6, at x7–x10, were
+    /// capped at 230 000 000, and a leverage change on a consumer core never moved the figure.
+    ///
     /// Args:
-    ///     core: Consumer core whose provider owns the market data.
+    ///     core: Consumer core whose provider owns the market data and whose account owns the
+    ///         position cap.
     ///     market: Canonical market name from `MarketHandle::name()`.
     ///
     /// Returns:
     ///     The market's limits, or `None` when the provider, its client, the snapshot, or the
     ///     market itself has not arrived yet. That is NOT the same as the exchange stating no
-    ///     limit, which is carried inside the value — see [`MarketLimits`].
+    ///     limit, which is carried inside the value — see [`MarketLimits`]. The position cap is
+    ///     `None` while the consumer core's own snapshot lacks the market; it is never borrowed
+    ///     from the provider.
     pub fn market_limits(&self, core: CoreId, market: &str) -> Option<MarketLimits> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
@@ -1018,7 +1030,7 @@ impl MarketDataSource {
         };
         let snapshot = client.snapshot_versioned()?;
         let handle = snapshot.markets().get(market)?;
-        Some(handle.with(|m| MarketLimits {
+        let mut limits = handle.with(|m| MarketLimits {
             max_order: max_order_notional(
                 &m.base_currency,
                 m.max_notional(),
@@ -1027,8 +1039,17 @@ impl MarketDataSource {
                 m.contract_size(),
             ),
             max_leverage: m.max_leverage,
-            position_cap: position_cap(m.max_value()),
-        }))
+            position_cap: None,
+        });
+        if let Some(core_snapshot) = self
+            .core_client(core)
+            .and_then(|client| client.snapshot_versioned())
+        {
+            if let Some(handle) = core_snapshot.markets().get(market) {
+                limits.position_cap = handle.with(|m| position_cap(m.max_value()));
+            }
+        }
+        Some(limits)
     }
 
     /// The market's contract terms as the core reports them: `(quote currency, contract_size)`.
