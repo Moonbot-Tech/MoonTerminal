@@ -2,7 +2,8 @@
 
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
 use super::{
-    missing_sound_copy, select_hotkey_target, select_preset_editor_after_render, take_group_edit,
+    engine_error_text, missing_sound_copy, select_hotkey_target, select_preset_editor_after_render,
+    take_group_edit,
 };
 use gpui::{
     AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Window, div, px,
@@ -225,5 +226,18 @@ fn hovered_group_chart_wins_over_hidden_main_for_market_hotkeys() {
     assert_eq!(
         select_hotkey_target(Some((11, "SOLUSDT".to_string())), false, Some(main.clone())),
         Some(main)
+    );
+}
+
+/// A core that masks the exchange's reason as `*` must not leave the toast saying only "*";
+/// a real message still wins over the code.
+#[test]
+fn a_placeholder_engine_error_falls_back_to_its_code() {
+    assert_eq!(engine_error_text("*", 400), "code 400");
+    assert_eq!(engine_error_text("  ", 400), "code 400");
+    assert_eq!(engine_error_text("", -1), "code -1");
+    assert_eq!(
+        engine_error_text("Leverage not allowed", 400),
+        "Leverage not allowed"
     );
 }
