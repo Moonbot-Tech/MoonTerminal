@@ -39,6 +39,12 @@ fn analytics_copy_places_and_reveals_the_new_strategy() {
             && body.contains("\"analytics.copy_created_root\""),
         "the copy must be revealed in the Strategies window and named where it went"
     );
+    // #1256: the copied fields carry the source's LastEditDate, which the core keeps.
+    assert!(
+        body.contains("LAST_EDIT_DATE_FIELD,")
+            && body.contains("edit_date_now(now_ms, cd.time_offset.offset_secs)"),
+        "the copy must be dated now on its core's clock, not with the source's last edit"
+    );
 }
 
 /// A `folder_path` is split only by `moon_core::feed::strategy_path::path_segments`.
