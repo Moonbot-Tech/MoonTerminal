@@ -206,7 +206,7 @@ impl Owner {
                     .iter()
                     .filter_map(|server| {
                         let scopes = grant.scopes_on(server.id)?;
-                        let mut state = core_status(session, server.id);
+                        let mut state = brief(&core_status(session, server.id));
                         state["name"] = json!(server.name);
                         state["permissions"] = json!(scopes);
                         Some(state)
@@ -217,6 +217,7 @@ impl Owner {
             }
             "core_state" => state(
                 session,
+                cfg,
                 require_core()?,
                 string(&args, "section")?,
                 number(&args, "offset", 0) as usize,
@@ -226,11 +227,18 @@ impl Owner {
                 None,
                 number(&args, "offset", 0) as usize,
             )?,
-            "strategy_read" => session.automation_strategies(
-                require_core()?,
-                Some(moon_core::automation::ids::parse(&args["strategy_id"])?),
-                0,
-            )?,
+            "strategy_read" => {
+                let mut read = session.automation_strategies(
+                    require_core()?,
+                    Some(moon_core::automation::ids::parse(&args["strategy_id"])?),
+                    0,
+                )?;
+                if let Some(names) = args.get("fields").and_then(Value::as_array) {
+                    let names: Vec<&str> = names.iter().filter_map(Value::as_str).collect();
+                    keep_fields(&mut read, &names);
+                }
+                read
+            }
             "strategy_schema" => session.automation_schema(
                 require_core()?,
                 args.get("strategy_kind")
@@ -334,8 +342,12 @@ impl Owner {
             "logs_get" | "logs_stop" => self.captures.get(
                 string(&args, "capture_id")?,
                 who,
-                number(&args, "offset", 0) as usize,
-                number(&args, "lines", 60) as usize,
+                super::capture::Read {
+                    offset: number(&args, "offset", 0) as usize,
+                    lines: number(&args, "lines", 60) as usize,
+                    contains: args.get("contains").and_then(Value::as_str),
+                    summary: args.get("summary").and_then(Value::as_bool) == Some(true),
+                },
                 name == "logs_stop",
                 shared,
             )?,
@@ -359,17 +371,53 @@ impl Owner {
                 json!({"events":events,"next_cursor":cursor,"gap":after > self.sequence || self.events.front().is_some_and(|first| after>0 && after.saturating_add(1)<first.seq),
                     "delivery":"poll while connected; the AI host must schedule observation and notifications"})
             }
+            super::tools::REPORT_SCOPE => {
+                let cores = readable(cfg, &grant, &args["filter"]["cores"])?;
+                authorize(shared, who, Scope::Read, &cores)?;
+                let names: Vec<Value> = cores
+                    .iter()
+                    .filter_map(|id| session.store().core(*id).map(|core| (*id, core)))
+                    .flat_map(|(id, core)| {
+                        core.strategies
+                            .iter()
+                            .map(|s| json!([id.to_string(), s.id.to_string(), s.name]))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                json!({"cores":cores.iter().map(u64::to_string).collect::<Vec<_>>(),"names":names})
+            }
+            "strategy_compare" => {
+                let cores = readable(cfg, &grant, &args["cores"])?;
+                authorize(shared, who, Scope::Read, &cores)?;
+                let found: Vec<(String, BTreeMap<String, String>)> = cores
+                    .iter()
+                    .filter_map(|id| session.store().core(*id).map(|core| (*id, core)))
+                    .flat_map(|(id, core)| {
+                        core.strategies
+                            .iter()
+                            .filter(|s| {
+                                s.name.eq_ignore_ascii_case(
+                                    string(&args, "strategy_name").unwrap_or_default(),
+                                )
+                            })
+                            .map(|s| (format!("{id}:{}", s.id), s.fields.iter().cloned().collect()))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                compare(
+                    string(&args, "strategy_name")?,
+                    &found,
+                    args.get("full_lists").and_then(Value::as_bool) == Some(true),
+                )?
+            }
             _ => bail!("unknown owner tool"),
         };
         if let Ok(knowledge) = shared.knowledge.read() {
             result["knowledge"] = knowledge.metadata();
+            // The guide's section rides only where an edit is being prepared. Elsewhere it repeated
+            // two kilobytes on every answer, and a client reads the guide with knowledge_read.
             let topic = match name {
-                "station_overview" => Some("Overview"),
-                "logs_start" | "logs_get" => Some("Diagnosis"),
-                "strategy_schema" | "strategy_read" => Some("Strategies"),
-                "settings_read" => Some("Settings"),
-                "market_read" => Some("Orders"),
-                "events_read" => Some("Events"),
+                "strategy_schema" => Some("Strategies"),
                 "action_preview" => Some("Commands"),
                 _ => None,
             };
@@ -504,14 +552,242 @@ fn core_status(session: &SessionManager, id: u64) -> Value {
         "connection_epoch":core.conn_epoch,"version":core.server_version,"trading":core.strategies_running,
         "runtime_started":core.runtime_state.map(|s|s.is_started),"autodetect":core.runtime_state.map(|s|s.auto_detect_active),
         "cpu_percent":core.sys.process_cpu_percent,"memory_mb":core.sys.used_memory_mb,"transport_round_trip_ms":core.sys.round_trip_ms,
-        "exchange_order_latency_ms":core.sys.order_api_latency_ms,"strategy_count":core.strategies.len(),"report_sync":core.report_sync.as_ref().map(|p|format!("{p:?}"))})
+        "exchange_order_latency_ms":core.sys.order_api_latency_ms,"strategy_count":core.strategies.len(),"report_sync":core.report_sync.as_ref().map(|p|format!("{p:?}")),
+        "problems":core.problems.supported.then_some(core.problems.items.len())})
+}
+
+/// The cores a tool names, or every core the grant reaches when it names none.
+///
+/// Errors:
+///     A value that is not a decimal core id. A named core outside the grant is refused later by
+///     the authorization check, never dropped quietly.
+fn readable(
+    cfg: &AppConfig,
+    grant: &moon_core::station_api::mcp::GrantInfo,
+    named: &Value,
+) -> Result<Vec<u64>> {
+    let named: Vec<u64> = named
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|core| {
+            core.as_str()
+                .and_then(|s| s.parse().ok())
+                .context("cores hold decimal core ids as strings")
+        })
+        .collect::<Result<_>>()?;
+    Ok(if named.is_empty() {
+        cfg.servers
+            .iter()
+            .map(|server| server.id)
+            .filter(|id| grant.scopes_on(*id).is_some())
+            .collect()
+    } else {
+        named
+    })
+}
+
+/// The fields that differ between same-named live strategies.
+///
+/// A whole strategy is about 9 KB, so only the differences travel. A coin list runs to kilobytes;
+/// unless asked for whole it is shown as its size and its difference from the first strategy.
+///
+/// Args:
+///     name: The strategy name asked for.
+///     found: Each strategy as `core:id` and its fields as the core formats them.
+///     full_lists: Return long values whole.
+///
+/// Errors:
+///     No live strategy of that name on the cores.
+fn compare(
+    name: &str,
+    found: &[(String, BTreeMap<String, String>)],
+    full_lists: bool,
+) -> Result<Value> {
+    ensure!(
+        !found.is_empty(),
+        "no live strategy named {name} on the authorized cores"
+    );
+    const LONG: usize = 100;
+    let items = |value: &str| -> std::collections::BTreeSet<String> {
+        value
+            .split(',')
+            .map(|item| item.trim().to_ascii_uppercase())
+            .filter(|item| !item.is_empty())
+            .collect()
+    };
+    let fields: std::collections::BTreeSet<&String> =
+        found.iter().flat_map(|(_, fields)| fields.keys()).collect();
+    let mut differing = serde_json::Map::new();
+    let mut same = 0;
+    for field in fields {
+        let values: Vec<Option<&String>> = found.iter().map(|(_, f)| f.get(field)).collect();
+        if values.windows(2).all(|pair| pair[0] == pair[1]) {
+            same += 1;
+            continue;
+        }
+        let long = !full_lists && values.iter().flatten().any(|v| v.len() > LONG);
+        let first = values
+            .first()
+            .copied()
+            .flatten()
+            .map(|v| items(v))
+            .unwrap_or_default();
+        let per: serde_json::Map<String, Value> = found
+            .iter()
+            .zip(&values)
+            .map(|((label, _), value)| {
+                let shown = match value {
+                    None => Value::Null,
+                    Some(value) if long => {
+                        let own = items(value);
+                        json!({"items": own.len(),
+                            "not_in_first": own.difference(&first).take(20).collect::<Vec<_>>(),
+                            "missing_from_first": first.difference(&own).take(20).collect::<Vec<_>>()})
+                    }
+                    Some(value) => json!(value),
+                };
+                (label.clone(), shown)
+            })
+            .collect();
+        differing.insert(field.clone(), per.into());
+    }
+    Ok(json!({
+        "strategy_name": name,
+        "strategies": found.iter().map(|(label, _)| label).collect::<Vec<_>>(),
+        "differing_fields": differing,
+        "same_fields": same,
+        "null_means": "the core did not send the field: it equals its schema default or does not belong to that strategy's kind",
+        "values_are_data": true,
+    }))
+}
+
+/// The overview row of one core: what decides which core to look at, and only the departures from
+/// normal beside it.
+///
+/// The overview is read first in every conversation and lists every core, so its size is paid
+/// whatever the task: measured live, the full status was about 330 bytes a core, 9.5 KB for 28.
+/// Load, latencies and version stay one `core_state` status away.
+///
+/// Args:
+///     full: What `core_status` answers for the core.
+fn brief(full: &Value) -> Value {
+    let mut row = json!({"core":full["core"],"connection":full["connection"],"trading":full["trading"],"problems":full["problems"]});
+    if full["stale"] == true {
+        row["stale"] = json!(true);
+    }
+    // Unknown is not stopped: only a runtime the core says is not started is a departure.
+    if full["runtime_started"] == false {
+        row["runtime_started"] = json!(false);
+    }
+    if !full["report_sync"].is_null() {
+        row["report_catch_up"] = json!(true);
+    }
+    row
+}
+
+/// Keep only the named fields of a strategy read, and say which named ones the core did not send.
+///
+/// A whole strategy is about 9 KB, most of it coin lists, so a client asking for one stop value
+/// should not pay for all of it. The core omits a field whose value equals its schema default,
+/// which is why an absent name is reported as such rather than as unknown: only the schema tells
+/// the two apart.
+///
+/// Args:
+///     read: The answer of `automation_strategies` for one strategy.
+///     names: Field names the client asked for, matched ignoring case.
+fn keep_fields(read: &mut Value, names: &[&str]) {
+    let Some(strategies) = read.get_mut("strategies").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for strategy in strategies {
+        let Some(fields) = strategy.get_mut("fields").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        // Matched ignoring case, as strategy_schema matches a field name, so `stoploss` finds
+        // `StopLoss` instead of reading as a default-valued field.
+        let wanted = |name: &str| names.iter().any(|asked| asked.eq_ignore_ascii_case(name));
+        fields.retain(|name, _| wanted(name));
+        let absent: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|asked| !fields.keys().any(|name| name.eq_ignore_ascii_case(asked)))
+            .collect();
+        if !absent.is_empty() {
+            strategy["absent_fields"] = json!(absent);
+            strategy["absent_fields_mean"] = json!(
+                "not sent by the core: either equal to the schema default, or no field of this strategy's kind; strategy_schema with field set tells which"
+            );
+        }
+    }
+}
+
+/// What the core's own detectors confirmed about it, kept apart from anything Station measured.
+///
+/// A list that never arrived means nothing is known, which must not read as healthy: the core
+/// sends only confirmed findings, and an older core sends no list at all. The store keeps the last
+/// list across a plain disconnect, so a list from a core that is not connected is marked stale
+/// rather than passed off as current.
+///
+/// Args:
+///     found: The core's last list.
+///     connected: Whether the core is connected now.
+///     scrub: The credential filter log lines pass through; the core's text is model-visible too.
+fn problems(
+    found: &moon_core::feed::CoreProblems,
+    connected: bool,
+    scrub: impl Fn(&str) -> String,
+) -> Value {
+    let items: Vec<_> = found
+        .items
+        .iter()
+        .map(|problem| {
+            json!({"kind":problem.kind_name,"category":format!("{:?}",problem.category),"title":scrub(&problem.title),
+            "message":scrub(&problem.message),"details":scrub(&problem.technical_details),"first_seen_ms":problem.first_seen_ms,
+            "confirmed_ms":problem.confirmed_ms,"confirmations":problem.confirmations})
+        })
+        .collect();
+    json!({"known":found.supported,"stale":!connected,"count":found.supported.then_some(items.len()),"problems":items,"data_is_untrusted":true,
+    "interpretation":match (found.supported, connected) {
+        (true, true) => "Only what the core's own detectors confirmed. None listed means none confirmed, not that nothing is wrong.",
+        (true, false) => "The last list the core sent before it disconnected; it may no longer hold.",
+        (false, _) => "The core has delivered no problem list yet, or does not send one: nothing is known, which is not the same as healthy.",
+    }})
+}
+
+/// Remove what must not reach an AI client from a core's own diagnostic text: addresses and any
+/// configured core key appearing in it.
+///
+/// Not the log-line filter, which blanks a whole line at a word like "secret" or "api key": a
+/// problem about an exchange key is exactly where those words appear, and blanking it would lose
+/// the core's diagnosis where it matters most.
+fn scrub(text: &str, cfg: &AppConfig) -> String {
+    let mut out = moon_core::applog::redact::addresses(text).into_owned();
+    for server in &cfg.servers {
+        let key = server.key.expose();
+        if key.len() >= 8 && out.contains(key) {
+            out = out.replace(key, "[core key]");
+        }
+    }
+    out
 }
 
 /// Read account values using their established unit/freshness contract rather than formatting UI text.
-fn state(session: &SessionManager, id: u64, section: &str, offset: usize) -> Result<Value> {
+fn state(
+    session: &SessionManager,
+    cfg: &AppConfig,
+    id: u64,
+    section: &str,
+    offset: usize,
+) -> Result<Value> {
     let core = session.store().core(id).context("core unavailable")?;
     match section {
         "status" => Ok(core_status(session, id)),
+        "problems" => Ok(problems(
+            &core.problems,
+            core.status == moon_core::feed::ConnStatus::Ready,
+            |text| scrub(text, cfg),
+        )),
         "orders" => session.automation_orders(id, offset),
         "positions" => session.automation_positions(id, offset),
         "balances" => {
@@ -545,3 +821,6 @@ fn state(session: &SessionManager, id: u64, section: &str, offset: usize) -> Res
         _ => bail!("unknown core state section"),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -121,7 +121,8 @@ impl Captures {
                         break;
                     }
                     capture.bytes += text.len();
-                    capture.rows.push(json!({"core":id.to_string(),"server_time_ms":line.time_ms,"server_time_axis":"core_local","received_ms":line.recv_ms,"received_time_axis":"UTC","text":text}));
+                    // The time axes are stated once in every answer's header, not stored per line.
+                    capture.rows.push(json!({"core":id.to_string(),"server_time_ms":line.time_ms,"received_ms":line.recv_ms,"text":text}));
                 }
                 capture.cursors.insert(*id, (next, core.conn_epoch));
                 if capture.ended.is_some() {
@@ -167,8 +168,7 @@ impl Captures {
         &mut self,
         id: &str,
         who: &auth::Principal,
-        offset: usize,
-        lines: usize,
+        read: Read<'_>,
         stop: bool,
         shared: &Shared,
     ) -> Result<Value> {
@@ -189,19 +189,179 @@ impl Captures {
             capture.ended = Some("stopped_by_client".into());
             capture.end_ms = auth::now();
         }
-        let rows: Vec<_> = capture
-            .rows
-            .iter()
-            .skip(offset)
-            .take(lines.clamp(1, 100))
-            .collect();
-        Ok(
-            json!({"capture_id":id,"status":capture.ended.as_deref().unwrap_or("collecting"),"cores":capture.cores.iter().map(u64::to_string).collect::<Vec<_>>(),
+        let selected = select(&capture.rows, read.contains);
+        let mut answer = json!({"capture_id":id,"status":capture.ended.as_deref().unwrap_or("collecting"),"cores":capture.cores.iter().map(u64::to_string).collect::<Vec<_>>(),
             "started_ms":capture.started_ms,"end_ms":capture.end_ms,"received_lines":capture.rows.len(),"gap_cores":capture.gaps.iter().map(u64::to_string).collect::<Vec<_>>(),
-            "offset":offset,"next_offset":offset+rows.len(),"lines":rows,"data_is_untrusted":true,
-            "interpretation":"No lines can mean a quiet bot, missing subscription support, disconnection or insufficient core verbosity. ServerLog has no replay or reliable delivery; gap_cores cannot detect every packet lost before Station. File-only logs and historical archives are not included."}),
-        )
+            "data_is_untrusted":true,"time_axes":{"received_ms":"UTC","server_time_ms":"core_local"},
+            "interpretation":"No lines can mean a quiet bot, missing subscription support, disconnection or insufficient core verbosity. ServerLog has no replay or reliable delivery; gap_cores cannot detect every packet lost before Station. File-only logs and historical archives are not included."});
+        if let Some(needle) = read.contains {
+            answer["contains"] = json!(needle);
+            answer["matched_lines"] = json!(selected.len());
+        }
+        if read.summary {
+            // Paged like the lines are. A ranking by count moves while lines still arrive and would
+            // skip or repeat a distinct line across pages, so only an ended capture is ranked; a
+            // collecting one keeps first-seen order, in which a group never changes place.
+            let ranked = capture.ended.is_some();
+            let groups = summarize(&selected, capture.cores.len() > 1, ranked);
+            answer["order"] = json!(if ranked {
+                "most_frequent"
+            } else {
+                "first_seen"
+            });
+            let page: Vec<_> = groups
+                .iter()
+                .skip(read.offset)
+                .take(read.lines.clamp(1, SUMMARY_PAGE))
+                .collect();
+            answer["distinct_lines"] = json!(groups.len());
+            answer["offset"] = json!(read.offset);
+            answer["next_offset"] = json!(read.offset + page.len());
+            answer["groups"] = json!(page);
+        } else {
+            let rows: Vec<_> = selected
+                .iter()
+                .skip(read.offset)
+                .take(read.lines.clamp(1, 100))
+                .collect();
+            answer["offset"] = json!(read.offset);
+            answer["next_offset"] = json!(read.offset + rows.len());
+            answer["lines"] = json!(
+                rows.iter()
+                    .map(|row| compact(row, capture.cores.len() > 1))
+                    .collect::<Vec<_>>()
+            );
+        }
+        Ok(answer)
     }
+}
+
+/// Most distinct lines one summary page holds; the rest is reached by `next_offset`. A summary is
+/// read to see what a log is busy with, which the first page answers.
+const SUMMARY_PAGE: usize = 20;
+/// Characters of a sample a summary keeps; the full line is one `contains` away.
+const SUMMARY_TEXT: usize = 300;
+
+/// One captured line as an answer carries it. The time axes are stated once in the answer, not on
+/// every line, and the core only when the observation has more than one: measured live, the
+/// labels were about 110 bytes of every line.
+fn compact(row: &Value, several_cores: bool) -> Value {
+    let mut line = json!({"received_ms":row["received_ms"],"server_time_ms":row["server_time_ms"],"text":row["text"]});
+    if several_cores {
+        line["core"] = row["core"].clone();
+    }
+    line
+}
+
+/// How `logs_get` reads an observation.
+pub(super) struct Read<'a> {
+    /// First line to return, counted over the lines that match `contains`; in a summary, the
+    /// first distinct line.
+    pub offset: usize,
+    /// Lines to return; in a summary, distinct lines.
+    pub lines: usize,
+    /// Keep only lines holding this text, ignoring case.
+    pub contains: Option<&'a str>,
+    /// One entry per distinct line instead of the lines.
+    pub summary: bool,
+}
+
+/// The captured lines holding `contains`, ignoring case; all of them without it.
+fn select<'a>(rows: &'a [Value], contains: Option<&str>) -> Vec<&'a Value> {
+    let needle = contains.map(str::to_lowercase);
+    rows.iter()
+        .filter(|row| {
+            needle.as_deref().is_none_or(|needle| {
+                row["text"]
+                    .as_str()
+                    .is_some_and(|text| text.to_lowercase().contains(needle))
+            })
+        })
+        .collect()
+}
+
+/// A line with every run of digits folded to one `#`, so the same message about two prices or two
+/// order numbers counts as one.
+fn pattern(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_digits = false;
+    for character in text.chars() {
+        if character.is_ascii_digit() {
+            if !in_digits {
+                out.push('#');
+            }
+            in_digits = true;
+        } else {
+            out.push(character);
+            in_digits = false;
+        }
+    }
+    out
+}
+
+/// One entry per distinct pattern, with a real line as its sample.
+///
+/// The folded pattern itself is not returned: it repeats the sample with its digits replaced, and
+/// on a live log it doubled the page.
+///
+/// Args:
+///     rows: The selected lines, in arrival order.
+///     several_cores: Whether each entry names the cores it came from.
+///     ranked: Most frequent first; otherwise by first appearance, the order that stays put while
+///         lines are still arriving.
+fn summarize(rows: &[&Value], several_cores: bool, ranked: bool) -> Vec<Value> {
+    struct Group<'a> {
+        count: usize,
+        first: &'a Value,
+        last: &'a Value,
+        cores: BTreeSet<&'a str>,
+    }
+    let mut groups: BTreeMap<String, Group<'_>> = BTreeMap::new();
+    for row in rows {
+        let text = row["text"].as_str().unwrap_or_default();
+        let group = groups.entry(pattern(text)).or_insert(Group {
+            count: 0,
+            first: row,
+            last: row,
+            cores: BTreeSet::new(),
+        });
+        group.count += 1;
+        group.last = row;
+        if let Some(core) = row["core"].as_str() {
+            group.cores.insert(core);
+        }
+    }
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    // Equal counts, and the unranked order, by first appearance, so the order is the same every read.
+    groups.sort_by(|(_, a), (_, b)| {
+        let by_count = if ranked {
+            b.count.cmp(&a.count)
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        by_count.then_with(|| {
+            a.first["received_ms"]
+                .as_i64()
+                .cmp(&b.first["received_ms"].as_i64())
+        })
+    });
+    groups
+        .into_iter()
+        .map(|(_, group)| {
+            let sample: String = group.first["text"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(SUMMARY_TEXT)
+                .collect();
+            let mut entry = json!({"count":group.count,"sample":sample,
+            "first_received_ms":group.first["received_ms"],"last_received_ms":group.last["received_ms"]});
+            if several_cores {
+                entry["cores"] = json!(group.cores);
+            }
+            entry
+        })
+        .collect()
 }
 
 /// Known keys and credential-labelled lines cannot reach an AI; keep timestamps and an explicit marker.

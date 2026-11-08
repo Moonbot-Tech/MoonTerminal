@@ -1,159 +1,104 @@
-//! Bounded report queries reuse the report layer's time correction and currency accounting.
+//! Report questions an AI client asks the Station, answered from the report replica.
+//!
+//! SQL only finds rows, through the Report layer's own filter, projection and USDT valuation;
+//! grouping, metrics, thresholds and ordering are computed here in Rust from closed sets of names,
+//! so no text a client sends reaches SQL and every figure agrees with the Report window.
 
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 use anyhow::{Result, ensure};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-/// Query an explicit authorized set. An empty set is rejected before the report API's all-core default.
-pub fn query(
-    cores: Vec<u64>,
-    from_ms: i64,
-    to_ms: i64,
-    emulator: bool,
-    offset: usize,
-) -> Result<Value> {
-    ensure!(
-        !cores.is_empty() && cores.len() <= 64,
-        "reports require 1..64 explicitly authorized cores"
-    );
-    ensure!(
-        from_ms > 0 && to_ms > from_ms && to_ms - from_ms <= 366 * 86_400_000,
-        "report interval must be positive and at most 366 days"
-    );
-    ensure!(
-        offset <= 10_000,
-        "narrow the report interval before paging beyond 10000 trades"
-    );
-    let conn = crate::db::open_reader().map_err(read_error)?;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    conn.progress_handler(10_000, Some(move || Instant::now() >= deadline))?;
-    let snapshot = crate::db::read_snapshot(&conn).map_err(read_error)?;
-    let axis = crate::db::ReportAxis::load(&snapshot, chrono_tz::UTC).map_err(read_error)?;
-    let missing_offsets: Vec<_> = cores
-        .iter()
-        .filter(|id| axis.offset_secs(**id, to_ms / 1000).is_none())
-        .copied()
-        .collect();
-    let filter = crate::db::ReportFilter {
-        core_uids: cores,
-        date_from: Some(from_ms / 1000),
-        date_to: Some(to_ms / 1000),
-        emulator: if emulator { None } else { Some(false) },
-        rows: crate::db::RowScope::Closed,
-        axis,
-        ..Default::default()
-    };
-    let table =
-        crate::db::query_mini_trades(&snapshot, &filter, offset + 101).map_err(read_error)?;
-    let totals = crate::db::query_totals(&snapshot, &filter).map_err(read_error)?;
-    let selected = [
-        "buydate",
-        "closedate",
-        "id",
-        "coin",
-        "isshort",
-        "quantity",
-        "buyprice",
-        "sellprice",
-        "spentbtc",
-        "gainedbtc",
-        "profitbtc",
-        "valuation_profit_usdt",
-        "profitpct",
-        "valuation_rate",
-        "valuation_rate_source",
-        "lev",
-        "strategyid",
-        "basecurrency",
-        "emulator",
-        "status",
-        "sellreason",
-    ];
-    let rows: Vec<_> = table
-        .rows
-        .iter()
-        .zip(&table.core_uids)
-        .zip(&table.rec_ids)
-        .skip(offset)
-        .take(100)
-        .map(|((row, core), record)| {
-            let mut result = serde_json::Map::new();
-            result.insert("core".into(), json!(core.to_string()));
-            result.insert("record_id".into(), json!(record.to_string()));
-            for (index, column) in table
-                .cols
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| selected.contains(&c.as_str()))
-            {
-                let value = row.get(index).map(cell).unwrap_or(Value::Null);
-                if matches!(column.as_str(), "buydate" | "closedate") {
-                    let utc = value
-                        .as_i64()
-                        .filter(|seconds| *seconds > 0)
-                        .filter(|seconds| filter.axis.offset_secs(*core, *seconds).is_some())
-                        .map(|seconds| filter.axis.to_utc(seconds, *core).saturating_mul(1000));
-                    result.insert(format!("{column}_utc_ms"), json!(utc));
-                    result.insert(format!("{column}_core_local_seconds"), value);
-                } else if column == "strategyid" {
-                    result.insert(
-                        column.clone(),
-                        value
-                            .as_i64()
-                            .map(|id| json!((id as u64).to_string()))
-                            .unwrap_or(value),
-                    );
-                } else if column == "id" {
-                    result.insert(
-                        column.clone(),
-                        value
-                            .as_i64()
-                            .map(|id| json!(id.to_string()))
-                            .unwrap_or(value),
-                    );
-                } else if column == "basecurrency" {
-                    result.insert(
-                        "currency".into(),
-                        json!(
-                            value
-                                .as_i64()
-                                .and_then(crate::db::QuoteCurrency::from_report_ordinal)
-                                .map(|currency| currency.ticker())
-                        ),
-                    );
-                } else {
-                    result.insert(column.clone(), value);
-                }
-            }
-            Value::Object(result)
-        })
-        .collect();
-    let native: Vec<_> = totals
-        .quotes
-        .totals
-        .iter()
-        .map(|v| json!({"currency":v.currency.ticker(),"profit":v.profit,"trades":v.orders}))
-        .collect();
-    let coverage = totals.quotes.valuation.as_ref().map(|v| json!({"eligible":v.eligible_orders,"valued":v.valued_orders,"unavailable":v.unavailable_orders,
-        "profit_usdt":v.usdt.as_ref().map(|total| total.profit)}));
-    Ok(
-        json!({"source":"Station report replica","from_ms":from_ms,"to_ms":to_ms,"time_zone":"UTC",
-        "cores_without_clock_offset":missing_offsets.iter().map(u64::to_string).collect::<Vec<_>>(),"clock_caveat":"Report filters fall back to the core clock when its offset is unknown. Row UTC times are null without a measured offset at that instant; raw core-local seconds remain separate.",
-        "rows":rows,"next_offset":offset+rows.len(),"has_more":table.rows.len()>offset+100,
-        "total_trades":totals.quotes.orders,"native_profit":native,"unknown_currency_trades":totals.quotes.unknown_orders,"valuation":coverage,
-        "read_at_ms":crate::util::now_unix_ms_i64(),"freshness":"Replicated history may still be downloading; compare each core's report_sync in station_overview."}),
-    )
+mod aggregate;
+mod filter;
+mod rows;
+mod stats;
+mod trade;
+mod whatif;
+
+pub use filter::TradeFilter;
+
+/// Largest page an answer builds before it stops with `has_more`: a page of 65 thousand
+/// characters already overran Claude Code's tool-result limit.
+const ANSWER_BUDGET: usize = 60_000;
+
+/// What the caller resolved before the read: the authorized cores and their live strategy names.
+#[derive(Debug, Clone, Default)]
+pub struct Scope {
+    /// Explicit cores the client may read; never empty.
+    pub cores: Vec<u64>,
+    /// Current strategy names from the live lists, by core and strategy id.
+    pub live_names: HashMap<(u64, u64), String>,
 }
 
-/// Blob columns never leak binary payloads into an AI response.
-fn cell(value: &rusqlite::types::Value) -> Value {
-    match value {
-        rusqlite::types::Value::Null | rusqlite::types::Value::Blob(_) => Value::Null,
-        rusqlite::types::Value::Integer(v) => json!(v),
-        rusqlite::types::Value::Real(v) => json!(v),
-        rusqlite::types::Value::Text(v) => json!(v),
+/// Run one report tool by name on an authorized scope.
+///
+/// Args:
+///     tool: `reports_aggregate`, `reports_query`, `reports_whatif`, `blacklist_candidates` or
+///         `strategy_effect`.
+///     scope: Authorized cores, already checked against the client's grant.
+///     args: The tool's arguments, already checked against its schema.
+///
+/// Errors:
+///     An unknown tool, an empty scope, a bad argument, a read failure or a time-out.
+pub fn run(tool: &str, scope: &Scope, args: Value) -> Result<Value> {
+    ensure!(
+        !scope.cores.is_empty() && scope.cores.len() <= 64,
+        "reports require 1..64 explicitly authorized cores"
+    );
+    let mut answer = match tool {
+        "reports_aggregate" => aggregate::run(scope, serde_json::from_value(args)?)?,
+        "reports_query" => rows::run(scope, serde_json::from_value(args)?)?,
+        "reports_whatif" => whatif::whatif(scope, serde_json::from_value(args)?)?,
+        "blacklist_candidates" => whatif::blacklist(scope, serde_json::from_value(args)?)?,
+        "strategy_effect" => whatif::effect(scope, serde_json::from_value(args)?)?,
+        other => anyhow::bail!("{other} is not a report tool"),
+    };
+    answer["names_are_data"] = Value::Bool(true);
+    Ok(answer)
+}
+
+/// Parse a report tool's arguments without reading anything.
+///
+/// The Station's tool schema and these parsers are two descriptions of one contract; a test
+/// feeds every argument the schema accepts through here, so neither can widen alone.
+///
+/// Errors:
+///     Arguments the tool's parser rejects, or an unknown tool.
+pub fn check_args(tool: &str, args: Value) -> Result<()> {
+    match tool {
+        "reports_aggregate" => drop(serde_json::from_value::<aggregate::Args>(args)?),
+        "reports_query" => drop(serde_json::from_value::<rows::Args>(args)?),
+        "reports_whatif" => drop(serde_json::from_value::<whatif::WhatIfArgs>(args)?),
+        "blacklist_candidates" => drop(serde_json::from_value::<whatif::BlacklistArgs>(args)?),
+        "strategy_effect" => drop(serde_json::from_value::<whatif::EffectArgs>(args)?),
+        "strategy_versions" => drop(serde_json::from_value::<super::strategy_history::Args>(
+            args,
+        )?),
+        other => anyhow::bail!("{other} is not a report tool"),
     }
+    Ok(())
+}
+
+/// The cores a filter names, as ids; empty means every core the client may read.
+///
+/// Errors:
+///     A value that is not a decimal core id.
+pub fn filter_cores(args: &Value) -> Result<Vec<u64>> {
+    let cores = args
+        .get("filter")
+        .and_then(|f| f.get("cores"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    cores
+        .iter()
+        .map(|core| {
+            core.as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or_else(|| anyhow::anyhow!("filter.cores holds decimal core ids as strings"))
+        })
+        .collect()
 }
 
 /// Preserve the report layer's classified failure in the model-visible tool error.
