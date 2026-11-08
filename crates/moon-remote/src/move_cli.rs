@@ -96,7 +96,7 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
         .context("--proto-port")?;
     let package = args
         .value("--package")?
-        .unwrap_or_else(|| core_move::TEST_PACKAGE.to_owned());
+        .unwrap_or_else(|| core_move::RELEASE_PACKAGE.to_owned());
     let key_out = args.value("--key-out")?;
     let public_ip = match args.value("--public-ip")? {
         Some(ip) => ip.parse::<Ipv4Addr>().context("--public-ip")?,

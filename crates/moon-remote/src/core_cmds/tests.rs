@@ -163,6 +163,39 @@ fn invalid_connection_key_errors_exclude_the_input() {
     }
 }
 
+/// MoonBot 7.73 answers `--moonProtoKey` with the bare packet: reading only JSON replies made the
+/// window's "connection key" command fail on every release core.
+#[test]
+fn a_bare_packet_reply_is_the_key() {
+    let packet = format!("{}==", "A1b2+/".repeat(20));
+    let key = key_reply(true, &format!("\n{packet}\n"), "").unwrap();
+    assert_eq!(key.as_str(), packet);
+    // A notice around the packet does not hide it.
+    let noisy = format!("{{\"note\":\"x\"}}\n{packet}\nsee mb --help\n");
+    assert_eq!(key_reply(true, &noisy, "").unwrap().as_str(), packet);
+    // The JSON form older builds answered with still reads.
+    let json = format!("{{\"ok\":true,\"key\":\"{packet}\"}}");
+    assert_eq!(key_reply(true, &json, "").unwrap().as_str(), packet);
+}
+
+/// A failed or garbled bare reply must fail without quoting stdout, which may hold the key.
+#[test]
+fn a_bad_bare_reply_errors_without_the_input() {
+    let secret = format!("SECRETPACKET{}", "x".repeat(60));
+    for (ok, stdout) in [
+        (false, secret.clone()),
+        (true, format!("{secret} trailing words")),
+        (true, "short".to_owned()),
+        (true, String::new()),
+    ] {
+        let error = key_reply(ok, &stdout, "core is busy").unwrap_err();
+        assert!(!format!("{error:#}").contains("SECRETPACKET"), "{error:#}");
+    }
+    // A core that is not running says so on stderr only, or not at all: the reason is never blank.
+    let error = key_reply(false, "", "").unwrap_err();
+    assert!(!format!("{error:#}").trim_end().ends_with(':'), "{error:#}");
+}
+
 /// Including stdout in a parse error would disclose the MoonProto connection key to logs and UI.
 #[test]
 fn unreadable_moonproto_key_reply_excludes_the_key() {

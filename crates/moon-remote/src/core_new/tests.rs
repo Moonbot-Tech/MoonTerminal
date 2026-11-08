@@ -109,3 +109,19 @@ fn keys_go_as_the_json_the_core_reads() {
     let json: serde_json::Value = serde_json::from_slice(&rsa.json()).unwrap();
     assert_eq!(json, serde_json::json!({"rsa_bundle": "B"}));
 }
+
+/// An accepted switch is not a finished one: the status right after it still names the previous
+/// exchange, possibly ready, and a later one may be initializing on the new exchange. Only the
+/// new exchange past initialization lets MoonProto be set up for it.
+#[test]
+fn initialization_counts_only_on_the_picked_exchange() {
+    let before = status_of(r#"{"ok":true,"state":"ready","exchange":"binance-futures"}"#);
+    let logging_in = status_of(r#"{"ok":true,"state":"initializing","exchange":"bybit-futures"}"#);
+    let waiting_keys = status_of(r#"{"ok":true,"state":"needs_keys","exchange":"bybit-futures"}"#);
+    assert!(!initialized_on(&before, Some("bybit-futures")));
+    assert!(!initialized_on(&logging_in, Some("bybit-futures")));
+    assert!(initialized_on(&waiting_keys, Some("bybit-futures")));
+    // Right after the install no exchange is asked for: any settled state will do.
+    assert!(initialized_on(&before, None));
+    assert!(!initialized_on(&logging_in, None));
+}

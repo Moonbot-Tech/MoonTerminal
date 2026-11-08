@@ -5,7 +5,6 @@ use std::net::Ipv4Addr;
 use zeroize::Zeroizing;
 
 use crate::core_move::command;
-use crate::core_new::mb;
 use crate::script::{self, Privilege, STEP_TIMEOUT};
 use crate::ssh::{Conn, Output};
 
@@ -147,8 +146,31 @@ pub fn moonproto_key(
     privilege: &Privilege,
     dir: &str,
 ) -> anyhow::Result<Zeroizing<String>> {
-    let reply = mb(conn, privilege, dir, &["--moonProtoKey"], &[])?;
-    connection_key(reply)
+    let out = privilege.run_raw(
+        conn,
+        &command("mb", &[dir, "--moonProtoKey"]),
+        &[],
+        STEP_TIMEOUT,
+    )?;
+    let stdout = Zeroizing::new(out.stdout_text());
+    key_reply(out.ok(), &stdout, &out.stderr_text())
+}
+
+/// The connection key in a `--moonProtoKey` reply. MoonBot 7.73 prints the bare packet, unlike
+/// the JSON its other commands answer with: a successful reply's last packet-shaped line is the
+/// key, whatever else stdout carries. Anything else — a JSON reply with `key`, the core's refusal,
+/// no reply at all — is read the way [`crate::core_new::mb`] reads a reply, which reports stderr
+/// or the output's size. No error carries stdout: it is the secret.
+fn key_reply(exited_ok: bool, stdout: &str, stderr: &str) -> anyhow::Result<Zeroizing<String>> {
+    let base64 = |c: char| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=');
+    let packet = stdout
+        .lines()
+        .map(str::trim)
+        .rfind(|line| line.len() >= 64 && line.chars().all(base64));
+    match packet {
+        Some(packet) if exited_ok => Ok(Zeroizing::new(packet.to_owned())),
+        _ => connection_key(crate::core_new::parse_reply(exited_ok, stdout, stderr)?),
+    }
 }
 
 /// Move, trim and wipe the connection key; the SSH stdout buffer remains a residual copy.

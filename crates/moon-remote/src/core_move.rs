@@ -21,9 +21,9 @@ use crate::ssh::Conn;
 
 /// The server-side script.
 pub const SCRIPT: &str = include_str!("../remote/moonbot-move.sh");
-/// MoonBot's Linux test channel: it redirects to the newest test package (L6 on 2026-11-01, the
-/// first with the command line `core_new` drives). Any other package URL may be given.
-pub const TEST_PACKAGE: &str = "https://api.moon-bot.com/files/latest-linux-test.php";
+/// MoonBot's full Linux release distribution (7.73 from 2026-11-07): the package a new install
+/// starts from. `botupdate.zip` only updates an installed core. Any other package URL may be given.
+pub const RELEASE_PACKAGE: &str = "https://api.moonbot.pro/files/linux/MoonBot.zip";
 /// Download and unpack of the package together — and, for a fresh core, its first start.
 pub(crate) const INSTALL_TIMEOUT: Duration = Duration::from_secs(1200);
 /// The first start: the core takes its key (up to 60 s in the script) and listens (30 s).

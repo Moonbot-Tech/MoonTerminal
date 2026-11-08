@@ -193,6 +193,17 @@ service_failed() {
     exit 1
 }
 
+# Put the package's `mb` wrapper on PATH as `mb` and `moonbot`, the commands every MoonBot guide
+# uses, as the release's own install does: a newer package's copy replaces an older one, and the
+# wrapper serves every instance on the server, so remove leaves it in place.
+install_mb() {
+    test -f "$1/mb" || return 0
+    if test ! -e /usr/local/bin/mb || test "$1/mb" -nt /usr/local/bin/mb; then
+        install -p -m 0755 "$1/mb" /usr/local/bin/mb
+    fi
+    ln -sfn mb /usr/local/bin/moonbot
+}
+
 # Whether ufw is installed and active.
 ufw_active() {
     command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status | grep -q '^Status: active'
@@ -404,6 +415,7 @@ install)
     fi
     chmod 700 "$dest/MoonBot"
     install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
+    install_mb "$dest"
     # Only rules opened here are marked for removal, independently for IPv4 and IPv6.
     if ufw_active; then
         ufw_open "$port" "$dest"
@@ -467,6 +479,7 @@ install-fresh)
     printf '%s\n' "$port" > "$dest/$marker"
     chmod 700 "$dest/MoonBot" "$dest/mb"
     install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
+    install_mb "$dest"
     # As in install: only an allow opened here is marked for removal.
     if ufw_active; then
         ufw_open "$port" "$dest"

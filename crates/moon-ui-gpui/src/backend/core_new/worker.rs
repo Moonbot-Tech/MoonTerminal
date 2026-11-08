@@ -6,7 +6,7 @@ use std::sync::mpsc;
 
 use moon_core::diagnostics::CORE_MOVE_TARGET;
 use moon_remote::core_move;
-use moon_remote::core_new::{self, ApiKeys, CoreStatus};
+use moon_remote::core_new::{self, ApiKeys, CoreState, CoreStatus};
 use moon_remote::script::Privilege;
 use moon_remote::setup::{self, FirstAccess};
 use moon_remote::ssh::{Conn, Target};
@@ -152,7 +152,9 @@ fn check(
     core_move::check(&conn, &privilege, form.proto_port, &mut |_| {})
 }
 
-/// Install the package and the service, start the core, turn MoonProto on, read its exchanges.
+/// Install the package and the service, start the core, wait out its initialization and read its
+/// exchanges. MoonProto waits for the exchange: MoonBot keeps its settings per exchange, so the key
+/// handed out now would belong to the default exchange rather than the user's.
 fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
     let (conn, privilege) = login(form).map_err(Installing::Nothing)?;
     send(Event::Line(
@@ -163,7 +165,7 @@ fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
         &privilege,
         &form.dir,
         form.proto_port,
-        core_move::TEST_PACKAGE,
+        core_move::RELEASE_PACKAGE,
     )
     .map_err(Installing::Nothing)?;
     let dir = installed.dir;
@@ -171,32 +173,33 @@ fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
         t!("connect_wizard.line.installed", dir = &dir).to_string(),
     ));
     let after = || -> anyhow::Result<_> {
-        let key =
-            core_new::setup_moonproto(&conn, &privilege, &dir, form.public_ip, form.proto_port)?;
-        send(Event::Line(
-            t!(
-                "connect_wizard.line.key",
-                address = format!("{}:{}", form.public_ip, form.proto_port)
-            )
-            .to_string(),
-        ));
-        let exchanges = core_new::exchanges(&conn, &privilege, &dir)?;
-        Ok((key, exchanges))
+        core_new::wait_initialized(&conn, &privilege, &dir, None, core_new::SETTLE_TIMEOUT)?;
+        core_new::exchanges(&conn, &privilege, &dir)
     };
     match after() {
-        Ok((key, exchanges)) => {
+        Ok(exchanges) => {
             send(Event::Installed {
                 dir: dir.clone(),
-                key,
                 exchanges,
             });
             Ok(dir)
         }
-        Err(e) => Err(Installing::Left(dir, e)),
+        Err(e) => {
+            // The core is on the server all the same: the backend learns its folder, so the
+            // stuck screen can retry it and name its row; the list stays empty until a retry
+            // reads it.
+            send(Event::Installed {
+                dir: dir.clone(),
+                exchanges: Vec::new(),
+            });
+            Err(Installing::Left(dir, e))
+        }
     }
 }
 
-/// Select the exchange, give it the keys and wait for the login to settle.
+/// Switch to the exchange and take its connection key, give it the keys and wait for the login to
+/// settle. Every pick of an exchange — the first, or another one after a failed login — asks the
+/// core for that exchange's own key: the row follows it rather than keeping the previous one.
 fn set_keys(
     form: &NewForm,
     dir: &str,
@@ -205,7 +208,22 @@ fn set_keys(
     send: &dyn Fn(Event),
 ) -> anyhow::Result<()> {
     let (conn, privilege) = login(form)?;
-    core_new::select_exchange(&conn, &privilege, dir, exchange)?;
+    let key = core_new::switch_exchange(
+        &conn,
+        &privilege,
+        dir,
+        exchange,
+        form.public_ip,
+        form.proto_port,
+    )?;
+    send(Event::Line(
+        t!(
+            "connect_wizard.line.key",
+            address = format!("{}:{}", form.public_ip, form.proto_port)
+        )
+        .to_string(),
+    ));
+    send(Event::Key(key));
     core_new::set_api_keys(&conn, &privilege, dir, keys)?;
     send(Event::Line(
         t!("connect_wizard.line.keys_sent", exchange = exchange).to_string(),
@@ -214,11 +232,28 @@ fn set_keys(
 }
 
 /// Log in again with the stored keys and wait for it to settle.
+///
+/// Once the login has settled, the exchange list and the selected exchange's key are read again
+/// before the result is reported: the step that failed may have switched the exchange without
+/// handing out its key, or an install may have stopped before the list came, and a row left with
+/// another exchange's key would never connect. Read after the login, not before it, so a core
+/// stuck initializing is still sent its new login at once; it is left as it is while it still
+/// initializes, since it would refuse the setup.
 fn retry(form: &NewForm, dir: &str, send: &dyn Fn(Event)) -> anyhow::Result<()> {
     let (conn, privilege) = login(form)?;
     core_new::retry_login(&conn, &privilege, dir)?;
     send(Event::Line(t!("connect_wizard.line.retry").to_string()));
-    settle(&conn, &privilege, dir, send)
+    let end = wait_login(&conn, &privilege, dir, send)?;
+    if end.state != CoreState::Initializing {
+        send(Event::Exchanges(core_new::exchanges(
+            &conn, &privilege, dir,
+        )?));
+        let key =
+            core_new::setup_moonproto(&conn, &privilege, dir, form.public_ip, form.proto_port)?;
+        send(Event::Key(key));
+    }
+    send(Event::Settled(end));
+    Ok(())
 }
 
 /// Report every status while the login settles, then the one it settled on.
@@ -228,9 +263,21 @@ fn settle(
     dir: &str,
     send: &dyn Fn(Event),
 ) -> anyhow::Result<()> {
+    let end = wait_login(conn, privilege, dir, send)?;
+    send(Event::Settled(end));
+    Ok(())
+}
+
+/// Report every status while the login settles and return the one it settled on, unreported.
+fn wait_login(
+    conn: &Conn,
+    privilege: &Privilege,
+    dir: &str,
+    send: &dyn Fn(Event),
+) -> anyhow::Result<CoreStatus> {
     send(Event::Busy(NewPhase::LoggingIn));
     let mut last: Option<CoreStatus> = None;
-    let end = core_new::wait_settled(
+    core_new::wait_settled(
         conn,
         privilege,
         dir,
@@ -241,9 +288,7 @@ fn settle(
                 last = Some(status.clone());
             }
         },
-    )?;
-    send(Event::Settled(end));
-    Ok(())
+    )
 }
 
 /// Take the instance out of the server, with the firewall rule its install opened.

@@ -210,7 +210,8 @@ impl ApiKeys {
 
 /// Install the package and the service in `dir` (a taken name gets `-2`, `-3`…), open `proto_port`
 /// in an active ufw, and start the core on its default settings. Returns once the core answers
-/// its commands. A failure leaves nothing behind but the shared `moonbot@.service` template.
+/// its commands. A failure leaves nothing behind but what every instance shares: the
+/// `moonbot@.service` template and the `mb` command in `/usr/local/bin`.
 pub fn install(
     conn: &Conn,
     privilege: &Privilege,
@@ -270,7 +271,9 @@ pub fn exchanges(conn: &Conn, privilege: &Privilege, dir: &str) -> anyhow::Resul
 }
 
 /// Select exchange `id` with the keys stored for it, if any. Stops the core's strategies and
-/// logs out of the previous exchange, as MoonBot's own switch does; MoonProto keeps its key.
+/// logs out of the previous exchange, as MoonBot's own switch does. Since 7.73 every exchange
+/// keeps its own MoonProto settings: selecting one configured before brings its own back, so the
+/// connection key may differ from the previous exchange's — read it again after the switch.
 pub fn select_exchange(
     conn: &Conn,
     privilege: &Privilege,
@@ -299,6 +302,79 @@ pub fn retry_login(conn: &Conn, privilege: &Privilege, dir: &str) -> anyhow::Res
 pub fn status(conn: &Conn, privilege: &Privilege, dir: &str) -> anyhow::Result<CoreStatus> {
     let reply = mb_within(conn, privilege, dir, &["--status"], &[], STATUS_TIMEOUT)?;
     Ok(serde_json::from_value(reply)?)
+}
+
+/// Ask [`status`] until the core is done initializing — on `exchange`, when given — or `timeout`
+/// passed, and return that status. The core refuses an exchange switch, keys and MoonProto setup
+/// while it initializes ("Core is busy"), and an accepted switch is not a finished one: right
+/// after it the status may still describe the previous exchange, which is why the exchange id is
+/// compared, not only the state.
+///
+/// Failed asks are tolerated as in [`wait_settled`]; a timeout is an error here, since every
+/// caller goes on with a command the core would refuse.
+pub fn wait_initialized(
+    conn: &Conn,
+    privilege: &Privilege,
+    dir: &str,
+    exchange: Option<&str>,
+    timeout: Duration,
+) -> anyhow::Result<CoreStatus> {
+    let start = Instant::now();
+    let mut failures = 0;
+    loop {
+        match status(conn, privilege, dir) {
+            Ok(now) => {
+                failures = 0;
+                if initialized_on(&now, exchange) {
+                    return Ok(now);
+                }
+                if start.elapsed() >= timeout {
+                    anyhow::bail!(
+                        "the core is still initializing after {} s ({:?} on {})",
+                        timeout.as_secs(),
+                        now.state,
+                        now.exchange
+                    );
+                }
+            }
+            Err(e) => {
+                failures += 1;
+                if failures >= STATUS_FAILURES || start.elapsed() >= timeout {
+                    return Err(e);
+                }
+                log::debug!("core status in {dir} not read, asking again: {e:#}");
+            }
+        }
+        std::thread::sleep(POLL);
+    }
+}
+
+/// Whether `status` is past initialization, on `exchange` when one is asked for.
+pub(crate) fn initialized_on(status: &CoreStatus, exchange: Option<&str>) -> bool {
+    status.state != CoreState::Initializing && exchange.is_none_or(|id| status.exchange == id)
+}
+
+/// Switch to exchange `id` and bring its MoonProto server up at `host:port`, returning that
+/// exchange's connection key — the order MoonBot's Linux guide gives: the exchange first, MoonProto
+/// once the switch finished. The key is never carried over from the previous exchange: a fresh
+/// exchange gets the address, one configured before keeps its own key (`--setup-moonproto` without
+/// `--rotate-key`).
+///
+/// An exchange already selected is not selected again: that would only restart its login, and a
+/// status read before the restart begins would already pass the wait for it.
+pub fn switch_exchange(
+    conn: &Conn,
+    privilege: &Privilege,
+    dir: &str,
+    id: &str,
+    host: Ipv4Addr,
+    port: u16,
+) -> anyhow::Result<Zeroizing<String>> {
+    if status(conn, privilege, dir).map_or(true, |now| now.exchange != id) {
+        select_exchange(conn, privilege, dir, id)?;
+    }
+    wait_initialized(conn, privilege, dir, Some(id), SETTLE_TIMEOUT)?;
+    setup_moonproto(conn, privilege, dir, host, port)
 }
 
 /// Ask [`status`] until the core is [`CoreStatus::connectable`], [`CoreStatus::needs_user`], or
