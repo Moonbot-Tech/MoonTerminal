@@ -24,6 +24,63 @@ fn schemas_reject_wrong_types_extra_keys_and_out_of_range_arguments() {
     }
 }
 
+/// Regression target: one `bytes=-` for every failure. The over-budget answer is the one that
+/// says a tool needs narrowing, so it must not look like a refused permission in the log.
+#[test]
+fn a_failure_is_logged_by_its_kind() {
+    let class = |text: &str| error_class(&anyhow::anyhow!(text.to_owned()));
+    assert_eq!(
+        class("response exceeds the budget; narrow the query or page size"),
+        "over_budget"
+    );
+    assert_eq!(class("invalid tool arguments: x"), "invalid_arguments");
+    assert_eq!(class("unknown tool"), "unknown_tool");
+    assert_eq!(class("report read failed: disk"), "failed");
+}
+
+/// The narrowing arguments are bounded: an empty field name or an unbounded list would let one call
+/// ask for everything again.
+#[test]
+fn narrowing_arguments_are_bounded() {
+    let refused = [
+        (
+            "strategy_read",
+            json!({"core":"1","strategy_id":"2","fields":[]}),
+        ),
+        (
+            "strategy_read",
+            json!({"core":"1","strategy_id":"2","fields":[""]}),
+        ),
+        ("logs_get", json!({"capture_id":"x","contains":""})),
+        ("core_state", json!({"core":"1","section":"everything"})),
+    ];
+    for (name, arguments) in refused {
+        let (_, validator) = catalog()
+            .iter()
+            .find(|(tool, _)| tool.name == name)
+            .unwrap();
+        assert!(!validator.is_valid(&arguments), "{name} {arguments}");
+    }
+    let accepted = [
+        (
+            "strategy_read",
+            json!({"core":"1","strategy_id":"2","fields":["StopLoss"]}),
+        ),
+        (
+            "logs_get",
+            json!({"capture_id":"x","contains":"order","summary":true}),
+        ),
+        ("core_state", json!({"core":"1","section":"problems"})),
+    ];
+    for (name, arguments) in accepted {
+        let (_, validator) = catalog()
+            .iter()
+            .find(|(tool, _)| tool.name == name)
+            .unwrap();
+        assert!(validator.is_valid(&arguments), "{name} {arguments}");
+    }
+}
+
 /// The real order interface accepts a balance-currency amount and excludes the old incorrect unit.
 #[test]
 fn order_amount_schema_agrees_with_the_typed_action() {

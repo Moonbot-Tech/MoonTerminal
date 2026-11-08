@@ -1140,7 +1140,8 @@ Station cursors identify local loss/reconnects, not every upstream packet loss.
 
 MoonDoc is fetched outside the owner thread as one public commit, with an atomic last-good cache
 and six-hour refresh. Reference, concepts and strategy examples are available through local
-search/read tools; task-specific guide sections accompany relevant live facts. Documentation
+search/read tools; a guide section rides on an answer only where an edit is being prepared
+(`strategy_schema`, `action_preview`), and a client reads the rest itself. Documentation
 never changes permissions or writes settings. Cursor events require client polling; an absent
 AI chat is not awakened by MCP. Reports use the existing replica, clock correction and currency
 coverage instead of a parallel accounting implementation.

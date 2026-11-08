@@ -167,8 +167,7 @@ impl Captures {
         &mut self,
         id: &str,
         who: &auth::Principal,
-        offset: usize,
-        lines: usize,
+        read: Read<'_>,
         stop: bool,
         shared: &Shared,
     ) -> Result<Value> {
@@ -189,19 +188,134 @@ impl Captures {
             capture.ended = Some("stopped_by_client".into());
             capture.end_ms = auth::now();
         }
-        let rows: Vec<_> = capture
-            .rows
-            .iter()
-            .skip(offset)
-            .take(lines.clamp(1, 100))
-            .collect();
-        Ok(
-            json!({"capture_id":id,"status":capture.ended.as_deref().unwrap_or("collecting"),"cores":capture.cores.iter().map(u64::to_string).collect::<Vec<_>>(),
+        let selected = select(&capture.rows, read.contains);
+        let mut answer = json!({"capture_id":id,"status":capture.ended.as_deref().unwrap_or("collecting"),"cores":capture.cores.iter().map(u64::to_string).collect::<Vec<_>>(),
             "started_ms":capture.started_ms,"end_ms":capture.end_ms,"received_lines":capture.rows.len(),"gap_cores":capture.gaps.iter().map(u64::to_string).collect::<Vec<_>>(),
-            "offset":offset,"next_offset":offset+rows.len(),"lines":rows,"data_is_untrusted":true,
-            "interpretation":"No lines can mean a quiet bot, missing subscription support, disconnection or insufficient core verbosity. ServerLog has no replay or reliable delivery; gap_cores cannot detect every packet lost before Station. File-only logs and historical archives are not included."}),
-        )
+            "data_is_untrusted":true,
+            "interpretation":"No lines can mean a quiet bot, missing subscription support, disconnection or insufficient core verbosity. ServerLog has no replay or reliable delivery; gap_cores cannot detect every packet lost before Station. File-only logs and historical archives are not included."});
+        if let Some(needle) = read.contains {
+            answer["contains"] = json!(needle);
+            answer["matched_lines"] = json!(selected.len());
+        }
+        if read.summary {
+            // Paged like the lines are, so every distinct line stays reachable.
+            let groups = summarize(&selected);
+            let page: Vec<_> = groups
+                .iter()
+                .skip(read.offset)
+                .take(read.lines.clamp(1, SUMMARY_PAGE))
+                .collect();
+            answer["distinct_lines"] = json!(groups.len());
+            answer["offset"] = json!(read.offset);
+            answer["next_offset"] = json!(read.offset + page.len());
+            answer["groups"] = json!(page);
+        } else {
+            let rows: Vec<_> = selected
+                .iter()
+                .skip(read.offset)
+                .take(read.lines.clamp(1, 100))
+                .collect();
+            answer["offset"] = json!(read.offset);
+            answer["next_offset"] = json!(read.offset + rows.len());
+            answer["lines"] = json!(rows);
+        }
+        Ok(answer)
     }
+}
+
+/// Most distinct lines one summary page holds. With `SUMMARY_TEXT` this keeps a page of long lines
+/// well under the answer budget; the rest is reached by `next_offset`.
+const SUMMARY_PAGE: usize = 50;
+/// Characters of a pattern and of its sample a summary keeps; the full line is one `contains` away.
+const SUMMARY_TEXT: usize = 400;
+
+/// How `logs_get` reads an observation.
+pub(super) struct Read<'a> {
+    /// First line to return, counted over the lines that match `contains`; in a summary, the
+    /// first distinct line.
+    pub offset: usize,
+    /// Lines to return; in a summary, distinct lines.
+    pub lines: usize,
+    /// Keep only lines holding this text, ignoring case.
+    pub contains: Option<&'a str>,
+    /// One entry per distinct line instead of the lines.
+    pub summary: bool,
+}
+
+/// The captured lines holding `contains`, ignoring case; all of them without it.
+fn select<'a>(rows: &'a [Value], contains: Option<&str>) -> Vec<&'a Value> {
+    let needle = contains.map(str::to_lowercase);
+    rows.iter()
+        .filter(|row| {
+            needle.as_deref().is_none_or(|needle| {
+                row["text"]
+                    .as_str()
+                    .is_some_and(|text| text.to_lowercase().contains(needle))
+            })
+        })
+        .collect()
+}
+
+/// A line with every run of digits folded to one `#`, so the same message about two prices or two
+/// order numbers counts as one.
+fn pattern(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_digits = false;
+    for character in text.chars() {
+        if character.is_ascii_digit() {
+            if !in_digits {
+                out.push('#');
+            }
+            in_digits = true;
+        } else {
+            out.push(character);
+            in_digits = false;
+        }
+    }
+    out
+}
+
+/// One entry per distinct pattern, most frequent first, with a real line as its sample.
+fn summarize(rows: &[&Value]) -> Vec<Value> {
+    struct Group<'a> {
+        count: usize,
+        first: &'a Value,
+        last: &'a Value,
+        cores: BTreeSet<&'a str>,
+    }
+    let mut groups: BTreeMap<String, Group<'_>> = BTreeMap::new();
+    for row in rows {
+        let text = row["text"].as_str().unwrap_or_default();
+        let group = groups.entry(pattern(text)).or_insert(Group {
+            count: 0,
+            first: row,
+            last: row,
+            cores: BTreeSet::new(),
+        });
+        group.count += 1;
+        group.last = row;
+        if let Some(core) = row["core"].as_str() {
+            group.cores.insert(core);
+        }
+    }
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    // Most frequent first; equal counts by first appearance, so the order is the same every read.
+    groups.sort_by(|(_, a), (_, b)| {
+        b.count.cmp(&a.count).then_with(|| {
+            a.first["received_ms"]
+                .as_i64()
+                .cmp(&b.first["received_ms"].as_i64())
+        })
+    });
+    groups
+        .into_iter()
+        .map(|(pattern, group)| {
+            let clip = |text: &str| text.chars().take(SUMMARY_TEXT).collect::<String>();
+            json!({"pattern":clip(&pattern),"count":group.count,"sample":clip(group.first["text"].as_str().unwrap_or_default()),
+            "first_received_ms":group.first["received_ms"],"last_received_ms":group.last["received_ms"],
+            "cores":group.cores})
+        })
+        .collect()
 }
 
 /// Known keys and credential-labelled lines cannot reach an AI; keep timestamps and an explicit marker.
