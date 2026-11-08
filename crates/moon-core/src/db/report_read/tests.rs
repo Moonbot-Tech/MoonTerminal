@@ -1973,7 +1973,7 @@ fn profit_abs_is_profit_percent_divided_by_leverage() {
         .expect("read ProfitAbs rows");
     assert_eq!(table.rec_ids, vec![1, 2, 3, 4]);
     assert_eq!(number(&table, 0, super::PROFIT_PERCENT_COLUMN), Some(10.0));
-    assert_eq!(number(&table, 0, super::PROFIT_ABS_COLUMN), Some(5.0));
+    assert_eq!(number(&table, 0, super::PROFIT_ABS_COLUMN), Some(10.0));
     for row in 1..4 {
         assert_eq!(
             cell(&table, row, super::PROFIT_ABS_COLUMN),
@@ -1982,6 +1982,64 @@ fn profit_abs_is_profit_percent_divided_by_leverage() {
             table.rec_ids[row]
         );
     }
+}
+
+/// A notional-basis core's ProfitAbs is the unleveraged return.
+///
+/// Fixture: a 10x long, 10 contracts at 10.0 = 100 USDT notional, `spentbtc` = 100 (the full
+/// notional, as `analytics/basis.rs` documents for Binance/Gate/Hyperliquid cores), profit 1 USDT.
+/// Hand computation: profit without leverage = 1 / 100 = 1 %; MoonBot's ProfitAbs is "profit or
+/// loss as a percentage, excluding leverage" -> 1.0.
+///
+/// Breakage: dividing by leverage on every core, which removes it twice where `spentbtc` is
+/// already the notional and shows 0.1.
+#[test]
+fn profit_abs_on_a_notional_core_is_not_divided_by_leverage() {
+    let conn = Connection::open_in_memory().expect("open fixture");
+    super::super::init_db(&conn).expect("initialize report database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, profitbtc REAL, spentbtc REAL, lev REAL,
+             boughtq REAL, buyprice REAL,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep VALUES (1, 'CORE-A', 1, 100, 1.0, 100.0, 10.0, 10.0, 10.0);",
+    )
+    .expect("seed");
+    super::super::test_support::rep_init(&conn);
+    let table =
+        query_reports(&conn, &ReportFilter::default(), "closedate", false, 100).expect("read");
+    assert_eq!(number(&table, 0, super::PROFIT_PERCENT_COLUMN), Some(1.0));
+    assert_eq!(number(&table, 0, super::PROFIT_ABS_COLUMN), Some(1.0));
+}
+
+/// A margin-basis core's ProfitAbs removes the leverage its `spentbtc` carries.
+///
+/// Fixture: the same 10x long, 100 USDT notional, but the core writes the MARGIN it posted,
+/// `spentbtc` = 10 (notional / leverage, the Bybit case `analytics/basis.rs` documents), profit
+/// 1 USDT. Hand computation: 1 / 100 = 1 % without leverage, while Profit % is 1 / 10 = 10 %.
+///
+/// Breakage: never dividing by leverage, which shows the leveraged 10.0 on margin cores.
+#[test]
+fn profit_abs_on_a_margin_core_removes_leverage() {
+    let conn = Connection::open_in_memory().expect("open fixture");
+    super::super::init_db(&conn).expect("initialize report database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT NOT NULL, newrecid INTEGER NOT NULL,
+             closedate INTEGER, profitbtc REAL, spentbtc REAL, lev REAL,
+             boughtq REAL, buyprice REAL,
+             PRIMARY KEY (core_uid, newrecid)
+         );
+         INSERT INTO orders_rep VALUES (1, 'CORE-A', 1, 100, 1.0, 10.0, 10.0, 10.0, 10.0);",
+    )
+    .expect("seed");
+    super::super::test_support::rep_init(&conn);
+    let table =
+        query_reports(&conn, &ReportFilter::default(), "closedate", false, 100).expect("read");
+    assert_eq!(number(&table, 0, super::PROFIT_PERCENT_COLUMN), Some(10.0));
+    assert_eq!(number(&table, 0, super::PROFIT_ABS_COLUMN), Some(1.0));
 }
 
 /// A legacy visibility preference gains Profit % once, while a current preference may hide it.
@@ -2332,15 +2390,27 @@ fn every_synthetic_column_can_both_project_and_sort() {
     for entry in super::SYNTHETIC {
         let column = entry.name;
         let names = vec![column.to_string()];
-        let select = super::source_select(&source, &names, Some(&valuation), &Default::default());
+        let select = super::source_select(
+            &source,
+            &names,
+            Some(&valuation),
+            &Default::default(),
+            &Default::default(),
+        );
         assert!(
             !select.starts_with("NULL"),
             "{column} must project an expression on a full-schema source"
         );
         // No expression means `query_reports_attempt` falls back to the constant `1`, which drops
         // this source's ordering entirely and hands the merge an arbitrary top-N.
-        super::source_sort_expression(&source, column, Some(&valuation), &Default::default())
-            .unwrap_or_else(|| panic!("{column} must be sortable on a full-schema source"));
+        super::source_sort_expression(
+            &source,
+            column,
+            Some(&valuation),
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap_or_else(|| panic!("{column} must be sortable on a full-schema source"));
         assert!(
             super::super::DISPLAY_COLUMNS.contains(&column),
             "{column} is registered but never offered, so nothing can ever render it"
@@ -2710,9 +2780,21 @@ fn every_corrected_column_sorts_by_the_same_sql_it_projects() {
 
     for column in corrected {
         let names = vec![column.to_string()];
-        let select = super::source_select(&source, &names, None, &Default::default());
-        let sort = super::source_sort_expression(&source, column, None, &Default::default())
-            .expect("a corrected column must remain sortable");
+        let select = super::source_select(
+            &source,
+            &names,
+            None,
+            &Default::default(),
+            &Default::default(),
+        );
+        let sort = super::source_sort_expression(
+            &source,
+            column,
+            None,
+            &Default::default(),
+            &Default::default(),
+        )
+        .expect("a corrected column must remain sortable");
         assert_eq!(
             select,
             format!("{sort} AS \"{column}\""),

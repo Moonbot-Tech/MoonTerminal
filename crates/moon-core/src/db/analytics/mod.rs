@@ -22,7 +22,7 @@ use super::{
     ProfitMetric, ProfitScope, ProfitUnit, QuoteBreakdown, QuoteScope, ReadFail, ReadResult,
 };
 
-mod basis;
+pub(in crate::db) mod basis;
 mod calendar;
 mod groups;
 mod profit_monitor;
