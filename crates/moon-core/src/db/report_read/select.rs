@@ -62,6 +62,8 @@ pub fn display_columns(conn: &Connection) -> ReadResult<Vec<String>> {
 ///     entry: Synthetic column being built.
 ///     src: Physical source whose schema decides availability.
 ///     valuation: Derived-cache fragments, absent when that cache is not joined.
+///     margin: Cores whose `spentbtc` is margin rather than notional, from
+///         [`crate::db::analytics::basis::margin_cores`].
 ///
 /// Returns:
 ///     The expression, or `None` when this source cannot compute the column.
@@ -69,6 +71,7 @@ pub(super) fn synthetic_expression(
     entry: &Synthetic,
     src: &ReadSource,
     valuation: Option<&crate::db::valuation::CoverageSql>,
+    margin: &std::collections::HashSet<u64>,
 ) -> Option<String> {
     if !entry.inputs.iter().all(|name| src.cols.contains(*name)) {
         return None;
@@ -81,11 +84,20 @@ pub(super) fn synthetic_expression(
             format!("CASE WHEN {spent} > 0 THEN {profit} / {spent} * 100.0 END")
         }
         PROFIT_ABS_COLUMN => {
-            // MoonBot's absolute return removes leverage from the same settled Profit % ratio.
+            // MoonBot's absolute return is profit over the traded notional, leverage excluded.
+            // `spentbtc` is already the notional on most cores and the margin only on some
+            // (`analytics::basis`), so leverage is removed only where the spend column carries it.
+            // A zero or missing leverage still shows no value, as on every core before. The
+            // `100.0` comes first so integer-valued money columns never divide as integers.
             let profit = crate::db::quote::settled_amount_expr("r", &src.cols, "profitbtc");
             let spent = crate::db::quote::settled_amount_expr("r", &src.cols, "spentbtc");
+            let factor = if src.cols.contains("core_uid") {
+                crate::db::analytics::basis::notional_factor_expr("r", margin)
+            } else {
+                "1".to_string()
+            };
             format!(
-                "CASE WHEN {spent} > 0 THEN {profit} / {spent} * 100.0 / NULLIF(r.\"lev\", 0.0) END"
+                "CASE WHEN {spent} > 0 AND r.\"lev\" <> 0 THEN {profit} * 100.0 / ({spent} * {factor}) END"
             )
         }
         // A cache-free retry has no `v` or `ra` aliases, so the expression must vanish with the
@@ -108,6 +120,7 @@ pub(super) fn synthetic_expression(
 ///     cols: Shared runtime display columns to project in order.
 ///     valuation: Derived-cache fragments when that cache is joined.
 ///     core_names: Current configured core names for the `core_name` column.
+///     margin: Cores whose `spentbtc` is margin, for the synthetic columns.
 ///
 /// Returns:
 ///     Comma-separated SQL projection for the aliased source.
@@ -116,6 +129,7 @@ pub(super) fn source_select(
     cols: &[String],
     valuation: Option<&crate::db::valuation::CoverageSql>,
     core_names: &crate::db::CoreNames,
+    margin: &std::collections::HashSet<u64>,
 ) -> String {
     cols.iter()
         .map(|c| {
@@ -128,7 +142,7 @@ pub(super) fn source_select(
             } else if let Some(sql) = notify_column_expression(src, c) {
                 format!("{sql} AS \"{c}\"")
             } else if let Some(entry) = synthetic(c) {
-                let sql = synthetic_expression(entry, src, valuation)
+                let sql = synthetic_expression(entry, src, valuation, margin)
                     .unwrap_or_else(|| "NULL".to_string());
                 format!("{sql} AS \"{c}\"")
             } else if src.legacy && c == "id" && src.cols.contains("db_id") {
@@ -218,6 +232,7 @@ pub(super) fn sort_column(cols: &[String], key: &str) -> String {
 ///     col: Validated runtime sort-column key.
 ///     valuation: Derived-cache fragments when that cache is joined.
 ///     core_names: Current configured core names for the `core_name` column.
+///     margin: Cores whose `spentbtc` is margin, for the synthetic columns.
 ///
 /// Returns:
 ///     SQL expression when the source can sort by the column, otherwise `None`.
@@ -226,9 +241,10 @@ pub(super) fn source_sort_expression(
     col: &str,
     valuation: Option<&crate::db::valuation::CoverageSql>,
     core_names: &crate::db::CoreNames,
+    margin: &std::collections::HashSet<u64>,
 ) -> Option<String> {
     if let Some(entry) = synthetic(col) {
-        return synthetic_expression(entry, src, valuation);
+        return synthetic_expression(entry, src, valuation, margin);
     }
     if let Some(sql) = corrected_column_expression(src, col, core_names) {
         return Some(sql);

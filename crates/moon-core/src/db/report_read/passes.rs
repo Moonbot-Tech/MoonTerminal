@@ -110,6 +110,8 @@ struct ReportPass<'a> {
     sources: &'a [ReadSource],
     /// Strategy metadata of this read, resolved once for both attempts.
     meta: &'a StrategyMeta,
+    /// Cores whose `spentbtc` is margin, resolved once for both attempts.
+    margin: &'a std::collections::HashSet<u64>,
 }
 
 /// Execute one complete Report row request: the closed rows, and the open ones ahead of them.
@@ -277,7 +279,13 @@ fn run_row_pass(
             .as_ref()
             .map(|parts| parts.per_row.joins.as_str())
             .unwrap_or("");
-        let select = source_select(src, pass.cols, valuation.as_ref(), &pass.filter.core_names);
+        let select = source_select(
+            src,
+            pass.cols,
+            valuation.as_ref(),
+            &pass.filter.core_names,
+            pass.margin,
+        );
         let rec_id_select = rec_id_expr(src);
         // Sort in SQL only if this source can express the column; otherwise source order is
         // irrelevant, because the merge below reorders everything anyway.
@@ -314,6 +322,7 @@ fn run_row_pass(
             sort_col,
             valuation.as_ref(),
             &pass.filter.core_names,
+            pass.margin,
         ) {
             Some(expression) if desc => {
                 let mut order = format!("{expression} {dir}");
@@ -663,6 +672,12 @@ fn query_projected_reports(
         .map_err(|error| read_fail("reports: resolve strategy mask", error))?;
     let col = sort_column(&cols, sort_key);
     let sources = read_sources_res(conn)?;
+    // Only ProfitAbs reads the spend basis; a projection without it skips the replica-wide probe.
+    let margin = if cols.iter().any(|c| c == PROFIT_ABS_COLUMN) {
+        crate::db::analytics::basis::margin_cores(conn)?
+    } else {
+        std::collections::HashSet::new()
+    };
     // The column set is deliberately resolved ONCE, outside the retry: both attempts must project
     // the same `cols`, or a cache-free retry would desynchronise `cols` from `rows`.
     let merged = {
@@ -675,6 +690,7 @@ fn query_projected_reports(
             limit,
             sources: &sources,
             meta: &meta,
+            margin: &margin,
         };
         with_valuation_fallback(
             conn,
