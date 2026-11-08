@@ -589,7 +589,8 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) {
         use crate::strategies::tree::ops::{
-            NewStrategy, STRATEGY_NAME_FIELD, set_field, unique_name,
+            LAST_EDIT_DATE_FIELD, NewStrategy, STRATEGY_NAME_FIELD, edit_date_now, set_field,
+            unique_name,
         };
         let Some(target) = dlg.targets.first() else {
             return;
@@ -608,6 +609,8 @@ impl AnalyticsView {
             }
         };
         let b = self.backend.read(cx);
+        // One reading for the whole batch, so copies sent together carry one minute.
+        let now_ms = moon_core::util::now_unix_ms_i64();
         let mut plans: Vec<(
             moon_core::session::CoreId,
             moon_core::feed::NewStrategySpec,
@@ -640,6 +643,12 @@ impl AnalyticsView {
                 break;
             };
             set_field(&mut fields, STRATEGY_NAME_FIELD, &name);
+            // A copy is a new strategy: it is dated now, not with the source's last edit (#1256).
+            set_field(
+                &mut fields,
+                LAST_EDIT_DATE_FIELD,
+                &edit_date_now(now_ms, cd.time_offset.offset_secs),
+            );
             plans.push((
                 cid,
                 // Use the shared intent conversion so every creation path populates the same spec.

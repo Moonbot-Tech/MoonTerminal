@@ -201,6 +201,9 @@ fn transform(
             let mut made = editor.into_snapshot();
             // Preview identity is stable; the wall clock is applied only at submission.
             made.last_date = 0;
+            // The editor stamps format 1, which the core would convert as an old strategy file —
+            // a MoonShot would lose its TriggerKeyBuy (#1286). Stamped like every other create.
+            made.strategy_ver = crate::feed::live::revision_stamp(full);
             (json!({"next_id":id.to_string()}), made, false)
         }
         Action::StrategyDelete { id } => {

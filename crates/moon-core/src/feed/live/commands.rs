@@ -29,9 +29,10 @@ pub(in crate::feed) use chart_text::ChartTextWanted;
 pub(super) use local_edits::LocalStratEdits;
 use local_edits::signaltype_to_kind_ordinal;
 pub(super) use placement::StrategyPlacementGuard;
+pub(crate) use placement::revision_stamp;
 #[cfg(test)]
 use placement::strategy_placements_unchanged;
-use placement::{anchor_on_core, plan_insert_positions, revision_stamp};
+use placement::{anchor_on_core, plan_insert_positions};
 
 #[cfg(test)]
 mod tests;

@@ -648,3 +648,20 @@ fn cut_move_plan_preserves_original_ids_and_refuses_recursive_folder_targets() {
         .is_empty()
     );
 }
+
+/// #1256: a copy is dated on the target core's own wall clock, to the minute, in MoonBot's
+/// `yyyy-mm-dd hh:nn` form. Catches dropping the offset (UTC on a +03:00 core), applying it with
+/// the wrong sign, rounding the seconds up, and an offset that carries the date across midnight.
+#[test]
+fn a_new_strategy_is_dated_on_the_cores_wall_clock() {
+    // 2026-11-05 13:34:59 UTC.
+    let now_ms = 1_793_885_699_000;
+    assert_eq!(edit_date_now(now_ms, Some(3 * 3600)), "2026-11-05 16:34");
+    assert_eq!(edit_date_now(now_ms, Some(0)), "2026-11-05 13:34");
+    assert_eq!(edit_date_now(now_ms, Some(-8 * 3600)), "2026-11-05 05:34");
+    // 2026-11-05 22:10:00 UTC on a +05:00 core is already the next day there.
+    assert_eq!(
+        edit_date_now(1_793_916_600_000, Some(5 * 3600)),
+        "2026-11-06 03:10"
+    );
+}

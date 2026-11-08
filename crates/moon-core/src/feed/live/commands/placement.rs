@@ -15,10 +15,31 @@ use super::*;
 /// or `Adjusted` on the fields, which is the message the user can act on.
 ///
 /// The maximum is taken so a core holding strategies written by a newer Moonbot is not sent one
-/// it would have to migrate; a core with no strategies yet gets `0`, the old behaviour.
-pub(super) fn revision_stamp(full: &[StrategySnapshot]) -> i32 {
-    full.iter().map(|s| s.strategy_ver).max().unwrap_or(0)
+/// it would have to migrate. A core with no strategies yet has nothing to read the number from and
+/// gets [`MOONBOT_STRATEGY_FORMAT`]: a lower number makes the core treat the new strategy as a file
+/// written by an old Moonbot and convert it on arrival, and that conversion reset a MoonShot's
+/// `TriggerKeyBuy` to 0 on the first strategy pasted onto an empty core (#1286).
+///
+/// Every path that creates a strategy on a core stamps it here: the paste/copy batch and the
+/// restore in this drain, and the automation create (`crate::automation::strategies`).
+pub(crate) fn revision_stamp(full: &[StrategySnapshot]) -> i32 {
+    full.iter()
+        .map(|s| s.strategy_ver)
+        .max()
+        .unwrap_or(MOONBOT_STRATEGY_FORMAT)
 }
+
+/// The strategy format current Moonbot builds stamp on every strategy they hold and echo back.
+///
+/// Used only for a core that holds no strategy to read its own format from. The core restamps every
+/// strategy it stores with its own format, and the echo carries that number, so the guess decides
+/// only two things. Which old-format conversions run: none from 12 down, at worst the ones a newer
+/// format adds on top. And how the panel resolves the create: on the fields when the core's format
+/// is 12 — every core seen so far; as superseded by a newer revision when it is higher, which is
+/// what every first strategy on an empty core got while this was sent as `0`; and only at the edit
+/// deadline when it is lower, because moonproto then reads the echo as neither this revision nor a
+/// newer one.
+const MOONBOT_STRATEGY_FORMAT: i32 = 12;
 
 /// Resolve a spec's placement anchor for the core it is actually being applied to.
 ///

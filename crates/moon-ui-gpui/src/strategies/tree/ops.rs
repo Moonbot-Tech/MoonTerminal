@@ -63,6 +63,32 @@ pub fn resolve_clipboard(
 /// Field name through which moonproto stores `StrategySnapshot::strategy_name`.
 pub const STRATEGY_NAME_FIELD: &str = "StrategyName";
 
+/// Field name of the read-only «Дата последней правки» string, `yyyy-mm-dd hh:nn`.
+pub const LAST_EDIT_DATE_FIELD: &str = "LastEditDate";
+
+/// The `LastEditDate` a strategy created right now carries on a core.
+///
+/// A create that copies another strategy's fields would otherwise keep the source's date: a
+/// copied `LastEditDate` survives the create, and leaving the field out does not help either,
+/// because the core then stores its empty default (#1256). So the creator writes the current
+/// minute itself, on the core's own wall clock — the clock that core writes every other date of
+/// its strategies on, so the «Изменена» column compares like with like. With no measured offset
+/// for the core yet, this PC's zone is the remaining guess.
+///
+/// Args:
+///     now_ms: Current UTC Unix time in milliseconds.
+///     core_offset_secs: The core's measured offset east of UTC, if one was ever adopted.
+///
+/// Returns:
+///     The minute as `yyyy-mm-dd hh:nn`, the form MoonBot stores; empty for an unrepresentable time.
+pub fn edit_date_now(now_ms: i64, core_offset_secs: Option<i32>) -> String {
+    let offset_ms = core_offset_secs.map_or_else(moon_core::util::time::local_utc_offset_ms, |s| {
+        i64::from(s) * 1000
+    });
+    let wall_secs = now_ms.saturating_add(offset_ms).div_euclid(1000);
+    moon_core::util::display_time::format_minute(wall_secs, chrono_tz::Tz::UTC)
+}
+
 /// Return distinct folder names the core will split, in first-seen order.
 /// Paths are planned destinations; only separators retained INSIDE a `path_segments` segment
 /// warn, so ordinary nested paths stay silent. No path is rewritten.
