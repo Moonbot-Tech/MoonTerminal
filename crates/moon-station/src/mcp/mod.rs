@@ -5,6 +5,7 @@ mod bridge;
 mod capture;
 mod http;
 mod knowledge;
+mod site;
 mod tools;
 
 use std::sync::{Arc, Mutex, mpsc};
@@ -71,6 +72,10 @@ struct Shared {
     knowledge: knowledge::SharedKnowledge,
     http_slots: Arc<Semaphore>,
     report_slots: Arc<Semaphore>,
+    /// The MoonTerminal site's search API, asked off the owner thread.
+    site: Arc<site::Client>,
+    /// Site requests in flight at once: each holds a blocking worker for up to two timeouts.
+    site_slots: Arc<Semaphore>,
 }
 
 impl Shared {
@@ -110,6 +115,8 @@ impl Mcp {
             knowledge,
             http_slots: Arc::new(Semaphore::new(32)),
             report_slots: Arc::new(Semaphore::new(2)),
+            site: Arc::new(site::Client::new()),
+            site_slots: Arc::new(Semaphore::new(4)),
         });
         let serving = shared.clone();
         let stop = CancellationToken::new();
