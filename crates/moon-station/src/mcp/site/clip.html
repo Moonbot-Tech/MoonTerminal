@@ -1,0 +1,137 @@
+<!doctype html>
+<!--
+  The player `site_clip` opens in the chat (MCP Apps, ui://moonstation/site-clip-<hash of this page>).
+
+  The host renders this page in a sandbox and hands it the tool's structured result: the answer's
+  question, its page and, when the site has finished it, the clip. The video loads from the site,
+  which is all the CSP the resource declares allows. The script is inline and speaks the MCP Apps
+  protocol (2026-01-26) itself rather than loading the SDK from a CDN: a script in this frame can
+  ask the host to call the station's tools, trading ones included, so nothing from outside runs
+  here. A host with no apps shows the same fields as text.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>MoonTerminal clip</title>
+    <style>
+      body { margin: 0; padding: 4px; font: 13px system-ui, sans-serif; background: transparent; color: CanvasText; }
+      /* Sized by width, never by vh: inside the host's frame vh is the frame's own height, which the host sets from
+         what this page reports, so a vh cap shrinks the video to whatever height the frame happened to open at.
+         The clips are square; the real ratio replaces this one once the video's metadata arrives. */
+      main { max-width: 560px; margin: 0 auto; }
+      video { display: block; width: 100%; height: auto; aspect-ratio: 1 / 1; border-radius: 8px; background: #000; }
+      p { margin: 6px 2px 0; display: flex; gap: 8px; justify-content: space-between; align-items: baseline; }
+      a { color: inherit; white-space: nowrap; }
+      [hidden] { display: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <video id="clip" controls playsinline preload="metadata" hidden></video>
+      <p><span id="question"></span><a id="page" href="#" hidden></a></p>
+    </main>
+    <script>
+      (() => {
+        const clip = document.getElementById('clip');
+        const question = document.getElementById('question');
+        const page = document.getElementById('page');
+        const pending = new Map();
+        let nextId = 1;
+
+        // JSON-RPC over postMessage with the host, the transport the MCP Apps protocol defines.
+        const post = (message) => window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
+        const request = (method, params) =>
+          new Promise((resolve, reject) => {
+            const id = nextId++;
+            pending.set(id, { resolve, reject });
+            post({ id, method, params });
+          });
+        const notify = (method, params) => post(params === undefined ? { method } : { method, params });
+
+        // Only addresses on the site are played or linked: the result is data from a tool.
+        const onSite = (value) =>
+          typeof value === 'string' && /^https:\/\/moonterminal\.(pro|eu)\//.test(value);
+
+        // The host says whether its chat is light or dark; text follows it, not the system.
+        const applyTheme = (context) => {
+          const theme = context && context.theme;
+          if (theme === 'light' || theme === 'dark') {
+            document.documentElement.style.colorScheme = theme;
+          }
+        };
+
+        // The content's own height, not the document's: scrollHeight never drops below the frame's current height,
+        // so a frame opened tall would stay tall, and one opened short is what made the video tiny.
+        // Nothing is reported before the handshake: a host may drop it, or size the frame to the caption alone.
+        let ready = false;
+        const reportSize = () => {
+          if (!ready) return;
+          const box = document.body.getBoundingClientRect();
+          notify('ui/notifications/size-changed', {
+            width: Math.ceil(box.width),
+            height: Math.ceil(box.height),
+          });
+        };
+
+        const show = (result) => {
+          const data = result && result.structuredContent;
+          if (!data) return;
+          question.textContent = typeof data.question === 'string' ? data.question : '';
+          if (onSite(data.video)) {
+            clip.src = data.video;
+            clip.hidden = false;
+          }
+          if (onSite(data.url)) {
+            page.textContent = new URL(data.url).host;
+            page.hidden = false;
+            page.onclick = (event) => {
+              event.preventDefault();
+              request('ui/open-link', { url: data.url }).catch(() => {});
+            };
+          }
+          reportSize();
+        };
+
+        window.addEventListener('message', (event) => {
+          if (event.source !== window.parent) return;
+          const message = event.data;
+          if (!message || message.jsonrpc !== '2.0') return;
+          if (message.method === undefined && pending.has(message.id)) {
+            const waiting = pending.get(message.id);
+            pending.delete(message.id);
+            if (message.error) waiting.reject(message.error);
+            else waiting.resolve(message.result);
+          } else if (message.method === 'ui/notifications/tool-result') {
+            show(message.params);
+          } else if (message.method === 'ui/notifications/host-context-changed') {
+            applyTheme(message.params);
+          } else if (message.method !== undefined && message.id !== undefined) {
+            // A request this page has nothing to add to (teardown, ping): acknowledge it.
+            post({ id: message.id, result: {} });
+          }
+        });
+
+        clip.addEventListener('loadedmetadata', () => {
+          if (clip.videoWidth && clip.videoHeight) {
+            clip.style.aspectRatio = `${clip.videoWidth} / ${clip.videoHeight}`;
+          }
+        });
+        // Any change of the content's size (the video's ratio, a wrapped caption, the frame's width) is reported.
+        new ResizeObserver(reportSize).observe(document.body);
+        request('ui/initialize', {
+          protocolVersion: '2026-01-26',
+          appInfo: { name: 'MoonTerminal clip', version: '1.0.0' },
+          appCapabilities: {},
+        })
+          .then((result) => {
+            applyTheme(result && result.hostContext);
+            notify('ui/notifications/initialized');
+            ready = true;
+            reportSize();
+          })
+          .catch(() => {});
+      })();
+    </script>
+  </body>
+</html>

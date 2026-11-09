@@ -1146,6 +1146,16 @@ never changes permissions or writes settings. Cursor events require client polli
 AI chat is not awakened by MCP. Reports use the existing replica, clock correction and currency
 coverage instead of a parallel accounting implementation.
 
+Questions about the terminal itself go to the MoonTerminal site, not to a copy of it: `mcp/site.rs`
+asks the site's search API (`GET /api/v1/{search,faq,screen,release}` on `moonterminal.pro`, then
+`moonterminal.eu`) on a blocking worker behind `site_slots`, never on the owner thread. A domain that
+answered is asked first for 30 minutes; a 3xx is never followed, it moves to the other domain, and a
+4xx is the site's answer. The query leaves the station, so the tools say never to put bot data in it.
+`site_clip` carries an MCP Apps `_meta.ui.resourceUri`: a client that renders apps opens the player
+(`mcp/site/clip.html`, the one resource, gated by the read grant like the tool list) and plays the
+answer's clip from the site; any other client shows the same fields as text. The site offers a clip
+only once it is rendered.
+
 ## UI Components
 
 The application depends on `Moonbot-Tech/MoonUI` and uses components through `moon_ui::*` /

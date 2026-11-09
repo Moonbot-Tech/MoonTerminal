@@ -162,3 +162,73 @@ fn order_amount_schema_agrees_with_the_typed_action() {
         }
     ));
 }
+
+/// The clip tool names the player, and the player is served under exactly that name with the
+/// MIME type an MCP Apps host requires: a mismatch shows a bare tool result and nothing plays.
+#[test]
+fn site_clip_names_the_player_the_server_serves() {
+    let (clip, _) = catalog()
+        .iter()
+        .find(|(tool, _)| tool.name == "site_clip")
+        .unwrap();
+    let meta = serde_json::to_value(clip.meta.as_ref().unwrap()).unwrap();
+    assert_eq!(meta["ui"]["resourceUri"], clip_ui());
+    assert_eq!(meta["ui/resourceUri"], clip_ui());
+    let contents = serde_json::to_value(clip_contents()).unwrap();
+    let page = &contents["contents"][0];
+    assert_eq!(page["uri"], clip_ui());
+    // The address carries the page's hash, so a changed page is a new address a host must fetch.
+    let suffix = clip_ui()
+        .strip_prefix("ui://moonstation/site-clip-")
+        .unwrap();
+    assert!(suffix.len() == 16 && suffix.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(page["mimeType"], "text/html;profile=mcp-app");
+    // The clip loads from the site, and nothing else may load: no CDN in the CSP or in the page.
+    assert_eq!(
+        page["_meta"]["ui"]["csp"]["resourceDomains"],
+        json!(site::ORIGINS)
+    );
+    let html = page["text"].as_str().unwrap();
+    assert!(!html.contains("<script src") && !html.contains("import "));
+    for method in [
+        "ui/initialize",
+        "ui/notifications/initialized",
+        "ui/notifications/tool-result",
+    ] {
+        assert!(html.contains(method), "the player never speaks {method}");
+    }
+}
+
+/// Every site tool in the catalog runs on the site worker, and no other tool does: a site tool
+/// renamed in one place only would otherwise be queued on the owner, which knows no such call.
+#[test]
+fn every_site_tool_and_only_they_go_to_the_site() {
+    for (tool, _) in catalog() {
+        assert_eq!(
+            site_tool(&tool.name).is_some(),
+            tool.name.starts_with("site_"),
+            "{}",
+            tool.name
+        );
+    }
+}
+
+/// The site tools refuse what the site would: a language it does not ship, an endless query,
+/// a kind it has no endpoint for.
+#[test]
+fn site_schemas_reject_what_the_site_has_no_answer_for() {
+    for (name, arguments) in [
+        ("site_search", json!({"query":"ключ","lang":"de"})),
+        ("site_search", json!({"query":"a".repeat(257)})),
+        ("site_search", json!({"query":"ключ","limit":50})),
+        ("site_read", json!({"kind":"page","id":"x"})),
+        ("site_read", json!({"kind":"faq"})),
+        ("site_clip", json!({"id":""})),
+    ] {
+        let (_, validator) = catalog()
+            .iter()
+            .find(|(tool, _)| tool.name == name)
+            .unwrap();
+        assert!(!validator.is_valid(&arguments), "{name} {arguments}");
+    }
+}

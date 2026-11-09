@@ -39,6 +39,8 @@ impl Fixture {
             )),
             http_slots: Arc::new(tokio::sync::Semaphore::new(8)),
             report_slots: Arc::new(tokio::sync::Semaphore::new(2)),
+            site: Arc::new(super::super::site::Client::new()),
+            site_slots: Arc::new(tokio::sync::Semaphore::new(1)),
         });
         Self {
             router: router(shared.clone(), CancellationToken::new()),
