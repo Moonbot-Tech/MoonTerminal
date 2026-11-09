@@ -141,6 +141,14 @@ fn transform(
                 .iter()
                 .find(|s| s.strategy_id == *id)
                 .context("strategy not found")?;
+            // Only a rename is judged: an edit that keeps its name must stay possible even on a
+            // pair that already shares one, or the duplicate could never be fixed from here.
+            if let Some(next) = fields.get("StrategyName") {
+                let next = next.as_str().context("StrategyName must be a string")?;
+                if old.strategy_name().map(str::trim) != Some(next.trim()) {
+                    ensure_name_free(full, Some(*id), next)?;
+                }
+            }
             let mut base = old.clone();
             if let Some(signal) = fields.get("SignalType") {
                 let name = signal.as_str().context("SignalType must be a string")?;
@@ -182,6 +190,7 @@ fn transform(
                 !name.trim().is_empty() && name.len() <= 128,
                 "strategy name must contain 1..128 bytes"
             );
+            ensure_name_free(full, None, name)?;
             let id = full
                 .iter()
                 .map(|s| s.strategy_id)
@@ -233,6 +242,38 @@ fn transform(
         json!({"before":before,"after":after,"id":id.to_string(),"apply_to_orders":apply_orders,
         "limits":"No server-side compare-and-swap. An external edit after submission can still race. Settings confirmation does not confirm BUY replacement."}),
     )
+}
+
+/// Refuse a strategy name another strategy on this core already carries.
+///
+/// A rule of the Station's automation path only, not of the core: the core accepts two strategies
+/// of one name, but `UseHookStrategy` names its MoonHook BY NAME, and with a Manual and a hook
+/// both called the same the core priced orders off the Manual's parameters instead of the hook's.
+/// A person may still make such a pair in MoonBot; the Station's AI client may not.
+///
+/// Matching trims surrounding whitespace and ignores case. Whether the core's own name lookup
+/// folds case is not known, so the guard takes the stricter reading: refusing `fast - 1` beside
+/// `Fast - 1` costs an AI client one other name, while letting it through could rebuild the very
+/// collision this exists to stop. `own` is the strategy being renamed, which never collides with
+/// itself. An empty name collides with nothing; the callers bound the name themselves.
+fn ensure_name_free(full: &[StrategySnapshot], own: Option<u64>, name: &str) -> Result<()> {
+    let wanted = name.trim();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let folded = wanted.to_lowercase();
+    if let Some(other) = full.iter().find(|s| {
+        Some(s.strategy_id) != own
+            && s.strategy_name()
+                .is_some_and(|n| n.trim().to_lowercase() == folded)
+    }) {
+        bail!(
+            "strategy name {wanted:?} is already used by strategy {} on this core; pick another \
+             name (UseHookStrategy and other references resolve strategies by name)",
+            other.strategy_id
+        );
+    }
+    Ok(())
 }
 
 /// A folder is a logical strategy path, never a filesystem path or implicit delete operation.
