@@ -32,10 +32,11 @@
 </p>
 
 <p align="center">
-  <a href="https://moonbot-tech.github.io/MoonTerminal/"><b>User guide</b></a> — an interactive tour of the terminal interface
+  <a href="https://moonterminal.pro/"><b>moonterminal.pro</b></a> — downloads, the user guide and FAQ in seven languages ·
+  <a href="https://moonbot-tech.github.io/MoonTerminal/">Interface tour</a>
 </p>
 
-MoonTerminal is a native desktop trading terminal for the **[Moonbot](https://moonbot.pro)** cryptocurrency-trading core. It renders live charts, order books, orders, reports, and strategies for one or more Moonbot cores from a single GPU-accelerated window on Windows, macOS, and Linux.
+MoonTerminal is a desktop shell for Windows and macOS for controlling **[Moonbot](https://moonbot.pro)** cores: charts, orders, reports and strategies in one window. The terminal does not trade by itself: it connects to a Moonbot core with a key. The source code is public on GitHub. It is not affiliated with moonterminal.io or with third-party Telegram trading bots under similar names.
 
 > **Work in progress.** This is the active development workspace for the terminal — a GPUI shell, MoonUI integration, the MoonProto live feed, per-platform GPU chart rendering, and debug tooling. It is not a finished, packaged product yet.
 
@@ -176,7 +177,8 @@ Runtime config lives next to the executable. Server credentials are stored in en
 
 | Guide | What's inside |
 |---|---|
-| [User guide](https://moonbot-tech.github.io/MoonTerminal/) | Interactive tour: the main-window map, first connection, panels, hotkeys |
+| [User guide](https://moonterminal.pro/) | The website: downloads, the interface reference, the FAQ and the version history in seven languages |
+| [Interface tour](https://moonbot-tech.github.io/MoonTerminal/) | Interactive tour: the main-window map, first connection, panels, hotkeys |
 | [Architecture](docs/ARCHITECTURE.md) | Crates, per-platform GPU rendering, and the live data path |
 | [Telegram chat reports](docs/TELEGRAM_REPORTS.md) | Pairing the bot, the report keyboard and views, notifications |
 | [FireTest](docs/FIRETEST.md) | The built-in `chart-smoke` live probe |
