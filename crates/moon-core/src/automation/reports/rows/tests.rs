@@ -26,3 +26,28 @@ fn a_row_prints_ids_unsigned_and_money_rounded() {
     assert_eq!(cell(&trade, "profit_usdt", &want).to_string(), "0.0");
     assert_eq!(cell(&trade, "unknown_field", &want), Value::Null);
 }
+
+/// A trade without a USDT rate goes after the valued ones in BOTH directions: asking for the
+/// biggest wins (`profit_usdt` desc) must start with the biggest win, not with unvalued trades,
+/// as `compare` promises an empty cell last and `aggregate::order` keeps a missing value last.
+#[test]
+fn an_empty_cell_sorts_last_in_both_directions() {
+    let mut unvalued = Trade::sample(1, 1, "ACE", 1_000, 0.0);
+    unvalued.profit_usdt = None;
+    let small = Trade::sample(1, 1, "BTC", 2_000, 1.0);
+    let big = Trade::sample(1, 1, "ETH", 3_000, 5.0);
+    let want = Want::default();
+    for (dir, expected) in [
+        (Dir::Desc, ["ETH", "BTC", "ACE"]),
+        (Dir::Asc, ["BTC", "ETH", "ACE"]),
+    ] {
+        let mut trades = vec![&unvalued, &small, &big];
+        let sort = [super::super::aggregate::Sort {
+            by: "profit_usdt".into(),
+            dir,
+        }];
+        order(&mut trades, &sort, &want);
+        let coins: Vec<&str> = trades.iter().map(|t| &*t.coin).collect();
+        assert_eq!(coins, expected, "{dir:?}");
+    }
+}
