@@ -21,6 +21,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use gpui::{Context, Task};
+use moon_core::config::{CoreTarget, ServerConfig, parse_endpoint_override, target_from_key};
 use moon_core::diagnostics::CORE_MOVE_TARGET;
 use moon_remote::ssh::Target;
 use rust_i18n::t;
@@ -29,6 +30,41 @@ pub(crate) use steps::{StepEvent, StepId, StepNote, StepRow, StepState, Steps};
 pub(crate) use worker::{Command, MoveForm};
 
 use crate::Backend;
+
+/// Where this terminal reaches core `uid`: its key's address with the row's typed Address laid
+/// over it — the endpoint the live feed and the core menu use.
+///
+/// The move must ask the old core at this same endpoint. Read from the key alone, a core whose
+/// key was copied without an address — reached through the Address field instead — failed the
+/// move at its first step, although the terminal traded through it.
+///
+/// Errors:
+///     The core is not in `servers`, its Address does not parse (the feed refuses it too), its
+///     key is unreadable, or neither names a host — the localhost the feed falls back to is not
+///     where a core on a server runs, and asking there would only time out. Each says which, for
+///     the user to correct.
+fn old_core_target(servers: &[ServerConfig], uid: u64) -> anyhow::Result<CoreTarget> {
+    let server = servers
+        .iter()
+        .find(|s| s.uid == uid)
+        .ok_or_else(|| anyhow::anyhow!("the core is no longer in the settings"))?;
+    let endpoint = parse_endpoint_override(&server.endpoint_override).map_err(|_| {
+        anyhow::anyhow!(
+            "the core's Address on the Cores page, {:?}, is not an address: correct it, then \
+             start the move again",
+            server.endpoint_override.trim()
+        )
+    })?;
+    let target = target_from_key(server.key.expose(), endpoint.as_ref()).ok_or_else(|| {
+        anyhow::anyhow!("the core's key is not readable: paste it again on the Cores page")
+    })?;
+    anyhow::ensure!(
+        !target.localhost_fallback,
+        "the core's address is not known: neither its key nor its Address on the Cores page names \
+         one. Fill in the Address the core answers at, then start the move again"
+    );
+    Ok(target)
+}
 
 /// How often the backend drains a move's channel.
 const POLL: Duration = Duration::from_millis(250);
@@ -174,11 +210,12 @@ impl Backend {
         ) {
             return;
         }
+        let old = old_core_target(&self.config.servers, uid);
         let (tx, rx) = mpsc::channel();
         let (commands, answers) = mpsc::channel();
         std::thread::Builder::new()
             .name("core-move".into())
-            .spawn(move || worker::run(uid, form, &tx, &answers))
+            .spawn(move || worker::run(uid, form, old, &tx, &answers))
             .ok();
         self.core_move_track(uid, MovePhase::Running, Some(commands), rx, cx);
     }
