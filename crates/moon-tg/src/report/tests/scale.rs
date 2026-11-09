@@ -28,7 +28,7 @@ fn capture_closing_statement(event: rusqlite::trace::TraceEvent<'_>) {
 #[test]
 #[ignore = "manual closing identity scale measurement"]
 fn probe_closing_identity() {
-    let conn = source(100_000, 1_700_000_000, 1_700_200_000);
+    let mut conn = source(100_000, 1_700_000_000, 1_700_200_000);
     let indexing = Instant::now();
     conn.execute_batch(
         "CREATE INDEX idx_rep_coin_entry ON orders_rep(core_uid, coin COLLATE NOCASE, buydate) WHERE buydate > 0",
@@ -42,7 +42,8 @@ fn probe_closing_identity() {
     conn.trace_v2(
         rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
         Some(capture_closing_statement),
-    );
+    )
+    .unwrap();
     super::super::read_mini_chart_trade_on(
         &conn,
         chrono_tz::UTC,
@@ -51,7 +52,11 @@ fn probe_closing_identity() {
         Err(("XALPHA".into(), 1_700_000_000_000)),
     )
     .unwrap();
-    conn.trace_v2(rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT, None);
+    conn.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+    )
+    .unwrap();
     let statements = CLOSING_SQL.with(|rows| rows.borrow().clone());
     assert!(!statements.is_empty());
     for sql in statements {

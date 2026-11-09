@@ -39,9 +39,9 @@ fn open_rw() -> Option<Connection> {
     if !path.exists() {
         return None;
     }
-    let conn = Connection::open(&path).ok()?;
+    let mut conn = Connection::open(&path).ok()?;
     let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
-    crate::db::trace::install_on(&conn);
+    crate::db::trace::install_on(&mut conn);
     Some(conn)
 }
 

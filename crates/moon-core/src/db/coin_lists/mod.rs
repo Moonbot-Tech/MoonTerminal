@@ -389,13 +389,13 @@ fn open_strategies() -> ReadResult<Connection> {
     const CTX: &str = "analytics: coin lists (opening strategies.sqlite)";
     let path = crate::config::paths::strategies_db_path();
     super::metadata_gate(&path, CTX)?;
-    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let mut conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| crate::db::read_fail::read_fail_at(CTX, &path, e))?;
     // The strat_db writer commits and checkpoints on its own thread; without this a write
     // landing under our snapshot surfaces to the user as a read failure. Same 3s the
     // strategy store's own reader uses.
     let _ = conn.busy_timeout(Duration::from_secs(3));
-    super::trace::install_on(&conn);
+    super::trace::install_on(&mut conn);
     Ok(conn)
 }
 

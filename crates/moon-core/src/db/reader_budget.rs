@@ -28,7 +28,7 @@
 //! mutex is held must not disable every report reader for the rest of the
 //! process lifetime.
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
@@ -194,6 +194,15 @@ impl Deref for ReportReader {
     /// Borrow the inner report connection.
     fn deref(&self) -> &Connection {
         &self.conn
+    }
+}
+
+impl DerefMut for ReportReader {
+    /// Borrow the inner report connection mutably. rusqlite 0.41 registers per-connection
+    /// callbacks (`progress_handler`, `trace_v2`) only through `&mut Connection`; the reader
+    /// permit stays held either way, so this cannot release the budget slot early.
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.conn
     }
 }
 

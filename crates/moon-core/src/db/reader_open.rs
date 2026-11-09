@@ -178,14 +178,14 @@ pub fn open_reader_with(attach: AttachSet) -> ReadResult<ReportReader> {
         );
         flags.insert(rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY);
     }
-    let conn = Connection::open_with_flags(&path, flags)
+    let mut conn = Connection::open_with_flags(&path, flags)
         .map_err(|e| read_fail::read_fail_at("отчёты(reader)", &path, e))?;
     // Before the ATTACH below: `cache_size` applies to one schema, and `main` is the
     // one every period scan reads.
     tune_reader(&conn);
     attach_databases(&conn, attach)?;
-    read_cancel::install_current(&conn)?;
-    trace::install_on(&conn);
+    read_cancel::install_current(&mut conn)?;
+    trace::install_on(&mut conn);
     Ok(ReportReader {
         conn,
         _permit: permit,

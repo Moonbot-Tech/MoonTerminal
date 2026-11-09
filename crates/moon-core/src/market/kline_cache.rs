@@ -249,7 +249,7 @@ impl KlineCache {
     /// Returns `None` when opening or initialization fails because charts can operate
     /// without this optional cache.
     pub fn open(path: PathBuf) -> Option<Self> {
-        let conn = match rusqlite::Connection::open(&path) {
+        let mut conn = match rusqlite::Connection::open(&path) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("kline cache open failed {}: {e}", path.display());
@@ -262,7 +262,7 @@ impl KlineCache {
         }
         // This one connection also serves `Op::Merge`/`Op::MergeBatch` on the worker thread below,
         // so a hook installed here captures background WRITE timings too, mixed in with reads.
-        crate::db::trace::install_on(&conn);
+        crate::db::trace::install_on(&mut conn);
         let (tx, rx) = mpsc::sync_channel::<Op>(OP_QUEUE_CAP);
         let pruned = Arc::new((Mutex::new(false), Condvar::new()));
         let worker_pruned = Arc::clone(&pruned);

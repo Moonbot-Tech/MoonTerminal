@@ -98,7 +98,7 @@ fn joined_archive_reads_keep_unusable_filed_lines_distinct_from_empty_answers() 
 #[test]
 #[ignore = "synthetic 1000-trace timing probe"]
 fn archive_scale_probe() {
-    let conn = Connection::open_in_memory().unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
     init(&conn).unwrap();
     let expected = [line(
         true,
@@ -122,7 +122,8 @@ fn archive_scale_probe() {
     conn.trace_v2(
         rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
         Some(archive_trace),
-    );
+    )
+    .unwrap();
     for _ in 0..3 {
         ARCHIVE_SQL.with_borrow_mut(Vec::clear);
         let scalar_start = std::time::Instant::now();

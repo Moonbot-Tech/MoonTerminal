@@ -374,7 +374,7 @@ impl TradeCache {
         std::thread::Builder::new()
             .name("trade-cache".into())
             .spawn(move || {
-                let conn = match rusqlite::Connection::open(&path) {
+                let mut conn = match rusqlite::Connection::open(&path) {
                     Ok(c) => c,
                     Err(e) => {
                         log::warn!("trade cache open failed {}: {e}", path.display());
@@ -408,7 +408,7 @@ impl TradeCache {
                         held_bytes(&conn).unwrap_or(0)
                     }
                 };
-                crate::db::trace::install_on(&conn);
+                crate::db::trace::install_on(&mut conn);
                 log::info!("trade cache открыт: {}", path.display());
                 run(conn, rx, held, ceiling, disk);
             })

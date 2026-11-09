@@ -77,8 +77,15 @@ fn interleave(sql: &str) {
 fn grow(path: std::path::PathBuf, forget_running: bool) {
     let writer = seed(&path, forget_running);
     let mut old = Connection::open(&path).unwrap();
-    #[allow(deprecated)]
-    old.trace(Some(interleave));
+    old.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        Some(|event: rusqlite::trace::TraceEvent<'_>| {
+            if let rusqlite::trace::TraceEvent::Stmt(_, sql) = event {
+                interleave(sql);
+            }
+        }),
+    )
+    .unwrap();
     let snapshot = read_snapshot(&old).unwrap();
     if !forget_running {
         add_proof(&writer);

@@ -76,8 +76,8 @@ fn unproven_corruption_remains_fail_closed() {
 fn requested_interrupt_is_classified_without_logging() {
     let cancellation = super::super::read_cancel::ReadCancellation::new();
     let failure = super::super::read_cancel::with_read_cancellation(cancellation.clone(), || {
-        let connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
-        super::super::read_cancel::install_current(&connection)
+        let mut connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
+        super::super::read_cancel::install_current(&mut connection)
             .expect("install cancellation callback");
         cancellation.cancel();
         let error = connection
@@ -114,8 +114,8 @@ fn nested_scope_classifies_the_connection_that_actually_interrupted() {
     let outer = super::super::read_cancel::ReadCancellation::new();
     let inner = super::super::read_cancel::ReadCancellation::new();
     let failure = super::super::read_cancel::with_read_cancellation(outer.clone(), || {
-        let connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
-        super::super::read_cancel::install_current(&connection)
+        let mut connection = rusqlite::Connection::open_in_memory().expect("in-memory database");
+        super::super::read_cancel::install_current(&mut connection)
             .expect("install outer cancellation callback");
         outer.cancel();
         super::super::read_cancel::with_read_cancellation(inner, || {

@@ -11,8 +11,8 @@ use super::*;
 fn cancelled_scope_interrupts_sqlite_work() {
     let cancellation = ReadCancellation::new();
     let error = with_read_cancellation(cancellation.clone(), || {
-        let connection = Connection::open_in_memory().expect("in-memory database");
-        install_current(&connection).expect("install cancellation callback");
+        let mut connection = Connection::open_in_memory().expect("in-memory database");
+        install_current(&mut connection).expect("install cancellation callback");
         cancellation.cancel();
         connection
             .query_row(

@@ -463,12 +463,12 @@ pub fn counts_by_core() -> crate::db::ReadResult<std::collections::HashMap<u64, 
 /// The one place the open flags live: [`open_reader`] swallows the error, [`max_core_uid`]
 /// reports it, and both need the connection opened the same way.
 fn open_ro(path: &std::path::Path) -> rusqlite::Result<Connection> {
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let _ = conn.busy_timeout(std::time::Duration::from_secs(3));
-    crate::db::trace::install_on(&conn);
+    crate::db::trace::install_on(&mut conn);
     Ok(conn)
 }
 
