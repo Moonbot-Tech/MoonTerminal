@@ -5,6 +5,8 @@ use std::net::Ipv4Addr;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
+use moon_core::config::CoreTarget;
 use moon_core::core_move::old_core::StopAnswer;
 use moon_remote::core_move::plan::{KeySource, Plan, Request};
 use moon_remote::core_move::{self, MoveStep, MoveWarning};
@@ -127,17 +129,22 @@ impl<'a> Progress<'a> {
     }
 }
 
-/// Run the move of core `uid` and report its end.
+/// Run the move of core `uid`, reached at `old` (or failing with why it cannot be), and report
+/// its end.
 pub(super) fn run(
     uid: u64,
     form: MoveForm,
+    old: anyhow::Result<CoreTarget>,
     tx: &mpsc::Sender<Event>,
     answers: &mpsc::Receiver<Command>,
 ) {
     let progress = Progress::new(tx);
     let mut say = |step: MoveStep| progress.saw(&step);
     let mut stage = Stage::Nothing;
-    let event = match run_move(uid, &form, tx, answers, &progress, &mut say, &mut stage) {
+    let moved = run_move(
+        uid, &form, old, tx, answers, &progress, &mut say, &mut stage,
+    );
+    let event = match moved {
         Ok(event) => event,
         Err(e) => {
             let reason = format!("{e:#}");
@@ -167,10 +174,25 @@ pub(super) fn run(
     let _ = tx.send(event);
 }
 
+/// The old core's `host:port` as the move's plan takes it, from where this terminal reaches it.
+///
+/// Resolves a host name, which may block: call it on the move's thread.
+///
+/// Errors:
+///     A host name that does not resolve.
+pub(super) fn old_core_from(target: &CoreTarget) -> anyhow::Result<String> {
+    let resolved = target
+        .resolve()
+        .with_context(|| format!("resolve the old core's address {}", target.text()))?;
+    Ok(format!("{}:{}", resolved.client_host, target.port))
+}
+
 /// The move proper; `stage` follows what is on the server, for a failure to report.
+#[allow(clippy::too_many_arguments)] // one call site; a struct would only rename the list
 fn run_move(
     uid: u64,
     form: &MoveForm,
+    old: anyhow::Result<CoreTarget>,
     tx: &mpsc::Sender<Event>,
     answers: &mpsc::Receiver<Command>,
     progress: &Progress,
@@ -185,6 +207,8 @@ fn run_move(
         StepState::Running,
         StepNote::TakingSettings,
     );
+    // Before the login: a core with no known address has nothing to move from.
+    let from = old_core_from(&old?)?;
     let (conn, privilege) = setup::provider_login(&form.target, &form.first, &form.pin)?;
     send(Event::Line(
         t!("core_move.logged_in", user = conn.user()).to_string(),
@@ -193,7 +217,7 @@ fn run_move(
         key: KeySource::Core(uid.to_string()),
         zip: None,
         exchange: None,
-        from: None,
+        from: Some(from),
         report_db: true,
         strategy_sync: true,
         strategies_off: false,
