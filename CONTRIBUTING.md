@@ -116,8 +116,9 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   `Clippy (x86_64-msvc)` running `cargo clippy --workspace --all-targets --locked -- -D warnings`,
   `Station (x86_64-linux-musl)` building, testing and linting `moon-station` for Linux musl,
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
-  `cargo fmt --all -- --check`. They run in parallel. The macOS job is diagnostic
-  (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
+  `cargo fmt --all -- --check`. They run in parallel. The macOS probe is diagnostic and runs
+  outside them, in its own `macos-probe.yml` workflow (`continue-on-error`; `macos-probe-retry.yml`
+  re-runs it when no macOS runner was acquired) — read its log, but it does not block. "Gate" is a convention here, not
   enforcement: the ruleset on `main` requires a pull request and the `alena-review` mark but none of
   these checks, so nothing stops a red merge except you reading them.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
