@@ -110,11 +110,12 @@ pub fn current_is_cancelled() -> bool {
 /// Install the current request's progress callback on a fully attached reader.
 ///
 /// Args:
-///     connection: Fresh report reader after every required database attachment.
+///     connection: Fresh report reader after every required database attachment. Mutable
+///         because rusqlite 0.41 registers callbacks only through `&mut Connection`.
 ///
 /// Errors:
 ///     Returns a classified SQLite setup failure when callback registration fails.
-pub(super) fn install_current(connection: &Connection) -> super::ReadResult<()> {
+pub(super) fn install_current(connection: &mut Connection) -> super::ReadResult<()> {
     let cancellation = CURRENT.with(|current| current.borrow().clone());
     if let Some(cancellation) = cancellation {
         connection

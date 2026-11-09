@@ -62,7 +62,7 @@ fn ready_batch_releases_savepoint_even_when_rollback_fails() {
     use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
 
     for nested in [false, true] {
-        let store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+        let mut store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
         let input = TradeInput {
             source: TradeSource::Typed,
             core_uid: 1,
@@ -367,26 +367,32 @@ fn valuation_scale_probe() {
     let rows = (0..100_000)
         .map(|id| (id % 10 + 1, id / 10 + 1, 1_700_000_000 + id / 10))
         .collect::<Vec<_>>();
-    let (dir, reports) = report_fixture(&rows);
-    let (burst_dir, burst) = report_fixture(&rows[..20_000]);
+    let (dir, mut reports) = report_fixture(&rows);
+    let (burst_dir, mut burst) = report_fixture(&rows[..20_000]);
     burst
         .execute_batch("CREATE UNIQUE INDEX scale_pk ON orders_rep(core_uid,newrecid)")
         .unwrap();
     reports.execute_batch("CREATE UNIQUE INDEX scale_pk ON orders_rep(core_uid,newrecid); CREATE INDEX idx_rep_closedate ON orders_rep(closedate);").unwrap();
     super::super::init_report_outbox(&burst).unwrap();
-    let store = super::super::open_store(&dir.join("valuation.sqlite")).unwrap();
-    reports.trace_v2(
-        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-        Some(scale_trace),
-    );
-    burst.trace_v2(
-        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-        Some(scale_trace),
-    );
-    store.trace_v2(
-        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-        Some(scale_trace),
-    );
+    let mut store = super::super::open_store(&dir.join("valuation.sqlite")).unwrap();
+    reports
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(scale_trace),
+        )
+        .unwrap();
+    burst
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(scale_trace),
+        )
+        .unwrap();
+    store
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(scale_trace),
+        )
+        .unwrap();
     for id in 0..5000 {
         let input = TradeInput {
             source: TradeSource::Typed,
@@ -522,7 +528,7 @@ fn valuation_scale_probe() {
             .unwrap(),
         5000
     );
-    let reference = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+    let mut reference = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
     let inputs = (0..20_000)
         .map(|id| TradeInput {
             source: TradeSource::Typed,
@@ -535,10 +541,12 @@ fn valuation_scale_probe() {
         })
         .collect::<Vec<_>>();
     store.execute("DELETE FROM trade_values", []).unwrap();
-    reference.trace_v2(
-        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-        Some(scale_trace),
-    );
+    reference
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(scale_trace),
+        )
+        .unwrap();
     SCALE_SQL.with_borrow_mut(Vec::clear);
     assert!(matches!(
         prepare_trade(&reference, &NoNetwork, &axis(), &inputs[0], false),
@@ -546,7 +554,12 @@ fn valuation_scale_probe() {
     ));
     scale_plan(&reference, "SELECT resolved_minute_utc");
     scale_plan(&reference, "INSERT INTO trade_values");
-    reference.trace_v2(rusqlite::trace::TraceEventCodes::empty(), None);
+    reference
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::empty(),
+            None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+        )
+        .unwrap();
     reference.execute("DELETE FROM trade_values", []).unwrap();
     commit_batch(&reference, || {
         for input in &inputs {
@@ -2986,11 +2999,13 @@ fn provider_batch_prefetch_precedes_the_write_transaction() {
     let source = EventSource {
         calls: AtomicU64::new(0),
     };
-    let store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
-    store.trace_v2(
-        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-        Some(trace),
-    );
+    let mut store = super::super::open_store(std::path::Path::new(":memory:")).unwrap();
+    store
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(trace),
+        )
+        .unwrap();
     let first_minute = current_minute_utc() - 600;
     let inputs = (0..8)
         .map(|row_id| TradeInput {

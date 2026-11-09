@@ -76,9 +76,9 @@ pub fn attach_epoch() -> Option<u64> {
 fn existing_store_is_healthy(path: &Path) -> Result<bool, String> {
     let uri = sqlite_read_only_uri(path);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
-    let conn = Connection::open_with_flags(uri, flags)
+    let mut conn = Connection::open_with_flags(uri, flags)
         .map_err(|error| format!("read-only open failed: {error}"))?;
-    crate::db::trace::install_on(&conn);
+    crate::db::trace::install_on(&mut conn);
     let check = conn.query_row("PRAGMA main.quick_check(1)", [], |row| {
         row.get::<_, String>(0)
     });
@@ -407,7 +407,7 @@ pub(crate) fn store_fault(error: rusqlite::Error) -> FaultCause {
 /// Errors:
 ///     Returns the underlying SQLite error when the file or schema cannot be initialized.
 pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     crate::db::wal::enable(&conn)?;
     // The worker writes one transaction per batch. A less frequent checkpoint reduces checkpoint
     // pressure while the fixed SQLite WAL implementation coordinates attached readers.
@@ -520,7 +520,7 @@ pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
             }
         }
     }
-    crate::db::trace::install_on(&conn);
+    crate::db::trace::install_on(&mut conn);
     Ok(conn)
 }
 

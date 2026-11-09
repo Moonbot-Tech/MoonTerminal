@@ -74,7 +74,7 @@ fn scale_probe() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(20_000);
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, rows, 10, 60, 1_000, 8);
     // Chart records require valid prices; NULL prices benchmark discarded rows instead.
     conn.execute_batch("UPDATE orders_rep SET buyprice=10.0, sellprice=11.0, quantity=1.0;")
@@ -88,32 +88,32 @@ fn scale_probe() {
     for (name, plans) in [
         (
             "totals",
-            plans_of(&conn, || {
-                query_totals(&conn, &all).unwrap();
+            plans_of(&mut conn, |conn| {
+                query_totals(conn, &all).unwrap();
             }),
         ),
         (
             "strategies",
-            plans_of(&conn, || {
-                distinct_strategies(&conn, &all).unwrap();
+            plans_of(&mut conn, |conn| {
+                distinct_strategies(conn, &all).unwrap();
             }),
         ),
         (
             "closedate",
-            plans_of(&conn, || {
-                query_reports(&conn, &all, "closedate", true, 500).unwrap();
+            plans_of(&mut conn, |conn| {
+                query_reports(conn, &all, "closedate", true, 500).unwrap();
             }),
         ),
         (
             "profitbtc",
-            plans_of(&conn, || {
-                query_reports(&conn, &all, "profitbtc", true, 500).unwrap();
+            plans_of(&mut conn, |conn| {
+                query_reports(conn, &all, "profitbtc", true, 500).unwrap();
             }),
         ),
         (
             "coin",
-            plans_of(&conn, || {
-                query_reports(&conn, &all, "coin", true, 500).unwrap();
+            plans_of(&mut conn, |conn| {
+                query_reports(conn, &all, "coin", true, 500).unwrap();
             }),
         ),
     ] {
@@ -158,8 +158,8 @@ fn scale_probe() {
             !history.records.is_empty(),
             "chart probe must parse real records"
         );
-        for (sql, plan) in plans_of(&conn, || {
-            query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1000).unwrap();
+        for (sql, plan) in plans_of(&mut conn, |conn| {
+            query_chart_trade_history_for_cores(conn, &cores, &coins, None, 1000).unwrap();
         }) {
             println!(
                 "plan[{rows}] chart coins={}: {plan}; SQL: {sql}",
@@ -297,7 +297,7 @@ fn former_distinct_strategies(
 /// Index-served identity discovery must offer exactly the same Manual, liquidation and deleted choices.
 #[test]
 fn strategy_discovery_matches_the_former_statements() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 1200, 10, 60, 19, 8);
     conn.execute_batch("ALTER TABLE orders_rep ADD COLUMN channelname TEXT;
         ALTER TABLE orders_rep ADD COLUMN signaltype TEXT;
@@ -340,8 +340,8 @@ fn strategy_discovery_matches_the_former_statements() {
             "{filter:?}"
         );
     }
-    let (_, plan) = plans_of(&conn, || {
-        distinct_strategies(&conn, &ReportFilter::default()).unwrap();
+    let (_, plan) = plans_of(&mut conn, |conn| {
+        distinct_strategies(conn, &ReportFilter::default()).unwrap();
     })
     .into_iter()
     .find(|(sql, _)| sql.contains("WITH identities") && sql.contains("FROM orders_rep"))
@@ -461,7 +461,7 @@ fn strategy_window_filter(days: i64, shifted: bool) -> ReportFilter {
 #[ignore = "100000-deal paired strategy-discovery timing probe"]
 fn strategy_window_scale_probe() {
     for legacy in [false, true] {
-        let conn = strategy_window_fixture(legacy, 100_000);
+        let mut conn = strategy_window_fixture(legacy, 100_000);
         for shifted in [false, true] {
             for days in [1, 30] {
                 let filter = strategy_window_filter(days, shifted);
@@ -469,8 +469,8 @@ fn strategy_window_scale_probe() {
                 let new = distinct_strategies(&conn, &filter).unwrap();
                 assert!(!old.is_empty());
                 assert_eq!(new, old);
-                for (sql, plan) in plans_of(&conn, || {
-                    distinct_strategies(&conn, &filter).unwrap();
+                for (sql, plan) in plans_of(&mut conn, |conn| {
+                    distinct_strategies(conn, &filter).unwrap();
                 }) {
                     if sql.contains("WITH identities")
                         || sql.starts_with("SELECT r.core_uid")
@@ -518,7 +518,7 @@ fn strategy_window_scale_probe() {
 #[test]
 fn strategy_window_discovery_seeks_the_scoped_period() {
     for legacy in [false, true] {
-        let conn = strategy_window_fixture(legacy, 1200);
+        let mut conn = strategy_window_fixture(legacy, 1200);
         let table = if legacy {
             "closed_sell_reports"
         } else {
@@ -531,8 +531,8 @@ fn strategy_window_discovery_seeks_the_scoped_period() {
                     distinct_strategies(&conn, &filter).unwrap(),
                     former_distinct_strategies(&conn, &filter).unwrap()
                 );
-                let plans = plans_of(&conn, || {
-                    distinct_strategies(&conn, &filter).unwrap();
+                let plans = plans_of(&mut conn, |conn| {
+                    distinct_strategies(conn, &filter).unwrap();
                 });
                 let (sql, plan) = plans
                     .iter()
@@ -572,7 +572,7 @@ fn strategy_window_discovery_seeks_the_scoped_period() {
 #[test]
 #[ignore = "100000-row tied chart-history timing probe"]
 fn chart_history_tied_scale_probe() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 100_000, 10, 1, 1_000_000, 8);
     conn.execute_batch(
         "UPDATE orders_rep SET closedate=1700000000, buydate=1699999900,
@@ -587,8 +587,8 @@ fn chart_history_tied_scale_probe() {
                 .expect("chart history"),
         );
     });
-    for (sql, plan) in plans_of(&conn, || {
-        query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1_000)
+    for (sql, plan) in plans_of(&mut conn, |conn| {
+        query_chart_trade_history_for_cores(conn, &cores, &coins, None, 1_000)
             .expect("chart history plan");
     }) {
         println!("chart_tied_plan: {plan}; SQL: {sql}");

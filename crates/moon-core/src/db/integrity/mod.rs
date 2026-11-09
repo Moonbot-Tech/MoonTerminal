@@ -182,12 +182,12 @@ pub(crate) fn run(path: &Path) -> Integrity {
     }
 
     let started = Instant::now();
-    let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+    let mut conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(c) => c,
         Err(e) => return classify_pragma_error(e, "открытие"),
     };
     let _ = conn.busy_timeout(Duration::from_secs(30));
-    super::trace::install_on(&conn);
+    super::trace::install_on(&mut conn);
 
     // HARD DEADLINE. `busy_timeout` bounds lock waiting, not statement runtime,
     // and the scan holds a WAL read snapshot for its whole duration — which
@@ -284,12 +284,12 @@ pub(crate) fn quick(path: &Path) -> Integrity {
         }
         Err(error) => return Integrity::CheckFailed(format!("replica is unavailable: {error}")),
     }
-    let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+    let mut conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
         Ok(conn) => conn,
         Err(error) => return classify_pragma_error(error, "quick open"),
     };
     let _ = conn.busy_timeout(Duration::from_secs(30));
-    super::trace::install_on(&conn);
+    super::trace::install_on(&mut conn);
     match conn.query_row("PRAGMA main.quick_check(1)", [], |row| {
         row.get::<_, String>(0)
     }) {

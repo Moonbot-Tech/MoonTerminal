@@ -85,7 +85,7 @@ zeroize = "1"
 bytemuck = { version = "1", features = ["derive"] }
 
 # Local reports database (db/).
-rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "trace", "functions"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "hooks", "trace", "functions"] }
 
 # Public historical spot candles used to value mixed report quote currencies in USDT. The
 # synchronous client lives on a dedicated worker thread, never on a UI or feed thread.

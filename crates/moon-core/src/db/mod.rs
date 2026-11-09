@@ -299,12 +299,12 @@ pub fn open_readonly() -> ReadResult<Connection> {
     let path = paths::reports_db_path();
     // Same reasoning as `open_reader`: only a genuine absence may report `NotReady`.
     metadata_gate(&path, "отчёты(ro): доступ к файлу")?;
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         &path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|e| read_fail::read_fail_at("отчёты(ro)", &path, e))?;
-    trace::install_on(&conn);
+    trace::install_on(&mut conn);
     Ok(conn)
 }
 

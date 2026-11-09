@@ -40,14 +40,22 @@ fn capture(event: rusqlite::trace::TraceEvent<'_>) {
 }
 
 /// Run `read` and return every captured report SELECT with its query plan.
-pub(super) fn plans_of(conn: &Connection, read: impl FnOnce()) -> Vec<(String, String)> {
+pub(super) fn plans_of(
+    conn: &mut Connection,
+    read: impl FnOnce(&Connection),
+) -> Vec<(String, String)> {
     CAPTURED.with(|slot| slot.borrow_mut().clear());
     conn.trace_v2(
         rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
         Some(capture),
-    );
-    read();
-    conn.trace_v2(rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT, None);
+    )
+    .unwrap();
+    read(conn);
+    conn.trace_v2(
+        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+        None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+    )
+    .unwrap();
     let statements = CAPTURED.with(|slot| slot.borrow().clone());
     statements
         .into_iter()
@@ -208,7 +216,7 @@ fn two_offset_axis() -> ReportAxis {
 /// totals footer scans the whole report table to find a handful of open positions.
 #[test]
 fn open_row_reads_seek_the_open_partial_index() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 6_000, 20, 40, 500, 10);
     let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
 
@@ -263,11 +271,11 @@ fn open_row_reads_seek_the_open_partial_index() {
         ),
     ];
     for (what, filter, totals) in reads {
-        let plans = plans_of(&conn, || {
+        let plans = plans_of(&mut conn, |conn| {
             if totals {
-                query_totals(&conn, &filter).expect("totals read");
+                query_totals(conn, &filter).expect("totals read");
             } else {
-                query_reports(&conn, &filter, "closedate", true, 100).expect("rows read");
+                query_reports(conn, &filter, "closedate", true, 100).expect("rows read");
             }
         });
         let open: Vec<_> = plans
@@ -289,7 +297,7 @@ fn open_row_reads_seek_the_open_partial_index() {
 /// through every trade the selected cores ever made.
 #[test]
 fn coin_reads_seek_the_coin_index() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 6_000, 4, 200, 500, 10);
     let one = ["C7USDT".to_string()];
     let window = ReportFilter {
@@ -302,8 +310,8 @@ fn coin_reads_seek_the_coin_index() {
         ("single coin, no window", &one, None),
     ];
     for (what, coins, window) in chart_reads {
-        let plans = plans_of(&conn, || {
-            query_chart_trade_history_for_cores(&conn, &[1, 2], coins, window, 1000)
+        let plans = plans_of(&mut conn, |conn| {
+            query_chart_trade_history_for_cores(conn, &[1, 2], coins, window, 1000)
                 .expect("chart history");
         });
         assert!(!plans.is_empty(), "chart history {what}: nothing prepared");
@@ -321,8 +329,8 @@ fn coin_reads_seek_the_coin_index() {
             date_from,
             ..ReportFilter::default()
         };
-        let plans = plans_of(&conn, || {
-            query_reports(&conn, &filter, "closedate", true, 100).expect("exact coin rows");
+        let plans = plans_of(&mut conn, |conn| {
+            query_reports(conn, &filter, "closedate", true, 100).expect("exact coin rows");
         });
         assert!(!plans.is_empty(), "{what}: nothing prepared");
         for (sql, plan) in &plans {
@@ -335,11 +343,11 @@ fn coin_reads_seek_the_coin_index() {
 /// walk every closed trade. The current IN predicate supports the same coin seek as one alias.
 #[test]
 fn multi_coin_chart_history_seeks_the_coin_index() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 6_000, 4, 200, 500, 10);
     let two = ["C7USDT".to_string(), "C9USDT".to_string()];
-    let plans = plans_of(&conn, || {
-        query_chart_trade_history_for_cores(&conn, &[1, 2], &two, None, 1000)
+    let plans = plans_of(&mut conn, |conn| {
+        query_chart_trade_history_for_cores(conn, &[1, 2], &two, None, 1000)
             .expect("chart history");
     });
     assert!(!plans.is_empty(), "chart history: nothing prepared");
@@ -354,15 +362,15 @@ fn multi_coin_chart_history_seeks_the_coin_index() {
 /// name matcher for every report row the period holds.
 #[test]
 fn positive_name_mask_is_not_a_correlated_subquery() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 2_000, 4, 20, 500, 100);
     let filter = ReportFilter {
         rows: RowScope::Closed,
         strategy_name_mask: "Alpha".to_string(),
         ..ReportFilter::default()
     };
-    let plans = plans_of(&conn, || {
-        let table = query_reports(&conn, &filter, "closedate", true, 100).expect("mask rows");
+    let plans = plans_of(&mut conn, |conn| {
+        let table = query_reports(conn, &filter, "closedate", true, 100).expect("mask rows");
         assert!(
             !table.rows.is_empty(),
             "the mask must select the Alpha rows"
@@ -456,7 +464,7 @@ fn replica_indexes_are_idempotent_and_wait_for_their_columns() {
 /// across replica initialization, then compare the new key pass against the original statement.
 #[test]
 fn date_read_optimization_preserves_reports_and_other_sort_orders() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 600, 4, 20, 100, 8);
     conn.execute_batch(
         "DROP INDEX idx_rep_closedate;
@@ -499,8 +507,8 @@ fn date_read_optimization_preserves_reports_and_other_sort_orders() {
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
     assert_eq!(key, ["closedate"]);
-    for (sql, plan) in plans_of(&conn, || {
-        query_reports(&conn, &filter, "closedate", true, 500).unwrap();
+    for (sql, plan) in plans_of(&mut conn, |conn| {
+        query_reports(conn, &filter, "closedate", true, 500).unwrap();
     }) {
         assert!(sql.starts_with("WITH chosen_report_rows"), "{sql}");
         assert!(plan.contains("MATERIALIZE chosen_report_rows"), "{plan}");
@@ -839,7 +847,7 @@ fn seek_timing_200k() {
 /// Adding the record-id tie-break to the coin index must not change tied chart rows or their order.
 #[test]
 fn chart_history_tied_rows_match_the_narrow_coin_index() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 2_000, 10, 1, 1_000_000, 8);
     conn.execute_batch(
         "UPDATE orders_rep SET closedate=1700000000, buydate=1699999900,
@@ -867,8 +875,8 @@ fn chart_history_tied_rows_match_the_narrow_coin_index() {
         .expect("migrated chart history");
     assert_eq!(actual, expected);
     assert_eq!(actual, narrow);
-    for (_, plan) in plans_of(&conn, || {
-        query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1_000)
+    for (_, plan) in plans_of(&mut conn, |conn| {
+        query_chart_trade_history_for_cores(conn, &cores, &coins, None, 1_000)
             .expect("chart history plan");
     }) {
         assert!(!plan.contains("TEMP B-TREE FOR ORDER BY"), "{plan}");
@@ -878,7 +886,7 @@ fn chart_history_tied_rows_match_the_narrow_coin_index() {
 /// The chart-only index must also match record identity when a replica carries legacy `id`.
 #[test]
 fn chart_history_id_schema_uses_the_matching_record_index() {
-    let conn = replica();
+    let mut conn = replica();
     seed(&conn, 2_000, 10, 1, 1_000_000, 8);
     conn.execute_batch(
         "ALTER TABLE orders_rep ADD COLUMN id INTEGER;
@@ -896,8 +904,8 @@ fn chart_history_id_schema_uses_the_matching_record_index() {
     let actual = query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 2_000)
         .expect("id-indexed chart history");
     assert_eq!(actual, expected);
-    for (_, plan) in plans_of(&conn, || {
-        query_chart_trade_history_for_cores(&conn, &cores, &coins, None, 1_000)
+    for (_, plan) in plans_of(&mut conn, |conn| {
+        query_chart_trade_history_for_cores(conn, &cores, &coins, None, 1_000)
             .expect("chart history plan");
     }) {
         assert!(plan.contains("idx_rep_coin_close_record_id"), "{plan}");

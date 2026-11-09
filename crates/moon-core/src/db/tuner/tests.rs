@@ -587,7 +587,7 @@ fn tuner_materialization_cannot_cross_the_quote_preflight_snapshot() {
 #[test]
 fn one_ordered_variant_statement_matches_independent_variant_scans() {
     let _trace = start_trace();
-    let conn = Connection::open_in_memory().expect("in-memory database");
+    let mut conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(
         "CREATE TABLE trades(
             closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL, d1h REAL, coin TEXT,
@@ -626,9 +626,14 @@ fn one_ordered_variant_statement_matches_independent_variant_scans() {
         },
     ];
 
-    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
+    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql))
+        .unwrap();
     let actual = variant_stats_from_source(&conn, &query, source, &variants);
-    conn.trace_v2(TraceEventCodes::empty(), None);
+    conn.trace_v2(
+        TraceEventCodes::empty(),
+        None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+    )
+    .unwrap();
     let actual = actual.expect("single ordered variant scan");
     let statements = TRACE_SQL
         .lock()

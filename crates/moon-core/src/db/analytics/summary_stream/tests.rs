@@ -131,7 +131,7 @@ fn start_trace() -> MutexGuard<'static, ()> {
 #[test]
 fn current_summary_rows_execute_multiple_bounded_statements() {
     let _trace = start_trace();
-    let conn = Connection::open_in_memory().expect("in-memory database");
+    let mut conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(
         "CREATE TABLE current_rows(
             closedate INTEGER, buydate INTEGER, pnl REAL, core_uid INTEGER,
@@ -150,9 +150,14 @@ fn current_summary_rows_execute_multiple_bounded_statements() {
     };
     let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
-    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
+    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql))
+        .unwrap();
     let result = read(&conn, source, None, &query, &query.axis, 3_600, false);
-    conn.trace_v2(TraceEventCodes::empty(), None);
+    conn.trace_v2(
+        TraceEventCodes::empty(),
+        None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+    )
+    .unwrap();
     result.expect("bounded current-period stream");
 
     let statements = TRACE_SQL
@@ -559,7 +564,7 @@ fn equal_time_mixed_pnl_and_top_rows_ignore_union_planner_order() {
 #[test]
 fn current_summary_ordering_uses_raw_dates_only_for_zero_offset_axes() {
     let _trace = start_trace();
-    let conn = Connection::open_in_memory().expect("in-memory database");
+    let mut conn = Connection::open_in_memory().expect("in-memory database");
     conn.execute_batch(
         "CREATE TABLE current_rows(
             closedate INTEGER, buydate INTEGER, pnl REAL, core_uid INTEGER,
@@ -587,10 +592,15 @@ fn current_summary_ordering_uses_raw_dates_only_for_zero_offset_axes() {
         chrono_tz::UTC,
     );
 
-    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
+    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql))
+        .unwrap();
     read(&conn, source, None, &query, &zero_axis, 3_600, false)
         .expect("zero-offset current-period stream");
-    conn.trace_v2(TraceEventCodes::empty(), None);
+    conn.trace_v2(
+        TraceEventCodes::empty(),
+        None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+    )
+    .unwrap();
     let zero_sql = TRACE_SQL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -613,10 +623,15 @@ fn current_summary_ordering_uses_raw_dates_only_for_zero_offset_axes() {
         )]),
         chrono_tz::UTC,
     );
-    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
+    conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql))
+        .unwrap();
     read(&conn, source, None, &query, &shifted_axis, 3_600, false)
         .expect("shifted current-period stream");
-    conn.trace_v2(TraceEventCodes::empty(), None);
+    conn.trace_v2(
+        TraceEventCodes::empty(),
+        None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+    )
+    .unwrap();
     let shifted_sql = TRACE_SQL
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

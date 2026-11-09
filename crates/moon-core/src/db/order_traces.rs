@@ -600,13 +600,13 @@ fn open_ro(path: &std::path::Path) -> ReadResult<Option<Connection>> {
     if !path.exists() {
         return Ok(None);
     }
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|e| read_fail(CTX, e))?;
     let _ = conn.busy_timeout(Duration::from_secs(3));
-    super::trace::install_on(&conn);
+    super::trace::install_on(&mut conn);
     Ok(Some(conn))
 }
 

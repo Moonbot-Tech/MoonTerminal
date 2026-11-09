@@ -166,7 +166,7 @@ pub fn load<T>(
     }
     let residual = Residual::new(filter, &entry_fields)?;
     let sids = filter::strategy_ids(filter)?;
-    let conn = crate::db::open_reader().map_err(read_error)?;
+    let mut conn = crate::db::open_reader().map_err(read_error)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     conn.progress_handler(10_000, Some(move || Instant::now() >= deadline))?;
     let snapshot = crate::db::read_snapshot(&conn).map_err(read_error)?;

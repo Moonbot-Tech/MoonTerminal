@@ -5,10 +5,11 @@
 //! never gate behaviour — a caller that wants to branch on "is profiling on" is using this
 //! module wrong.
 //!
-//! `trace_v2` accepts only a plain `fn` pointer, not a closure, so the hook itself carries no
-//! state; a caller that needs to accumulate results supplies a `fn` that writes into its own
+//! The hook is a plain `fn` pointer held in one process-wide static, so it carries no state of
+//! its own; a caller that needs to accumulate results supplies a `fn` that writes into its own
 //! static or thread-local storage (see `crates/moon-core/examples/db_read_timing.rs` for the
-//! harness that does exactly this).
+//! harness that does exactly this). `trace_v2` itself would take a closure since rusqlite 0.41,
+//! but one shared `fn` keeps every connection reporting to the same place.
 //!
 //! `trace_v2` is CONNECTION-LOCAL: this crate opens report/strategy/valuation/kline read
 //! connections from ten call sites, and each one must call [`install_on`] itself. There is no
@@ -56,20 +57,27 @@ pub fn install_read_profiler(hook: fn(ProfiledStatement)) -> bool {
 /// touched, no behaviour changed. Call this from every connection-owning call site in this
 /// crate — there is no single place that sees every connection (see the module docs).
 ///
+/// A failed registration is logged and otherwise ignored: the profiler is a measurement
+/// instrument, and losing it must never fail the read that opened the connection.
+///
 /// Args:
-///     conn: Freshly opened connection, before it is handed to any caller.
-pub(crate) fn install_on(conn: &Connection) {
-    if HOOK.get().is_some() {
-        conn.trace_v2(
-            TraceEventCodes::SQLITE_TRACE_PROFILE,
-            Some(on_profile_event),
-        );
+///     conn: Freshly opened connection, before it is handed to any caller. Mutable because
+///         rusqlite 0.41 registers callbacks only through `&mut Connection`.
+pub(crate) fn install_on(conn: &mut Connection) {
+    if HOOK.get().is_none() {
+        return;
+    }
+    if let Err(error) = conn.trace_v2(
+        TraceEventCodes::SQLITE_TRACE_PROFILE,
+        Some(on_profile_event),
+    ) {
+        log::warn!("read profiler: trace_v2 registration failed: {error}");
     }
 }
 
 /// `trace_v2` callback: build a [`ProfiledStatement`] from a PROFILE event and forward it to
-/// the installed hook. A plain `fn`, per `trace_v2`'s signature — it carries no state of its
-/// own and reads the current hook from [`HOOK`] on every call.
+/// the installed hook. A plain `fn` with no state of its own; it reads the current hook from
+/// [`HOOK`] on every call.
 fn on_profile_event(event: TraceEvent<'_>) {
     let TraceEvent::Profile(stmt, duration) = event else {
         return;

@@ -3259,7 +3259,7 @@ fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
         "cores 7 and 8 must both appear, newest close first, and core 9 must stay out"
     );
 
-    let plan_conn = Connection::open_in_memory().expect("open chart-history plan fixture");
+    let mut plan_conn = Connection::open_in_memory().expect("open chart-history plan fixture");
     plan_conn
         .execute_batch(
             "CREATE TABLE orders_rep (
@@ -3306,10 +3306,12 @@ fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
         .execute_batch("ANALYZE")
         .expect("analyze chart-history plan fixture");
     CHART_HISTORY_SQL.with(|slot| slot.borrow_mut().clear());
-    plan_conn.trace_v2(
-        rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
-        Some(capture_chart_history_sql),
-    );
+    plan_conn
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(capture_chart_history_sql),
+        )
+        .unwrap();
     let window = ReportFilter {
         date_from: Some(1_700_000_000),
         date_to: Some(1_700_008_080),
@@ -3317,7 +3319,12 @@ fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
     };
     query_chart_trade_history_for_cores(&plan_conn, &[7, 8], &coins, Some(&window), 10)
         .expect("query the indexed multi-core window");
-    plan_conn.trace_v2(rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT, None);
+    plan_conn
+        .trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            None::<fn(rusqlite::trace::TraceEvent<'_>)>,
+        )
+        .unwrap();
     let sql = CHART_HISTORY_SQL.with(|slot| slot.borrow().last().cloned());
     let sql = sql.expect("the multi-core chart query must prepare a SELECT");
     let mut explained = plan_conn

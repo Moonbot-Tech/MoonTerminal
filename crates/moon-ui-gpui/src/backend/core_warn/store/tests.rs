@@ -88,7 +88,7 @@ fn mandatory_series_migration_waits_before_read_to_write_upgrade() {
     let (release, released) = std::sync::mpsc::channel();
     let worker_path = path.clone();
     let worker = std::thread::spawn(move || {
-        let conn = Connection::open(worker_path).unwrap();
+        let mut conn = Connection::open(worker_path).unwrap();
         SERIES_MIGRATION_GATE.with(|gate| {
             gate.replace(Some(SeriesMigrationGate {
                 events: events.clone(),
