@@ -9,6 +9,7 @@
 | Telegram Mini App preview and interaction check | [`miniapp_preview/`](#telegram-mini-app-preview), below |
 | Synthetic report replica for Analytics timing | `gen_replica.py` (usage in its docstring) |
 | Figma plugin for the N3 MoonProto contracts | [`figma-moonproto-contract-inspector/`](figma-moonproto-contract-inspector/README.md) |
+| SessionStart hooks for Claude and Codex (inject the conventions, sync `main`), registered in `.claude/settings.json` and `.codex/hooks.json` | [`agent-hooks/`](agent-hooks/) |
 
 ## Telegram Mini App preview
 

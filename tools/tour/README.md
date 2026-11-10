@@ -124,7 +124,7 @@ re-derived from scratch next time.
 | `template.html` | the page itself, with `{{slots}}` where data goes |
 | `knowledge.py` | the knowledge bundle: `knowledge/index.html`, `kb/*.md`, `llms.txt`, `llms-full.txt`, `knowledge.jsonl`, `robots.txt`, `sitemap.xml` |
 | `knowledge_template.html` | the knowledge landing page; `knowledge.py` fills `{{css_tokens}}`, `{{cards}}` and `{{public_base}}` |
-| `tests/` | run with `make tour-test`; the fixtures are deliberately broken content |
+| `tests/` | run with `make tour-test`; the fixtures are deliberately broken content. `test_script_syntax.py` builds the site and runs `node --check` on every inline script of the committed page and the Pages artifact — skipped locally without Node, a failure in CI |
 
 Failures accumulate rather than stopping at the first one: fixing a language pass
 one message per run would mean a hundred runs.
