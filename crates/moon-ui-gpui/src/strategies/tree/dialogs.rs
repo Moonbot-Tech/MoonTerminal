@@ -184,7 +184,9 @@ fn tree_op_field_width(dialog_w: f32) -> f32 {
 /// does not re-export `window_paddings`; this uses the same `window_decorations` and
 /// `client_inset` inputs. Server decorations (Windows) are zero; client-side frames keep the
 /// inset on untiled sides. The Linux 12 px fallback is MoonUI's `SHADOW_SIZE` when the inset
-/// has not been set yet.
+/// has not been set yet — kept although every window of this application now sets a zero inset
+/// (`windowing::frame`), because this function must give what MoonUI's own `window_paddings`
+/// gives, and that still falls back to 12 px before the first border render.
 ///
 /// Args:
 ///     window: Window whose decorations and client inset feed the overlay bounds.

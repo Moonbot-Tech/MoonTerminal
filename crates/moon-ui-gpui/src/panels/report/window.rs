@@ -279,7 +279,10 @@ pub fn open_scoped(
             backend.report_window_view = Some(panel.downgrade());
         });
         cx.new(|cx| {
-            Root::new(panel, window, cx).background_policy(moon_ui::MoonBackgroundPolicy::Opaque)
+            crate::window::windowing::frame(
+                Root::new(panel, window, cx)
+                    .background_policy(moon_ui::MoonBackgroundPolicy::Opaque),
+            )
         })
     }) {
         backend.update(cx, |backend, _| {

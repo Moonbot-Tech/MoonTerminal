@@ -578,7 +578,11 @@ fn open_bound(
         b.update(cx, |backend, _| {
             backend.core_expert_view = Some(view.downgrade());
         });
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     });
     match created {
         Ok(handle) => {

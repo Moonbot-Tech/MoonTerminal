@@ -87,7 +87,11 @@ pub(crate) fn open_on(
         cx.global_mut::<Windows>()
             .0
             .insert(uid, (window.window_handle(), weak));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     });
     match created {
         Ok(handle) => {

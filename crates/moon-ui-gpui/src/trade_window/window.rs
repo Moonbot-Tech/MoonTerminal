@@ -147,7 +147,11 @@ pub(crate) fn open_trade_window(
             cascade_px: step,
         };
         let view = cx.new(|vcx| new_view(&owner, seed, host, Some(window), vcx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill),
+            )
+        })
     });
     match opened {
         Ok(handle) => {

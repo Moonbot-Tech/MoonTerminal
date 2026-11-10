@@ -525,7 +525,11 @@ pub fn open(
         // NoFill: the tuner's trade pane draws a chart UNDER the GPUI scene, and an opaque root
         // (or any fill above the pane) hides it whole. The clear colour is the shell's, the fill
         // the root used to paint; `AnalyticsView::render` keeps it on the palette.
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill),
+            )
+        })
     }) {
         backend.update(cx, |bk, _| bk.analytics_window = Some(handle));
         crate::window::titles::track(handle.into(), owner.is_some(), title, cx);

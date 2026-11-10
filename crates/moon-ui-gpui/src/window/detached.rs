@@ -752,7 +752,11 @@ pub fn spawn(
                 cx,
             )
         });
-        cx.new(|cx| Root::new(dw, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(dw, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     })?;
     // Recorded HERE rather than at the call sites, because there are four of them — the startup
     // restore, the dock's detach action, the panel toolbar button and the settings-driven reopen
