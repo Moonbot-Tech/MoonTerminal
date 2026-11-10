@@ -16,7 +16,8 @@ updates:
     # author creates them ahead of the releases themselves — 1.98 / 1.99 / 1.100 exist as refs
     # while stable is still 1.97.x. Dependabot resolves the highest ref, so its "latest" is a
     # toolchain rustup cannot download and every compiling job dies at install time with a 404.
-    # The pin therefore moves by hand, in step across build.yml, macos-probe.yml and release.yml.
+    # The pin therefore moves by hand, in step across build.yml, macos-probe.yml, linux-probe.yml
+    # and release.yml.
     # Qualified by `update-types` rather than left bare: an unqualified ignore would drop this action's
     # SECURITY update PRs too, and nothing else here watches it — the cargo-deny gate audits the
     # Rust lockfile, not the workflows.

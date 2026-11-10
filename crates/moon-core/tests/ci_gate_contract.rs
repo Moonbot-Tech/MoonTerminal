@@ -49,13 +49,20 @@ const COMPILING_JOBS: [&str; 4] = ["windows", TEST_JOB, "clippy", STATION_JOB];
 /// The diagnostic macOS compile, separated so its cancellation cannot fail the gating build.
 const MACOS_PROBE_JOB: &str = "macos-probe";
 
+/// The diagnostic Linux build of the graphical terminal, separated from the gating build for the
+/// same reason as the macOS probe: a platform that is not a gate must not fail like one.
+const LINUX_PROBE_JOB: &str = "linux-probe";
+
+/// The job that starts the Linux probe's binary on a virtual display.
+const LINUX_SMOKE_JOB: &str = "linux-smoke";
+
 /// The `release.yml` jobs that compile the terminal, and so must ship MoonUI at its latest master
 /// through the same lockfile contract as `build.yml`'s compiling jobs. The station jobs are left
 /// out: `moon-station` does not depend on MoonUI.
 const RELEASE_TERMINAL_JOBS: [&str; 2] = ["windows", "macos-slice"];
 
 /// Every job that must run the lockfile contract, with the workflow text it lives in: the build's
-/// compiling jobs, the standalone macOS probe and `release.yml`'s terminal jobs.
+/// compiling jobs, the standalone macOS and Linux probes and `release.yml`'s terminal jobs.
 fn lockfile_contract_jobs() -> Vec<(&'static str, String, &'static str)> {
     let build = workflow_text();
     let release = release_workflow_text();
@@ -67,6 +74,12 @@ fn lockfile_contract_jobs() -> Vec<(&'static str, String, &'static str)> {
         "macos-probe.yml",
         macos_probe_workflow_text(),
         MACOS_PROBE_JOB,
+    ));
+    // The Linux probe uploads a binary people run, so it is held to the same contract.
+    jobs.push((
+        "linux-probe.yml",
+        linux_probe_workflow_text(),
+        LINUX_PROBE_JOB,
     ));
     jobs.extend(
         RELEASE_TERMINAL_JOBS
@@ -158,6 +171,58 @@ fn macos_workflow_text(file: &str) -> String {
 /// Read the standalone diagnostic macOS probe workflow.
 fn macos_probe_workflow_text() -> String {
     macos_workflow_text("macos-probe.yml")
+}
+
+/// Read the standalone diagnostic workflow that builds and starts the Linux terminal.
+fn linux_probe_workflow_text() -> String {
+    let path = workspace_dir().join(".github/workflows/linux-probe.yml");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// Read the build guide whose Linux package lists the probe is the proof of.
+fn mac_linux_build_guide_text() -> String {
+    let path = workspace_dir().join("docs/MAC_LINUX_BUILD.md");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// Package names a job's named step hands to `apt-get install`.
+///
+/// Reads the continuation lines of that one command: the step's body up to the next step, minus
+/// the command words and its flags. Returns nothing when the step or the command is missing, so a
+/// caller asserting on the result also catches a renamed step.
+fn apt_packages_of_step(body: &[&str], step_name: &str) -> Vec<String> {
+    let Some(start) = body
+        .iter()
+        .position(|line| line.trim() == format!("- name: {step_name}"))
+    else {
+        return Vec::new();
+    };
+    let step: Vec<&str> = body[start + 1..]
+        .iter()
+        .take_while(|line| !line.trim_start().starts_with("- "))
+        .copied()
+        .collect();
+    let Some(install) = step
+        .iter()
+        .position(|line| line.contains("apt-get install"))
+    else {
+        return Vec::new();
+    };
+    let mut packages = Vec::new();
+    for line in &step[install..] {
+        packages.extend(
+            line.split_whitespace()
+                .filter(|word| {
+                    !word.starts_with('-') && !["apt-get", "install", "\\"].contains(word)
+                })
+                .map(str::to_string),
+        );
+        // The command ends on the first line that does not continue onto the next.
+        if !line.trim_end().ends_with('\\') {
+            break;
+        }
+    }
+    packages
 }
 
 /// Read the workflow that listens for completed macOS probe attempts.
@@ -663,6 +728,139 @@ fn the_macos_probe_is_diagnostic_and_outside_the_gating_build() {
     );
 }
 
+/// Breakage guarded: the Linux probe moved into the gating build or stripped of
+/// `continue-on-error` — a platform that is not a gate would then redden main — or quietly
+/// hollowed out while staying green: built on the runner's own image instead of the bare
+/// container (which stops proving the documented package list), the build narrowed to a `check`
+/// that links nothing, or the smoke run dropped or chained to swallow its exit code, so a binary
+/// is uploaded that nothing ever started.
+#[test]
+fn the_linux_probe_is_diagnostic_builds_in_a_bare_container_and_starts_the_binary() {
+    assert!(
+        job_body(&workflow_text(), LINUX_PROBE_JOB).is_none()
+            && job_body(&workflow_text(), LINUX_SMOKE_JOB).is_none(),
+        "build.yml must not contain the diagnostic Linux probe"
+    );
+    let probe = linux_probe_workflow_text();
+    for trigger in ["push:", "pull_request:", "workflow_dispatch:"] {
+        assert!(
+            probe.lines().any(|line| line.trim() == trigger),
+            "linux-probe.yml must keep its `{trigger}` trigger"
+        );
+    }
+    for job in [LINUX_PROBE_JOB, LINUX_SMOKE_JOB] {
+        let body = job_body(&probe, job)
+            .unwrap_or_else(|| panic!("linux-probe.yml must keep a `{job}:` job"));
+        assert!(
+            body.iter()
+                .any(|line| line.trim() == "continue-on-error: true"),
+            "job `{job}` must remain diagnostic"
+        );
+    }
+
+    let build = job_body(&probe, LINUX_PROBE_JOB).expect("Linux probe job");
+    assert!(
+        build
+            .iter()
+            .any(|line| line.trim() == "container: ubuntu:22.04"),
+        "the Linux probe must build in the bare ubuntu:22.04 container — on the runner's own \
+         image the install step no longer proves the documented package list, and a newer base \
+         raises the glibc the uploaded binary demands"
+    );
+    let expected = "run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-unknown-linux-gnu";
+    assert!(
+        build.iter().any(|line| line.trim() == expected),
+        "the Linux probe must link the release terminal with `{expected}`"
+    );
+
+    let smoke = job_body(&probe, LINUX_SMOKE_JOB).expect("Linux smoke job");
+    assert!(
+        smoke
+            .iter()
+            .any(|line| line.trim() == format!("needs: {LINUX_PROBE_JOB}")),
+        "the smoke job must start the binary the probe job built"
+    );
+    assert!(
+        smoke
+            .iter()
+            .any(|line| line.trim() == "container: ${{ matrix.image }}"),
+        "the smoke job must run in a bare distribution container, not on the runner's image"
+    );
+    let expected = "run: bash .github/scripts/linux-gui-smoke.sh dist/moonterminal crates/moon-core/fixtures smoke-out";
+    assert!(
+        smoke.iter().any(|line| line.trim() == expected),
+        "the smoke job must start the terminal with exactly `{expected}` — nothing chained \
+         after it that could swallow a failure"
+    );
+}
+
+/// Package sets of the guide's fenced `apt install` commands, one set per code block.
+///
+/// Only the command blocks count: a package named in a sentence is not an instruction anyone
+/// pastes, so prose must not satisfy the comparison with the workflow.
+fn guide_apt_blocks(guide: &str) -> Vec<std::collections::BTreeSet<String>> {
+    let mut blocks = Vec::new();
+    let mut open: Option<Vec<&str>> = None;
+    for line in guide.lines() {
+        if !line.trim_start().starts_with("```") {
+            if let Some(lines) = open.as_mut() {
+                lines.push(line);
+            }
+            continue;
+        }
+        let Some(lines) = open.take() else {
+            open = Some(Vec::new());
+            continue;
+        };
+        let text = lines.join(" ");
+        if text.contains("apt install") {
+            blocks.push(
+                text.split_whitespace()
+                    .filter(|word| {
+                        !word.starts_with('-')
+                            && !["sudo", "apt", "update", "&&", "install", "\\"].contains(word)
+                    })
+                    .map(str::to_string)
+                    .collect(),
+            );
+        }
+    }
+    blocks
+}
+
+/// Breakage guarded: the Linux package lists in `docs/MAC_LINUX_BUILD.md` drifting from the ones
+/// the probe actually installs, in either direction. The probe's bare containers are the only
+/// proof those lists are complete, so a package added to the workflow to get it green and never
+/// to the guide leaves the guide exactly as unverified as it was before the probe existed — and a
+/// package dropped from the workflow but kept in the guide is a line nothing proves any more.
+#[test]
+fn the_build_guide_and_the_linux_probe_install_the_same_packages() {
+    let probe = linux_probe_workflow_text();
+    let blocks = guide_apt_blocks(&mac_linux_build_guide_text());
+    for (job, step) in [
+        (LINUX_PROBE_JOB, "Install the build dependencies"),
+        (
+            LINUX_SMOKE_JOB,
+            "Install what the terminal needs at run time",
+        ),
+    ] {
+        let body = job_body(&probe, job)
+            .unwrap_or_else(|| panic!("linux-probe.yml must keep a `{job}:` job"));
+        let installed: std::collections::BTreeSet<String> =
+            apt_packages_of_step(&body, step).into_iter().collect();
+        assert!(
+            installed.len() >= 5,
+            "job `{job}` must keep its `{step}` step with an `apt-get install` list; \
+             found {installed:?}"
+        );
+        assert!(
+            blocks.contains(&installed),
+            "docs/MAC_LINUX_BUILD.md must carry an `apt install` block with exactly the packages \
+             job `{job}` installs in `{step}`: {installed:?}; the guide's blocks are {blocks:?}"
+        );
+    }
+}
+
 /// Breakage guarded: broadening the retry listener to another workflow, dropping its attempt cap,
 /// or granting unrelated token permissions turns a narrowly scoped infrastructure retry into an
 /// automatic re-run of real failures.
@@ -876,8 +1074,8 @@ fn the_macos_retry_stops_after_two_extra_attempts() {
 }
 
 /// Breakage guarded: a well-meaning reorder in the lockfile contract (verify -> refresh MoonUI ->
-/// assert nothing else moved), in any compiling job of `build.yml`, the standalone macOS probe or
-/// a terminal job of `release.yml`. `cargo fetch --locked` only proves the committed lock agrees with the manifests
+/// assert nothing else moved), in any compiling job of `build.yml`, the standalone macOS and
+/// Linux probes or a terminal job of `release.yml`. `cargo fetch --locked` only proves the committed lock agrees with the manifests
 /// when it runs BEFORE anything can rewrite the lock; run after `cargo update`, it only proves the
 /// lock agrees with itself. `assert-only-moonui-moved.sh` only has a refreshed lock to inspect once
 /// `cargo update` has actually run — moved ahead of it, or deleted outright, a MoonUI refresh that

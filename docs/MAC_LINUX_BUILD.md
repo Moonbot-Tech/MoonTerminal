@@ -1,6 +1,6 @@
 # macOS / Linux Build Notes
 
-Last updated: 2026-09-25.
+Last updated: 2026-11-10.
 
 This file describes the current public stack: `MoonTerminal` + `Moonbot-Tech/MoonUI`.
 
@@ -174,21 +174,82 @@ For live smoke, launch the `.app` through a GUI session.
 
 ## Linux
 
-Minimum set for Ubuntu/Debian:
+Releases carry no graphical terminal for Linux: the `.exe`, the `.dmg`, and the station's Linux
+binaries, which are a different program. There are two ways to get the terminal, and the
+diagnostic `Linux probe` workflow (`.github/workflows/linux-probe.yml`) exercises both on every
+pull request and every push to `main`: it builds the terminal in a bare `ubuntu:22.04` container
+and then starts the result on a virtual display in bare `ubuntu:22.04` and `ubuntu:24.04`
+containers. The package lists below are the ones those containers install — a contract test
+(`the_build_guide_and_the_linux_probe_install_the_same_packages`) fails when the two differ.
+
+What the probe does NOT cover: any distribution outside the Debian/Ubuntu family, a Wayland
+session (the virtual display is X11), and a real GPU (the container renders through Mesa's
+software Vulkan driver). Other distributions need the same libraries under their own package
+names.
+
+### Prebuilt binary
+
+x86_64 only. Linked against Ubuntu 22.04's glibc, so it needs glibc 2.35 or newer — Ubuntu 22.04,
+Debian 12, or anything more recent.
+
+1. Under the repository's Actions tab open a recent `Linux probe` run on `main` in which the
+   `Linux probe` job and both `Linux smoke` jobs passed, and download its
+   `moonterminal-linux-x86_64` artifact. Look at the jobs, not at the run's own mark: the jobs
+   are diagnostic, so the run shows green even when the build or the start-up failed. GitHub
+   asks for a signed-in account and keeps an artifact for 90 days.
+2. Install what the binary needs at run time:
+
+   ```bash
+   sudo apt update && sudo apt install -y \
+     libfontconfig1 libfreetype6 \
+     libwayland-client0 libxkbcommon0 libxkbcommon-x11-0 \
+     libx11-6 libxtst6 libxcb1 \
+     libdbus-1-3 \
+     libvulkan1 mesa-vulkan-drivers \
+     gnome-keyring libsecret-tools
+   ```
+
+   `mesa-vulkan-drivers` is the Vulkan driver for Intel and AMD graphics; a machine on the
+   proprietary NVIDIA driver already has its own. A desktop install usually carries most of this
+   list already.
+3. Unpack and start it from a terminal inside the graphical session. The download is a zip
+   holding a tarball, which keeps the executable bit; any archive manager opens the zip if
+   `unzip` is not installed:
+
+   ```bash
+   unzip moonterminal-linux-x86_64.zip
+   tar -xzf moonterminal-linux-x86_64.tar.gz
+   ./moonterminal
+   ```
+
+Data and logs live under `~/.config/com.moonbot.moonterminal/`.
+
+### Build from source
+
+Build-time packages for Ubuntu/Debian, plus Rust from [rustup](https://rustup.rs) (the repository's
+`rust-toolchain.toml` selects the version):
 
 ```bash
 sudo apt update && sudo apt install -y \
-  git build-essential pkg-config \
-  libfontconfig-dev libwayland-dev libxkbcommon-dev libvulkan-dev libssl-dev \
-  dbus-user-session gnome-keyring libsecret-tools
+  ca-certificates curl git build-essential pkg-config \
+  libfontconfig-dev libfreetype-dev \
+  libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libx11-dev libxtst-dev libxcb1-dev \
+  libdbus-1-dev
 ```
 
 Build:
 
 ```bash
 cargo check -p moon-ui-gpui --bin moonterminal
-cargo build --release -p moon-ui-gpui --bin moonterminal --features debug-tools
+cargo build --release -p moon-ui-gpui --bin moonterminal
 ```
+
+The binary is `target/release/moonterminal`. Add `--features debug-tools` for the perf smoke
+further down. Running it needs the run-time list from the previous section as well: Vulkan is
+opened at run time, so a build succeeds on a machine with no Vulkan driver at all.
+
+### Secret Service
 
 Encrypted config on Linux needs a Secret Service backend in the same GUI/DBus session where the
 terminal is launched. Without it there will be an error of the form:
@@ -198,7 +259,8 @@ keyring get: Platform secure storage failure:
 DBus error: The name org.freedesktop.secrets was not provided by any .service files
 ```
 
-For a headless/Xvfb test session:
+For a headless/Xvfb test session — `.github/scripts/linux-gui-smoke.sh` is the maintained form of
+these lines, run by the probe:
 
 ```bash
 eval "$(dbus-launch --sh-syntax)"

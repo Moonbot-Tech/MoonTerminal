@@ -13,7 +13,9 @@ permissions:
 #   Tour         — deterministic interactive and AI documentation. Blocking.
 #   Fmt          — `cargo fmt --all -- --check`. Blocking.
 # The diagnostic macOS probe lives in macos-probe.yml so its runner-acquisition cancellation
-# cannot override `continue-on-error` and turn this gating workflow red.
+# cannot override `continue-on-error` and turn this gating workflow red. The diagnostic Linux
+# build of the graphical terminal lives in linux-probe.yml for the same reason: that platform is
+# not a gate, and its failure must not look like one.
 #
 # THE LOCKFILE CONTRACT, which the four compiling jobs implement in the same three steps.
 # `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. Each job
@@ -45,9 +47,9 @@ permissions:
 # deliberate commit that can be reverted on its own when a new compiler breaks a dep. Dependabot
 # does not propose that raise: it is told to ignore this action in .github/dependabot.yml, because
 # the action is versioned by branches its author creates ahead of the Rust releases they name, so
-# its "latest" resolves to a toolchain rustup cannot download. Move all eight sites together —
-# four here, one in macos-probe.yml, two in release.yml, and rust-toolchain.toml, which never
-# re-runs these gates.
+# its "latest" resolves to a toolchain rustup cannot download. Move all ten sites together —
+# four here, one in macos-probe.yml, one in linux-probe.yml, three in release.yml, and
+# rust-toolchain.toml, which never re-runs these gates.
 on:
   push:
     branches: [main]
@@ -183,10 +185,10 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     # A gate, not a probe. The station is the one binary this workspace ships for Linux — a
-    # static musl build the terminal installs on the user's server — and no other job compiles
-    # for Linux at all, so a `cfg(unix)` path or a C dependency that breaks there would first
-    # show on a user's VPS. Only `moon-station` and what it pulls in: the terminal's GUI crates
-    # are Windows/macOS and never built here.
+    # static musl build the terminal installs on the user's server — and no other GATING job
+    # compiles for Linux at all, so a `cfg(unix)` path or a C dependency that breaks there would
+    # first show on a user's VPS. Only `moon-station` and what it pulls in: the terminal's GUI
+    # crates are built for Linux by the diagnostic linux-probe.yml, which blocks nothing.
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.1
