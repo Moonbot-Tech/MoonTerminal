@@ -131,19 +131,15 @@ cargo build -p moon-ui-gpui --bin moonterminal
 
 ### Linux
 
-Базовый набор для Ubuntu/Debian:
-
-```bash
-sudo apt update && sudo apt install -y git build-essential pkg-config \
-  libfontconfig-dev libwayland-dev libxkbcommon-dev libvulkan-dev libssl-dev
-```
+Графического терминала для Linux в релизах нет. В
+[гайде по сборке под macOS и Linux](docs/MAC_LINUX_BUILD.md#linux) — списки пакетов для
+Ubuntu/Debian, которые CI ставит в чистый контейнер, готовый бинарь из этого прогона CI и
+настройка Secret Service, которая нужна шифрованному конфигу в пользовательской GUI/DBus-сессии.
+Когда пакеты для сборки установлены:
 
 ```bash
 cargo build -p moon-ui-gpui --bin moonterminal
 ```
-
-Шифрованный конфиг под Linux использует Secret Service в пользовательской GUI/DBus-сессии.
-Подробности — в [гайде по сборке под macOS и Linux](docs/MAC_LINUX_BUILD.md).
 
 ### Основные команды
 

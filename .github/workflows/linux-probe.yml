@@ -1,0 +1,201 @@
+name: Linux probe
+
+permissions:
+  contents: read
+
+# Two diagnostic jobs, deliberately outside build.yml like the macOS probe: the graphical terminal
+# is not a supported Linux deliverable yet, so its failure there must not turn the gating build red.
+#   Linux probe — compiles the terminal for x86_64 Linux, which no other job does: the station job
+#                 in build.yml builds only `moon-station`, so the wgpu chart backend, the X11 and
+#                 Wayland platform code and every `cfg(target_os = "linux")` path in the GUI crates
+#                 are compiled here and nowhere else. Uploads the binary as an artifact.
+#   Linux smoke — starts that binary on a virtual display in images that carry only run-time
+#                 packages, and fails unless a window with a drawn frame comes up (on the one
+#                 image whose software Vulkan driver cannot show it: unless the window comes up
+#                 and the process stays alive). Uploads the captured frame and the logs.
+# Read their logs; they never block.
+#
+# BOTH JOBS RUN IN A BARE DISTRIBUTION CONTAINER, not on the runner's own image, and that is the
+# point of them. A hosted runner ships hundreds of development packages, so a build there proves
+# nothing about the package list in docs/MAC_LINUX_BUILD.md. In `ubuntu:22.04` the `apt-get
+# install` lines below are the complete list: a library the build or the binary needs and the list
+# lacks is a red probe, not a surprise on a user's machine. Keep those lines and the document's
+# in step — the document quotes them.
+#
+# The build image is the OLDEST release the binary is meant to run on, because a binary linked
+# against one glibc runs on that version and newer, never older. The smoke matrix then starts the
+# same file on newer releases as well.
+#
+# THE LOCKFILE CONTRACT, implemented in the same three steps as build.yml's compiling jobs.
+# `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. The probe
+# job, in this order and no other:
+#   1. verifies the committed lock still agrees with the manifests (`cargo fetch --locked`),
+#      BEFORE anything can rewrite it — afterwards `--locked` would only prove the lock agrees
+#      with itself;
+#   2. refreshes the three Moonbot-owned MoonUI crates, and only those, so MoonUI keeps rolling
+#      against its master with no human action. `moonproto` is deliberately never named here: it
+#      moves only when a human runs `cargo update -p moonproto` and commits the result;
+#   3. asserts that step 2 moved MoonUI and nothing else, so the uploaded binary carries no
+#      third-party version nobody committed.
+#
+# The Rust toolchain is PINNED, not `@stable`, for the same reason as in build.yml and release.yml.
+# Keep every workflow and rust-toolchain.toml in step.
+#
+# Deliberately NOT cached. A release-profile cache of the whole GUI graph would be one more large
+# writer in the repository's 10 GB Actions quota, which has been full once and evicts the gating
+# jobs' caches by least-recent-use. Nobody waits on a diagnostic job, so it compiles cold.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+  # No `schedule:` on purpose. build.yml's weekly cron exists for its audit job alone; here it
+  # would only start a run in which every job is skipped.
+
+# Cancel superseded runs for the same ref (e.g. new pushes to an open PR).
+# Each tag ("v*") has a unique ref, so a tagged commit's probe is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  DEBIAN_FRONTEND: noninteractive
+
+# A job container runs steps with `sh` unless told otherwise; the steps below are written for bash.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux-probe:
+    name: Linux probe (x86_64 GUI build) — diagnostic
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    # Probe: the Linux GUI has never been a gate. Do not fail the pipeline — read the job log.
+    continue-on-error: true
+    # A cold release build with fat LTO on a hosted runner; the limit only stops a hung step.
+    timeout-minutes: 120
+    steps:
+      # The complete build-time list, quoted by docs/MAC_LINUX_BUILD.md. What each line is for:
+      # the compiler and linker; fontconfig and freetype for system fonts; Wayland, X11, xcb and
+      # xkbcommon for the two window backends and the FireTest mouse storm (XTest); D-Bus for the
+      # Secret Service keyring. Vulkan needs nothing here: its loader is opened at run time.
+      - name: Install the build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config \
+            libfontconfig-dev libfreetype-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libxtst-dev libxcb1-dev \
+            libdbus-1-dev
+      - uses: actions/checkout@v7
+      # The checkout belongs to the runner's user while the container runs as root, so git would
+      # refuse the tree as of "dubious ownership" — in the lock assertion and in the build stamp.
+      - name: Trust the checkout inside the container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-unknown-linux-gnu
+      # The lockfile contract — see the header. This job never blocks, so a failure here is a
+      # diagnostic like the rest of it; the gating jobs run the same three steps.
+      - name: Verify the committed lockfile agrees with the manifests
+        run: cargo fetch --locked
+      - name: Refresh MoonUI only
+        run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
+      - name: Assert the refresh moved MoonUI and nothing else
+        run: bash .github/scripts/assert-only-moonui-moved.sh
+      # The release profile and the default features: the same set the Windows .exe ships.
+      - name: Build the terminal
+        run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-unknown-linux-gnu
+      # Recorded in the log so the run-time package list is read off the binary, not guessed: the
+      # libraries it links, and the newest glibc symbol version it asks for.
+      - name: Report what the binary links
+        run: |
+          binary=target/x86_64-unknown-linux-gnu/release/moonterminal
+          ldd "$binary" | tee ldd.txt
+          if grep -q 'not found' ldd.txt; then
+            echo "the freshly built binary does not resolve its own libraries" >&2
+            exit 1
+          fi
+          echo "newest glibc symbol version required:"
+          objdump -T "$binary" | grep -o 'GLIBC_[0-9.]*' | sort -u -V | tail -n 1
+      # A tarball, because an Actions artifact is a zip and drops the executable bit.
+      - name: Package the binary
+        run: |
+          mkdir -p dist
+          tar -czf dist/moonterminal-linux-x86_64.tar.gz \
+            -C target/x86_64-unknown-linux-gnu/release moonterminal
+      - uses: actions/upload-artifact@v7
+        with:
+          name: moonterminal-linux-x86_64
+          path: dist/moonterminal-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  linux-smoke:
+    name: Linux smoke (${{ matrix.image }}) — diagnostic
+    needs: linux-probe
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    continue-on-error: true
+    timeout-minutes: 20
+    strategy:
+      # One image's failure says nothing about the others; let each report.
+      fail-fast: false
+      matrix:
+        include:
+          # The build image itself: proves the binary loads and stays up on the glibc it was
+          # linked against. Its software Vulkan driver (Mesa 23.2.1) shows nothing in the
+          # terminal's 32-bit window, so a blank frame is reported there, not failed — the
+          # measurements are in the smoke script's header.
+          - image: "ubuntu:22.04"
+            blank-frame: report
+          - image: "ubuntu:24.04"
+            blank-frame: fail
+          - image: "debian:13"
+            blank-frame: fail
+    steps:
+      # The complete run-time list for a downloaded binary, quoted by docs/MAC_LINUX_BUILD.md:
+      # the libraries the binary links (the probe job's `ldd` report) or opens once it runs
+      # (fontconfig, Wayland), a Vulkan loader with a driver (Mesa here; a laptop has its own
+      # GPU driver), and a Secret Service for the encrypted configuration. Sufficient, as the
+      # smoke run shows; nobody has proven it minimal. No `-dev` package and
+      # no compiler: this image is the user's machine, not the build host.
+      - name: Install what the terminal needs at run time
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libfontconfig1 libfreetype6 \
+            libwayland-client0 libxkbcommon0 libxkbcommon-x11-0 \
+            libx11-6 libxtst6 libxcb1 \
+            libdbus-1-3 \
+            libvulkan1 mesa-vulkan-drivers \
+            gnome-keyring libsecret-tools
+      # What a desktop session already has and a container lacks: a display, a session bus, a
+      # font, and the tools the smoke script inspects the screen with.
+      - name: Install the virtual display and the inspection tools
+        run: |
+          apt-get install -y --no-install-recommends \
+            ca-certificates git xvfb dbus x11-utils imagemagick fonts-dejavu-core vulkan-tools
+      # For the smoke script and the committed chart fixture the run draws.
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: moonterminal-linux-x86_64
+          path: dist
+      - name: Unpack the binary
+        run: tar -xzf dist/moonterminal-linux-x86_64.tar.gz -C dist
+      - name: Start the terminal on a virtual display
+        env:
+          SMOKE_BLANK_FRAME: ${{ matrix.blank-frame }}
+        run: bash .github/scripts/linux-gui-smoke.sh dist/moonterminal crates/moon-core/fixtures smoke-out
+      - uses: actions/upload-artifact@v7
+        # The frame and the logs matter most when the step above failed.
+        if: ${{ !cancelled() }}
+        with:
+          name: linux-gui-smoke-${{ strategy.job-index }}
+          path: smoke-out
+          if-no-files-found: warn

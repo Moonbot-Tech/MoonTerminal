@@ -131,19 +131,14 @@ For canonical Metal validation see the [macOS & Linux build guide](docs/MAC_LINU
 
 ### Linux
 
-Ubuntu/Debian baseline:
-
-```bash
-sudo apt update && sudo apt install -y git build-essential pkg-config \
-  libfontconfig-dev libwayland-dev libxkbcommon-dev libvulkan-dev libssl-dev
-```
+Releases carry no graphical terminal for Linux. The
+[macOS & Linux build guide](docs/MAC_LINUX_BUILD.md#linux) has the Ubuntu/Debian package lists
+that CI installs in a bare container, a prebuilt binary from that CI run, and the Secret Service
+setup the encrypted config needs in the user GUI/DBus session. With the build packages installed:
 
 ```bash
 cargo build -p moon-ui-gpui --bin moonterminal
 ```
-
-The Linux encrypted config uses Secret Service in the user GUI/DBus session. Details in the
-[macOS & Linux build guide](docs/MAC_LINUX_BUILD.md).
 
 ### Common commands
 

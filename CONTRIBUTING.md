@@ -118,7 +118,10 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
   `cargo fmt --all -- --check`. They run in parallel. The macOS probe is diagnostic and runs
   outside them, in its own `macos-probe.yml` workflow (`continue-on-error`; `macos-probe-retry.yml`
-  re-runs it when no macOS runner was acquired) — read its log, but it does not block. "Gate" is a convention here, not
+  re-runs it when no macOS runner was acquired) — read its log, but it does not block. The Linux
+  probe is diagnostic in the same way (`linux-probe.yml`): it builds the graphical terminal for
+  x86_64 Linux in a bare Ubuntu container, uploads the binary, and starts it on a virtual display
+  (→ [`docs/MAC_LINUX_BUILD.md`](docs/MAC_LINUX_BUILD.md) § Linux). "Gate" is a convention here, not
   enforcement: the ruleset on `main` requires a pull request and the `alena-review` mark but none of
   these checks, so nothing stops a red merge except you reading them.
 - Never force-push or reset a shared `main` — fix forward with a new commit or a revert.
