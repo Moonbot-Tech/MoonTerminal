@@ -131,9 +131,10 @@ const WATCHED: &[Watched] = &[
 /// reason to leave a trade unjudged. Kept apart from [`WATCHED`], whose fields the model does
 /// not read at all.
 const PARTLY_MODELLED: &[Watched] = &[
-    // `FastStopLoss` YES: the core confirms a spike by a VWAP check and a run of trades past the
-    // level; no run length is documented, so the model fires on the last print of each 250 ms tick
-    // (`ModelSettings::fast_price`, `exit::stops::FastStop`). NO is the core's default.
+    // `FastStopLoss` YES: the core confirms a spike by two weighted-price readings past the
+    // level or a run of checks with the last trade past it, which the model follows
+    // (`exit::stops::CoreFast`), and by the BID past it once the ticker has arrived, which the
+    // fast stop's walk does not read. NO is the core's default.
     // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     watched("FastStopLoss", ParamSection::Stops, "NO"),
 ];

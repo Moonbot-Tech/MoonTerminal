@@ -891,6 +891,7 @@ fn group_trades(ticks: &[Tick]) -> Vec<&[Tick]> {
 /// Stable ASCII names shared by identification and the owner's rule comparison.
 fn fast_rule_name(rule: FastPrice) -> String {
     match rule {
+        FastPrice::CoreRule => "core_rule".into(),
         FastPrice::LastOfTick => "LastOfTick".into(),
         FastPrice::VwapLastTrades(n) => format!("vwap_last_trades_{n}"),
         FastPrice::TradeEma {
@@ -1347,7 +1348,7 @@ fn ab_fast_rules(kept: &[Kept], fires: &[Option<&StopFire>]) {
         "ab fast rules: dropped {} deals with tape holes after fill",
         kept.len() - eligible.len()
     );
-    let mut rules = vec![FastPrice::LastOfTick];
+    let mut rules = vec![FastPrice::LastOfTick, FastPrice::CoreRule];
     rules.extend([3, 4, 5, 6, 8].map(FastPrice::VwapLastTrades));
     rules.extend([0.2, 0.25, 0.3].map(|alpha| FastPrice::TradeEma {
         alpha,

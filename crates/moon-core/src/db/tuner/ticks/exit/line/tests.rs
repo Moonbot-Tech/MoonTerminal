@@ -187,6 +187,8 @@ fn stop_wins_same_second_over_custom_ema() {
     p.use_stop_loss = true;
     p.fast_stop_loss = true;
     p.stop_loss_pct = -1.0;
+    // The tick-end reading puts the stop on the formula's own boundary.
+    p.model.fast_price = crate::db::tuner::ticks::settings::FastPrice::LastOfTick;
     p.model.series_tick_ms = 250;
     let ticks = ema_tape(&[(750, 98.0), (1_000, 98.0)]);
     let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
@@ -204,6 +206,7 @@ fn earlier_stop_between_prints_beats_later_custom_ema() {
     p.use_stop_loss = true;
     p.fast_stop_loss = true;
     p.stop_loss_pct = -1.0;
+    p.model.fast_price = crate::db::tuner::ticks::settings::FastPrice::LastOfTick;
     p.model.series_tick_ms = 250;
     let ticks = ema_tape(&[(1_100, 98.0), (2_500, 98.0)]);
     let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
@@ -410,6 +413,8 @@ fn vol_never_warms_from_bars() {
 #[test]
 fn replacement_marketable_at_arrival_fills_at_the_print() {
     let p = ExitParams {
+        // The tape stands at the buy, where the default stop stands too: the sell alone.
+        use_stop_loss: false,
         sell_level_delay_s: -1.0,
         sell_level_time_s: 1.0,
         sell_level_count: 1,

@@ -6,9 +6,11 @@
 //! - The line follows the middle of the ticker's spread, `(bid + ask)/2`, and only rises: it
 //!   stands `TrailingPercent` (negative) under the peak of that middle — a multiplication, the one
 //!   distance of a short that is not a division off the buy.
-//! - The peak steps at most once a second, and only when the middle is past it; with
-//!   `TrailingEMA` N a step moves it `1/(N + 1)` of the way to the middle, so a single spike does
-//!   not drag the line after it.
+//! - The peak steps at most once a second, and only when the middle is past it. With
+//!   `TrailingEMA` N of 2 or more a step moves it `1/(N + 1)` of the way to the lower of the
+//!   middle and the ask before the last one (the higher, for a short), so a single spike does
+//!   not drag the line after it; under 2 the peak jumps to the middle (matches the core's
+//!   rule).
 //! - Inside `StopLossDelay` the peak is followed, and at the delay's end it restarts at the
 //!   middle of that moment.
 //! - With `UseTakeProfit`, there is no line until the middle has gone `TakeProfit +
@@ -54,6 +56,13 @@ pub fn trailing_level(peak: f64, buy: f64, params: &ExitParams, long: bool) -> f
     )
 }
 
+/// A step's share of the way from the peak to its target under `TrailingEMA`, read as the
+/// whole number the core holds: the whole way under 2, `1/(N + 1)` from there.
+fn peak_weight(trailing_ema: f64) -> f64 {
+    let ema = trailing_ema.max(0.0).round();
+    if ema < 2.0 { 1.0 } else { 1.0 / (ema + 1.0) }
+}
+
 /// [`trailing_level`] over its parts: `pct` negative, `take` the take profit's level.
 fn line_of(peak: f64, pct: f64, take: Option<f64>, long: bool) -> f64 {
     let line = if long {
@@ -72,8 +81,11 @@ pub(super) struct Trailing {
     long: bool,
     /// `TrailingPercent`, negative: the line's distance under the peak.
     pct: f64,
-    /// A step's share of the way from the peak to the middle, `1/(TrailingEMA + 1)`.
+    /// A step's share of the way from the peak to its target: `1/(TrailingEMA + 1)` from a
+    /// `TrailingEMA` of 2, the whole way under it.
     weight: f64,
+    /// The ask the sample before this one read: an averaged peak's step is capped by it.
+    prev_ask: Option<f64>,
     /// The `TakeProfit` level off the buy, when `UseTakeProfit` is on.
     take: Option<f64>,
     /// How far past the buy the middle must go before the line appears, when `UseTakeProfit` is
@@ -144,7 +156,8 @@ impl Trailing {
         Some(Self {
             long,
             pct,
-            weight: 1.0 / (params.trailing_ema.max(0.0).round() + 1.0),
+            weight: peak_weight(params.trailing_ema),
+            prev_ask: None,
             take,
             activation,
             active: take.is_none(),
@@ -202,6 +215,7 @@ impl Trailing {
             let Some(mid) = self.middle(at) else {
                 continue;
             };
+            let prev_ask = std::mem::replace(&mut self.prev_ask, self.ticker.ask(at, self.ask));
             if at >= self.armed_at && !self.restarted {
                 self.restarted = true;
                 self.peak = Some(mid);
@@ -213,7 +227,15 @@ impl Trailing {
                         self.last_step = at;
                     }
                     Some(peak) if self.beyond(mid, peak) && at - self.last_step >= PEAK_STEP_MS => {
-                        self.peak = Some(peak + (mid - peak) * self.weight);
+                        // An averaged peak goes after the nearer of the middle and the ask
+                        // before the last, and stays when that is not past it.
+                        let toward = match prev_ask.filter(|_| self.weight < 1.0) {
+                            Some(prev) if self.beyond(mid, prev) => prev,
+                            _ => mid,
+                        };
+                        if self.beyond(toward, peak) {
+                            self.peak = Some(peak + (toward - peak) * self.weight);
+                        }
                         self.last_step = at;
                     }
                     Some(_) => {}

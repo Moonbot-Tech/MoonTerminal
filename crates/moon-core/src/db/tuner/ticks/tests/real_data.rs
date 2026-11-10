@@ -2137,7 +2137,9 @@ fn real_data_reproduction() {
 /// Parse the owner's one bench-wide estimator override, rejecting unknown grammar loudly.
 fn parse_fast_price_override(value: &str) -> super::super::settings::FastPrice {
     use super::super::settings::FastPrice;
-    let rule = if value == "last" {
+    let rule = if value == "core" {
+        Some(FastPrice::CoreRule)
+    } else if value == "last" {
         Some(FastPrice::LastOfTick)
     } else if let Some(n) = value.strip_prefix("vwap") {
         n.parse::<u8>().ok().map(FastPrice::VwapLastTrades)
@@ -2154,7 +2156,7 @@ fn parse_fast_price_override(value: &str) -> super::super::settings::FastPrice {
             })
     }
     .unwrap_or_else(|| {
-        panic!("MOON_TICKS_FAST_PRICE: expected last | vwap<N> | ema<alpha> | emaq<alpha>")
+        panic!("MOON_TICKS_FAST_PRICE: expected core | last | vwap<N> | ema<alpha> | emaq<alpha>")
     });
     let sanitized = ModelSettings {
         fast_price: rule,

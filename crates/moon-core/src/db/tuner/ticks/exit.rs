@@ -231,12 +231,14 @@ pub struct ExitParams {
     /// `StopLoss`, read as is whether or not `UseStopLoss` arms it.
     pub stop_loss_pct: f64,
     pub stop_loss_delay_s: f64,
-    /// `AllowedDrop` — the panic sell's floor, per cent off the buy: the core never sells a
-    /// stop or trailing panic sale below it. At -98 or under there is no floor. Read as a
-    /// bound only.
+    /// `AllowedDrop` — the panic sell's floor, per cent off the buy: the core sells no stop's
+    /// panic sale past it and `StopLossSpread` more, the floor moved with a stop that stands
+    /// elsewhere than `StopLoss` (`exit::stops::Stops::sale_floor`). At -98 or under there is
+    /// no floor. Read as a bound only.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub allowed_drop_pct: f64,
-    /// `AllowedDrop3` — the floor that replaces `AllowedDrop` once the third stop took over.
+    /// `AllowedDrop3` — the floor that replaces `AllowedDrop` once the third stop's step was
+    /// taken, paired with `StopLoss3` as `AllowedDrop` is with `StopLoss`.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub allowed_drop3_pct: f64,
     /// `UseMarketOrder` — the stop sells by a market order instead of a panic sell, with no
