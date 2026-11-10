@@ -9,17 +9,24 @@
 #
 # What it sets up, because a desktop session has all of it and a container has none:
 #   - a D-Bus session bus (the script re-executes itself under `dbus-run-session`);
-#   - an unlocked Secret Service (gnome-keyring), the backend `servers.enc`'s machine key lives in;
+#   - an unlocked Secret Service (gnome-keyring), the backend `servers.enc`'s machine key lives in.
+#     The script proves it with its own store/lookup round trip, and that is all the proof there
+#     is: a `--fixture` run configures its core in plaintext and never asks the keyring, so the
+#     terminal's own keyring path is NOT exercised here;
 #   - an X server (Xvfb). The GPU is whatever Vulkan driver the image carries — lavapipe, Mesa's
 #     software rasterizer, on a hosted runner.
 #
 # It fails when the window never appears, the process exits before the frame is captured, or the
-# captured frame is blank. A blank frame is measured, not assumed: a screen of one flat colour has
+# captured frame is blank. A blank frame is measured, not assumed: a window of one flat colour has
 # a handful of distinct colours, a drawn interface has thousands.
+#
+# The frame that is judged is the terminal's OWN window, read by its id. The whole screen is
+# captured beside it for the artifact only: the window uses a 32-bit visual on a 24-bit screen,
+# and what a root-window capture shows for such a child is left to the X server.
 #
 # Usage: linux-gui-smoke.sh <path to moonterminal> <fixtures directory> <output directory>
 # Requires: Xvfb, dbus-run-session, gnome-keyring-daemon, secret-tool, xwininfo, and ImageMagick's
-# `import` and `identify`. Linux only — it is never run on the macOS checkout, but stays inside the
+# `import` and `identify`. `vulkaninfo`, when present, is recorded for the artifact. Linux only — it is never run on the macOS checkout, but stays inside the
 # portable shell subset the repository's script contract enforces.
 
 set -euo pipefail
@@ -121,6 +128,19 @@ if [ "$(secret-tool lookup service moon-terminal-smoke key ping)" != "ping" ]; t
 fi
 echo "linux-gui-smoke: Secret Service is unlocked"
 
+# Which X server, which capture tool and which Vulkan driver this run had: a blank frame on one
+# image and a drawn one on another is otherwise two logs with nothing to tell them apart.
+{
+    Xvfb -version 2>&1 || true
+    import -version 2>&1 | head -n 1 || true
+    if command -v vulkaninfo >/dev/null 2>&1; then
+        vulkaninfo --summary 2>&1 || true
+    else
+        echo "vulkaninfo is not installed"
+    fi
+} >"$out/environment.txt"
+grep -E 'X.Org X Server|deviceName|driverInfo|apiVersion' "$out/environment.txt" || true
+
 MOON_FIXTURE_DIR=$fixtures "$binary" --fixture >"$out/stdout.log" 2>"$out/stderr.log" &
 app_pid=$!
 
@@ -145,11 +165,19 @@ if ! kill -0 "$app_pid" 2>/dev/null; then
     fail "the terminal exited within ${settle_secs} s of opening its window"
 fi
 
+window_id=$(xwininfo -root -tree | awk 'tolower($0) ~ /moonterminal/ { print $1; exit }')
+if [ -z "$window_id" ]; then
+    fail "the MoonTerminal window disappeared before the frame was captured"
+fi
+xwininfo -id "$window_id" >"$out/window-info.txt" 2>&1 || true
+
 import -display "$display" -window root "$out/screen.png"
-colours=$(identify -format '%k' "$out/screen.png")
-echo "linux-gui-smoke: captured frame has ${colours} distinct colours"
+echo "linux-gui-smoke: whole screen has $(identify -format '%k' "$out/screen.png") distinct colours"
+import -display "$display" -window "$window_id" "$out/window.png"
+colours=$(identify -format '%k' "$out/window.png")
+echo "linux-gui-smoke: the terminal's window has ${colours} distinct colours"
 if [ "$colours" -lt "$min_colours" ]; then
-    fail "the captured frame is blank (${colours} distinct colours, need ${min_colours})"
+    fail "the terminal's window is blank (${colours} distinct colours, need ${min_colours})"
 fi
 
 echo "linux-gui-smoke: PASS"

@@ -148,8 +148,10 @@ jobs:
         image: ["ubuntu:22.04", "ubuntu:24.04"]
     steps:
       # The complete run-time list for a downloaded binary, quoted by docs/MAC_LINUX_BUILD.md:
-      # the libraries `ldd` names, a Vulkan loader with a driver (Mesa here; a laptop has its own
-      # GPU driver), and a Secret Service for the encrypted configuration. No `-dev` package and
+      # the libraries the binary links (the probe job's `ldd` report) or opens once it runs
+      # (fontconfig, Wayland), a Vulkan loader with a driver (Mesa here; a laptop has its own
+      # GPU driver), and a Secret Service for the encrypted configuration. Sufficient, as the
+      # smoke run shows; nobody has proven it minimal. No `-dev` package and
       # no compiler: this image is the user's machine, not the build host.
       - name: Install what the terminal needs at run time
         run: |
@@ -166,7 +168,7 @@ jobs:
       - name: Install the virtual display and the inspection tools
         run: |
           apt-get install -y --no-install-recommends \
-            ca-certificates git xvfb dbus x11-utils imagemagick fonts-dejavu-core
+            ca-certificates git xvfb dbus x11-utils imagemagick fonts-dejavu-core vulkan-tools
       # For the smoke script and the committed chart fixture the run draws.
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
