@@ -165,6 +165,36 @@ fn rgb_to_rgba(rgb_hex: u32) -> Rgba {
     rgba((rgb_hex << 8) | 0xFF)
 }
 
+/// Width of the transparent margin MoonUI leaves around a client-decorated window for its drop
+/// shadow. Zero: this application's windows have none.
+///
+/// MoonUI's default on Linux is 12 px, and only Linux decorates on the client side. The margin
+/// can show a shadow only where the window is see-through there, and it is not: a window is
+/// cleared to an opaque ground over its whole surface, margin included, and that ground cannot
+/// be replaced by a painted fill inside the frame — the chart draws UNDER the scene and would be
+/// covered. So the margin showed as a solid band around every dialog, and after a light/dark
+/// switch as a band of the previous theme, because a tool window's clear colour is set once.
+/// Without the margin a window ends at its one-pixel frame, as it does on Windows.
+///
+/// One cost, accepted: MoonUI's resize band is centred on the frame edge, so with no margin only
+/// its inner half lies inside the window — the grab strip for resizing is the frame plus four
+/// pixels, where it was that on both sides of the frame before.
+const CLIENT_FRAME_SHADOW: Pixels = px(0.0);
+
+/// Give a window's MoonUI root the frame every window of this application has.
+///
+/// Every `Root::new` goes through here; a contract test holds that, so a new window cannot
+/// reintroduce the band by forgetting.
+///
+/// Args:
+///     root: The root as its opener configured it.
+///
+/// Returns:
+///     The same root with the client-side shadow margin removed.
+pub(crate) fn frame(root: moon_ui::Root) -> moon_ui::Root {
+    root.window_shadow_size(CLIENT_FRAME_SHADOW)
+}
+
 pub(crate) fn configure_shell_clear_color(window: &Window, cx: &App) {
     window.set_clear_color(Some(rgb_to_rgba(moon_ui::MoonPalette::active(cx).shell)));
 }

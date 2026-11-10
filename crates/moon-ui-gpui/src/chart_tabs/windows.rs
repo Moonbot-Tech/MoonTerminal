@@ -306,7 +306,11 @@ impl ChartTabs {
                     cx,
                 )
             });
-            cx.new(|cx| Root::new(host, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
+            cx.new(|cx| {
+                crate::window::windowing::frame(
+                    Root::new(host, window, cx).background_policy(MoonBackgroundPolicy::NoFill),
+                )
+            })
         });
         if let Ok(handle) = opened {
             // Independent, not owned: `detached_chart_window_options`.

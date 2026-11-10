@@ -97,7 +97,11 @@ pub fn open(
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| AssetsView::new(b, AssetsScope::All, true, true, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     }) {
         backend.update(cx, |bk, _| bk.assets_window = Some(handle));
         crate::window::titles::track(handle.into(), owner.is_some(), title, cx);

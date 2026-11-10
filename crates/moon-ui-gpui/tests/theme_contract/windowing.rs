@@ -1375,3 +1375,50 @@ fn detached_chart_state_uses_the_existing_geometry_and_flush_paths() {
             .contains("snapshot.with_charts(backend.chart_specs.clone())")
     );
 }
+
+/// A window root built without `windowing::frame` keeps MoonUI's default client-side shadow
+/// margin. On Linux that margin is 12 px of the window's opaque clear colour — a solid band
+/// around the window, and a band of the PREVIOUS theme after a light/dark switch. Windows has no
+/// such margin, so a Windows-only look at a new window would never show the omission.
+#[test]
+fn every_window_root_is_framed_in_windowing() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_sources(&src, &mut files);
+    let mut roots = 0;
+    for path in files {
+        let rel = path.strip_prefix(&src).unwrap_or(&path);
+        if rel.components().any(|part| part.as_os_str() == "tests")
+            || file_name(&path) == "tests.rs"
+        {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let code: String = code_only(&text)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let built = code.matches("Root::new(").count();
+        let framed = code.matches("windowing::frame(Root::new(").count();
+        assert_eq!(
+            built,
+            framed,
+            "{}: every `Root::new(` must be the argument of `windowing::frame(`",
+            rel.display()
+        );
+        roots += built;
+    }
+    assert!(
+        roots >= 17,
+        "found only {roots} window roots; the scan no longer reaches the windows it guards"
+    );
+
+    let windowing = code_only(&read_src("window/windowing.rs"));
+    assert!(
+        braced_body(&windowing, "pub(crate) fn frame(")
+            .contains("root.window_shadow_size(CLIENT_FRAME_SHADOW)")
+            && windowing.contains("const CLIENT_FRAME_SHADOW: Pixels = px(0.0);"),
+        "`windowing::frame` must set the client-side shadow margin to zero"
+    );
+}

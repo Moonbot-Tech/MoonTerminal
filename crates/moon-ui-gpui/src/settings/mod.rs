@@ -1475,7 +1475,11 @@ pub fn open_on_tab(
     match cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| SettingsView::new(b, tab, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     }) {
         Ok(handle) => {
             backend.update(cx, |b, _| b.settings_window = Some(handle));

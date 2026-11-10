@@ -480,7 +480,11 @@ pub(crate) fn open_debug_perf_window(
         windowing::configure_dwm_window(window);
         windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| DebugPerfWindow::new(b, g, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     }) {
         backend.update(cx, |bk, _| {
             bk.debug_window = Some(handle);
@@ -607,7 +611,11 @@ pub(crate) fn spawn_debug_chart_windows(cx: &mut App, backend: Entity<Backend>) 
                 )
             });
             let host = cx.new(|cx| DebugChartHost::new(panel, title, cx));
-            cx.new(|cx| Root::new(host, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
+            cx.new(|cx| {
+                windowing::frame(
+                    Root::new(host, window, cx).background_policy(MoonBackgroundPolicy::NoFill),
+                )
+            })
         });
         match opened_window {
             Ok(handle) => opened.push(handle),

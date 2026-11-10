@@ -56,6 +56,10 @@ const LINUX_PROBE_JOB: &str = "linux-probe";
 /// The job that starts the Linux probe's binary on a virtual display.
 const LINUX_SMOKE_JOB: &str = "linux-smoke";
 
+/// The job that runs the tests only a Linux machine can: the self-update's Linux steps and the
+/// terminal crate's unit tests.
+const LINUX_TESTS_JOB: &str = "linux-tests";
+
 /// The `release.yml` jobs that compile the terminal, and so must ship MoonUI at its latest master
 /// through the same lockfile contract as `build.yml`'s compiling jobs. The station jobs are left
 /// out: `moon-station` does not depend on MoonUI.
@@ -80,6 +84,11 @@ fn lockfile_contract_jobs() -> Vec<(&'static str, String, &'static str)> {
         "linux-probe.yml",
         linux_probe_workflow_text(),
         LINUX_PROBE_JOB,
+    ));
+    jobs.push((
+        "linux-probe.yml",
+        linux_probe_workflow_text(),
+        LINUX_TESTS_JOB,
     ));
     jobs.extend(
         RELEASE_TERMINAL_JOBS
@@ -739,6 +748,7 @@ fn the_macos_probe_is_diagnostic_and_outside_the_gating_build() {
 fn the_linux_probe_is_diagnostic_builds_in_a_bare_container_and_starts_the_binary() {
     assert!(
         job_body(&workflow_text(), LINUX_PROBE_JOB).is_none()
+            && job_body(&workflow_text(), LINUX_TESTS_JOB).is_none()
             && job_body(&workflow_text(), LINUX_SMOKE_JOB).is_none(),
         "build.yml must not contain the diagnostic Linux probe"
     );
@@ -749,7 +759,7 @@ fn the_linux_probe_is_diagnostic_builds_in_a_bare_container_and_starts_the_binar
             "linux-probe.yml must keep its `{trigger}` trigger"
         );
     }
-    for job in [LINUX_PROBE_JOB, LINUX_SMOKE_JOB] {
+    for job in [LINUX_PROBE_JOB, LINUX_TESTS_JOB, LINUX_SMOKE_JOB] {
         let body = job_body(&probe, job)
             .unwrap_or_else(|| panic!("linux-probe.yml must keep a `{job}:` job"));
         assert!(
@@ -773,12 +783,38 @@ fn the_linux_probe_is_diagnostic_builds_in_a_bare_container_and_starts_the_binar
         build.iter().any(|line| line.trim() == expected),
         "the Linux probe must link the release terminal with `{expected}`"
     );
+    assert!(
+        !build.iter().any(|line| line.contains("cargo test")),
+        "the Linux probe job must not run tests: a red one would stop it before the binary is \
+         built and uploaded, and the smoke job would have nothing to start"
+    );
+
+    let tests = job_body(&probe, LINUX_TESTS_JOB).expect("Linux tests job");
+    assert!(
+        tests
+            .iter()
+            .any(|line| line.trim() == "container: ubuntu:22.04"),
+        "the Linux tests must run in the same bare container the probe builds in"
+    );
+    assert_eq!(
+        apt_packages_of_step(&tests, "Install the build dependencies"),
+        apt_packages_of_step(&build, "Install the build dependencies"),
+        "the Linux tests job must install exactly the probe job's build packages — a second \
+         list that drifts stops proving the documented one"
+    );
     let expected =
         "run: cargo test -p moon-core --lib 'update::' --target x86_64-unknown-linux-gnu";
     assert!(
-        build.iter().any(|line| line.trim() == expected),
-        "the Linux probe must run `{expected}` — the self-update's Linux file and process steps \
+        tests.iter().any(|line| line.trim() == expected),
+        "the Linux tests must run `{expected}` — the self-update's Linux file and process steps \
          compile on Linux only, and no other job would ever execute their tests"
+    );
+    let expected =
+        "run: cargo test -p moon-ui-gpui --bin moonterminal --target x86_64-unknown-linux-gnu";
+    assert!(
+        tests.iter().any(|line| line.trim() == expected),
+        "the Linux tests must run `{expected}` — a single test naming a Windows-only module \
+         once kept the terminal crate's whole test target from compiling on Linux, unnoticed"
     );
 
     let smoke = job_body(&probe, LINUX_SMOKE_JOB).expect("Linux smoke job");

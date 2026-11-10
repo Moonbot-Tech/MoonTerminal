@@ -570,7 +570,11 @@ pub(crate) fn open(
             })
             .detach();
         });
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     });
     match created {
         Ok(handle) => {

@@ -117,12 +117,18 @@ fn trade_mark_uses_the_report_stamps_without_any_tape_input() {
     assert_eq!(mark.close_ms, 1_700_000_900_000);
 }
 
-use super::{TradeGeometry, TradeHoverChange, built_span, take_trade_geometry_builds};
-use crate::chartdx::{ChartEngine, PaneRender};
+use super::built_span;
+// Used by the one Windows-only test below; gated with it so other targets build clean.
+#[cfg(windows)]
+use super::{TradeGeometry, TradeHoverChange, take_trade_geometry_builds};
+use crate::chartdx::ChartEngine;
+#[cfg(windows)]
+use crate::chartdx::PaneRender;
 use moon_chart::view::ChartView;
 use moon_core::config::ChartTheme;
 
 /// A few round trips, far enough apart to draw as separate arrows.
+#[cfg(windows)]
 fn hover_marks() -> Vec<moon_chart::trade_marks::TradeMark> {
     (0..6)
         .map(|i| moon_chart::trade_marks::TradeMark {
@@ -138,6 +144,7 @@ fn hover_marks() -> Vec<moon_chart::trade_marks::TradeMark> {
         .collect()
 }
 
+#[cfg(windows)]
 fn hover_ctx(hovered: Option<(usize, bool)>) -> moon_chart::trade_marks::TradeGeometryCtx {
     moon_chart::trade_marks::TradeGeometryCtx {
         epoch_ms: 900_000.0,
@@ -233,6 +240,11 @@ fn built_span_covers_every_view_with_its_key_and_the_signature_follows_the_cell(
 /// that can patch, or `patch_trade_hover` missing the previous arrow, makes every hover rebuild
 /// every pane (or leaves the old arrow drawn hot). A hover change must patch exactly the old and
 /// the new arrow, with no geometry build.
+///
+/// Windows only: the patch counter read here lives in the D3D11 userdata layer
+/// (`chartdx::userdata`), the one backend that patches markers in place. Left ungated, this one
+/// test kept the whole test target from compiling on Linux and macOS.
+#[cfg(windows)]
 #[test]
 fn hover_change_patches_two_arrows_without_a_rebuild() {
     let engine = ChartEngine::new(0.0, ChartTheme::default());

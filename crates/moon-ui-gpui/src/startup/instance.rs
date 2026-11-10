@@ -277,9 +277,6 @@ fn wide(name: &str) -> Vec<u16> {
 
 #[cfg(unix)]
 fn acquire_named(_token: &str) -> anyhow::Result<Named> {
-    use std::fs::OpenOptions;
-    use std::os::unix::io::AsRawFd;
-
     let lock_path = paths::instance_lock_path();
     let wake_path = paths::instance_wake_path();
     match try_unix_lock(&lock_path)? {

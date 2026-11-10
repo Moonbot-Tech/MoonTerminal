@@ -199,7 +199,9 @@ fn open_window(
                 crate::window::windowing::set_group_window_icon(window, 0);
                 let view = cx.new(|cx| ProfitMonitorView::new(view_backend, window, cx));
                 cx.new(|cx| {
-                    Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque)
+                    crate::window::windowing::frame(
+                        Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+                    )
                 })
             });
             backend.update(cx, |backend, _| {

@@ -262,7 +262,11 @@ fn spawn_group_window_inner(
         windowing::configure_shell_clear_color(window, cx);
         windowing::set_group_window_icon(window, icon_id);
         let view = cx.new(|cx| Shell::new(b, g, focus, epoch, theme, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill))
+        cx.new(|cx| {
+            windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill),
+            )
+        })
     });
     if let Ok(handle) = opened {
         backend.update(cx, |bk, bcx| {

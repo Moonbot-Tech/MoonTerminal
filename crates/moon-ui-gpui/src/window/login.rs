@@ -495,7 +495,11 @@ pub(crate) fn open(
     let opened = cx.open_window(opts, |window, cx| {
         let callback = done.take().expect("the window body runs once");
         let view = cx.new(|cx| LoginView::new(step, callback, window, cx));
-        cx.new(|cx| Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque))
+        cx.new(|cx| {
+            crate::window::windowing::frame(
+                Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
+            )
+        })
     });
     match opened {
         Ok(handle) => {
