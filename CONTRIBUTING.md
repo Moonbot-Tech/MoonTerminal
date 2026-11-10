@@ -131,9 +131,9 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   new minor line at `vMAJOR.MINOR.0`, then increment PATCH for fixes. Tag an already-green `main`
   commit and either push that exact tag or dispatch the workflow with that existing tag; never
   create a new `vMAJOR.MINOR` release. The release workflow checks out that exact tag with full
-  tag history, requires its commit on `main`, and verifies GitHub's published
-  SHA-256 digest for the exact
-  `MoonTerminal.exe` asset while the release is a draft. Repository release immutability must be
+  tag history, requires its commit on `main`, starts the Linux terminal it built on a virtual
+  display, and verifies GitHub's published SHA-256 digests for the exact `MoonTerminal.exe`,
+  `MoonTerminal-linux-x86_64` and station assets while the release is a draft. Repository release immutability must be
   enabled: publication then locks the verified tag and assets. The publish job runs in the `release`
   environment and waits there until one of its required reviewers approves the run.
   `RELEASE_ADMIN_TOKEN` must be a secret of that environment, not of the repository, and must grant

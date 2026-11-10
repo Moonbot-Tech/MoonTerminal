@@ -20,11 +20,12 @@ steps:
     en: Download the terminal
   body:
     ru: 'На странице <a href="https://github.com/Moonbot-Tech/MoonTerminal/releases/latest" target="_blank"
-      rel="noopener">Releases</a> лежат готовые сборки: <code>MoonTerminal.exe</code> для Windows и <code>.dmg</code>
-      для macOS. Под Linux пока только сборка из исходников — <code>make build</code>.'
+      rel="noopener">Releases</a> лежат готовые сборки: <code>MoonTerminal.exe</code> для Windows, <code>.dmg</code>
+      для macOS и, в релизах новее v0.66.0, <code>MoonTerminal-linux-x86_64</code> для Linux.'
     en: 'Ready builds live on the <a href="https://github.com/Moonbot-Tech/MoonTerminal/releases/latest"
-      target="_blank" rel="noopener">Releases</a> page: <code>MoonTerminal.exe</code> for Windows and
-      a <code>.dmg</code> for macOS. Linux is build-from-source for now — <code>make build</code>.'
+      target="_blank" rel="noopener">Releases</a> page: <code>MoonTerminal.exe</code> for Windows,
+      a <code>.dmg</code> for macOS and, in releases newer than v0.66.0,
+      <code>MoonTerminal-linux-x86_64</code> for Linux.'
     html: true
 - title:
     ru: Откройте Настройки → Подключения → Ядра

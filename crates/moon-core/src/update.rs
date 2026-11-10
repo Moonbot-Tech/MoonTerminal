@@ -25,6 +25,14 @@ pub use release::{
 #[cfg(test)]
 mod tests;
 
+/// Exact release asset name of the Linux terminal, for the release pipeline's contract test.
+///
+/// Returns:
+///     The name a Linux x86_64 build's updater looks for in a release.
+pub fn linux_terminal_asset_name() -> &'static str {
+    release::LINUX_X86_64_ASSET_NAME
+}
+
 /// Whether releases carry a terminal for the target this binary was compiled for.
 ///
 /// `false` means no release can ever be offered here — Linux on an architecture other than

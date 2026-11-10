@@ -3,8 +3,9 @@ name: Linux probe
 permissions:
   contents: read
 
-# Three diagnostic jobs, deliberately outside build.yml like the macOS probe: the graphical terminal
-# is not a supported Linux deliverable yet, so its failure there must not turn the gating build red.
+# Three diagnostic jobs, deliberately outside build.yml like the macOS probe. Releases do ship the
+# Linux terminal, and release.yml builds and starts it before it publishes; a pull request is not
+# blocked on it, so a failure here must not turn the gating build red.
 #   Linux probe — compiles the terminal for x86_64 Linux, which no other job does: the station job
 #                 in build.yml builds only `moon-station`, so the wgpu chart backend, the X11 and
 #                 Wayland platform code and every `cfg(target_os = "linux")` path in the GUI crates

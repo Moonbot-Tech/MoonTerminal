@@ -174,16 +174,18 @@ For live smoke, launch the `.app` through a GUI session.
 
 ## Linux
 
-Releases carry no graphical terminal for Linux: the `.exe`, the `.dmg`, and the station's Linux
-binaries, which are a different program. There are two ways to get the terminal, and the
-diagnostic `Linux probe` workflow (`.github/workflows/linux-probe.yml`) exercises both on every
-pull request and every push to `main`: it builds the terminal in a bare `ubuntu:22.04` container
-and then starts the result on a virtual display in bare `ubuntu:22.04`, `ubuntu:24.04` and
-`debian:13` containers. The package lists below are the ones those containers install — a
-contract test (`the_build_guide_and_the_linux_probe_install_the_same_packages`) fails when the
-two differ.
+Releases carry the terminal for x86_64 Linux as one executable, `MoonTerminal-linux-x86_64`,
+beside the `.exe` and the `.dmg`, in every release newer than `v0.66.0`
+(the `moon-station-*` files there are a different program, the server-side station). The release
+builds it in a bare `ubuntu:22.04` container and starts it on a virtual display before anything
+is published. The diagnostic `Linux probe` workflow (`.github/workflows/linux-probe.yml`) does
+the same on every pull request and every push to `main`: it builds the terminal in a bare
+`ubuntu:22.04` container, runs the tests only a Linux machine can, and starts the result on a
+virtual display in bare `ubuntu:22.04`, `ubuntu:24.04` and `debian:13` containers. The package
+lists below are the ones those containers install — a contract test
+(`the_build_guide_and_the_linux_probe_install_the_same_packages`) fails when the two differ.
 
-What the probe does NOT cover: any distribution outside the Debian/Ubuntu family, a Wayland
+What neither of them covers: any distribution outside the Debian/Ubuntu family, a Wayland
 session (the virtual display is X11), a real GPU (the container renders through Mesa's
 software Vulkan driver), and the terminal's own use of the Secret Service (the run uses
 `--fixture`, which configures its core in plaintext). Other distributions need the same
@@ -201,11 +203,13 @@ different presentation path, which nobody has tested on those two older releases
 x86_64 only. Linked against Ubuntu 22.04's glibc, so it needs glibc 2.35 or newer — Ubuntu 22.04,
 Debian 12, or anything more recent.
 
-1. Under the repository's Actions tab open a recent `Linux probe` run on `main` in which the
-   `Linux probe` job and both `Linux smoke` jobs passed, and download its
-   `moonterminal-linux-x86_64` artifact. Look at the jobs, not at the run's own mark: the jobs
-   are diagnostic, so the run shows green even when the build or the start-up failed. GitHub
-   asks for a signed-in account and keeps an artifact for 90 days.
+1. Download `MoonTerminal-linux-x86_64` from the latest release on the repository's Releases
+   page; `v0.66.0` and older carry none. For a commit that is not released yet, a `Linux probe`
+   run on `main` (Actions tab)
+   carries the same build as the `moonterminal-linux-x86_64` artifact: a zip holding a tarball
+   with the file `moonterminal`, which needs a signed-in GitHub account and is kept for 90 days.
+   Pick a run whose `Linux probe` and `Linux smoke` jobs passed — those jobs are diagnostic, so
+   the run itself shows green even when they fail.
 2. Install what the binary needs at run time:
 
    ```bash
@@ -221,23 +225,20 @@ Debian 12, or anything more recent.
    `mesa-vulkan-drivers` is the Vulkan driver for Intel and AMD graphics; a machine on the
    proprietary NVIDIA driver already has its own. A desktop install usually carries most of this
    list already.
-3. Unpack and start it from a terminal inside the graphical session. The download is a zip
-   holding a tarball, which keeps the executable bit; any archive manager opens the zip if
-   `unzip` is not installed:
+3. Make it executable — a browser download is not — and start it from a terminal inside the
+   graphical session:
 
    ```bash
-   unzip moonterminal-linux-x86_64.zip
-   tar -xzf moonterminal-linux-x86_64.tar.gz
-   ./moonterminal
+   chmod +x MoonTerminal-linux-x86_64
+   ./MoonTerminal-linux-x86_64
    ```
 
 Data and logs live under `~/.config/com.moonbot.moonterminal/`.
 
-The terminal updates itself in place, as on Windows, once a release carries the
-`MoonTerminal-linux-x86_64` asset: the header button appears, the download is verified against
-the release's SHA-256, and the executable is replaced with a rollback if the new one does not
-start. Keep the file in a directory you can write to — the update works beside it, in
-`.moonterminal-update/`. Until a release carries that asset, a Linux build is offered nothing.
+The terminal updates itself in place, as on Windows: when a newer release is published the
+header button appears, the download is verified against the release's SHA-256, and the
+executable is replaced with a rollback if the new one does not start. Keep the file in a
+directory you can write to — the update works beside it, in `.moonterminal-update/`.
 
 ### Build from source
 

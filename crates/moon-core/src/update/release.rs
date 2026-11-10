@@ -10,7 +10,7 @@ const WINDOWS_ASSET_NAME: &str = "MoonTerminal.exe";
 const MACOS_ASSET_NAME: &str = "MoonTerminal.dmg";
 /// The Linux terminal is one executable file, published under this exact name. Frozen once a
 /// release carries it: every installed Linux build looks for precisely this asset.
-const LINUX_X86_64_ASSET_NAME: &str = "MoonTerminal-linux-x86_64";
+pub(super) const LINUX_X86_64_ASSET_NAME: &str = "MoonTerminal-linux-x86_64";
 pub(super) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[cfg(test)]

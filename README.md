@@ -36,7 +36,7 @@
   <a href="https://moonbot-tech.github.io/MoonTerminal/">Interface tour</a>
 </p>
 
-MoonTerminal is a desktop shell for Windows and macOS for controlling **[Moonbot](https://moonbot.pro)** cores: charts, orders, reports and strategies in one window. The terminal does not trade by itself: it connects to a Moonbot core with a key. The source code is public on GitHub. It is not affiliated with moonterminal.io or with third-party Telegram trading bots under similar names.
+MoonTerminal is a desktop shell for Windows, macOS and Linux for controlling **[Moonbot](https://moonbot.pro)** cores: charts, orders, reports and strategies in one window. The terminal does not trade by itself: it connects to a Moonbot core with a key. The source code is public on GitHub. It is not affiliated with moonterminal.io or with third-party Telegram trading bots under similar names.
 
 > **Work in progress.** This is the active development workspace for the terminal — a GPUI shell, MoonUI integration, the MoonProto live feed, per-platform GPU chart rendering, and debug tooling. It is not a finished, packaged product yet.
 
@@ -131,10 +131,12 @@ For canonical Metal validation see the [macOS & Linux build guide](docs/MAC_LINU
 
 ### Linux
 
-Releases carry no graphical terminal for Linux. The
-[macOS & Linux build guide](docs/MAC_LINUX_BUILD.md#linux) has the Ubuntu/Debian package lists
-that CI installs in a bare container, a prebuilt binary from that CI run, and the Secret Service
-setup the encrypted config needs in the user GUI/DBus session. With the build packages installed:
+Releases newer than `v0.66.0` carry the terminal for x86_64 Linux as one executable,
+`MoonTerminal-linux-x86_64`. The
+[macOS & Linux build guide](docs/MAC_LINUX_BUILD.md#linux) has the run-time packages it needs,
+the Ubuntu/Debian build packages that CI installs in a bare container, and the Secret Service
+setup the encrypted config needs in the user GUI/DBus session. To build it yourself, with the
+build packages installed:
 
 ```bash
 cargo build -p moon-ui-gpui --bin moonterminal
