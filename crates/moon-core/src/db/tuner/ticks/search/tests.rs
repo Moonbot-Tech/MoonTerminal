@@ -296,13 +296,16 @@ fn spread_variant_with_unknown_base_is_refused() {
     );
 }
 
-/// A fact-calibrated hook cannot lend a percent fallback to search or hand-typed variants.
-#[test]
-fn unknown_hook_variant_is_refused_before_scoring() {
+/// A non-fixed hook on the strategy's own `HookSellLevel`, with the take the core stated for it.
+///
+/// The tape climbs to 104 off a buy at 100: the fact's 2 % take (level 50) closes at 102, and a
+/// level twice as high reaches 104 only if the variant's take is the stated one scaled by the
+/// level ratio.
+fn non_fixed_hook(stated: Option<f64>) -> PreparedDeal {
     let mut d = prepared(1, 104.0);
     d.deal.kind = "MoonHook".into();
     d.deal.hook_depth_pct = Some(4.0);
-    d.deal.hook_stated_take_pct = Some(2.0);
+    d.deal.hook_stated_take_pct = stated;
     d.deal.sell_price = 102.0;
     d.own = Arc::new(
         [
@@ -312,6 +315,45 @@ fn unknown_hook_variant_is_refused_before_scoring() {
         ]
         .into(),
     );
+    d
+}
+
+/// The search parameters that vary `HookSellLevel` alone, over the one value `level`.
+fn hook_level_search<'a>(
+    held: &'a HashMap<String, String>,
+    defaults: &'a HashMap<String, f64>,
+    locked: &'a HashSet<String>,
+    grids: &'a Grids,
+    model: ModelSettings,
+) -> SearchParams<'a> {
+    SearchParams {
+        held,
+        defaults,
+        kind: "MoonHook",
+        vary_entry: false,
+        vary_exit: true,
+        locked,
+        grids,
+        restarts: 1,
+        min_n: Some(1),
+        seed: Some(1),
+        train_frac: 1.0,
+        max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: false,
+        risk: Default::default(),
+        screen_entry: false,
+        model,
+    }
+}
+
+/// A non-fixed hook's variant at another `HookSellLevel` scales the core's stated take by the
+/// level ratio: the core fixes the take as that level's share of a spike measured once at the
+/// detect, so another level moves the take and nothing else. Regression: until 2026-11 every
+/// such variant was refused as an unknown take, and a strategy whose level had changed over the
+/// period had no point the search could score at all.
+#[test]
+fn non_fixed_hook_variant_scales_the_stated_take() {
+    let d = non_fixed_hook(Some(2.0));
     let defaults = HashMap::new();
     let model = ModelSettings {
         latency_ms: 0.0,
@@ -337,18 +379,6 @@ fn unknown_hook_variant_is_refused_before_scoring() {
         "{verdict:?}"
     );
     let variant = vec![("HookSellLevel".into(), "100".into())];
-    let (manual, per_deal) = variant_tally_by_deal(
-        std::slice::from_ref(&d),
-        &defaults,
-        "MoonHook",
-        &variant,
-        model,
-    );
-    assert_eq!(manual.unjudged, 1);
-    assert_eq!(manual.tally.n, 0);
-    assert_eq!(manual.untraded, 0);
-    assert_eq!(manual.open, 0);
-    assert_eq!(per_deal, vec![(d.deal.report_uid, None)]);
     let scored = variant_tally(
         std::slice::from_ref(&d),
         &defaults,
@@ -356,23 +386,13 @@ fn unknown_hook_variant_is_refused_before_scoring() {
         &variant,
         model,
     );
-    assert_eq!(scored.unjudged, 1);
-    assert_eq!(scored.tally.n, 0);
-    assert_eq!(scored.untraded, 0);
+    assert_eq!(scored.unjudged, 0);
+    assert_eq!(scored.tally.n, 1);
     let picture = variant_picture(&d, &defaults, "MoonHook", &variant, model);
-    assert!(picture.outcome.fill.is_some());
-    assert_eq!(picture.outcome.exit, None);
-    assert_eq!(picture.outcome.profit_pct, None);
-    assert!(picture.sell_line.is_empty());
-    let fact = variant_tally(std::slice::from_ref(&d), &defaults, "MoonHook", &[], model);
-    assert_eq!(fact.unjudged, 0);
-    assert_eq!(fact.tally.n, 1);
+    let exit = picture.outcome.exit.expect("the doubled take is reached");
+    assert!((exit.price - 104.0).abs() < 1e-9, "{exit:?}");
     let check = check_corridors([(&d.deal, d.own.as_ref())], &defaults, &variant, model);
-    assert_eq!(check.take_unknown, 1);
-    assert_eq!(
-        check_corridors([(&d.deal, d.own.as_ref())], &defaults, &[], model).take_unknown,
-        0
-    );
+    assert_eq!(check.take_unknown, 0);
     let mut grids = Grids::default();
     grids.insert("HookSellLevel", Arc::from([100.0]));
     let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
@@ -380,27 +400,37 @@ fn unknown_hook_variant_is_refused_before_scoring() {
     let held = HashMap::new();
     let found = suggest(
         &[d],
-        &SearchParams {
-            held: &held,
-            defaults: &defaults,
-            kind: "MoonHook",
-            vary_entry: false,
-            vary_exit: true,
-            locked: &locked,
-            grids: &grids,
-            restarts: 1,
-            min_n: Some(1),
-            seed: Some(1),
-            train_frac: 1.0,
-            max_passes: DEFAULT_MAX_PASSES,
-            keep_corridor: false,
-            risk: Default::default(),
-            screen_entry: false,
-            model,
-        },
+        &hook_level_search(&held, &defaults, &locked, &grids, model),
         &SearchHandle::new(),
     );
-    assert!(matches!(found, Err(SearchMiss::Corridor)), "{found:?}");
+    assert!(found.is_ok(), "{found:?}");
+}
+
+/// A non-fixed hook without the core's stated take has no depth its take can be placed off, so
+/// every point is refused — and the search names that, not the MoonShot corridor it never
+/// touched.
+#[test]
+fn a_search_refused_by_unknown_takes_says_so() {
+    let d = non_fixed_hook(None);
+    let defaults = HashMap::new();
+    let model = ModelSettings {
+        latency_ms: 0.0,
+        ..Default::default()
+    };
+    let variant = vec![("HookSellLevel".into(), "100".into())];
+    let check = check_corridors([(&d.deal, d.own.as_ref())], &defaults, &variant, model);
+    assert_eq!(check.take_unknown, 1);
+    let mut grids = Grids::default();
+    grids.insert("HookSellLevel", Arc::from([100.0]));
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    locked.remove("HookSellLevel");
+    let held = HashMap::new();
+    let found = suggest(
+        &[d],
+        &hook_level_search(&held, &defaults, &locked, &grids, model),
+        &SearchHandle::new(),
+    );
+    assert!(matches!(found, Err(SearchMiss::UnknownTake)), "{found:?}");
 }
 
 /// Search only the take on a chronological half sample, exposing embargo selection regressions.

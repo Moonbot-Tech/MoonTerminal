@@ -435,9 +435,8 @@ pub fn params_for<'k>(
 /// which is how the delta modifiers went unapplied through a whole measurement run on 2026-09-22
 /// while every test passed.
 ///
-/// `HookSellFixed` selects the fixed depth-percent rule or the stated factual take only:
-/// Fixed=NO variants at another level are refused (`ExitParams::hook_sell_fixed`).
-/// Read at the strategy's own value, never as a grid knob.
+/// `HookSellFixed` decides whether a hook's take needs the take the core stated
+/// (`ExitParams::hook_sell_fixed`). Read at the strategy's own value, never as a grid knob.
 /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
 /// The Delta Modifiers section is a knob
 /// since 2026-09-25, all but `MaxModifier` on a MoonShot, which the grid draws fixed there

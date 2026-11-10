@@ -233,7 +233,8 @@ fn search(
         .collect();
     let evaluations = std::sync::atomic::AtomicUsize::new(0);
     // Why points were refused, for the answer's reason when none is left.
-    let (cornered, unclosed, unjudged_refused) = (
+    let (cornered, unknown_take, unclosed, unjudged_refused) = (
+        std::sync::atomic::AtomicUsize::new(0),
         std::sync::atomic::AtomicUsize::new(0),
         std::sync::atomic::AtomicUsize::new(0),
         std::sync::atomic::AtomicUsize::new(0),
@@ -249,17 +250,22 @@ fn search(
     // Entry group can produce one — an Exit search leaves the strategy's own fields alone,
     // whatever they hold. Both rules read the entry alone, which is what lets the nested search
     // refuse an entry point before it searches the exit under it. Unknown variant takes are
-    // refused here too, before either the fill cache or replay cache can score a guessed take.
+    // refused here too, before either the fill cache or replay cache can score a guessed take —
+    // and counted apart: a search refused for unknown takes is told so, not sent to the corridor.
     let corridor_refuses = |per_base: &[(EntryParams, ExitParams)]| {
-        let refused = (params.vary_entry && inverts(&start_ordered, per_base))
+        let corridor = (params.vary_entry && inverts(&start_ordered, per_base))
             || guard
                 .as_ref()
-                .is_some_and(|g| !g.holds(&bases.of_deal, per_base))
-            || unknown_takes(deals, &bases.of_deal, per_base) > 0;
-        if refused {
+                .is_some_and(|g| !g.holds(&bases.of_deal, per_base));
+        if corridor {
             cornered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return true;
         }
-        refused
+        let unknown = unknown_takes(deals, &bases.of_deal, per_base) > 0;
+        if unknown {
+            unknown_take.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        unknown
     };
     // The fills of the entries scored lately: most points share their entry with the point
     // before (`fills`).
@@ -490,7 +496,12 @@ fn search(
     }
     // What the descents refused, read before the counts below and the trim add to it.
     let load = |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
-    let (cornered_n, unclosed_n, risky_n) = (load(&cornered), load(&unclosed), load(&risky));
+    let (cornered_n, unknown_take_n, unclosed_n, risky_n) = (
+        load(&cornered),
+        load(&unknown_take),
+        load(&unclosed),
+        load(&risky),
+    );
     let unjudged_refused_n = load(&unjudged_refused);
     // A restart steered by the deals a point closes can end on one that leaves some open: it is
     // refused all the same, read the answer's way.
@@ -532,6 +543,7 @@ fn search(
         entry_points: entry_scored.load(std::sync::atomic::Ordering::Relaxed),
         fills_reused: fill_cache.reused(),
         cornered: load(&cornered),
+        unknown_take: load(&unknown_take),
         unjudged_refused: load(&unjudged_refused),
     };
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
@@ -563,7 +575,7 @@ fn search(
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded, unknown takes) {:?}; points refused by the corridor or unknown take {}, by an unjudged deal {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}; stopped {}/{} ({})",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} purged, {} left out; base refused by (inverts, deals nearer than their own corridor, guarded, unknown takes) {:?}; points refused by the corridor {}, by an unknown take {}, by an unjudged deal {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}; stopped {}/{} ({})",
         brief(&base_score),
         brief(&score),
         train.len(),
@@ -571,6 +583,7 @@ fn search(
         left_open.len(),
         base_why,
         cornered_n,
+        unknown_take_n,
         unjudged_refused_n,
         unclosed_n,
         risky_n,
@@ -626,14 +639,19 @@ fn search(
     // `better_score` ranks a refused point below every other, and `better` one under the floor
     // below any above it: a best refused or under the floor means no point held either.
     let Some(train_tally) = score else {
-        // The rule that refused the most points is the one to name.
-        let (unclosed, cornered, risky) = (unclosed_n, cornered_n, risky_n);
-        return Err(if risky > unclosed.max(cornered) {
-            SearchMiss::Risk
-        } else if unclosed > cornered {
+        // The rule that refused the most points is the one to name; a tie goes to the earlier
+        // rule a point meets — the corridor, then the take, then closing, then the risk limits.
+        let (unclosed, cornered, unknown, risky) =
+            (unclosed_n, cornered_n, unknown_take_n, risky_n);
+        let top = cornered.max(unknown).max(unclosed).max(risky);
+        return Err(if cornered == top {
+            SearchMiss::Corridor
+        } else if unknown == top {
+            SearchMiss::UnknownTake
+        } else if unclosed == top {
             SearchMiss::Unclosed
         } else {
-            SearchMiss::Corridor
+            SearchMiss::Risk
         });
     };
     if train_tally.n < min_n {

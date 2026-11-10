@@ -1960,14 +1960,14 @@ fn a_hook_without_its_depth_is_not_a_known_take() {
     let model = ExitModel::new(&params);
     assert!(
         model.take_known(&hook_deal()),
-        "the stated fact level stays known"
+        "the core's stated take makes a non-fixed take known"
     );
     assert!(
         !model.take_known(&Deal {
             hook_stated_take_pct: None,
             ..hook_deal()
         }),
-        "a non-fixed take without its fact level needs the spike"
+        "a non-fixed take without the core's stated take has no depth to scale"
     );
     let no_depth = Deal {
         hook_depth_pct: None,

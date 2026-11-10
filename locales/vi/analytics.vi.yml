@@ -877,6 +877,7 @@ analytics.ticks.search_base_open: "%{n} đang mở ở nền của nó, bị lo�
 analytics.ticks.warn_whole_period: "Điểm tìm được được khớp và xét trên cùng các giao dịch: không có kiểm ngoài mẫu."
 analytics.ticks.unguarded_warn: "Không có bảo vệ: %{n} trong %{m} chiến lược — không cắt lỗ và không trailing stop khi không có chốt lời; một giao dịch có thể không bao giờ đóng"
 analytics.ticks.sugg_corridor: "Không phương án nào giữ hành lang: MShotPriceMin dưới MShotPrice và, khi công tắc bật, không gần giá hơn giao dịch"
+analytics.ticks.sugg_unknown_take: "Không phương án nào tính được chốt lời cho mọi giao dịch hợp lệ, và phương án không đánh giá được bất kỳ giao dịch nào trong số đó sẽ bị loại hẳn — để mọi phương án được so trên cùng các giao dịch. Thường là do cài đặt chốt lời của chiến lược hiện không còn như trong các giao dịch của khoảng thời gian"
 analytics.ticks.inverted_warn: "MShotPriceMin không dưới MShotPrice trên %{n} trong %{m} giao dịch: các trường không mô tả hành lang đó, core làm gì với nó thì không rõ, ước lượng không đáng tin"
 analytics.ticks.cfg_keep_corridor: "Giữ hành lang không gần giá hơn"
 analytics.ticks.cfg_keep_corridor_help: "Hành lang kết quả của phương án (MShotPrice, MShotPriceMin và các cộng delta MShotAdd) không lúc nào trong đời lệnh gần giá hơn giao dịch đã từng. Khoảng cách có thể chuyển giữa các trường, không được rút ngắn: lệnh gần giá hơn sẽ bắt các nhịp không có trong mẫu."

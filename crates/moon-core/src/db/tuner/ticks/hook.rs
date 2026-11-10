@@ -1,9 +1,10 @@
 //! MoonHook's own take rule, and the numbers the core writes about its detect.
 //!
-//! The documented `HookSellFixed=NO` rule locates the take inside High/Min's spike.
-//! That rule does not reproduce the core's stated takes. Only the stated take at the fact's calibrated level
-//! is retained; Fixed=NO variants at another level, or without a stated take, are refused.
-//! Fixed=YES specifies a share of depth as a percent distance off the buy.
+//! The take is `HookSellLevel` per cent of a depth, placed as a percent off the buy, so a variant
+//! at another level scales the take the core stated by the level ratio. `HookSellFixed` decides
+//! which depth: YES the detect's own, "regardless of the buy price"; NO one counted off the buy,
+//! which the comment does not state — a non-fixed take is known only through the take the core
+//! stated for it.
 //! Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
 //!
 //! A MoonHook carries **no `SellPrice` field at all** — its sell lives in `HookSellLevel`, in
@@ -25,8 +26,8 @@
 //! that number on 90 of 118 trades within 0.01 pp, with the buy price as the base (median of
 //! fact against prediction +0.003 %). The remaining 28 all sit HIGHER than the formula, never
 //! lower; the depth in the comment is written at close time while the take was placed at fill
-//! time. The depth inferred by `record::placed_hook_depth` preserves that stated factual take
-//! and identifies its `HookSellLevel`; a non-fixed variant at another level is refused.
+//! time. The depth inferred by `record::placed_hook_depth` preserves that stated factual take,
+//! and a variant at another `HookSellLevel` scales it.
 //! See `docs-internal/STRATEGY_FORMULAS/moonhook.md`.
 //!
 //! The archive cannot stand in for this: the core files a line only when it was RE-PLACED, and

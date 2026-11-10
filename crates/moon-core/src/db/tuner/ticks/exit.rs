@@ -152,9 +152,10 @@ pub struct ExitParams {
     /// verdict then answers nothing rather than judging the line against a guessed level
     /// ([`ExitModel::take_known`]). Ignored by every other kind.
     pub hook_sell_level_pct: f64,
-    /// `HookSellFixed`: YES places a depth share as a percent off the buy.
-    /// NO's documented spike rule does not reproduce the core's stated takes; only the stated
-    /// take at the fact's own level is kept, other levels are refused. Never a grid knob.
+    /// `HookSellFixed`: which depth `HookSellLevel` is a share of — YES the detect's own, "regardless
+    /// of the buy price", NO one counted off the buy. Both place the take as a percent off the buy; NO's
+    /// depth is known only through the take the core stated (`ExitModel::take_known`). Never a
+    /// grid knob.
     /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
     pub hook_sell_fixed: bool,
     /// `MStrikeSellLevel` — MoonStrike's replacement for `SellPrice`: the take in per cent OF THE

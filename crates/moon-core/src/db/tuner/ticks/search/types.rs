@@ -104,6 +104,14 @@ pub enum SearchMiss {
     /// [`SearchParams::keep_corridor`], every trade's corridor at least as far from the price as
     /// the trade's own.
     Corridor,
+    /// No point the search visited could place the take of every deal it is fitted on: some
+    /// deal lacks the record the kind's take rule reads (a hook's stated take, a strike's
+    /// detect, a Spread's recorded take — `ExitModel::take_known`). The deals are fit ones —
+    /// fitness is judged at the settings each ran with — so this is usually a strategy whose
+    /// take settings now differ from theirs; the point is refused whole rather than the deal
+    /// dropped, so every point is scored on the same deals. Told apart from [`Self::Corridor`]
+    /// because the cure differs.
+    UnknownTake,
     /// No point the search visited kept its max drawdown and win rate within the risk limits
     /// of the fact ([`SearchParams::risk`]).
     Risk,
@@ -155,8 +163,11 @@ pub struct SearchStats {
     /// Points scored on the entry fills of a point scored before ([`fills`]), whether their exit
     /// was replayed or its folded result was read from the memo.
     pub fills_reused: usize,
-    /// Point requests refused by a corridor rule or an unknown take.
+    /// Point requests refused by a corridor rule.
     pub cornered: usize,
+    /// Point requests that kept the corridor but left some deal's take unknown
+    /// ([`SearchMiss::UnknownTake`]).
+    pub unknown_take: usize,
     /// Point requests refused because replay left at least one deal unjudged.
     pub unjudged_refused: usize,
 }
