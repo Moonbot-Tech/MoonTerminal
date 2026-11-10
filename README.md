@@ -32,7 +32,7 @@
 </p>
 
 <p align="center">
-  <a href="https://moonterminal.pro/"><b>moonterminal.pro</b></a> — downloads, the user guide and FAQ in seven languages ·
+  <a href="https://moonterminal.pro/"><b>moonterminal.pro</b></a> — downloads, the user guide and FAQ in eight languages ·
   <a href="https://moonbot-tech.github.io/MoonTerminal/">Interface tour</a>
 </p>
 
@@ -172,7 +172,7 @@ Runtime config lives next to the executable. Server credentials are stored in en
 
 | Guide | What's inside |
 |---|---|
-| [User guide](https://moonterminal.pro/) | The website: downloads, the interface reference, the FAQ and the version history in seven languages |
+| [User guide](https://moonterminal.pro/) | The website: downloads, the interface reference, the FAQ and the version history in eight languages |
 | [Interface tour](https://moonbot-tech.github.io/MoonTerminal/) | Interactive tour: the main-window map, first connection, panels, hotkeys |
 | [Architecture](docs/ARCHITECTURE.md) | Crates, per-platform GPU rendering, and the live data path |
 | [Telegram chat reports](docs/TELEGRAM_REPORTS.md) | Pairing the bot, the report keyboard and views, notifications |
