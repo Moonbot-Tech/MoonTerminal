@@ -78,6 +78,7 @@ fn unlisted_load_reach_is_core_aware() {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,

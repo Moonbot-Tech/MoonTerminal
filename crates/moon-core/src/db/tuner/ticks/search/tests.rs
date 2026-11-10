@@ -624,6 +624,7 @@ pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,

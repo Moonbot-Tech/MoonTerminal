@@ -183,6 +183,7 @@ pub(super) fn deal() -> Deal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,
@@ -383,6 +384,7 @@ fn a_core_replays_its_re_places_on_its_own_round_trip() {
     assert_eq!(fill_of(&unmeasured, &missed, &mshot()), None);
     let slow = Deal {
         round_trip_ms: Some(300.0),
+        leverage: None,
         ..deal()
     };
     assert_eq!(
@@ -1861,6 +1863,7 @@ fn hook_deal() -> Deal {
         hook_stated_take_pct: Some(2.0),
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,

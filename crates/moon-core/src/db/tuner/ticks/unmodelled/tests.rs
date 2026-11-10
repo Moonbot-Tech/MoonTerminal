@@ -118,10 +118,10 @@ fn switched_on_fields_come_with_value_and_section() {
     assert_eq!(found[0].rule, None, "a warning, not a rule");
 }
 
-/// The stop ladder is modelled, and the liquidation guards and the grid's fixed stop are left out
+/// The stop ladder and the liquidation guards are modelled, and the grid's fixed stop is left out
 /// on purpose (the developer's call, 2026-09-24): none of them raises the warning.
 #[test]
-fn the_ladder_and_the_left_out_stop_fields_raise_nothing() {
+fn the_modelled_and_the_left_out_stop_fields_raise_nothing() {
     let v = values(&[
         ("UseSecondStop", "YES"),
         ("UseStopLoss3", "YES"),

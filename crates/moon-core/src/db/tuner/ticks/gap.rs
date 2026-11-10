@@ -23,8 +23,7 @@
 use std::sync::Arc;
 
 use super::exit::ExitParams;
-use super::exit::level_off_buy;
-use super::exit::stops::stop_pct;
+use super::exit::stops::{guarded_stop_level, stop_pct};
 use super::verify::{POINT_TIME_TOLERANCE_MS, fact_sell_start};
 use super::{Deal, PRICE_EPS, PRICE_TOLERANCE};
 use crate::market::trade_replay::Coverage;
@@ -141,7 +140,7 @@ fn fact_stop(
     ]
     .into_iter()
     .flatten()
-    .map(|pct| level_off_buy(deal.buy_price, pct, long))
+    .map(|pct| guarded_stop_level(exit, deal, deal.buy_price, pct))
     .reduce(|a, b| if long { a.min(b) } else { a.max(b) })?;
     Some(GapStop {
         level: deepest,

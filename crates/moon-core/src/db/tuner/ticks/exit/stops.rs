@@ -21,10 +21,12 @@
 //! `UseStopLoss3`) is [`ladder`], which moves the level this stop fires at.
 
 pub mod ladder;
+pub mod liq;
 pub mod ticker;
 pub mod trailing;
 
 use self::ladder::Ladder;
+use self::liq::LiqGuard;
 use self::ticker::Ticker;
 use self::trailing::Trailing;
 use super::delta_mods::modifier_sum;
@@ -201,6 +203,20 @@ pub fn stop_pct(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
         return params.stop_loss_pct;
     }
     params.stop_loss_pct - modifier_sum(params, deal, at_ms) * params.stop_loss_modifier
+}
+
+/// A stop level `pct` per cent off `buy` as the liquidation guard leaves it: where
+/// `StopAboveLiq` holds the stop nearer the buy, that level ([`liq`]). The one conversion for
+/// every reader of a stop's level — the walk, the verdict's fallback and the hole's bound — so
+/// none of them places the stop where the core no longer keeps it.
+///
+/// Args:
+///     params: The sell parameters.
+///     deal: The trade, for its side and leverage.
+///     buy: The buy the level counts from.
+///     pct: The stop's distance off the buy, negative on the losing side.
+pub fn guarded_stop_level(params: &ExitParams, deal: &Deal, buy: f64, pct: f64) -> f64 {
+    LiqGuard::new(params, deal, buy).stop(level_off_buy(buy, pct, deal.is_long()))
 }
 
 /// Whether the strategy runs the documented immediate `StopLoss`: `FastStopLoss` on,
@@ -551,6 +567,9 @@ pub(super) struct Stops {
     /// The first stop's level, before any ladder step: past it `AllowedDrop` bounds the sale
     /// again, whatever rung stands.
     main_level: Option<f64>,
+    /// The liquidation guards: where `StopAboveLiq` holds every level of the stop, and where
+    /// `DontSellBelowLiq` holds its sale.
+    guard: LiqGuard,
 }
 
 impl Stops {
@@ -570,7 +589,9 @@ impl Stops {
         // trigger for a market sell, and nothing about it is ever placed.
         let stop = stop_pct(params, deal, fill.t_ms);
         let stop_on = params.use_stop_loss;
-        let level = side.off_buy(fill.price, stop);
+        // `StopAboveLiq` holds the level away from the liquidation price, the ladder's rungs too.
+        let guard = LiqGuard::new(params, deal, fill.price);
+        let level = guard.stop(side.off_buy(fill.price, stop));
         let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
         // What the fact proves about the stop when this walk runs the trade's own
         // (`record::StopAnchor`): it fired when the core's did, at the price the core sold at, and
@@ -719,6 +740,7 @@ impl Stops {
             immediate,
             buy: fill.price,
             main_level: stop_on.then_some(level),
+            guard,
         }
     }
 
@@ -729,8 +751,10 @@ impl Stops {
     /// (`AllowedDrop` at -98 or under). While the third stop's rung is the level in force
     /// `AllowedDrop3` replaces it, until the print passes the main stop's level, where the main
     /// stop's `AllowedDrop` applies again. The immediate stop's order limit (buy less
-    /// `StopLossSpread`) bounds it too: the tighter of the two. The panic sell's re-stepping by
-    /// `StopLossSpread` needs the book — this is a bound, not a fill model.
+    /// `StopLossSpread`) bounds it too, and so does `DontSellBelowLiq`'s liquidation level
+    /// ([`liq`]) — a panic sell's, not a market order's, which has no price to hold: the
+    /// tightest of them. The panic sell's re-stepping by `StopLossSpread` needs the book — this
+    /// is a bound, not a fill model.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub(super) fn sale_floor(&self, params: &ExitParams, print: f64, long: bool) -> Option<f64> {
         if params.use_market_order {
@@ -748,11 +772,11 @@ impl Stops {
         let drop_floor = (drop > -98.0).then(|| level_off_buy(self.buy, drop, long));
         let limit = (self.fired_rule == Some(StopTrigger::Immediate))
             .then(|| level_off_buy(self.buy, -params.stop_loss_spread_pct, long));
-        match (drop_floor, limit) {
-            // The tighter: nearer the buy.
-            (Some(a), Some(b)) => Some(if long { a.max(b) } else { a.min(b) }),
-            (a, b) => a.or(b),
-        }
+        // The tightest: nearest the buy.
+        [drop_floor, limit, self.guard.sale_floor()]
+            .into_iter()
+            .flatten()
+            .reduce(|a, b| if long { a.max(b) } else { a.min(b) })
     }
 
     /// Where the stop stands now — the ladder's last step, else the first stop's level; `None`
@@ -795,6 +819,7 @@ impl Stops {
         let Some(level) = self.ladder.as_mut().and_then(|ladder| ladder.before(until)) else {
             return;
         };
+        let level = self.guard.stop(level);
         match &mut self.trigger {
             Trigger::Off => {}
             Trigger::Fast(fast) => fast.level = level,
@@ -806,9 +831,13 @@ impl Stops {
     /// The ladder includes a cycle at the event's own time, then reaches `until` only if quiet.
     fn book_before(&mut self, until: i64) -> Option<(Exit, StopTrigger)> {
         let ladder = &mut self.ladder;
+        let guard = self.guard;
         let exit = match &mut self.trigger {
             Trigger::Book(book) => book.before_with(until, |at| {
-                ladder.as_mut().and_then(|ladder| ladder.before(at + 1))
+                ladder
+                    .as_mut()
+                    .and_then(|ladder| ladder.before(at + 1))
+                    .map(|level| guard.stop(level))
             }),
             Trigger::Off | Trigger::Fast(_) => None,
         };

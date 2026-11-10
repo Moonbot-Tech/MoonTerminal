@@ -11,8 +11,10 @@
 //!   its execution — `StopSpreadAdd1mDelta`, `TrailingSpread` and the spreads' re-stepping —
 //!   stays unmodelled (the book's): the verdict judges a stop by its decision, and a variant
 //!   that keeps the trade's stop takes the fact's own sale (`record::StopAnchor`);
-//! - the liquidation guards and the grid's fixed stop — `DontSellBelowLiq`, `StopAboveLiq`,
-//!   `StopLossFixed`: not taken into account at all (the developer's call, 2026-09-24);
+//! - the liquidation guards — `DontSellBelowLiq`, `StopAboveLiq`: read and modelled off the
+//!   trade's leverage since 2026-11-10 (`exit::stops::liq`), so they raise nothing here;
+//! - the grid's fixed stop — `StopLossFixed`: not taken into account at all (the developer's
+//!   call, 2026-09-24);
 //! - the entry — `SellEMACheckEnter` (checks the EMA filter before the BUY), `BuyModifier`,
 //!   `DetectModifier`;
 //! - what acts only by hand or only in another kind — `SplitPiece` (a chart menu item),
@@ -85,8 +87,9 @@ const fn watched(key: &'static str, section: ParamSection, default: &'static str
 /// Every exit field a strategy can switch on that the model does not have, in the strategy
 /// window's order.
 const WATCHED: &[Watched] = &[
-    // Stops. The ladder is modelled (`exit::stops::ladder`); `DontSellBelowLiq`, `StopAboveLiq`
-    // and `StopLossFixed` are left out on purpose (the developer's call, 2026-09-24).
+    // Stops. The ladder and the liquidation guards (`DontSellBelowLiq`, `StopAboveLiq`) are
+    // modelled (`exit::stops::ladder`, `exit::stops::liq`); `StopLossFixed` is left out on
+    // purpose (the developer's call, 2026-09-24).
     // A stop on the ratio of buy to sell volume, over trades the tape has but a rule it does not.
     watched("UseBV_SV_Stop", ParamSection::Stops, "NO"),
     // Stops taken from a Telegram signal.

@@ -309,6 +309,9 @@ pub struct Deal {
     /// re-places on it ([`mshot::entry_latency_ms`]); `None` — too few re-places archived, or no
     /// caller calibrated it — runs them on the model settings' one latency.
     pub round_trip_ms: Option<f64>,
+    /// The leverage the trade ran at (`lev` of the report row), read by the liquidation guards
+    /// ([`exit::stops::liq`]); `None` where the source keeps none.
+    pub leverage: Option<f64>,
     /// What the fact proves about the stop, for a variant that runs the same one
     /// ([`record::StopAnchor`]); filled with the rest of the model inputs, `None` before.
     pub stop_anchor: Option<StopAnchor>,

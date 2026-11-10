@@ -106,6 +106,7 @@ fn stopped() -> Deal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,
@@ -222,6 +223,11 @@ fn the_anchor_holds_only_for_the_trades_own_entry_and_stop() {
         },
         ExitParams {
             stop_loss_pct: -1.5,
+            ..book()
+        },
+        // Another liquidation guard may hold the stop at another level.
+        ExitParams {
+            stop_above_liq_pct: 50.0,
             ..book()
         },
     ] {

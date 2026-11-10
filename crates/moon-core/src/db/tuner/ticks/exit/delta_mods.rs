@@ -316,6 +316,17 @@ fn stop_reading(deal: &Deal, params: &ExitParams) -> Option<Reading> {
     let level = stated_stop_level(&deal.sell_reason)?;
     let buy = deal.buy_price;
     let long = deal.is_long();
+    // A level `StopAboveLiq` moved is the guard's own, not `f(Σ)`: it carries no sum.
+    let step = deal
+        .tick
+        .filter(|t| t.is_finite() && *t > 0.0)
+        .unwrap_or(level * PRICE_TOLERANCE);
+    if super::stops::liq::LiqGuard::new(params, deal, buy)
+        .stop_bound()
+        .is_some_and(|bound| (level - bound).abs() <= step)
+    {
+        return None;
+    }
     Reading::of(deal, level, params.stop_loss_modifier, |stop| {
         // The stop's per cent off the buy, negative on the losing side; a short's divides.
         let stop_pct = if long {

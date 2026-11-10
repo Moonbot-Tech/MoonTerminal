@@ -245,6 +245,14 @@ pub struct ExitParams {
     /// `StopLossSpread` — how far under the price the panic sell places its order, per cent.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub stop_loss_spread_pct: f64,
+    /// `StopAboveLiq` — per cent over the liquidation level the stop is held at; 0 is off
+    /// (`stops::liq`).
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub stop_above_liq_pct: f64,
+    /// `DontSellBelowLiq` — a stop's sale and a PriceDown step are not priced past the
+    /// liquidation level (`stops::liq`).
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub dont_sell_below_liq: bool,
     /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), checked by the
     /// last price of each series tick as it closes (`stops::FastStop`). NO — the core's default: the REST ticker's BID (the
     /// ASK for a short), a long's averaged per `StopLossEMA`, which the trade tape does not
@@ -332,6 +340,8 @@ impl Default for ExitParams {
             allowed_drop3_pct: -99.0,
             use_market_order: false,
             stop_loss_spread_pct: 1.0,
+            stop_above_liq_pct: 0.0,
+            dont_sell_below_liq: false,
             // The trigger the tape itself carries; `exit_params` reads the strategy's own, and
             // its absence there is the core's default, NO.
             fast_stop_loss: true,

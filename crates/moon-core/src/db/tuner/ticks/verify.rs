@@ -44,11 +44,10 @@
 //! fixed, when the stored reason keeps it, and the moment it activated ([`verify_stop`]). A stop the core fired and the model never did is a miss.
 
 use super::exit::ExitModel;
-use super::exit::level_off_buy;
 use super::exit::line::LinePoint;
 use super::exit::sell_order::{take_is_recorded, take_model_for};
 use super::exit::stops::trailing::trailing_level;
-use super::exit::stops::{immediate_stop, stop_pct};
+use super::exit::stops::{guarded_stop_level, immediate_stop, stop_pct};
 use super::mshot::MshotParams;
 use super::settings::ModelSettings;
 use super::{
@@ -681,10 +680,11 @@ fn verify_stop(
     Option<i64>,
 ) {
     let level = stop_level.unwrap_or_else(|| {
-        level_off_buy(
+        guarded_stop_level(
+            exit,
+            deal,
             deal.buy_price,
             stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms),
-            deal.is_long(),
         )
     });
     let stated = stated_stop_level(&deal.sell_reason);
@@ -766,7 +766,7 @@ pub(super) fn stop_jump_level(
     let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
     stated_stop_level(reason).or_else(|| {
         (exit.second_stop.is_none() && exit.third_stop.is_none())
-            .then(|| level_off_buy(deal.buy_price, pct, deal.is_long()))
+            .then(|| guarded_stop_level(exit, deal, deal.buy_price, pct))
     })
 }
 

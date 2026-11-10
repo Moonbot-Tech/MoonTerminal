@@ -174,6 +174,7 @@ fn the_facts_stop_bounds_the_hole_at_its_deepest_level() {
         delay_s: 0.0,
         fast: false,
         ema: 3.0,
+        stop_above_liq_pct: 0.0,
         second: exit.second_stop,
         third: None,
         fired: Some((HOUR, 98.0)),

@@ -98,6 +98,7 @@ pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
         let (q, src, usdt_src) = crate::db::tuner::tuner_deal_sources_on(conn, q)?;
         let mut read = read_on(conn, &q, &src)?;
         overlay_hook_detect(conn, &q, &mut read.deals)?;
+        overlay_leverage(conn, &q, &mut read.deals)?;
         let usdt_src = usdt_src.resolve(conn, &q)?;
         match usdt_src {
             Some(usdt_src) => overlay_usdt_profit(conn, &q, &usdt_src, &mut read.deals)?,
@@ -130,6 +131,78 @@ pub fn read_deals(q: &Query) -> ReadResult<DealsRead> {
         .retain(|deal| is_tunable(&deal.kind, &deal.sell_reason));
     read.untunable = before - read.deals.len();
     Ok(read)
+}
+
+/// Fill each deal's leverage ([`Deal::leverage`]) off the raw report rows: `lev` is no column of
+/// the scan's unified source. Read the way [`overlay_hook_detect`] reads the comment, in the same
+/// snapshot. A source without the column (the legacy table) contributes nothing — its trades run
+/// without the liquidation guards, as before the guards were modelled.
+///
+/// Args:
+///     conn: The snapshot the scan ran in.
+///     q: The floored query the scan ran with — its period bounds are the parameters.
+///     deals: The scanned deals, filled in place.
+fn overlay_leverage(conn: &Connection, q: &Query, deals: &mut [Deal]) -> ReadResult<()> {
+    const CTX: &str = "tuner: ticks deals (leverage)";
+    if deals.is_empty() {
+        return Ok(());
+    }
+    let wanted: std::collections::HashSet<(u64, i64)> =
+        deals.iter().map(|d| (d.core_uid, d.report_uid)).collect();
+    let mut found: HashMap<(u64, i64), f64> = HashMap::new();
+    for src in crate::db::read_sources_res(conn)? {
+        if !["reportuid", "lev", "core_uid", "closedate"]
+            .iter()
+            .all(|col| src.cols.contains(*col))
+        {
+            continue;
+        }
+        let sql = format!(
+            "SELECT \"core_uid\", \"reportuid\", \"lev\" FROM \"{}\"
+             WHERE \"closedate\" BETWEEN ?1 AND ?2 AND \"lev\" > 0",
+            src.table
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
+        // The same widening as the hook detect's read: `closedate` is the core's own clock, the
+        // bounds are true UTC, and the scanned keys (`wanted`) are what actually select.
+        let mut rows = stmt
+            .query(rusqlite::params![
+                q.from
+                    .saturating_add(i64::from(crate::db::report_axis::MIN_OFFSET_SECS)),
+                q.to.saturating_add(i64::from(crate::db::report_axis::MAX_OFFSET_SECS))
+            ])
+            .map_err(|e| read_fail_on(conn, CTX, e))?;
+        while let Some(r) = rows.next().map_err(|e| read_fail_on(conn, CTX, e))? {
+            let key = (
+                r.get::<_, Option<i64>>(0)
+                    .map_err(|e| read_fail_on(conn, CTX, e))?
+                    .unwrap_or(0) as u64,
+                r.get::<_, Option<i64>>(1)
+                    .map_err(|e| read_fail_on(conn, CTX, e))?
+                    .unwrap_or(0),
+            );
+            if !wanted.contains(&key) {
+                continue;
+            }
+            let leverage = r
+                .get::<_, Option<f64>>(2)
+                .map_err(|e| read_fail_on(conn, CTX, e))?
+                .filter(|lev| lev.is_finite() && *lev > 0.0);
+            if let Some(leverage) = leverage {
+                found.entry(key).or_insert(leverage);
+            }
+        }
+    }
+    for deal in deals.iter_mut() {
+        deal.leverage = found.get(&(deal.core_uid, deal.report_uid)).copied();
+    }
+    log::info!(
+        target: crate::diagnostics::TICKS_AXIS_TARGET,
+        "[x] ticks deals: leverage read for {} of {} deal(s)",
+        found.len(),
+        deals.len()
+    );
+    Ok(())
 }
 
 /// Keep a parsed strike detect only for MoonStrike after kind resolution.
@@ -341,6 +414,8 @@ fn read_on(conn: &Connection, q: &Query, src: &str) -> ReadResult<DealsRead> {
             strike_detect: None,
             step_lag_ms: 0.0,
             round_trip_ms: None,
+            // Filled by `overlay_leverage` off the raw report row's `lev`.
+            leverage: None,
             // Filled with the model inputs, once the archive and the parameters are in.
             stop_anchor: None,
             own_entry: None,

@@ -36,6 +36,7 @@
 //!   variant turning SellLevel on sold at a level the core would never have placed.
 
 use super::line::Line;
+use super::stops::liq::LiqGuard;
 use super::{ExitModel, ExitParams, Side, due_by, level_off_buy};
 use crate::db::tuner::ticks::deltas::Bar;
 use crate::db::tuner::ticks::hook::{KIND_MOONHOOK, hook_take_pct};
@@ -473,12 +474,18 @@ impl<'a> PriceDown<'a> {
     /// Arm the timer and its allowed-drop level at the replayed buy.
     pub(super) fn new(params: &'a ExitParams, deal: &Deal, fill: Fill, side: Side) -> Self {
         let pd_on = params.price_down_on();
+        // `DontSellBelowLiq` keeps a step from passing the liquidation level, whatever
+        // `PriceDownAllowedDrop` allows.
+        let floor = side.off_buy(fill.price, params.price_down_allowed_drop_pct);
+        let floor = LiqGuard::new(params, deal, fill.price)
+            .sale_floor()
+            .map_or(floor, |liq| side.farther(floor, liq));
         Self {
             params,
             fill,
             side,
             next: pd_on.then(|| fill.t_ms + (params.price_down_timer_s * 1000.0) as i64),
-            floor: side.off_buy(fill.price, params.price_down_allowed_drop_pct),
+            floor,
             delay_ms: step_ms(params.price_down_delay_s, params.model.step_floor_ms),
             lag_ms: deal.step_lag_ms.max(0.0) as i64,
         }

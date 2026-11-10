@@ -81,6 +81,7 @@ fn deal(uid: i64, strategy_id: i64, core_uid: u64) -> Deal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,

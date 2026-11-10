@@ -49,6 +49,10 @@ pub struct StopAnchor {
     pub delay_s: f64,
     pub fast: bool,
     pub ema: f64,
+    /// `StopAboveLiq` of the fact, compared as stored: another value may hold the stop at
+    /// another level (`exit::stops::liq`), and a variant is then not taken for the fact's stop
+    /// even where the guard happens to move nothing — the cautious reading.
+    pub stop_above_liq_pct: f64,
     /// The ladder the fact ran (`ExitParams::second_stop`, `third_stop`).
     pub second: Option<StopStep>,
     pub third: Option<StopStep>,
@@ -101,6 +105,7 @@ impl StopAnchor {
             delay_s: exit.stop_loss_delay_s,
             fast: exit.fast_stop_loss,
             ema: exit.stop_loss_ema,
+            stop_above_liq_pct: exit.stop_above_liq_pct,
             second: exit.second_stop,
             third: exit.third_stop,
             fired,
@@ -137,6 +142,7 @@ impl StopAnchor {
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast
             && params.stop_loss_ema == self.ema
+            && params.stop_above_liq_pct == self.stop_above_liq_pct
             && params.second_stop == self.second
             && params.third_stop == self.third
     }

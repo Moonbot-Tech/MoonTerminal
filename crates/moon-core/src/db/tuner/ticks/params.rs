@@ -458,6 +458,9 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "AllowedDrop3",
     "UseMarketOrder",
     "StopLossSpread",
+    // The liquidation guards (see `exit::stops::liq`): read, never a knob.
+    "StopAboveLiq",
+    "DontSellBelowLiq",
     // PumpsDetection's one sell move (see `exit::pump_move`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
@@ -917,6 +920,8 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         allowed_drop3_pct: v.num("AllowedDrop3", base.allowed_drop3_pct),
         use_market_order: v.bool("UseMarketOrder", base.use_market_order),
         stop_loss_spread_pct: v.num("StopLossSpread", base.stop_loss_spread_pct),
+        stop_above_liq_pct: v.num("StopAboveLiq", base.stop_above_liq_pct).max(0.0),
+        dont_sell_below_liq: v.bool("DontSellBelowLiq", base.dont_sell_below_liq),
         // Absent means the core default, NO: every live stop of a strategy that omits the field
         // closed as "StopLoss AutoActivated on price drop: BID = …" (173 of 184 with a tape),
         // the book-watching stop, never as the fast stop's "StopLoss Market Sell".
