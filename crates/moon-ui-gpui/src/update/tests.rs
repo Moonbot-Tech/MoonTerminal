@@ -148,8 +148,9 @@ fn helper_failure_reason_round_trips_and_absence_stays_opaque() {
 /// derived install root.
 #[test]
 fn same_installed_target_accepts_a_renamed_install_name() {
-    let canonical = std::path::Path::new(r"C:\install\MoonTerminal.exe");
-    let renamed = std::path::Path::new(r"C:\install\MoonTerminalX.exe");
+    // Relative paths with `/`, which every platform this suite runs on splits the same way.
+    let canonical = std::path::Path::new("install/MoonTerminal.exe");
+    let renamed = std::path::Path::new("install/MoonTerminalX.exe");
 
     assert!(same_installed_target(renamed, canonical));
 }
@@ -159,8 +160,8 @@ fn same_installed_target_accepts_a_renamed_install_name() {
 /// executable.
 #[test]
 fn same_installed_target_rejects_a_target_outside_the_derived_install_root() {
-    let canonical = std::path::Path::new(r"C:\install\MoonTerminal.exe");
-    let outside = std::path::Path::new(r"C:\other\MoonTerminal.exe");
+    let canonical = std::path::Path::new("install/MoonTerminal.exe");
+    let outside = std::path::Path::new("other/MoonTerminal.exe");
 
     assert!(!same_installed_target(outside, canonical));
 }

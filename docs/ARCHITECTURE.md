@@ -1268,7 +1268,9 @@ its `validate` job resolved, checks the GitHub SHA-256 of the Windows artifact w
 and only then publishes the release as Latest. The repository must have release immutability
 enabled: publication locks the verified tag and assets.
 
-### Windows self-update
+### Self-update (Windows and Linux)
+
+The text below describes Windows; Linux differs only where the last part of the section says so.
 
 An ordinary Windows process after `startup::boot` starts one `Backend`-owned discovery loop:
 the first scan runs immediately, later ones are pinned to UTC half-hours with a stable process phase
@@ -1308,7 +1310,34 @@ the safe part of `startup::run`, but strictly before migrations/opening portable
 any failure terminates only the launched child, restores the backup and reopens the previous
 version with a notification; after it, rolling back the old exe is already forbidden, so old
 code does not read a new schema. The helper deletes the backup only after its own read of `healthy`. `cfg/`, `data/`,
-`logs/`, `backups/` and `servers.enc` do not take part in the transaction. On macOS/Linux the updater is disabled.
+`logs/`, `backups/` and `servers.enc` do not take part in the transaction.
+
+**Linux runs the same transaction.** A release offers a Linux build the single executable
+`MoonTerminal-linux-x86_64`, under the same rules as the `.exe`; a release without that asset
+offers it nothing, and a Linux build on another architecture is never offered anything. Only the
+steps that touch a process or replace a file differ, and they live in `moon_core::update::swap`,
+where the Linux probe in CI runs their tests:
+
+- the staged download gets the execute bits its read bits allow, because it is run as the helper;
+- the helper binds the parent through a process descriptor (`pidfd_open`, Linux 5.3 or newer;
+  without it the update fails before anything is replaced and the terminal keeps running) and compares the
+  parent's image with the installed file by device and inode through `/proc/<pid>/exe`;
+- the replacement is a hard link (the backup is a second name for the installed file) followed by
+  one `rename`, so the install path names a complete executable at every instant; the new file
+  takes over the old one's mode; rollback is one `rename` back.
+
+The installed file's name is not pinned on either platform — the binding is the parent process,
+not the name — so a renamed copy updates like any other. The directory holding the executable
+must be writable: the transaction lives beside it in `.moonterminal-update/<nonce>/`.
+
+On macOS the button downloads the verified `.dmg` into Downloads and opens it; no helper runs.
+A target releases carry no terminal for never starts discovery.
+
+One consumer reads the discovery for something other than the button: the station's version is
+judged against the newest known release. A scan that finds no candidate proves "this build is the
+newest" only where every release carries the platform's asset, which the release pipeline
+guarantees for Windows and macOS and not yet for Linux; there the newest release stays unknown
+until a candidate appears.
 
 The trust boundary is HTTPS, an immutable GitHub Release and its SHA-256 metadata. The release workflow
 serializes publication per tag; the administrative `RELEASE_ADMIN_TOKEN` is allowed only in

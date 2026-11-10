@@ -6,8 +6,16 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use super::*;
-use crate::update::release::{GitHubRelease, platform_asset_name};
+use crate::update::release::GitHubRelease;
 use crate::update::{BuildIdentity, GitHubReleaseClient, UpdateEligibility};
+
+/// The terminal asset of the platform running this suite.
+///
+/// Every target the suite runs on ships a terminal; one that does not has no discovery to test.
+fn platform_asset_name() -> &'static str {
+    crate::update::release::platform_asset_name()
+        .expect("this suite runs only on a target releases carry a terminal for")
+}
 
 /// Comparing only major/minor inside `greatest_eligible` would keep `v0.24.0` ahead of
 /// `v0.24.1`, so users would never see the available patch update.
@@ -324,7 +332,7 @@ fn each_session_offers_only_the_asset_it_installs() {
         BuildIdentity::from_release_base("v0.21"),
         GitHubReleaseClient::for_test(&server.url),
     );
-    station.asset_name = "moon-station-x86_64";
+    station.asset_name = Some("moon-station-x86_64");
 
     assert_eq!(
         terminal.scan_at(1_000).unwrap().eligibility,

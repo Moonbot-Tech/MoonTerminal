@@ -732,8 +732,9 @@ fn the_macos_probe_is_diagnostic_and_outside_the_gating_build() {
 /// `continue-on-error` — a platform that is not a gate would then redden main — or quietly
 /// hollowed out while staying green: built on the runner's own image instead of the bare
 /// container (which stops proving the documented package list), the build narrowed to a `check`
-/// that links nothing, or the smoke run dropped or chained to swallow its exit code, so a binary
-/// is uploaded that nothing ever started.
+/// that links nothing, the smoke run dropped or chained to swallow its exit code, so a binary
+/// is uploaded that nothing ever started, or the Linux-only update tests dropped, which no other
+/// job runs.
 #[test]
 fn the_linux_probe_is_diagnostic_builds_in_a_bare_container_and_starts_the_binary() {
     assert!(
@@ -771,6 +772,13 @@ fn the_linux_probe_is_diagnostic_builds_in_a_bare_container_and_starts_the_binar
     assert!(
         build.iter().any(|line| line.trim() == expected),
         "the Linux probe must link the release terminal with `{expected}`"
+    );
+    let expected =
+        "run: cargo test -p moon-core --lib 'update::' --target x86_64-unknown-linux-gnu";
+    assert!(
+        build.iter().any(|line| line.trim() == expected),
+        "the Linux probe must run `{expected}` — the self-update's Linux file and process steps \
+         compile on Linux only, and no other job would ever execute their tests"
     );
 
     let smoke = job_body(&probe, LINUX_SMOKE_JOB).expect("Linux smoke job");

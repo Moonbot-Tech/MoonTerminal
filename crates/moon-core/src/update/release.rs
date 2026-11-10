@@ -8,29 +8,36 @@ use serde::Deserialize;
 const DOWNLOAD_PREFIX: &str = "https://github.com/Moonbot-Tech/MoonTerminal/releases/download/";
 const WINDOWS_ASSET_NAME: &str = "MoonTerminal.exe";
 const MACOS_ASSET_NAME: &str = "MoonTerminal.dmg";
+/// The Linux terminal is one executable file, published under this exact name. Frozen once a
+/// release carries it: every installed Linux build looks for precisely this asset.
+const LINUX_X86_64_ASSET_NAME: &str = "MoonTerminal-linux-x86_64";
 pub(super) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests;
 
-/// Exact release asset name the update path installs on one target OS.
+/// Exact release asset name the update path installs on one target.
 ///
 /// Args:
 ///     target_os: Value of `std::env::consts::OS` for the build being served.
+///     target_arch: Value of `std::env::consts::ARCH` for the build being served.
 ///
 /// Returns:
-///     `MoonTerminal.dmg` on macOS and `MoonTerminal.exe` everywhere else.
-pub(super) fn asset_name_for_os(target_os: &str) -> &'static str {
-    if target_os == "macos" {
-        MACOS_ASSET_NAME
-    } else {
-        WINDOWS_ASSET_NAME
+///     `MoonTerminal.dmg` on macOS, `MoonTerminal.exe` on Windows, `MoonTerminal-linux-x86_64` on
+///     x86_64 Linux, and `None` for a target releases carry no terminal for. `None` rather than
+///     a fallback name: a build must never be offered another platform's executable.
+pub(super) fn asset_name_for_target(target_os: &str, target_arch: &str) -> Option<&'static str> {
+    match (target_os, target_arch) {
+        ("macos", _) => Some(MACOS_ASSET_NAME),
+        ("windows", _) => Some(WINDOWS_ASSET_NAME),
+        ("linux", "x86_64") => Some(LINUX_X86_64_ASSET_NAME),
+        _ => None,
     }
 }
 
-/// Exact release asset name for the platform this binary was compiled for.
-pub(super) fn platform_asset_name() -> &'static str {
-    asset_name_for_os(std::env::consts::OS)
+/// Exact release asset name for the platform this binary was compiled for, if releases carry one.
+pub(super) fn platform_asset_name() -> Option<&'static str> {
+    asset_name_for_target(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 /// Exact release asset name of the station binary for one CPU architecture.
@@ -150,8 +157,8 @@ pub struct AvailableRelease {
     version: ReleaseVersion,
     /// Exact Git tag returned by the immutable release metadata.
     release_tag: String,
-    /// Exact asset the discovery looked for: `MoonTerminal.exe`, `MoonTerminal.dmg`, or the
-    /// station's `moon-station-<arch>`.
+    /// Exact asset the discovery looked for: `MoonTerminal.exe`, `MoonTerminal.dmg`,
+    /// `MoonTerminal-linux-x86_64`, or the station's `moon-station-<arch>`.
     asset: ReleaseAsset,
 }
 
@@ -225,7 +232,7 @@ struct GitHubAsset {
 ///
 /// Args:
 ///     release: One bounded release-list record borrowed from the page cache.
-///     asset_name: Exact asset name from [`asset_name_for_os`] or [`station_asset_name`].
+///     asset_name: Exact asset name from [`asset_name_for_target`] or [`station_asset_name`].
 ///
 /// Returns:
 ///     A cloned install candidate when every stable immutable metadata check passes.

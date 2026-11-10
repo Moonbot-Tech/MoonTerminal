@@ -109,7 +109,9 @@ pub struct DiscoveryResult {
 pub struct ReleaseDiscovery {
     client: GitHubReleaseClient,
     identity: BuildIdentity,
-    asset_name: &'static str,
+    /// `None` on a target releases carry no terminal for: every scan then answers `Unsupported`
+    /// without a request.
+    asset_name: Option<&'static str>,
     pages: [Option<CachedReleasePage>; MAX_RELEASE_PAGES],
     page_two_refresh_at: u64,
 }
@@ -123,7 +125,7 @@ impl ReleaseDiscovery {
     /// Returns:
     ///     A new HTTPS-only discovery session with an empty page cache.
     pub fn new(identity: BuildIdentity) -> Self {
-        Self::for_asset(identity, platform_asset_name())
+        Self::with_client(identity, GitHubReleaseClient::new())
     }
 
     /// Create a production HTTPS discovery session for one exact release asset — the station's
@@ -137,7 +139,7 @@ impl ReleaseDiscovery {
     ///     A new HTTPS-only discovery session with an empty page cache.
     pub fn for_asset(identity: BuildIdentity, asset_name: &'static str) -> Self {
         let mut discovery = Self::with_client(identity, GitHubReleaseClient::new());
-        discovery.asset_name = asset_name;
+        discovery.asset_name = Some(asset_name);
         discovery
     }
 
@@ -181,7 +183,7 @@ impl ReleaseDiscovery {
     /// Errors:
     ///     Returns a typed failure without committing an incomplete page snapshot.
     fn scan_at(&mut self, now_unix: u64) -> Result<DiscoveryResult, DiscoveryError> {
-        let Some(baseline) = self.identity.baseline() else {
+        let (Some(baseline), Some(asset_name)) = (self.identity.baseline(), self.asset_name) else {
             return Ok(DiscoveryResult {
                 eligibility: UpdateEligibility::Unsupported,
                 defer_until_unix: None,
@@ -202,7 +204,7 @@ impl ReleaseDiscovery {
 
         if first_len < RELEASES_PER_PAGE {
             staged[1] = None;
-            let eligibility = eligibility_from_pages(&staged, baseline, self.asset_name)?;
+            let eligibility = eligibility_from_pages(&staged, baseline, asset_name)?;
             self.pages = staged;
             self.page_two_refresh_at = 0;
             return Ok(DiscoveryResult {
@@ -233,7 +235,7 @@ impl ReleaseDiscovery {
             next_page_two_refresh_at = now_unix.saturating_add(PAGE_SENTINEL_SECONDS);
         }
 
-        let eligibility = eligibility_from_pages(&staged, baseline, self.asset_name)?;
+        let eligibility = eligibility_from_pages(&staged, baseline, asset_name)?;
         self.pages = staged;
         self.page_two_refresh_at = next_page_two_refresh_at;
         Ok(DiscoveryResult {

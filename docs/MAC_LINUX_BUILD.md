@@ -233,6 +233,12 @@ Debian 12, or anything more recent.
 
 Data and logs live under `~/.config/com.moonbot.moonterminal/`.
 
+The terminal updates itself in place, as on Windows, once a release carries the
+`MoonTerminal-linux-x86_64` asset: the header button appears, the download is verified against
+the release's SHA-256, and the executable is replaced with a rollback if the new one does not
+start. Keep the file in a directory you can write to — the update works beside it, in
+`.moonterminal-update/`. Until a release carries that asset, a Linux build is offered nothing.
+
 ### Build from source
 
 Build-time packages for Ubuntu/Debian, plus Rust from [rustup](https://rustup.rs) (the repository's

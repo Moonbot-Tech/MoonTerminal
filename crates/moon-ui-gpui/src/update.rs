@@ -1,4 +1,10 @@
-//! Process-wide update state and the acknowledged Windows replacement helper.
+//! Process-wide update state and the acknowledged replacement helper of Windows and Linux.
+//!
+//! The transaction is one on both: the verified download runs as a helper, waits for the old
+//! application to exit, swaps the executable while keeping a backup, starts the new one and rolls
+//! back unless it reports healthy. Only the steps that touch a process or replace a file differ,
+//! and they sit at the end of this file — Windows calls its own API there, Linux calls
+//! `moon_core::update::swap`.
 //!
 //! On macOS the same button downloads the verified `.dmg` into Downloads and opens it; the user
 //! drags the app into Applications, so no helper, quit or replacement runs there.
@@ -324,7 +330,8 @@ pub(crate) struct UpdateController {
     /// Disk image saved and opened for `candidate` (macOS), reopened on the next click.
     installer_image: Option<PathBuf>,
     polling_started: bool,
-    /// A release scan has completed at least once: with no candidate, this build is the latest.
+    /// A release scan has completed at least once. What a scan without a candidate proves is
+    /// [`Self::latest_release`]'s decision, not this flag's.
     scanned: bool,
     install_generation: u64,
 }
@@ -348,11 +355,13 @@ impl UpdateController {
     }
 
     /// The newest stable release this terminal's discovery knows of: its candidate, or after a
-    /// completed scan without one the terminal's own release. `None` before any scan finished.
+    /// completed scan without one the terminal's own release — where a scan without a candidate
+    /// proves that ([`EVERY_RELEASE_CARRIES_THIS_PLATFORM`]). `None` before any scan finished,
+    /// and wherever a scan cannot settle it.
     pub(crate) fn latest_release(&self) -> Option<ReleaseVersion> {
         match &self.candidate {
             Some(candidate) => Some(candidate.version()),
-            None if self.scanned => terminal_release(),
+            None if self.scanned && EVERY_RELEASE_CARRIES_THIS_PLATFORM => terminal_release(),
             None => None,
         }
     }
@@ -366,6 +375,11 @@ impl UpdateController {
         let baseline = option_env!("MOONTERMINAL_RELEASE_BASE").unwrap_or("unknown");
         let identity = BuildIdentity::from_release_base(baseline);
         if identity.baseline().is_none() {
+            return;
+        }
+        // A target releases carry no terminal for can never be offered one, so it holds no
+        // timer and never counts as having scanned.
+        if !moon_core::update::terminal_asset_exists_for_this_target() {
             return;
         }
         if !entity.update(cx, |this, _| claim_polling(&mut this.polling_started)) {
@@ -505,9 +519,18 @@ impl UpdateController {
     }
 }
 
+/// Whether every release is known to carry this platform's terminal. Only then does a completed
+/// scan without a candidate mean "this build is the newest release".
+///
+/// True where the release pipeline builds and verifies the asset before it publishes: Windows
+/// and macOS. Not yet Linux — `release.yml` does not publish `MoonTerminal-linux-x86_64`, so a
+/// Linux scan that finds nothing has learned nothing about the releases newer than this build.
+/// Extend this in the change that makes the release pipeline publish and verify that asset.
+const EVERY_RELEASE_CARRIES_THIS_PLATFORM: bool = cfg!(any(windows, target_os = "macos"));
+
 /// What a successful click left behind, which decides the next header state.
 enum InstallOutcome {
-    /// Windows: the helper owns the replacement and this process quits.
+    /// Windows and Linux: the helper owns the replacement and this process quits.
     Restart,
     /// macOS: the verified disk image at this path was opened for the user.
     Opened(PathBuf),
@@ -1100,12 +1123,17 @@ fn same_installed_target(actual: &Path, canonical: &Path) -> bool {
     actual.parent() == canonical.parent() && actual.file_name().is_some()
 }
 
-/// Compare two existing Windows paths through canonical filesystem identities.
+/// Compare two existing paths through canonical filesystem identities.
+///
+/// Case is folded on Windows only, where the filesystem folds it too. Elsewhere `Moon` and
+/// `moon` are two files, and treating them as one would let a look-alike name pass for the
+/// staged helper.
 fn same_file_path(left: &Path, right: &Path) -> bool {
     match (fs::canonicalize(left), fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left
+        (Ok(left), Ok(right)) if cfg!(windows) => left
             .to_string_lossy()
             .eq_ignore_ascii_case(&right.to_string_lossy()),
+        (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
 }
@@ -1149,7 +1177,8 @@ fn cleanup_staged_download(staged: &Path) {
     }
 }
 
-/// Remove the staged helper after Windows releases its running executable handle.
+/// Remove the staged helper once it has exited: Windows keeps a running executable locked, and
+/// on every platform its transaction directory is not empty until the file is gone.
 fn schedule_completed_staging_cleanup(staged: PathBuf) {
     std::thread::spawn(move || {
         let Some(directory) = staged.parent().map(Path::to_path_buf) else {
@@ -1259,7 +1288,10 @@ fn required_arg<'a>(args: &'a [String], index: usize, label: &str) -> anyhow::Re
 #[cfg(windows)]
 type ParentHandle = windows::Win32::Foundation::HANDLE;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+type ParentHandle = moon_core::update::swap::ParentProcess;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 type ParentHandle = ();
 
 /// Open the exact parent process for synchronization before acknowledging readiness.
@@ -1299,10 +1331,19 @@ fn open_parent(pid: u32, target: &Path) -> anyhow::Result<ParentHandle> {
     Ok(handle)
 }
 
+/// Bind the exact parent process and prove its image is the installed executable.
+///
+/// The Linux counterpart of the Windows function above: a process descriptor instead of a
+/// handle, and the image compared by file identity through `/proc`.
+#[cfg(target_os = "linux")]
+fn open_parent(pid: u32, target: &Path) -> anyhow::Result<ParentHandle> {
+    moon_core::update::swap::ParentProcess::open(pid, target)
+}
+
 /// Reject helper execution on unsupported platforms.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn open_parent(_pid: u32, _target: &Path) -> anyhow::Result<ParentHandle> {
-    bail!("self-update is supported only on Windows")
+    bail!("self-update is supported only on Windows and Linux")
 }
 
 /// Close an opened parent handle when the helper transaction is not committed.
@@ -1314,11 +1355,20 @@ fn close_parent(handle: ParentHandle) {
     let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
 }
 
+/// Release the bound parent when the helper transaction is not committed.
+///
+/// Args:
+///     handle: Process descriptor opened before publishing readiness; dropping it closes it.
+#[cfg(target_os = "linux")]
+fn close_parent(handle: ParentHandle) {
+    drop(handle);
+}
+
 /// Discard the unsupported-platform parent placeholder.
 ///
 /// Args:
 ///     _handle: Unsupported-platform placeholder value.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn close_parent(_handle: ParentHandle) {}
 
 /// Wait for the parent to exit normally and close its synchronization handle.
@@ -1337,10 +1387,16 @@ fn wait_parent(handle: ParentHandle) -> anyhow::Result<()> {
     }
 }
 
-/// Unreachable non-Windows parent wait retained for cross-platform compilation.
-#[cfg(not(windows))]
+/// Wait for the bound parent to exit, without a deadline, like the Windows function above.
+#[cfg(target_os = "linux")]
+fn wait_parent(handle: ParentHandle) -> anyhow::Result<()> {
+    handle.wait_for_exit()
+}
+
+/// Unreachable parent wait retained for cross-platform compilation.
+#[cfg(not(any(windows, target_os = "linux")))]
 fn wait_parent(_handle: ParentHandle) -> anyhow::Result<()> {
-    bail!("self-update is supported only on Windows")
+    bail!("self-update is supported only on Windows and Linux")
 }
 
 /// Atomically replace the installed executable while retaining a backup.
@@ -1349,10 +1405,16 @@ fn replace_target(target: &Path, incoming: &Path, backup: &Path) -> anyhow::Resu
     replace_file(target, incoming, Some(backup)).context("replace installed executable")
 }
 
+/// Atomically replace the installed executable while retaining a backup.
+#[cfg(target_os = "linux")]
+fn replace_target(target: &Path, incoming: &Path, backup: &Path) -> anyhow::Result<()> {
+    moon_core::update::swap::replace_keeping_backup(target, incoming, backup)
+}
+
 /// Reject replacement on unsupported platforms.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn replace_target(_target: &Path, _incoming: &Path, _backup: &Path) -> anyhow::Result<()> {
-    bail!("self-update is supported only on Windows")
+    bail!("self-update is supported only on Windows and Linux")
 }
 
 /// Restore the verified backup over a failed replacement.
@@ -1365,10 +1427,16 @@ fn restore_backup(target: &Path, backup: &Path) -> anyhow::Result<()> {
     }
 }
 
+/// Restore the verified backup over a failed replacement.
+#[cfg(target_os = "linux")]
+fn restore_backup(target: &Path, backup: &Path) -> anyhow::Result<()> {
+    moon_core::update::swap::restore_backup(target, backup)
+}
+
 /// Reject rollback on unsupported platforms.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn restore_backup(_target: &Path, _backup: &Path) -> anyhow::Result<()> {
-    bail!("self-update is supported only on Windows")
+    bail!("self-update is supported only on Windows and Linux")
 }
 
 /// Call `ReplaceFileW` with stable UTF-16 buffers.

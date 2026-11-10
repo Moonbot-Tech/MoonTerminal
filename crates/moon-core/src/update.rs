@@ -1,9 +1,11 @@
 //! Stable GitHub release discovery and verified update downloads.
 //!
-//! This module deliberately stops at a verified download: the staged Windows executable, the
-//! macOS disk image, or the station's Linux binary. Process coordination, replacement, restart,
-//! and rollback belong to the Windows GPUI shell; on macOS the shell only opens the image; the
-//! station's binary is installed by its server helper (`moon-station-admin update-from-release`).
+//! This module deliberately stops at a verified download: the staged Windows or Linux executable,
+//! the macOS disk image, or the station's Linux binary. Process coordination, replacement,
+//! restart, and rollback belong to the GPUI shell on Windows and Linux; on macOS the shell only
+//! opens the image; the station's binary is installed by its server helper
+//! (`moon-station-admin update-from-release`). The one exception is [`swap`]: the Linux file and
+//! process steps of the shell's transaction live here, where the Linux CI job can test them.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -11,6 +13,8 @@ use std::time::Duration;
 mod discovery;
 mod download;
 mod release;
+#[cfg(target_os = "linux")]
+pub mod swap;
 
 pub use discovery::{DiscoveryError, DiscoveryResult, DiscoveryRetry, ReleaseDiscovery};
 pub use release::{
@@ -20,6 +24,14 @@ pub use release::{
 
 #[cfg(test)]
 mod tests;
+
+/// Whether releases carry a terminal for the target this binary was compiled for.
+///
+/// `false` means no release can ever be offered here — Linux on an architecture other than
+/// x86_64, or another OS altogether — so the caller has no reason to start discovery.
+pub fn terminal_asset_exists_for_this_target() -> bool {
+    release::platform_asset_name().is_some()
+}
 
 const RELEASES_URL: &str = "https://api.github.com/repos/Moonbot-Tech/MoonTerminal/releases";
 

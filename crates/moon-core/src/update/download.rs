@@ -29,7 +29,21 @@ pub(super) fn download_verified(
 ) -> anyhow::Result<PathBuf> {
     let staged_path = crate::config::paths::update_staged_executable_path(nonce)
         .context("resolve canonical update staging path")?;
-    download_verified_to(client, release, &staged_path)
+    let staged = download_verified_to(client, release, &staged_path)?;
+    // The staged file is the helper the transaction runs next, and a download is created
+    // without execute bits. Windows has no such bit; macOS never stages an executable.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = super::swap::mark_executable(&staged) {
+        // The caller never receives the path of a download this function failed to hand over,
+        // so it cannot clean it up: remove the file, and its transaction directory if that
+        // leaves it empty.
+        let _ = fs::remove_file(&staged);
+        if let Some(directory) = staged.parent() {
+            let _ = fs::remove_dir(directory);
+        }
+        return Err(error);
+    }
+    Ok(staged)
 }
 
 /// Download one eligible asset to an exact caller-chosen path through the same verified flow.
