@@ -178,14 +178,23 @@ Releases carry no graphical terminal for Linux: the `.exe`, the `.dmg`, and the 
 binaries, which are a different program. There are two ways to get the terminal, and the
 diagnostic `Linux probe` workflow (`.github/workflows/linux-probe.yml`) exercises both on every
 pull request and every push to `main`: it builds the terminal in a bare `ubuntu:22.04` container
-and then starts the result on a virtual display in bare `ubuntu:22.04` and `ubuntu:24.04`
-containers. The package lists below are the ones those containers install — a contract test
-(`the_build_guide_and_the_linux_probe_install_the_same_packages`) fails when the two differ.
+and then starts the result on a virtual display in bare `ubuntu:22.04`, `ubuntu:24.04` and
+`debian:13` containers. The package lists below are the ones those containers install — a
+contract test (`the_build_guide_and_the_linux_probe_install_the_same_packages`) fails when the
+two differ.
 
 What the probe does NOT cover: any distribution outside the Debian/Ubuntu family, a Wayland
-session (the virtual display is X11), and a real GPU (the container renders through Mesa's
-software Vulkan driver). Other distributions need the same libraries under their own package
-names.
+session (the virtual display is X11), a real GPU (the container renders through Mesa's
+software Vulkan driver), and the terminal's own use of the Secret Service (the run uses
+`--fixture`, which configures its core in plaintext). Other distributions need the same
+libraries under their own package names.
+
+Known limit of old software rendering, measured on 2026-11-10 with one binary: where no GPU
+driver is in use and Vulkan falls back to Mesa's software rasterizer, Mesa 22.3.6 (Debian 12)
+and 23.2.1 (Ubuntu 22.04) leave the terminal's window blank, while Mesa 25.0.7 draws it — on
+Debian 13, on Ubuntu 24.04, and on Ubuntu 22.04 with only Mesa replaced. That is a virtual
+machine or a remote desktop without GPU acceleration. A machine on its real GPU driver takes a
+different presentation path, which nobody has tested on those two older releases yet.
 
 ### Prebuilt binary
 

@@ -20,6 +20,14 @@
 # captured frame is blank. A blank frame is measured, not assumed: a window of one flat colour has
 # a handful of distinct colours, a drawn interface has thousands.
 #
+# `SMOKE_BLANK_FRAME=report` turns the blank-frame failure into a logged note, for an image whose
+# software Vulkan driver is known not to show the window at all. Measured on 2026-11-10 with one
+# binary: Mesa 22.3.6 (debian:12) and 23.2.1 (ubuntu:22.04) leave the terminal's 32-bit window one
+# flat colour while presenting an ordinary 24-bit window (`vkcube`) correctly; Mesa 25.0.7 draws it
+# — on debian:13, on ubuntu:24.04's own Mesa, and on ubuntu:22.04 with nothing but Mesa replaced.
+# So that blank frame is the old rasterizer's presentation path, not the terminal, and on such an
+# image the run still proves the binary loads, opens its window and stays up.
+#
 # The frame that is judged is the terminal's OWN window, read by its id. The whole screen is
 # captured beside it for the artifact only: the window uses a 32-bit visual on a 24-bit screen,
 # and what a root-window capture shows for such a child is left to the X server.
@@ -52,6 +60,12 @@ window_wait_secs=120
 settle_secs=20
 # Fewer distinct colours than this is a blank or flat frame.
 min_colours=256
+# What a blank frame means on this image: `fail` (the default) or `report`.
+blank_frame=${SMOKE_BLANK_FRAME:-fail}
+if [ "$blank_frame" != "fail" ] && [ "$blank_frame" != "report" ]; then
+    echo "SMOKE_BLANK_FRAME must be 'fail' or 'report', not '$blank_frame'" >&2
+    exit 2
+fi
 
 display=:99
 mkdir -p "$out"
@@ -177,6 +191,12 @@ import -display "$display" -window "$window_id" "$out/window.png"
 colours=$(identify -format '%k' "$out/window.png")
 echo "linux-gui-smoke: the terminal's window has ${colours} distinct colours"
 if [ "$colours" -lt "$min_colours" ]; then
+    if [ "$blank_frame" = "report" ]; then
+        echo "linux-gui-smoke: the terminal's window is blank (${colours} distinct colours);" \
+            "this image is known to show nothing through its software Vulkan driver"
+        echo "linux-gui-smoke: PASS (started and stayed up; frame not judged)"
+        exit 0
+    fi
     fail "the terminal's window is blank (${colours} distinct colours, need ${min_colours})"
 fi
 

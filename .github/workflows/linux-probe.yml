@@ -9,9 +9,10 @@ permissions:
 #                 in build.yml builds only `moon-station`, so the wgpu chart backend, the X11 and
 #                 Wayland platform code and every `cfg(target_os = "linux")` path in the GUI crates
 #                 are compiled here and nowhere else. Uploads the binary as an artifact.
-#   Linux smoke — starts that binary on a virtual display in an image that carries only run-time
-#                 packages, and fails unless a window with a drawn frame comes up. Uploads the
-#                 captured frame and the logs.
+#   Linux smoke — starts that binary on a virtual display in images that carry only run-time
+#                 packages, and fails unless a window with a drawn frame comes up (on the one
+#                 image whose software Vulkan driver cannot show it: unless the window comes up
+#                 and the process stays alive). Uploads the captured frame and the logs.
 # Read their logs; they never block.
 #
 # BOTH JOBS RUN IN A BARE DISTRIBUTION CONTAINER, not on the runner's own image, and that is the
@@ -23,7 +24,7 @@ permissions:
 #
 # The build image is the OLDEST release the binary is meant to run on, because a binary linked
 # against one glibc runs on that version and newer, never older. The smoke matrix then starts the
-# same file on the newer release as well.
+# same file on newer releases as well.
 #
 # THE LOCKFILE CONTRACT, implemented in the same three steps as build.yml's compiling jobs.
 # `Cargo.lock` is committed, so third-party versions move only in a deliberate commit. The probe
@@ -142,10 +143,20 @@ jobs:
     continue-on-error: true
     timeout-minutes: 20
     strategy:
-      # One image's failure says nothing about the other; let both report.
+      # One image's failure says nothing about the others; let each report.
       fail-fast: false
       matrix:
-        image: ["ubuntu:22.04", "ubuntu:24.04"]
+        include:
+          # The build image itself: proves the binary loads and stays up on the glibc it was
+          # linked against. Its software Vulkan driver (Mesa 23.2.1) shows nothing in the
+          # terminal's 32-bit window, so a blank frame is reported there, not failed — the
+          # measurements are in the smoke script's header.
+          - image: "ubuntu:22.04"
+            blank-frame: report
+          - image: "ubuntu:24.04"
+            blank-frame: fail
+          - image: "debian:13"
+            blank-frame: fail
     steps:
       # The complete run-time list for a downloaded binary, quoted by docs/MAC_LINUX_BUILD.md:
       # the libraries the binary links (the probe job's `ldd` report) or opens once it runs
@@ -178,6 +189,8 @@ jobs:
       - name: Unpack the binary
         run: tar -xzf dist/moonterminal-linux-x86_64.tar.gz -C dist
       - name: Start the terminal on a virtual display
+        env:
+          SMOKE_BLANK_FRAME: ${{ matrix.blank-frame }}
         run: bash .github/scripts/linux-gui-smoke.sh dist/moonterminal crates/moon-core/fixtures smoke-out
       - uses: actions/upload-artifact@v7
         # The frame and the logs matter most when the step above failed.
