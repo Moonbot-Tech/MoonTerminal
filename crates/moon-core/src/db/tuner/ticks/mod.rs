@@ -292,9 +292,9 @@ pub struct Deal {
     /// Factual drop detect parsed from this trade's comment, kept only on DropsDetection.
     pub drops_detect: Option<drops::DropsDetect>,
     /// The take the core actually placed on a hook trade, per cent from the buy before the delta
-    /// modifiers, as the same comment states it. It fixes the calibrated depth
-    /// ([`record::placed_hook_depth`]) for fixed depth-percent variants. Fixed=NO keeps only
-    /// this stated take at the fact's level; variants at another level are refused.
+    /// modifiers, as the same comment states it. It fixes the depth every variant's take is
+    /// placed off ([`record::placed_hook_depth`]); a `HookSellFixed=NO` take without it is
+    /// unknown.
     pub hook_stated_take_pct: Option<f64>,
     /// MoonStrike's depth and `TradePrice`, parsed from its detect comment.
     /// `None` for other kinds and comments without a usable strike detect.

@@ -249,13 +249,14 @@ pub fn entry_placement(deal: &Deal, lines: OwnLines<'_>) -> Option<f64> {
 /// sale sat on the stated take to its hundredth (GEOD 7.467 % against 7.47 %, W3GG 28.567 against
 /// 28.56), a tenth to a half above `Depth · HookSellLevel` (5.55, 19.64).
 ///
-/// Both branches retain this depth as the fact's level calibration. Fixed=NO's documented
-/// spike rule does not reproduce the core's stated takes: only the stated take at the fact's
-/// own level is kept, other levels are refused. Fixed=YES keeps the depth-percent rule.
+/// Both `HookSellFixed` branches read their depth here, and a variant at another level scales
+/// the stated take by the level ratio. For Fixed=NO it is the only depth there is: that branch
+/// counts the depth from the buy, which the comment's `Depth` is not (`ExitModel::take_known`).
 /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
 ///
 /// `None` — the comment's depth stays — for every other kind, without a stated take, and with a
-/// level of zero.
+/// level of zero. A level of zero leaves such a trade's own take unknown (`verify` asks
+/// `ExitModel::take_known` with the trade's own parameters), so it never reaches a variant.
 pub fn placed_hook_depth(deal: &Deal, exit: &ExitParams) -> Option<f64> {
     if deal.kind != KIND_MOONHOOK || exit.hook_sell_level_pct <= 0.0 {
         return None;

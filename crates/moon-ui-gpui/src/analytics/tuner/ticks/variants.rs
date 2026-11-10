@@ -974,6 +974,7 @@ pub(super) fn miss_note(miss: SearchMiss, floor: i64) -> String {
         )
         .to_string(),
         SearchMiss::Corridor => t!("analytics.ticks.sugg_corridor").to_string(),
+        SearchMiss::UnknownTake => t!("analytics.ticks.sugg_unknown_take").to_string(),
         SearchMiss::Unclosed => t!("analytics.ticks.sugg_unclosed").to_string(),
         SearchMiss::Risk => t!("analytics.ticks.sugg_risk").to_string(),
         SearchMiss::Nothing => t!("analytics.ticks.sugg_none").to_string(),

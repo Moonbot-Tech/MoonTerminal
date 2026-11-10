@@ -2,7 +2,7 @@
 //! `SellLevel*`.
 //!
 //! - **The take** is `SellPrice` per cent above the fill for every kind but three: MoonHook, whose
-//!   take uses a fixed depth share or preserves its stated factual take
+//!   take is `HookSellLevel` per cent of the depth it was placed off
 //!   ([`crate::db::tuner::ticks::hook`]), MoonStrike, whose take is `MStrikeSellLevel` per cent
 //!   of the strike's span off its detect price ([`crate::db::tuner::ticks::strike`]), and
 //!   Spread, whose take is the edge of the spread it
@@ -164,16 +164,6 @@ impl ExitModel<'_> {
         })
     }
 
-    /// The fact's calibrated hook level, when its stated take defines one.
-    fn hook_fact_level(&self, deal: &Deal) -> Option<f64> {
-        let depth = deal.hook_depth_pct.filter(|v| v.is_finite() && *v > 0.0)?;
-        let stated = deal
-            .hook_stated_take_pct
-            .filter(|v| v.is_finite() && *v > 0.0)?;
-        let level = 100.0 * stated / depth;
-        level.is_finite().then_some(level)
-    }
-
     /// A MoonStrike's take price before the modifiers — `MStrikeSellLevel` of the strike's span
     /// ([`strike_take_level`]) — or `None` for every other kind and for a strike whose level or
     /// detect is unknown. Non-positive levels have no defined strike take.
@@ -218,8 +208,9 @@ impl ExitModel<'_> {
         (buy.is_finite() && buy > 0.0).then_some(buy)
     }
 
-    /// The percent-path take distance: fixed `HookSellLevel` of the detect depth for MoonHook,
-    /// or the fallback for an unknown non-fixed take; `SellPrice` for other kinds. A MoonStrike
+    /// The percent-path take distance: `HookSellLevel` of the depth the take was placed off for
+    /// MoonHook ([`Self::take_known`] says when that depth is known); `SellPrice` for other kinds.
+    /// A MoonStrike
     /// with its level and detect never reaches it ([`Self::strike_take`] places a price); one
     /// without falls back to `SellPrice` like a hook below.
     ///
@@ -242,8 +233,8 @@ impl ExitModel<'_> {
     /// variant cannot place is one the search cannot run, whatever the fact's own replay did
     /// with the level the core recorded. Per kind:
     ///
-    /// - a MoonHook needs positive depth and level; Fixed=NO also needs a stated take and
-    ///   the fact's calibrated level;
+    /// - a MoonHook needs positive depth and level; Fixed=NO also needs the take the core stated,
+    ///   which is what places its depth (`record::placed_hook_depth`);
     /// - a MoonStrike needs `MStrikeSellLevel` and its detect — the depth and `TradePrice` the
     ///   comment wrote ([`Deal::strike_detect`]), and its calculated buy when adjusted;
     /// - a Spread needs the recorded take and an invertible fact shift when modifiers change;
@@ -261,16 +252,16 @@ impl ExitModel<'_> {
     pub fn take_known(&self, deal: &Deal) -> bool {
         let positive = |v: Option<f64>| v.is_some_and(|x| x.is_finite() && x > 0.0);
         if deal.kind == KIND_MOONHOOK {
-            // Fixed=NO: the documented spike rule does not reproduce the core's stated takes;
-            // only the stated take at the fact's own level is kept, other levels are refused.
-            // Fixed=YES keeps the percent-of-depth rule. Source:
-            // https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
+            // The take is `HookSellLevel` per cent of a depth, so another level scales the take
+            // and moves nothing else. Fixed=YES counts that depth "regardless of the buy price"
+            // (the documentation) — the comment's `Depth` states it; Fixed=NO counts it from
+            // the buy, which the comment does not state — only the take the core placed off it
+            // (`SellPrice: Y%`) does, and `record::placed_hook_depth` reads the depth back off
+            // that take. Without it a non-fixed take is unknown.
+            // Source: https://moonbot.pro/documentation/advanced-strategy-parameters/moonhook-strategy-and-its-parameters
             return positive(Some(self.params.hook_sell_level_pct))
                 && positive(deal.hook_depth_pct)
-                && (self.params.hook_sell_fixed
-                    || self
-                        .hook_fact_level(deal)
-                        .is_some_and(|fact| same_level(self.params.hook_sell_level_pct, fact)));
+                && (self.params.hook_sell_fixed || positive(deal.hook_stated_take_pct));
         }
         if deal.kind == KIND_MOONSTRIKE {
             // Re-checked here though the scan parses only positive numbers: a Deal is also
@@ -290,11 +281,6 @@ impl ExitModel<'_> {
         }
         true
     }
-}
-
-/// Relative equality preserves the fact's exact price without hiding a changed level.
-fn same_level(a: f64, b: f64) -> bool {
-    a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
 }
 
 /// The kind name of Spread as the strategy list spells it.

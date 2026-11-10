@@ -197,9 +197,11 @@ fn modified_take_stops_at_the_buy_for_both_sides() {
     }
 }
 
-/// Guessing a non-fixed hook rule would score unsupported levels; its fact stays bit-exact.
+/// A non-fixed hook's take needs the core's stated take: without it the comment's depth is not
+/// the spike the take was placed off. With it the fact stays bit-exact, and another level scales
+/// that take by the level ratio — 10 % at level 100 is 5 % at level 50.
 #[test]
-fn hook_non_fixed_take_requires_the_stated_fact_level() {
+fn hook_non_fixed_take_scales_the_stated_take() {
     let mut d = deal(false);
     d.kind = KIND_MOONHOOK.into();
     d.hook_depth_pct = Some(10.0);
@@ -229,7 +231,8 @@ fn hook_non_fixed_take_requires_the_stated_fact_level() {
         old.to_bits()
     );
     p.hook_sell_level_pct = 50.0;
-    assert!(!ExitModel::new(&p).take_known(&d));
+    assert!(ExitModel::new(&p).take_known(&d));
+    assert!((ExitModel::new(&p).take_level(&d, &[], fill) - 102.0 * 1.05).abs() < 1e-9);
     d.strike_detect = None;
     p.hook_sell_level_pct = 100.0;
     assert!(ExitModel::new(&p).take_known(&d));
@@ -237,22 +240,6 @@ fn hook_non_fixed_take_requires_the_stated_fact_level() {
         ExitModel::new(&p).take_level(&d, &[], fill).to_bits(),
         old.to_bits()
     );
-}
-
-/// Hook fact-level equality is relative, including levels smaller than one percent.
-#[test]
-fn hook_fact_level_tolerance_is_relative() {
-    let mut d = deal(false);
-    d.kind = KIND_MOONHOOK.into();
-    d.hook_depth_pct = Some(10.0);
-    d.hook_stated_take_pct = Some(0.001);
-    let mut p = ExitParams {
-        hook_sell_level_pct: 0.01 * (1.0 + 0.5e-9),
-        ..ExitParams::default()
-    };
-    assert!(ExitModel::new(&p).take_known(&d));
-    p.hook_sell_level_pct = 0.01 + 0.5e-9;
-    assert!(!ExitModel::new(&p).take_known(&d));
 }
 
 /// A changed Spread modifier must move the archived take once, preserving the fact exactly.

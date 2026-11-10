@@ -98,6 +98,7 @@ fn repeated_point_search_preserves_the_answer() {
             entry_points: 0,
             fills_reused: 52_209,
             cornered: 0,
+            unknown_take: 0,
             unjudged_refused: 0,
         }
     );
