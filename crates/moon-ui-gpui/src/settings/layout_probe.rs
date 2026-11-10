@@ -425,10 +425,10 @@ fn check_words(visual: &mut VisualTestContext) -> Result<(), String> {
             continue;
         };
         // Measured here, not through `common::longest_word_w`, so the check does not trust the
-        // floor it checks.
+        // floor it checks. Only the word split is shared, and it has its own test.
         let need = lead
             + visual.update(|_, cx| {
-                text.split_whitespace()
+                design::unbreakable_units(&text)
                     .map(|word| {
                         if caption {
                             design::ui_caption_text_width(cx, word, 400.0)

@@ -210,9 +210,15 @@ fn time_validation_layout(cx: &mut gpui::TestAppContext) {
                         if matches!(face, 1 | 2 | 4 | 5) {
                             let warn = visual.debug_bounds("time-warning").unwrap();
                             assert!(warn.right() <= root.right() + px(0.5));
-                            assert!(
-                                warn.size.height >= px(if width == 320.0 { 20.0 } else { 10.0 })
-                            );
+                            // The prose gains height where one line cannot hold it. A compact
+                            // script fits a whole warning in 320 px, so two lines are required
+                            // only of a text wider than its box.
+                            let key = warning(&result(face).unwrap()).unwrap();
+                            let one_line = visual.update(|_, cx| {
+                                crate::design::ui_caption_text_width(cx, &rust_i18n::t!(key), 400.0)
+                            });
+                            let wraps = width == 320.0 && one_line > f32::from(warn.size.width);
+                            assert!(warn.size.height >= px(if wraps { 20.0 } else { 10.0 }));
                         }
                     }
                 }

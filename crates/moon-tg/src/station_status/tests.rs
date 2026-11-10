@@ -465,6 +465,7 @@ fn compact_mockup_states_use_supported_html_in_every_locale() {
             "A carga do processador aparece após o primeiro minuto completo.",
         ),
         ("vi", "Tải bộ xử lý xuất hiện sau phút đầu tiên đầy đủ."),
+        ("zh", "处理器负载将在运行满一分钟后显示。"),
     ] {
         let _locale = crate::test_locale::force(locale);
         let mut normal = status(Some(host(vec![file("UNIT_01.db", GIB)])));
@@ -590,7 +591,7 @@ fn compact_files_and_day_peak_keep_aggregate_values() {
 /// Decimal formatting or truncation would widen the approved CPU/resource/file output in chat.
 #[test]
 fn compact_numbers_round_cpu_half_up_and_switch_gb_precision_in_every_locale() {
-    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi", "zh"] {
         let _locale = crate::test_locale::force(locale);
         let unit = if matches!(locale, "ru" | "uk") {
             "ГБ"

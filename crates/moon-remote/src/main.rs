@@ -14,7 +14,7 @@
 //! another terminal; the terminal UI guards removal selections with removal_matches.
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
 //! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | --state | [--token]
-//!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es|uk|tr|pt|vi])
+//!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es|uk|tr|pt|vi|zh])
 //! moon-remote --data <dir> core-move | core-move-start | core-move-finish | core-move-remove …
 //!                                                                             (see move_cli.rs)
 //! moon-remote --data <dir> core-new | core-new-status | core-new-exchanges | core-new-keys …

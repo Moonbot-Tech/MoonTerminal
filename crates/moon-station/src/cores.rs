@@ -51,7 +51,7 @@
 //! [telegram]
 //! mini_app = true
 //! zone = "Europe/Moscow"   # the reports' time zone until a pushed one; UTC when absent
-//! language = "ru"          # ru | en | es | uk | tr | pt | vi; en when absent
+//! language = "ru"          # ru | en | es | uk | tr | pt | vi | zh; en when absent
 //! ```
 //!
 //! A `key =` line is refused rather than ignored: a key in a plain file is exactly what this
@@ -388,8 +388,9 @@ fn telegram(section: TelegramSection, creds: Option<&Path>) -> anyhow::Result<Te
         None => Tz::UTC,
     };
     let language = match section.language {
-        Some(code) => Language::from_code(&code)
-            .ok_or_else(|| anyhow::anyhow!("language {code:?}: ru, en, es, uk, tr, pt or vi"))?,
+        Some(code) => Language::from_code(&code).ok_or_else(|| {
+            anyhow::anyhow!("language {code:?}: ru, en, es, uk, tr, pt, vi or zh")
+        })?,
         None => Language::En,
     };
     let token = credential(creds, TOKEN_CREDENTIAL)

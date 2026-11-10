@@ -129,7 +129,7 @@ fn shipped_catalogues() -> &'static BTreeMap<String, BTreeMap<String, LocaleEntr
 /// Catalogue for one shipped language, shared with every test in this process.
 ///
 /// Args:
-///     lang: Shipped language code (`en`, `ru`, `es`, `uk`, `tr`, `pt`, `vi`).
+///     lang: Shipped language code (`en`, `ru`, `es`, `uk`, `tr`, `pt`, `vi`, `zh`).
 ///
 /// Returns:
 ///     Shared key map. Panics when `lang` is not in [`SHIPPED`].

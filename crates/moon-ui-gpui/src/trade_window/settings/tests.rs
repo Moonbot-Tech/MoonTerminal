@@ -65,7 +65,7 @@ impl gpui::Render for PriceLinesHarness {
 #[gpui::test]
 fn price_line_popup_rows_fit_every_locale(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
-    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi", "zh"] {
         let _locale = crate::test_locale::force(locale);
         for mode in [
             moon_core::config::UiThemeMode::Dark,

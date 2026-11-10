@@ -43,6 +43,9 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
 
 /// Width of the widest word of `text` in the UI face, body or caption size, in layout pixels.
 ///
+/// A word is what the wrapper will not break ([`design::unbreakable_units`]): text between spaces,
+/// and a single character of a CJK script, which writes none.
+///
 /// Args:
 ///     text: The label.
 ///     caption: Whether the label is drawn at the caption size.
@@ -51,8 +54,7 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
 /// Returns:
 ///     The widest word's width plus a pixel of rounding slack per side.
 pub(super) fn longest_word_w(text: &str, caption: bool, cx: &App) -> f32 {
-    let widest = text
-        .split_whitespace()
+    let widest = design::unbreakable_units(text)
         .map(|word| {
             if caption {
                 design::ui_caption_text_width(cx, word, 400.0)

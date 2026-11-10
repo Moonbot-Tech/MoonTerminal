@@ -28,6 +28,9 @@ mod uk {
 mod vi {
     rust_i18n::i18n!("../../locales/vi", fallback = "en");
 }
+mod zh {
+    rust_i18n::i18n!("../../locales/zh", fallback = "en");
+}
 
 pub(crate) use en::_rust_i18n_t;
 
@@ -48,6 +51,7 @@ impl SplitBackend {
             "tr" => Some(tr::_rust_i18n_backend()),
             "uk" => Some(uk::_rust_i18n_backend()),
             "vi" => Some(vi::_rust_i18n_backend()),
+            "zh" => Some(zh::_rust_i18n_backend()),
             _ => None,
         }
     }
@@ -56,7 +60,7 @@ impl SplitBackend {
 impl Backend for SplitBackend {
     /// List the same locales as the combined generated backend, in sorted order.
     fn available_locales(&self) -> Vec<Cow<'_, str>> {
-        ["en", "es", "pt", "ru", "tr", "uk", "vi"]
+        ["en", "es", "pt", "ru", "tr", "uk", "vi", "zh"]
             .into_iter()
             .map(Cow::Borrowed)
             .collect()

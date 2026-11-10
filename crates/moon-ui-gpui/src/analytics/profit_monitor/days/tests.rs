@@ -150,6 +150,7 @@ fn core_captions_use_real_count_grammar_instead_of_empty_templates() {
         ("pt", vec![(1, "núcleo"), (21, "núcleos")]),
         ("tr", vec![(1, "çekirdek"), (21, "çekirdek")]),
         ("vi", vec![(1, "lõi"), (21, "lõi")]),
+        ("zh", vec![(1, "个核心"), (21, "个核心")]),
     ] {
         let _locale = crate::test_locale::force(locale);
         for (count, noun) in cases {

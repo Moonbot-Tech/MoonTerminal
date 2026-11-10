@@ -397,7 +397,14 @@ cmd_status() {
     # Config-field support belongs to the installed binary, not this independently upgraded helper.
     core_endpoint_override=no
     mcp_https=no
+    # The bot languages the installed binary parses; "none" for one that predates the list.
+    languages=none
     if [ -x "$BIN" ] && capabilities=$("$BIN" capabilities 2>/dev/null); then
+        listed=$(printf '%s\n' "$capabilities" | sed -n 's/^languages=//p' | head -n 1)
+        case "$listed" in
+            '' | *[!a-z,]*) ;;
+            *) languages=$listed ;;
+        esac
         if printf '%s\n' "$capabilities" | grep -qx 'core_endpoint_override=yes'; then
             core_endpoint_override=yes
         fi
@@ -407,6 +414,7 @@ cmd_status() {
     fi
     echo "core_endpoint_override=$core_endpoint_override"
     echo "mcp_https=$mcp_https"
+    echo "languages=$languages"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }

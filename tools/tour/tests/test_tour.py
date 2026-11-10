@@ -81,7 +81,7 @@ class LocaleLoad(unittest.TestCase):
         self.assertEqual(locales.file_of("shell.settings_btn"), "en/shell.en.yml")
         self.assertEqual(
             locales.languages_of("shell.settings_btn"),
-            {"ru", "en", "es", "uk", "tr", "pt", "vi"},
+            {"ru", "en", "es", "uk", "tr", "pt", "vi", "zh"},
         )
         self.assertEqual(locales.get("shell.settings_btn", "en"), "Settings")
 

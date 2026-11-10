@@ -99,6 +99,11 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("capabilities") {
         println!("core_endpoint_override=yes");
         println!("mcp_https=yes");
+        // The bot languages this binary parses. A terminal writes `[telegram] language` only
+        // from this list: a code this binary does not know fails the whole config
+        // (`cores::telegram`), so a newer terminal's language must not reach an older station.
+        let languages = moon_core::config::Language::ALL.map(moon_core::config::Language::code);
+        println!("languages={}", languages.join(","));
         return Ok(());
     }
     // The API's client: no log, no data root — one exchange with the running station.

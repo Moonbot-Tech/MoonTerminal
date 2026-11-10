@@ -168,13 +168,15 @@ fn station_labels_replace_the_terminal_wording() {
             let path = format!("telegram.{key}_station");
             let text = rust_i18n::t!(&path, locale = locale).to_lowercase();
             assert_ne!(text, path.to_lowercase(), "{path} is missing in {locale}");
-            // tr/pt keep the loanword "terminal". Ukrainian uses "термінал" and Vietnamese
-            // "thiết bị đầu cuối"; a denied-chat key may still name where to turn the app on.
+            // tr/pt keep the loanword "terminal". Ukrainian uses "термінал", Vietnamese
+            // "thiết bị đầu cuối" and Chinese "终端"; a denied-chat key may still name where to
+            // turn the app on.
             assert!(
                 !text.contains("terminal")
                     && !text.contains("терминал")
                     && !text.contains("термінал")
                     && !text.contains("thiết bị đầu cuối")
+                    && !text.contains("终端")
                     || key.contains("denied"),
                 "{path} ({locale}) names the terminal: {text}"
             );
@@ -295,7 +297,7 @@ fn an_empty_keyboard_keeps_the_report_section() {
 #[test]
 fn button_texts_are_distinct_in_every_locale() {
     use moon_core::config::telegram_menu::MenuItem;
-    for locale in ["ru", "en", "es"] {
+    for locale in moon_core::config::Language::ALL.map(moon_core::config::Language::code) {
         let mut texts: Vec<String> = MenuItem::ALL
             .into_iter()
             .map(|item| super::button_text(item, locale))

@@ -18,6 +18,7 @@ fn every_product_locale_is_available_and_translated() {
         ("tr", "Yükleniyor…"),
         ("uk", "Завантаження…"),
         ("vi", "Đang tải…"),
+        ("zh", "加载中…"),
     ];
     let mut expected = translations.map(|(locale, _)| locale);
     expected.sort_unstable();

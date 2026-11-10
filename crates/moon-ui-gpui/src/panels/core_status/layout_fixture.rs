@@ -18,7 +18,7 @@ use crate::backend::core_warn::LatencySeverity;
 pub(super) const WIDTHS: [f32; 3] = [1640.0, 1100.0, 720.0];
 
 /// Locales the layout tests walk. The order matches [`moon_core::config::Language::ALL`].
-pub(super) const LOCALES: [&str; 7] = ["ru", "en", "es", "uk", "tr", "pt", "vi"];
+pub(super) const LOCALES: [&str; 8] = ["ru", "en", "es", "uk", "tr", "pt", "vi", "zh"];
 
 /// Install the dark presentation theme at zoom 1. Layout does not depend on the light palette.
 pub(super) fn install_dark(cx: &mut gpui::TestAppContext) {

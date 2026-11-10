@@ -1,0 +1,151 @@
+_version: 1
+
+# Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
+# Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
+
+trade_window.open: "打开交易窗口"
+trade_window.focus: "显示交易"
+trade_window.focus.tip: "回到所选交易，并重置时间和价格缩放"
+trade_window.scale.tip: "可见区域的高度，以价格的百分比表示：10% 表示整个图表在垂直方向上覆盖价格的 10%。10 条网格带每条占十分之一。手动缩放时，图表上的标记会随之变化。"
+
+trade_window.blocked.unresolved: "交易窗口不可用——核心未连接"
+
+trade_window.retry: "重试"
+
+trade_window.other_trades: "显示其他交易"
+
+# The header's ⚙: one popup for everything the window draws (trades, history, candles); every row
+# is stored at once, for every trade window.
+trade_window.settings.tip: "交易窗口视图"
+
+trade_window.settings.title: "交易窗口视图"
+
+trade_window.settings.frame_trades: "交易"
+
+trade_window.settings.fit: "将交易适配到窗口"
+
+# The trade's own captions at the top of the chart: its strategy, the detect it fired on, why it
+# closed. On in a trade window, off in the tuner's pane — each remembers its own.
+trade_window.settings.show_labels: "图表上的交易标注"
+
+trade_window.settings.hide_rail: "隐藏右侧面板"
+
+# The entry corridor the core saved for a MoonShot order, shaded from the order's placement to its
+# fill. Off by default: the band is loud and the corridor is an input, not an event.
+trade_window.settings.moonshot_zone: "MoonShot 区域"
+
+# The tick stage: the venue's own prints around the position, paged from its public REST — slow
+# on some venues, so the reader can leave the window on bars alone.
+trade_window.settings.load_ticks: "加载逐笔数据"
+
+trade_window.source.candles_ticks_disabled: "%{min} 分钟 K线——窗口设置中已关闭逐笔数据"
+
+trade_window.state.loading: "正在加载该交易前后的行情…"
+
+trade_window.state.failed: "无法从交易所获取数据。可以重试。"
+
+trade_window.state.rate_limited: "交易所限制了请求频率。%{secs} 秒后重试。"
+
+trade_window.state.unknown_symbol: "交易所没有这个市场。"
+
+trade_window.source.ticks: "交易所逐笔数据"
+
+trade_window.source.core_ticks: "核心逐笔数据"
+
+trade_window.source.loading_more: "继续加载中"
+
+trade_window.source.context_unavailable: "K线上下文不可用"
+
+trade_window.source.awaiting_core: "%{min} 分钟 K线，正在检查核心存档"
+
+trade_window.source.core_ticks_bucketed: "核心逐笔数据，步长 %{secs} s"
+
+trade_window.source.ticks_bucketed: "交易所逐笔数据，步长 %{secs} s"
+
+trade_window.source.core_ticks_edges_bucketed: "核心逐笔数据，两端步长 %{secs} s"
+
+trade_window.source.ticks_edges_bucketed: "交易所逐笔数据，两端步长 %{secs} s"
+
+# Joined to any of the tick captions above with " - " in code — the separator glyph never
+# lives in the dictionary.
+trade_window.source.ticks_edges: "两端由 %{min} 分钟 K线补齐"
+
+# Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.
+trade_window.source.ticks_ends: "入场和出场附近为逐笔数据，中间为 %{min} 分钟 K线"
+
+# Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
+# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки. Свечи теперь
+# всегда называют причину, по которой окно показывает их вместо тиков.
+trade_window.source.candles_ticks_pending: "%{min} 分钟 K线，逐笔数据仍在加载"
+
+trade_window.source.candles_no_route: "%{min} 分钟 K线——%{brand} 没有公开的逐笔数据"
+
+trade_window.source.candles_retention: "%{min} 分钟 K线——交易所仅保留 %{hours} 小时的逐笔数据"
+
+trade_window.source.candles_no_trades: "%{min} 分钟 K线——该时段内交易所没有成交"
+
+trade_window.source.candles_failed: "%{min} 分钟 K线——逐笔数据加载失败"
+
+trade_window.source.candles_rate_limited: "%{min} 分钟 K线——交易所限制了请求频率，未请求逐笔数据；请在 %{secs} 秒后重新打开窗口"
+
+trade_window.empty.no_data: "该时段内此市场没有数据。"
+
+trade_window.empty.no_endpoint: "%{brand} 没有终端可用的公开历史数据源。"
+
+
+trade_window.empty.core_offline: "该交易的核心未连接，无法确定其交易所和市场。"
+
+trade_window.empty.bad_window: "该交易的开仓或平仓时间无效。"
+
+trade_window.figure.side: "方向"
+
+trade_window.figure.entry: "入场"
+
+trade_window.figure.exit: "出场"
+
+trade_window.figure.quantity: "数量"
+
+trade_window.figure.profit: "盈利"
+
+trade_window.figure.profit_pct: "盈利，%"
+
+trade_window.figure.opened: "开仓"
+
+trade_window.figure.closed: "平仓"
+
+trade_window.figure.held: "持仓时长"
+
+# Блок стратегии в начале рейла — только у сделок, у которых стратегия есть (#561).
+trade_window.figure.strategy: "策略"
+# Метки состояния под именем: стратегии на ядре больше нет, но её история сохранена локально /
+# нет нигде / ядро, которому она принадлежит, сейчас не подключено.
+trade_window.strategy.in_deleted: "在已删除中"
+trade_window.strategy.deleted: "已删除"
+trade_window.strategy.core_offline: "核心未连接"
+# Строка версии: штамп — тот же, каким панель «Версии» подписывает свои строки, чтобы юзер нашёл
+# её глазами; «действует» — то же слово, что стоит там у текущей версии.
+trade_window.strategy.version: "版本 %{stamp}"
+trade_window.strategy.version_current: "版本：生效中"
+trade_window.strategy.version_unknown: "版本未知"
+trade_window.strategy.version_tip: "入场时生效的策略版本——以终端的记录为准：时间戳表示终端看到这些设置的时间，而非核心应用它们的时间。点击可在“版本”面板中打开该版本。"
+trade_window.strategy.version_unknown_tip: "该交易早于首个已保存的版本：当时终端尚未观察此核心"
+
+trade_window.figure.unknown: "无数据"
+
+# LONG / SHORT — отраслевой стандарт, не переводится (см. README), но живёт в словаре,
+# чтобы обе подписи правились в одном месте.
+trade_window.side.long: "LONG"
+
+trade_window.side.short: "SHORT"
+
+# Блок «Ордера» в рельсе: архивные трассы ордеров этой сделки из ядра (#569). Пустой ответ ядра —
+# окончательное «трасс нет», без вечного спиннера; ошибка/таймаут — с кнопкой «Повторить».
+trade_window.figure.orders: "订单"
+trade_window.traces.pending: "正在查找轨迹：先查存档，再问核心…"
+trade_window.traces.drawn: "自身 %{own} 条，继承 %{inherited} 条"
+trade_window.traces.drawn_own: "图表上 %{own} 条线"
+trade_window.traces.none: "存档中没有轨迹——出场取自报告，入场以箭头表示"
+trade_window.traces.not_askable: "未收到行键——该交易在核心更新之前就已复制"
+trade_window.traces.failed: "核心未响应——核心版本过旧或连接中断"
+trade_window.traces.retry_tip: "再次向核心请求订单轨迹"
+trade_window.traces.neighbours: "+%{n} 条相邻"

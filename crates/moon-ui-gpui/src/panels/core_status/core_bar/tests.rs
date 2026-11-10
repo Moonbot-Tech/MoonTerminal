@@ -10,7 +10,10 @@ use rust_i18n::t;
 
 use super::super::layout_fixture::{self, LOCALES, WIDTHS};
 use super::super::mode::CoreStatusMode;
-use super::{columns_menu_el, mode_count_tone, mode_switch_control, toolbar_row, toolbar_tail_el};
+use super::{
+    MODE_ORDER, columns_menu_el, mode_count_tone, mode_label, mode_switch_control, toolbar_row,
+    toolbar_tail_el,
+};
 use crate::design;
 
 /// Production toolbar slots. The scope chip is a fixed stand-in for the combo, which needs a
@@ -125,8 +128,8 @@ fn toolbar_slots_stay_inside_the_row_in_every_locale(cx: &mut gpui::TestAppConte
 }
 
 /// At 300 px every locale keeps five non-overlapping segments inside the strip, on the short
-/// label tier. The width is passed in: the production measure is deferred, so the first paint
-/// of this window has not stored one.
+/// label tier where the language has shorter names to fall back to. The width is passed in: the
+/// production measure is deferred, so the first paint of this window has not stored one.
 #[gpui::test]
 fn narrow_dock_keeps_every_mode_inside_the_toolbar(cx: &mut gpui::TestAppContext) {
     layout_fixture::install_dark(cx);
@@ -179,15 +182,23 @@ fn narrow_dock_keeps_every_mode_inside_the_toolbar(cx: &mut gpui::TestAppContext
                 );
             }
         }
-        assert!(
-            visual.debug_bounds("cs-mode-tier-short").is_some(),
-            "300px chose a tier other than short at {at}"
-        );
-        assert!(
-            visual.debug_bounds("cs-mode-tier-full").is_none()
-                && visual.debug_bounds("cs-mode-tier-plain").is_none(),
-            "300px kept a wider tier at {at}"
-        );
+        // The tier is pinned only where a language's short names are actually shorter. Chinese
+        // names are two or three characters in both forms, so a wider tier fits at 300 px and
+        // draws the same strip or a richer one; that it fits is what the checks above assert.
+        let short_is_shorter = MODE_ORDER
+            .iter()
+            .any(|mode| mode_label(*mode, true) != mode_label(*mode, false));
+        if short_is_shorter {
+            assert!(
+                visual.debug_bounds("cs-mode-tier-short").is_some(),
+                "300px chose a tier other than short at {at}"
+            );
+            assert!(
+                visual.debug_bounds("cs-mode-tier-full").is_none()
+                    && visual.debug_bounds("cs-mode-tier-plain").is_none(),
+                "300px kept a wider tier at {at}"
+            );
+        }
     }
 }
 

@@ -8,7 +8,7 @@ feature — a row in the map, a new user word — a row in the dictionary.
 
 ## How to find a feature by name
 
-1. `locales/<lang>/*.yml` — all UI labels (`grep -rni "слово" locales/`). The same key is written in `ru`, `en`, `es`, `uk`, `tr`, `pt`, and `vi`, so an English reader can grep any folder.
+1. `locales/<lang>/*.yml` — all UI labels (`grep -rni "слово" locales/`). The same key is written in `ru`, `en`, `es`, `uk`, `tr`, `pt`, `vi`, and `zh`, so an English reader can grep any folder.
    Found a string — the key is next to it, and the code is grepped by that key. Files by area:
    shell, interface, settings, hotkeys, orders, report, analytics,
    strategies, screener, news, connections, core_status, core_run,
@@ -178,7 +178,7 @@ Mini App with a live chart of any coin and tick charts of a closed trade or open
 (Light/Dark/Graphite + editor), a single colour picker (one palette
 everywhere — cores, strategies, lines, figures, badges, news tags; a custom HEX
 is remembered app-wide, last 20, the grid scrolls),
-locales ru/en/es/uk/tr/pt/vi, self-update
+locales ru/en/es/uk/tr/pt/vi/zh, self-update
 (a check every 15 min, no restart), Settings and strategy backups
 (`backups/`, daily), "Data by core" in Settings → Storage (whose reports,
 strategies, traces and warnings the databases hold — deleted connections

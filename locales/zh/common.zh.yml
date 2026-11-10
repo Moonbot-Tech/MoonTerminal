@@ -1,0 +1,72 @@
+# Strings shared by multiple panels: loading placeholders, report-database errors, and generic
+# labels such as an unidentified exchange.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+common.loading: "加载中…"
+common.empty_period: "此时间段内没有已平仓的交易。"
+common.db_read_failed: "无法读取报告数据库。"
+common.db_read_failed_corrupt: "数据库文件已损坏——重试也无济于事。详情见“日志”标签页。"
+common.db_read_failed_other: "这是读取错误，而不是没有交易。详情见“日志”标签页。"
+common.db_read_failed_exhausted: "同时打开的报告数据库读取过多。通常其他读取结束后就会恢复。如果一直如此，可能有其他进程占用了该文件。"
+common.db_read_failed_retry: "报告数据库当前正忙。请重试——该时间段会重新计算。如果反复出现，可能有其他进程占用了该文件——对文件夹 %{data_dir} 的云同步、杀毒软件、终端的第二个副本或外部数据库工具。"
+common.db_read_failed_detail: "文件：%{path}  操作：%{operation}  代码：%{code}"
+common.db_read_failed_file: "文件"
+common.db_read_failed_operation: "操作"
+common.db_read_failed_code: "代码"
+common.db_read_failed_copy: "复制"
+common.db_read_failed_short: "数据库读取错误"
+common.db_not_ready: "报告数据库尚未同步。"
+common.incomparable_quote: "所选交易的计价币不一致或未知。请选择一种币种，或切换到 Profit %。"
+common.period_out_of_range: "请求的时间段超出了可读范围。"
+common.period_out_of_range_title: "时间段超出可读范围。"
+common.period_out_of_range_hint: "这不是空时间段，而是被拒绝的时间段：请检查已保存的时间段或核心的数据。"
+common.exchange_unknown: "未识别的交易所"
+common.exchange_spot: "Spot"
+common.exchange_futures: "Futures"
+# Binance COIN-M delivery contracts, which the core itself calls "Binance Quarterly".
+common.exchange_quarterly: "Quarterly"
+# The shared core picker, used by Orders, Alerts, Assets, Core Status, Report and Analytics. Its
+# strings live here rather than in any one panel's file for the same reason the Analytics
+# placeholders do: six panels share the control, so no single namespace owns it.
+#
+# Saved core groups: a named set of cores the user applies instead of re-picking them. A group row
+# ticks when the current selection IS that group, and its trailing count is what a CLICK produces —
+# the members the panel showing it can actually select. In the MENU that count is formatted by the
+# consumer's own `cores_n`, so it cannot read differently from the trigger right above it;
+# `group_cores_n` below serves the two modals, which have no trigger beside them.
+# Short "all" word for the shared core selector once a narrow row shrinks it to its icon: the noun
+# is what the glyph now says, so only "all" versus a count is left to render. Masculine in Spanish,
+# agreeing with núcleos — which is why it is not the strategy filter's own "all" word.
+common.core_pick.all_short: "全部"
+common.core_pick.groups_heading: "核心分组"
+common.core_pick.group_cores_n: "%{n} 个核心"
+# Members whose core is no longer configured. They are kept on purpose — a core can come back — so
+# this is a warning, not an error.
+common.core_pick.group_dead_n: "缺少 %{n} 个"
+common.core_pick.save_as_group: "将所选保存为分组…"
+common.core_pick.manage_groups: "管理分组…"
+common.core_pick.save_title: "新建核心分组"
+common.core_pick.manage_title: "核心分组"
+# Refuses BOTH an empty name and a save blocked by the group ceiling: either way nothing was
+# created, and the dialog stays open. `dialogs.name_required` cannot be reused — it names a
+# strategy in all three languages.
+common.core_pick.group_name_required: "请输入分组名称"
+common.core_pick.group_name_ph: "分组名称"
+# Two-step delete rather than a confirmation dialog: MoonUI paints one dialog at a time, so a
+# confirm modal opened from the management modal would replace the list being edited. The second
+# click reuses the shared `dialogs.delete_q`.
+common.core_pick.group_delete: "删除"
+
+# A control edited for several things at once (strategies, cores) whose values disagree.
+common.mixed_values: "值不一致"
+
+# Second part of every strategy-name search tooltip (Strategies tree, Analytics, Report): the one
+# shared query syntax with examples.
+common.strategy_query_syntax: "逗号 = 或，空格 = 且，!词 = 排除。不区分大小写。\nEMA, Hook — 名称含 EMA 或 Hook\ndrops 1m — 名称同时含 drops 和 1m\nshort !test — 名称含 short 但不含 test"
+
+# The button that writes a staged change and keeps its surface open.
+common.apply: "应用"
+common.size_kb: "%{value} KB"
+common.size_mb: "%{value} MB"
+common.size_gb: "%{value} GB"

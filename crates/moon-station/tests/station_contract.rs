@@ -26,7 +26,7 @@ fn capabilities_are_available_without_config_credentials_or_a_running_service() 
     );
     assert_eq!(
         String::from_utf8(output.stdout).unwrap().trim(),
-        "core_endpoint_override=yes\nmcp_https=yes"
+        "core_endpoint_override=yes\nmcp_https=yes\nlanguages=ru,en,es,uk,tr,pt,vi,zh"
     );
 }
 

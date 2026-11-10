@@ -7,7 +7,7 @@ use super::*;
 /// Ignoring a missing bot-merge marker despite other capability readings would make transfer destructive.
 #[test]
 fn transfer_refreshes_helpers_that_cannot_preserve_bot_settings() {
-    let old = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\ncore_endpoint_override=no\n";
+    let old = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\ncore_endpoint_override=no\nlanguages=none\n";
     assert!(!super::super::helper_is_current(old));
     assert!(!super::super::helper_is_current(&format!(
         "{old}bot_settings_merge=no\n"

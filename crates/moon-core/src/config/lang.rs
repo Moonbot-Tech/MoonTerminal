@@ -1,4 +1,5 @@
-//! Interface language. Stored in settings.toml as a code ("ru"/"en"/"es"/"uk"/"tr"/"pt"/"vi");
+//! Interface language. Stored in settings.toml as a code
+//! ("ru"/"en"/"es"/"uk"/"tr"/"pt"/"vi"/"zh");
 //! applied through `rust_i18n::set_locale(lang.code())`.
 //!
 //! The default is the system locale (sys-locale), falling back to English when the
@@ -16,11 +17,13 @@ pub enum Language {
     Tr,
     Pt,
     Vi,
+    /// Simplified Chinese, the only Chinese dictionary shipped.
+    Zh,
 }
 
 impl Language {
     /// All supported languages (order = order in the settings dropdown).
-    pub const ALL: [Language; 7] = [
+    pub const ALL: [Language; 8] = [
         Language::Ru,
         Language::En,
         Language::Es,
@@ -28,6 +31,7 @@ impl Language {
         Language::Tr,
         Language::Pt,
         Language::Vi,
+        Language::Zh,
     ];
 
     /// Locale code for rust_i18n / settings.toml.
@@ -40,6 +44,7 @@ impl Language {
             Language::Tr => "tr",
             Language::Pt => "pt",
             Language::Vi => "vi",
+            Language::Zh => "zh",
         }
     }
 
@@ -53,13 +58,17 @@ impl Language {
             Language::Tr => "Türkçe",
             Language::Pt => "Português (Brasil)",
             Language::Vi => "Tiếng Việt",
+            Language::Zh => "简体中文",
         }
     }
 
     /// Parse the leading ASCII language prefix, ignoring case and any region suffix.
     ///
     /// Codes such as `en-US`, `es_ES`, and `pt-BR` select the same language as `en`, `es`,
-    /// and `pt`. Returns `None` when the prefix is empty or unsupported.
+    /// and `pt`. Every Chinese code (`zh-CN`, `zh-TW`, `zh-Hans-CN`) selects `zh`, Simplified
+    /// Chinese: it is the only Chinese dictionary shipped, and a Traditional-script system reads
+    /// it better than the English fallback. Returns `None` when the prefix is empty or
+    /// unsupported.
     pub fn from_code(s: &str) -> Option<Language> {
         let prefix: String = s
             .chars()
@@ -74,6 +83,7 @@ impl Language {
             "tr" => Some(Language::Tr),
             "pt" => Some(Language::Pt),
             "vi" => Some(Language::Vi),
+            "zh" => Some(Language::Zh),
             _ => None,
         }
     }

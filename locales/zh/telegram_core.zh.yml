@@ -1,0 +1,206 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+telegram_core.core_pick_none: "请选择核心"
+telegram_core.tag.logged_in: "已登录"
+telegram_core.tag.not_logged_in: "未登录"
+telegram_core.tag.proxy_error: "代理错误"
+telegram_core.tag.reader_off: "读取器已关闭"
+telegram_core.tag.no_core: "无法连接核心"
+telegram_core.tag.unsupported: "不支持远程登录"
+telegram_core.tag_short.logged_in: "已登录"
+telegram_core.tag_short.not_logged_in: "未登录"
+telegram_core.tag_short.proxy_error: "代理错误"
+telegram_core.tag_short.reader_off: "读取器关"
+telegram_core.tag_short.no_core: "无连接"
+telegram_core.tag_short.unsupported: "不支持登录"
+telegram_core.list_core: "核心"
+telegram_core.list_telegram: "Telegram"
+telegram_core.row_login: "登录"
+telegram_core.row_account: "账号"
+telegram_core.account_phone: "账号 %{phone} · 已登录"
+telegram_core.account_none: "未连接账号"
+telegram_core.account_reader_off: "读取器已关闭——账号不受影响"
+telegram_core.disconnected_hint: "Telegram 状态来自核心本身。连接恢复后，这里会显示登录和代理。"
+telegram_core.reconnect: "重新连接"
+
+telegram_core.enable: "启用读取器"
+
+telegram_core.enable_tip: "关闭只会停止此核心的读取器，不会退出 Telegram 账号。"
+
+telegram_core.unsupported: "此服务不支持远程登录。"
+
+telegram_core.unsupported_ver: "此服务不支持远程登录（版本 %{v}）。"
+
+telegram_core.stale: "快照已过期——在收到核心的最新状态之前，操作不可用。"
+
+telegram_core.sent_waiting: "已发送，等待核心响应…"
+
+telegram_core.service_online: "服务在线"
+
+telegram_core.service_offline: "服务离线"
+
+telegram_core.client_state: "状态"
+
+telegram_core.setup_error: "初始化错误"
+
+telegram_core.client_error: "客户端错误"
+
+telegram_core.disconnected: "核心未连接。"
+
+telegram_core.no_snapshot: "没有状态快照。"
+
+telegram_core.proxy_kind_none: "不使用代理"
+
+telegram_core.proxy_kind_socks5: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto: "MTProto"
+
+telegram_core.proxy_host: "主机"
+
+telegram_core.proxy_port: "端口"
+
+telegram_core.proxy_user: "用户名"
+
+telegram_core.proxy_password: "密码"
+
+telegram_core.proxy_secret: "密钥"
+
+telegram_core.proxy_secret_hint: "核心不会返回已保存的密码或密钥，因此需要重新输入。留空会将其清除，而不是保留旧值。"
+
+telegram_core.proxy_actual: "实际代理"
+
+telegram_core.proxy_actual_unknown: "尚不清楚"
+
+telegram_core.proxy_error: "代理错误"
+
+telegram_core.phone: "手机号"
+
+telegram_core.phone_hint: "国际格式，例如 +15551234567。"
+
+telegram_core.phone_send: "发送号码"
+
+telegram_core.login_phone: "改用手机号登录"
+
+telegram_core.cancel_to_phone: "取消登录并返回手机号输入"
+
+telegram_core.code: "验证码"
+
+telegram_core.code_send: "发送验证码"
+
+telegram_core.password: "2FA 密码"
+
+telegram_core.password_send: "发送密码"
+
+telegram_core.password_hint_label: "提示"
+
+telegram_core.recovery_email: "恢复邮箱"
+
+telegram_core.email: "邮箱"
+
+telegram_core.email_send: "发送邮箱"
+
+telegram_core.email_code: "邮箱验证码"
+
+telegram_core.email_code_send: "发送邮箱验证码"
+
+telegram_core.email_pattern: "邮件将发送到 %{pattern}"
+
+telegram_core.code_length: "验证码长度：%{n}"
+
+telegram_core.first_name: "名字"
+
+telegram_core.last_name: "姓氏"
+
+telegram_core.terms_accept: "我接受条款"
+
+telegram_core.register: "注册"
+
+telegram_core.min_age: "最低年龄：%{n}"
+
+telegram_core.logged_in: "账号 %{phone}"
+
+telegram_core.logged_in_unknown: "账号已就绪"
+
+telegram_core.logout: "退出登录"
+
+telegram_core.logout_title: "在核心上退出 Telegram"
+
+telegram_core.logout_q: "这会退出账号，并重置该核心所在机器上共用的 Telegram 数据。那台机器上的所有 Moonbot 进程都会受影响，不只是这个核心。"
+
+telegram_core.premium: "需要完成 Telegram 的外部步骤。取消登录即可返回手机号输入。"
+
+telegram_core.support_email: "支持邮箱"
+
+telegram_core.support_subject: "主题"
+
+telegram_core.cancel_login: "取消登录"
+
+telegram_core.transitional: "核心正在处理，请稍候…"
+
+telegram_core.step_unknown: "未知的登录步骤。请刷新状态，不要凭猜测发送数据。"
+
+telegram_core.refresh: "刷新"
+
+telegram_core.service_error: "错误 %{code}：%{message}"
+
+telegram_core.connection: "Telegram 网络"
+
+telegram_core.conn.unknown: "未知"
+
+telegram_core.conn.waiting_for_network: "等待网络"
+
+telegram_core.conn.connecting_to_proxy: "正在连接代理"
+
+telegram_core.conn.connecting: "连接中"
+
+telegram_core.conn.updating: "更新中"
+
+telegram_core.conn.ready: "就绪"
+
+telegram_core.qr_failed: "无法生成二维码。请刷新状态。"
+
+telegram_core.qr_wait: "正在等待二维码链接…"
+
+telegram_core.resend: "重新发送验证码"
+
+telegram_core.resend_in: "%{wait} 后可重新发送"
+
+telegram_core.no_answer: "核心没有响应。请刷新状态后重试。"
+
+telegram_core.next_code: "下一种方式"
+
+telegram_core.code_kind.telegram: "验证码在 Telegram 应用中。"
+
+telegram_core.code_kind.sms: "SMS."
+
+telegram_core.code_kind.sms_word: "SMS 单词，以“%{first_letter}”开头，第一个词是“%{first_word}”。"
+
+telegram_core.code_kind.sms_phrase: "SMS 短语：%{first_word}（%{pattern}）。"
+
+telegram_core.code_kind.call: "语音电话。"
+
+telegram_core.code_kind.flash_call: "Flash 来电，前缀 %{prefix}。"
+
+telegram_core.code_kind.missed_call: "未接来电，前缀 %{prefix}。"
+
+telegram_core.code_kind.fragment: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported: "不支持这种接收方式。"
+
+telegram_core.code_kind.other: "%{kind}"
+
+# Settings redesign (phases 3-5)
+tgcore.steps.phone: "手机号"
+tgcore.steps.code: "Telegram 验证码"
+tgcore.steps.password: "云端密码"
+tgcore.steps.done: "已连接"
+tgcore.steps.email: "登录邮箱"
+tgcore.steps.registration: "账号未注册"
+tgcore.steps.premium_required: "需要 Telegram Premium"
+tgcore.steps.waiting: "等待核心响应…"
+tgcore.steps.unknown: "未知的登录步骤"
+tgcore.qr_login: "用二维码登录"
+tgcore.proxy.title: "代理"
+tgcore.proxy.send: "发送到核心"
