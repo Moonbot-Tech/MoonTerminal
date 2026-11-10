@@ -369,11 +369,11 @@ pub fn walk_held(
     params: &ExitParams,
     hold_until_ms: Option<i64>,
 ) -> LineWalk {
-    // Core logs place the sale in the condition's second, so the delay is read as time after
-    // purchase before checks start: https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
-    let check_start_ms = fill
-        .t_ms
-        .saturating_add(sell_delay_ms(params.custom_ema_delay_s));
+    // Core logs place the sale in the condition's second, so the delay is read as time before
+    // checks start — counted, as every sell timer, from the sell's placement:
+    // https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
+    let check_start_ms =
+        armed_at(fill, params).saturating_add(sell_delay_ms(params.custom_ema_delay_s));
     let series = params.custom_ema.as_ref().map(|formula| {
         let second = |tick: &Tick| (tick.time_ms / 1000.0).floor() as i64;
         let first = first_check_ms(check_start_ms);
@@ -642,6 +642,10 @@ impl Rules<'_, '_> {
     /// Args:
     ///     seen: The prints up to `t_ms` — what the price-following rules read.
     fn step_through(self, t_ms: i64, seen: &[Tick], line: &mut Line) {
+        // A SellLevel move parked under its floor wakes on the print that clears it.
+        if let Some(last) = seen.last().filter(|tick| tick.time_ms as i64 == t_ms) {
+            self.sell_level.see(t_ms, f64::from(last.price));
+        }
         let mut suppress_price_down = false;
         loop {
             let price_down_due = self
@@ -712,7 +716,7 @@ fn cross_hole(
     });
     if *rules.price_down_deferred
         || rules.pump_move.due(i64::MAX).is_some()
-        || rules.sell_level.due(i64::MAX).is_some()
+        || rules.sell_level.pending()
         || stops.follows_price()
     {
         return in_gap;

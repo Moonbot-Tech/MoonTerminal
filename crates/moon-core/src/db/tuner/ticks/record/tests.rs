@@ -8,19 +8,21 @@ use crate::db::tuner::ticks::{Deltas, ExitKind, ModelSettings, simulate, verify}
 use crate::feed::types::{Side, Tick};
 use crate::market::trade_replay::Coverage;
 
-/// SellDelay only changes ladder timing; a plain stop keeps its factual anchor.
+/// SellDelay moves the sell's placement, and the stop's delay counts from there: a plain stop
+/// under another SellDelay arms at another moment and must not inherit the fact's firing.
 #[test]
-fn plain_stop_anchor_keeps_a_different_sell_delay() {
+fn plain_stop_anchor_rejects_a_different_sell_delay() {
     let d = stopped();
     let p = book();
     let anchor = StopAnchor::of(&d, &p, None);
     let delayed = ExitParams {
         sell_delay_ms: 10_000.0,
-        ..p
+        ..p.clone()
     };
+    assert!(anchor.holds(&d, fact_fill(), &p), "the fact's own stop");
     assert!(
-        anchor.holds(&d, fact_fill(), &delayed),
-        "plain stop ignores SellDelay"
+        !anchor.holds(&d, fact_fill(), &delayed),
+        "another SellDelay is another stop"
     );
 }
 
@@ -228,6 +230,11 @@ fn the_anchor_holds_only_for_the_trades_own_entry_and_stop() {
         // Another liquidation guard may hold the stop at another level.
         ExitParams {
             stop_above_liq_pct: 50.0,
+            ..book()
+        },
+        // Another `SellDelay` places the sell, and with it the stop's delay, at another moment.
+        ExitParams {
+            sell_delay_ms: 500.0,
             ..book()
         },
     ] {

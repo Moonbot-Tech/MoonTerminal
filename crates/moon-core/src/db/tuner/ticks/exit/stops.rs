@@ -2,7 +2,8 @@
 //! `FastStopLoss`, `StopLossEMA` and `StopLossModifier`.
 //!
 //! **StopLoss** — `StopLoss` per cent from the buy (negative: a loss), adjusted by
-//! `StopLossModifier` ([`stop_pct`]), armed `StopLossDelay` seconds after the buy; `UseStopLoss`
+//! `StopLossModifier` ([`stop_pct`]), armed `StopLossDelay` seconds after the sell's placement
+//! (`SellDelay` past the buy); `UseStopLoss`
 //! arms it, and `StopLoss` 0 is a stop at the buy price (matches the core's rule). With `FastStopLoss`, `ModelSettings::fast_price`
 //! (default: the last price) is checked as each [`SERIES_TICK_MS`] tick closes, a market exit
 //! at the tick's last print
@@ -592,7 +593,9 @@ impl Stops {
         // `StopAboveLiq` holds the level away from the liquidation price, the ladder's rungs too.
         let guard = LiqGuard::new(params, deal, fill.price);
         let level = guard.stop(side.off_buy(fill.price, stop));
-        let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
+        // `StopLossDelay` counts from the sell's placement, `SellDelay` past the fill.
+        let stop_from = super::sell_order::armed_at(fill, params)
+            + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
         // What the fact proves about the stop when this walk runs the trade's own
         // (`record::StopAnchor`): it fired when the core's did, at the price the core sold at, and
         // not a moment before — nor before the close, on a trade it never stopped. The book the

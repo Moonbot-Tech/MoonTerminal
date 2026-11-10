@@ -2820,3 +2820,13 @@ fn strike_take_never_above_fill_without_shift_short() {
     let take = ExitModel::new(&p).take_level(&strike_deal(true), &[], strike_fill(94.0));
     assert!((take - 94.0).abs() < 1e-9, "{take}");
 }
+
+/// A tie between two steps lands on the odd multiple — half to even counted from the grid's
+/// first step — and everything else on the nearest. Rounding ties away from zero put 3.5 on 4,
+/// a step past the core's order on every second halving of a PriceDown at 50 %.
+#[test]
+fn a_level_between_two_steps_rounds_to_the_odd_one() {
+    let rounded = [2.4, 2.5, 2.6, 3.5, 4.5, 0.3].map(|level| round_to_step(level, 1.0));
+    assert_eq!(rounded, [2.0, 3.0, 3.0, 3.0, 5.0, 0.0]);
+    assert_eq!(round_to_step(2.5, 0.0), 2.5);
+}

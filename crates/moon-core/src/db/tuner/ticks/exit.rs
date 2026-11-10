@@ -131,7 +131,7 @@ fn due_by(next: Option<i64>, t_ms: i64) -> Option<i64> {
 pub struct ExitParams {
     /// Parsed, supported `SellByCustomEMA` formula; absent when off or refused.
     pub custom_ema: Option<std::sync::Arc<super::custom_ema::Formula>>,
-    /// `SellEMADelay` in seconds after purchase before formula checks start.
+    /// `SellEMADelay` in seconds after the sell's placement before formula checks start.
     /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
     pub custom_ema_delay_s: f64,
     /// Why a nonblank custom formula could not be replayed.
@@ -202,7 +202,8 @@ pub struct ExitParams {
     pub price_down_pct: f64,
     pub price_down_delay_s: f64,
     /// The core omits `PriceDownRelative` at its default NO; strategies that set it dump
-    /// `True`. Archived Exit lines without the field step by a fixed share of the buy.
+    /// `True`. Archived Exit lines without the field step by a fixed share of the sell's own
+    /// price.
     pub price_down_relative: bool,
     /// Calculate a relative step toward the allowed-drop level rather than the buy.
     /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters

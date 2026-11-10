@@ -487,9 +487,10 @@ pub fn verify(
 /// holding the take-anchored reading back under a threshold of 0.5 s cost two verdicts more than
 /// it saved on the same sample.
 ///
-/// `SellDelay` keeps the relation the walk already has: the timers run from the booked buy and
-/// the take goes up `SellDelay` after it. Every one of the 1 613 live deals ran it at 0, so which
-/// moment the core's timers count from when it is not is unchecked.
+/// `SellDelay` is taken back out, so that the walk places the take at the archived moment —
+/// `SellDelay` after this start — and runs every sell timer from that placement, as the core
+/// does. Checked on the live sample of 2026-11-10: counted from the booked buy instead, the 194
+/// hook trades run with a `SellDelay` missed 73 exits; from the placement, 65.
 ///
 /// Args:
 ///     deal: The report row.
@@ -785,7 +786,8 @@ pub fn stated_peak(reason: &str) -> Option<f64> {
 /// Where the stop took over an archived line: the first move at or past the stop level, no
 /// earlier than the stop's activation — the panic sell's first price, or the market order's.
 ///
-/// The stop arms only `StopLossDelay` seconds after the buy (less the point tolerance), and a
+/// The stop arms only `StopLossDelay` seconds after the sell's placement — `SellDelay` past
+/// the buy — (less the point tolerance), and a
 /// level on the profit side of the buy (a "time stop") is already reached by the take placement
 /// and every re-placement of the take, all skipped: the doc's "the stop-loss will be placed at ASK at +50% from the
 /// purchase price, but it will trigger only after 60 seconds, activate Panic Sell". The
@@ -800,7 +802,8 @@ fn stop_jump(deal: &Deal, exit: &ExitParams, moves: &[(i64, f64)], level: f64) -
     } else {
         0
     };
-    let armed_ms = deal.buy_ms + delay_ms.max(0) - slack;
+    let placed_ms = deal.buy_ms + exit.sell_delay_ms.max(0.0) as i64;
+    let armed_ms = placed_ms + delay_ms.max(0) - slack;
     let profit_side = if long {
         level > deal.buy_price
     } else {

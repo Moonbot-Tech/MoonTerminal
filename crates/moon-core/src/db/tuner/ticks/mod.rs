@@ -117,9 +117,19 @@ pub fn snap_to_step(level: f64, tick: f64, down: bool) -> f64 {
     snapped * tick
 }
 
-/// A level rounded to the NEAREST step of the price grid — the sell line's placement: the
-/// archived Exit lines round both ways (2026-09-21, 458 deals: a floor lost 5 exits the
-/// nearest step keeps, ARX's four levels agree with both). A non-positive step rounds nothing.
+/// A level rounded to the NEAREST step of the price grid — every order's placement: the sell
+/// line's, where the tie rule below was measured, and the entry's, whose ties are too rare to
+/// tell (the bench's entries did not move with it). The archived Exit lines round both ways
+/// (2026-09-21, 458 deals: a
+/// floor lost 5 exits the nearest step keeps, ARX's four levels agree with both). A
+/// non-positive step rounds nothing.
+///
+/// A level exactly between two steps goes half to even counted from the grid's FIRST step, not
+/// from zero — the grid starts at the market's minimum price, one step on most markets — so a
+/// tie lands on an odd multiple of the step. Ties are the rule, not the exception, under a
+/// relative `PriceDownPercent` of 50, which halves a distance of whole steps: on 7 290 archived
+/// PriceDown lines (2026-11-10) this reading reproduces 5 653 whole, half away from zero 5 474
+/// and half to even from zero 5 399; on the bench it judges 58 more exits right.
 ///
 /// Args:
 ///     level: The price to round.
@@ -128,7 +138,7 @@ pub fn round_to_step(level: f64, tick: f64) -> f64 {
     if tick <= 0.0 || tick.is_nan() || !level.is_finite() {
         return level;
     }
-    (level / tick).round() * tick
+    ((level - tick) / tick).round_ties_even() * tick + tick
 }
 
 /// The report-side deltas the delta modifiers read (`MShotAdd*` on the entry corridor, `Add*`
