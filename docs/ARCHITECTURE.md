@@ -1264,7 +1264,8 @@ at `.0`, and ship fixes by incrementing PATCH. Historical two-component tags
 like `v0.21` are read by the updater as patch zero, but new tags of that form and the equivalent alias
 `v0.21.0` are forbidden. `release.yml`
 builds the immutable commit of that tag `--locked` after refreshing MoonUI to the one master revision
-its `validate` job resolved, checks the GitHub SHA-256 of the Windows artifact while still in draft,
+its `validate` job resolved, starts the Linux terminal it built on a virtual display, checks the
+GitHub SHA-256 of the Windows, Linux and station artifacts while still in draft,
 and only then publishes the release as Latest. The repository must have release immutability
 enabled: publication locks the verified tag and assets.
 
@@ -1335,9 +1336,9 @@ A target releases carry no terminal for never starts discovery.
 
 One consumer reads the discovery for something other than the button: the station's version is
 judged against the newest known release. A scan that finds no candidate proves "this build is the
-newest" only where every release carries the platform's asset, which the release pipeline
-guarantees for Windows and macOS and not yet for Linux; there the newest release stays unknown
-until a candidate appears.
+newest" only where every release carries the platform's asset. The release pipeline guarantees
+that for Windows, macOS and Linux: it refuses to publish a release whose asset list is not
+exactly the five expected names.
 
 The trust boundary is HTTPS, an immutable GitHub Release and its SHA-256 metadata. The release workflow
 serializes publication per tag; the administrative `RELEASE_ADMIN_TOKEN` is allowed only in

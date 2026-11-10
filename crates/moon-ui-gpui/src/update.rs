@@ -522,11 +522,16 @@ impl UpdateController {
 /// Whether every release is known to carry this platform's terminal. Only then does a completed
 /// scan without a candidate mean "this build is the newest release".
 ///
-/// True where the release pipeline builds and verifies the asset before it publishes: Windows
-/// and macOS. Not yet Linux — `release.yml` does not publish `MoonTerminal-linux-x86_64`, so a
-/// Linux scan that finds nothing has learned nothing about the releases newer than this build.
-/// Extend this in the change that makes the release pipeline publish and verify that asset.
-const EVERY_RELEASE_CARRIES_THIS_PLATFORM: bool = cfg!(any(windows, target_os = "macos"));
+/// True where the release pipeline builds the asset and refuses to publish without it: Windows,
+/// macOS and Linux (`verify-release-assets.sh` requires the exact asset list).
+///
+/// For Linux that holds for every release cut from the revision that put the Linux terminal
+/// into the release pipeline, or from a later one. A release tagged on one of the few commits
+/// between the Linux updater and that revision would carry no Linux asset, and a Linux build
+/// older than it would then read its own version as the newest. So a release is never tagged on
+/// a commit older than that revision.
+const EVERY_RELEASE_CARRIES_THIS_PLATFORM: bool =
+    cfg!(any(windows, target_os = "macos", target_os = "linux"));
 
 /// What a successful click left behind, which decides the next header state.
 enum InstallOutcome {

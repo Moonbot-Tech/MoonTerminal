@@ -121,7 +121,8 @@ release_by_id() {
     gh api "${repository_api}/releases/${release_id}"
 }
 
-# Verify release identity, lifecycle state, exact assets, and the local Windows and station bytes.
+# Verify release identity, lifecycle state, exact assets, and the local Windows, Linux and station
+# bytes.
 verify_release() {
     local release_json="$1"
     local expected_state="$2"
@@ -161,10 +162,15 @@ verify_release() {
     esac
 
     asset_names="$(jq -c '[.assets[].name] | sort' <<<"$release_json")"
-    if [[ "$asset_names" != '["MoonTerminal.dmg","MoonTerminal.exe","moon-station-aarch64","moon-station-x86_64"]' ]]; then
-        fail "release must contain exactly MoonTerminal.dmg, MoonTerminal.exe, moon-station-aarch64 and moon-station-x86_64"
+    if [[ "$asset_names" != '["MoonTerminal-linux-x86_64","MoonTerminal.dmg","MoonTerminal.exe","moon-station-aarch64","moon-station-x86_64"]' ]]; then
+        fail "release must contain exactly MoonTerminal-linux-x86_64, MoonTerminal.dmg, MoonTerminal.exe, moon-station-aarch64 and moon-station-x86_64"
     fi
     require_asset_matches "$release_json" "$asset_name" "$local_digest" "$local_size" "Windows asset"
+    # The Linux terminal: what a Linux build's updater downloads and runs in place of itself.
+    require_asset_matches "$release_json" "$linux_asset" \
+        "sha256:$(sha256_hex "$linux_asset_path")" \
+        "$(wc -c < "$linux_asset_path" | tr -d '[:space:]')" \
+        "Linux asset"
     # The station's binaries: what its updater installs as root on the user's server.
     for station_asset in $station_assets; do
         station_path="$station_asset_dir/$station_asset"
@@ -193,6 +199,9 @@ repository_api="repos/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 # The station's Linux binaries, built beside the Windows one and verified the same way.
 station_assets="moon-station-x86_64 moon-station-aarch64"
 station_asset_dir="${STATION_ASSET_DIR:?STATION_ASSET_DIR is required: the directory holding the local station binaries}"
+# The Linux terminal, one executable built beside the Windows one and verified the same way.
+linux_asset="MoonTerminal-linux-x86_64"
+linux_asset_path="${LINUX_ASSET_PATH:?LINUX_ASSET_PATH is required: the local Linux terminal binary}"
 
 if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     fail "non-canonical release tag: $release_tag"
@@ -204,6 +213,7 @@ if ! valid_u64_component "$release_major" \
     fail "release tag exceeds the supported numeric range: $release_tag"
 fi
 [[ -f "$asset_path" ]] || fail "local Windows asset is missing: $asset_path"
+[[ -f "$linux_asset_path" ]] || fail "local Linux asset is missing: $linux_asset_path"
 for station_asset in $station_assets; do
     [[ -f "$station_asset_dir/$station_asset" ]] \
         || fail "local station asset is missing: $station_asset_dir/$station_asset"

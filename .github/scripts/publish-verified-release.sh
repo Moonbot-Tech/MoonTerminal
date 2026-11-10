@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Publish the exact verified draft while its remote tag still names the built commit. The draft's
-# Windows and station binaries are checked against the local ones: the Windows asset is the third
-# argument, the station binaries sit in STATION_ASSET_DIR (see verify-release-assets.sh).
+# Windows, Linux and station binaries are checked against the local ones: the Windows asset is
+# the third argument, the station binaries sit in STATION_ASSET_DIR and the Linux terminal is
+# LINUX_ASSET_PATH (see verify-release-assets.sh, which reads both from the environment).
 set -euo pipefail
 
 release_tag="${1:?release tag is required}"

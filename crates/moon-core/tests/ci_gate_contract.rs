@@ -63,7 +63,7 @@ const LINUX_TESTS_JOB: &str = "linux-tests";
 /// The `release.yml` jobs that compile the terminal, and so must ship MoonUI at its latest master
 /// through the same lockfile contract as `build.yml`'s compiling jobs. The station jobs are left
 /// out: `moon-station` does not depend on MoonUI.
-const RELEASE_TERMINAL_JOBS: [&str; 2] = ["windows", "macos-slice"];
+const RELEASE_TERMINAL_JOBS: [&str; 3] = ["windows", "macos-slice", "linux"];
 
 /// Every job that must run the lockfile contract, with the workflow text it lives in: the build's
 /// compiling jobs, the standalone macOS and Linux probes and `release.yml`'s terminal jobs.
@@ -1694,10 +1694,12 @@ fn releases_verify_the_published_windows_digest() {
         "release list must contain exactly one release tagged $release_tag",
         "release_by_id",
         "release_json=\"$(release_by_id \"$listed_release_id\")\"",
-        "'[\"MoonTerminal.dmg\",\"MoonTerminal.exe\",\"moon-station-aarch64\",\"moon-station-x86_64\"]'",
+        "'[\"MoonTerminal-linux-x86_64\",\"MoonTerminal.dmg\",\"MoonTerminal.exe\",\"moon-station-aarch64\",\"moon-station-x86_64\"]'",
         "STATION_ASSET_DIR",
+        "LINUX_ASSET_PATH",
         "require_asset_matches \"$release_json\" \"$asset_name\"",
         "require_asset_matches \"$release_json\" \"$station_asset\"",
+        "require_asset_matches \"$release_json\" \"$linux_asset\"",
         "remote_digest=",
         "local_digest=",
         "remote_digest_lower=\"$(printf '%s' \"$remote_digest\" | tr '[:upper:]' '[:lower:]')\"",
@@ -1811,7 +1813,8 @@ fn releases_ship_the_station_under_the_names_its_updater_reads() {
     );
     assert!(
         text.lines()
-            .any(|line| line.trim() == "needs: [validate, windows, macos, station]"),
+            .any(|line| line.trim()
+                == "needs: [validate, windows, macos, station, linux, linux-smoke]"),
         "publication must wait for the station binaries"
     );
     assert_eq!(
@@ -1821,6 +1824,86 @@ fn releases_ship_the_station_under_the_names_its_updater_reads() {
             .count(),
         2,
         "both the draft verification and the publisher must check the station digests"
+    );
+}
+
+/// Breakage guarded: the Linux terminal stops shipping, ships under a name its updater never
+/// looks for (`moon_core::update::linux_terminal_asset_name`), is built on the runner's own image
+/// (a newer glibc than users have), goes out without the tags and so never asks for an update,
+/// is published without its digest being checked, or is published without ever having been
+/// started — the one thing nobody does by hand before a release that cannot be replaced.
+#[test]
+fn releases_ship_the_linux_terminal_built_started_and_verified() {
+    let text = release_workflow_text();
+    let linux = job_body(&text, "linux").expect("release.yml must keep the linux job");
+    let smoke = job_body(&text, "linux-smoke").expect("release.yml must keep the linux-smoke job");
+    let publish = job_body(&text, "publish").expect("release.yml must keep the publish job");
+    let has = |body: &[&str], want: &str| body.iter().any(|line| line.trim() == want);
+    let asset = moon_core::update::linux_terminal_asset_name();
+
+    for want in [
+        "container: ubuntu:22.04".to_owned(),
+        "fetch-depth: 0".to_owned(),
+        "run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-unknown-linux-gnu".to_owned(),
+        format!("cp target/x86_64-unknown-linux-gnu/release/moonterminal dist/{asset}"),
+        "if grep -q 'not found' ldd.txt; then".to_owned(),
+        "name: linux".to_owned(),
+        format!("path: dist/{asset}"),
+    ] {
+        assert!(has(&linux, &want), "the linux job must keep `{want}`");
+    }
+    assert!(
+        !linux.iter().any(|line| line.contains("continue-on-error")),
+        "the release's linux job is not a probe: a failed build must stop the release"
+    );
+
+    let probe = linux_probe_workflow_text();
+    let probe_build = job_body(&probe, LINUX_PROBE_JOB).expect("Linux probe job");
+    let probe_smoke = job_body(&probe, LINUX_SMOKE_JOB).expect("Linux smoke job");
+    assert_eq!(
+        apt_packages_of_step(&linux, "Install the build dependencies"),
+        apt_packages_of_step(&probe_build, "Install the build dependencies"),
+        "the release must build the Linux terminal with the probe's build packages — the list \
+         every pull request proves"
+    );
+    assert_eq!(
+        apt_packages_of_step(&smoke, "Install what the terminal needs at run time"),
+        apt_packages_of_step(&probe_smoke, "Install what the terminal needs at run time"),
+        "the release must start the Linux terminal on the probe's run-time packages"
+    );
+
+    for want in [
+        "needs: [validate, linux]".to_owned(),
+        "container: ubuntu:24.04".to_owned(),
+        format!("run: chmod +x dist/linux/{asset}"),
+        format!(
+            "run: bash .github/scripts/linux-gui-smoke.sh dist/linux/{asset} crates/moon-core/fixtures smoke-out"
+        ),
+    ] {
+        assert!(has(&smoke, &want), "the linux-smoke job must keep `{want}`");
+    }
+    assert!(
+        !smoke
+            .iter()
+            .any(|line| line.contains("continue-on-error") || line.contains("SMOKE_BLANK_FRAME")),
+        "the release's start-up check must fail on a blank frame and must stop the release"
+    );
+
+    assert!(
+        has(&publish, "name: linux") && has(&publish, "path: dist/linux"),
+        "the publish job must download the Linux terminal into dist/linux"
+    );
+    assert!(
+        has(&publish, &format!("dist/linux/{asset}")),
+        "the release must publish {asset}"
+    );
+    assert_eq!(
+        publish
+            .iter()
+            .filter(|line| line.trim() == format!("LINUX_ASSET_PATH: dist/linux/{asset}"))
+            .count(),
+        2,
+        "both the draft verification and the publisher must check the Linux digest"
     );
 }
 
@@ -2000,6 +2083,8 @@ fn create_release_script_fixture(purpose: &str) -> (PathBuf, String) {
     .expect("write release publisher into fixture");
     std::fs::write(root.join("MoonTerminal.exe"), b"abc")
         .expect("write local Windows asset fixture");
+    std::fs::write(root.join(LINUX_ASSET.0), LINUX_ASSET.1)
+        .expect("write local Linux asset fixture");
     std::fs::create_dir_all(root.join("station")).expect("create station asset directory");
     for (name, bytes) in STATION_ASSETS {
         std::fs::write(root.join("station").join(name), bytes)
@@ -2048,6 +2133,24 @@ fn create_release_script_fixture(purpose: &str) -> (PathBuf, String) {
 /// SHA-256 of the three-byte `abc` Windows asset the fixture writes, in GitHub's lowercase hex.
 const WINDOWS_ASSET_SHA256: &str =
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+/// The Linux terminal the fixture writes beside the Windows one: asset name and bytes.
+const LINUX_ASSET: (&str, &[u8]) = ("MoonTerminal-linux-x86_64", b"linux terminal");
+
+/// The published `assets` entry of the Linux fixture: the file's own size and digest, or
+/// `sha256` in place of its digest.
+fn linux_asset_json(sha256: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    let (name, bytes) = LINUX_ASSET;
+    let digest = match sha256 {
+        Some(forced) => forced.to_owned(),
+        None => format!("{:x}", Sha256::digest(bytes)),
+    };
+    format!(
+        r#"{{"name":"{name}","size":{},"digest":"sha256:{digest}"}}"#,
+        bytes.len()
+    )
+}
 
 /// The station binaries the fixture writes beside the Windows one, by asset name.
 const STATION_ASSETS: [(&str, &[u8]); 2] = [
@@ -2101,7 +2204,30 @@ fn release_fixture_json_full(
     exe_sha256: &str,
     station_x86_sha256: Option<&str>,
 ) -> String {
-    let station = station_assets_json(station_x86_sha256);
+    release_fixture_json_assets(
+        commit,
+        draft,
+        immutable,
+        exe_sha256,
+        station_x86_sha256,
+        Some(&linux_asset_json(None)),
+    )
+}
+
+/// The same release response with the Linux terminal's `assets` entry chosen by the caller:
+/// `None` leaves the Linux terminal out of the release altogether.
+fn release_fixture_json_assets(
+    commit: &str,
+    draft: bool,
+    immutable: bool,
+    exe_sha256: &str,
+    station_x86_sha256: Option<&str>,
+    linux: Option<&str>,
+) -> String {
+    let station = match linux {
+        Some(linux) => format!("{linux},{}", station_assets_json(station_x86_sha256)),
+        None => station_assets_json(station_x86_sha256),
+    };
     format!(
         r#"{{"id":4242,"tag_name":"v0.24.2","target_commitish":"{commit}","draft":{draft},"prerelease":false,"immutable":{immutable},"assets":[{{"name":"MoonTerminal.dmg","size":7,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:{exe_sha256}"}},{station}]}}"#
     )
@@ -2235,6 +2361,7 @@ fn run_release_script(root: &Path, script: &str, args: &[&str]) -> Output {
         .env("GITHUB_REPOSITORY", "Moonbot-Tech/MoonTerminal")
         .env("GH_TOKEN", "fixture-token")
         .env("STATION_ASSET_DIR", root.join("station"))
+        .env("LINUX_ASSET_PATH", root.join(LINUX_ASSET.0))
         .output()
         .expect("run release script fixture")
 }
@@ -2337,6 +2464,42 @@ fn release_verifier_rejects_a_bad_station_digest() {
         Err("published digest does not match the local station asset moon-station-x86_64"),
     );
     std::fs::remove_dir_all(root).expect("remove bad-station-digest fixture");
+}
+
+/// Accepting a mismatched Linux digest would publish a file every Linux terminal then downloads
+/// and runs in place of itself; a release without the Linux terminal would leave those builds
+/// believing they are current for good.
+#[test]
+fn release_verifier_rejects_a_bad_or_missing_linux_asset() {
+    if !script_fixtures_can_run() {
+        return;
+    }
+    let (root, commit) = create_release_script_fixture("bad-linux-asset");
+    write_draft_fixture(
+        &root,
+        &release_fixture_json_assets(
+            &commit,
+            true,
+            false,
+            WINDOWS_ASSET_SHA256,
+            None,
+            Some(&linux_asset_json(Some(&"e".repeat(64)))),
+        ),
+    );
+    assert_verifier(
+        &root,
+        Err("published digest does not match the local Linux asset"),
+    );
+
+    write_draft_fixture(
+        &root,
+        &release_fixture_json_assets(&commit, true, false, WINDOWS_ASSET_SHA256, None, None),
+    );
+    assert_verifier(
+        &root,
+        Err("release must contain exactly MoonTerminal-linux-x86_64"),
+    );
+    std::fs::remove_dir_all(root).expect("remove bad-linux-asset fixture");
 }
 
 /// Publishing by tag or checking postconditions out of order can finalize the wrong draft.
