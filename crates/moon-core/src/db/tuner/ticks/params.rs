@@ -505,9 +505,8 @@ const ENTRY_INPUT_KEYS: &[&str] = &["AutoCancelBuy", "MShotAddArbRange", "UsePos
 const RULE_SWITCH_KEYS: &[&str] = &[
     // No sell order at all.
     "AutoSell",
-    // SellShot is on only with a distance to keep.
+    // SellShot is on by its switch alone, whatever the distance.
     "IgnoreSellShot",
-    "SellShotDistance",
     "IgnoreSellSpread",
 ];
 
@@ -823,7 +822,7 @@ pub fn entry_params_for(kind: &str, v: &StrategyValues<'_>, model: ModelSettings
 
 /// Core sell defaults used only when neither a historical value nor the schema supplies one.
 /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
-const CORE_SELL_PRICE: f64 = 0.5;
+pub(super) const CORE_SELL_PRICE: f64 = 0.5;
 const CORE_PRICE_DOWN_PERCENT: f64 = 0.2;
 const CORE_PRICE_DOWN_DELAY: f64 = 10.0;
 const CORE_PRICE_DOWN_ALLOWED_DROP: f64 = 0.1;
@@ -855,7 +854,15 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         custom_ema_delay_s: v.num("SellEMADelay", 0.0),
         sell_price_pct: v.num("SellPrice", CORE_SELL_PRICE),
         sell_at_last_price: v.bool("MShotSellAtLastPrice", base.sell_at_last_price),
-        sell_price_adjust_pct: v.num("MShotSellPriceAdjust", base.sell_price_adjust_pct),
+        // Read as a magnitude of at most 20 %, matching the core's rule: a variant past it
+        // runs as the bound's. A value that is no number stays one — `f64::min` would make
+        // it the bound — and the sell then has no price (`sell_order::ask_take_factor`).
+        sell_price_adjust_pct: {
+            let adjust = v
+                .num("MShotSellPriceAdjust", base.sell_price_adjust_pct)
+                .abs();
+            if adjust > 20.0 { 20.0 } else { adjust }
+        },
         sell_delay_ms: v.num("SellDelay", base.sell_delay_ms),
         hook_sell_level_pct: v.num("HookSellLevel", base.hook_sell_level_pct),
         hook_sell_fixed: v.bool("HookSellFixed", base.hook_sell_fixed),
@@ -970,15 +977,16 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
 /// off (`assets/param_deps.toml`). On this machine's reports (2026-09-23) the trailing stop was
 /// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; both are modelled since
 /// 2026-09-24 (`exit::stops::trailing`, `exit::stops::ladder`). SellShot and SellSpread are not modelled
-/// at all (the developer's call, 2026-09-24); each is on for 2 live strategies of 1 422 (24.09),
-/// SellShot only where a distance is set (the walk kept it off at a zero one). `AutoSell` off
+/// at all (the developer's call, 2026-09-24); each is on for 2 live strategies of 1 422 (24.09).
+/// SellShot is on by `IgnoreSellShot` alone: at a zero `SellShotDistance` it still holds the
+/// sell at the recent high, inside its corridor (matches the core's rule). `AutoSell` off
 /// places no sell order at all (no live strategy, 24.09). Unsupported or unparsed custom-EMA
 /// formulas and the remaining uncovered sell fields raise warnings in `unmodelled`; this
 /// function names the rules that take a trade out of the verdict.
 pub(super) fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
     if !v.bool("AutoSell", true) {
         Some(UnmodelledRule::NoAutoSell)
-    } else if !v.bool("IgnoreSellShot", true) && v.num("SellShotDistance", 0.0) != 0.0 {
+    } else if !v.bool("IgnoreSellShot", true) {
         Some(UnmodelledRule::SellShot)
     } else if !v.bool("IgnoreSellSpread", true) {
         Some(UnmodelledRule::SellSpread)

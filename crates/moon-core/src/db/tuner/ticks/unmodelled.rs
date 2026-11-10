@@ -52,11 +52,9 @@ use crate::feed::strategy_deps::{FieldDeps, Values, as_bool};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Also {
     Nothing,
-    /// `UseScalpingMode` acts only while `SellPrice` is under 1 % (the site's Sell order tab).
-    SellPriceUnderOne,
-    /// SellShot keeps the sell at a distance only when there is one (`SellShotDistance` ≠ 0) —
-    /// as `params::unmodelled_rule` reads it.
-    SellShotDistance,
+    /// `UseScalpingMode` acts only while `SellPrice` is 1 % or under (the site's Sell order
+    /// tab; the bound itself included, matching the core's rule).
+    SellPriceAtMostOne,
     /// Only nonblank formulas the evaluator cannot parse or support need a warning.
     CustomEmaNotCovered,
 }
@@ -104,7 +102,7 @@ const WATCHED: &[Watched] = &[
     },
     // The sell placed under the ASK book's walls, up to 2 % — the book, which the tape has not.
     Watched {
-        also: Also::SellPriceUnderOne,
+        also: Also::SellPriceAtMostOne,
         ..watched("UseScalpingMode", ParamSection::SellOrder, "NO")
     },
     // Sells when the filters' bounds are left, seconds after the buy; 0 is off.
@@ -114,9 +112,9 @@ const WATCHED: &[Watched] = &[
         also: Also::CustomEmaNotCovered,
         ..watched("SellByCustomEMA", ParamSection::SellOrder, "")
     },
-    // SellShot.
+    // SellShot: on by its switch alone, a zero `SellShotDistance` included — as
+    // `params::unmodelled_rule` reads it.
     Watched {
-        also: Also::SellShotDistance,
         rule: Some(UnmodelledRule::SellShot),
         ..watched("IgnoreSellShot", ParamSection::SellShot, "YES")
     },
@@ -158,7 +156,6 @@ const CONDITION_KEYS: &[&[&str]] = &[
         "AutoSell",
         "UseStopLoss",
         "SellPrice",
-        "SellShotDistance",
         "CheckAfterBuy",
         "SignalType",
         "IgnoreFilters",
@@ -426,9 +423,9 @@ fn also_holds(
     };
     match also {
         Also::Nothing => true,
-        // The model's own fallback for `SellPrice` (`ExitParams::default`).
-        Also::SellPriceUnderOne => num("SellPrice", 1.0) < 1.0,
-        Also::SellShotDistance => num("SellShotDistance", 0.0) != 0.0,
+        // The fallback `params::exit_params` runs the sell on when neither the dump nor the
+        // schema carries `SellPrice`.
+        Also::SellPriceAtMostOne => num("SellPrice", super::params::CORE_SELL_PRICE) <= 1.0,
         Also::CustomEmaNotCovered => values.get("SellByCustomEMA").is_some_and(|text| {
             !text.trim().is_empty()
                 && super::custom_ema::parse(text)

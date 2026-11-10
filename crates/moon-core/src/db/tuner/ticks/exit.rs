@@ -142,7 +142,8 @@ pub struct ExitParams {
     /// for MoonShot alone (`sell_order::lifts_take_to_ask`): the core's schema defaults it on,
     /// so strategies of every kind carry it.
     pub sell_at_last_price: bool,
-    /// `MShotSellPriceAdjust` — per cent SUBTRACTED from the pre-spike price.
+    /// `MShotSellPriceAdjust` — per cent SUBTRACTED from the pre-spike price; a strategy's
+    /// value arrives as a magnitude of at most 20 (`params::exit_params`).
     pub sell_price_adjust_pct: f64,
     /// `SellDelay` — milliseconds the core waits before placing the sell; prints inside the
     /// delay cannot fill it.
@@ -382,7 +383,7 @@ impl ExitParams {
 /// A sell rule the strategy can switch on that the model does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnmodelledRule {
-    /// `IgnoreSellShot` off with a `SellShotDistance` — the sell kept at a distance from the
+    /// `IgnoreSellShot` off, whatever the `SellShotDistance` — the sell kept at a distance from the
     /// market's high.
     SellShot,
     /// `IgnoreSellSpread` off — the sell placed under the spread.

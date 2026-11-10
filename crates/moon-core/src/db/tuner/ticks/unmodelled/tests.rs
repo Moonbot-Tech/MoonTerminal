@@ -209,23 +209,27 @@ fn covered_formula_raises_no_warning() {
     assert!(unmodelled_fields(&v, &HashMap::new(), &FieldDeps::bundled()).is_empty());
 }
 
-/// `UseScalpingMode` acts only under a 1 % `SellPrice`; SellShot only with a distance.
+/// `UseScalpingMode` acts only at a `SellPrice` of 1 % or under, the bound included; SellShot
+/// by its switch alone, a zero distance included.
 #[test]
 fn the_extra_conditions_hold_the_field_back() {
     let deps = FieldDeps::bundled();
     let wide = values(&[("UseScalpingMode", "YES"), ("SellPrice", "1.2")]);
     assert!(unmodelled_fields(&wide, &HashMap::new(), &deps).is_empty());
-    let tight = values(&[("UseScalpingMode", "YES"), ("SellPrice", "0,5")]);
-    assert_eq!(
-        keys(&unmodelled_fields(&tight, &HashMap::new(), &deps)),
-        ["UseScalpingMode"]
-    );
-    let still = values(&[("IgnoreSellShot", "NO"), ("SellShotDistance", "0")]);
-    assert!(unmodelled_fields(&still, &HashMap::new(), &deps).is_empty());
-    let shot = values(&[("IgnoreSellShot", "NO"), ("SellShotDistance", "0.5")]);
-    let found = unmodelled_fields(&shot, &HashMap::new(), &deps);
-    assert_eq!(keys(&found), ["IgnoreSellShot"]);
-    assert_eq!(found[0].rule, Some(UnmodelledRule::SellShot));
+    for sell_price in ["0,5", "1"] {
+        let tight = values(&[("UseScalpingMode", "YES"), ("SellPrice", sell_price)]);
+        assert_eq!(
+            keys(&unmodelled_fields(&tight, &HashMap::new(), &deps)),
+            ["UseScalpingMode"],
+            "SellPrice {sell_price}"
+        );
+    }
+    for distance in ["0", "0.5"] {
+        let shot = values(&[("IgnoreSellShot", "NO"), ("SellShotDistance", distance)]);
+        let found = unmodelled_fields(&shot, &HashMap::new(), &deps);
+        assert_eq!(keys(&found), ["IgnoreSellShot"], "distance {distance}");
+        assert_eq!(found[0].rule, Some(UnmodelledRule::SellShot));
+    }
 }
 
 /// `AutoSell` is watched the other way round: NO is what the model does not have.
