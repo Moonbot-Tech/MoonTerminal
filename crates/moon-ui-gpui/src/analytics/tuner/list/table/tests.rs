@@ -25,6 +25,7 @@ use crate::design;
 struct IdentityWidthProbe {
     with_core: bool,
     all_metrics: bool,
+    long_name: bool,
 }
 
 /// Stable synthetic values cover grouped money, signs, large tails and coin-list counts.
@@ -48,7 +49,11 @@ fn strategy_geometry_group() -> moon_core::db::analytics::GroupStat {
 impl Render for IdentityWidthProbe {
     /// Draw the same width owners as the sortable header and the strategy body.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let group = strategy_geometry_group();
+        let mut group = strategy_geometry_group();
+        if self.long_name {
+            group.core = "CORE_A / VENUE_A / UNIT_01".into();
+            group.name = "ALPHA LONG / MEDIUM VOLUME / ".repeat(3);
+        }
         let scale = design::font_scale(cx);
         let core_w = super::core_col_w(std::slice::from_ref(&group), scale, cx);
         let widths = super::metric_col_widths(std::slice::from_ref(&group), cx);
@@ -63,7 +68,7 @@ impl Render for IdentityWidthProbe {
                 } else {
                     "identity-row"
                 };
-                let mut columns = super::fixed_columns(cx, self.with_core);
+                let mut columns = super::fixed_columns(cx);
                 if self.with_core {
                     columns = columns.child(
                         super::column_width(
@@ -134,7 +139,7 @@ impl Render for IdentityWidthProbe {
     }
 }
 
-/// A long core must not truncate beside a mostly empty name column on a wide table.
+/// Identity cells must fit their labels before the name receives all remaining row space.
 #[gpui::test]
 fn strategy_and_core_share_spare_width_without_stretching_metrics(cx: &mut gpui::TestAppContext) {
     for theme in [
@@ -153,73 +158,93 @@ fn strategy_and_core_share_spare_width_without_stretching_metrics(cx: &mut gpui:
             let _locale = crate::test_locale::force(language.code());
             for zoom in [1.0, 1.25] {
                 for with_core in [true, false] {
-                    let mut narrow_name = px(0.0);
-                    let mut narrow_core = px(0.0);
-                    for width in [740.0, 2000.0] {
-                        let window =
-                            cx.open_window(gpui::size(px(width * zoom), px(150.0)), |_, _| {
-                                IdentityWidthProbe {
-                                    with_core,
-                                    all_metrics: false,
-                                }
-                            });
-                        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-                        visual.update(|window, cx| window.set_content_zoom(zoom, cx));
-                        for _ in 0..3 {
-                            visual.update(|window, cx| {
-                                let _ = window.draw(cx);
-                            });
-                        }
-                        let name = visual.debug_bounds("identity-row-name").expect("name");
-                        let row = visual.debug_bounds("identity-row-bounds").expect("row");
-                        for i in [0, 1, 2, 3, 5, 6] {
-                            let cell = visual
-                                .debug_bounds(leak(format!("identity-row-metric-{i}")))
-                                .expect("metric");
-                            let header = visual
-                                .debug_bounds(leak(format!("identity-header-metric-{i}")))
-                                .expect("heading");
-                            assert!(
-                                (cell.left() - header.left()).abs() <= px(0.5),
-                                "header drift: {language:?} {theme:?} width {width}"
-                            );
-                            assert!(
-                                cell.right() <= row.right(),
-                                "metric escaped: {language:?} {theme:?} width {width}"
-                            );
-                        }
-                        if with_core {
-                            let core = visual.debug_bounds("identity-row-core").expect("core");
-                            assert!(name.right() <= core.left(), "identity columns overlap");
-                            if width == 740.0 {
-                                narrow_name = name.size.width;
-                                narrow_core = core.size.width;
-                            } else {
-                                // Both labels must receive the extra space instead of reserving
-                                // almost half the wide table for a short strategy name.
-                                assert!(core.size.width - narrow_core >= px(400.0));
-                                assert!(name.size.width - narrow_name >= px(400.0));
-                                assert!(name.size.width < row.size.width * 0.4);
-                                let required = visual.update(|_, cx| {
-                                    design::mono_body_text_width(
-                                        cx,
-                                        "CORE_A / VENUE_A / ACCOUNT_ALPHA / INSTRUMENTS",
-                                        400.0,
-                                    )
+                    for long_name in [false, true] {
+                        for width in [740.0, 2000.0] {
+                            let window =
+                                cx.open_window(gpui::size(px(width * zoom), px(150.0)), |_, _| {
+                                    IdentityWidthProbe {
+                                        with_core,
+                                        all_metrics: false,
+                                        long_name,
+                                    }
                                 });
+                            let mut visual =
+                                gpui::VisualTestContext::from_window(window.into(), cx);
+                            visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+                            for _ in 0..3 {
+                                visual.update(|window, cx| {
+                                    let _ = window.draw(cx);
+                                });
+                            }
+                            let name = visual.debug_bounds("identity-row-name").expect("name");
+                            let row = visual.debug_bounds("identity-row-bounds").expect("row");
+                            for i in [0, 1, 2, 3, 5, 6] {
+                                let cell = visual
+                                    .debug_bounds(leak(format!("identity-row-metric-{i}")))
+                                    .expect("metric");
+                                let header = visual
+                                    .debug_bounds(leak(format!("identity-header-metric-{i}")))
+                                    .expect("heading");
                                 assert!(
-                                    f32::from(core.size.width) >= required,
-                                    "core still clipped beside spare space"
+                                    (cell.left() - header.left()).abs() <= px(0.5),
+                                    "header drift: {language:?} {theme:?} width {width}"
+                                );
+                                assert!(
+                                    cell.right() <= row.right(),
+                                    "metric escaped: {language:?} {theme:?} width {width}"
                                 );
                             }
-                        } else {
-                            let first = visual
-                                .debug_bounds("identity-row-metric-0")
-                                .expect("first metric");
-                            assert!(
-                                (first.left() - name.right() - px(8.0)).abs() <= px(0.5),
-                                "hidden core left an empty column"
-                            );
+                            if with_core {
+                                let core = visual.debug_bounds("identity-row-core").expect("core");
+                                assert!(name.right() <= core.left(), "identity columns overlap");
+                                let header = visual
+                                    .debug_bounds("identity-header-core")
+                                    .expect("core header");
+                                assert!((core.left() - header.left()).abs() <= px(0.5));
+                                assert!((core.size.width - header.size.width).abs() <= px(0.5));
+                                if width == 2000.0 {
+                                    let (required, name_required) = visual.update(|_, cx| {
+                                        let mut group = strategy_geometry_group();
+                                        if long_name {
+                                            group.core = "CORE_A / VENUE_A / UNIT_01".into();
+                                            group.name = "ALPHA LONG / MEDIUM VOLUME / ".repeat(3);
+                                        }
+                                        (
+                                            design::mono_body_text_width(cx, &group.core, 400.0),
+                                            design::mono_body_text_width(cx, &group.name, 400.0),
+                                        )
+                                    });
+                                    assert!(
+                                        f32::from(core.size.width) >= required,
+                                        "core still clipped beside spare space"
+                                    );
+                                    assert!(
+                                        f32::from(core.size.width) <= required + 1.0,
+                                        "core absorbed space beyond its content: {:?}, needs {required}",
+                                        core.size.width
+                                    );
+                                    assert!(
+                                        f32::from(name.size.width) >= name_required,
+                                        "strategy name clipped: {language:?} {theme:?} zoom {zoom}, long_name {long_name}: {:?}, needs {name_required}",
+                                        name.size.width
+                                    );
+                                    let first = visual
+                                        .debug_bounds("identity-row-metric-0")
+                                        .expect("first metric");
+                                    assert!(
+                                        (first.left() - core.right() - px(8.0)).abs() <= px(0.5),
+                                        "fixed group retained empty space after the core"
+                                    );
+                                }
+                            } else {
+                                let first = visual
+                                    .debug_bounds("identity-row-metric-0")
+                                    .expect("first metric");
+                                assert!(
+                                    (first.left() - name.right() - px(8.0)).abs() <= px(0.5),
+                                    "hidden core left an empty column"
+                                );
+                            }
                         }
                     }
                 }
@@ -290,6 +315,7 @@ fn all_strategy_metrics_fit_and_align(cx: &mut gpui::TestAppContext) {
                 IdentityWidthProbe {
                     with_core: true,
                     all_metrics: true,
+                    long_name: false,
                 }
             });
             let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
@@ -444,7 +470,7 @@ impl Render for ColumnSpacingProbe {
                     "spacing-row"
                 };
                 h_flex().w_full().child(div().flex_1().min_w_0()).child(
-                    super::fixed_columns(cx, false)
+                    super::fixed_columns(cx)
                         .children(
                             super::METRIC_COLS
                                 .iter()

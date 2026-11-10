@@ -46,10 +46,10 @@ fn strat_row_h(cx: &App) -> f32 {
 const COLUMN_GAP: f32 = 8.0;
 
 /// Share the fixed-column spacing between the header, rows and rendered geometry probe.
-fn fixed_columns(cx: &App, with_core: bool) -> Div {
+fn fixed_columns(cx: &App) -> Div {
     h_flex()
-        // Share spare width with the name only when the core cell can consume it.
-        .flex_grow(if with_core { 1.0 } else { 0.0 })
+        // Its intrinsic width includes the full core label; only the name takes surplus.
+        .flex_grow_0()
         .flex_shrink_1()
         .min_w_0()
         .gap(design::ui_px(cx, COLUMN_GAP))
@@ -57,11 +57,21 @@ fn fixed_columns(cx: &App, with_core: bool) -> Div {
 }
 
 /// Apply one sizing policy to body identities, sortable headings and geometry probes.
-fn column_width<T: Styled>(column: T, key: &str, width: Option<(f32, f32)>, cx: &App) -> T {
+fn column_width<T: Styled + FluentBuilder>(
+    column: T,
+    key: &str,
+    width: Option<(f32, f32)>,
+    cx: &App,
+) -> T {
     match width {
         Some((width, min)) => column
             .w(design::font_w_px(cx, width))
             .min_w(design::font_w_px(cx, min))
+            .when(key == SORT_CORE, |column| {
+                column
+                    .flex_basis(design::font_w_px(cx, width.min(CORE_W_MAX)))
+                    .max_w(design::font_w_px(cx, width))
+            })
             .flex_grow(if key == SORT_CORE { 1.0 } else { 0.0 })
             .flex_shrink_1(),
         None => column
@@ -492,7 +502,7 @@ fn strategy_row(
     let core_text = core_label(g);
     // Cloned before the column consumes it: the context menu names the same core the row shows.
     let menu_core_name = core_text.clone();
-    // The name and core share spare width; measured numeric cells keep their compact widths.
+    // The core stops at its content width; the name takes the rest of the available space.
     // The header uses the same two flex groups to keep every column aligned on resize.
     let mut row = h_flex()
         .id(SharedString::from(format!("an-strat-{}", g.key)))
@@ -532,7 +542,7 @@ fn strategy_row(
                 }),
         )
         .child(
-            fixed_columns(cx, view.col_shown(COL_BIT_CORE))
+            fixed_columns(cx)
                 // Shrinkable, not rigid: the columns inside carry their own floors, so the
                 // row squeezes them evenly and only overflows once every one is at its
                 // floor — instead of sliding off the edge at full width.
@@ -725,9 +735,9 @@ impl AnalyticsView {
                 false,
                 Some(t!("analytics.strat.hint").to_string()),
             ))
-            // The core absorbs this group's share of spare width, just as in the rows.
+            // Keep this group content-sized, just as in the rows.
             .child(
-                fixed_columns(cx, self.col_shown(COL_BIT_CORE))
+                fixed_columns(cx)
                     .children(self.col_shown(COL_BIT_KIND).then(|| {
                         sortable(
                             "an-hdr-kind".into(),
@@ -1126,10 +1136,11 @@ fn core_label(g: &GroupStat) -> String {
     }
 }
 
-/// Preferred width of the core column, in font-scaled BASE px (the callers wrap it in
+/// Content width of the core column, in font-scaled BASE px (the callers wrap it in
 /// `font_w_px`): the widest single-core label the list can draw, measured in the font the
-/// cell renders with (the window root's mono family at body size), clamped to
-/// [`CORE_W`, `CORE_W_MAX`].
+/// cell renders with (the window root's mono family at body size), with a [`CORE_W`] floor.
+/// [`column_width`] caps only the flex basis at [`CORE_W_MAX`], so wide rows can fit long
+/// labels while narrow rows can still squeeze them beside the metrics.
 ///
 /// Content-measured because the single-core label is a free-form server name: any fixed
 /// width either truncates it on a wide window or wastes the row on a narrow one. Measured
@@ -1158,7 +1169,7 @@ fn core_col_w(groups: &[GroupStat], scale: f32, cx: &App) -> f32 {
     // which scales again — divide back to base units (this also makes the cached value hold
     // across Font-slider moves). Ceil so a fractional shortfall cannot ellipsize the widest
     // name the column was sized for.
-    (w / scale).ceil().clamp(CORE_W, CORE_W_MAX)
+    (w / scale).ceil().max(CORE_W)
 }
 
 /// Font-scaled gutter added to every numeric column so neighbouring figures never touch.

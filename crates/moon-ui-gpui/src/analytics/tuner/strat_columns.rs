@@ -101,8 +101,8 @@ pub(super) const KIND_MIN_W: f32 = 48.0;
 pub(super) const CORE_W: f32 = 88.0;
 /// How narrow the core column may be squeezed once row space runs short.
 pub(super) const CORE_MIN_W: f32 = 56.0;
-/// Ceiling of the measured core width: one anomalously named server must not push the
-/// metric columns off the row.
+/// Ceiling of the core column's flex basis: long labels may grow to their measured width
+/// on wide rows, but must still yield space to the metrics on narrow rows.
 pub(super) const CORE_W_MAX: f32 = 240.0;
 /// Full mask — every toggleable column visible (kind, core, all metric columns, lastedit).
 ///

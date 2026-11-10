@@ -334,7 +334,7 @@ pub struct AnalyticsView {
     /// Visible-column bitmask of the strategy list, PER axis: the list sits beside a
     /// different tool in each mode and is asked a different question there.
     pub(super) strat_cols: moon_core::config::layout::StratColsByMode,
-    /// Content-measured preferred width of the strategy list's core column as
+    /// Uncapped content-measured width of the strategy list's core column as
     /// `(font_scale_it_was_measured_under, width_in_base_px)` (`tuner::list::table::core_col_w`).
     /// Filled lazily on render; measuring lays out a glyph per character for every distinct core
     /// name, too much to repay on an idle repaint. It is cleared only when a published base
