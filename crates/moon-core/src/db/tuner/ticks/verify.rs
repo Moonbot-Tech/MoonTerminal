@@ -864,7 +864,7 @@ pub fn stated_stop_level(reason: &str) -> Option<f64> {
 /// at the fill), floored at the price tolerance (`ModelSettings::price_pct`) — see the module
 /// doc.
 pub fn entry_tolerance_pct(params: &MshotParams, deal: &Deal) -> f64 {
-    let (near, far) = params.bounds_pct(&deal.deltas_at(deal.buy_ms));
+    let (near, far) = params.bounds_pct(&deal.corridor_deltas_at(deal.buy_ms));
     (far - near).max(params.model.price_pct)
 }
 

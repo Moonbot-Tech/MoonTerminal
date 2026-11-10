@@ -61,7 +61,8 @@ pub struct ModelSettings {
     /// How long a replacement — of the sell, and of the entry order on a core with no measured
     /// round trip (`Deal::round_trip_ms`) — takes to reach the book.
     pub latency_ms: f64,
-    /// The window a re-placed entry order's price is read off.
+    /// The short window an entry order's price is read off — alone without `MShotRaiseWait`,
+    /// inside the wait's own window with it (`mshot::Reference::placement`).
     pub replace_window_ms: i64,
     /// How far past the fact's fill a shifted order may still be reached by the same spike.
     pub shift_window_ms: i64,

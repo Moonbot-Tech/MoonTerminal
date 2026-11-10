@@ -13,7 +13,7 @@
 //! snapshot (0.105).
 
 use super::sell_order::{archived_take, take_is_recorded};
-use super::{ExitModel, ExitParams, Side};
+use super::{ExitModel, ExitParams};
 use crate::db::tuner::ticks::mshot::Modifiers;
 use crate::db::tuner::ticks::verify::{
     REASON_STOP, REASON_TAKE, reason_starts_with, stated_stop_level,
@@ -70,18 +70,8 @@ fn model_sum(mods: &Modifiers, deal: &Deal, at_ms: i64) -> (f64, bool) {
     // floor it at zero before it enters the Add sum.
     // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/delta-modifiers-tab
     // MarkPriceDelta: https://moonbot.pro/documentation/reports-window/main-reports-area-with-settings
-    deltas.dmark = oriented_mark(deal, deltas.dmark);
+    deltas.dmark = deal.oriented_mark(deltas.dmark);
     (mods.near_addition(&deltas).abs(), deltas.dmark > 0.0)
-}
-
-/// Only adverse mark deviation contributes to the sell sum or receives residual weight.
-fn oriented_mark(deal: &Deal, mark: f64) -> f64 {
-    (Side {
-        long: deal.is_long(),
-    }
-    .sign()
-        * mark)
-        .max(0.0)
 }
 
 /// The weights the record's miss is spread over, one per `Add*` term: the coefficient's

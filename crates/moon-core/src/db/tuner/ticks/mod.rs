@@ -94,7 +94,8 @@ pub fn reaches(price: f64, level: f64, from_below: bool) -> bool {
 }
 
 /// A level snapped to the market's price grid: down to the step below when `down`, up to the
-/// step above otherwise — the entry's placement, which the core rounds AWAY from the price. A
+/// step above otherwise — a placement kept on its own side of the price (the gated Drops entry;
+/// the MoonShot corridor rounds to the nearest step, [`round_to_step`]). A
 /// level already on the grid stays — the quotient is read with [`PRICE_EPS`] of slack, so
 /// `0.3379` computed as `0.33789999` does not lose a step. A non-positive step snaps nothing.
 ///
@@ -337,7 +338,10 @@ impl Deal {
         order_open_at(self.buy_ms, self.buy_set_ms)
     }
 
-    /// The deltas the entry order lived through, one per refresh step of the live track
+    /// The deltas the entry order lived through, as the MoonShot corridor reads them — the mark
+    /// delta turned to the position's side and floored at zero ([`Self::corridor_deltas`]), so
+    /// not a reading for the sell's sum, which orients its own — one per refresh step of the
+    /// live track
     /// ([`deltas::STEP_MS`]) and one per point of the recorded list ([`quotes`]) from the order's
     /// creation ([`Deal::order_open_ms`]) to the fill, the fill's own included — the core
     /// re-places the corridor when a delta moves, so these
@@ -349,7 +353,7 @@ impl Deal {
     pub fn entry_deltas(&self) -> Vec<Deltas> {
         let mark_live = self.quotes.as_ref().is_some_and(|q| q.mark_live());
         if self.delta_track.is_none() && !mark_live {
-            return vec![self.deltas];
+            return vec![self.corridor_deltas(self.deltas)];
         }
         let to = self.buy_ms;
         let from = self.order_open_ms().unwrap_or(to);
@@ -364,7 +368,29 @@ impl Deal {
         moments.push(to);
         moments.sort_unstable();
         moments.dedup();
-        moments.into_iter().map(|t| self.deltas_at(t)).collect()
+        moments
+            .into_iter()
+            .map(|t| self.corridor_deltas_at(t))
+            .collect()
+    }
+
+    /// The mark-price delta as a delta-modifier sum reads it: turned to the position's side and
+    /// floored at zero, so only a mark price standing against the position enters the sum. One
+    /// rule for both families — the sell's `Add*` and the corridor's `MShotAdd*`.
+    pub fn oriented_mark(&self, mark: f64) -> f64 {
+        (if self.is_long() { mark } else { -mark }).max(0.0)
+    }
+
+    /// Deltas as the MoonShot corridor reads them: the mark delta oriented
+    /// ([`Self::oriented_mark`]), every other field as it stands.
+    pub fn corridor_deltas(&self, mut deltas: Deltas) -> Deltas {
+        deltas.dmark = self.oriented_mark(deltas.dmark);
+        deltas
+    }
+
+    /// [`Self::deltas_at`] as the MoonShot corridor reads it ([`Self::corridor_deltas`]).
+    pub fn corridor_deltas_at(&self, t_ms: i64) -> Deltas {
+        self.corridor_deltas(self.deltas_at(t_ms))
     }
 
     /// The deltas as the core held them at a moment: every field the live track answers for

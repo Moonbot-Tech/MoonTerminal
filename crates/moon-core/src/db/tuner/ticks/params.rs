@@ -738,6 +738,12 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
     let base = MshotParams::default();
     // KB default: 300 s. MoonShot's documented minimum for a positive timer is 15 s.
     let auto_cancel_buy_s = v.num("AutoCancelBuy", 300.0);
+    // The core reads the corridor's coefficients as magnitudes under a ceiling of their own: 1
+    // for the coin's deltas, 10 for the market's and BTC's, 5 for the price bug — all but the
+    // mark's, which it takes as written. A value past its ceiling runs as the ceiling, so a
+    // variant past it is the ceiling's variant.
+    let coin = |key: &str| v.num(key, 0.0).abs().min(1.0);
+    let wide = |key: &str| v.num(key, 0.0).abs().min(10.0);
     MshotParams {
         price_pct: v.num("MShotPrice", base.price_pct),
         price_min_pct: v.num("MShotPriceMin", base.price_min_pct),
@@ -752,20 +758,20 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
         minus_satoshi: v.bool("MShotMinusSatoshi", base.minus_satoshi),
         fast_algo: v.bool("FastShotAlgo", base.fast_algo),
         modifiers: Modifiers {
-            add_5s: v.num("MShotAdd5sDelta", 0.0),
-            add_1m: v.num("MShotAdd1minDelta", 0.0),
-            add_5m: v.num("MShotAdd5minDelta", 0.0),
-            add_15m: v.num("MShotAdd15minDelta", 0.0),
-            add_1h: v.num("MShotAddHourlyDelta", 0.0),
-            add_3h: v.num("MShotAdd3hDelta", 0.0),
-            add_24h: v.num("MShotAdd24hDelta", 0.0),
+            add_5s: coin("MShotAdd5sDelta"),
+            add_1m: coin("MShotAdd1minDelta"),
+            add_5m: coin("MShotAdd5minDelta"),
+            add_15m: coin("MShotAdd15minDelta"),
+            add_1h: coin("MShotAddHourlyDelta"),
+            add_3h: coin("MShotAdd3hDelta"),
+            add_24h: coin("MShotAdd24hDelta"),
             add_mark: v.num("MShotAddMarkDelta", 0.0),
-            add_pricebug: v.num("MShotAddPriceBug", 0.0),
-            add_btc_1h: v.num("MShotAddBTCDelta", 0.0),
+            add_pricebug: v.num("MShotAddPriceBug", 0.0).abs().min(5.0),
+            add_btc_1h: wide("MShotAddBTCDelta"),
             // MoonShot's corridor family has no 1-minute BTC term; the Delta Modifiers tab does.
             add_btc_1m: 0.0,
-            add_btc_5m: v.num("MShotAddBTC5mDelta", 0.0),
-            add_market_1h: v.num("MShotAddMarketDelta", 0.0),
+            add_btc_5m: wide("MShotAddBTC5mDelta"),
+            add_market_1h: wide("MShotAddMarketDelta"),
             // The corridor family has none of the three (the exe's `MShotAdd*` list).
             add_market_24h: 0.0,
             add_pump_1h: 0.0,
@@ -774,7 +780,7 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
             distance_pct: v.num("MShotAddDistance", 0.0),
             pricebug_cap: MSHOT_PRICEBUG_CAP_PCT,
         },
-        max_modifier: v.num("MaxModifier", 0.0),
+        max_modifier: v.num("MaxModifier", 0.0).max(0.0),
         model,
     }
 }

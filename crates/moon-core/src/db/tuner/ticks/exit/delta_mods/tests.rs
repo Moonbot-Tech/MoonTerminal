@@ -17,7 +17,7 @@ fn favourable_mark_gets_no_residual_weight() {
     for (short, mark) in [(false, -2.0), (true, 2.0)] {
         let mut d = deal(short);
         d.deltas.dmark = mark;
-        let mark_active = oriented_mark(&d, mark) > 0.0;
+        let mark_active = d.oriented_mark(mark) > 0.0;
         assert_eq!(weights(&mods, mark_active)[7], 0.0);
         assert_eq!(weight(&mods, mark_active), 1.0);
         d.kind = "PumpsDetection".into();
