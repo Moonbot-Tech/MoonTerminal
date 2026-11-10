@@ -20,22 +20,25 @@
 //! (2026-09-20: 862 of 1 331 run `PriceDownTimer` 1 s with `PriceDownPercent` 50 relative,
 //! `SellLevelDelay` is absent everywhere):
 //!
-//! - **PriceDown** — `PriceDownTimer` seconds after the buy the sell is lowered by
+//! - **PriceDown** — `PriceDownTimer` seconds after the sell's placement the sell is lowered by
 //!   `PriceDownPercent`: of the distance to the buy when `PriceDownRelative` (`sell −= (sell −
-//!   buy) · pct`), of the price otherwise (`sell −= buy · pct`); then again every
+//!   buy) · pct`), of the sell's own price otherwise (`sell −= sell · pct`); then again every
 //!   `PriceDownDelay` seconds (0 reads as the terminal's own 0.33 s floor), never below
 //!   `PriceDownAllowedDrop` per cent over the buy. A zero timer never starts.
-//! - **SellLevel** — `SellLevelDelay` seconds after the buy (a negative value is the 0.33 s
-//!   floor, zero never), the sell moves to the highest print of the last `SellLevelTime`
-//!   seconds adjusted by `SellLevelAdjust` per cent — of that high, or of its distance to the
-//!   buy when `SellLevelRelative` — at most `SellLevelCount` times, every `SellLevelDelayNext`
-//!   (or `SellLevelDelay`) seconds, inside `SellLevelWorkTime`, never below
-//!   `SellLevelAllowedDrop` per cent over the buy. The high is read over the tape AND the
+//! - **SellLevel** — `SellLevelDelay` whole seconds after the sell's placement, on the core's
+//!   rounded clock ([`whole_seconds_reach_ms`]; a negative value is the 0.33 s floor, zero
+//!   never), the sell moves to the highest print of the last `SellLevelTime` seconds adjusted
+//!   by `SellLevelAdjust` per cent — of that high, or of its distance to the buy when
+//!   `SellLevelRelative` — at most `SellLevelCount` times, every `SellLevelDelayNext` seconds
+//!   after a move (or the k-th move k delays after the placement), inside `SellLevelWorkTime`.
+//!   A level under `SellLevelAllowedDrop` per cent over the buy is not placed: the move is
+//!   skipped and read again. The high is read over the tape AND the
 //!   market's minute bars (`Deal::bars`): the tape reaches minutes before the order, the look-back
 //!   an hour — read off the tape alone, the "hour's high" was the high of the run-up, and a
 //!   variant turning SellLevel on sold at a level the core would never have placed.
 
 use super::line::Line;
+use super::stops::liq::LiqGuard;
 use super::{ExitModel, ExitParams, Side, due_by, level_off_buy};
 use crate::db::tuner::ticks::deltas::Bar;
 use crate::db::tuner::ticks::hook::{KIND_MOONHOOK, hook_take_pct};
@@ -447,8 +450,26 @@ pub(in crate::db::tuner::ticks) fn step_ms(seconds: f64, floor_ms: i64) -> i64 {
     if ms <= 0 { floor_ms } else { ms }
 }
 
+/// How long after its start a clock of whole seconds, rounded half to even, first reads `n`
+/// seconds or more: half a second before `n`, and one millisecond later for an odd `n`, whose
+/// half rounds down. The core times SellLevel on such a clock — a delay of 8 fires 7.5 s after
+/// the sell's placement (2026-11-10: the archived move at 7 533 ms).
+pub(super) fn whole_seconds_reach_ms(n: i64) -> i64 {
+    if n <= 0 {
+        0
+    } else {
+        n.saturating_mul(1000) - 500 + n % 2
+    }
+}
+
+/// The core's sell loop, between two reads of a rule that had nothing to do: about a tenth of
+/// a second. The shortest spacing of PriceDown's re-reads under a floor it may not lift to.
+const SELL_LOOP_MS: i64 = 96;
+
 /// When the take is placed: `SellDelay` after the fill. Prints inside the delay cannot fill it,
-/// and the take-timed rules (the pump move) count from here.
+/// and every sell timer counts from here — PriceDown's, SellLevel's, the stop's delay and
+/// ladder, the pump move and the formula's delay. On the live sample of 2026-11-10 the 194
+/// hook trades run with a `SellDelay` missed 37 % of their exits against 16 % for the kind.
 pub(super) fn armed_at(fill: Fill, params: &ExitParams) -> i64 {
     fill.t_ms + params.sell_delay_ms.max(0.0) as i64
 }
@@ -473,12 +494,21 @@ impl<'a> PriceDown<'a> {
     /// Arm the timer and its allowed-drop level at the replayed buy.
     pub(super) fn new(params: &'a ExitParams, deal: &Deal, fill: Fill, side: Side) -> Self {
         let pd_on = params.price_down_on();
+        // `DontSellBelowLiq` keeps a step from passing the liquidation level, whatever
+        // `PriceDownAllowedDrop` allows.
+        let floor = side.off_buy(fill.price, params.price_down_allowed_drop_pct);
+        let floor = LiqGuard::new(params, deal, fill.price)
+            .sale_floor()
+            .map_or(floor, |liq| side.farther(floor, liq));
         Self {
             params,
             fill,
             side,
-            next: pd_on.then(|| fill.t_ms + (params.price_down_timer_s * 1000.0) as i64),
-            floor: side.off_buy(fill.price, params.price_down_allowed_drop_pct),
+            // From the sell's placement, as every sell timer: `SellDelay` past the fill.
+            next: pd_on.then(|| {
+                armed_at(fill, params).saturating_add((params.price_down_timer_s * 1000.0) as i64)
+            }),
+            floor,
             delay_ms: step_ms(params.price_down_delay_s, params.model.step_floor_ms),
             lag_ms: deal.step_lag_ms.max(0.0) as i64,
         }
@@ -505,13 +535,22 @@ impl<'a> PriceDown<'a> {
             };
             core - (core - base) * params.price_down_pct / 100.0
         } else {
-            // A share of the price, not a level off the buy: the step multiplies for a short too,
-            // matching the core's rule.
-            core - side.over(fill.price, params.price_down_pct) + fill.price
+            // A share of the sell order's own price, not of the buy: `sell · (1 − pct)`, a
+            // short's `sell · (1 + pct)` — a product for a short too. On the archived lines of
+            // 2026-11-10 it lands every step of the non-relative lines, where the buy's share
+            // landed none (126 trades, 111 of them misjudged).
+            side.over(core, -params.price_down_pct)
         };
         let next = side.farther(next, self.floor);
         if (next - core).abs() <= f64::EPSILON * core.abs() {
             self.next = None;
+            return;
+        }
+        // A floor standing over the order: the rule lowers the sell and never lifts it there.
+        // Read again a delay later — a SellLevel move may put the order back over the floor —
+        // and never sooner than the core's own loop, whatever the delay's floor is set to.
+        if side.farther(next, core) == next {
+            self.next = Some(due.saturating_add(self.delay_ms.max(SELL_LOOP_MS)));
             return;
         }
         // The core times the next step from this one's going through (`Deal::step_lag_ms`);
@@ -531,10 +570,19 @@ pub(super) struct SellLevel<'a> {
     side: Side,
     /// When the next move is due; `None` when the rule is off or done.
     next: Option<i64>,
-    /// The spacing of the moves after the first.
-    every_ms: i64,
-    /// Moves left of `SellLevelCount`.
-    left: u32,
+    /// The sell's placement: the clock of every move.
+    start_ms: i64,
+    /// `SellLevelDelay` in whole seconds, as the core compares it.
+    delay_s: i64,
+    /// The spacing of the moves after the first, counted from a move that went through
+    /// (`SellLevelDelayNext`); `None` puts the k-th move k delays after the placement.
+    every_ms: Option<i64>,
+    /// Moves made, of `SellLevelCount`.
+    done: u32,
+    /// A move whose level stood under the floor waits here for a print that lifts it over: the
+    /// price the look-back's extreme has to reach. Older prints only leave the window, so
+    /// nothing but such a print can clear the floor, and re-reading on a clock would only cost.
+    parked: Option<f64>,
     /// The end of `SellLevelWorkTime`, `None` without one.
     until: Option<i64>,
     /// `SellLevelAllowedDrop` over the buy.
@@ -549,17 +597,20 @@ impl<'a> SellLevel<'a> {
     pub(super) fn new(params: &'a ExitParams, deal: &'a Deal, fill: Fill, side: Side) -> Self {
         let floor_ms = params.model.step_floor_ms;
         let sl_on = params.sell_level_on();
-        let sl_first_ms = if params.sell_level_delay_s < 0.0 {
-            floor_ms
+        let start_ms = armed_at(fill, params);
+        // A negative delay keeps its meaning whatever its fraction; a positive one is the core's
+        // whole seconds, one at least.
+        let delay_s = if params.sell_level_delay_s < 0.0 {
+            -1
         } else {
-            (params.sell_level_delay_s * 1000.0) as i64
+            (params.sell_level_delay_s.round() as i64).max(1)
         };
         let every_ms = if params.sell_level_delay_next_s > 0.0 {
-            (params.sell_level_delay_next_s * 1000.0) as i64
+            Some((params.sell_level_delay_next_s * 1000.0) as i64)
         } else if params.sell_level_delay_next_s < 0.0 {
-            floor_ms
+            Some(floor_ms)
         } else {
-            sl_first_ms.max(floor_ms)
+            None
         };
         let mut bars: Vec<_> = deal
             .bars
@@ -576,20 +627,80 @@ impl<'a> SellLevel<'a> {
             params,
             fill,
             side,
-            next: sl_on.then(|| fill.t_ms + sl_first_ms),
+            next: sl_on.then(|| start_ms.saturating_add(Self::due_after(delay_s, 1, floor_ms))),
+            start_ms,
+            delay_s,
             every_ms,
-            left: params.sell_level_count,
+            done: 0,
+            parked: None,
             until: params
                 .sell_level_work_time_limited()
-                .then(|| fill.t_ms + (params.sell_level_work_time_s * 1000.0) as i64),
+                .then(|| start_ms + (params.sell_level_work_time_s * 1000.0) as i64),
             floor: side.off_buy(fill.price, params.sell_level_allowed_drop_pct),
             bars,
         }
     }
 
-    /// The move due by the print at `t_ms`, if any.
+    /// How long after the sell's placement the `k`-th move is due when nothing spaces the moves
+    /// but `SellLevelDelay`: `k` delays, on the core's clock of whole seconds
+    /// ([`whole_seconds_reach_ms`]). A negative delay waits for nothing but the floor, one
+    /// floor per move.
+    fn due_after(delay_s: i64, k: i64, floor_ms: i64) -> i64 {
+        if delay_s < 0 {
+            floor_ms.saturating_mul(k)
+        } else {
+            whole_seconds_reach_ms(delay_s.max(1).saturating_mul(k))
+        }
+    }
+
+    /// The move due by the print at `t_ms`, if any; none while it is parked under its floor.
     pub(super) fn due(&self, t_ms: i64) -> Option<i64> {
+        if self.parked.is_some() {
+            return None;
+        }
         due_by(self.next, t_ms)
+    }
+
+    /// Whether a move is still to come — on its clock, or parked under its floor.
+    pub(super) fn pending(&self) -> bool {
+        self.parked.is_some() || self.next.is_some()
+    }
+
+    /// Read a print: one that reaches what a parked move waits for makes the move due now.
+    pub(super) fn see(&mut self, t_ms: i64, price: f64) {
+        if self
+            .parked
+            .is_some_and(|needed| self.side.farther(price, needed) == price)
+        {
+            self.parked = None;
+            self.next = Some(t_ms);
+        }
+    }
+
+    /// The extreme the look-back has to reach for the move's level to clear the floor — the
+    /// inverse of the level's rule; unreachable where no extreme can clear it.
+    fn needed_extreme(&self) -> f64 {
+        let (params, fill, side) = (self.params, self.fill, self.side);
+        let never = if side.long {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        };
+        if params.sell_level_relative {
+            let share = (params.sell_level_adjust_pct / 100.0).max(0.0);
+            if share > 0.0 {
+                fill.price + (self.floor - fill.price) / share
+            } else {
+                never
+            }
+        } else {
+            let keep = 1.0 + params.sell_level_adjust_pct / 100.0;
+            match (keep > 0.0, side.long) {
+                (false, _) => never,
+                (true, true) => self.floor / keep,
+                (true, false) => self.floor * keep,
+            }
+        }
     }
 
     /// The extreme of `[from, due]` in the profit direction: the tape's prints, and every bar that
@@ -652,7 +763,7 @@ impl<'a> SellLevel<'a> {
     ///     seen: The prints up to and including the one the move is due by.
     pub(super) fn step(&mut self, due: i64, seen: &[Tick], line: &mut Line) {
         let (params, fill, side) = (self.params, self.fill, self.side);
-        if self.left == 0 || self.until.is_some_and(|until| due > until) {
+        if self.done >= params.sell_level_count || self.until.is_some_and(|until| due > until) {
             self.next = None;
             return;
         }
@@ -661,20 +772,49 @@ impl<'a> SellLevel<'a> {
         if !self.covered(seen, from, due, high) {
             line.sell_level_short_at.get_or_insert(due);
         }
-        if let Some(high) = high {
-            let next = if params.sell_level_relative {
-                fill.price + (high - fill.price) * params.sell_level_adjust_pct / 100.0
+        let level = high.map(|high| {
+            if params.sell_level_relative {
+                // A share of the profitable distance to the high; neither a high on the losing
+                // side of the buy nor a negative share moves the sell past the buy.
+                let reach = (side.sign() * (high - fill.price)).max(0.0);
+                let share = (params.sell_level_adjust_pct / 100.0).max(0.0);
+                fill.price + side.sign() * reach * share
             } else {
-                // Off the high, not off the buy — the product, like the trailing distance off its
-                // peak. No live strategy runs SellLevel (`SellLevelDelay` is absent from all
-                // 1 422, 2026-09-24), so no archive tells the readings apart.
-                side.over(high, params.sell_level_adjust_pct)
-            };
-            let next = side.farther(next, self.floor);
-            line.place(due, next);
+                // Off the high: `high · (1 + adjust)`, a short's `low / (1 + adjust)`.
+                level_off_buy(high, params.sell_level_adjust_pct, side.long)
+            }
+        });
+        // A level under `SellLevelAllowedDrop` is not placed at the floor: the move is skipped,
+        // costs no count, and waits for the print that lifts the level over — the core reads it
+        // again on every pass, and only such a print changes what it reads. A look-back with no
+        // print at all waits for any.
+        let waits_for = match level {
+            Some(_) => self.needed_extreme(),
+            None if side.long => f64::NEG_INFINITY,
+            None => f64::INFINITY,
+        };
+        match level.filter(|level| side.farther(*level, self.floor) == *level) {
+            Some(level) => {
+                line.place(due, level);
+                self.done += 1;
+                let floor_ms = params.model.step_floor_ms;
+                self.next = Some(match self.every_ms {
+                    Some(every_ms) => due.saturating_add(every_ms),
+                    None => self
+                        .start_ms
+                        .saturating_add(Self::due_after(
+                            self.delay_s,
+                            i64::from(self.done) + 1,
+                            floor_ms,
+                        ))
+                        .max(due + 1),
+                });
+            }
+            None => {
+                self.parked = Some(waits_for);
+                self.next = None;
+            }
         }
-        self.left -= 1;
-        self.next = Some(due + self.every_ms);
     }
 }
 

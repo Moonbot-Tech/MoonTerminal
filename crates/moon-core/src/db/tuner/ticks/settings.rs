@@ -19,11 +19,15 @@ use super::verify::{
     STOP_PRICE_TOLERANCE,
 };
 
-/// The code-level price estimate compared by a fast stop at the series tick's end.
+/// What a fast stop fires on: the core's own rule, or one of the older price estimates
+/// compared at the series tick's end, kept for the bench.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum FastPrice {
-    /// The tick's last print, preserving the current model.
+    /// The core's own trigger: two successive short-window VWAPs past the level, or the last
+    /// trade standing past it through a run of checks (`exit::stops::CoreFast`).
     #[default]
+    CoreRule,
+    /// The tick's last print — the model's reading before the core's rule, kept for comparison.
     LastOfTick,
     /// Quantity-weighted price of the last N trades, grouping same-time, same-side prints.
     VwapLastTrades(u8),
@@ -61,7 +65,8 @@ pub struct ModelSettings {
     /// How long a replacement — of the sell, and of the entry order on a core with no measured
     /// round trip (`Deal::round_trip_ms`) — takes to reach the book.
     pub latency_ms: f64,
-    /// The window a re-placed entry order's price is read off.
+    /// The short window an entry order's price is read off — alone without `MShotRaiseWait`,
+    /// inside the wait's own window with it (`mshot::Reference::placement`).
     pub replace_window_ms: i64,
     /// How far past the fact's fill a shifted order may still be reached by the same spike.
     pub shift_window_ms: i64,
@@ -71,7 +76,7 @@ pub struct ModelSettings {
     /// How often the core's REST ticker brings the price a non-fast stop watches.
     pub ticker_period_ms: i64,
     /// The core's price-series tick, which a stop at `StopLossEMA` 0 also fires on and at whose
-    /// end the fast stop checks `fast_price` (default: the last print).
+    /// end the fast stop checks a `fast_price` other than the core's rule.
     pub series_tick_ms: i64,
     /// The floor on a sell-line step delay of zero.
     pub step_floor_ms: i64,
@@ -151,6 +156,7 @@ impl ModelSettings {
                     alpha: alpha.min(1.0),
                     qty_weighted,
                 },
+                FastPrice::CoreRule => FastPrice::CoreRule,
                 _ => FastPrice::LastOfTick,
             },
             stop_fill: self.stop_fill,

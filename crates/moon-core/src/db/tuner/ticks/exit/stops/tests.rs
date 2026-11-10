@@ -386,9 +386,11 @@ fn positive_stop_does_not_sell_the_rebound_print() {
     assert_eq!((market.stop_fired_ms, market.exit.t_ms), (Some(250), 555));
 }
 
-/// Moving the default estimator would change the first firing tick.
+/// The default is the core's own rule: the trade at 98 stands past the stop from 240 ms, the
+/// first check comes a quarter of a second after the placement, and eight checks later — 128 ms
+/// — the stop fires on it, before the print back at 100. The tick's last print fired at 250.
 #[test]
-fn fast_default_is_last_of_tick() {
+fn fast_default_is_the_core_rule() {
     let p = fast_params(crate::db::tuner::ticks::ModelSettings::default().fast_price);
     let w = walk(
         &deal(false),
@@ -399,13 +401,114 @@ fn fast_default_is_last_of_tick() {
     );
     assert_eq!(
         (w.exit.kind, w.exit.t_ms, w.exit.price),
-        (ExitKind::Stop, 250, 98.0)
+        (ExitKind::Stop, FAST_FIRST_CHECK_MS + FAST_RUN_MS, 98.0)
     );
 }
 
-/// Warming the legacy pending tick would invent a stop before the first post-fill print.
+/// Two successive readings of the weighted price past the level fire the rule at the second
+/// reading, before the lone trade's run of checks would.
 #[test]
-fn fast_default_unchanged_by_prefill_prints() {
+fn core_fast_fires_on_two_weighted_readings() {
+    let mut core = CoreFast::new();
+    core.see(0, 100.0, 1.0, false);
+    core.see(100, 98.0, 1.0, true);
+    // One reading past 99, the one before it not: only the run, from the trade at 100 ms.
+    assert_eq!(core.holds_from(99.0, true, 0), Some(100 + FAST_RUN_MS));
+    core.see(180, 98.5, 1.0, true);
+    assert_eq!(core.holds_from(99.0, true, 0), Some(180));
+    // Neither fires before the first check.
+    assert_eq!(core.holds_from(99.0, true, 1_000), Some(1_000));
+}
+
+/// A small trade through the level does not move the weighted price of its window, and a
+/// print back over the level breaks its run: nothing holds.
+#[test]
+fn core_fast_run_is_broken_by_a_print_back() {
+    let mut core = CoreFast::new();
+    core.see(0, 100.0, 1.0, false);
+    core.see(60, 100.0, 9.0, false);
+    core.see(100, 98.0, 1.0, true);
+    // The window's weighted price is 99.8: over the level, so only the run counts.
+    assert_eq!(core.holds_from(99.0, true, 0), Some(100 + FAST_RUN_MS));
+    core.see(150, 100.0, 1.0, false);
+    assert_eq!(core.holds_from(99.0, true, 0), None);
+}
+
+/// A burst longer than the ring the weighted price reads keeps the run's own start: forty
+/// trades under the level, 1 ms apart — inside one reading of the weighted price — still fire
+/// a run's length after the first, not after the ring's oldest.
+#[test]
+fn core_fast_run_outlives_the_ring() {
+    let mut core = CoreFast::new();
+    core.see(0, 100.0, 1.0, false);
+    for i in 0..40 {
+        core.see(1_000 + i, 98.0, 1.0, true);
+    }
+    assert_eq!(core.holds_from(99.0, true, 0), Some(1_000 + FAST_RUN_MS));
+}
+
+/// A step of the ladder puts trades past a level that was not there when they printed: their
+/// run is read off their own moments, and a run already standing past the old level goes on.
+#[test]
+fn core_fast_reads_the_standing_trades_against_a_moved_level() {
+    let mut core = CoreFast::new();
+    core.see(0, 102.0, 1.0, false);
+    core.see(500, 100.2, 1.0, false);
+    core.relevel(100.5, true);
+    assert_eq!(core.holds_from(100.5, true, 0), Some(500 + FAST_RUN_MS));
+    // A run older than the ring is not cut to the ring's oldest trade.
+    let mut running = CoreFast::new();
+    running.see(0, 102.0, 1.0, false);
+    for i in 0..40 {
+        running.see(900 + i, 94.0, 1.0, true);
+    }
+    running.relevel(100.5, true);
+    assert_eq!(running.holds_from(100.5, true, 0), Some(900 + FAST_RUN_MS));
+}
+
+/// The walk reads the stop again after the ladder's step: the trade at 100.2 printed while the
+/// stop stood at 95, the third rung moves it to 100.5 at the 1 000 ms arrival, and the stop the
+/// print before it never showed is found at the next print — a run's length after the trade,
+/// whose own moment the run counts from.
+#[test]
+fn core_fast_is_read_again_after_a_ladder_step() {
+    let mut p = ExitParams {
+        third_stop: Some(ladder::StopStep {
+            after_s: 0.0,
+            switch_pct: 1.0,
+            level_pct: 0.5,
+        }),
+        ..fast_params(FastPrice::CoreRule)
+    };
+    p.stop_loss_pct = -5.0;
+    p.model.ticker_period_ms = 1_000;
+    // The taker sell quotes the bid at 102; the buys under it leave that bid proxy alone.
+    let ticks = vec![sold(100, 102.0), tick(500, 100.2), tick(3_000, 100.2)];
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.stop_fired_ms),
+        (ExitKind::Stop, Some(500 + FAST_RUN_MS)),
+        "{w:?}"
+    );
+    assert!(w.stop_level.is_some_and(|l| (l - 100.5).abs() < 1e-9));
+}
+
+/// A short's rule mirrors: trades over the level.
+#[test]
+fn core_fast_mirrors_for_a_short() {
+    let mut core = CoreFast::new();
+    core.see(0, 100.0, 1.0, false);
+    core.see(100, 102.0, 1.0, true);
+    assert_eq!(core.holds_from(101.0, false, 0), Some(100 + FAST_RUN_MS));
+    // A long's stop moved to the same level sees a trade over it: nothing.
+    core.relevel(101.0, true);
+    assert_eq!(core.holds_from(101.0, true, 0), None);
+}
+
+/// Warming the tick-end reading's pending tick would invent a stop before the first post-fill
+/// print.
+#[test]
+fn last_of_tick_is_unchanged_by_prefill_prints() {
     let w = walk(
         &deal(false),
         &tape(&[(90, 98.0), (1000, 100.0)]),
@@ -580,26 +683,25 @@ fn the_stop_fires_on_the_print_after_its_delay() {
         stop_loss_delay_s: 2.0,
         ..params()
     };
-    // A print through the stop inside the delay does not fire; one after it does as its series
-    // tick closes, at the print's price (a market exit).
+    // A print through the stop inside the delay does not fire; the price still standing past
+    // the stop when the delay ends fires it there, at the last print's price (a market exit).
     let ticks = tape(&[(1_000, 98.5), (3_000, 98.7)]);
     let w = walk(&deal(false), &ticks, fill(), 101.0, &p);
-    assert_eq!(
-        (w.exit.kind, w.exit.t_ms),
-        (ExitKind::Stop, 3_000 + SERIES_TICK_MS)
-    );
-    assert!((w.exit.price - 98.7).abs() < 1e-4);
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 2_000));
+    assert!((w.exit.price - 98.5).abs() < 1e-4);
 }
 
 /// The fast stop holds the LAST price of a series tick against the level: a sweep through it
 /// that prints back inside the same tick does not fire; a tick that closes past it does.
 #[test]
 fn the_fast_stop_reads_the_last_price_of_its_tick() {
-    let p = ExitParams {
+    let mut p = ExitParams {
         stop_loss_pct: -1.0,
         fast_stop_loss: true,
         ..params()
     };
+    // The tick-end reading, kept beside the core's rule for the bench.
+    p.model.fast_price = FastPrice::LastOfTick;
     let ticks = tape(&[
         (1_000, 98.5),
         (1_100, 99.6),
@@ -630,7 +732,7 @@ fn a_short_stop_divides_the_buy() {
     let w = walk(&deal(true), &inside, fill(), 99.0, &p);
     assert_eq!(
         (w.exit.kind, w.exit.t_ms),
-        (ExitKind::Stop, 2_000 + SERIES_TICK_MS),
+        (ExitKind::Stop, 2_000 + FAST_RUN_MS),
         "{w:?}"
     );
     assert!((level_off_buy(100.0, -2.5, false) - 100.0 / 0.975).abs() < 1e-9);
@@ -765,17 +867,14 @@ fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
         (ExitKind::Stop, 2 * TICKER_PERIOD_MS)
     );
     assert!((w.exit.price - 98.8).abs() < 1e-4);
-    // The fast stop takes the first series tick closing through the level, whichever side its
-    // last print hit.
+    // The fast stop takes the first trade through the level, whichever side it hit: the tape's
+    // first trade is both of the market's weighted readings.
     let fast = ExitParams {
         fast_stop_loss: true,
         ..book.clone()
     };
     let w = walk(&deal(false), &ticks, fill(), 101.0, &fast);
-    assert_eq!(
-        (w.exit.kind, w.exit.t_ms),
-        (ExitKind::Stop, 1_000 + SERIES_TICK_MS)
-    );
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 1_000));
 }
 
 /// Where the market list was recorded the book stop reads the list's BID on the list's arrivals:
@@ -1133,6 +1232,21 @@ fn market_stop_fill_past_allowed_drop_is_left_open() {
     assert_eq!(exit.kind, ExitKind::OpenAtWindowEnd);
 }
 
+/// The floor stands `StopLossSpread` (1 %) past `AllowedDrop`: 98 less 1 % is 97.02.
+#[test]
+fn the_floor_stands_a_spread_past_allowed_drop() {
+    assert!(!floor_walk(&dropped(-2.0), 97.5).1.past_floor);
+    assert!(floor_walk(&dropped(-2.0), 96.5).1.past_floor);
+}
+
+/// An `AllowedDrop` nearer than 1 % to the stop gives way: the stop at -1 % holds the drop at
+/// -2 %, so the floor is 97.02 again, not 98.5 less the spread (97.515).
+#[test]
+fn the_floor_keeps_one_per_cent_past_the_stop() {
+    assert!(!floor_walk(&dropped(-1.5), 97.5).1.past_floor);
+    assert!(floor_walk(&dropped(-1.5), 96.5).1.past_floor);
+}
+
 /// The KB's "no floor" setting must never bound the sale.
 #[test]
 fn allowed_drop_at_or_below_minus_98_has_no_floor() {
@@ -1175,13 +1289,17 @@ fn third_rung_walk(bid: f64) -> LineWalk {
 /// The third stop's own floor bounds its panic sell while the main level stands unpassed.
 #[test]
 fn allowed_drop3_applies_while_the_third_rung_is_active() {
-    let w = third_rung_walk(98.5);
+    let w = third_rung_walk(97.5);
     assert_eq!(
         (w.exit.kind, w.stop_fired_ms),
         (ExitKind::Stop, Some(1_250))
     );
     assert!(w.stop_level.is_some_and(|l| (l - 100.5).abs() < 1e-9));
-    assert!(w.past_floor, "98.5 is under AllowedDrop3's 99");
+    assert!(
+        w.past_floor,
+        "97.5 is under AllowedDrop3's 99 less the spread, 98.01"
+    );
+    assert!(!third_rung_walk(98.5).past_floor);
 }
 
 /// Past the main stop's level its AllowedDrop works again.
@@ -1239,9 +1357,9 @@ fn immediate_fast_stop_takes_the_tighter_of_spread_and_allowed_drop() {
     // AllowedDrop -5 (95): the spread's 99 is tighter.
     assert!(with_drop(-5.0, 98.5));
     assert!(!with_drop(-5.0, 99.2));
-    // AllowedDrop -0.5 (99.5): tighter than the spread's 99.
-    assert!(with_drop(-0.5, 99.2));
-    assert!(!with_drop(-0.5, 99.6));
+    // AllowedDrop +0.5 (100.5, less the spread 99.495): tighter than the order's 99.
+    assert!(with_drop(0.5, 99.2));
+    assert!(!with_drop(0.5, 99.6));
 }
 
 /// No print after the fill shows the immediate order's fill: no sale at its limit is invented.
@@ -1327,12 +1445,13 @@ fn immediate_fast_stop_without_a_print_is_unjudged_at_check() {
     assert_eq!(exit.kind, ExitKind::OpenAtWindowEnd);
 }
 
-/// A print a hair past the AllowedDrop floor (98) is within the price tolerance, not past it.
+/// A print a hair past the AllowedDrop floor (98 less the spread, 97.02) is within the price
+/// tolerance, not past it.
 #[test]
 fn a_print_within_tolerance_of_the_floor_is_not_past_it() {
-    let (exit, w) = floor_walk(&dropped(-2.0), 97.97);
+    let (exit, w) = floor_walk(&dropped(-2.0), 97.0);
     assert!(!w.past_floor, "{w:?}");
     assert_eq!(exit.kind, ExitKind::Stop);
-    let (_, w) = floor_walk(&dropped(-2.0), 97.9);
+    let (_, w) = floor_walk(&dropped(-2.0), 96.9);
     assert!(w.past_floor, "{w:?}");
 }

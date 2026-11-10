@@ -40,7 +40,8 @@ pub struct StopAnchor {
     /// The fact's sell modifier shift, for deriving a Spread variant's unshifted take.
     /// Source: https://moonbot.pro/documentation/advanced-strategy-parameters/spread-strategy-and-its-parameters
     pub take_shift_pct: f64,
-    /// Effective `SellDelay` in milliseconds, which offsets the ladder's sell placement.
+    /// Effective `SellDelay` in milliseconds, which offsets the sell's placement and with it the
+    /// stop's delay, the ladder and the trailing's restart.
     pub sell_delay_ms: i64,
     /// Whether the fact ran with `UseStopLoss` on: `StopLoss` is kept while it is off.
     pub use_stop_loss: bool,
@@ -49,6 +50,10 @@ pub struct StopAnchor {
     pub delay_s: f64,
     pub fast: bool,
     pub ema: f64,
+    /// `StopAboveLiq` of the fact, compared as stored: another value may hold the stop at
+    /// another level (`exit::stops::liq`), and a variant is then not taken for the fact's stop
+    /// even where the guard happens to move nothing — the cautious reading.
+    pub stop_above_liq_pct: f64,
     /// The ladder the fact ran (`ExitParams::second_stop`, `third_stop`).
     pub second: Option<StopStep>,
     pub third: Option<StopStep>,
@@ -101,6 +106,7 @@ impl StopAnchor {
             delay_s: exit.stop_loss_delay_s,
             fast: exit.fast_stop_loss,
             ema: exit.stop_loss_ema,
+            stop_above_liq_pct: exit.stop_above_liq_pct,
             second: exit.second_stop,
             third: exit.third_stop,
             fired,
@@ -121,8 +127,8 @@ impl StopAnchor {
     }
 
     /// Whether a walk from `fill` under `params` runs the fact's own stop — the same entry (to
-    /// the price, and within the point tolerance in time) and stop settings. SellDelay must
-    /// match only for a ladder, whose eligibility starts at sell placement.
+    /// the price, and within the point tolerance in time) and stop settings, `SellDelay`
+    /// among them: the stop's delay and the ladder both count from the sell's placement.
     ///
     /// Args:
     ///     deal: The trade, for the adjusted stop distance.
@@ -130,27 +136,29 @@ impl StopAnchor {
     ///     params: The walk's sell parameters.
     pub fn holds(&self, deal: &Deal, fill: Fill, params: &ExitParams) -> bool {
         self.same_entry(fill, params)
-            && ((params.second_stop.is_none() && params.third_stop.is_none())
-                || params.sell_delay_ms.max(0.0) as i64 == self.sell_delay_ms)
+            && params.sell_delay_ms.max(0.0) as i64 == self.sell_delay_ms
             && params.use_stop_loss == self.use_stop_loss
             && stop_pct(params, deal, self.entry_ms) == self.stop_pct
             && params.stop_loss_delay_s == self.delay_s
             && params.fast_stop_loss == self.fast
             && params.stop_loss_ema == self.ema
+            && params.stop_above_liq_pct == self.stop_above_liq_pct
             && params.second_stop == self.second
             && params.third_stop == self.third
     }
 
     /// Whether a walk from `fill` under `params` runs the fact's own trailing stop — the same
     /// entry as [`Self::holds`], the same trailing settings (the EMA as the core rounds it) and
-    /// the same `StopLossDelay`: the trailing's peak restarts at fill + delay, so another delay
-    /// is another trailing line and inherits neither the fact's firing nor its quiet window.
+    /// the same `StopLossDelay` and `SellDelay`: the trailing's peak restarts that delay after
+    /// the sell's placement, so another of either is another trailing line and inherits neither
+    /// the fact's firing nor its quiet window.
     ///
     /// Args:
     ///     fill: The walk's entry.
     ///     params: The walk's sell parameters.
     pub fn holds_trailing(&self, fill: Fill, params: &ExitParams) -> bool {
         self.same_entry(fill, params)
+            && params.sell_delay_ms.max(0.0) as i64 == self.sell_delay_ms
             && params.stop_loss_delay_s == self.delay_s
             && params.trailing_pct == self.trailing_pct
             && params.trailing_ema.max(0.0).round() == self.trailing_ema.max(0.0).round()

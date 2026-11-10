@@ -87,6 +87,54 @@ fn the_trailing_ema_moves_the_peak_a_share_of_the_way() {
     assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{w:?}");
 }
 
+/// `TrailingEMA` 1 averages nothing: the peak jumps to the middle as it does at 0, and the fall
+/// the averaged peak of 4 sat out sells here.
+#[test]
+fn a_trailing_ema_under_two_jumps_to_the_middle() {
+    let ticks = tape(&[
+        (100, 100.0, 100.2),
+        (3_000, 102.0, 102.2),
+        (5_000, 100.9, 101.1),
+        (9_000, 100.9, 101.1),
+    ]);
+    let one = ExitParams {
+        trailing_ema: 1.0,
+        ..trailing()
+    };
+    let w = walk(&deal(false), &ticks, fill(), far_take(), &one);
+    assert_eq!(
+        (w.exit.kind, w.stop_fired_ms),
+        (ExitKind::Stop, Some(6_450)),
+        "{w:?}"
+    );
+}
+
+/// An averaged peak goes after the ask before the last one when the middle has jumped over it:
+/// from 100.1 a third of the way to 100.2, not to 102.1 — the line stays near 99.13 and the fall
+/// to 99.5 does not reach it, where the middle's own third (a line at 99.76) would have sold.
+#[test]
+fn an_averaged_peak_is_capped_by_the_previous_ask() {
+    let ticks = tape(&[
+        (100, 100.0, 100.2),
+        (3_000, 102.0, 102.2),
+        (5_000, 99.4, 99.6),
+        (9_000, 99.4, 99.6),
+    ]);
+    let averaged = ExitParams {
+        trailing_ema: 2.0,
+        ..trailing()
+    };
+    let w = walk(&deal(false), &ticks, fill(), far_take(), &averaged);
+    assert_eq!(w.exit.kind, ExitKind::OpenAtWindowEnd, "{w:?}");
+    // The plain peak follows the jump, and the same fall sells.
+    let w = walk(&deal(false), &ticks, fill(), far_take(), &trailing());
+    assert_eq!(
+        (w.exit.kind, w.stop_fired_ms),
+        (ExitKind::Stop, Some(6_450)),
+        "{w:?}"
+    );
+}
+
 /// `UseTakeProfit` 2 % with a 1 % trailing: no line until the middle passes 103; then the line
 /// stands no lower than 102 and sells only while the middle is still above 102.
 #[test]

@@ -8,19 +8,21 @@ use crate::db::tuner::ticks::{Deltas, ExitKind, ModelSettings, simulate, verify}
 use crate::feed::types::{Side, Tick};
 use crate::market::trade_replay::Coverage;
 
-/// SellDelay only changes ladder timing; a plain stop keeps its factual anchor.
+/// SellDelay moves the sell's placement, and the stop's delay counts from there: a plain stop
+/// under another SellDelay arms at another moment and must not inherit the fact's firing.
 #[test]
-fn plain_stop_anchor_keeps_a_different_sell_delay() {
+fn plain_stop_anchor_rejects_a_different_sell_delay() {
     let d = stopped();
     let p = book();
     let anchor = StopAnchor::of(&d, &p, None);
     let delayed = ExitParams {
         sell_delay_ms: 10_000.0,
-        ..p
+        ..p.clone()
     };
+    assert!(anchor.holds(&d, fact_fill(), &p), "the fact's own stop");
     assert!(
-        anchor.holds(&d, fact_fill(), &delayed),
-        "plain stop ignores SellDelay"
+        !anchor.holds(&d, fact_fill(), &delayed),
+        "another SellDelay is another stop"
     );
 }
 
@@ -106,6 +108,7 @@ fn stopped() -> Deal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,
@@ -176,19 +179,15 @@ fn a_trade_its_stop_never_fired_on_keeps_it_quiet_until_the_close() {
         ..book()
     };
     let ticks = vec![tick(1_000, 98.5), tick(7_000, 98.5)];
-    let tick_ms = crate::db::tuner::ticks::exit::stops::SERIES_TICK_MS;
     let w = walk(&d, &ticks, fact_fill(), 101.0, &fast);
     assert_eq!(
-        w.exit.t_ms,
-        1_000 + tick_ms,
-        "without the anchor the first print's tick fires"
+        w.exit.t_ms, 1_000,
+        "without the anchor the first print fires"
     );
+    // The price still stands past the stop when the fact's quiet ends with its close.
     d.stop_anchor = Some(StopAnchor::of(&d, &fast, None));
     let w = walk(&d, &ticks, fact_fill(), 101.0, &fast);
-    assert_eq!(
-        (w.exit.kind, w.exit.t_ms),
-        (ExitKind::Stop, 7_000 + tick_ms)
-    );
+    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_001));
 }
 
 /// The anchor is the trade's own stop and entry, nothing near them.
@@ -222,6 +221,16 @@ fn the_anchor_holds_only_for_the_trades_own_entry_and_stop() {
         },
         ExitParams {
             stop_loss_pct: -1.5,
+            ..book()
+        },
+        // Another liquidation guard may hold the stop at another level.
+        ExitParams {
+            stop_above_liq_pct: 50.0,
+            ..book()
+        },
+        // Another `SellDelay` places the sell, and with it the stop's delay, at another moment.
+        ExitParams {
+            sell_delay_ms: 500.0,
             ..book()
         },
     ] {

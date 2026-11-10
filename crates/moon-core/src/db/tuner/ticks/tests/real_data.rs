@@ -376,7 +376,7 @@ fn dump_deal(
         },
         "mshot": match entry {
             EntryParams::MoonShot(p) => {
-                let (near, far) = p.bounds_pct(&deal.deltas_at(deal.buy_ms));
+                let (near, far) = p.bounds_pct(&deal.corridor_deltas_at(deal.buy_ms));
                 serde_json::json!({
                     "near": near,
                     "far": far,
@@ -906,7 +906,7 @@ fn partners_of(
                 },
                 ModelSettings::default(),
             );
-            let (near, far) = own.bounds_pct(&d.deltas);
+            let (near, far) = own.bounds_pct(&d.corridor_deltas(d.deltas));
             Some(Partner {
                 core: d.core_uid,
                 venue,
@@ -1524,7 +1524,7 @@ fn real_data_reproduction() {
         // The corridor the core saved against the model's band, `near` … `2 · far − near` off one
         // reference (`mshot`): the ratio of its edges is the band's width whatever the reference.
         if let (Some((down, up)), EntryParams::MoonShot(params)) = (deal.corridor, &entry) {
-            let (near, far) = params.bounds_pct(&deal.deltas_at(deal.buy_ms));
+            let (near, far) = params.bounds_pct(&deal.corridor_deltas_at(deal.buy_ms));
             let (a, b) = (near / 100.0, (2.0 * far - near) / 100.0);
             let predicted = if deal.is_long() {
                 (1.0 - a) / (1.0 - b)
@@ -1620,7 +1620,7 @@ fn real_data_reproduction() {
                 }
             }
             let (since, level) = MshotEntry::fact_anchor(&deal, entry_line.as_deref());
-            let (_, far) = own.bounds_pct(&deal.deltas_at(deal.buy_ms));
+            let (_, far) = own.bounds_pct(&deal.corridor_deltas_at(deal.buy_ms));
             let side = ticks
                 .iter()
                 .filter(|t| {
@@ -1658,7 +1658,10 @@ fn real_data_reproduction() {
             if from_creation {
                 let (_, moves) =
                     super::super::mshot::MshotEntry::new(params).trace(&deal, &ticks, Some(line));
-                let moved = params.modifiers.near_addition(&deal.deltas) != 0.0;
+                let moved = params
+                    .modifiers
+                    .near_addition(&deal.corridor_deltas(deal.deltas))
+                    != 0.0;
                 path.add(&deal, &moves, line, moved);
                 if std::env::var_os("MOON_TICKS_PATH_DEBUG").is_some() {
                     let created = deal.order_open_ms().unwrap_or(deal.buy_ms);
@@ -1677,8 +1680,8 @@ fn real_data_reproduction() {
                         params.fast_algo,
                         params.raise_wait_s,
                         params.replace_delay_s,
-                        params.bounds_pct(&deal.deltas_at(created)).0,
-                        params.bounds_pct(&deal.deltas_at(created)).1,
+                        params.bounds_pct(&deal.corridor_deltas_at(created)).0,
+                        params.bounds_pct(&deal.corridor_deltas_at(created)).1,
                         fmt(&moves),
                         fmt(&verify::archived_replacements(line)),
                     );
@@ -2134,7 +2137,9 @@ fn real_data_reproduction() {
 /// Parse the owner's one bench-wide estimator override, rejecting unknown grammar loudly.
 fn parse_fast_price_override(value: &str) -> super::super::settings::FastPrice {
     use super::super::settings::FastPrice;
-    let rule = if value == "last" {
+    let rule = if value == "core" {
+        Some(FastPrice::CoreRule)
+    } else if value == "last" {
         Some(FastPrice::LastOfTick)
     } else if let Some(n) = value.strip_prefix("vwap") {
         n.parse::<u8>().ok().map(FastPrice::VwapLastTrades)
@@ -2151,7 +2156,7 @@ fn parse_fast_price_override(value: &str) -> super::super::settings::FastPrice {
             })
     }
     .unwrap_or_else(|| {
-        panic!("MOON_TICKS_FAST_PRICE: expected last | vwap<N> | ema<alpha> | emaq<alpha>")
+        panic!("MOON_TICKS_FAST_PRICE: expected core | last | vwap<N> | ema<alpha> | emaq<alpha>")
     });
     let sanitized = ModelSettings {
         fast_price: rule,

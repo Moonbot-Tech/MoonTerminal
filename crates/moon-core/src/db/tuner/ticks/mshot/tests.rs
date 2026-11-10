@@ -2,9 +2,33 @@
 
 use super::*;
 
-/// Applying the sell sum's orientation here would change the MoonShot corridor's signed shift.
+/// A mark price against the position deepens the corridor; one with it adds nothing. Handing
+/// the raw delta on would shrink a long's corridor under a discount and a short's under a
+/// premium — on the live sample of 2026-11-10 that cost 112 entries of 5 316.
 #[test]
-fn corridor_sum_keeps_the_raw_mark_delta() {
+fn corridor_deltas_turn_the_mark_to_the_side() {
+    let mut deal = super::super::tests::deal();
+    for (short, mark, expected) in [
+        (false, 2.0, 2.0),
+        (false, -2.0, 0.0),
+        (true, -2.0, 2.0),
+        (true, 2.0, 0.0),
+    ] {
+        deal.is_short = short;
+        let read = deal.corridor_deltas(Deltas {
+            d1h: 3.0,
+            dmark: mark,
+            ..Deltas::default()
+        });
+        assert_eq!((read.dmark, read.d1h), (expected, 3.0));
+    }
+}
+
+/// The sum adds the mark as it is handed: the orientation is the caller's
+/// (`Deal::corridor_deltas`, the sell sum's own), and applying it here again would lose a
+/// short's term.
+#[test]
+fn corridor_sum_adds_the_mark_as_handed() {
     let mods = Modifiers {
         add_mark: 1.0,
         add_1h: 1.0,
@@ -29,18 +53,23 @@ fn retreat_depth_keeps_the_core_width_clamps() {
     assert_eq!(retreat_pct(3.0, 3.0), 3.001);
 }
 
-/// A 100 ms or inclusive window would retain a stale low and place the buy too deep.
+/// The order is placed off the low of the whole wait, the short window inside it: reading the
+/// short window alone would place it off the print that came back from a dip. Without a wait
+/// only records younger than 74 ms count — a 100 ms or inclusive window would keep a stale low.
 #[test]
-fn placement_uses_only_records_younger_than_74_ms() {
+fn placement_reads_the_wait_window_and_the_short_one_without_a_wait() {
     let ticks = super::super::tests::tape(&[(20, 90.0), (26, 92.0), (50, 95.0)]);
-    let mut reference = Reference::new(UsePrice::Trade, true, FAST_ALGO_WINDOW_MS, 1_000);
+    let mut waited = Reference::new(UsePrice::Trade, true, FAST_ALGO_WINDOW_MS, 1_000);
+    let mut unwaited = Reference::new(UsePrice::Trade, true, FAST_ALGO_WINDOW_MS, 0);
     for tick in &ticks {
-        reference.observe(tick);
+        waited.observe(tick);
+        unwaited.observe(tick);
     }
-    assert_eq!(reference.placement(100), Some(95.0));
-    assert_eq!(reference.window_extreme(100), Some(90.0));
-    reference.observe(&super::super::tests::tape(&[(100, 96.0)])[0]);
-    assert_eq!(reference.recent.front().map(|(t, _)| *t), Some(50));
+    assert_eq!(waited.placement(100), Some(90.0));
+    assert_eq!(waited.window_extreme(100), Some(90.0));
+    assert_eq!(unwaited.placement(100), Some(95.0));
+    unwaited.observe(&super::super::tests::tape(&[(100, 96.0)])[0]);
+    assert_eq!(unwaited.recent.front().map(|(t, _)| *t), Some(50));
 }
 
 /// Reusing the short placement window for Retreat would follow a rebound too early.
@@ -99,13 +128,15 @@ fn retreat_wait_is_strictly_since_the_last_command() {
         raise_wait_s: 1.0,
         ..Default::default()
     };
-    // A low at creation ages out at t=1001; without it the strict wait opens then too.
-    for initial in [100.0, 102.0] {
+    // A low at creation leaves the window a tenth of a second past the wait, at t=1101; without
+    // it the strict wait alone opens the move, at t=1001. Either way the new order stands 1 %
+    // under 102 — 100.98, on the grid's nearest step.
+    for (initial, moved_at) in [(100.0, 1_101), (102.0, 1_001)] {
         let mut points = vec![(0, initial)];
         points.extend((2..=12).map(|i| (i * 100, 102.0)));
         let ticks = super::super::tests::tape(&points);
         let (_, moves) = MshotEntry::new(&params).trace(&deal, &ticks, None);
-        assert_eq!(moves, vec![(0, 99.0), (1_001, 100.0)]);
+        assert_eq!(moves, vec![(0, 99.0), (moved_at, 101.0)]);
     }
 }
 
@@ -121,7 +152,9 @@ fn retreat_window_surfaces_next_best_after_expiry() {
         {
             reference.observe(&tick);
         }
-        assert_eq!(reference.window_extreme(1_001), Some(expected));
+        // The window reaches a tenth of a second past the one-second wait.
+        assert_eq!(reference.window_extreme(1_100), Some(prices[0]));
+        assert_eq!(reference.window_extreme(1_101), Some(expected));
         assert_eq!(reference.raise_recent.len(), 2);
     }
 }
@@ -167,11 +200,13 @@ fn approach_gap_timer_preserves_the_old_level_until_exchange_apply() {
 /// Ignoring expiry (or resetting it on a corridor move) would fill an already canceled buy.
 #[test]
 fn auto_cancel_buy_expires_from_creation_for_model_and_shift() {
+    // Created at 10 s with a 15 s timer: the order lives through the core's own span on top of
+    // it, to 35 s, and a print at 36 s finds it cancelled.
     let mut deal = super::super::tests::deal();
-    deal.buy_ms = 30_000;
+    deal.buy_ms = 36_000;
     deal.buy_set_ms = Some(10_000);
     deal.entry_placed = Some(99.0);
-    let ticks: Vec<Tick> = [(0, 100.0), (20_000, 102.0), (30_000, 99.0)]
+    let ticks: Vec<Tick> = [(0, 100.0), (20_000, 102.0), (36_000, 99.0)]
         .into_iter()
         .map(|(t, price)| Tick {
             time_ms: t as f64,
@@ -193,11 +228,11 @@ fn auto_cancel_buy_expires_from_creation_for_model_and_shift() {
     let fill = MshotEntry::new(&disabled)
         .run(&deal, &ticks, None)
         .expect("timer disabled");
-    assert_eq!(fill.t_ms, 30_000);
+    assert_eq!(fill.t_ms, 36_000);
     assert_eq!(
         MshotEntry::new(&disabled).shifted_fill(&deal, &ticks, &disabled, None),
         Some(Fill {
-            t_ms: 30_000,
+            t_ms: 36_000,
             price: 99.0
         })
     );
@@ -214,11 +249,13 @@ fn auto_cancel_buy_expires_from_creation_for_model_and_shift() {
 /// Re-clamping an already parsed timer or canceling at equality would change its expiry boundary.
 #[test]
 fn auto_cancel_buy_keeps_the_parsed_timer_and_expiry_boundary() {
+    // Created at 10 s with a 1 s timer: the last moment of the order is 21 s, the core's own
+    // ten-second span past the timer.
     let mut deal = super::super::tests::deal();
-    deal.buy_ms = 11_000;
+    deal.buy_ms = 21_000;
     deal.buy_set_ms = Some(10_000);
     deal.entry_placed = Some(99.0);
-    let ticks: Vec<Tick> = [(0, 100.0), (11_000, 99.0)]
+    let ticks: Vec<Tick> = [(0, 100.0), (21_000, 99.0)]
         .into_iter()
         .map(|(t, price)| Tick {
             time_ms: t as f64,
@@ -232,7 +269,7 @@ fn auto_cancel_buy_keeps_the_parsed_timer_and_expiry_boundary() {
         ..Default::default()
     };
     let expected = Some(Fill {
-        t_ms: 11_000,
+        t_ms: 21_000,
         price: 99.0,
     });
     assert_eq!(MshotEntry::new(&params).run(&deal, &ticks, None), expected);
@@ -241,7 +278,7 @@ fn auto_cancel_buy_keeps_the_parsed_timer_and_expiry_boundary() {
         expected
     );
     let mut late = ticks;
-    late.last_mut().unwrap().time_ms = 11_001.0;
+    late.last_mut().unwrap().time_ms = 21_001.0;
     assert_eq!(MshotEntry::new(&params).run(&deal, &late, None), None);
     assert_eq!(
         MshotEntry::new(&params).shifted_fill(&deal, &late, &params, None),
@@ -259,13 +296,15 @@ fn minus_satoshi_measures_two_steps_from_ask() {
     };
     let mut deal = super::super::tests::deal();
     deal.tick = Some(1.0);
+    // 0.6 % under 100 is 99.4, off a half-step tie: the guard's base is the subject here, and
+    // off the placement reference it would hold the order at 98.
     assert_eq!(
-        MshotEntry::new(&params).place(100.0, 0.5, &deal, Some(103.0)),
+        MshotEntry::new(&params).place(100.0, 0.6, &deal, Some(103.0)),
         99.0
     );
     deal.is_short = true;
     assert_eq!(
-        MshotEntry::new(&params).place(100.0, 0.5, &deal, Some(103.0)),
+        MshotEntry::new(&params).place(100.0, 0.6, &deal, Some(103.0)),
         105.0
     );
 }
@@ -385,9 +424,11 @@ fn creation_uses_the_preceding_buy_print_as_ask() {
         entry.anchored_level(&deal, &own, (1_000, 99.0), &ticks),
         Some(99.0)
     );
+    // Without an ASK proxy the guard counts from the reference itself, read back off the
+    // fact's level: 99 / 0.995 = 99.4975, two steps under it 97.4975, on the grid 97.
     assert_eq!(
         entry.placement_at_creation(&deal, 1_000, 0.5, None),
-        Some(98.0)
+        Some(97.0)
     );
 }
 
@@ -543,8 +584,10 @@ fn minus_satoshi_change_reprices_equal_far_bounds() {
     d.buy_set_ms = Some(0);
     d.own_entry = Some(EntryParams::MoonShot(own.clone()));
     let entry = MshotEntry::new(&variant);
-    assert_eq!(entry.anchored_level(&d, &own, (0, 99.0), &[]), Some(98.0));
-    assert_eq!(entry.placement_at_creation(&d, 0, 0.5, None), Some(98.0));
+    // The reference read back off the fact's 99 is 99 / 0.995 = 99.4975; two steps under it
+    // stand at 97.4975, on the grid 97 — a step under the fact's own 99 either way.
+    assert_eq!(entry.anchored_level(&d, &own, (0, 99.0), &[]), Some(97.0));
+    assert_eq!(entry.placement_at_creation(&d, 0, 0.5, None), Some(97.0));
     let ticks = [Tick {
         time_ms: 10_000.0,
         price: 99.0,

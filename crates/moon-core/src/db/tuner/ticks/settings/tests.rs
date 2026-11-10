@@ -125,6 +125,6 @@ fn fast_price_is_not_persisted() {
         serde_json::from_str::<ModelSettings>("{}")
             .unwrap()
             .fast_price,
-        FastPrice::LastOfTick
+        FastPrice::CoreRule
     );
 }

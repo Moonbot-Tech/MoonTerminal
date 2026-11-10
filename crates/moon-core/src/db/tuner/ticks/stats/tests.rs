@@ -31,6 +31,7 @@ fn deal(pnl: f64, spent: f64) -> Deal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,

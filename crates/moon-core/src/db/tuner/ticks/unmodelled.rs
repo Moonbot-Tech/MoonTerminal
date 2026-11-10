@@ -11,8 +11,10 @@
 //!   its execution — `StopSpreadAdd1mDelta`, `TrailingSpread` and the spreads' re-stepping —
 //!   stays unmodelled (the book's): the verdict judges a stop by its decision, and a variant
 //!   that keeps the trade's stop takes the fact's own sale (`record::StopAnchor`);
-//! - the liquidation guards and the grid's fixed stop — `DontSellBelowLiq`, `StopAboveLiq`,
-//!   `StopLossFixed`: not taken into account at all (the developer's call, 2026-09-24);
+//! - the liquidation guards — `DontSellBelowLiq`, `StopAboveLiq`: read and modelled off the
+//!   trade's leverage since 2026-11-10 (`exit::stops::liq`), so they raise nothing here;
+//! - the grid's fixed stop — `StopLossFixed`: not taken into account at all (the developer's
+//!   call, 2026-09-24);
 //! - the entry — `SellEMACheckEnter` (checks the EMA filter before the BUY), `BuyModifier`,
 //!   `DetectModifier`;
 //! - what acts only by hand or only in another kind — `SplitPiece` (a chart menu item),
@@ -50,11 +52,9 @@ use crate::feed::strategy_deps::{FieldDeps, Values, as_bool};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Also {
     Nothing,
-    /// `UseScalpingMode` acts only while `SellPrice` is under 1 % (the site's Sell order tab).
-    SellPriceUnderOne,
-    /// SellShot keeps the sell at a distance only when there is one (`SellShotDistance` ≠ 0) —
-    /// as `params::unmodelled_rule` reads it.
-    SellShotDistance,
+    /// `UseScalpingMode` acts only while `SellPrice` is 1 % or under (the site's Sell order
+    /// tab; the bound itself included, matching the core's rule).
+    SellPriceAtMostOne,
     /// Only nonblank formulas the evaluator cannot parse or support need a warning.
     CustomEmaNotCovered,
 }
@@ -85,8 +85,9 @@ const fn watched(key: &'static str, section: ParamSection, default: &'static str
 /// Every exit field a strategy can switch on that the model does not have, in the strategy
 /// window's order.
 const WATCHED: &[Watched] = &[
-    // Stops. The ladder is modelled (`exit::stops::ladder`); `DontSellBelowLiq`, `StopAboveLiq`
-    // and `StopLossFixed` are left out on purpose (the developer's call, 2026-09-24).
+    // Stops. The ladder and the liquidation guards (`DontSellBelowLiq`, `StopAboveLiq`) are
+    // modelled (`exit::stops::ladder`, `exit::stops::liq`); `StopLossFixed` is left out on
+    // purpose (the developer's call, 2026-09-24).
     // A stop on the ratio of buy to sell volume, over trades the tape has but a rule it does not.
     watched("UseBV_SV_Stop", ParamSection::Stops, "NO"),
     // Stops taken from a Telegram signal.
@@ -101,7 +102,7 @@ const WATCHED: &[Watched] = &[
     },
     // The sell placed under the ASK book's walls, up to 2 % — the book, which the tape has not.
     Watched {
-        also: Also::SellPriceUnderOne,
+        also: Also::SellPriceAtMostOne,
         ..watched("UseScalpingMode", ParamSection::SellOrder, "NO")
     },
     // Sells when the filters' bounds are left, seconds after the buy; 0 is off.
@@ -111,9 +112,9 @@ const WATCHED: &[Watched] = &[
         also: Also::CustomEmaNotCovered,
         ..watched("SellByCustomEMA", ParamSection::SellOrder, "")
     },
-    // SellShot.
+    // SellShot: on by its switch alone, a zero `SellShotDistance` included — as
+    // `params::unmodelled_rule` reads it.
     Watched {
-        also: Also::SellShotDistance,
         rule: Some(UnmodelledRule::SellShot),
         ..watched("IgnoreSellShot", ParamSection::SellShot, "YES")
     },
@@ -128,9 +129,10 @@ const WATCHED: &[Watched] = &[
 /// reason to leave a trade unjudged. Kept apart from [`WATCHED`], whose fields the model does
 /// not read at all.
 const PARTLY_MODELLED: &[Watched] = &[
-    // `FastStopLoss` YES: the core confirms a spike by a VWAP check and a run of trades past the
-    // level; no run length is documented, so the model fires on the last print of each 250 ms tick
-    // (`ModelSettings::fast_price`, `exit::stops::FastStop`). NO is the core's default.
+    // `FastStopLoss` YES: the core confirms a spike by two weighted-price readings past the
+    // level or a run of checks with the last trade past it, which the model follows
+    // (`exit::stops::CoreFast`), and by the BID past it once the ticker has arrived, which the
+    // fast stop's walk does not read. NO is the core's default.
     // Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     watched("FastStopLoss", ParamSection::Stops, "NO"),
 ];
@@ -154,7 +156,6 @@ const CONDITION_KEYS: &[&[&str]] = &[
         "AutoSell",
         "UseStopLoss",
         "SellPrice",
-        "SellShotDistance",
         "CheckAfterBuy",
         "SignalType",
         "IgnoreFilters",
@@ -422,9 +423,9 @@ fn also_holds(
     };
     match also {
         Also::Nothing => true,
-        // The model's own fallback for `SellPrice` (`ExitParams::default`).
-        Also::SellPriceUnderOne => num("SellPrice", 1.0) < 1.0,
-        Also::SellShotDistance => num("SellShotDistance", 0.0) != 0.0,
+        // The fallback `params::exit_params` runs the sell on when neither the dump nor the
+        // schema carries `SellPrice`.
+        Also::SellPriceAtMostOne => num("SellPrice", super::params::CORE_SELL_PRICE) <= 1.0,
         Also::CustomEmaNotCovered => values.get("SellByCustomEMA").is_some_and(|text| {
             !text.trim().is_empty()
                 && super::custom_ema::parse(text)

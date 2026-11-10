@@ -19,6 +19,9 @@ fn longer_sell_level_variant_is_unjudged_without_profit() {
     d.deal.sell_price = 105.0;
     d.deal.sell_reason = "Auto Price Down".into();
     d.ticks = Arc::from(vec![
+        // The own look-back of 10 s ends at the move, 4 501 ms on the core's rounded clock: a
+        // print before its start for the coverage, the high inside it.
+        tick(-5_500, 100.0),
         tick(-5_000, 105.0),
         tick(0, 100.0),
         tick(5_000, 100.0),
@@ -624,6 +627,7 @@ pub(super) fn prepared(uid: i64, peak: f64) -> PreparedDeal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,

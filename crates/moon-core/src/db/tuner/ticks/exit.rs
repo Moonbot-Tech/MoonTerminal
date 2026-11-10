@@ -131,7 +131,7 @@ fn due_by(next: Option<i64>, t_ms: i64) -> Option<i64> {
 pub struct ExitParams {
     /// Parsed, supported `SellByCustomEMA` formula; absent when off or refused.
     pub custom_ema: Option<std::sync::Arc<super::custom_ema::Formula>>,
-    /// `SellEMADelay` in seconds after purchase before formula checks start.
+    /// `SellEMADelay` in seconds after the sell's placement before formula checks start.
     /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
     pub custom_ema_delay_s: f64,
     /// Why a nonblank custom formula could not be replayed.
@@ -142,7 +142,8 @@ pub struct ExitParams {
     /// for MoonShot alone (`sell_order::lifts_take_to_ask`): the core's schema defaults it on,
     /// so strategies of every kind carry it.
     pub sell_at_last_price: bool,
-    /// `MShotSellPriceAdjust` — per cent SUBTRACTED from the pre-spike price.
+    /// `MShotSellPriceAdjust` — per cent SUBTRACTED from the pre-spike price; a strategy's
+    /// value arrives as a magnitude of at most 20 (`params::exit_params`).
     pub sell_price_adjust_pct: f64,
     /// `SellDelay` — milliseconds the core waits before placing the sell; prints inside the
     /// delay cannot fill it.
@@ -202,7 +203,8 @@ pub struct ExitParams {
     pub price_down_pct: f64,
     pub price_down_delay_s: f64,
     /// The core omits `PriceDownRelative` at its default NO; strategies that set it dump
-    /// `True`. Archived Exit lines without the field step by a fixed share of the buy.
+    /// `True`. Archived Exit lines without the field step by a fixed share of the sell's own
+    /// price.
     pub price_down_relative: bool,
     /// Calculate a relative step toward the allowed-drop level rather than the buy.
     /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
@@ -230,12 +232,14 @@ pub struct ExitParams {
     /// `StopLoss`, read as is whether or not `UseStopLoss` arms it.
     pub stop_loss_pct: f64,
     pub stop_loss_delay_s: f64,
-    /// `AllowedDrop` — the panic sell's floor, per cent off the buy: the core never sells a
-    /// stop or trailing panic sale below it. At -98 or under there is no floor. Read as a
-    /// bound only.
+    /// `AllowedDrop` — the panic sell's floor, per cent off the buy: the core sells no stop's
+    /// panic sale past it and `StopLossSpread` more, the floor moved with a stop that stands
+    /// elsewhere than `StopLoss` (`exit::stops::Stops::sale_floor`). At -98 or under there is
+    /// no floor. Read as a bound only.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub allowed_drop_pct: f64,
-    /// `AllowedDrop3` — the floor that replaces `AllowedDrop` once the third stop took over.
+    /// `AllowedDrop3` — the floor that replaces `AllowedDrop` once the third stop's step was
+    /// taken, paired with `StopLoss3` as `AllowedDrop` is with `StopLoss`.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub allowed_drop3_pct: f64,
     /// `UseMarketOrder` — the stop sells by a market order instead of a panic sell, with no
@@ -245,6 +249,14 @@ pub struct ExitParams {
     /// `StopLossSpread` — how far under the price the panic sell places its order, per cent.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub stop_loss_spread_pct: f64,
+    /// `StopAboveLiq` — per cent over the liquidation level the stop is held at; 0 is off
+    /// (`stops::liq`).
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub stop_above_liq_pct: f64,
+    /// `DontSellBelowLiq` — a stop's sale and a PriceDown step are not priced past the
+    /// liquidation level (`stops::liq`).
+    /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+    pub dont_sell_below_liq: bool,
     /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), checked by the
     /// last price of each series tick as it closes (`stops::FastStop`). NO — the core's default: the REST ticker's BID (the
     /// ASK for a short), a long's averaged per `StopLossEMA`, which the trade tape does not
@@ -332,6 +344,8 @@ impl Default for ExitParams {
             allowed_drop3_pct: -99.0,
             use_market_order: false,
             stop_loss_spread_pct: 1.0,
+            stop_above_liq_pct: 0.0,
+            dont_sell_below_liq: false,
             // The trigger the tape itself carries; `exit_params` reads the strategy's own, and
             // its absence there is the core's default, NO.
             fast_stop_loss: true,
@@ -369,7 +383,7 @@ impl ExitParams {
 /// A sell rule the strategy can switch on that the model does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnmodelledRule {
-    /// `IgnoreSellShot` off with a `SellShotDistance` — the sell kept at a distance from the
+    /// `IgnoreSellShot` off, whatever the `SellShotDistance` — the sell kept at a distance from the
     /// market's high.
     SellShot,
     /// `IgnoreSellSpread` off — the sell placed under the spread.

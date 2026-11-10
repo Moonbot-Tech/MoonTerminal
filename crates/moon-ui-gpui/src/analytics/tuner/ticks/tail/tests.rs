@@ -102,6 +102,7 @@ fn station_tail_is_the_rows_exit_horizon_and_clears_the_footer() {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,

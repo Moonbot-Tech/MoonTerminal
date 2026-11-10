@@ -44,11 +44,10 @@
 //! fixed, when the stored reason keeps it, and the moment it activated ([`verify_stop`]). A stop the core fired and the model never did is a miss.
 
 use super::exit::ExitModel;
-use super::exit::level_off_buy;
 use super::exit::line::LinePoint;
 use super::exit::sell_order::{take_is_recorded, take_model_for};
 use super::exit::stops::trailing::trailing_level;
-use super::exit::stops::{immediate_stop, stop_pct};
+use super::exit::stops::{guarded_stop_level, immediate_stop, stop_pct};
 use super::mshot::MshotParams;
 use super::settings::ModelSettings;
 use super::{
@@ -488,9 +487,10 @@ pub fn verify(
 /// holding the take-anchored reading back under a threshold of 0.5 s cost two verdicts more than
 /// it saved on the same sample.
 ///
-/// `SellDelay` keeps the relation the walk already has: the timers run from the booked buy and
-/// the take goes up `SellDelay` after it. Every one of the 1 613 live deals ran it at 0, so which
-/// moment the core's timers count from when it is not is unchecked.
+/// `SellDelay` is taken back out, so that the walk places the take at the archived moment —
+/// `SellDelay` after this start — and runs every sell timer from that placement, as the core
+/// does. Checked on the live sample of 2026-11-10: counted from the booked buy instead, the 194
+/// hook trades run with a `SellDelay` missed 73 exits; from the placement, 65.
 ///
 /// Args:
 ///     deal: The report row.
@@ -681,10 +681,11 @@ fn verify_stop(
     Option<i64>,
 ) {
     let level = stop_level.unwrap_or_else(|| {
-        level_off_buy(
+        guarded_stop_level(
+            exit,
+            deal,
             deal.buy_price,
             stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms),
-            deal.is_long(),
         )
     });
     let stated = stated_stop_level(&deal.sell_reason);
@@ -766,7 +767,7 @@ pub(super) fn stop_jump_level(
     let pct = stop_pct(exit, deal, fact_sell_start(deal, exit, exit_points).t_ms);
     stated_stop_level(reason).or_else(|| {
         (exit.second_stop.is_none() && exit.third_stop.is_none())
-            .then(|| level_off_buy(deal.buy_price, pct, deal.is_long()))
+            .then(|| guarded_stop_level(exit, deal, deal.buy_price, pct))
     })
 }
 
@@ -785,7 +786,8 @@ pub fn stated_peak(reason: &str) -> Option<f64> {
 /// Where the stop took over an archived line: the first move at or past the stop level, no
 /// earlier than the stop's activation — the panic sell's first price, or the market order's.
 ///
-/// The stop arms only `StopLossDelay` seconds after the buy (less the point tolerance), and a
+/// The stop arms only `StopLossDelay` seconds after the sell's placement — `SellDelay` past
+/// the buy — (less the point tolerance), and a
 /// level on the profit side of the buy (a "time stop") is already reached by the take placement
 /// and every re-placement of the take, all skipped: the doc's "the stop-loss will be placed at ASK at +50% from the
 /// purchase price, but it will trigger only after 60 seconds, activate Panic Sell". The
@@ -800,7 +802,8 @@ fn stop_jump(deal: &Deal, exit: &ExitParams, moves: &[(i64, f64)], level: f64) -
     } else {
         0
     };
-    let armed_ms = deal.buy_ms + delay_ms.max(0) - slack;
+    let placed_ms = deal.buy_ms + exit.sell_delay_ms.max(0.0) as i64;
+    let armed_ms = placed_ms + delay_ms.max(0) - slack;
     let profit_side = if long {
         level > deal.buy_price
     } else {
@@ -864,7 +867,7 @@ pub fn stated_stop_level(reason: &str) -> Option<f64> {
 /// at the fill), floored at the price tolerance (`ModelSettings::price_pct`) — see the module
 /// doc.
 pub fn entry_tolerance_pct(params: &MshotParams, deal: &Deal) -> f64 {
-    let (near, far) = params.bounds_pct(&deal.deltas_at(deal.buy_ms));
+    let (near, far) = params.bounds_pct(&deal.corridor_deltas_at(deal.buy_ms));
     (far - near).max(params.model.price_pct)
 }
 

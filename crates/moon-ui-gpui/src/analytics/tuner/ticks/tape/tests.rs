@@ -115,6 +115,7 @@ fn samples_and_single_pictures_keep_each_rows_own_exit_horizon() {
             strike_detect: None,
             step_lag_ms: 0.0,
             round_trip_ms: None,
+            leverage: None,
             stop_anchor: None,
             delta_track: None,
             quotes: None,

@@ -17,10 +17,15 @@
 //!   `MShotAddDistance` scales what the FAR bound receives by `1 + distance / 100`;
 //! - `MShotMinusSatoshi` keeps the order at least two price steps off the ASK;
 //! - `MShotUsePrice` picks the reference: the last trade, or the book's ASK / BID;
-//! - the near bound uses the current price. A Trade re-place uses records younger than 74 ms,
-//!   the core's short extreme, regardless of RaiseWait; ASK/BID use the last wanted-side print.
+//! - the near bound uses the current price. A Trade order — the first and every re-place — is
+//!   placed off the extreme of the whole `MShotRaiseWait` window, a tenth of a second past the
+//!   wait, the 74 ms short extreme inside it; without a wait the short extreme alone. ASK/BID
+//!   use the last wanted-side print. (2026-11-10, 5 316 entries: the short window alone repeated
+//!   851 of the core's 6 661 archived moves, the wait's window 1 255.)
 //!   Approach is due after `max(ReplaceDelay - 2 ms, 0)`; Retreat waits strictly more than
-//!   RaiseWait since the last replacement command. Timers fire between prints before the next
+//!   RaiseWait since the last replacement command — the wait itself, while the window its
+//!   extreme is read over is the same tenth of a second longer (for a wait of that tenth or
+//!   more; a shorter one has no reach). Timers fire between prints before the next
 //!   fill check. Only one re-place may be in flight; order-loop jitter is not modelled.
 //!
 //! Two things the tape cannot give and the model states instead: the book (an ASK / BID
@@ -69,7 +74,7 @@
 
 use super::settings::ModelSettings;
 use super::verify::archived_replacements;
-use super::{Deal, Deltas, EntryParams, Fill, ORDER_WAIT_CAP_MS, deltas, reaches, snap_to_step};
+use super::{Deal, Deltas, EntryParams, Fill, ORDER_WAIT_CAP_MS, deltas, reaches, round_to_step};
 use crate::feed::types::{Side, Tick};
 
 /// Which price the order keeps its distance from (`MShotUsePrice`).
@@ -202,8 +207,8 @@ impl Modifiers {
             + self.add_1h * d.d1h
             + self.add_3h * d.d3h
             + self.add_24h * d.d24h
-            // Shared addition takes the mark as given: the sell sum orients it first,
-            // while the corridor sum passes the raw delta.
+            // The mark arrives oriented: both families turn it to the position's side and floor
+            // it at zero before the sum (`Deal::oriented_mark`).
             + self.add_mark * d.dmark
             + self.add_btc_1h * wide(d.btc1h)
             + self.add_btc_5m * wide(d.btc5m)
@@ -265,8 +270,18 @@ pub const SHIFT_WINDOW_MS: i64 = 2_000;
 /// The seconds the FAQ's "4-second-old ASK" of `MShotSellAtLastPrice` looks back.
 pub const PRE_SPIKE_LOOKBACK_MS: i64 = 4_000;
 
-/// Trade re-places use records younger than 74 ms, the core's short extreme.
+/// The core's short extreme: records younger than 74 ms. A Trade placement reads it inside the
+/// `MShotRaiseWait` window, and alone when there is no wait.
 pub const FAST_ALGO_WINDOW_MS: i64 = 74;
+
+/// How far past `MShotRaiseWait` the far bound's window reaches: a tenth of a second.
+const EXTREME_REACH_MS: i64 = 100;
+
+/// The span the core adds to `AutoCancelBuy` on a live order — up to ten seconds, drawn per
+/// order. The model keeps the order to the end of it: a fill the fact shows inside the span is
+/// one the core's own order lived to. On 4 607 timed entries (2026-11-10) 108 filled past the
+/// bare timer.
+const AUTO_CANCEL_SPAN_MS: i64 = 10_000;
 
 /// MoonShot entry parameters, in the strategy's own units (per cent, seconds).
 #[derive(Clone, Debug, PartialEq)]
@@ -280,7 +295,8 @@ pub struct MshotParams {
     pub raise_wait_s: f64,
     /// `MShotReplaceDelay`, seconds — before re-placing after the price CAME TOO CLOSE.
     pub replace_delay_s: f64,
-    /// `AutoCancelBuy`, seconds from creation; zero disables expiry.
+    /// `AutoCancelBuy`, seconds from creation; zero disables expiry. The order lives
+    /// [`AUTO_CANCEL_SPAN_MS`] past it (`MshotEntry::expiry_ms`).
     pub auto_cancel_buy_s: f64,
     /// `MShotMinusSatoshi`.
     pub minus_satoshi: bool,
@@ -444,15 +460,20 @@ impl<'a> MshotEntry<'a> {
     fn expiry_ms(&self, deal: &Deal) -> Option<i64> {
         let seconds = self.params.auto_cancel_buy_s;
         if seconds > 0.0 {
-            deal.order_open_ms()
-                .map(|created_ms| created_ms.saturating_add((seconds * 1000.0) as i64))
+            deal.order_open_ms().map(|created_ms| {
+                created_ms
+                    .saturating_add((seconds * 1000.0) as i64)
+                    .saturating_add(AUTO_CANCEL_SPAN_MS)
+            })
         } else {
             None
         }
     }
 
     /// Place a far bound off the reference, enforcing two steps from `ask` when requested,
-    /// then snap away from the reference. Source:
+    /// then round to the nearest step of the price grid, as every order sent to an exchange is
+    /// (on the live sample of 2026-11-10 a snap away from the price lost 24 entries of 5 316
+    /// against it). Source:
     /// https://moonbot.pro/documentation/advanced-strategy-parameters/moonshot-strategy-and-its-parameters
     fn place(&self, reference: f64, far_pct: f64, deal: &Deal, ask: Option<f64>) -> f64 {
         let distance = reference * far_pct / 100.0;
@@ -472,7 +493,7 @@ impl<'a> MshotEntry<'a> {
                     level.max(ask + keep_off)
                 };
             }
-            level = snap_to_step(level, tick, deal.is_long());
+            level = round_to_step(level, tick);
         }
         level
     }
@@ -510,7 +531,7 @@ impl<'a> MshotEntry<'a> {
         let Some(EntryParams::MoonShot(own)) = deal.own_entry.as_ref() else {
             return Some(fact_level);
         };
-        let (_, fact_far_pct) = own.bounds_pct(&deal.deltas_at(created_ms));
+        let (_, fact_far_pct) = own.bounds_pct(&deal.corridor_deltas_at(created_ms));
         if fact_far_pct == far_pct && own.minus_satoshi == self.params.minus_satoshi {
             return Some(fact_level);
         }
@@ -521,17 +542,15 @@ impl<'a> MshotEntry<'a> {
     /// The reference a placed level stood off, read back from the level and the far bound it was
     /// placed with.
     ///
-    /// The level is the placement snapped AWAY from the reference (`place`): before the snap it
-    /// lay within one step of it toward the price, half a step on average, and the reference is
-    /// read back from there — off the snapped level itself it would sit a half step too far and
-    /// every variant with it. (`MShotMinusSatoshi` binds only on a corridor narrower than two
-    /// steps and is not undone.)
+    /// The level is the placement rounded to the nearest step (`place`), so it stands for the
+    /// unrounded level within half a step either way and the reference is read straight off it:
+    /// the same far bound then places the same level back. (`MShotMinusSatoshi` binds only on a
+    /// corridor narrower than two steps and is not undone.)
     fn reference_of(level: f64, far_pct: f64, deal: &Deal) -> Option<f64> {
-        let half_step = deal.tick.filter(|t| *t > 0.0).map_or(0.0, |t| t / 2.0);
         let reference = if deal.is_long() {
-            (level + half_step) / (1.0 - far_pct / 100.0)
+            level / (1.0 - far_pct / 100.0)
         } else {
-            (level - half_step) / (1.0 + far_pct / 100.0)
+            level / (1.0 + far_pct / 100.0)
         };
         (reference.is_finite() && reference > 0.0).then_some(reference)
     }
@@ -574,7 +593,7 @@ impl<'a> MshotEntry<'a> {
         (placed_ms, level): (i64, f64),
         ticks: &[Tick],
     ) -> Option<f64> {
-        let deltas = deal.deltas_at(placed_ms);
+        let deltas = deal.corridor_deltas_at(placed_ms);
         let (_, fact_far) = own.bounds_pct(&deltas);
         let (_, far) = self.params.bounds_pct(&deltas);
         if fact_far == far && own.minus_satoshi == self.params.minus_satoshi {
@@ -595,7 +614,8 @@ impl<'a> MshotEntry<'a> {
     /// the shift window past the buy (`ModelSettings::shift_window_ms`, [`SHIFT_WINDOW_MS`] by
     /// default): the same spike. Nothing about the corridor is modelled:
     /// the order is taken to stand still through the spike, as the fact's did. An enabled
-    /// `AutoCancelBuy` with known creation ends the fill window at expiry.
+    /// `AutoCancelBuy` with known creation ends the fill window at expiry — the timer and the
+    /// core's own span past it ([`AUTO_CANCEL_SPAN_MS`]).
     pub(super) fn shifted_fill(
         &self,
         deal: &Deal,
@@ -978,7 +998,7 @@ impl<'a> LiveBounds<'a> {
             .map_or(i64::MIN, |p| p.t_ms);
         let step = (track_step, list_point);
         if self.step != Some(step) {
-            self.bounds = self.params.bounds_pct(&self.deal.deltas_at(t_ms));
+            self.bounds = self.params.bounds_pct(&self.deal.corridor_deltas_at(t_ms));
             self.step = Some(step);
         }
         self.bounds
@@ -997,9 +1017,10 @@ fn wait_ms(seconds: f64) -> i64 {
     (seconds * 1000.0).clamp(0.0, ORDER_WAIT_CAP_MS as f64) as i64
 }
 
-/// Prices read by the corridor: current wanted-side price for Approach, the RaiseWait
-/// window's minimum (maximum for a short) for Retreat, and records younger than 74 ms,
-/// the core's short extreme, for Trade placement. ASK/BID placement uses the last side print.
+/// Prices read by the corridor: current wanted-side price for Approach, and the RaiseWait
+/// window's minimum (maximum for a short) both for Retreat and for Trade placement, where the
+/// records younger than 74 ms — the core's short extreme — are read with it. ASK/BID placement
+/// uses the last side print.
 struct Reference {
     wanted_side: Option<Side>,
     is_long: bool,
@@ -1020,6 +1041,13 @@ struct Reference {
 impl Reference {
     /// Build independent placement and Retreat windows for the selected price side.
     fn new(use_price: UsePrice, is_long: bool, window_ms: i64, raise_window_ms: i64) -> Self {
+        // The far-bound window — Retreat's and the placement's alike — reaches a tenth of a
+        // second past the wait; a wait shorter than that reach is left as it is.
+        let raise_window_ms = if raise_window_ms >= EXTREME_REACH_MS {
+            raise_window_ms + EXTREME_REACH_MS
+        } else {
+            raise_window_ms
+        };
         Self {
             wanted_side: match use_price {
                 UsePrice::Trade => None,
@@ -1138,17 +1166,26 @@ impl Reference {
         None
     }
 
-    /// Trade placement uses the short extreme at the command time, falling back to check
-    /// when the window is empty; ASK/BID use their last print without a short window.
+    /// Trade placement reads the extreme the far bound is measured from — the whole
+    /// `MShotRaiseWait` window, with the short one inside it — so an order placed after a dip
+    /// stands off the dip's low, not off the print that came back; a zero wait leaves the short
+    /// window alone. Falls back to the check price when both are empty; ASK/BID use their last
+    /// print.
     fn placement(&self, now_ms: i64) -> Option<f64> {
         if self.wanted_side.is_some() {
             return self.check();
         }
+        let waited = self
+            .raise_recent
+            .iter()
+            .filter(|(t, _)| now_ms.saturating_sub(*t) <= self.raise_window_ms)
+            .map(|(_, p)| *p);
         let prices = self
             .recent
             .iter()
             .filter(|(t, _)| now_ms - *t < self.window_ms)
-            .map(|(_, p)| *p);
+            .map(|(_, p)| *p)
+            .chain(waited);
         let extreme = if self.is_long {
             prices.reduce(f64::min)
         } else {

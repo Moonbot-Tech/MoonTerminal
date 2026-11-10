@@ -183,6 +183,7 @@ pub(super) fn deal() -> Deal {
         strike_detect: None,
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,
@@ -383,6 +384,7 @@ fn a_core_replays_its_re_places_on_its_own_round_trip() {
     assert_eq!(fill_of(&unmeasured, &missed, &mshot()), None);
     let slow = Deal {
         round_trip_ms: Some(300.0),
+        leverage: None,
         ..deal()
     };
     assert_eq!(
@@ -1861,6 +1863,7 @@ fn hook_deal() -> Deal {
         hook_stated_take_pct: Some(2.0),
         step_lag_ms: 0.0,
         round_trip_ms: None,
+        leverage: None,
         stop_anchor: None,
         delta_track: None,
         quotes: None,
@@ -2816,4 +2819,14 @@ fn strike_take_never_above_fill_without_shift_short() {
     // Detect 100, top 96; a fill at 94 puts half the span at 97.
     let take = ExitModel::new(&p).take_level(&strike_deal(true), &[], strike_fill(94.0));
     assert!((take - 94.0).abs() < 1e-9, "{take}");
+}
+
+/// A tie between two steps lands on the odd multiple — half to even counted from the grid's
+/// first step — and everything else on the nearest. Rounding ties away from zero put 3.5 on 4,
+/// a step past the core's order on every second halving of a PriceDown at 50 %.
+#[test]
+fn a_level_between_two_steps_rounds_to_the_odd_one() {
+    let rounded = [2.4, 2.5, 2.6, 3.5, 4.5, 0.3].map(|level| round_to_step(level, 1.0));
+    assert_eq!(rounded, [2.0, 3.0, 3.0, 3.0, 5.0, 0.0]);
+    assert_eq!(round_to_step(2.5, 0.0), 2.5);
 }

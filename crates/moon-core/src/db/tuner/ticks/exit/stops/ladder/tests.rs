@@ -122,7 +122,8 @@ fn the_walk_stops_at_the_second_level() {
     let w = walk(&deal(false), &ticks, fill(), 105.0, &p);
     assert_eq!(
         (w.exit.kind, w.exit.t_ms),
-        (ExitKind::Stop, 6_000 + super::super::SERIES_TICK_MS),
+        // The trade under the second level stands eight checks of the fast stop.
+        (ExitKind::Stop, 6_000 + super::super::FAST_RUN_MS),
         "{w:?}"
     );
     assert!(

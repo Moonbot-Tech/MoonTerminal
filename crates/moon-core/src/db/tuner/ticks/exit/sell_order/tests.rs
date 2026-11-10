@@ -8,7 +8,9 @@ use crate::db::tuner::ticks::exit::tests::{deal, fill, params, tape};
 /// Treating WorkTime=1 as a one-second deadline would suppress the delayed sell move.
 #[test]
 fn sell_level_work_time_one_waits_for_manual_move() {
-    let ticks = tape(&[(-5_000, 105.0), (0, 100.0), (5_000, 100.0)]);
+    // The move is due 4 501 ms after the placement, so its 10 s look-back starts at −5 499: a
+    // print before that for the coverage, the high inside it.
+    let ticks = tape(&[(-5_500, 100.0), (-5_000, 105.0), (0, 100.0), (5_000, 100.0)]);
     for (work_time, moves) in [(1.0, 2), (2.0, 1)] {
         let p = ExitParams {
             sell_level_delay_s: 5.0,
@@ -21,7 +23,9 @@ fn sell_level_work_time_one_waits_for_manual_move() {
         let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
         assert_eq!(w.points.len(), moves);
         if moves == 2 {
-            assert_eq!((w.points[1].t_ms, w.points[1].price), (5_000, 105.0));
+            // Five seconds on the core's rounded clock: due 4.5 s after the placement, a
+            // millisecond later for an odd count.
+            assert_eq!((w.points[1].t_ms, w.points[1].price), (4_501, 105.0));
             assert!(w.sell_level_short_at.is_none());
         }
     }
@@ -49,9 +53,11 @@ fn price_down_relative_can_count_toward_allowed_drop() {
 /// A boundary bar is safe only when it cannot change the extreme; gaps remain unjudged.
 #[test]
 fn sell_level_requires_contiguous_admissible_history() {
-    let ticks = tape(&[(-295_000, 105.0), (0, 100.0), (5_000, 100.0)]);
+    // A delay of 6 s is due 5.5 s after the placement, so the hour's look-back starts at
+    // −3 594 500 ms and the bars are laid from there.
+    let ticks = tape(&[(-294_500, 105.0), (0, 100.0), (5_500, 100.0)]);
     let p = ExitParams {
-        sell_level_delay_s: 5.0,
+        sell_level_delay_s: 6.0,
         sell_level_time_s: 3600.0,
         sell_level_count: 1,
         sell_level_adjust_pct: 0.0,
@@ -59,8 +65,8 @@ fn sell_level_requires_contiguous_admissible_history() {
     };
     let bars: Vec<_> = (0..55)
         .map(|i| Bar {
-            from_ms: -3_595_000 + i * 60_000,
-            to_ms: -3_535_000 + i * 60_000,
+            from_ms: -3_594_500 + i * 60_000,
+            to_ms: -3_534_500 + i * 60_000,
             open: 100.0,
             high: 120.0,
             low: 99.0,
@@ -157,17 +163,18 @@ fn sell_level_straddling_bar_must_not_change_the_window_extreme() {
             .into(),
         );
         let p = ExitParams {
-            sell_level_delay_s: 5.123,
+            sell_level_delay_s: 5.0,
             sell_level_time_s: 120.0,
             sell_level_count: 1,
             sell_level_adjust_pct: 0.0,
             ..params()
         };
-        let ticks = tape(&[(0, 100.0), (5_123, 100.0)]);
+        // Five seconds on the core's rounded clock are due at 4 501 ms.
+        let ticks = tape(&[(0, 100.0), (4_501, 100.0)]);
         let w = walk(&d, &ticks, fill(), if short { 50.0 } else { 150.0 }, &p);
         assert_eq!(
             w.sell_level_short_at,
-            expected_short.then_some(5_123),
+            expected_short.then_some(4_501),
             "{short} {boundary}"
         );
         assert_eq!(w.points[1].price, if short { 80.0 } else { 120.0 });
@@ -614,7 +621,8 @@ fn a_short_price_down_floor_divides_off_the_buy() {
         ..p
     };
     let w = walk(&deal(true), &ticks, fill(), 99.0, &absolute);
-    assert!((w.points[1].price - 99.2).abs() < 1e-9, "{:?}", w.points);
+    // A share of the sell's own price: 99 · 1.002.
+    assert!((w.points[1].price - 99.198).abs() < 1e-9, "{:?}", w.points);
 }
 
 // ---- PriceDown -------------------------------------------------------------------------------
@@ -655,7 +663,8 @@ fn price_down_steps_the_line_toward_the_buy_on_the_timer() {
 
 #[test]
 fn price_down_absolute_takes_a_share_of_the_price() {
-    // SellPrice 1 %, pct 0.2 absolute: 101 -> 100.8 (of the buy price).
+    // SellPrice 1 %, pct 0.2 absolute: 101 -> 100.798, a share of the sell's own price — the
+    // buy's share (100.8) lands none of the core's archived non-relative steps.
     let p = ExitParams {
         price_down_timer_s: 1.0,
         price_down_pct: 0.2,
@@ -666,7 +675,7 @@ fn price_down_absolute_takes_a_share_of_the_price() {
     };
     let ticks = tape(&[(1_500, 100.0), (2_000, 100.9)]);
     let w = walk(&deal(false), &ticks, fill(), 101.0, &p);
-    assert!((w.points[1].price - 100.8).abs() < 1e-9, "{:?}", w.points);
+    assert!((w.points[1].price - 100.798).abs() < 1e-9, "{:?}", w.points);
     assert_eq!(w.exit.kind, ExitKind::Line);
 }
 
@@ -773,18 +782,19 @@ fn sell_level_and_price_down_go_in_the_order_they_fall_due() {
         price_down_delay_s: 10.0,
         price_down_relative: true,
         price_down_allowed_drop_pct: 0.0,
-        sell_level_delay_s: 2.9,
+        sell_level_delay_s: 3.0,
         sell_level_time_s: 10.0,
         sell_level_count: 1,
         sell_level_adjust_pct: 0.0,
         ..params()
     };
-    // Both are due by the print at 3 500: SellLevel at 2 900 from the take 105 to the high 104,
+    // Both are due by the print at 3 500: SellLevel at 2 501 (three seconds on the core's
+    // rounded clock) from the take 105 to the high 104,
     // then PriceDown at 3 000 halfway from 104 to the buy — not PriceDown off 105 to 102.5 first.
     let ticks = tape(&[(500, 104.0), (3_500, 100.5)]);
     let w = walk(&deal(false), &ticks, fill(), 105.0, &p);
     let levels: Vec<(i64, f64)> = w.points.iter().map(|pt| (pt.t_ms, pt.price)).collect();
-    assert_eq!(levels[1], (2_900, 104.0), "{levels:?}");
+    assert_eq!(levels[1], (2_501, 104.0), "{levels:?}");
     assert!((levels[2].1 - 102.0).abs() < 1e-9, "{levels:?}");
 }
 
@@ -864,4 +874,119 @@ fn a_shift_through_the_entry_is_held_at_the_entry() {
             );
         }
     }
+}
+
+/// The core times SellLevel on whole seconds rounded half to even: `n` is reached half a second
+/// early, a millisecond later for an odd `n`. Plain milliseconds would fire a delay of 8 at
+/// 8 000 ms, where the core's archived move stands at 7 533.
+#[test]
+fn whole_seconds_are_reached_half_a_second_early() {
+    assert_eq!(
+        [0, 1, 2, 3, 8].map(whole_seconds_reach_ms),
+        [0, 501, 1_500, 2_501, 7_500]
+    );
+}
+
+/// A level under `SellLevelAllowedDrop` is skipped, not placed at the floor: the move costs no
+/// count and waits for the print that lifts the high over the floor.
+#[test]
+fn sell_level_under_its_floor_waits_instead_of_taking_the_floor() {
+    let p = ExitParams {
+        sell_level_delay_s: 2.0,
+        sell_level_time_s: 10.0,
+        sell_level_count: 1,
+        sell_level_adjust_pct: 0.0,
+        sell_level_allowed_drop_pct: 3.0,
+        use_stop_loss: false,
+        ..params()
+    };
+    // Due at 1 500 with a high of 102 under the floor of 103; the print at 1 600 changes
+    // nothing, the print of 104 at 1 800 clears the floor and the move goes then.
+    let ticks = tape(&[
+        (0, 100.0),
+        (1_000, 102.0),
+        (1_600, 102.0),
+        (1_800, 104.0),
+        (2_000, 100.5),
+    ]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    let levels: Vec<(i64, f64)> = w.points.iter().map(|pt| (pt.t_ms, pt.price)).collect();
+    assert_eq!(levels, vec![(0, 110.0), (1_800, 104.0)]);
+}
+
+/// A negative `SellLevelDelay` waits for nothing but the floor, and spaces its moves by it: two
+/// moves stand one floor apart, not a millisecond.
+#[test]
+fn a_negative_sell_level_delay_spaces_its_moves_by_the_floor() {
+    let p = ExitParams {
+        sell_level_delay_s: -1.0,
+        sell_level_time_s: 10.0,
+        sell_level_count: 2,
+        // 2 % over the high keeps the sell out of the next print's reach: 106.08 over 104, then
+        // 107.1 over 105.
+        sell_level_adjust_pct: 2.0,
+        use_stop_loss: false,
+        ..params()
+    };
+    let floor_ms = p.model.step_floor_ms;
+    let ticks = tape(&[(0, 100.0), (100, 104.0), (500, 105.0), (2_000, 101.0)]);
+    let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
+    let moved: Vec<i64> = w.points.iter().skip(1).map(|pt| pt.t_ms).collect();
+    assert_eq!(moved, vec![floor_ms, 2 * floor_ms]);
+}
+
+/// A floor standing over the order is re-read on the core's loop even where the step delay and
+/// its floor are both zero: the walk ends, and the sell stays where it was.
+#[test]
+fn price_down_under_its_floor_ends_with_a_zero_delay() {
+    let mut p = ExitParams {
+        price_down_timer_s: 1.0,
+        price_down_delay_s: 0.0,
+        price_down_pct: 50.0,
+        price_down_relative: true,
+        price_down_allowed_drop_pct: 0.5,
+        use_stop_loss: false,
+        ..params()
+    };
+    p.model.step_floor_ms = 0;
+    let ticks = tape(&[(500, 100.0), (60_000, 100.1)]);
+    let w = walk(&deal(false), &ticks, fill(), 100.2, &p);
+    assert_eq!(w.points.len(), 1);
+}
+
+/// PriceDown lowers the sell and never lifts it: a take standing under `PriceDownAllowedDrop`
+/// stays where it is.
+#[test]
+fn price_down_never_lifts_the_sell_to_its_floor() {
+    let p = ExitParams {
+        price_down_timer_s: 1.0,
+        price_down_delay_s: 1.0,
+        price_down_pct: 50.0,
+        price_down_relative: true,
+        price_down_allowed_drop_pct: 0.5,
+        use_stop_loss: false,
+        ..params()
+    };
+    let ticks = tape(&[(500, 100.0), (1_500, 100.1), (2_500, 100.1)]);
+    let w = walk(&deal(false), &ticks, fill(), 100.2, &p);
+    let levels: Vec<(i64, f64)> = w.points.iter().map(|pt| (pt.t_ms, pt.price)).collect();
+    assert_eq!(levels, vec![(0, 100.2)]);
+}
+
+/// Every sell timer counts from the sell's placement: with a `SellDelay` of a second the first
+/// PriceDown step is due a second later than the timer alone says.
+#[test]
+fn price_down_timer_counts_from_the_placement_after_sell_delay() {
+    let p = ExitParams {
+        sell_delay_ms: 1_000.0,
+        price_down_timer_s: 1.0,
+        price_down_delay_s: 10.0,
+        price_down_pct: 50.0,
+        price_down_relative: true,
+        use_stop_loss: false,
+        ..params()
+    };
+    let ticks = tape(&[(500, 100.0), (3_000, 100.5)]);
+    let w = walk(&deal(false), &ticks, fill(), 102.0, &p);
+    assert_eq!((w.points[1].t_ms, w.points[1].price), (2_000, 101.0));
 }

@@ -458,6 +458,9 @@ const MODEL_ONLY_KEYS: &[&str] = &[
     "AllowedDrop3",
     "UseMarketOrder",
     "StopLossSpread",
+    // The liquidation guards (see `exit::stops::liq`): read, never a knob.
+    "StopAboveLiq",
+    "DontSellBelowLiq",
     // PumpsDetection's one sell move (see `exit::pump_move`); `PumpMovePersent` is the
     // core's own spelling of the field.
     "PumpMoveTimer",
@@ -502,9 +505,8 @@ const ENTRY_INPUT_KEYS: &[&str] = &["AutoCancelBuy", "MShotAddArbRange", "UsePos
 const RULE_SWITCH_KEYS: &[&str] = &[
     // No sell order at all.
     "AutoSell",
-    // SellShot is on only with a distance to keep.
+    // SellShot is on by its switch alone, whatever the distance.
     "IgnoreSellShot",
-    "SellShotDistance",
     "IgnoreSellSpread",
 ];
 
@@ -735,6 +737,12 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
     let base = MshotParams::default();
     // KB default: 300 s. MoonShot's documented minimum for a positive timer is 15 s.
     let auto_cancel_buy_s = v.num("AutoCancelBuy", 300.0);
+    // The core reads the corridor's coefficients as magnitudes under a ceiling of their own: 1
+    // for the coin's deltas, 10 for the market's and BTC's, 5 for the price bug — all but the
+    // mark's, which it takes as written. A value past its ceiling runs as the ceiling, so a
+    // variant past it is the ceiling's variant.
+    let coin = |key: &str| v.num(key, 0.0).abs().min(1.0);
+    let wide = |key: &str| v.num(key, 0.0).abs().min(10.0);
     MshotParams {
         price_pct: v.num("MShotPrice", base.price_pct),
         price_min_pct: v.num("MShotPriceMin", base.price_min_pct),
@@ -749,20 +757,20 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
         minus_satoshi: v.bool("MShotMinusSatoshi", base.minus_satoshi),
         fast_algo: v.bool("FastShotAlgo", base.fast_algo),
         modifiers: Modifiers {
-            add_5s: v.num("MShotAdd5sDelta", 0.0),
-            add_1m: v.num("MShotAdd1minDelta", 0.0),
-            add_5m: v.num("MShotAdd5minDelta", 0.0),
-            add_15m: v.num("MShotAdd15minDelta", 0.0),
-            add_1h: v.num("MShotAddHourlyDelta", 0.0),
-            add_3h: v.num("MShotAdd3hDelta", 0.0),
-            add_24h: v.num("MShotAdd24hDelta", 0.0),
+            add_5s: coin("MShotAdd5sDelta"),
+            add_1m: coin("MShotAdd1minDelta"),
+            add_5m: coin("MShotAdd5minDelta"),
+            add_15m: coin("MShotAdd15minDelta"),
+            add_1h: coin("MShotAddHourlyDelta"),
+            add_3h: coin("MShotAdd3hDelta"),
+            add_24h: coin("MShotAdd24hDelta"),
             add_mark: v.num("MShotAddMarkDelta", 0.0),
-            add_pricebug: v.num("MShotAddPriceBug", 0.0),
-            add_btc_1h: v.num("MShotAddBTCDelta", 0.0),
+            add_pricebug: v.num("MShotAddPriceBug", 0.0).abs().min(5.0),
+            add_btc_1h: wide("MShotAddBTCDelta"),
             // MoonShot's corridor family has no 1-minute BTC term; the Delta Modifiers tab does.
             add_btc_1m: 0.0,
-            add_btc_5m: v.num("MShotAddBTC5mDelta", 0.0),
-            add_market_1h: v.num("MShotAddMarketDelta", 0.0),
+            add_btc_5m: wide("MShotAddBTC5mDelta"),
+            add_market_1h: wide("MShotAddMarketDelta"),
             // The corridor family has none of the three (the exe's `MShotAdd*` list).
             add_market_24h: 0.0,
             add_pump_1h: 0.0,
@@ -771,7 +779,7 @@ pub fn mshot_params(v: &StrategyValues<'_>, model: ModelSettings) -> MshotParams
             distance_pct: v.num("MShotAddDistance", 0.0),
             pricebug_cap: MSHOT_PRICEBUG_CAP_PCT,
         },
-        max_modifier: v.num("MaxModifier", 0.0),
+        max_modifier: v.num("MaxModifier", 0.0).max(0.0),
         model,
     }
 }
@@ -814,7 +822,7 @@ pub fn entry_params_for(kind: &str, v: &StrategyValues<'_>, model: ModelSettings
 
 /// Core sell defaults used only when neither a historical value nor the schema supplies one.
 /// https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
-const CORE_SELL_PRICE: f64 = 0.5;
+pub(super) const CORE_SELL_PRICE: f64 = 0.5;
 const CORE_PRICE_DOWN_PERCENT: f64 = 0.2;
 const CORE_PRICE_DOWN_DELAY: f64 = 10.0;
 const CORE_PRICE_DOWN_ALLOWED_DROP: f64 = 0.1;
@@ -846,7 +854,15 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         custom_ema_delay_s: v.num("SellEMADelay", 0.0),
         sell_price_pct: v.num("SellPrice", CORE_SELL_PRICE),
         sell_at_last_price: v.bool("MShotSellAtLastPrice", base.sell_at_last_price),
-        sell_price_adjust_pct: v.num("MShotSellPriceAdjust", base.sell_price_adjust_pct),
+        // Read as a magnitude of at most 20 %, matching the core's rule: a variant past it
+        // runs as the bound's. A value that is no number stays one — `f64::min` would make
+        // it the bound — and the sell then has no price (`sell_order::ask_take_factor`).
+        sell_price_adjust_pct: {
+            let adjust = v
+                .num("MShotSellPriceAdjust", base.sell_price_adjust_pct)
+                .abs();
+            if adjust > 20.0 { 20.0 } else { adjust }
+        },
         sell_delay_ms: v.num("SellDelay", base.sell_delay_ms),
         hook_sell_level_pct: v.num("HookSellLevel", base.hook_sell_level_pct),
         hook_sell_fixed: v.bool("HookSellFixed", base.hook_sell_fixed),
@@ -917,6 +933,8 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         allowed_drop3_pct: v.num("AllowedDrop3", base.allowed_drop3_pct),
         use_market_order: v.bool("UseMarketOrder", base.use_market_order),
         stop_loss_spread_pct: v.num("StopLossSpread", base.stop_loss_spread_pct),
+        stop_above_liq_pct: v.num("StopAboveLiq", base.stop_above_liq_pct).max(0.0),
+        dont_sell_below_liq: v.bool("DontSellBelowLiq", base.dont_sell_below_liq),
         // Absent means the core default, NO: every live stop of a strategy that omits the field
         // closed as "StopLoss AutoActivated on price drop: BID = …" (173 of 184 with a tape),
         // the book-watching stop, never as the fast stop's "StopLoss Market Sell".
@@ -959,15 +977,16 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
 /// off (`assets/param_deps.toml`). On this machine's reports (2026-09-23) the trailing stop was
 /// on for the strategies of 44 trades of 2 042 and the stop ladder for 2; both are modelled since
 /// 2026-09-24 (`exit::stops::trailing`, `exit::stops::ladder`). SellShot and SellSpread are not modelled
-/// at all (the developer's call, 2026-09-24); each is on for 2 live strategies of 1 422 (24.09),
-/// SellShot only where a distance is set (the walk kept it off at a zero one). `AutoSell` off
+/// at all (the developer's call, 2026-09-24); each is on for 2 live strategies of 1 422 (24.09).
+/// SellShot is on by `IgnoreSellShot` alone: at a zero `SellShotDistance` it still holds the
+/// sell at the recent high, inside its corridor (matches the core's rule). `AutoSell` off
 /// places no sell order at all (no live strategy, 24.09). Unsupported or unparsed custom-EMA
 /// formulas and the remaining uncovered sell fields raise warnings in `unmodelled`; this
 /// function names the rules that take a trade out of the verdict.
 pub(super) fn unmodelled_rule(v: &StrategyValues<'_>) -> Option<UnmodelledRule> {
     if !v.bool("AutoSell", true) {
         Some(UnmodelledRule::NoAutoSell)
-    } else if !v.bool("IgnoreSellShot", true) && v.num("SellShotDistance", 0.0) != 0.0 {
+    } else if !v.bool("IgnoreSellShot", true) {
         Some(UnmodelledRule::SellShot)
     } else if !v.bool("IgnoreSellSpread", true) {
         Some(UnmodelledRule::SellSpread)

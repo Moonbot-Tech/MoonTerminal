@@ -12,7 +12,8 @@ fn overdue_pump_move_precedes_a_later_sell_level() {
     let p = ExitParams {
         pump_move_timer_s: 2.0,
         pump_move_pct: 1.0,
-        sell_level_delay_s: 3.0,
+        // On the core's rounded clock a delay of 4 s is due 3.5 s after the placement.
+        sell_level_delay_s: 4.0,
         sell_level_time_s: 10.0,
         sell_level_count: 1,
         sell_level_adjust_pct: 10.0,
@@ -23,7 +24,7 @@ fn overdue_pump_move_precedes_a_later_sell_level() {
     let w = walk(&d, &ticks, fill(), 120.0, &p);
     assert_eq!(
         w.points.iter().map(|pt| pt.t_ms).collect::<Vec<_>>(),
-        vec![0, 2_501, 3_000]
+        vec![0, 2_501, 3_500]
     );
     assert!((w.points[1].price - 109.9).abs() < 1e-9);
     assert!((w.points[2].price - 121.0).abs() < 1e-9);
@@ -186,6 +187,8 @@ fn stop_wins_same_second_over_custom_ema() {
     p.use_stop_loss = true;
     p.fast_stop_loss = true;
     p.stop_loss_pct = -1.0;
+    // The tick-end reading puts the stop on the formula's own boundary.
+    p.model.fast_price = crate::db::tuner::ticks::settings::FastPrice::LastOfTick;
     p.model.series_tick_ms = 250;
     let ticks = ema_tape(&[(750, 98.0), (1_000, 98.0)]);
     let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
@@ -203,6 +206,7 @@ fn earlier_stop_between_prints_beats_later_custom_ema() {
     p.use_stop_loss = true;
     p.fast_stop_loss = true;
     p.stop_loss_pct = -1.0;
+    p.model.fast_price = crate::db::tuner::ticks::settings::FastPrice::LastOfTick;
     p.model.series_tick_ms = 250;
     let ticks = ema_tape(&[(1_100, 98.0), (2_500, 98.0)]);
     let w = walk(&deal(false), &ticks, fill(), 110.0, &p);
@@ -409,6 +413,8 @@ fn vol_never_warms_from_bars() {
 #[test]
 fn replacement_marketable_at_arrival_fills_at_the_print() {
     let p = ExitParams {
+        // The tape stands at the buy, where the default stop stands too: the sell alone.
+        use_stop_loss: false,
         sell_level_delay_s: -1.0,
         sell_level_time_s: 1.0,
         sell_level_count: 1,
@@ -493,12 +499,14 @@ fn queued_moves_survive_latency_longer_than_the_interval() {
 #[test]
 fn queued_moves_at_the_same_time_keep_placement_order() {
     let p = ExitParams {
-        price_down_timer_s: 0.33,
+        // Both due 1.5 s after the placement: the timer as written, SellLevel's two seconds on
+        // the core's rounded clock.
+        price_down_timer_s: 1.5,
         price_down_delay_s: 10.0,
         price_down_pct: 50.0,
         price_down_relative: true,
-        sell_level_delay_s: 0.33,
-        sell_level_time_s: 1.0,
+        sell_level_delay_s: 2.0,
+        sell_level_time_s: 2.0,
         sell_level_count: 1,
         sell_level_adjust_pct: 3.0,
         ..params()
@@ -518,16 +526,16 @@ fn queued_moves_at_the_same_time_keep_placement_order() {
         price_down: &mut price_down,
         sell_level: &mut sell_level,
     }
-    .step_through(330, &tape(&[(0, 100.0)]), &mut line);
-    line.land(430);
+    .step_through(1_500, &tape(&[(0, 100.0)]), &mut line);
+    line.land(1_600);
     assert_eq!(line.exch, 101.5);
-    assert_eq!(line.moved_at, Some(430));
+    assert_eq!(line.moved_at, Some(1_600));
     assert_eq!(
         line.points
             .iter()
             .map(|p| (p.t_ms, p.price))
             .collect::<Vec<_>>(),
-        vec![(0, 110.0), (430, 103.0), (430, 101.5)]
+        vec![(0, 110.0), (1_600, 103.0), (1_600, 101.5)]
     );
 }
 

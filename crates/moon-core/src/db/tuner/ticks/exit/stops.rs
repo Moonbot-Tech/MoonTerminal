@@ -2,10 +2,12 @@
 //! `FastStopLoss`, `StopLossEMA` and `StopLossModifier`.
 //!
 //! **StopLoss** — `StopLoss` per cent from the buy (negative: a loss), adjusted by
-//! `StopLossModifier` ([`stop_pct`]), armed `StopLossDelay` seconds after the buy; `UseStopLoss`
-//! arms it, and `StopLoss` 0 is a stop at the buy price (matches the core's rule). With `FastStopLoss`, `ModelSettings::fast_price`
-//! (default: the last price) is checked as each [`SERIES_TICK_MS`] tick closes, a market exit
-//! at the tick's last print
+//! `StopLossModifier` ([`stop_pct`]), armed `StopLossDelay` seconds after the sell's placement
+//! (`SellDelay` past the buy); `UseStopLoss`
+//! arms it, and `StopLoss` 0 is a stop at the buy price (matches the core's rule). With
+//! `FastStopLoss` the stop fires on the core's own reading of the trades — two successive
+//! short-window weighted prices past the level, or the last trade standing past it through a
+//! run of checks ([`CoreFast`]) — a market exit at the last print by then
 //! ([`FastStop`]). Without it — the core's default — the core watches the
 //! REST ticker's BID (a short's ASK), a long's averaged over `StopLossEMA` of the ticker's
 //! arrivals, and the walk reads a proxy of that: the last print on that side of the book (a
@@ -21,10 +23,12 @@
 //! `UseStopLoss3`) is [`ladder`], which moves the level this stop fires at.
 
 pub mod ladder;
+pub mod liq;
 pub mod ticker;
 pub mod trailing;
 
 use self::ladder::Ladder;
+use self::liq::LiqGuard;
 use self::ticker::Ticker;
 use self::trailing::Trailing;
 use super::delta_mods::modifier_sum;
@@ -129,7 +133,7 @@ impl FastPriceState {
     pub(crate) fn value(&self) -> Option<f64> {
         let OpenTrade { pq, q, .. } = self.open?;
         match self.rule {
-            FastPrice::LastOfTick => None,
+            FastPrice::LastOfTick | FastPrice::CoreRule => None,
             FastPrice::TradeEma { .. } => Some(self.step(pq / q, q)),
             FastPrice::VwapLastTrades(n) => {
                 let (mut sum_pq, mut sum_q) = (pq, q);
@@ -159,8 +163,8 @@ pub const TICKER_PERIOD_MS: i64 = 2_150;
 /// closest to the previous point (`docs-internal/STRATEGY_FORMULAS/deltas.md` §7). A stop at
 /// `StopLossEMA` 0 fires on that series as well as on the ticker's price (the core developer,
 /// 2026-09-23) — a lone print in its tick is a point, a spike among prints near the last
-/// point is not. The fast stop compares `ModelSettings::fast_price` at the same tick end,
-/// defaulting to its last price ([`FastStop`]).
+/// point is not. The fast stop's older readings — a `ModelSettings::fast_price` other than the
+/// core's rule — are compared at the same tick end ([`FastStop`]).
 pub const SERIES_TICK_MS: i64 = 250;
 
 /// Which rule of the walk fired its stop — what the diagnostic report counts per segment, so a
@@ -171,7 +175,8 @@ pub enum StopTrigger {
     Ticker,
     /// The core's 250 ms price series, at `StopLossEMA` 0 ([`SERIES_TICK_MS`]).
     Series,
-    /// `FastStopLoss`: `ModelSettings::fast_price`, defaulting to the tick's last price.
+    /// `FastStopLoss`: the core's own rule by default ([`CoreFast`]), else the tick-end reading
+    /// `ModelSettings::fast_price` names. The name is the report's, from the tick-end readings.
     FastTick,
     /// `UseTrailing`'s line.
     Trailing,
@@ -201,6 +206,20 @@ pub fn stop_pct(params: &ExitParams, deal: &Deal, at_ms: i64) -> f64 {
         return params.stop_loss_pct;
     }
     params.stop_loss_pct - modifier_sum(params, deal, at_ms) * params.stop_loss_modifier
+}
+
+/// A stop level `pct` per cent off `buy` as the liquidation guard leaves it: where
+/// `StopAboveLiq` holds the stop nearer the buy, that level ([`liq`]). The one conversion for
+/// every reader of a stop's level — the walk, the verdict's fallback and the hole's bound — so
+/// none of them places the stop where the core no longer keeps it.
+///
+/// Args:
+///     params: The sell parameters.
+///     deal: The trade, for its side and leverage.
+///     buy: The buy the level counts from.
+///     pct: The stop's distance off the buy, negative on the losing side.
+pub fn guarded_stop_level(params: &ExitParams, deal: &Deal, buy: f64, pct: f64) -> f64 {
+    LiqGuard::new(params, deal, buy).stop(level_off_buy(buy, pct, deal.is_long()))
 }
 
 /// Whether the strategy runs the documented immediate `StopLoss`: `FastStopLoss` on,
@@ -308,24 +327,145 @@ fn next_series_tick(t_ms: i64, tick_ms: i64) -> i64 {
     (t_ms.div_euclid(tick_ms) + 1) * tick_ms
 }
 
-/// The fast stop compares `ModelSettings::fast_price` at each [`SERIES_TICK_MS`] tick end,
-/// defaulting to the last price. Its market exit price remains the tick's last print.
+/// How far back the fast stop's volume-weighted price reads the trades: under 74 ms.
+const FAST_VWAP_WINDOW_MS: i64 = 74;
+
+/// How often that price is taken anew: on a trade more than 75 ms after the last reading.
+const FAST_VWAP_EVERY_MS: i64 = 75;
+
+/// The trades the weighted price is read from, the newest.
+const FAST_VWAP_TRADES: usize = 25;
+
+/// How long the last trade must stand past the level for the fast stop to fire on it alone:
+/// eight checks in a row, one about every 16 ms.
+const FAST_RUN_MS: i64 = 128;
+
+/// The fast stop's first check after the sell's placement.
+const FAST_FIRST_CHECK_MS: i64 = 250;
+
+/// The core's own fast trigger, the state it reads off the trades.
 ///
-/// Core logs print `WeightedPrice`/`WeightedPricePrev` only on fast-stop fires; there the
-/// weighted reading, rather than BID/LastPrice, crosses the logged level. A VWAP of the last
-/// few trades approximates that reading without reproducing it exactly.
+/// The fast stop "reacts to spikes" and confirms one in either of two ways: two successive
+/// readings of a volume-weighted price of the last trades both past the level, or the last
+/// trade itself standing past it through a run of checks. Core logs print
+/// `WeightedPrice`/`WeightedPricePrev` on a fast stop's fire for the first; the second is what
+/// lets a lone print fire it once nothing answers it.
 ///
-/// Checking every print can fire before the core; the tick's last price better approximates
-/// its timing. The delta series' closest-to-previous-point selection can instead fire late.
+/// Measured on the stopped MoonShot trades of 2026-09-26 (192 fast stops): a price past the
+/// level for a tenth of a second and a 75 ms series reproduced 165–171 moments, the last print
+/// of a 250 ms tick 143–148.
 ///
-/// The core's own rule reacts to "spikes" without waiting for an average to be crossed, and
-/// confirms one by a VWAP check plus a run of trades past the level. Neither the run's length
-/// nor the VWAP's window is documented, so none is modelled here; a strategy with `FastStopLoss` on is warned
-/// about instead (`unmodelled::PARTLY_MODELLED`).
+/// The book's side of the rule — the BID past the level, once the ticker has arrived — is not
+/// read: the fast stop's walk keeps no ticker, and a strategy with `FastStopLoss` on stays
+/// warned about (`unmodelled::PARTLY_MODELLED`).
 /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
+struct CoreFast {
+    /// The newest trades the weighted price is read from, oldest first: moment, price,
+    /// quantity.
+    trades: std::collections::VecDeque<(i64, f64, f64)>,
+    /// When the weighted price was last taken.
+    read_at: i64,
+    /// The weighted price as last taken, and the reading before it.
+    vwap: Option<(f64, f64)>,
+    /// Since when every trade has stood past the stop's level; `None` once one stood back.
+    /// Kept as the trades come, not read off the ring: a burst longer than the ring would
+    /// keep moving the run's start.
+    run_since: Option<i64>,
+}
+
+impl CoreFast {
+    fn new() -> Self {
+        Self {
+            trades: std::collections::VecDeque::with_capacity(FAST_VWAP_TRADES + 1),
+            read_at: i64::MIN,
+            vwap: None,
+            run_since: None,
+        }
+    }
+
+    /// Read a trade: keep it, and take the weighted price anew when the last reading is old
+    /// enough — over the trades inside the window, the previous reading kept beside it. The
+    /// first trade is both readings. `past` says whether the trade stands at or past the
+    /// stop's level: the run goes on with it, or ends.
+    fn see(&mut self, t_ms: i64, price: f64, qty: f64, past: bool) {
+        self.run_since = past.then(|| self.run_since.unwrap_or(t_ms));
+        self.trades.push_back((t_ms, price, qty));
+        if self.trades.len() > FAST_VWAP_TRADES {
+            self.trades.pop_front();
+        }
+        match self.vwap {
+            None => {
+                self.vwap = Some((price, price));
+                self.read_at = t_ms;
+            }
+            Some((current, _)) if t_ms.saturating_sub(self.read_at) > FAST_VWAP_EVERY_MS => {
+                let (value, volume) = self
+                    .trades
+                    .iter()
+                    .filter(|(at, _, qty)| t_ms - *at < FAST_VWAP_WINDOW_MS && *qty > 0.0)
+                    .fold((0.0, 0.0), |(value, volume), (_, price, qty)| {
+                        (value + price * qty, volume + qty)
+                    });
+                let fresh = if volume > 0.0 { value / volume } else { price };
+                self.vwap = Some((fresh, current));
+                self.read_at = t_ms;
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// The stop moved to `level`, a step of the ladder: the run is read again off the ring's
+    /// trades, and a run already standing goes on when the whole ring is past the new level.
+    ///
+    /// The trades count from their own moments, not from the step. The model's ladder steps
+    /// on its ticker proxy, later than the core's own; holding the fire back to the model's
+    /// step cost the reproduction 32 exits for 10 gained (2026-11-10, 11 737 trades).
+    fn relevel(&mut self, level: f64, long: bool) {
+        let (run, since) = self
+            .trades
+            .iter()
+            .rev()
+            .take_while(|(_, price, _)| reaches(*price, level, long))
+            .fold((0usize, None), |(run, _), (since, _, _)| {
+                (run + 1, Some(*since))
+            });
+        self.run_since = match (since, self.run_since) {
+            (Some(since), Some(before)) if run == self.trades.len() => Some(since.min(before)),
+            (since, _) => since,
+        };
+    }
+
+    /// The first moment from `from` — the first check — the rule holds against `level`: when
+    /// both readings of the weighted price came to stand past it, or a run's length after the
+    /// trades did, the run counted from the first check — whichever comes first. `None` while
+    /// neither holds.
+    fn holds_from(&self, level: f64, long: bool, from: i64) -> Option<i64> {
+        // At or past the level, as every level of the walk is read (`reaches`).
+        let past = |price: f64| reaches(price, level, long);
+        let pair = self
+            .vwap
+            .filter(|(current, previous)| past(*current) && past(*previous))
+            .map(|_| self.read_at.max(from));
+        let run = self
+            .run_since
+            .map(|since| since.max(from).saturating_add(FAST_RUN_MS));
+        match (pair, run) {
+            (Some(pair), Some(run)) => Some(pair.min(run)),
+            (pair, run) => pair.or(run),
+        }
+    }
+}
+
+/// The fast stop. Under [`FastPrice::CoreRule`] — the default — it fires on the core's own rule
+/// ([`CoreFast`]), at the moment the rule comes to hold. The other `ModelSettings::fast_price`
+/// readings are compared at each [`SERIES_TICK_MS`] tick end, as the model did before the rule
+/// was read, and stay for a comparison on the bench. Either way the market exit is priced at
+/// the last print by then.
 struct FastStop {
     price_rule: FastPrice,
     state: FastPriceState,
+    /// The core's rule and its state, under [`FastPrice::CoreRule`].
+    core: Option<CoreFast>,
     long: bool,
     level: f64,
     /// The end of `StopLossDelay`.
@@ -341,14 +481,33 @@ struct FastStop {
 }
 
 impl FastStop {
-    /// When the open tick closes, if it holds a print and closes by `until`.
+    /// Move the stop to `level`, a step of the ladder.
+    fn relevel(&mut self, level: f64) {
+        self.level = level;
+        if let Some(core) = self.core.as_mut() {
+            core.relevel(level, self.long);
+        }
+    }
+
+    /// When the stop is to be read next by `until`: the moment the core's rule comes to hold —
+    /// past what the fact proves quiet — or the close of the open tick, if it holds a print.
     fn due(&self, until: i64) -> Option<i64> {
+        if let Some(core) = &self.core {
+            let at = core
+                .holds_from(self.level, self.long, self.from)?
+                .max(self.quiet_until.saturating_add(1));
+            return (self.last.is_some() && at <= until).then_some(at);
+        }
         (self.last.is_some() && self.tick_end <= until).then_some(self.tick_end)
     }
 
     /// Compare the selected estimate at tick end, exiting at the tick's last print.
     /// The fact's quiet span is read against that same tick end.
     fn before(&mut self, until: i64) -> Option<Exit> {
+        if self.core.is_some() {
+            let at = self.due(until)?;
+            return self.last.map(|price| stop_exit(at, price));
+        }
         if self.tick_end > until {
             return None;
         }
@@ -367,7 +526,10 @@ impl FastStop {
     fn see(&mut self, tick: &Tick, t_ms: i64, price: f64) {
         self.tick_end = next_series_tick(t_ms, self.tick_ms);
         self.last = Some(price);
-        if self.price_rule != FastPrice::LastOfTick {
+        if let Some(core) = self.core.as_mut() {
+            let past = reaches(price, self.level, self.long);
+            core.see(t_ms, price, f64::from(tick.qty), past);
+        } else if self.price_rule != FastPrice::LastOfTick {
             self.state.see(tick);
         }
     }
@@ -522,15 +684,15 @@ pub(crate) fn stop_side(long: bool) -> crate::feed::types::Side {
 enum Trigger {
     /// No stop: `UseStopLoss` off.
     Off,
-    /// Compare `ModelSettings::fast_price` (default: last of tick) at tick end.
+    /// The fast stop: the core's own rule by default, or `ModelSettings::fast_price` at tick end.
     /// Boxing once per walk keeps the inline trade ring from expanding every trigger variant.
     Fast(Box<FastStop>),
     /// The book-watching stop on its ticker proxy.
     Book(BookStop),
 }
 
-/// The stop as the walk runs it: the fast one on `ModelSettings::fast_price` at each tick end,
-/// defaulting to the last print; the
+/// The stop as the walk runs it: the fast one on the core's own rule ([`CoreFast`]), or on
+/// `ModelSettings::fast_price` at each tick end where a setting asks for it; the
 /// book-watching one on its ticker proxy, or the fact's own when the walk replays the trade's own stop — and the trailing
 /// stop beside it.
 pub(super) struct Stops {
@@ -551,6 +713,9 @@ pub(super) struct Stops {
     /// The first stop's level, before any ladder step: past it `AllowedDrop` bounds the sale
     /// again, whatever rung stands.
     main_level: Option<f64>,
+    /// The liquidation guards: where `StopAboveLiq` holds every level of the stop, and where
+    /// `DontSellBelowLiq` holds its sale.
+    guard: LiqGuard,
 }
 
 impl Stops {
@@ -570,8 +735,12 @@ impl Stops {
         // trigger for a market sell, and nothing about it is ever placed.
         let stop = stop_pct(params, deal, fill.t_ms);
         let stop_on = params.use_stop_loss;
-        let level = side.off_buy(fill.price, stop);
-        let stop_from = fill.t_ms + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
+        // `StopAboveLiq` holds the level away from the liquidation price, the ladder's rungs too.
+        let guard = LiqGuard::new(params, deal, fill.price);
+        let level = guard.stop(side.off_buy(fill.price, stop));
+        // `StopLossDelay` counts from the sell's placement, `SellDelay` past the fill.
+        let stop_from = super::sell_order::armed_at(fill, params)
+            + (params.stop_loss_delay_s.max(0.0) * 1000.0) as i64;
         // What the fact proves about the stop when this walk runs the trade's own
         // (`record::StopAnchor`): it fired when the core's did, at the price the core sold at, and
         // not a moment before — nor before the close, on a trade it never stopped. The book the
@@ -652,17 +821,39 @@ impl Stops {
         } else if params.fast_stop_loss {
             let price_rule = params.model.fast_price;
             let mut state = FastPriceState::new(price_rule);
-            if price_rule != FastPrice::LastOfTick {
+            // The core keeps its weighted price for the market, not for the order: warm at the
+            // fill, off the prints before it.
+            let core = (price_rule == FastPrice::CoreRule).then(|| {
+                let mut core = CoreFast::new();
+                for tick in before_fill() {
+                    let price = f64::from(tick.price);
+                    core.see(
+                        tick.time_ms as i64,
+                        price,
+                        f64::from(tick.qty),
+                        reaches(price, level, side.long),
+                    );
+                }
+                core
+            });
+            if core.is_none() && price_rule != FastPrice::LastOfTick {
                 for tick in before_fill() {
                     state.see(tick);
                 }
             }
+            // The core's rule is first read a quarter of a second after the sell's placement.
+            let from = if core.is_some() {
+                stop_from.max(super::sell_order::armed_at(fill, params) + FAST_FIRST_CHECK_MS)
+            } else {
+                stop_from
+            };
             Trigger::Fast(Box::new(FastStop {
                 price_rule,
                 state,
+                core,
                 long: side.long,
                 level,
-                from: stop_from,
+                from,
                 quiet_until,
                 last: None,
                 tick_end: i64::MIN,
@@ -719,39 +910,86 @@ impl Stops {
             immediate,
             buy: fill.price,
             main_level: stop_on.then_some(level),
+            guard,
         }
     }
 
     /// The panic sell's floor for a stop sale at `print`: the price past which the core's panic
     /// sell could never have sold — "the minimum allowed level in percent from the purchase
     /// price to which the Sell order may be lowered after the stop is triggered and Panic Sell
-    /// is activated" (`AllowedDrop`). `None` under `UseMarketOrder`, and without a floor
-    /// (`AllowedDrop` at -98 or under). While the third stop's rung is the level in force
-    /// `AllowedDrop3` replaces it, until the print passes the main stop's level, where the main
-    /// stop's `AllowedDrop` applies again. The immediate stop's order limit (buy less
-    /// `StopLossSpread`) bounds it too: the tighter of the two. The panic sell's re-stepping by
+    /// is activated" (`AllowedDrop`). `None` under `UseMarketOrder`, and without a floor (a
+    /// drop at -98 or under). The drop is the stop's own ([`Self::stop_drop`]) — or, for a sale
+    /// the trailing fired, the take profit's level where it has one, else `AllowedDrop` — and
+    /// the floor stands `StopLossSpread` past it, the panic sell's last step. The immediate
+    /// stop's order limit (buy less `StopLossSpread`) bounds it too, and so does
+    /// `DontSellBelowLiq`'s liquidation level ([`liq`]) — a panic sell's, not a market order's,
+    /// which has no price to hold: the tightest of them. The panic sell's re-stepping by
     /// `StopLossSpread` needs the book — this is a bound, not a fill model.
     /// Source: https://moonbot.pro/documentation/general-parameters-for-all-strategies/stops-tab
     pub(super) fn sale_floor(&self, params: &ExitParams, print: f64, long: bool) -> Option<f64> {
         if params.use_market_order {
             return None;
         }
-        let third = self.ladder.as_ref().is_some_and(Ladder::active_is_third)
-            && !self
-                .main_level
-                .is_some_and(|main| reaches(print, main, long));
-        let drop = if third {
-            params.allowed_drop3_pct
+        let drop = if self.fired_rule == Some(StopTrigger::Trailing) {
+            params
+                .trailing_take_profit_pct
+                .unwrap_or(params.allowed_drop_pct)
         } else {
-            params.allowed_drop_pct
+            self.stop_drop(params, print, long)
         };
-        let drop_floor = (drop > -98.0).then(|| level_off_buy(self.buy, drop, long));
+        let drop_floor = (drop > -98.0).then(|| {
+            level_off_buy(
+                level_off_buy(self.buy, drop, long),
+                -params.stop_loss_spread_pct,
+                long,
+            )
+        });
         let limit = (self.fired_rule == Some(StopTrigger::Immediate))
             .then(|| level_off_buy(self.buy, -params.stop_loss_spread_pct, long));
-        match (drop_floor, limit) {
-            // The tighter: nearer the buy.
-            (Some(a), Some(b)) => Some(if long { a.max(b) } else { a.min(b) }),
-            (a, b) => a.or(b),
+        // The tightest: nearest the buy.
+        [drop_floor, limit, self.guard.sale_floor()]
+            .into_iter()
+            .flatten()
+            .reduce(|a, b| if long { a.max(b) } else { a.min(b) })
+    }
+
+    /// How far under the buy, in per cent, a stop's panic sell may go (matches the core's rule):
+    /// `AllowedDrop`, but no nearer than 1 % past the stop's level in force, and as far past
+    /// that level as `AllowedDrop` stands past `StopLoss` — so a stop its modifiers, its ladder
+    /// or the liquidation guard moved takes the floor with it. Once the third stop's rung has
+    /// been taken the pair is `AllowedDrop3` and `StopLoss3`. After any step of the ladder a
+    /// print past the main stop's level opens the lower of the two drops.
+    fn stop_drop(&self, params: &ExitParams, print: f64, long: bool) -> f64 {
+        let ladder = self.ladder.as_ref();
+        let third = params
+            .third_stop
+            .filter(|_| ladder.is_some_and(Ladder::third_taken));
+        let (allowed, stop) = match third {
+            Some(step) => (params.allowed_drop3_pct, step.level_pct),
+            None => (params.allowed_drop_pct, params.stop_loss_pct),
+        };
+        let drop = self
+            .level()
+            .filter(|_| self.buy > 0.0)
+            .map_or(allowed, |level| {
+                // The level's own distance off the buy; a short's is read off the price, not
+                // off the division that placed it.
+                let at = if long {
+                    (level / self.buy - 1.0) * 100.0
+                } else {
+                    (1.0 - level / self.buy) * 100.0
+                };
+                allowed.min(at - 1.0).min(at + allowed - stop)
+            })
+            .max(-100.0);
+        let past_main = ladder.is_some_and(Ladder::stepped)
+            && self
+                .main_level
+                .is_some_and(|main| reaches(print, main, long));
+        if past_main {
+            drop.min(params.allowed_drop_pct.min(params.allowed_drop3_pct))
+        } else {
+            drop
         }
     }
 
@@ -780,12 +1018,17 @@ impl Stops {
         }
     }
 
-    /// Whether trailing, a pending rung, or a weighted fast estimate needs missing prints.
+    /// Whether trailing, a pending rung, or a weighted fast estimate needs missing prints. The
+    /// core's own fast rule does not: like the tick's last print it fires on the price standing
+    /// past the level, which the fact's own stop bounds across a hole.
     pub(super) fn follows_price(&self) -> bool {
         self.trailing.is_some()
             || self.ladder.as_ref().is_some_and(Ladder::pending)
             || (self.fired.is_none()
-                && matches!(&self.trigger, Trigger::Fast(fast) if fast.price_rule != FastPrice::LastOfTick))
+                && matches!(&self.trigger, Trigger::Fast(fast) if !matches!(
+                    fast.price_rule,
+                    FastPrice::LastOfTick | FastPrice::CoreRule
+                )))
     }
 
     /// The ladder's steps strictly before `until`, moving the stop's level when one is taken.
@@ -795,10 +1038,32 @@ impl Stops {
         let Some(level) = self.ladder.as_mut().and_then(|ladder| ladder.before(until)) else {
             return;
         };
+        let level = self.guard.stop(level);
         match &mut self.trigger {
             Trigger::Off => {}
-            Trigger::Fast(fast) => fast.level = level,
+            Trigger::Fast(fast) => fast.relevel(level),
             Trigger::Book(book) => book.level = level,
+        }
+    }
+
+    /// The fast stop's fire by `until`, the ladder climbed to its moment — or, with no fire
+    /// due, to `idle`. A step of the ladder on the way moves the level, and the stop is read
+    /// again against it: the core's rule may hold against the new level at once. `floor` is a
+    /// moment the ladder is climbed past even when the fire is earlier (the tape's end).
+    fn fast_before(&mut self, until: i64, idle: i64, floor: i64) -> Option<Exit> {
+        loop {
+            let Trigger::Fast(fast) = &self.trigger else {
+                return None;
+            };
+            let (due, level) = (fast.due(until), fast.level);
+            self.climb(due.map_or(idle, |at| at.max(floor).saturating_add(1)));
+            let Trigger::Fast(fast) = &mut self.trigger else {
+                return None;
+            };
+            // Every rung is taken once, so the level settles.
+            if fast.level == level {
+                return due.and_then(|_| fast.before(until));
+            }
         }
     }
 
@@ -806,9 +1071,13 @@ impl Stops {
     /// The ladder includes a cycle at the event's own time, then reaches `until` only if quiet.
     fn book_before(&mut self, until: i64) -> Option<(Exit, StopTrigger)> {
         let ladder = &mut self.ladder;
+        let guard = self.guard;
         let exit = match &mut self.trigger {
             Trigger::Book(book) => book.before_with(until, |at| {
-                ladder.as_mut().and_then(|ladder| ladder.before(at + 1))
+                ladder
+                    .as_mut()
+                    .and_then(|ladder| ladder.before(at + 1))
+                    .map(|level| guard.stop(level))
             }),
             Trigger::Off | Trigger::Fast(_) => None,
         };
@@ -842,17 +1111,7 @@ impl Stops {
         // The fast stop's tick is judged against the level as it stood when the tick closed,
         // before the ladder's steps up to this print move it — and a tick that fires leaves the
         // ladder where it stood then.
-        let fast_due = match &self.trigger {
-            Trigger::Fast(fast) => fast.due(t_ms),
-            Trigger::Off | Trigger::Book(_) => None,
-        };
-        let by_fast = fast_due.and_then(|closes_at| {
-            self.climb(closes_at + 1);
-            match &mut self.trigger {
-                Trigger::Fast(fast) => fast.before(t_ms),
-                Trigger::Off | Trigger::Book(_) => None,
-            }
-        });
+        let by_fast = self.fast_before(t_ms, t_ms, i64::MIN);
         if by_fast.is_none() && !matches!(self.trigger, Trigger::Book(_)) {
             self.climb(t_ms);
         }
@@ -902,19 +1161,15 @@ impl Stops {
         }
         // The tape's last tick closes on its last print — nothing the tape holds follows it — and
         // is judged against the ladder as it stood at the tick's end.
-        let fast_closes_at = match &self.trigger {
-            Trigger::Fast(fast) => fast.due(i64::MAX),
-            Trigger::Off | Trigger::Book(_) => None,
-        };
-        if !matches!(self.trigger, Trigger::Book(_)) {
-            self.climb(fast_closes_at.map_or(tail, |at| at.max(tail)) + 1);
-        }
-        let by_book = match &mut self.trigger {
+        let by_book = match &self.trigger {
             Trigger::Book(_) => self.book_before(tail + 1),
-            Trigger::Fast(fast) => fast
-                .before(i64::MAX)
+            Trigger::Fast(_) => self
+                .fast_before(i64::MAX, tail + 1, tail)
                 .map(|exit| (exit, StopTrigger::FastTick)),
-            Trigger::Off => None,
+            Trigger::Off => {
+                self.climb(tail + 1);
+                None
+            }
         };
         let by_trailing = self
             .trailing

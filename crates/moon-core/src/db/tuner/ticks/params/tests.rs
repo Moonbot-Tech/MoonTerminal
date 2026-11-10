@@ -283,6 +283,26 @@ fn strike_grid_shows_mstrike_sell_level_not_sell_price() {
     assert!(!pump.contains(&"MStrikeSellLevel"), "a strike-only field");
 }
 
+/// `MShotSellPriceAdjust` runs as a magnitude of at most 20 %: a negative value as its
+/// positive, a value past the bound as the bound.
+#[test]
+fn mshot_sell_price_adjust_is_a_bounded_magnitude() {
+    let defaults = HashMap::new();
+    for (written, runs_as) in [("0.3", 0.3), ("-0.3", 0.3), ("35", 20.0), ("-35", 20.0)] {
+        let values: HashMap<String, String> =
+            [("MShotSellPriceAdjust".to_string(), written.to_string())].into();
+        let sv = StrategyValues {
+            values: &values,
+            defaults: &defaults,
+        };
+        assert_eq!(
+            exit_params(&sv, ModelSettings::default()).sell_price_adjust_pct,
+            runs_as,
+            "{written}"
+        );
+    }
+}
+
 /// The panic sell's bounds are read with the strategy's values, defaults when absent.
 #[test]
 fn exit_params_reads_the_panic_sell_bounds() {

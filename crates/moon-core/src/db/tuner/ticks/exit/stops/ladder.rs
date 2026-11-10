@@ -64,8 +64,6 @@ pub(super) struct Ladder {
     /// The ticker's clock and book, shared with the book stop.
     ticker: Ticker,
     fill_ms: i64,
-    /// Whether the rung taken last — the level in force — is the third stop's.
-    active_third: bool,
 }
 
 impl Ladder {
@@ -120,7 +118,6 @@ impl Ladder {
             next_sample: ticker.first(anchor - back * period_ms),
             ticker,
             fill_ms,
-            active_third: false,
         })
     }
 
@@ -129,7 +126,6 @@ impl Ladder {
     /// stop now stands — `None` when no step was taken by `until`.
     pub(super) fn before(&mut self, until: i64) -> Option<f64> {
         let mut moved = None;
-        let mut active_third = self.active_third;
         while self.next_sample < until {
             let at = self.next_sample;
             self.next_sample = self.ticker.next(at);
@@ -150,18 +146,21 @@ impl Ladder {
                 if at >= rung.from_ms && past {
                     rung.taken = true;
                     moved = Some(rung.level);
-                    active_third = rung.third;
                 }
             }
         }
-        self.active_third = active_third;
         moved
     }
 
-    /// Whether the third stop's rung is the level in force: a second rung taken after it
-    /// overwrites it.
-    pub(super) fn active_is_third(&self) -> bool {
-        self.active_third
+    /// Whether the third stop's rung has been taken: from then on its `AllowedDrop3` and
+    /// `StopLoss3` set the panic sell's floor, whichever rung's level is in force.
+    pub(super) fn third_taken(&self) -> bool {
+        self.rungs.iter().any(|r| r.third && r.taken)
+    }
+
+    /// Whether any step has been taken.
+    pub(super) fn stepped(&self) -> bool {
+        self.rungs.iter().any(|r| r.taken)
     }
 
     /// Whether a step is still to be taken.

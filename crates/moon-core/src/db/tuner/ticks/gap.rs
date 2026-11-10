@@ -23,8 +23,7 @@
 use std::sync::Arc;
 
 use super::exit::ExitParams;
-use super::exit::level_off_buy;
-use super::exit::stops::stop_pct;
+use super::exit::stops::{guarded_stop_level, stop_pct};
 use super::verify::{POINT_TIME_TOLERANCE_MS, fact_sell_start};
 use super::{Deal, PRICE_EPS, PRICE_TOLERANCE};
 use crate::market::trade_replay::Coverage;
@@ -61,10 +60,11 @@ pub struct TapeGap {
 pub struct GapStop {
     /// The deepest level the fact's stop could stand at inside the hole: the first stop's, or a
     /// ladder rung's deeper still — every price the fact's trigger read in the hole stayed on the
-    /// position's side of it (for a fast stop, the per-tick LAST price, LastOfTick only).
-    /// A weighted fast rule needs missing trades and is refused across a hole.
+    /// position's side of it (for a fast stop, the trades themselves: the core's rule and the
+    /// tick's last print both fire on a price standing past the level).
+    /// A weighted fast estimate needs missing trades and is refused across a hole.
     pub level: f64,
-    /// `FastStopLoss` of the fact: the hole proof covers LastOfTick only.
+    /// `FastStopLoss` of the fact: the hole proof covers the core's rule and LastOfTick.
     pub fast: bool,
     /// `StopLossEMA` of the fact: the average a book-watching stop compares.
     pub ema: f64,
@@ -141,7 +141,7 @@ fn fact_stop(
     ]
     .into_iter()
     .flatten()
-    .map(|pct| level_off_buy(deal.buy_price, pct, long))
+    .map(|pct| guarded_stop_level(exit, deal, deal.buy_price, pct))
     .reduce(|a, b| if long { a.min(b) } else { a.max(b) })?;
     Some(GapStop {
         level: deepest,
@@ -211,8 +211,8 @@ pub(super) fn stop_not_nearer(variant: f64, bound: f64, long: bool) -> bool {
 }
 
 /// Whether a variant's stop trigger is no quicker than the fact's: the same trigger only. The
-/// fast stop reads the last price of each series tick, so a quiet fast fact proves nothing about
-/// a print inside a tick — the one a book-watching variant's ticker sample may read; a
+/// fast stop reads the trades — a price standing past the level, not every print — so a quiet
+/// fast fact proves nothing about a lone print — the one a book-watching variant's ticker sample may read; a
 /// book-watching stop averaged differently fires at other moments, and neither is bounded by the
 /// other.
 pub(super) fn trigger_not_quicker(variant_fast: bool, variant_ema: f64, fact: &GapStop) -> bool {

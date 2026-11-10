@@ -1,6 +1,7 @@
 //! A boundary B evaluates second B/1000 - 1, whose entire bucket precedes B.
 //! The walk aggregates its tape once; advancing a check never reads a later bucket.
-//! SellEMADelay postpones checks after purchase; a true check places the sale immediately.
+//! SellEMADelay postpones checks after the sell's placement; a true check places the sale
+//! immediately.
 //! https://moonbot.pro/documentation/sell-order-tab/sell-order-tab-parameters
 
 use super::super::custom_ema::{EmaHistoryPath, Formula, FormulaState, Refusal, SecondSeries};

@@ -37,6 +37,7 @@ fn row(tape: TapeStatus) -> DealRow {
             strike_detect: None,
             step_lag_ms: 0.0,
             round_trip_ms: None,
+            leverage: None,
             stop_anchor: None,
             own_entry: None,
             buy_set_ms: None,
