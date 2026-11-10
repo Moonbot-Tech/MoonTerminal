@@ -56,7 +56,7 @@ pub use units::size_text;
 
 /// Initialize this crate's dictionary once on a joined thread with an 8 MiB stack.
 ///
-/// The seven-locale dictionary outgrows a default spawned thread's stack, so the initializing
+/// The eight-locale dictionary outgrows a default spawned thread's stack, so the initializing
 /// lookups run on this larger stack rather than the caller's. Concurrent calls wait for
 /// initialization; after it succeeds, later calls reuse the completed `Once`.
 ///

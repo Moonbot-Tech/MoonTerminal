@@ -1,0 +1,125 @@
+_version: 1
+telegram.report_title: "报告"
+telegram.report_exchange_menu: "交易所"
+telegram.report_exchange_total: "交易所合计"
+telegram.report_exchange_summary: "%{cores} 个核心 · %{active} 个有交易 · 胜率 %{winrate}% · 平均订单 %{average}"
+telegram.report_by_groups: "按分组"
+telegram.report_best_cores: "最佳核心"
+telegram.report_worst_cores: "最差核心"
+telegram.report_hidden_prefix: "已隐藏名称的共同前缀：%{prefix}"
+telegram.report_exchange_all: "该交易所的全部核心 · %{active} 个有交易"
+telegram.report_other_exchange: "其他交易所"
+telegram.report_back_exchange: "返回交易所"
+telegram.report_page_short: "页"
+telegram.report_rank_footer: "从最差到最佳 · 没有交易的核心不显示"
+telegram.report_average_col: "平均 %"
+telegram.report_volume_col: "成交额"
+telegram.report_native_col: "计价币"
+
+telegram.help_hour: "本小时"
+
+telegram.help_daily: "本月按日统计"
+
+telegram.help_intro: "在底部菜单中选择时间段。再次点击可刷新报告。选择交易所可打开它的汇总。"
+
+telegram.help_commands: "命令与自定义时间段"
+
+telegram.help_limits: "日期包含首尾两天，最多 366 天。时区：%{zone}。终端需要保持运行。"
+
+telegram.help_limits_station: "日期包含首尾两天，最多 366 天。时区：%{zone}。报告全天候更新。"
+
+telegram.help_custom: "自定义时间段 / 按日"
+
+telegram.help_mini: "聊天中的报告不需要 Mini App。如果已在终端设置中启用，可用 /miniapp 命令打开它。"
+
+telegram.help_mini_station: "聊天中的报告不需要 Mini App。如果已在服务站上启用，可用 /miniapp 命令打开它。"
+
+telegram.help_status_station: "服务站状态；有新版本时会出现更新按钮"
+telegram.report_total: "合计"
+
+telegram.report_calculation_extra: "合计涵盖所选分组和时间段的全部数据，包括其他页。平均订单按数据合适的交易计算；被排除的部分见报告详情。"
+
+telegram.button_home: "概览"
+
+telegram.report_navigation_hint: "在底部菜单中选择时间段。再次点击可获取最新报告。报告下方的按钮用于切换视图或打开交易所。"
+
+telegram.report_all_cores: "全部核心"
+
+telegram.report_calculation: "计算方式"
+
+telegram.report_exchanges: "交易所"
+
+telegram.report_exchanges_back: "返回"
+
+telegram.report_scope_unavailable: "交易所不可用"
+
+telegram.report_average_coverage: "已计入 %{counted}；已排除 %{excluded}"
+
+telegram.report_delivery_failed: "无法显示报告。请重试；如果错误反复出现，请检查终端的连接并更新 Telegram。"
+telegram.report_delivery_failed_station: "无法显示报告。请重试；如果错误反复出现，请更新 Telegram。"
+
+telegram.button_today: "今天"
+
+telegram.button_yesterday: "昨天"
+
+telegram.button_month: "本月"
+
+telegram.button_lastmonth: "上月"
+
+telegram.button_daily: "按日"
+
+telegram.report_days: "每日"
+
+telegram.report_cores: "核心"
+telegram.report_groups: "分组"
+telegram.report_groups_missing: "分组尚未传到服务站；终端会自动发送。"
+telegram.report_view_switch: "视图：%{view}"
+
+telegram.report_profit: "盈亏"
+
+telegram.report_trades: "交易"
+
+telegram.report_date: "日期"
+
+telegram.report_details: "币种与平均订单"
+
+telegram.report_average: "平均订单"
+
+telegram.report_page: "页码"
+
+telegram.report_prev: "上一页"
+
+telegram.report_next: "下一页"
+
+telegram.report_unvalued: "无估值"
+telegram.report_quote_unknown: "计价币未知"
+
+telegram.report_empty: "此时间段内没有已平仓的交易"
+
+telegram.report_scope: "终端历史中的所选分组 · 真实的已平仓交易 · 按交易时的汇率。数据来自本地历史；已关闭的机器人不会更新。"
+telegram.report_scope_station: "服务站历史中的所选分组 · 真实的已平仓交易 · 按交易时的汇率。服务站全天候复制核心的历史；已断开的机器人不会更新。"
+
+telegram.report_missing_rates: "如果部分交易没有 USDT 汇率，合计会拆成多行：“合计 USDT”涵盖已完整估值的币种，其余每个币种各占一行并以该币种计，例如“合计 RUB”。不同币种的金额不会相加；未知币种的交易只显示笔数。"
+
+telegram.report_busy: "上一份报告仍在计算中。请稍后重试。"
+
+telegram.report_failed: "无法读取交易历史。请重试；读取错误不代表盈亏为零。"
+
+telegram.report_help: "请用按钮选择时间段。报告可按机器人或按日查看——再次点击底部菜单中的时间段可获取最新数据。\n\n/hour — 本小时\n/today — 今天\n/daily — 本月按日统计\n/report 2026-09-01 2026-09-10 — 自定义时间段\n/daily 2026-09-01 2026-09-10 — 自定义时间段按日统计\n日期包含首尾两天，最多 366 天；时区取自终端的时钟。终端需要保持运行。"
+
+telegram.report_help_station: "请用按钮选择时间段。报告可按机器人或按日查看——再次点击底部菜单中的时间段可获取最新数据。\n\n/hour — 本小时\n/today — 今天\n/daily — 本月按日统计\n/report 2026-09-01 2026-09-10 — 自定义时间段\n/daily 2026-09-01 2026-09-10 — 自定义时间段按日统计\n/status — 服务站状态\n日期包含首尾两天，最多 366 天；时区取自服务站设置。报告全天候更新。"
+
+telegram.notify_manual: "手动"
+
+telegram.notify_unvalued: "无估值"
+
+telegram.notify_unchecked: "未检查阈值：没有美元估值"
+telegram.notify_core_named: "Name: %{name}"
+
+telegram.notify_opened: "交易已开仓"
+telegram.notify_emulator: "模拟"
+telegram.notify_events_more: "…还有 %{n} 条"
+
+telegram.notify_down: "连接中断于"
+
+telegram.notify_back: "连接已恢复"

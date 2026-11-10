@@ -1,0 +1,26 @@
+# Create, rename, and delete dialogs plus shared buttons.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Shared buttons ---
+dialogs.cancel: "取消"
+dialogs.done: "完成"
+dialogs.yes: "是"
+dialogs.no: "否"
+dialogs.create: "创建"
+dialogs.rename: "重命名"
+
+# --- Strategy dialog titles ---
+dialogs.new_strategy: "新建策略"
+dialogs.new_folder: "新建文件夹"
+dialogs.rename_folder: "重命名文件夹"
+dialogs.delete_q: "删除？"
+dialogs.operation: "操作"
+
+# --- Dialog fields and hints ---
+dialogs.name_ph: "名称"
+dialogs.name_required: "请输入策略名称"
+dialogs.folder_prefix: "文件夹：%{path}"
+dialogs.into_prefix: "位置：%{path}"
+dialogs.delete_confirm: "删除 %{what}？此操作无法撤销。"
+dialogs.close: "关闭"

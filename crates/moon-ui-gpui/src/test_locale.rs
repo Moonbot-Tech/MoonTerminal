@@ -22,7 +22,7 @@ use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
 /// Initialize the including crate's dictionary once on a joined 8 MiB thread.
 ///
-/// The seven-locale dictionary exceeds a default 2 MiB test thread's stack. This helper is
+/// The eight-locale dictionary exceeds a default 2 MiB test thread's stack. This helper is
 /// compiled into both the terminal and Telegram test binaries, each with its own dictionary
 /// and `Once`. Concurrent calls wait for initialization; a successful return means the
 /// dictionary is ready before [`force`] changes the process-wide locale.

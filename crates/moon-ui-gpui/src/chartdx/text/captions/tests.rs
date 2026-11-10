@@ -875,10 +875,16 @@ fn the_wrapped_draw_branch_registers_column_lines() {
 /// must instead keep the fixed head intact and cut only the core segment out of the centre's way.
 #[test]
 fn widened_filter_header_stays_clear_in_every_locale() {
-    let measure = |text: &str| text.chars().count() as f32 * 6.0;
+    // A CJK glyph is about twice as wide as a Latin one: count it so, or the Chinese pass would
+    // measure its title at half its width and prove nothing.
+    let measure = |text: &str| {
+        text.chars()
+            .map(|c| if crate::design::is_cjk(c) { 12.0 } else { 6.0 })
+            .sum::<f32>()
+    };
     let centred = "VENUE \u{b7} ALL CORES (42)";
     let long_core = format!(" \u{b7} {}", "CORE_ALPHA_LONG_".repeat(6));
-    for locale in ["en", "es", "pt", "ru", "tr", "uk", "vi"] {
+    for locale in ["en", "es", "pt", "ru", "tr", "uk", "vi", "zh"] {
         let _locale = crate::test_locale::force(locale);
         let title = rust_i18n::t!("chart_labels.field.strategy_filters");
         for marker in [">", "v"] {

@@ -135,7 +135,7 @@ fn moonbot_technical_headers_match_in_every_language() {
         ("dvol", "D. Vol"),
         (moon_core::db::PROFIT_ABS_COLUMN, "ProfitAbs"),
     ];
-    for language in ["en", "es", "pt", "ru", "tr", "uk", "vi"] {
+    for language in ["en", "es", "pt", "ru", "tr", "uk", "vi", "zh"] {
         let _locale = crate::test_locale::force(language);
         for (column, label) in expected {
             assert_eq!(header_label(column), label, "{language}: {column}");
@@ -160,6 +160,7 @@ fn profit_percent_label_follows_the_locales_profit_neighbour() {
         ("tr", "Kâr %"),
         ("uk", "Прибуток %"),
         ("vi", "Lãi %"),
+        ("zh", "盈利 %"),
     ] {
         let _locale = crate::test_locale::force(language);
         assert_eq!(header_label("profitpct"), label);

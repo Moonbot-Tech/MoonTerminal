@@ -375,10 +375,13 @@ fn the_footer_keeps_one_row_and_its_count_in_every_locale(cx: &mut gpui::TestApp
                 assert!(now <= last, "{code}: {width}px gained text while narrowing");
                 last = now;
             }
-            assert_eq!(
-                footer_density(DEFAULT_TREE_W, &footer_label_width(cx, 0, 0), 0, cx),
-                FooterDensity::Icons,
-                "{code}: nothing to act on has no count to show"
+            // With nothing to act on the footer has two states and never a count: every label
+            // where the pane holds them all (a compact script does at the default width), bare
+            // icons otherwise.
+            let idle = footer_density(DEFAULT_TREE_W, &footer_label_width(cx, 0, 0), 0, cx);
+            assert!(
+                matches!(idle, FooterDensity::Full | FooterDensity::Icons),
+                "{code}: nothing to act on has no count to show, got {idle:?}"
             );
         });
     }

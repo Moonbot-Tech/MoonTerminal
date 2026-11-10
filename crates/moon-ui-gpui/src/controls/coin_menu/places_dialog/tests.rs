@@ -525,7 +525,20 @@ fn places_paths_and_captions_wrap_every_locale(cx: &mut gpui::TestAppContext) {
         for viewport_w in [800.0, 1000.0] {
             let mut face = face_rows(false);
             face.rows = vec![face.rows.remove(2)];
-            face.rows[0].sub = format!("{} ", face.rows[0].sub).repeat(6);
+            // Six repeats wrap a Latin caption. A Chinese one is a few characters long, so it is
+            // repeated until it passes the dialog's width in that script too: the fixture must
+            // wrap in every language, or the checks below prove nothing.
+            let unit = format!("{} ", face.rows[0].sub);
+            let repeats = if unit.chars().any(crate::design::is_cjk) {
+                let weight: usize = unit
+                    .chars()
+                    .map(|c| if crate::design::is_cjk(c) { 2 } else { 1 })
+                    .sum();
+                260 / weight.max(1) + 1
+            } else {
+                6
+            };
+            face.rows[0].sub = unit.repeat(repeats);
             let expected = expects(&face);
             let window =
                 cx.open_window(gpui::size(px(viewport_w), px(1400.0)), |_, _| Host { face });

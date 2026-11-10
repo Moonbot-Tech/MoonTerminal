@@ -111,7 +111,7 @@ impl Render for HeaderHarness {
 #[gpui::test]
 fn localized_dust_label_fits_narrow_and_wide_headers(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
-    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi", "zh"] {
         let _locale = crate::test_locale::force(locale);
         for mode in [
             UiThemeMode::Dark,

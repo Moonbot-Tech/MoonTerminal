@@ -1,0 +1,68 @@
+# Right order pane and the Orders table in the bottom dock.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Intentionally untranslated: Buy · Sell.
+_version: 1
+
+
+# --- Bottom dock: Orders table ---
+orders.empty: "没有挂单"
+orders.col.core: "核心"
+orders.col.side: "方向"
+orders.col.token: "代币"
+orders.col.price: "价格"
+orders.col.tp_price: "TP 价格"
+orders.col.pnl_tp: "PNL TP"
+# Strategy user-assigned name column, distinct from the Strat (kind) column.
+orders.col.strat_name: "名称"
+orders.all_cores: "全部核心"
+orders.cores_n: "核心：%{n}"
+orders.columns: "字段"
+# Tooltip of the gear button that opens the sorting and filtering menu.
+orders.settings: "设置"
+orders.kind.all: "全部"
+orders.kind.real: "真实"
+orders.kind.emu: "模拟"
+orders.only_current: "仅当前市场的订单"
+# Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
+# than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
+# repeats the same three numbers with what each one counts.
+#
+# LABEL: VALUE, never an inflected noun phrase. «реальных %{real}» reads wrong at a count of one
+# («реальных 1»), and Russian and Spanish would each need their own plural rule to fix it; a
+# colon-separated label is grammatical at every count in all three languages and needs none. The
+# labels are the order-kind filter's own words (`orders.kind.real` / `.emu`) so the footer and the
+# dropdown above it name the same two things identically.
+orders.footer_total: "总计：%{total} · 真实：%{real} · 模拟：%{emu}"
+# Tooltip of that footer. States the scope the counts are taken over, and that the order-kind
+# filter above the table does not narrow them (the split is computed before that filter runs).
+#
+# The real line says «real account, not the emulator» and deliberately NOT «placed on the
+# exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
+# `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
+orders.footer_total_tip: "总计：%{total}——所选核心的挂单（启用该过滤器时仅限当前市场）。\n真实：%{real}——真实账户上的订单，不是模拟器。\n模拟：%{emu}——Moonbot 模拟器的订单。\n“全部 / 真实 / 模拟”过滤器不影响这些计数。"
+orders.show_all: "显示全部"
+orders.sort.profit: "Profit 优先"
+orders.sort.sell: "Sell 优先"
+orders.sort.buy: "Buy 优先"
+orders.sort.creation: "按订单创建时间"
+orders.sort.new: "最新优先"
+orders.sort.old: "最早优先"
+# --- Active-order editor (click BUY/SELL or right-click an order line) ---
+orders.edit.title: "活动订单"
+orders.edit.coin: "币种："
+orders.edit.side: "类型："
+orders.edit.status: "状态："
+orders.edit.size: "数量："
+orders.edit.strategy: "策略："
+orders.edit.core: "核心："
+orders.edit.cond: "条件：若 ASK < %{p} 则 Buy"
+orders.edit.buy_price: "BUY 价格"
+orders.edit.sell_price: "SELL 价格"
+orders.edit.current: "当前：%{p}"
+orders.edit.stops: "止损"
+orders.edit.fixed: "Fixed"
+orders.edit.vol_lt: "Vol <"
+
+# Move rows opened on Main to the top (two mutually exclusive checkboxes plus off).
+orders.sort.main_all: "Main 置顶：整个币种"
+orders.sort.main_hi: "Main 置顶：仅高亮的行"

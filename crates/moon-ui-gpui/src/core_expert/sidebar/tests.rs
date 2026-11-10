@@ -294,7 +294,9 @@ fn expert_rail_keeps_names_chips_and_chrome_inside_in_every_locale(cx: &mut gpui
                     required_height <= f32::from(footer_text.size.height) + 0.5,
                     "footer text clipped in {locale:?}: needs {required_height}, has {footer_text:?}"
                 );
-                for word in hint.split_whitespace() {
+                // A word is what the wrapper cannot break: a Chinese hint has no spaces and
+                // wraps before any character, so the whole sentence is not one word.
+                for word in design::unbreakable_units(&hint) {
                     let width =
                         visual.update(|_, app| design::ui_caption_text_width(app, word, 400.0));
                     assert!(

@@ -1,6 +1,8 @@
 //! Regression coverage for exact batched text measurement and for the brand assets.
 
-use super::{FontId, FontWeight, MonoGlyphWidthCache, invert_font_scale, wrap_text};
+use super::{
+    FontId, FontWeight, MonoGlyphWidthCache, invert_font_scale, unbreakable_units, wrap_text,
+};
 use std::collections::HashMap;
 
 /// Removing the glyph cache in `design::MonoGlyphWidthCache::text_width` must fail the lookup
@@ -104,6 +106,39 @@ fn an_unbreakable_word_is_cut_rather_than_looped() {
 
     // And zero lines is a legitimate ask: it prints nothing rather than looping.
     assert!(wrap_text("anything", 10.0, 0, measure).is_empty());
+}
+
+/// A Chinese caption has no spaces. Breaking only at spaces cut it to one line with an ellipsis
+/// and threw the other lines of the budget away.
+#[test]
+fn wrap_text_breaks_beside_cjk_characters() {
+    let measure = |s: &str| s.chars().count() as f32;
+    let lines = wrap_text("成交量加权平均价格偏离", 4.0, 3, measure);
+    let texts: Vec<&str> = lines.iter().map(|(line, _)| line.as_str()).collect();
+    assert_eq!(texts, ["成交量加", "权平均价", "格偏离"]);
+}
+
+/// A comma must not open a line: the break moves one character back instead.
+#[test]
+fn wrap_text_keeps_closing_punctuation_off_the_line_start() {
+    let measure = |s: &str| s.chars().count() as f32;
+    let lines = wrap_text("盈利，亏损", 2.0, 3, measure);
+    let texts: Vec<&str> = lines.iter().map(|(line, _)| line.as_str()).collect();
+    assert_eq!(texts, ["盈", "利，", "亏损"]);
+}
+
+/// The width floor of a label is its widest unbreakable piece. A Chinese sentence taken as one
+/// word would pin the label to the sentence's full width and stop it wrapping.
+#[test]
+fn unbreakable_units_end_before_every_cjk_character() {
+    let units: Vec<&str> = unbreakable_units("Moonbot 核心 3个 ok").collect();
+    assert_eq!(units, ["Moonbot", "核", "心", "3", "个", "ok"]);
+    // Latin after a CJK character stays attached: the wrapper breaks before the character only.
+    let mixed: Vec<&str> = unbreakable_units("好world").collect();
+    assert_eq!(mixed, ["好world"]);
+    // Text without CJK keeps the plain whitespace split.
+    let latin: Vec<&str> = unbreakable_units("Stop  loss, %").collect();
+    assert_eq!(latin, ["Stop", "loss,", "%"]);
 }
 
 /// The brand cuts: scheme name, asset source, and the wordmark colour that cut must carry.

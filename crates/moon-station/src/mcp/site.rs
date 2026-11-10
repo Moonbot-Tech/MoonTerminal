@@ -19,7 +19,8 @@ use serde_json::{Value, json};
 /// may be unreachable, and the site may send such a station there with a 3xx.
 pub(super) const ORIGINS: [&str; 2] = ["https://moonterminal.pro", "https://moonterminal.eu"];
 
-/// The languages the site's reference ships, the same seven the terminal does.
+/// The languages the site's reference ships. The terminal ships one more, `zh`, which the site
+/// has no reference in yet: add it here when the site does.
 pub(super) const LANGS: [&str; 7] = ["ru", "en", "es", "uk", "tr", "pt", "vi"];
 
 /// The language when a call names none: the FAQ is written in Russian and translated from it.

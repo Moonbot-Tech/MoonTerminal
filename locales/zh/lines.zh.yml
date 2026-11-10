@@ -1,0 +1,44 @@
+# Lines tab of the Settings window (order-line styling, orders.toml).
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# Line names (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) are trading terms and intentionally remain untranslated: lines.rs keeps them as
+# English literals. This file contains only attributes and shared labels.
+lines.dashed: "虚线"
+lines.knots: "节点"
+lines.cross_size: "十字大小"
+lines.cross_thickness: "十字粗细"
+lines.path_title: "改价历史（路径 / 蛇形线）"
+lines.path_line_color: "使用线条自身的颜色"
+lines.path_alpha: "不透明度"
+lines.path_hint: "订单价格每次移动的台阶——包括核心发来的和终端还原的。止损的移动线段始终绘制。"
+lines.active_alpha: "活动订单不透明度"
+lines.pending_dashed: "条件单：入场线用虚线"
+lines.max_closed: "图表上绘制的已关闭订单上限"
+
+# Settings redesign (phases 3-5)
+lines.name.buy_long: "Long 入场"
+lines.name.buy_short: "Short 入场"
+lines.name.sell_long: "Long 出场"
+lines.name.sell_short: "Short 出场"
+lines.name.stop: "止损"
+lines.name.trailing: "追踪止损"
+lines.name.take_profit: "止盈"
+lines.name.vstop: "VStop"
+lines.name.pending: "条件单"
+lines.name.liquidation: "强平"
+lines.col.line: "线条"
+lines.col.sample: "外观"
+lines.col.width: "粗细"
+lines.col.dash: "虚线"
+lines.col.crosses: "十字"
+lines.all.title: "适用于所有线条"
+lines.note.after_entry: "止损、追踪止损和强平线仅在入场成交后才显示在图表上。"
+lines.not_filled: "尚未成交"
+lines.cross_at_start: "在起点"
+lines.cross_at_end: "在终点"
+lines.closed_alpha: "已关闭订单不透明度"
+lines.closed_alpha.hint: "已撤销和已成交的订单。"
+lines.max_closed.short: "图表上已关闭订单，最多"
+lines.path.hint_short: "订单移动经过的台阶。"

@@ -1,0 +1,59 @@
+# City names for the header clock's time-zone picker, keyed by the three-letter code the header
+# shows. The CODES are not translated (see README); the names are proper nouns that genuinely
+# differ across the three languages.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+city.UTC: "协调世界时"
+
+# --- Americas ---
+city.HNL: "檀香山"
+city.ANC: "安克雷奇"
+city.LAX: "洛杉矶"
+city.DEN: "丹佛"
+city.MEX: "墨西哥城"
+city.CHI: "芝加哥"
+city.BOG: "波哥大"
+city.NYC: "纽约"
+city.TOR: "多伦多"
+city.SCL: "圣地亚哥"
+city.BUE: "布宜诺斯艾利斯"
+city.SAO: "圣保罗"
+
+# --- Europe and Africa ---
+city.LIS: "里斯本"
+city.DUB: "都柏林"
+city.LON: "伦敦"
+city.AMS: "阿姆斯特丹"
+city.BER: "柏林"
+city.MAD: "马德里"
+city.PAR: "巴黎"
+city.ROM: "罗马"
+city.ZRH: "苏黎世"
+city.ATH: "雅典"
+city.HEL: "赫尔辛基"
+city.KIE: "基辅"
+city.WAW: "华沙"
+city.CAI: "开罗"
+city.JNB: "约翰内斯堡"
+city.IST: "伊斯坦布尔"
+city.MOW: "莫斯科"
+city.RUH: "利雅得"
+
+# --- Asia and Oceania ---
+city.DXB: "迪拜"
+city.KHI: "卡拉奇"
+city.BOM: "孟买"
+city.ALA: "阿拉木图"
+city.BKK: "曼谷"
+city.JKT: "雅加达"
+city.PER: "珀斯"
+city.SIN: "新加坡"
+city.HKG: "香港"
+city.SHA: "上海"
+city.TPE: "台北"
+city.SEL: "首尔"
+city.TYO: "东京"
+city.BNE: "布里斯班"
+city.SYD: "悉尼"
+city.AKL: "奥克兰"

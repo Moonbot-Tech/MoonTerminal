@@ -1,0 +1,89 @@
+# Bottom dock: tabs, detaching, and log.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Bottom-dock tabs ---
+dock.tab.charts: "图表"
+dock.tab.orders: "订单"
+dock.tab.assets: "资产"
+dock.tab.log: "日志"
+dock.tab.news: "新闻"
+dock.tab.report: "报告"
+dock.tab.detects: "检测"
+# The tab lists every chart FIGURE, armed or not — arming one is what it is for, but the list is
+# the drawing layer. `panel_name` stays "Alerts": it is the persistence key in `docks.json`.
+dock.tab.alerts: "图形"
+dock.tab.core_status: "核心状态"
+# Gear popover for configuring the detection ribbon: size tabs, sliders, slots, and preview.
+detects.cfg.title: "检测视图"
+detects.cfg.decimals: "小数位"
+detects.cfg.show_add_to_chart: "显示 AddToChart 检测"
+detects.cfg.frame_size: "尺寸与图表"
+detects.cfg.width: "宽度"
+detects.cfg.height: "高度"
+detects.cfg.chart: "图表"
+detects.cfg.chart_none: "无"
+detects.cfg.chart_candles: "K线"
+detects.cfg.chart_line: "折线"
+detects.cfg.rail_frame: "服务器色条"
+detects.cfg.rail_hint: "左侧的彩色条 + 由它延伸出的渐变"
+detects.cfg.rail_w: "色条"
+detects.cfg.rail_grad: "渐变"
+detects.cfg.frame_fields: "字段"
+detects.cfg.over_on: "叠加在图表上"
+detects.cfg.over_off: "在文字中（点击切换为叠加在图表上）"
+detects.cfg.align_left: "靠左（点击切换为靠右）"
+detects.cfg.align_right: "靠右（点击切换为靠左）"
+detects.cfg.vpos_above: "图表上方（点击切换到下方）"
+detects.cfg.vpos_below: "图表下方（点击切换到上方）"
+# What the feed states instead of a blank pane. Four different facts, four strings: only
+# `empty_no_cores` asks the user to go and connect something, and the shared hidden-by-preset
+# sentence (`workspace.scope.all_hidden`) outranks all three from `scope_empty_text`.
+detects.empty: "暂无检测——核心触发后会出现卡片"
+detects.empty_settings_hint: "卡片视图：左上角的齿轮"
+detects.empty_filtered: "有检测，但被当前的查看范围隐藏"
+detects.empty_no_cores: "此分组中没有可用的核心——检测无从产生"
+detects.field.none: "—"
+detects.field.coin: "币种"
+detects.field.v24: "v 24h"
+detects.field.v1: "v 1h"
+detects.field.d24: "Δ 24h"
+detects.field.d1: "Δ 1h"
+detects.field.strategy: "策略"
+detects.field.strategy_alert: "预警"
+detects.view.size_mini: "迷你"
+detects.view.size_medium: "中"
+detects.view.size_large: "大"
+detects.view.time: "时间"
+detects.view.core: "核心"
+detects.view.badge: "徽章"
+detects.view.exchange: "交易所"
+detects.view.exchange_kind: "交易所类型"
+dock.log.empty: "日志为空"
+dock.detach_hint: "分离为独立窗口"
+dock.tab.hint_docked: "单击选择 · 双击或拖动可分离为窗口"
+dock.tab.generic: "面板"
+dock.stub_soon: "%{name} — 即将推出"
+dock.ctl.zoom_in: "将面板放大到整个停靠区"
+dock.ctl.zoom_out: "恢复正常布局"
+dock.ctl.close: "关闭：将面板放回原位"
+dock.ctl.overflow: "更多标签页"
+
+# --- Tab right-click menu (unread counters) ---
+dock.tab_menu.counters: "显示计数"
+dock.tab_menu.no_colour_split: "不按颜色区分"
+
+# --- Log ---
+log.source.local: "本地"
+log.source.group: "分组日志"
+log.source.all: "全部核心"
+log.live: "Live（当前）"
+log.file: "文件"
+log.search: "搜索…"
+log.errors_only: "仅错误"
+log.empty_filtered: "没有符合过滤条件的行"
+log.count: "%{shown} / %{total}"
+# Hover tooltip of a log row. The line shows ONE clock — this terminal's, in the selected display
+# zone — and the core's own clock, which it repeats at the head of its own message, moves here.
+log.core_time: "核心时间：%{time}"
+log.follow_tail: "Live"

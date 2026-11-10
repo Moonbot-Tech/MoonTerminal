@@ -1,0 +1,4 @@
+_version: 1
+alerts.fig.horizontal_ray: "水平射线"
+hotkeys.draw_horizontal_ray: "水平射线"
+hotkeys.draw_horizontal_ray_hint: "单击一次设定向右射线的起点和价格。再按一次取消选中该工具。"

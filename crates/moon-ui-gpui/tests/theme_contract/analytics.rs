@@ -2334,7 +2334,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
     // resolves to one bland word would satisfy the reference check above and tell the user nothing.
     // Ukrainian names the tuner "підбір порогів" and does not contain "тюнер". Turkish names it
     // "Eşik ayarı", Portuguese "ajuste" (the same noun Spanish uses), and Vietnamese
-    // "tinh chỉnh ngưỡng".
+    // "tinh chỉnh ngưỡng". Chinese names it "调优".
     let hints = [
         ("ru", "тюнер"),
         ("en", "tuning"),
@@ -2343,6 +2343,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
         ("tr", "Eşik ayarı"),
         ("pt", "ajuste"),
         ("vi", "tinh chỉnh ngưỡng"),
+        ("zh", "调优"),
     ];
     let codes: [&str; SHIPPED.len()] = std::array::from_fn(|index| hints[index].0);
     assert_eq!(

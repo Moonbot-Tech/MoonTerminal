@@ -1,0 +1,125 @@
+# Assets window/panel: controls, table columns, and wallets.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# Per-core dust conversion; the existing Engine result supplies completion feedback.
+assets.dust.button: "小额资产兑换为 %{token}"
+assets.dust.title: "兑换小额资产"
+assets.dust.hint: "将此核心上所有符合条件的小额余额兑换为 %{token}"
+assets.dust.question: "将核心 %{core}（%{venue}）上所有符合条件的小额资产兑换为 %{token}？此操作不可撤销。哪些余额符合条件由交易所决定。"
+assets.dust.unavailable: "兑换已取消：核心已离线、不受支持或不在当前资产范围内。"
+assets.dust.failed: "兑换指令未发送：核心不可达。"
+
+assets.window_title: "MoonTerminal — 资产"
+# Hint for the top-bar dust-threshold slider; 0 shows everything.
+assets.min_value_hint: "隐藏价值低于 N $ 的资产（0 表示显示全部；可用滚轮调节）"
+assets.cores_free_total: "核心 · 可用/总计"
+assets.no_cores: "无核心"
+assets.empty: "无资产"
+# Futures balances are quote-denominated and absent from the table, so its empty state describes
+# open positions rather than account equity; the balance surfaces carry the account figure.
+assets.empty_no_positions: "无持仓"
+# --- Footer: account balances across the in-scope cores ---
+# Tooltip on the LEFT footer group. The row carries two different sums side by side, so each
+# group states what it covers — a trader must never read Σ as the account equity.
+assets.footer_table_hint: "经小额资产过滤后的表格行；Σ 为它们的总价值"
+# Appended to the tooltip above when some visible rows have no valid value: the row count
+# includes them but Σ cannot, so a shortened sum must say what it left out.
+assets.footer_rows_unpriced: "%{n} 行没有有效价值——Σ 未计入它们"
+# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
+assets.balances_scope_hint: "范围内各核心的资金——并非表格合计"
+assets.balances_total: "总计"
+assets.balances_free: "可用"
+# The retained figure is not confirmed current for the connection.
+assets.balance_stale: "离线"
+# A snapshot exists, but its USD valuation is incomplete or invalid rather than zero.
+assets.balance_unpriced: "无汇率"
+# Cores whose snapshot has not arrived yet: excluded from the total, but the state clears itself.
+assets.balances_awaiting: "等待中：%{n}"
+# Cores with a snapshot but no conversion rate: also excluded, and — unlike awaiting — it will
+# not resolve on its own, so it is counted separately rather than told to keep waiting.
+assets.balances_unpriced_n: "无汇率：%{n}"
+# Some cores were summed from a retained snapshot, so the total is not "as of now".
+assets.balances_stale_n: "离线：%{n}"
+# Cores left out of the total because another core already counts the same exchange account.
+assets.balances_folded_n: "同一账户：%{n}"
+# Cores the user set to stay out of the total (per-core setting).
+assets.balances_excluded_n: "不计入：%{n}"
+# Tooltip line per shared account: which cores were folded into which counted one.
+assets.balances_folded_into: "%{cores} 与 %{core} 为同一账户：只计一次"
+# Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
+assets.balances_folded_hl_caveat: "（Hyperliquid：终端看不到账户模式（统一或标准）；如果钱包是分开的，请在“设置 → 连接 → 计入资产总计”中将该核心设为“单独”）"
+# Tooltip line naming the cores excluded by their own setting.
+assets.balances_excluded_list: "按核心设置不计入：%{cores}"
+assets.section_positions: "仓位"
+# Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
+assets.all_cores: "全部核心"
+assets.cores_n: "核心：%{n}"
+
+# --- Asset table columns ---
+assets.col.core: "核心"
+assets.col.coin: "资产"
+assets.col.qty: "数量"
+assets.col.value: "价值 $"
+# Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
+# price of each leg. "PnL" is a trading term kept untranslated across the terminal.
+assets.col.pnl: "PnL"
+# Field-selector entry for the Market Sell / Order button column. The column header itself is
+# blank, so this name exists only in the menu.
+assets.col.actions: "按钮"
+# Tooltip of the table field selector, matching the Orders and Report wording.
+assets.columns: "字段"
+
+# Tooltip labels for unavailable table values; the dash glyph itself remains in Rust.
+assets.pnl.spot_unavailable: "现货余额没有未实现 PnL"
+assets.actions.unavailable_qty: "没有可卖出的 %{coin} 数量"
+assets.actions.unavailable_market_identity: "%{coin} 没有市场标识"
+assets.actions.unavailable_market_catalog: "核心的目录中没有市场 %{market}"
+
+# --- Position action buttons ---
+assets.open_global_hint: "在独立窗口中打开“资产”（全部核心）"
+assets.market_sell: "Market sell"
+assets.market_sell_confirm: "市价卖出"
+assets.market_sell_no_price: "卖出已取消：该市场没有当前价格，而下单需要价格。"
+assets.market_sell_q: "确定以市价卖出 %{coin}？"
+assets.market_sell_scope_changed: "卖出已取消：核心已不在当前资产范围内。"
+assets.order: "Order"
+# Tooltip of the Order button on a position row: the core cancels its own sells on the market and
+# re-places a limit close for the WHOLE position at its own offset from the price — Moonbot's
+# `Order` gesture for a limit that was left behind by the market.
+assets.order_hint: "重挂卖单：撤销自己的 %{coin} 订单，并为整个仓位挂出限价平仓单（同 Moonbot 的 Order）"
+# Tooltip of the same button on a spot holding: Moonbot's Pending Order window in SELL mode.
+assets.order_hint_spot: "挂出 %{coin} 限价卖单：带价格和数量的订单窗口（同 Moonbot 现货的 Order）"
+# --- The spot Order dialog (Moonbot's Pending Order window, SELL type) ---
+assets.order_dialog.title: "卖出 %{coin}"
+assets.order_dialog.side: "订单"
+assets.order_dialog.size: "数量，%{coin}"
+assets.order_dialog.max: "Max"
+assets.order_dialog.price: "卖出价格"
+# The "Current:" label welded to the live price figure (MIXED NODE, mono).
+assets.order_dialog.current: "当前：%{p}"
+assets.order_dialog.bad_size: "数量必须为正数"
+assets.order_dialog.bad_price: "价格必须为正数"
+# Toasts of the position press. Said on enqueue only: the terminal knows the command left for the
+# core, not what the core did with it (a market it does not hold or a position already gone is a
+# silent no-op on its side).
+assets.order_sent: "%{coin} 的 Order 指令已发送给核心——结果请查看“订单”和核心日志"
+assets.order_failed: "%{coin} 仓位的限价平仓指令未发送：核心不可达"
+
+# --- Wallets for transferring coins between containers ---
+assets.wallet.kind.spot: "现货"
+assets.wallet.kind.futures: "合约"
+assets.wallet.kind.quarterly: "季度合约"
+assets.wallet.filtered_empty: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
+assets.wallets_hint: "钱包 · 在容器之间拖动币种"
+assets.refresh_hint: "刷新核心余额"
+# --- Wallet-section display settings (the gear beside the refresh button) ---
+assets.settings.title: "钱包设置"
+assets.settings.display: "显示"
+assets.settings.group_by_venue: "按交易所对核心分组"
+# Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
+# column, so no Shift variant to advertise.
+assets.roster_resize: "拖动可调整列宽。双击可重置"
+assets.transfer_title: "划转 %{coin}：%{from} -> %{to}"
+assets.free: "可用：%{n}"
+assets.transfer_btn: "划转"

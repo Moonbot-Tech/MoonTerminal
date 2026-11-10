@@ -1,0 +1,412 @@
+# Core Status panel: core system metrics from `Event::KernelHealth`, including CPU and memory, plus status.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Top bar ---
+core_status.all_cores: "所有核心"
+core_status.cores_n: "核心：%{n}"
+# Short reason beside a problem core's name. `%{dur}` is the existing elapsed figure.
+core_status.row.reason_for: "%{reason} · %{dur}"
+# Exchange heading: count, median core ping, and how many are not Ready.
+core_status.section.aggregate_one: "%{n} 个核心 · 延迟中位数 %{ping} ms · %{k} 个未连接"
+core_status.section.aggregate_few: "%{n} 个核心 · 延迟中位数 %{ping} ms · %{k} 个未连接"
+core_status.section.aggregate_many: "%{n} 个核心 · 延迟中位数 %{ping} ms · %{k} 个未连接"
+core_status.section.aggregate_ok_one: "%{n} 个核心 · 延迟中位数 %{ping} ms · 全部在线"
+core_status.section.aggregate_ok_few: "%{n} 个核心 · 延迟中位数 %{ping} ms · 全部在线"
+core_status.section.aggregate_ok_many: "%{n} 个核心 · 延迟中位数 %{ping} ms · 全部在线"
+core_status.section.aggregate_nomed_one: "%{n} 个核心 · %{k} 个未连接"
+core_status.section.aggregate_nomed_few: "%{n} 个核心 · %{k} 个未连接"
+core_status.section.aggregate_nomed_many: "%{n} 个核心 · %{k} 个未连接"
+core_status.section.aggregate_ok_nomed_one: "%{n} 个核心 · 全部在线"
+core_status.section.aggregate_ok_nomed_few: "%{n} 个核心 · 全部在线"
+core_status.section.aggregate_ok_nomed_many: "%{n} 个核心 · 全部在线"
+# Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
+# sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
+core_status.section_sort_hint: "排序在每个交易所内部进行"
+core_status.empty: "暂无核心数据"
+core_status.mode.flat: "核心"
+core_status.mode.servers: "服务器"
+core_status.mode.problems: "问题"
+core_status.mode.warnings: "警报"
+core_status.mode.updates: "更新"
+core_status.mode.flat_short: "核心"
+core_status.mode.servers_short: "服务器"
+core_status.mode.problems_short: "问题"
+core_status.mode.warnings_short: "警报"
+core_status.mode.updates_short: "更新"
+core_status.updates.behind_n: "将落后的核心更新到正式版（%{n}）"
+core_status.updates.legend_newest_one: "%{build} — %{n} 个核心（最新）"
+core_status.updates.legend_newest_few: "%{build} — %{n} 个核心（最新）"
+core_status.updates.legend_newest_many: "%{build} — %{n} 个核心（最新）"
+core_status.updates.legend_build_one: "%{build} — %{n} 个核心"
+core_status.updates.legend_build_few: "%{build} — %{n} 个核心"
+core_status.updates.legend_build_many: "%{build} — %{n} 个核心"
+core_status.updates.up_to_date_title: "所有核心均为最新构建"
+core_status.updates.up_to_date_body: "%{build} 是现有核心中最新的构建。"
+core_status.updates.hint: "更新每次只进行一台服务器；核心会重启约 20 秒。"
+core_status.warn.where: "位置"
+core_status.empty.no_cores_title: "还没有核心"
+core_status.empty.no_cores_body: "在“设置 → 核心”中添加核心——这里将显示它的连接、负载和版本。"
+core_status.empty.open_settings: "打开设置"
+core_status.empty.no_problems_title: "没有问题"
+core_status.empty.no_problems_body: "全部 %{n} 个核心在线，延迟正常，版本均为最新。"
+core_status.empty.no_alarms_title: "过去 24 小时没有警报"
+core_status.empty.no_alarms_body: "CPU、延迟、内存和 API 密钥的阈值通过模式旁边的齿轮设置。"
+core_status.servers.cpu: "CPU"
+core_status.servers.ram_free: "空闲内存"
+core_status.search.placeholder: "核心、服务器或 IP"
+core_status.columns.menu: "列"
+core_status.health.verdict_bad: "需要关注：%{total} 个中的 %{n} 个"
+core_status.health.verdict_ok_single: "核心在线"
+core_status.health.verdict_ok_one: "%{total} 个核心在线"
+core_status.health.verdict_ok_few: "全部 %{total} 个核心在线"
+core_status.health.verdict_ok_many: "全部 %{total} 个核心在线"
+core_status.health.sub_online_one: "%{n} 个在线"
+core_status.health.sub_online_few: "%{n} 个在线"
+core_status.health.sub_online_many: "%{n} 个在线"
+core_status.health.sub_servers_one: "%{n} 台服务器"
+core_status.health.sub_servers_few: "%{n} 台服务器"
+core_status.health.sub_servers_many: "%{n} 台服务器"
+core_status.health.chip_offline: "离线与故障"
+core_status.health.chip_ping: "核心延迟高于正常 ×%{k}"
+core_status.health.chip_version: "版本落后"
+core_status.health.chip_api: "API 密钥即将到期"
+core_status.health.chip_alarms: "24h 内的警报"
+core_status.same.title: "全部相同："
+core_status.same.tz_off: "UTC"
+core_status.same.cpus: "逻辑 CPU 数"
+core_status.same.api_key: "API 密钥"
+core_status.same.api_quota: "API 配额"
+core_status.same.version: "Moonbot"
+core_status.same.no_expiry: "无期限"
+core_status.same.not_set: "未设置"
+# Warnings-list columns.
+core_status.col.time: "时间"
+core_status.col.dur: "持续时间"
+core_status.col.type: "类型"
+core_status.col.peak: "峰值"
+
+# --- Server tree ---
+core_status.server_n: "Server %{n}"
+core_status.rename: "重命名服务器"
+core_status.show_ip: "显示 IP"
+core_status.hide_ip: "隐藏 IP"
+core_status.ip_unknown: "终端尚未获得此服务器的地址"
+core_status.cpu_load: "%{value} (%{n})"
+core_status.mem_free: "%{pct}% (%{gb} GB)"
+core_status.unknown_server: "IP 未知：%{core}"
+
+# --- Table columns ---
+core_status.col.server: "服务器"
+core_status.col.core: "核心"
+core_status.col.status: "状态"
+core_status.col.cpu_proc: "进程 CPU"
+core_status.col.cpu_sys: "系统 CPU"
+core_status.col.mem_used: "内存占用"
+core_status.col.free_phys: "空闲物理"
+core_status.col.cpus: "逻辑 CPU"
+core_status.col.ping: "核心延迟"
+core_status.col.ping_exch: "交易所延迟"
+# Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
+# bare number.
+# Moonbot build the core reported. The product noun IS the heading, so the cells hold
+# a bare number; it is a proper name and is not translated. BOTH views read this one key --
+# they would never legitimately differ, and two identical values are one translator edit away
+# from disagreeing. `core_status.col.startup` is shared the same way.
+core_status.col.version: "Moonbot"
+# Hover on a Moonbot cell whose core runs an older build than the newest one currently reported
+# across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
+# server what the latest Moonbot is. Both numbers arrive as typed builds and are dotted by
+# `util::fmt::core_build` at the call site.
+core_status.version_behind: "Moonbot 构建已过时：%{have}。现有核心中最新的是 %{newest}"
+core_status.col.api_key: "API (d)"
+# Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
+# lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
+# the only place the reader can learn what it claims.
+core_status.api_perpetual: "无到期日的密钥"
+
+# --- Flat column header hovers ------------------------------------------------------------------
+# Three Flat headings are abbreviated past the point of being readable on their own, because the
+# column is narrower than the phrase. The heading keeps the abbreviation (widening the column would
+# cost the metrics their room); the hover carries the full phrase.
+core_status.col_tip.cpus: "机器上的逻辑处理器数"
+core_status.col_tip.tz_off: "核心时钟相对 UTC 的偏移"
+core_status.col_tip.api_key: "距交易所 API 密钥到期的天数"
+# Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
+# a dash. Named for the budget rather than the exchange, so the column still reads right the day a
+# second venue starts publishing a quota.
+core_status.col.api_quota: "API 限额"
+
+# The same axis named as a KIND in the Warnings episode list, where no unit belongs.
+core_status.axis_api: "API"
+# Unit for a request count in the Warnings peak column.
+core_status.requests: "次请求"
+# The quota axis named as a KIND in the Warnings episode list.
+core_status.axis_api_quota: "API 限额"
+
+# --- Detached-window chart legend ---
+core_status.chart_cpu: "CPU"
+core_status.chart_mem: "RAM"
+# Ping/RTT axis label on the warning badge card and the Warnings list (client↔core ping).
+core_status.chart_ping: "延迟"
+# Core→exchange order-latency label (the exchange ping) on the chart legend and the card.
+core_status.chart_exch: "交易所"
+# Connectivity axis label on a chart warning badge's hover card.
+core_status.warn_conn: "连接"
+# Shown as a warning cluster's duration while it is still active.
+core_status.warn_ongoing: "进行中"
+# Warning-badge card: heading above the server/core state captured when the warning fired.
+core_status.warn_at_detect: "检测时："
+core_status.warn_server: "服务器"
+core_status.chart_5m: "5 min"
+core_status.chart_1h: "1 h"
+
+# --- Alert-axis toggles (Core Status gear popup) ---
+# Popup heading and one label per warning axis the engine can catch.
+core_status.warn_cfg.title: "警报：监测项目"
+core_status.warn_cfg.cpu: "服务器 CPU"
+core_status.warn_cfg.mem: "内存增长"
+core_status.warn_cfg.conn: "核心掉线"
+core_status.warn_cfg.ping: "核心延迟突增"
+core_status.warn_cfg.exch: "交易所延迟突增"
+core_status.warn_cfg.api: "API 密钥即将到期"
+core_status.warn_cfg.api_quota: "API 限额即将用尽"
+# Column captions on a warning row (above the controls).
+core_status.warn_cfg.col.on: "启用"
+core_status.warn_cfg.col.chart: "图表"
+core_status.warn_cfg.col.sound: "声音"
+# Threshold captions.
+core_status.warn_cfg.p.threshold: "阈值"
+core_status.warn_cfg.p.hold: "持续"
+core_status.warn_cfg.p.growth: "增长"
+core_status.warn_cfg.p.window: "时间窗"
+core_status.warn_cfg.p.yellow: "黄"
+core_status.warn_cfg.p.red: "红"
+# How many days before expiration the API-key warning starts.
+core_status.warn_cfg.p.days: "提前"
+# Floor for the API-quota warning: it fires while the remaining request count is at or below this.
+core_status.warn_cfg.p.min_requests: "最少请求数"
+# "no sound" option and the seconds unit in the alert popup.
+core_status.warn_cfg.sound_none: "无"
+core_status.warn_cfg.u.sec: "s"
+core_status.warn_cfg.u.day: "天"
+
+# --- Units and relative time ---
+core_status.mb: "MB"
+core_status.ms: "ms"
+core_status.ago_s: "%{n}s"
+core_status.ago_m: "%{n}m"
+core_status.ago_h: "%{n}h"
+core_status.ago_d: "%{n}d"
+# Day count WITH its unit — used by the Warnings list's mixed-unit "Peak" column only; the API
+# column itself prints a bare number under a heading that carries the unit.
+core_status.api_days: "%{n} d"
+core_status.api_expired: "已过期"
+
+# --- Startup telemetry (polled MoonProto StartupStatus) ---
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.startup: "启动"
+# Completed init steps out of the total, while the core is still coming up.
+core_status.startup.progress: "%{done}/%{total}"
+# Seconds with one decimal. The unit is here so the number and its unit stay one token.
+core_status.startup.secs: "%{t} s"
+# The FROZEN figure once the core is up. The past-tense preposition is what stops a settled
+# number from reading as a running clock; do not reduce this to a bare duration.
+core_status.startup.took: "耗时 %{t}"
+core_status.startup.rate: "%{v}/s"
+core_status.startup.b: "B"
+core_status.startup.kb: "KB"
+core_status.startup.mb: "MB"
+# Startup phases.
+core_status.startup.state.connecting: "连接中"
+core_status.startup.state.initializing: "初始化中"
+core_status.startup.state.ready: "就绪"
+core_status.startup.state.reconnecting: "重新连接中"
+core_status.startup.state.failed: "错误"
+core_status.startup.state.disconnected: "已断开"
+core_status.startup.state.unknown: "未知"
+# Init steps, in the order the core runs them.
+core_status.startup.step.base_check: "兼容性检查"
+core_status.startup.step.auth_check: "访问权限检查"
+core_status.startup.step.markets_list: "市场列表"
+core_status.startup.step.markets_update: "价格与指数"
+core_status.startup.step.strategy_schema: "策略架构"
+core_status.startup.step.core_state: "核心状态"
+core_status.startup.step.post_init_flush: "初始请求"
+core_status.startup.step.snapshot: "首个快照"
+core_status.startup.step.events: "启动事件"
+# Hover fact labels. RTT and MTU stay untranslated per locales/README.md.
+core_status.startup.f.phase: "阶段"
+core_status.startup.f.step: "步骤"
+core_status.startup.f.elapsed: "已用时"
+core_status.startup.f.received: "已接收"
+core_status.startup.f.blocks: "数据块"
+core_status.startup.f.dupes: "重复"
+core_status.startup.f.transfers: "传输"
+core_status.startup.f.idle: "静默"
+core_status.startup.f.retries: "重试（步骤 · 总计）"
+core_status.startup.f.reconnects: "重连次数"
+core_status.startup.f.local_port: "本地 UDP 端口"
+core_status.startup.f.previous_port: "上一个 UDP 端口"
+core_status.startup.f.port_changes: "本地端口变更次数"
+core_status.startup.packets: "已发 %{sent} · 已收 %{recv}"
+core_status.startup.f.rtt: "RTT"
+core_status.startup.f.mtu: "MTU"
+core_status.startup.f.delivery: "送达"
+
+# --- Clock offset (measured core-vs-UTC skew) --------------------------------------------------
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.tz_off: "UTC 偏移"
+# The never-measured cell, and the collapsed-group cell when no core on the server ever measured
+# an offset. Deliberately never "UTC": a core that runs on UTC and a core nobody has measured must
+# not read the same.
+core_status.tz_off.unknown: "—"
+core_status.tz_off.f.offset: "偏移"
+core_status.tz_off.f.observed: "测量时间"
+core_status.tz_off.f.source: "来源"
+# Hover line for a core nothing has been measured on yet.
+core_status.tz_off.f.unmeasured: "尚未测量"
+core_status.tz_off.source.log: "核心日志"
+core_status.tz_off.source.ping: "核心 Ping"
+core_status.tz_off.source.replica: "副本数据"
+core_status.tz_off.source.skew: "偏差校正"
+core_status.tz_off.source.none: "—"
+
+# --- Connection verdict: why a core is not usable, and what to do about it. -------------------
+# `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
+# status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`
+# names every possibility it cannot separate, `unknown` names the raw stage instead of guessing,
+# and the key class (`key_empty` / `key_unparsable`) names a field the terminal could not decode
+# before any socket existed.
+core_status.fault.short.local_port: "本地端口"
+core_status.fault.short.no_response: "无应答"
+core_status.fault.short.unparsed: "已收到 UDP"
+core_status.fault.short.access: "密钥 / 访问权限"
+core_status.fault.short.unidentified: "核心未表明身份"
+core_status.fault.short.syncing: "同步中"
+core_status.fault.short.stalled: "卡在某一步"
+core_status.fault.short.aborted: "已停止"
+core_status.fault.short.unknown: "无法确定"
+core_status.fault.short.key_empty: "未粘贴密钥"
+core_status.fault.short.key_unparsable: "不是 Moonbot 密钥"
+core_status.fault.short.endpoint_invalid: "地址无效"
+core_status.fault.short.endpoint_unresolved: "找不到主机名"
+core_status.fault.reason.local_port: "终端无法占用自己的 UDP 端口（尝试次数：%{n}）"
+core_status.fault.reason.silent: "%{t} 秒内未从核心收到任何字节"
+core_status.fault.reason.unparsed: "收到的 UDP 数据包：%{n}；终端在 %{t} 秒内未接受握手"
+core_status.fault.reason.partial: "从核心收到了 %{bytes}，但连接在 %{t} 秒内始终未能建立"
+core_status.fault.reason.access_refused: "核心未接受密钥"
+core_status.fault.reason.access_timeout: "核心已应答，但账户访问权限检查未完成"
+core_status.fault.reason.access_failed: "账户访问权限检查未通过：%{msg}"
+core_status.fault.reason.unidentified_timeout: "核心未应答兼容性检查"
+core_status.fault.reason.unidentified_failed: "兼容性检查未通过：%{msg}"
+core_status.fault.reason.syncing: "步骤 %{step}（%{done}/%{total}），%{t} 秒，快照尚未到达"
+core_status.fault.reason.stalled: "初始化停在步骤 %{step}（%{done}/%{total}），%{t} 秒"
+core_status.fault.reason.aborted: "终端自行停止了本次尝试"
+core_status.fault.reason.unknown: "无法确定原因"
+core_status.fault.reason.key_empty: "“密钥”字段为空——没有可用于连接的密钥"
+core_status.fault.reason.key_unparsable: "“密钥”字段中的内容不是 Moonbot 密钥——终端无法读取"
+core_status.fault.reason.endpoint_invalid: "“地址:端口”列中的内容不是地址——终端不知道该连接到哪里"
+core_status.fault.reason.endpoint_unresolved: "“地址:端口”列中的主机名无法解析为地址"
+core_status.fault.next.local_port: "占用该端口的程序就在这台机器上：VPN 或本地防火墙"
+core_status.fault.next.no_response: "在主机商面板和机器自身的防火墙中都要开放核心的 UDP 端口。从快照恢复的虚拟机不会带上规则组；Windows 会把新网卡标记为“公用”网络，而仅针对“专用”网络的规则不会生效"
+core_status.fault.next.unparsed: "数据包已到达终端：这不是端口关闭的问题。请将日志和这些计数发给技术支持"
+core_status.fault.next.try_mode: "此终端上的其他核心已通过 %{mode} 模式连接成功——请尝试将此核心切换到 %{mode}"
+core_status.fault.next.access: "粘贴正是由这个机器人导出的密钥，并检查核心上是否已开启 Kernel (VPS) 模式。只要交易所账户未挂在 MoonBonus 推荐关系下，该模式就保持未激活"
+core_status.fault.next.unidentified: "核心有应答，但未通过兼容性检查。请依次检查：Kernel (VPS) 模式是否开启，核心是否过载，并更新其所在机器上的 Moonbot"
+core_status.fault.next.syncing: "请等待。如果数字停止变化，将鼠标悬停在启动列上：那里会显示通道的丢包情况"
+core_status.fault.next.stalled: "尝试会自动重复。如果同一步骤反复出现，将鼠标悬停在启动列上并发送日志"
+core_status.fault.next.aborted: "无需任何操作"
+core_status.fault.next.unknown: "请将此行和日志发给技术支持"
+core_status.fault.next.key: "密钥在 Moonbot 中创建，而不是在网站上。在 Moonbot 中：左下角的绿色圆点（Info 窗口）→ Moon Kernel 行 → Settings → Moon Proto 窗口的 Settings 标签页 → Key: → Copy Key（还没有密钥则点 New Key）。用“粘贴”按钮将其完整粘贴到“密钥”字段，然后点击“保存”——核心会自动连接"
+core_status.fault.next.endpoint_invalid: "在“设置 → 连接”中修正“地址:端口”列（地址、地址:端口 或 :端口），或将其清空以使用密钥中的地址，然后点击“保存”"
+core_status.fault.next.endpoint_unresolved: "检查名称是否有拼写错误，并确认这台电脑的网络和 DNS 工作正常——终端会自动重试。也可以直接输入 IP 来代替名称"
+core_status.fault.core.legacy_named: "核心报告的是 Moonbot %{server}，但未报告协议版本：它比本终端旧"
+core_status.fault.core.legacy_silent: "核心未报告协议版本：它比本终端旧"
+core_status.fault.retrying: "重新连接中"
+core_status.fault.f.reason: "原因"
+core_status.fault.f.next: "解决方法"
+core_status.fault.f.stage: "环节"
+core_status.fault.f.core: "核心"
+
+# --- Problems mode: the cores' OWN confirmed diagnostics (moonproto ProblemsState) ---
+# Distinct from the Warnings list, which holds THIS terminal's measured episodes. The wording
+# keeps that difference visible: these rows are the core's conclusions, not our thresholds.
+core_status.col.problem_category: "类别"
+core_status.col.problem_kind: "特征"
+core_status.col.problem_title: "问题"
+# Shown when at least one core has never delivered a list — it is older than the extension, or its
+# list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
+# that a core is healthy.
+core_status.problems_unknown: "未上报：%{n}——核心版本较旧，或列表尚未到达"
+# Shown when the row list hit its cap, so a shortened view never reads as the complete picture.
+core_status.problems_truncated: "仅显示前 %{n} 条"
+# Shown above the table when the panel's scope covers no cores at all: an empty table then says
+# nothing about anyone's health.
+core_status.problems_no_cores: "范围内没有核心"
+# Neutral empty state used whenever the notice above the table already explains the gap. It must not
+# contradict that notice by claiming a clean bill.
+core_status.problems_nothing_listed: "未上报任何内容"
+core_status.problem_cat.machine: "机器"
+core_status.problem_cat.exchange: "交易所"
+core_status.problem_cat.network: "网络"
+core_status.problem_cat.other: "其他"
+
+# --- Problems mode: the three diagnostic actions ---
+# The reset and the re-read mirror Moonbot's own Problems window; the test is ours.
+#
+# A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
+# channel end to end. It leaves a row behind that only the reset removes, which is why that pair
+# ships together.
+core_status.problems_test: "测试通道"
+# Deliberately NOT Moonbot's "reset all", though it is the same command on the wire. Moonbot's
+# window belongs to one core, so "all" there means all of that core's findings; this panel spans a
+# fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
+# picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how
+# many cores that is.
+core_status.problems_clear: "重置"
+core_status.problems_test_tip: "通过核心自身的检测器发布一条测试事实——大约两秒。可验证整条链路：检测器、传输、投影、面板。"
+core_status.problems_refresh: "刷新"
+# Said out loud because the label promises a round trip the protocol cannot make: a core pushes its
+# list, nothing can ask for one. Saying so here is cheaper than an operator concluding the button is
+# broken when a stale row does not move.
+core_status.problems_refresh_tip: "重新读取在线核心（%{cores}）目前已发来的内容。点击某一行可只重读该行的核心。无法请求新的列表：协议中没有这样的命令——核心会在连接时以及其检测器更改列表时自行发送。适合在核心重启后使用，那时旧的行已不再反映它的状态。"
+# The blast radius, stated BEFORE the dialog: an operator who picked no core is acting on the whole
+# scope, and that is the difference between a tidy-up and a fleet-wide loss.
+# The one-core forms, for when a clicked finding has narrowed the action. The scope-wide wording
+# would state a falsehood about the panel ("connected cores: 1" for a scope of twenty-six) and would
+# keep advising a click that, in this state, cancels the pick instead of making one.
+core_status.problems_clear_tip_one: "将重置所选核心的诊断——不可恢复，且对所有终端生效。再次点击它所在的行可回到整个范围"
+core_status.problems_refresh_tip_one: "重新读取所选核心目前已发来的内容。无法请求新的列表：协议中没有这样的命令。再次点击它所在的行可回到整个范围"
+core_status.problems_clear_tip: "将重置诊断。在线核心：%{cores}。不可恢复，且对所有终端生效。点击某一行可只重置该行的核心"
+# The test is per-core on the wire and has no fleet-wide form worth having: publishing a test fact
+# on two hundred cores litters two hundred cores. So it alone needs one core named.
+core_status.problems_pick_core: "测试只发往一个核心：在表格中点击该核心的问题行——或将面板范围缩小到单个核心"
+core_status.problems_picked_offline: "所选核心不在线——命令会一直等到它恢复连接"
+core_status.problems_no_online: "面板范围内没有在线的核心"
+# Guards the TEST alone. The command channel outlives the connection, so a queued test would fire on
+# the next reconnect and publish its fact at some unannounced later moment, on a core the operator
+# stopped looking at hours ago.
+core_status.problems_core_offline: "核心不在线——测试会等到重新连接后才执行，并在无法预知的时刻发布事实"
+core_status.problems_test_title: "发送测试诊断？"
+# The consequence is the whole reason this action is confirmed at all.
+core_status.problems_test_q: "核心 %{core} 将通过它的常规检测器发布一条测试事实——大约两秒。该行会留在核心上，而且只能通过重置来移除，而重置会同时清除该核心的真实诊断结果。"
+core_status.problems_test_sent: "测试已发送到 %{core}——该行将在几秒后出现"
+core_status.problems_clear_sent: "重置已发送到 %{core}——核心发来新列表后这些行就会消失"
+core_status.problems_clear_sent_many: "重置已发送到 %{cores} 个核心——这些核心发来新列表后相应的行就会消失"
+# Says what it re-read, not "done": the honest outcome of a re-read that found nothing new is an
+# unchanged table, and a message claiming more would make that look like a failure.
+core_status.problems_refreshed: "已重读的核心：%{cores}"
+# The shortfall, never a bare success: a fleet action that reached nine of twelve cores has failed
+# on three, and only the toast can say so.
+core_status.problems_fleet_none: "%{cores} 个核心一个也未送达——不在线，或命令通道已关闭"
+core_status.problems_fleet_partial: "已送达 %{cores} 个核心中的 %{sent} 个——其余不在线或其通道已关闭"
+core_status.problems_not_sent: "未发送：核心的命令通道已关闭"
+core_status.problems_not_sent_offline: "未发送：核心不在线"
+core_status.problems_clear_title: "重置该核心的诊断？"
+# Blunt on purpose: the protocol's own warning is that cleared real diagnostics cannot be restored.
+core_status.problems_clear_q: "核心 %{core} 将清除所有已确认的问题和未确认的假设——对所有终端生效，且无法恢复。这并不能消除原因：如果原因仍在，核心会再次确认该问题。"
+core_status.problems_clear_title_many: "重置多个核心的诊断？"
+# The core NAMES, not just how many: a count is nothing an operator can check, and this dialog is
+# the last place the mistake is still cheap.
+core_status.problems_clear_q_many: "这 %{cores} 个核心都将清除所有已确认的问题和未确认的假设——对所有终端生效，且无法恢复。这并不能消除原因：如果原因仍在，核心会再次确认这些问题。"

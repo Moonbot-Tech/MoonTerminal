@@ -267,6 +267,6 @@ fn text_written_into_a_control_is_a_listed_decision() {
     assert_list_matches(
         LITERAL_TEXT,
         &found,
-        "Put it through t! in all seven languages, or add `file | text` if it stays as it is.",
+        "Put it through t! in every shipped language, or add `file | text` if it stays as it is.",
     );
 }

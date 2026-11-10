@@ -1,0 +1,19 @@
+_version: 1
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark: "无文件"
+sounds.missing_title: "未找到声音"
+sounds.missing_name: "未找到声音“%{name}”——改为播放 %{fallback}。请把 %{name}.wav 放入文件夹 %{folder}。"
+sounds.missing_ordinal: "%{n} 号声音不存在——改为播放 %{fallback}。请在文件夹 %{folder} 中放入名为 %{n}_名称.wav 的文件，或在核心设置中重新选择声音。"
+sounds.open_folder: "打开文件夹"
+sounds.rescan: "重新扫描"
+sounds.numbered_title: "自定义编号"
+sounds.scan_pending: "正在读取文件夹…"
+sounds.rejected_title: "被拒绝的文件"
+sounds.reject_not_pcm: "不是 PCM WAV"
+sounds.reject_too_large: "超过 %{mb} MB"
+sounds.reject_over_total: "超出 %{mb} MB 的总限额"
+sounds.reject_io: "无法读取：%{detail}"
+sounds.reject_number_reserved: "%{first} 以下的编号由内置声音占用"
+sounds.reject_number_taken: "该编号已被“%{by}”占用"
+sounds.reject_name_taken: "已存在同名的声音——带编号的文件需要换一个名称"

@@ -51,6 +51,8 @@ fn old_station_pushes_omit_overrides_and_keep_credentials() {
 }
 
 /// A static helper marker would enable an override against an older binary that rejects the field.
+/// The bot languages are relayed the same way: only what the binary itself lists, and "none" for
+/// a binary that lists nothing or something that is not a list of codes.
 #[test]
 fn helper_reads_override_capability_from_the_installed_binary() {
     use std::io::Write;
@@ -73,12 +75,26 @@ fn helper_reads_override_capability_from_the_installed_binary() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    for (binary, expected) in [
-        (None, "no"),
-        (Some("exit 1"), "no"),
-        (Some("printf 'core_endpoint_override=unknown\\n'"), "no"),
-        (Some("printf 'core_endpoint_override=yes\\n'; exit 1"), "no"),
-        (Some("printf 'core_endpoint_override=yes\\n'"), "yes"),
+    for (binary, expected, languages) in [
+        (None, "no", "none"),
+        (Some("exit 1"), "no", "none"),
+        (
+            Some("printf 'core_endpoint_override=unknown\\n'"),
+            "no",
+            "none",
+        ),
+        (
+            Some("printf 'core_endpoint_override=yes\\n'; exit 1"),
+            "no",
+            "none",
+        ),
+        (
+            Some("printf 'core_endpoint_override=yes\\n'"),
+            "yes",
+            "none",
+        ),
+        (Some("printf 'languages=en,zh\\n'"), "no", "en,zh"),
+        (Some("printf 'languages=EN;id\\n'"), "no", "none"),
     ] {
         let before = r#"
 set -eu
@@ -109,14 +125,52 @@ systemctl() { printf 'inactive\n'; }
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        let stdout = String::from_utf8(output.stdout).unwrap();
         assert_eq!(
-            crate::script::value(
-                &String::from_utf8(output.stdout).unwrap(),
-                "core_endpoint_override"
-            ),
+            crate::script::value(&stdout, "core_endpoint_override"),
             Some(expected)
         );
+        assert_eq!(crate::script::value(&stdout, "languages"), Some(languages));
     }
+}
+
+/// A terminal in a language the station binary does not parse must not write it: the station
+/// would fail to load its whole config. A binary that lists its languages is believed; one that
+/// predates the list gets only the codes every station knows.
+#[test]
+fn a_bot_language_the_station_does_not_know_is_withheld() {
+    let ask = |language: &str, status: &str| {
+        let mut notes = Vec::new();
+        let change = BotChange {
+            mini_app: Some(true),
+            zone: Some("Europe/Kyiv".to_owned()),
+            language: Some(language.to_owned()),
+        };
+        let sent = peer_bot_change(&change, status, &mut |progress| notes.push(progress));
+        // The rest of the change is never touched.
+        assert_eq!(sent.mini_app, Some(true));
+        assert_eq!(sent.zone.as_deref(), Some("Europe/Kyiv"));
+        (sent.language, notes.len())
+    };
+    // An old binary: no list. A baseline language goes, a newer one stays behind with one note.
+    assert_eq!(ask("ru", "languages=none\n"), (Some("ru".to_owned()), 0));
+    assert_eq!(ask("zh", "languages=none\n"), (None, 1));
+    // A binary that lists its languages decides, in both directions.
+    assert_eq!(
+        ask("zh", "languages=ru,en,zh\n"),
+        (Some("zh".to_owned()), 0)
+    );
+    assert_eq!(ask("vi", "languages=ru,en,zh\n"), (None, 1));
+    // The station reads the leading letters only, so a regional code is the same language.
+    assert_eq!(
+        ask("zh-CN", "languages=ru,en,zh\n"),
+        (Some("zh-CN".to_owned()), 0)
+    );
+    // No language asked: nothing to withhold.
+    let silent = peer_bot_change(&BotChange::default(), "languages=none\n", &mut |_| {
+        panic!("nothing was withheld")
+    });
+    assert!(silent.language.is_none());
 }
 
 /// Sending terminal uid 3 directly would reject a valid CLI add to a station whose floor is 12.
@@ -1079,6 +1133,17 @@ remove_station=yes
 removal_guard=yes
 bot_settings_merge=yes
 core_endpoint_override=no
+languages=none
+"
+    ));
+    // The same helper before it relayed the binary's languages is replaced.
+    assert!(!helper_is_current(
+        "release_update=yes
+bot_return=yes
+remove_station=yes
+removal_guard=yes
+bot_settings_merge=yes
+core_endpoint_override=no
 "
     ));
     assert!(!helper_is_current(
@@ -1092,7 +1157,7 @@ remove_station=no
 /// Treating capability=no as a stale helper would reinstall it on every old-station refresh.
 #[test]
 fn helper_capability_reading_is_current_for_both_binary_generations() {
-    let base = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\nbot_settings_merge=yes\n";
+    let base = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\nbot_settings_merge=yes\nlanguages=none\n";
     for capability in ["yes", "no"] {
         assert!(helper_is_current(&format!(
             "{base}core_endpoint_override={capability}\n"

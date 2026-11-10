@@ -333,6 +333,7 @@ pub fn transfer_bot(
         script::value(&status, "config") == Some("yes"),
         StationError::ConfigMissing
     );
+    let change = &super::peer_bot_change(change, &status, say);
     // A bot already there has its own chats; handing another over would drop them.
     anyhow::ensure!(
         script::value(&status, "token") != Some("yes"),

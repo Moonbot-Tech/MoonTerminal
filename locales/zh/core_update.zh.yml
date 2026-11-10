@@ -1,0 +1,95 @@
+# Core Status panel: per-core update-queue phase badges/tooltips and the fleet-wide footer
+# counters. Separate from `update.yml`, which is the TERMINAL's own self-update namespace.
+_version: 1
+
+# --- Per-core phase, shown as a badge beside the reported build and as its hover text ---
+core_update.phase.queued: "排队中"
+core_update.phase.held: "等待中 — 通道被占用"
+core_update.phase.sent: "命令已发送"
+core_update.phase.waiting: "更新中"
+core_update.phase.verifying: "正在验证版本"
+core_update.phase.succeeded: "已更新"
+core_update.phase.installed: "已安装"
+core_update.phase.unchanged: "版本未变"
+core_update.phase.other_build: "装上的是另一个版本：%{got}，而不是 %{expected}"
+core_update.phase.failed.not_sent: "命令发送失败"
+core_update.phase.failed.never_dropped: "核心没有为更新而断开"
+core_update.phase.failed.not_ready: "未能等到核心就绪，更新命令无法发送"
+core_update.phase.failed.timeout: "更新后没有恢复连接 — 超时"
+core_update.phase.failed.gone: "核心地址变为未知"
+core_update.phase.failed.abandoned: "因退出应用而中断"
+core_update.phase.failed.rejected: "核心拒绝了所请求的版本"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable: "未能验证版本 — 无法重新连接"
+core_update.phase.unverified.timeout: "未能验证版本 — 核心没有及时恢复"
+
+# --- Fleet-wide footer counters, drawn only while a campaign is active ---
+core_update.summary.updating: "更新中"
+core_update.summary.queued: "排队中"
+core_update.summary.failed: "失败"
+
+# --- Updates list (Core Status "Updates" mode): columns, empty state, target wording ---
+core_update.col.time: "时间"
+core_update.col.core: "核心"
+core_update.col.server: "服务器"
+core_update.col.from_to: "从 → 到"
+core_update.col.target: "目标"
+core_update.col.outcome: "结果"
+core_update.col.duration: "耗时"
+core_update.list_empty: "暂无更新记录"
+core_update.target.release: "正式版"
+core_update.target.named: "Beta 版 %{name}"
+# --- Hover-revealed row/server update control (shared control, controls/core_update) ---
+core_update.row.action: "将此核心更新到正式版"
+core_update.server.action_one: "将此服务器上的 %{n} 个核心更新到正式版"
+core_update.server.action_few: "将此服务器上的 %{n} 个核心更新到正式版"
+core_update.server.action_many: "将此服务器上的 %{n} 个核心更新到正式版"
+core_update.retry: "重试更新"
+core_update.skipped_offline: "%{n} 个离线"
+core_update.skipped_already_one: "%{n} 个已在更新"
+core_update.skipped_already_few: "%{n} 个已在更新"
+core_update.skipped_already_many: "%{n} 个已在更新"
+# A release press replaces a lettered (test) build; builds lists the distinct letters.
+core_update.release_replaces_test_one: "%{n} 个核心正在运行测试版 %{builds} — 正式版会替换它"
+core_update.release_replaces_test_few: "%{n} 个核心正在运行测试版 %{builds} — 正式版会替换它"
+core_update.release_replaces_test_many: "%{n} 个核心正在运行测试版 %{builds} — 正式版会替换它"
+# A press that queued nothing at all; reasons joins the skipped_* phrases above.
+core_update.notice.none: "没有任何核心加入队列：%{reasons}。"
+# --- Footer fleet-wide bulk actions and their single shared confirm ---
+core_update.fleet.all: "全部更新到正式版"
+core_update.fleet.behind_none: "这里没有核心落后于此处可见的最新版本，而终端看不到 Moonbot 的正式版。"
+core_update.fleet.selected: "将所选更新到正式版（%{n}）"
+core_update.fleet.named: "更新到指定版本…"
+core_update.confirm.title: "更新核心"
+# The question is composed: cores and servers are the counted phrases below.
+core_update.confirm.cores_one: "%{n} 个核心"
+core_update.confirm.cores_few: "%{n} 个核心"
+core_update.confirm.cores_many: "%{n} 个核心"
+core_update.confirm.servers_one: "位于 %{n} 台服务器"
+core_update.confirm.servers_few: "位于 %{n} 台服务器"
+core_update.confirm.servers_many: "位于 %{n} 台服务器"
+core_update.confirm.q_release: "将 %{cores}（%{servers}）更新到正式版？"
+core_update.confirm.q_named: "将 %{cores}（%{servers}）更新到下方指定的版本？"
+core_update.confirm.lanes: "各服务器并行更新——每台服务器同时最多更新一个核心。"
+core_update.confirm.release_what: "每个核心会下载自己的正式版安装包——不是本页上最新的版本，也不是测试版。终端看不到正式版的版本号。"
+# --- Row context menu: the ordinary release update, and the named beta/test build one level
+# deeper (a free-text prompt -- MoonProto has no list of available builds to offer) ---
+core_update.menu.release: "更新到正式版"
+core_update.menu.named: "更新到指定名称的版本…"
+core_update.menu.named_prompt: "%{core} 的版本名称："
+core_update.menu.release_n_one: "将 %{n} 个核心更新到正式版"
+core_update.menu.release_n_few: "将 %{n} 个核心更新到正式版"
+core_update.menu.release_n_many: "将 %{n} 个核心更新到正式版"
+core_update.menu.named_n_one: "将 %{n} 个核心更新到指定名称的版本…"
+core_update.menu.named_n_few: "将 %{n} 个核心更新到指定名称的版本…"
+core_update.menu.named_n_many: "将 %{n} 个核心更新到指定名称的版本…"
+core_update.menu.named_prompt_n_one: "%{n} 个核心的版本名称："
+core_update.menu.named_prompt_n_few: "%{n} 个核心的版本名称："
+core_update.menu.named_prompt_n_many: "%{n} 个核心的版本名称："
+core_update.confirm.named_prompt: "版本名称："
+# The placeholder is the bare example name; the hint under the field spells out every form.
+core_update.menu.named_ph: "MoonBot-F8"
+core_update.menu.named_hint: "三种写法都可以："
+core_update.menu.named_hint_all: "%{all} 在这里不会增加核心：只更新此窗口中的核心。"
+core_update.menu.unavailable: "不可用 — 核心未就绪或已在更新"

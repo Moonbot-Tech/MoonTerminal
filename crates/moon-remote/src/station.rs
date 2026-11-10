@@ -210,6 +210,52 @@ pub struct BotChange {
     pub language: Option<String>,
 }
 
+/// The bot languages every station binary parses, including those older than the `languages`
+/// capability: a binary that does not list its own is sent a language only from here.
+const BASELINE_LANGUAGES: [&str; 7] = ["ru", "en", "es", "uk", "tr", "pt", "vi"];
+
+/// `change` without a bot language the installed station binary would reject.
+///
+/// A station fails to load its whole `station.toml` on a `[telegram] language` it does not know,
+/// and the service then stays down. So a language reaches the file only when the binary lists it
+/// in its `languages` capability, or, for a binary older than that capability, when it is one of
+/// [`BASELINE_LANGUAGES`]. A withheld language keeps the server's own value; the bot takes the
+/// terminal's language on the first push after the service is updated.
+///
+/// Args:
+///     change: What the terminal asks for.
+///     status: The helper's `status` output, with the binary's capabilities relayed.
+///     say: Receives one diagnostic when a language is withheld.
+///
+/// Returns:
+///     The change to write.
+fn peer_bot_change(change: &BotChange, status: &str, say: &mut dyn FnMut(Progress)) -> BotChange {
+    let listed = script::value(status, "languages").filter(|list| *list != "none");
+    let language = change.language.as_ref().filter(|language| {
+        // The station reads only the leading letters (`zh-CN` is `zh`): compare the same prefix.
+        let code = language
+            .chars()
+            .take_while(char::is_ascii_alphabetic)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        let known = match listed {
+            Some(list) => list.split(',').any(|item| item == code),
+            None => BASELINE_LANGUAGES.contains(&code.as_str()),
+        };
+        if !known {
+            say(Progress::Diagnostic(format!(
+                "bot language {language:?}: not sent, the installed station does not know it"
+            )));
+        }
+        known
+    });
+    BotChange {
+        mini_app: change.mini_app,
+        zone: change.zone.clone(),
+        language: language.cloned(),
+    }
+}
+
 /// `current` with its `[telegram]` changed by `change`, or removed with `off`.
 ///
 /// Args:
@@ -681,7 +727,9 @@ fn edit_config_using(
 }
 
 /// Require guarded removal, bot preservation and an explicit installed-binary capability reading.
-/// Both yes and no are current: an old binary must not cause repeated helper refreshes.
+/// Both yes and no are current: an old binary must not cause repeated helper refreshes. The
+/// `languages` line is required the same way, whatever it holds: a helper without it cannot say
+/// which bot languages the binary parses ([`peer_bot_change`]).
 fn helper_is_current(status: &str) -> bool {
     script::value(status, "bot_return") == Some("yes")
         && script::value(status, "remove_station") == Some("yes")
@@ -691,6 +739,7 @@ fn helper_is_current(status: &str) -> bool {
             script::value(status, "core_endpoint_override"),
             Some("yes" | "no")
         )
+        && script::value(status, "languages").is_some()
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
@@ -734,6 +783,7 @@ pub fn push_telegram(
         Ok(script::checked(conn.run(&command, stdin, STEP_TIMEOUT)?)?.stdout_text())
     };
     let status = current_helper_status(&conn)?;
+    let change = &peer_bot_change(change, &status, say);
     let has_token = script::value(&status, "token") == Some("yes");
     anyhow::ensure!(
         off || token.is_some() || has_token,

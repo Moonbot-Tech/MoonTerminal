@@ -1,0 +1,27 @@
+# Telegram owner and read-only viewer assignments.
+_version: 1
+
+telegram.access_title: "聊天"
+telegram.access_chat: "聊天 %{id}"
+telegram.access_owner_summary: "所有者：全部核心，完全访问"
+telegram.access_viewer_summary: "观察者：%{count} 个核心，仅查看"
+telegram.access_waiting: "观察者：未分配核心，无数据访问权限"
+telegram.access_no_cores: "尚未为此聊天分配核心。请让所有者在 MoonTerminal 中选择：设置 → Telegram。"
+telegram.access_collapse: "收起"
+telegram.access_name: "终端中的聊天名称"
+telegram.access_name_placeholder: "例如：小王 — 客户"
+telegram.access_transfer_hint: "此聊天将获得全部核心的完全访问权限。原所有者将变为未分配核心的观察者。更改在保存后生效。"
+telegram.access_transfer_confirm: "确认更换所有者"
+telegram.access_make_owner: "设为所有者"
+telegram.access_remove: "解绑聊天"
+telegram.access_cores: "可用核心：仅查看"
+telegram.access_search: "按编号或名称查找核心"
+telegram.access_select_current: "选择当前全部核心"
+telegram.access_clear: "清除选择"
+telegram.access_archived: "核心已从连接中移除（可访问历史）"
+telegram.access_no_matches: "未找到核心。请添加并保存连接，或修改搜索条件。"
+telegram.access_history_loading: "正在从历史中加载核心…"
+telegram.access_history_failed: "无法读取历史。已连接的核心和已保存的分配仍可使用。"
+telegram.access_retry: "重试"
+
+telegram.chats_hint: "通过代码添加聊天；第一个为所有者，其余聊天在“保存”后可查看所选核心。"

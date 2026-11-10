@@ -58,7 +58,7 @@ impl Render for HeaderHarness {
 #[gpui::test]
 fn trade_header_controls_fit_every_locale(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
-    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi"] {
+    for locale in ["ru", "en", "es", "uk", "tr", "pt", "vi", "zh"] {
         let _locale = crate::test_locale::force(locale);
         for mode in [
             UiThemeMode::Dark,

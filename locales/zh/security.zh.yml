@@ -1,0 +1,77 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Settings → General → Security ---
+security.title: "安全"
+security.password: "密码"
+security.confirm: "再次输入"
+security.mismatch: "两次输入的密码不一致"
+
+# --- Launch gate ---
+security.launch: "启动密码"
+
+# --- servers.enc encryption password ---
+security.file: "servers.enc 加密密码"
+security.rule: "至少 %{min} 个字符，并包含两类不同的字符。"
+security.bits: "≈%{bits} 位"
+
+# --- Strength meter ---
+security.level.empty: "—"
+security.level.weak: "弱"
+security.level.fair: "中等"
+security.level.good: "良好"
+security.level.strong: "强"
+security.issue.none: "符合要求"
+security.issue.short: "太短：至少需要 %{min} 个字符"
+security.issue.common: "包含常见词——会被整体猜中"
+security.issue.repeats: "同一字符重复过多"
+security.issue.sequence: "连续排列的字符会被瞬间猜中"
+security.issue.one_class: "只有一类字符——请加入数字、大写字母或符号"
+security.issue.low_entropy: "太容易猜到——请加长并增加变化"
+
+# --- Machine key slots ---
+security.machines: "有访问权限的设备：%{used} / %{max}"
+security.machines_forgotten: "已撤销其他设备的访问权限"
+
+# --- Apply results ---
+security.applied: "密码已保存"
+security.pending_write: "密码已接受，正在保存…"
+security.err.not_saved: "密码已接受，但配置未保存——请修复上方的错误后重新保存"
+security.err.empty: "请输入密码"
+security.err.mismatch: "两次输入的密码不一致"
+security.err.not_editable: "本次运行未打开配置——密码无处保存"
+security.err.backend: "密钥存储不可用——密码未保存"
+security.not_editable: "本次运行未打开 servers.enc——密码不可用"
+security.err.weak: "加密密码强度太低"
+
+# --- Login window ---
+login.window_title: "MoonTerminal — 登录"
+login.title: "登录"
+login.placeholder: "密码"
+login.enter: "进入"
+login.exit: "退出"
+login.start_over: "从零开始"
+login.file_subtitle: "servers.enc 无法用此设备的密钥打开。请输入加密密码，之后此设备会记住访问权限。"
+login.launch_subtitle: "请输入启动密码。"
+login.locked_subtitle: "servers.enc 由另一台设备的密钥加密，且未设置加密密码。没有办法打开该文件。"
+login.throttled: "多次输错后，输入会变慢"
+login.err.empty: "请输入密码"
+login.err.backend: "无法验证密码——详情见日志"
+login.err.wrong: "密码错误"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "有访问权限的电脑"
+security.machines.label: "无需密码即可打开文件"
+security.machines.count: "%{n} / %{max}"
+security.machines.keep_only: "仅保留这台…"
+security.machines.keep_only_off: "只有这台电脑有访问权限——没有可撤销的。"
+security.machines.hint: "撤销会立即保存。"
+security.machines.confirm_title: "仅保留这台电脑的访问权限？"
+security.machines.confirm_body: "其他电脑将无法再免密码打开连接文件。更改会立即保存。"
+security.machines.confirm_btn: "仅保留这台"
+security.unrecoverable: "无法找回。如果在新电脑上忘记密码，核心密钥就必须重新输入。"
+security.launch.title: "启动密码"
+security.launch.hint: "每次启动时询问。不会加密核心密钥。"
+security.file.title: "连接文件加密"
+security.file.hint: "仅在文件无法自行打开的电脑上需要。"

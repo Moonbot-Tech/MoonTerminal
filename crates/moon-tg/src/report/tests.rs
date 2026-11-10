@@ -162,6 +162,7 @@ fn report_preview_titles_are_localized() {
         ("tr", "Rapor", "Çekirdekler", "Günler"),
         ("pt", "Relatório", "Núcleos", "Dias"),
         ("vi", "Báo cáo", "Core", "Ngày"),
+        ("zh", "报告", "核心", "每日"),
     ] {
         let _locale = crate::test_locale::force(locale);
         for (by_exchange, daily, scope, title) in [

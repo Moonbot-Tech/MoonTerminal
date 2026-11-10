@@ -9,7 +9,7 @@ fn code_roundtrip() {
     assert_eq!(Language::from_code("en-US"), Some(Language::En));
     assert_eq!(Language::from_code("es_ES"), Some(Language::Es));
     assert_eq!(Language::from_code("ru-RU.UTF-8"), Some(Language::Ru));
-    assert_eq!(Language::from_code("zh"), None);
+    assert_eq!(Language::from_code("ja"), None);
     assert_eq!(Language::from_code("xx"), None);
 }
 
@@ -61,6 +61,19 @@ fn tr_pt_vi_codes_map() {
     assert_eq!(Language::from_code("vi"), Some(Language::Vi));
     assert_eq!(Language::from_code("vi-VN"), Some(Language::Vi));
     assert_eq!(Language::from_code("vi_VN"), Some(Language::Vi));
+}
+
+/// Every Chinese system locale must select Simplified Chinese, the only Chinese
+/// dictionary shipped. An unmapped `zh-CN` would leave a Chinese Windows on English,
+/// and a `zh-TW` one would lose the closest language the terminal has.
+#[test]
+fn zh_codes_map_to_simplified_chinese() {
+    assert_eq!(Language::from_code("zh"), Some(Language::Zh));
+    assert_eq!(Language::from_code("zh-CN"), Some(Language::Zh));
+    assert_eq!(Language::from_code("zh_CN"), Some(Language::Zh));
+    assert_eq!(Language::from_code("zh-Hans-CN"), Some(Language::Zh));
+    assert_eq!(Language::from_code("zh-TW"), Some(Language::Zh));
+    assert_eq!(Language::from_code("ZH"), Some(Language::Zh));
 }
 
 /// settings.toml must store Turkish, Portuguese, and Vietnamese by code and

@@ -261,6 +261,10 @@ fn every_preview_key_has_all_locales_and_matching_parameters() {
             "vi",
             include_str!("../../../../../../locales/vi/import.vi.yml"),
         ),
+        (
+            "zh",
+            include_str!("../../../../../../locales/zh/import.zh.yml"),
+        ),
     ];
     let mut by_lang: BTreeMap<&str, BTreeMap<&str, String>> = BTreeMap::new();
     for (lang, yaml) in files {
