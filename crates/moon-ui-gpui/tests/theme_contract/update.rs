@@ -231,8 +231,9 @@ fn every_shell_observes_the_one_backend_updater() {
     );
 }
 
-/// Removing the Windows/macOS/FireTest gates would spend GitHub quota in unsupported or diagnostic
-/// processes; arming the timer before awaiting the scan would permit overlapping requests.
+/// Removing the Windows/macOS/Linux/FireTest gates would spend GitHub quota in unsupported or
+/// diagnostic processes; arming the timer before awaiting the scan would permit overlapping
+/// requests.
 #[test]
 fn recurring_update_scans_are_gated_idempotent_and_sequential() {
     let boot = code_only(&read_src("startup/boot.rs"));
@@ -247,7 +248,7 @@ fn recurring_update_scans_are_gated_idempotent_and_sequential() {
     let timer = start.find("executor.timer(wait).await").unwrap();
     assert!(
         boot.contains(
-            "#[cfg(any(windows, target_os = \"macos\"))]\n        crate::update::UpdateController::start_polling(&updater, cx);"
+            "#[cfg(any(windows, target_os = \"macos\", target_os = \"linux\"))]\n        crate::update::UpdateController::start_polling(&updater, cx);"
         ) && start.contains("claim_polling(&mut this.polling_started)")
             && start.contains("polling_continues_after(&this.state)")
             && start.matches("ReleaseDiscovery::new(identity)").count() == 1
@@ -255,7 +256,7 @@ fn recurring_update_scans_are_gated_idempotent_and_sequential() {
             && scan_loop < scan
             && scan < timer
             && !start.contains("install_generation"),
-        "one Windows/macOS-only non-FireTest loop must await every scan before arming its next timer"
+        "one non-FireTest loop, on the platforms with an update path only, must await every scan before arming its next timer"
     );
 }
 
@@ -333,7 +334,8 @@ fn helper_owns_liveness_and_binds_both_process_images() {
             && identity.contains("same_file_path(&current, &transaction.staged)")
             && identity.contains("transaction.expected_sha256")
             && parent.contains("QueryFullProcessImageNameW")
-            && parent.contains("same_file_path(&image, target)"),
+            && parent.contains("same_file_path(&image, target)")
+            && update.contains("moon_core::update::swap::ParentProcess::open(pid, target)"),
         "every post-ready failure must recover a verified old target and both process images must be bound"
     );
     assert!(

@@ -1072,9 +1072,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
         }
     } else {
-        // Windows replaces the executable in place; macOS opens the release .dmg. Linux has no
-        // update path, so it never spends GitHub quota on discovery.
-        #[cfg(any(windows, target_os = "macos"))]
+        // Windows and Linux replace the executable in place; macOS opens the release .dmg. Any
+        // other target has no update path, so it never spends GitHub quota on discovery.
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         crate::update::UpdateController::start_polling(&updater, cx);
     }
     if update_recovered {

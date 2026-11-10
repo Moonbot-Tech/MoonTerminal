@@ -19,7 +19,7 @@ key space — splitting into files is purely organisational, by UI area:
 |------------------------------|--------------------------------------------------------------|
 | `shell.<lang>.yml`           | top bar, status bar, toolbar, chart tab/window                |
 | `tick_volume.<lang>.yml`     | cursor volume readout and the hovered candle's bucket        |
-| `update.<lang>.yml`          | the header update button: Windows self-update, macOS `.dmg`  |
+| `update.<lang>.yml`          | the header update button: self-update, and the macOS `.dmg`  |
 | `crowd.<lang>.yml`           | crowd stats on empty Main and its toggle                      |
 | `strategies.<lang>.yml`      | the Strategies window (tree, filter, parameters, context menu)|
 | `screener.<lang>.yml`        | the Screener window's coin table                              |

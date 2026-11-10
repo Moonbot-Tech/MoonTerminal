@@ -147,16 +147,56 @@ fn asset_url_is_bound_to_the_repository_tag_and_exact_name() {
     }
 }
 
-/// The asset choice is a plain function of the target OS, so this Windows-run suite also pins
-/// what a macOS build selects; swapping or collapsing the two names would offer macOS users an
-/// executable they cannot run, or Windows users a disk image.
+/// The asset choice is a plain function of the target, so this Windows-run suite also pins what a
+/// macOS and a Linux build select; swapping or collapsing the names would offer one platform's
+/// users a file they cannot run. A target releases carry nothing for must get no name at all:
+/// the old "everything else is Windows" fallback is what would have offered `MoonTerminal.exe`
+/// to a Linux build.
 #[test]
-fn asset_name_is_chosen_per_target_os() {
-    assert_eq!(asset_name_for_os("macos"), "MoonTerminal.dmg");
-    assert_eq!(asset_name_for_os("windows"), "MoonTerminal.exe");
+fn asset_name_is_chosen_per_target() {
+    assert_eq!(
+        asset_name_for_target("macos", "aarch64"),
+        Some("MoonTerminal.dmg")
+    );
+    assert_eq!(
+        asset_name_for_target("windows", "x86_64"),
+        Some("MoonTerminal.exe")
+    );
+    assert_eq!(
+        asset_name_for_target("linux", "x86_64"),
+        Some("MoonTerminal-linux-x86_64")
+    );
+    assert_eq!(asset_name_for_target("linux", "aarch64"), None);
+    assert_eq!(asset_name_for_target("freebsd", "x86_64"), None);
     assert_eq!(
         platform_asset_name(),
-        asset_name_for_os(std::env::consts::OS)
+        asset_name_for_target(std::env::consts::OS, std::env::consts::ARCH)
+    );
+}
+
+/// A Linux release asset must pass the same download-URL binding as the other two, under its own
+/// name; a check that still compared against the Windows name would refuse every Linux update.
+#[test]
+fn a_linux_asset_is_eligible_under_its_own_name_only() {
+    let linux_only = fixture_release_with("v0.67.0", LINUX_X86_64_ASSET_NAME);
+    let linux = eligible_release_for(&linux_only, LINUX_X86_64_ASSET_NAME)
+        .unwrap()
+        .expect("a release carrying the Linux asset is eligible for a Linux build");
+    assert_eq!(linux.asset_name(), "MoonTerminal-linux-x86_64");
+    assert!(
+        linux
+            .download_url()
+            .ends_with("/v0.67.0/MoonTerminal-linux-x86_64")
+    );
+    assert_eq!(
+        eligible_release_for(&linux_only, WINDOWS_ASSET_NAME).unwrap(),
+        None,
+        "a release with only the Linux asset offers a Windows build nothing"
+    );
+    assert_eq!(
+        eligible_release_for(&fixture_release("v0.67.0"), LINUX_X86_64_ASSET_NAME).unwrap(),
+        None,
+        "a release with only the Windows asset offers a Linux build nothing"
     );
 }
 

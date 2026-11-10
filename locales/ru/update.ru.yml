@@ -1,4 +1,4 @@
-# Header update button: Windows self-update, macOS installer image download.
+# Header update button: Windows and Linux self-update, macOS installer image download.
 _version: 1
 
 update.available: "Обновить до %{version}"

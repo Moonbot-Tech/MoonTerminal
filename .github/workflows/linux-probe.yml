@@ -8,7 +8,8 @@ permissions:
 #   Linux probe — compiles the terminal for x86_64 Linux, which no other job does: the station job
 #                 in build.yml builds only `moon-station`, so the wgpu chart backend, the X11 and
 #                 Wayland platform code and every `cfg(target_os = "linux")` path in the GUI crates
-#                 are compiled here and nowhere else. Uploads the binary as an artifact.
+#                 are compiled here and nowhere else. Runs the tests of the self-update steps
+#                 that exist on Linux only. Uploads the binary as an artifact.
 #   Linux smoke — starts that binary on a virtual display in images that carry only run-time
 #                 packages, and fails unless a window with a drawn frame comes up (on the one
 #                 image whose software Vulkan driver cannot show it: unless the window comes up
@@ -108,6 +109,13 @@ jobs:
         run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
       - name: Assert the refresh moved MoonUI and nothing else
         run: bash .github/scripts/assert-only-moonui-moved.sh
+      # The Linux halves of the self-update transaction (moon_core::update::swap: binding the
+      # parent process, swapping the executable with a backup, rolling back) compile on Linux
+      # only, so the Windows test job never runs them. This step is the one place CI does, and
+      # it comes first: it is minutes, and a mistake there leaves a user with no executable.
+      # The filter is quoted because a bare `update:: ` would read as a YAML mapping key.
+      - name: Test the update steps only Linux has
+        run: cargo test -p moon-core --lib 'update::' --target x86_64-unknown-linux-gnu
       # The release profile and the default features: the same set the Windows .exe ships.
       - name: Build the terminal
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-unknown-linux-gnu
