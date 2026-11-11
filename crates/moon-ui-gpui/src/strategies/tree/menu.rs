@@ -53,6 +53,7 @@ fn empty_folder_delete_entry(key: &str, count: usize) -> FolderDeleteEntry {
 /// Args:
 ///     selected_count: Selected folders, including the clicked row.
 ///     empty_count: Selected folders that the strict deletion plan can delete.
+///     selection_has_core: Whether a non-deletable core root is part of the selection.
 ///     clicked_block: Enabled strategies beneath the clicked folder, used only for one selection.
 ///
 /// Returns:
@@ -60,10 +61,13 @@ fn empty_folder_delete_entry(key: &str, count: usize) -> FolderDeleteEntry {
 fn folder_delete_entry(
     selected_count: usize,
     empty_count: usize,
+    selection_has_core: bool,
     clicked_block: Option<ops::DeleteBlock>,
 ) -> FolderDeleteEntry {
     if selected_count > 1 {
-        return empty_folder_delete_entry("strat.menu_delete_empty_folders", empty_count);
+        let mut entry = empty_folder_delete_entry("strat.menu_delete_empty_folders", empty_count);
+        entry.disabled |= selection_has_core;
+        return entry;
     }
     FolderDeleteEntry {
         label: t!("strat.menu_delete_folder").to_string(),
@@ -334,7 +338,12 @@ impl StrategiesView {
                         .map(|cd| ops::delete_block(&ops::rows_under(&cd.strategies, path)))
                         .unwrap_or(None)
                 };
-                let delete_entry = folder_delete_entry(selected.len(), empty_count, folder_block);
+                let delete_entry = folder_delete_entry(
+                    selected.len(),
+                    empty_count,
+                    selected.iter().any(|(_, path)| path.is_empty()),
+                    folder_block,
+                );
                 let mut delete_folder = MoonMenuItem::with_key("delete-folder", delete_entry.label)
                     .tone(MoonTone::Danger)
                     .disabled(delete_entry.disabled);

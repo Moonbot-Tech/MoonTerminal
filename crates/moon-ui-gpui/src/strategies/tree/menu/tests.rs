@@ -56,6 +56,7 @@ fn multi_folder_delete_counts_only_empty_targets_and_ignores_clicked_block() {
     let entry = folder_delete_entry(
         selected.len(),
         plan.targets.len(),
+        false,
         Some(DeleteBlock {
             enabled: 1,
             total: 1,
@@ -64,7 +65,16 @@ fn multi_folder_delete_counts_only_empty_targets_and_ignores_clicked_block() {
     assert_eq!(entry.label, "Delete empty folders (1)");
     assert!(!entry.disabled);
     assert!(entry.block.is_none());
-    assert!(folder_delete_entry(2, 0, None).disabled);
+    assert!(folder_delete_entry(2, 0, false, None).disabled);
+}
+
+/// A core root makes the dispatcher refuse the whole selection, so the menu cannot promise deletion.
+#[test]
+fn core_root_disables_multi_folder_delete() {
+    let _locale = crate::test_locale::force("en");
+    let entry = folder_delete_entry(2, 1, true, None);
+    assert_eq!(entry.label, "Delete empty folders (1)");
+    assert!(entry.disabled);
 }
 
 /// The multi-selection model must not weaken the existing one-folder enabled-strategy guard.
@@ -75,7 +85,7 @@ fn single_folder_delete_keeps_the_clicked_folder_block() {
         enabled: 1,
         total: 1,
     };
-    let entry = folder_delete_entry(1, 0, Some(block));
+    let entry = folder_delete_entry(1, 0, false, Some(block));
     assert_eq!(entry.label, "Delete folder…");
     assert!(entry.disabled);
     assert_eq!(entry.block, Some(block));
