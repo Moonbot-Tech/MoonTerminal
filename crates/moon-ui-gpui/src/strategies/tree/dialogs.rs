@@ -82,9 +82,9 @@ fn op_title(op: &TreeOp) -> String {
         TreeOp::RenameFolder { .. } => t!("dialogs.rename_folder").to_string(),
         TreeOp::RenameStrategy { .. } => t!("strat.rename_strategy_title").to_string(),
         TreeOp::MoveToFolder { .. } => t!("strat.move_to_title").to_string(),
-        TreeOp::ConfirmDeleteStrategies { .. } | TreeOp::ConfirmDeleteFolder { .. } => {
-            t!("dialogs.delete_q").to_string()
-        }
+        TreeOp::ConfirmDeleteStrategies { .. }
+        | TreeOp::ConfirmDeleteFolder { .. }
+        | TreeOp::ConfirmDeleteEmptyFolders { .. } => t!("dialogs.delete_q").to_string(),
         TreeOp::ConfirmForget { .. } => t!("strat.forget_title").to_string(),
     }
 }
@@ -97,9 +97,9 @@ fn op_ok_label(op: &TreeOp) -> String {
         TreeOp::RenameFolder { .. } | TreeOp::RenameStrategy { .. } => {
             t!("dialogs.rename").to_string()
         }
-        TreeOp::ConfirmDeleteStrategies { .. } | TreeOp::ConfirmDeleteFolder { .. } => {
-            t!("dialogs.yes").to_string()
-        }
+        TreeOp::ConfirmDeleteStrategies { .. }
+        | TreeOp::ConfirmDeleteFolder { .. }
+        | TreeOp::ConfirmDeleteEmptyFolders { .. } => t!("dialogs.yes").to_string(),
         TreeOp::ConfirmForget { .. } => t!("strat.forget_ok").to_string(),
         // Picked by clicking a destination, so the footer carries Cancel alone.
         TreeOp::MoveToFolder { .. } => t!("dialogs.cancel").to_string(),
@@ -111,6 +111,7 @@ fn op_has_close_button(op: &TreeOp) -> bool {
         op,
         TreeOp::ConfirmDeleteStrategies { .. }
             | TreeOp::ConfirmDeleteFolder { .. }
+            | TreeOp::ConfirmDeleteEmptyFolders { .. }
             | TreeOp::ConfirmForget { .. }
     )
 }
@@ -124,6 +125,7 @@ fn op_ok_is_danger(op: &TreeOp) -> bool {
         op,
         TreeOp::ConfirmDeleteStrategies { .. }
             | TreeOp::ConfirmDeleteFolder { .. }
+            | TreeOp::ConfirmDeleteEmptyFolders { .. }
             | TreeOp::ConfirmForget { .. }
     )
 }
@@ -403,6 +405,27 @@ fn op_dialog_body(
                 .child(t!("dialogs.delete_confirm", what = label).to_string())
                 .into_any_element(),
         ),
+        TreeOp::ConfirmDeleteEmptyFolders { candidates, .. } => {
+            let cores = candidates
+                .iter()
+                .map(|(core, _)| *core)
+                .collect::<HashSet<_>>()
+                .len();
+            Some(
+                div()
+                    .w_full()
+                    .text_color(moon(p.text))
+                    .child(
+                        t!(
+                            "strat.delete_empty_folders_confirm",
+                            n = candidates.len(),
+                            cores = cores
+                        )
+                        .to_string(),
+                    )
+                    .into_any_element(),
+            )
+        }
         TreeOp::MoveToFolder { core, sources, .. } => {
             let destinations = {
                 let backend = backend.read(cx);
@@ -530,7 +553,7 @@ fn op_dialog_footer(
                 .variant(ok_variant)
                 .label(ok_label)
                 .on_click(move |_, window, cx| {
-                    match ok_view.update(cx, |this, cx| this.confirm_op_dialog(cx)) {
+                    match ok_view.update(cx, |this, cx| this.confirm_op_dialog(window, cx)) {
                         Ok(true) => window.close_dialog(cx),
                         // Keep the dialog open when validation rejects an empty strategy name and
                         // explain the reason instead of failing silently.
@@ -843,7 +866,7 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        match self.confirm_op_dialog(cx) {
+        match self.confirm_op_dialog(window, cx) {
             Ok(close) => {
                 if !close {
                     window.push_notification(
@@ -867,11 +890,12 @@ impl StrategiesView {
     /// moves; an operation whose captured core is no longer visible closes without dispatch.
     ///
     /// Args:
+    ///     window: Native owner used to report the result of confirmed bulk cleanup.
     ///     cx: View context used to resolve inputs, effective selection, and session commands.
     ///
     /// Returns:
     ///     Whether the dialog may close, or a session dispatch error.
-    fn confirm_op_dialog(&mut self, cx: &mut Context<Self>) -> Result<bool> {
+    fn confirm_op_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<bool> {
         let Some(op) = self.op.clone() else {
             return Ok(true);
         };
@@ -959,6 +983,12 @@ impl StrategiesView {
                 ..
             } => {
                 self.delete_folder(core, &path, &targets, workspace_generation, cx)?;
+            }
+            TreeOp::ConfirmDeleteEmptyFolders {
+                candidates,
+                workspace_generation,
+            } => {
+                self.confirm_delete_empty_folders(&candidates, workspace_generation, window, cx);
             }
             TreeOp::RenameStrategy {
                 core,
@@ -1132,10 +1162,10 @@ impl StrategiesView {
             return;
         }
         let plan = self.empty_folder_plan(&folders, cx);
-        self.delete_empty_folders(plan, window, cx);
+        self.request_empty_folder_cleanup(plan, window, cx);
     }
 
-    /// Delete every strictly empty folder reported by the visible cores, plus local empty markers.
+    /// Request deletion of every strictly empty folder reported by visible cores and local markers.
     pub(super) fn request_delete_all_empty_folders(
         &mut self,
         window: &mut Window,
@@ -1143,7 +1173,39 @@ impl StrategiesView {
     ) {
         let folders = self.all_empty_folder_candidates(cx);
         let plan = self.empty_folder_plan(&folders, cx);
-        self.delete_empty_folders(plan, window, cx);
+        self.request_empty_folder_cleanup(plan, window, cx);
+    }
+
+    /// Stage one confirmation for the currently empty targets, or report an empty plan immediately.
+    ///
+    /// Args:
+    ///     plan: Strictly empty candidates classified from the request-time snapshot.
+    ///     window: Native owner used to present the dialog or the nothing-to-delete note.
+    ///     cx: View context used to capture workspace authority and construct dialog state.
+    ///
+    /// Returns:
+    ///     Nothing; a non-empty plan queues no command until confirmation.
+    fn request_empty_folder_cleanup(
+        &mut self,
+        plan: ops::EmptyFolderDeletePlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if plan.targets.is_empty() {
+            self.delete_empty_folders(plan, window, cx);
+            return;
+        }
+        let candidates = plan
+            .targets
+            .into_iter()
+            .map(|target| (target.core, target.path))
+            .collect();
+        self.op = Some(TreeOp::ConfirmDeleteEmptyFolders {
+            candidates,
+            workspace_generation: self.action_workspace_generation(cx),
+        });
+        self.open_op_dialog(window, cx);
+        cx.notify();
     }
 
     /// Collect the same visible-core candidates for both the menu count and the delete request.
@@ -1182,6 +1244,39 @@ impl StrategiesView {
             }
         }
         ops::empty_folder_delete_plan(&snapshots, folders)
+    }
+
+    /// Reclassify confirmed candidates against the current snapshot before queueing any deletion.
+    ///
+    /// Args:
+    ///     candidates: Exact folder identities captured when the confirmation opened.
+    ///     workspace_generation: Auto generation captured with the confirmation, or Classic.
+    ///     window: Native owner used to report deleted, skipped, and failed counts.
+    ///     cx: View context used to revalidate scope and read the current strategy snapshot.
+    ///
+    /// Returns:
+    ///     Nothing; stale workspace authority cancels the whole batch, and newly occupied folders
+    ///     are skipped by the fresh plan.
+    fn confirm_delete_empty_folders(
+        &mut self,
+        candidates: &[(CoreId, String)],
+        workspace_generation: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current_generation = self.action_workspace_generation(cx);
+        if !candidates.iter().all(|(core, _)| {
+            tree_op_authorized(
+                workspace_generation,
+                current_generation,
+                self.workspace_cores.as_deref(),
+                *core,
+            )
+        }) {
+            return;
+        }
+        let plan = self.empty_folder_plan(candidates, cx);
+        self.delete_empty_folders(plan, window, cx);
     }
 
     /// Queue conditional folder commands only; this path never deletes a strategy.

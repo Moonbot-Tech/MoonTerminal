@@ -105,6 +105,7 @@ strat.note_empty_folders_deleted: "Видалено порожніх папок:
 strat.note_empty_folders_skipped: "Видалено порожніх папок: %{deleted}; пропущено через наявність стратегій: %{skipped}"
 strat.note_no_empty_folders: "Немає порожніх папок для видалення"
 strat.note_empty_folders_failed: "Видалено порожніх папок: %{deleted}; пропущено через наявність стратегій: %{skipped}; не вдалося поставити в чергу: %{failed}"
+strat.delete_empty_folders_confirm: "Видалити порожні папки: %{n} на ядрах: %{cores}? Теки зі стратегіями залишаються без змін."
 strat.note_rename_one: "Вибрано стратегій: %{n} — перейменування працює з однією"
 strat.note_core_rename: "Ядро перейменовується в Налаштуваннях"
 strat.note_rename_sent: "Перейменування надіслано: %{old} -> %{new}"

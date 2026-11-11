@@ -143,7 +143,7 @@ fn enter_and_ok_share_tree_dialog_confirmation() {
         .split_once("impl StrategiesView")
         .expect("tree dialog footer end must be found")
         .0;
-    assert!(footer.contains("this.confirm_op_dialog(cx)"));
+    assert!(footer.contains("this.confirm_op_dialog(window, cx)"));
     assert!(footer.contains("dialogs.name_required"));
     let report = source
         .split_once("fn confirm_op_dialog_and_report(")
@@ -152,22 +152,64 @@ fn enter_and_ok_share_tree_dialog_confirmation() {
         .split_once("fn confirm_op_dialog(")
         .expect("shared confirmation reporter end must be found")
         .0;
-    assert!(report.contains("self.confirm_op_dialog(cx)"));
+    assert!(report.contains("self.confirm_op_dialog(window, cx)"));
     assert!(report.contains("dialogs.name_required"));
 }
 
-/// Both bulk entry points must reach the conditional empty-folder dispatcher, which has no strategy
-/// deletion call and reports exactly how many occupied folders the planner skipped.
+/// Restoring a direct dispatcher call in either bulk request would delete before the user confirms.
+/// The staging helper may dispatch only an empty plan to preserve the existing informational note.
+#[test]
+fn bulk_folder_delete_requests_stage_confirmation_without_queueing() {
+    let source = include_str!("../dialogs.rs");
+    for (entry, end) in [
+        (
+            "fn request_delete_target(",
+            "fn request_delete_all_empty_folders(",
+        ),
+        (
+            "fn request_delete_all_empty_folders(",
+            "fn request_empty_folder_cleanup(",
+        ),
+    ] {
+        let body = source
+            .split_once(entry)
+            .expect(entry)
+            .1
+            .split_once(end)
+            .expect(end)
+            .0;
+        assert!(body.contains("self.request_empty_folder_cleanup(plan, window, cx)"));
+        assert!(!body.contains("delete_empty_folders("));
+        assert!(!body.contains(".delete_empty_folder("));
+    }
+
+    let staging = source
+        .split_once("fn request_empty_folder_cleanup(")
+        .expect("bulk confirmation staging must exist")
+        .1
+        .split_once("pub(super) fn all_empty_folder_candidates(")
+        .expect("bulk confirmation staging end must be found")
+        .0;
+    let empty = staging
+        .find("if plan.targets.is_empty()")
+        .expect("an empty plan must keep the existing note");
+    let note = staging
+        .find("self.delete_empty_folders(plan, window, cx);")
+        .expect("only the empty plan may reach the dispatcher during staging");
+    let staged = staging
+        .find("self.op = Some(TreeOp::ConfirmDeleteEmptyFolders")
+        .expect("a non-empty plan must stage the confirmation");
+    assert!(empty < note && note < staged);
+    assert!(staging[note..staged].contains("return;"));
+    assert!(staging.contains("self.open_op_dialog(window, cx);"));
+    assert!(!staging.contains(".delete_empty_folder("));
+}
+
+/// Both bulk entry points must retain the conditional dispatcher, which never deletes a strategy
+/// and reports exactly how many occupied folders the confirmation-time planner skipped.
 #[test]
 fn bulk_folder_delete_is_conditional_and_never_deletes_strategies() {
     let source = include_str!("../dialogs.rs");
-    for entry in [
-        "fn request_delete_target(",
-        "fn request_delete_all_empty_folders(",
-    ] {
-        let body = source.split_once(entry).expect(entry).1;
-        assert!(body.contains("self.delete_empty_folders(plan, window, cx)"));
-    }
     let dispatch = source
         .split_once("fn delete_empty_folders(")
         .expect("bulk empty-folder dispatcher must exist")
@@ -178,6 +220,71 @@ fn bulk_folder_delete_is_conditional_and_never_deletes_strategies() {
     assert!(dispatch.contains(".delete_empty_folder("));
     assert!(!dispatch.contains(".delete_strategy("));
     assert!(dispatch.contains("skipped: plan.skipped_non_empty"));
+}
+
+/// Reusing the request-time plan would delete a folder that gained a strategy behind the dialog.
+/// Confirmation must revalidate scope and classify the captured identities against current rows.
+#[test]
+fn bulk_folder_delete_confirmation_replans_current_snapshot() {
+    let source = include_str!("../dialogs.rs");
+    let confirm = source
+        .split_once("fn confirm_delete_empty_folders(")
+        .expect("bulk empty-folder confirmation must exist")
+        .1
+        .split_once("fn delete_empty_folders(")
+        .expect("bulk confirmation end must be found")
+        .0;
+    let authority = confirm
+        .find("tree_op_authorized(")
+        .expect("confirmation must revalidate workspace authority");
+    let replan = confirm
+        .find("self.empty_folder_plan(candidates, cx)")
+        .expect("confirmation must reclassify the captured candidates");
+    let dispatch = confirm
+        .find("self.delete_empty_folders(plan, window, cx);")
+        .expect("only the fresh plan may reach deletion");
+    assert!(authority < replan && replan < dispatch);
+
+    let candidates = vec![(7, "empty".to_string()), (7, "occupied-later".to_string())];
+    let before = Vec::new();
+    let opened = super::ops::empty_folder_delete_plan(&[(7, before.as_slice())], &candidates);
+    assert_eq!(opened.targets.len(), 2);
+
+    let current = [moon_core::feed::StrategyRow {
+        id: 42,
+        name: "arrived".to_string(),
+        kind: "Long".to_string(),
+        kind_ordinal: 1,
+        folder_path: "occupied-later".to_string(),
+        checked: false,
+        is_short: false,
+        fields: Vec::new(),
+    }];
+    let confirmed = super::ops::empty_folder_delete_plan(&[(7, current.as_slice())], &candidates);
+    assert_eq!(confirmed.skipped_non_empty, 1);
+    assert_eq!(
+        confirmed
+            .targets
+            .iter()
+            .map(|target| target.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["empty"]
+    );
+    assert_eq!(
+        confirmed.targets[0].expected_placements,
+        vec![(42, "occupied-later".to_string())]
+    );
+}
+
+/// The confirmation names both the folder and core counts and warns that occupied folders remain.
+#[test]
+fn bulk_folder_delete_confirmation_text_has_counts_and_safety_note() {
+    let _locale = crate::test_locale::force("en");
+    let text = rust_i18n::t!("strat.delete_empty_folders_confirm", n = 3, cores = 2);
+    assert_eq!(
+        text,
+        "Delete 3 empty folders on 2 cores? Folders containing strategies are left untouched."
+    );
 }
 
 /// The occupied-folder count is user-visible and explicitly says that containing strategies is why

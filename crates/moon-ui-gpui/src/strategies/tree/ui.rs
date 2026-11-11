@@ -131,6 +131,11 @@ pub(crate) enum TreeOp {
         targets: Vec<Key>,
         workspace_generation: Option<u64>,
     },
+    /// Confirm bulk deletion of folders that were strictly empty when the dialog opened.
+    ConfirmDeleteEmptyFolders {
+        candidates: Vec<(CoreId, String)>,
+        workspace_generation: Option<u64>,
+    },
     /// Confirm an IRREVERSIBLE purge of deleted strategies and their whole version history.
     ///
     /// The one new confirmation in this window, and it earns it: every other action here either
