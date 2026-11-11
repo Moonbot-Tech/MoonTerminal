@@ -1141,29 +1141,32 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let folders = {
-            let backend = self.backend.read(cx);
-            let cores = visible_strategy_cores(self, backend);
-            let store = backend.session.store();
-            let mut folders = Vec::new();
-            for (core, _) in cores.iter() {
-                if let Some(data) = store.core(*core) {
-                    folders.extend(data.folders.paths.iter().map(|path| (*core, path.clone())));
-                }
-                folders.extend(
-                    self.ui_folder_paths(*core)
-                        .into_iter()
-                        .map(|path| (*core, strategy_path::join_path(&path))),
-                );
-            }
-            folders
-        };
+        let folders = self.all_empty_folder_candidates(cx);
         let plan = self.empty_folder_plan(&folders, cx);
         self.delete_empty_folders(plan, window, cx);
     }
 
+    /// Collect the same visible-core candidates for both the menu count and the delete request.
+    pub(super) fn all_empty_folder_candidates(&self, cx: &Context<Self>) -> Vec<(CoreId, String)> {
+        let backend = self.backend.read(cx);
+        let cores = visible_strategy_cores(self, backend);
+        let store = backend.session.store();
+        let mut folders = Vec::new();
+        for (core, _) in cores.iter() {
+            if let Some(data) = store.core(*core) {
+                folders.extend(data.folders.paths.iter().map(|path| (*core, path.clone())));
+            }
+            folders.extend(
+                self.ui_folder_paths(*core)
+                    .into_iter()
+                    .map(|path| (*core, strategy_path::join_path(&path))),
+            );
+        }
+        folders
+    }
+
     /// Capture current placements once and classify every candidate against the same live snapshot.
-    fn empty_folder_plan(
+    pub(super) fn empty_folder_plan(
         &self,
         folders: &[(CoreId, String)],
         cx: &Context<Self>,

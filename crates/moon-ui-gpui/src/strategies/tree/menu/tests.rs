@@ -1,7 +1,9 @@
 //! Regression tests for reorder menu entries and empty-folder refusal.
 
-use super::reorder_entries;
-use crate::strategies::tree::ops::{MoveStep, reorder_folder_step};
+use super::{empty_folder_delete_entry, folder_delete_entry, reorder_entries};
+use crate::strategies::tree::ops::{
+    DeleteBlock, MoveStep, empty_folder_delete_plan, reorder_folder_step,
+};
 use moon_core::feed::StrategyRow;
 
 /// A right-click inside a multi-folder selection must not bypass strict bulk deletion and delete the
@@ -18,6 +20,65 @@ fn folder_delete_menu_uses_the_current_selection_route() {
         .0;
     assert!(folder.contains("this.request_delete_target(window, cx)"));
     assert!(!folder.contains("this.request_delete_folder("));
+}
+
+/// Dropping the count or enabling a zero-target action would promise cleanup that cannot run.
+#[test]
+fn all_cores_empty_folder_menu_counts_targets_and_disables_at_zero() {
+    let _locale = crate::test_locale::force("en");
+    let some = empty_folder_delete_entry("strat.menu_delete_empty_all_cores", 2);
+    assert_eq!(some.label, "Delete empty folders in every visible core (2)");
+    assert!(!some.disabled);
+
+    let none = empty_folder_delete_entry("strat.menu_delete_empty_all_cores", 0);
+    assert_eq!(none.label, "Delete empty folders in every visible core (0)");
+    assert!(none.disabled);
+}
+
+/// Counting the clicked folder's enabled strategies as a block would disable valid bulk cleanup.
+#[test]
+fn multi_folder_delete_counts_only_empty_targets_and_ignores_clicked_block() {
+    let _locale = crate::test_locale::force("en");
+    let rows = [StrategyRow {
+        id: 1,
+        name: "Example".into(),
+        kind: "Long".into(),
+        kind_ordinal: 1,
+        folder_path: "occupied".into(),
+        checked: true,
+        is_short: false,
+        fields: Vec::new(),
+    }];
+    let selected = [(7, "empty".to_string()), (7, "occupied".to_string())];
+    let plan = empty_folder_delete_plan(&[(7, rows.as_slice())], &selected);
+    assert_eq!(plan.skipped_non_empty, 1);
+
+    let entry = folder_delete_entry(
+        selected.len(),
+        plan.targets.len(),
+        Some(DeleteBlock {
+            enabled: 1,
+            total: 1,
+        }),
+    );
+    assert_eq!(entry.label, "Delete empty folders (1)");
+    assert!(!entry.disabled);
+    assert!(entry.block.is_none());
+    assert!(folder_delete_entry(2, 0, None).disabled);
+}
+
+/// The multi-selection model must not weaken the existing one-folder enabled-strategy guard.
+#[test]
+fn single_folder_delete_keeps_the_clicked_folder_block() {
+    let _locale = crate::test_locale::force("en");
+    let block = DeleteBlock {
+        enabled: 1,
+        total: 1,
+    };
+    let entry = folder_delete_entry(1, 0, Some(block));
+    assert_eq!(entry.label, "Delete folder…");
+    assert!(entry.disabled);
+    assert_eq!(entry.block, Some(block));
 }
 
 /// Omitting the folder actions or enabling an empty folder would make the menu disagree with arrows.
@@ -56,9 +117,9 @@ fn folder_menu_keeps_both_directions_and_explains_empty_refusal() {
     );
 }
 
-/// A longer translation or a smaller fitted-menu cap must not clip the new batch action.
+/// A longer translation or a smaller fitted-menu cap must not clip a counted batch action.
 #[gpui::test]
-fn forget_all_cores_label_fits_every_locale(cx: &mut gpui::TestAppContext) {
+fn batch_action_labels_fit_every_locale(cx: &mut gpui::TestAppContext) {
     use moon_core::config::{Language, UiThemeMode};
     use moon_ui::{MoonMenuSize, MoonSize, MoonTheme};
 
@@ -76,20 +137,31 @@ fn forget_all_cores_label_fits_every_locale(cx: &mut gpui::TestAppContext) {
                     MoonMenuSize::Custom { .. } => MoonSize::Sm,
                 };
                 let metrics = tier.control_metrics();
-                let label = rust_i18n::t!("strat.menu_forget_all_cores", n = 99999).to_string();
-                let text =
-                    crate::design::ui_text_width_zoomed(cx, &label, metrics.font_size, 600.0, true);
                 // MoonUI dropdown/layout.rs: outer pads, border, row pads, check slot and gaps.
                 let chrome = crate::design::ui_value(cx, 4.0) * 2.0
                     + 2.0
                     + crate::design::ui_value(cx, metrics.pad_x) * 2.0
                     + crate::design::ui_value(cx, 12.0)
                     + crate::design::ui_value(cx, metrics.gap) * 2.0;
-                assert!(
-                    text + chrome <= crate::design::ui_value(cx, super::MENU_MAX_WIDTH),
-                    "batch forget caption exceeds the fitted menu cap in {}",
-                    language.code()
-                );
+                for key in [
+                    "strat.menu_forget_all_cores",
+                    "strat.menu_delete_empty_all_cores",
+                    "strat.menu_delete_empty_folders",
+                ] {
+                    let label = rust_i18n::t!(key, n = 99999).to_string();
+                    let text = crate::design::ui_text_width_zoomed(
+                        cx,
+                        &label,
+                        metrics.font_size,
+                        600.0,
+                        true,
+                    );
+                    assert!(
+                        text + chrome <= crate::design::ui_value(cx, super::MENU_MAX_WIDTH),
+                        "batch caption {label} exceeds the fitted menu cap in {}",
+                        language.code()
+                    );
+                }
             });
         }
     }

@@ -12,10 +12,9 @@ use rust_i18n::t;
 /// rendering as a cramped stub. Unlike the retired fixed width, a fitted minimum is multiplied by
 /// the theme's text scale, so the menu now follows the font slider like the rest of the UI.
 const MENU_MIN_WIDTH: f32 = 190.0;
-/// Maximum outer width at that same reference size. Every current label is a locale constant that
-/// fits well inside it; the cap exists so a longer translation widens the menu instead of stretching
-/// it across the pane.
-const MENU_MAX_WIDTH: f32 = 460.0;
+/// Maximum outer width at that same reference size. Counted cleanup labels in every locale fit
+/// inside it; the cap lets their translations widen the menu without stretching it across the pane.
+const MENU_MAX_WIDTH: f32 = 560.0;
 
 /// Pure reorder-menu model shared by folder and strategy rows.
 struct ReorderEntry {
@@ -24,6 +23,53 @@ struct ReorderEntry {
     label: String,
     right_label: String,
     enabled: bool,
+}
+
+/// Presentation of a folder-delete menu action, independent of MoonUI and view state.
+struct FolderDeleteEntry {
+    label: String,
+    disabled: bool,
+    block: Option<ops::DeleteBlock>,
+}
+
+/// Build a counted empty-folder action that is unavailable when there is nothing to delete.
+///
+/// Args:
+///     key: Locale key whose label accepts the `n` count.
+///     count: Strictly empty folders in the action's current plan.
+///
+/// Returns:
+///     The localized label and disabled state, with no single-folder block reason.
+fn empty_folder_delete_entry(key: &str, count: usize) -> FolderDeleteEntry {
+    FolderDeleteEntry {
+        label: t!(key, n = count).to_string(),
+        disabled: count == 0,
+        block: None,
+    }
+}
+
+/// Resolve folder deletion from the whole selection while preserving the single-folder guard.
+///
+/// Args:
+///     selected_count: Selected folders, including the clicked row.
+///     empty_count: Selected folders that the strict deletion plan can delete.
+///     clicked_block: Enabled strategies beneath the clicked folder, used only for one selection.
+///
+/// Returns:
+///     The selection-aware label, disabled state, and optional enabled-strategy reason.
+fn folder_delete_entry(
+    selected_count: usize,
+    empty_count: usize,
+    clicked_block: Option<ops::DeleteBlock>,
+) -> FolderDeleteEntry {
+    if selected_count > 1 {
+        return empty_folder_delete_entry("strat.menu_delete_empty_folders", empty_count);
+    }
+    FolderDeleteEntry {
+        label: t!("strat.menu_delete_folder").to_string(),
+        disabled: clicked_block.is_some(),
+        block: clicked_block,
+    }
 }
 
 /// Keep both directions visible, explaining why an empty folder cannot store an order.
@@ -272,20 +318,27 @@ impl StrategiesView {
                         }
                     }),
                 );
-                let folder_block = {
+                let selected = selected_folders(self);
+                let multi_select = selected.len() > 1;
+                let empty_count = if multi_select {
+                    self.empty_folder_plan(&selected, cx).targets.len()
+                } else {
+                    0
+                };
+                let folder_block = if multi_select {
+                    None
+                } else {
                     let store = self.backend.read(cx).session.store();
                     store
                         .core(core)
                         .map(|cd| ops::delete_block(&ops::rows_under(&cd.strategies, path)))
                         .unwrap_or(None)
                 };
-                let mut delete_folder = MoonMenuItem::with_key(
-                    "delete-folder",
-                    t!("strat.menu_delete_folder").to_string(),
-                )
-                .tone(MoonTone::Danger)
-                .disabled(folder_block.is_some());
-                if let Some(block) = folder_block {
+                let delete_entry = folder_delete_entry(selected.len(), empty_count, folder_block);
+                let mut delete_folder = MoonMenuItem::with_key("delete-folder", delete_entry.label)
+                    .tone(MoonTone::Danger)
+                    .disabled(delete_entry.disabled);
+                if let Some(block) = delete_entry.block {
                     delete_folder = delete_folder
                         .right_label(t!("strat.reason_enabled", n = block.enabled).to_string());
                 }
@@ -423,21 +476,25 @@ impl StrategiesView {
                         });
                     }
                 }));
+                let empty_count = {
+                    let folders = self.all_empty_folder_candidates(cx);
+                    self.empty_folder_plan(&folders, cx).targets.len()
+                };
+                let delete_entry =
+                    empty_folder_delete_entry("strat.menu_delete_empty_all_cores", empty_count);
                 items.push(
-                    MoonMenuItem::with_key(
-                        "delete-empty-folders-all-cores",
-                        t!("strat.menu_delete_empty_all_cores").to_string(),
-                    )
-                    .tone(MoonTone::Danger)
-                    .on_click({
-                        let view = view.clone();
-                        move |_, window, app| {
-                            window.close_context_menu(app);
-                            view.update(app, |this, cx| {
-                                this.request_delete_all_empty_folders(window, cx);
-                            });
-                        }
-                    }),
+                    MoonMenuItem::with_key("delete-empty-folders-all-cores", delete_entry.label)
+                        .tone(MoonTone::Danger)
+                        .disabled(delete_entry.disabled)
+                        .on_click({
+                            let view = view.clone();
+                            move |_, window, app| {
+                                window.close_context_menu(app);
+                                view.update(app, |this, cx| {
+                                    this.request_delete_all_empty_folders(window, cx);
+                                });
+                            }
+                        }),
                 );
                 items.push(MoonMenuItem::separator());
                 items.push(
