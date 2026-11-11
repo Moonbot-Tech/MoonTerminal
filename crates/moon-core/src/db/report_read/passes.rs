@@ -219,10 +219,25 @@ fn run_row_pass(
         rows,
         ..pass.filter.clone()
     };
+    // A date column sorts by the instant its cell prints, so cores on different clocks are queried
+    // as separate branches; a source without the column cannot be split by it.
+    let splits = date_sort_splits(&scoped, sort_col);
+    let unsplit = [None];
+    let date_sort = splits.len() > 1;
     // Query the top N from EACH source separately so indexes work, then merge below.
     let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
-    for src in pass.sources {
+    for (src, split) in pass.sources.iter().flat_map(|src| {
+        let branches = if src.cols.contains(sort_col) {
+            &splits[..]
+        } else {
+            &unsplit[..]
+        };
+        branches.iter().map(move |split| (src, split))
+    }) {
         let (mut where_sql, mut params) = build_where(&scoped, &src.cols, pass.meta);
+        if let Some(split) = split {
+            where_sql.push_str(split);
+        }
         if let Some(RowKey::Entry(entry_ms)) = pass.row_key {
             if !src.cols.contains("buydate") || !src.cols.contains("closedate") {
                 continue;
@@ -397,9 +412,27 @@ fn run_row_pass(
     }
 
     // Merge with NULL always last, like `{col} IS NULL` in SQL, then apply direction.
+    // A split date sort compares the corrected instant, the one the cell prints.
+    fn key<'a>(
+        row: &'a (u64, i64, Vec<Value>),
+        sort_ix: Option<usize>,
+        axis: Option<&crate::db::ReportAxis>,
+    ) -> std::borrow::Cow<'a, Value> {
+        match (sort_ix.and_then(|i| row.2.get(i)), axis) {
+            // The cell reads a REAL stamp as its whole seconds, so the merge does too.
+            (Some(Value::Integer(secs)), Some(axis)) => {
+                std::borrow::Cow::Owned(Value::Integer(axis.to_utc(*secs, row.0)))
+            }
+            (Some(Value::Real(secs)), Some(axis)) => {
+                std::borrow::Cow::Owned(Value::Integer(axis.to_utc(*secs as i64, row.0)))
+            }
+            (Some(value), _) => std::borrow::Cow::Borrowed(value),
+            (None, _) => std::borrow::Cow::Owned(Value::Null),
+        }
+    }
+    let axis = date_sort.then_some(&scoped.axis);
     merged.sort_by(|a, b| {
-        let va = sort_ix.and_then(|i| a.2.get(i)).unwrap_or(&Value::Null);
-        let vb = sort_ix.and_then(|i| b.2.get(i)).unwrap_or(&Value::Null);
+        let (va, vb): (&Value, &Value) = (&key(a, sort_ix, axis), &key(b, sort_ix, axis));
         match (matches!(va, Value::Null), matches!(vb, Value::Null)) {
             (true, true) => std::cmp::Ordering::Equal,
             (true, false) => std::cmp::Ordering::Greater,
