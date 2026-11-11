@@ -51,3 +51,39 @@ fn an_empty_cell_sorts_last_in_both_directions() {
         assert_eq!(coins, expected, "{dir:?}");
     }
 }
+
+/// A text column that mixes numerals and names — strategies called `9`, `10` and `1A` — still
+/// orders the same whatever order the trades arrive in.
+///
+/// `sort_by` needs a total order. Reading numbers only where both cells parse made a cycle:
+/// `1A < 9` as text, `9 < 10` as numbers, `10 < 1A` as text, so the listed order depended on the
+/// read order (and the standard sort may panic on such a comparator). `aggregate::key_order`
+/// already names this hazard; the expected order here keeps every name before every numeral, as
+/// it does for its mixed quantile column: `1A`, then `9`, then `10`.
+#[test]
+fn a_column_mixing_numerals_and_names_orders_the_same_from_any_input_order() {
+    let named = |name: &str, close_ms: i64| {
+        let mut trade = Trade::sample(1, 1, "ACE", close_ms, 1.0);
+        trade.name = std::sync::Arc::from(name);
+        trade
+    };
+    let (a, b, c) = (named("1A", 1_000), named("9", 2_000), named("10", 3_000));
+    let want = Want::default();
+    let sort = [super::super::aggregate::Sort {
+        by: "strategy_name".into(),
+        dir: Dir::Asc,
+    }];
+    for input in [
+        [&a, &b, &c],
+        [&a, &c, &b],
+        [&b, &a, &c],
+        [&b, &c, &a],
+        [&c, &a, &b],
+        [&c, &b, &a],
+    ] {
+        let mut trades = input.to_vec();
+        order(&mut trades, &sort, &want);
+        let names: Vec<&str> = trades.iter().map(|t| &*t.name).collect();
+        assert_eq!(names, ["1A", "9", "10"]);
+    }
+}

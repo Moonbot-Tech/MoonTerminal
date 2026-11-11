@@ -163,7 +163,12 @@ fn compare(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::String(x), Value::String(y)) => match (x.parse::<u64>(), y.parse::<u64>()) {
             // Ids travel as decimal strings and must order as numbers.
             (Ok(x), Ok(y)) => x.cmp(&y),
-            _ => x.cmp(y),
+            // A column mixing numerals and names keeps every numeral after every name, as
+            // `aggregate::key_order` does: comparing numbers only where both parse is no total
+            // order (`1A < 9 < 10 < 1A`), and the sort may misorder or panic on one.
+            (Ok(_), Err(_)) => Ordering::Greater,
+            (Err(_), Ok(_)) => Ordering::Less,
+            (Err(_), Err(_)) => x.cmp(y),
         },
         _ => a.to_string().cmp(&b.to_string()),
     }
