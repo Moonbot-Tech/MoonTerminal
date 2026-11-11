@@ -85,6 +85,7 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
             None => host.session().core_venues().clone(),
         },
         groups: host.report_groups(),
+        host: host.kind(),
     };
     let store_ptr = Arc::as_ptr(store).addr();
     let state = host.state_mut();

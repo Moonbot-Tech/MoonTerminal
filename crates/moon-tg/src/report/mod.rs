@@ -19,8 +19,8 @@ use std::sync::mpsc::SyncSender;
 
 use crate::notify::trades::ClosedTrade;
 
-use crate::TgHost;
 use crate::labels::{answer, navigation_keyboard, section_label};
+use crate::{HostKind, TgHost};
 use moon_core::telegram::api::ReplyMarkup;
 
 mod drill;
@@ -200,6 +200,7 @@ pub(crate) fn telegram_report(
     let names = db::CoreNames::from_servers(&host.config().servers);
     let venues = host.session().core_venues().clone();
     let groups = host.report_groups();
+    let host_kind = host.kind();
     let read_access = access.clone();
     host.state_mut().report_pending = true;
     host.spawn(Box::new(move || {
@@ -215,6 +216,7 @@ pub(crate) fn telegram_report(
             venues,
             read_access,
             groups,
+            host_kind,
         );
         Box::new(move |host: &mut dyn TgHost| {
             host.state_mut().report_pending = false;
@@ -315,6 +317,7 @@ fn read_page(
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     access: TelegramReportAccess,
     groups: Vec<CoreGroup>,
+    host: HostKind,
 ) -> db::ReadResult<Page> {
     let conn = db::open_reader()?;
     read_page_with(
@@ -327,6 +330,7 @@ fn read_page(
         layout,
         &names,
         &groups,
+        host,
         |cores| {
             order.sort_by(cores, |(id, _)| *id);
             (venues, access)
@@ -362,6 +366,7 @@ fn read_page_on(
         ReportLayout::default(),
         names,
         &[],
+        HostKind::Station,
         order,
     )
 }
@@ -373,6 +378,8 @@ fn read_page_on(
 /// lists one summary per group. Both query each group's total over its cores, so overlapping
 /// membership counts in each group while the headline counts every core once.
 /// The supplied layout also sizes the pages and their repeated group headers.
+/// A terminal host with no saved groups reads the Groups view as Cores: its groups are its own
+/// saved list, so none will arrive. A station's empty list means groups not synced yet.
 #[allow(clippy::too_many_arguments)]
 fn read_page_with(
     conn: &rusqlite::Connection,
@@ -384,6 +391,7 @@ fn read_page_with(
     layout: ReportLayout,
     names: &db::CoreNames,
     groups: &[CoreGroup],
+    host: HostKind,
     order: impl FnOnce(
         &mut [(u64, String)],
     ) -> (
@@ -456,6 +464,9 @@ fn read_page_with(
         date_from: Some(from),
         date_to: Some(to),
     };
+    if groups.is_empty() && host == HostKind::Terminal {
+        request.by_group = false;
+    }
     let groups_missing =
         groups.is_empty() && request.by_group && !request.daily && !request.by_exchange;
     if request.scope != ReportScope::All && !request.daily && !request.by_group {
@@ -736,6 +747,8 @@ pub(crate) struct AutoInputs {
     pub(crate) venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     /// The bot's saved groups, shared by core sections and group summaries.
     pub(crate) groups: Vec<CoreGroup>,
+    /// Which process reads: decides what an empty `groups` means.
+    pub(crate) host: HostKind,
 }
 
 /// Read one automatic report: the report a button opens, over the slot's frozen period, in the
@@ -766,6 +779,7 @@ pub(crate) fn read_auto_report(
         inputs.layout.clone(),
         &inputs.names,
         &inputs.groups,
+        inputs.host,
         |cores| {
             inputs.order.sort_by(cores, |(id, _)| *id);
             (inputs.venues.clone(), access.clone())

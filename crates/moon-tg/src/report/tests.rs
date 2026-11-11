@@ -510,6 +510,7 @@ fn report_four_columns_page_within_rich_message_caps_and_auto_uses_layout() {
             layout.clone(),
             &Default::default(),
             &groups,
+            crate::HostKind::Station,
             |cores| {
                 cores.sort_by_key(|(id, _)| *id);
                 (Default::default(), super::TelegramReportAccess::Owner)
@@ -545,6 +546,7 @@ fn report_four_columns_page_within_rich_message_caps_and_auto_uses_layout() {
         names: Default::default(),
         venues: Default::default(),
         groups,
+        host: crate::HostKind::Station,
     };
     let window = moon_core::telegram::report::AutoWindow {
         at: 201,
@@ -2016,6 +2018,7 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
         names: Default::default(),
         venues: Default::default(),
         groups: Vec::new(),
+        host: crate::HostKind::Station,
     };
     let caption = |title: &str| super::AutoCaption {
         title: title.into(),
@@ -2209,6 +2212,7 @@ fn cores_are_listed_under_their_groups() {
             moon_core::config::ReportLayout::default(),
             &Default::default(),
             &groups,
+            crate::HostKind::Station,
             |cores| {
                 cores.sort_by_key(|(id, _)| *id);
                 (Default::default(), super::TelegramReportAccess::Owner)
@@ -2307,6 +2311,7 @@ fn cores_are_listed_under_their_groups() {
         moon_core::config::ReportLayout::default(),
         &Default::default(),
         &all,
+        crate::HostKind::Station,
         |_| (Default::default(), super::TelegramReportAccess::Owner),
     )
     .unwrap();
@@ -2362,6 +2367,7 @@ fn groups_summarize_activity_and_keep_the_scope_total() {
             moon_core::config::ReportLayout::default(),
             &Default::default(),
             groups,
+            crate::HostKind::Station,
             |_| (Default::default(), access),
         )
         .unwrap()
@@ -2482,6 +2488,7 @@ fn groups_choice_survives_restart_and_period_changes() {
             Default::default(),
             &Default::default(),
             &groups,
+            crate::HostKind::Station,
             |_| (Default::default(), TelegramReportAccess::Owner),
         )
         .unwrap();
@@ -2633,6 +2640,7 @@ fn groups_pages_fit_the_saved_layout() {
             },
             &Default::default(),
             &groups,
+            crate::HostKind::Station,
             |_| (Default::default(), super::TelegramReportAccess::Owner),
         )
         .unwrap();
@@ -3048,6 +3056,7 @@ fn groups_missing_shows_localized_note_and_total_without_core_rows() {
                 ReportLayout::default(),
                 &Default::default(),
                 &[],
+                crate::HostKind::Station,
                 |_| (Default::default(), access.clone()),
             )
             .unwrap();
@@ -3107,6 +3116,7 @@ fn groups_missing_empty_period_keeps_note_and_totals_table() {
             ReportLayout::default(),
             &Default::default(),
             &[],
+            crate::HostKind::Station,
             |_| (Default::default(), TelegramReportAccess::Owner),
         )
         .unwrap();
@@ -3159,6 +3169,7 @@ fn chat_report_sliced_reads_match_per_row_totals() {
         ReportLayout::default(),
         &Default::default(),
         &[],
+        crate::HostKind::Station,
         |_| panic!("invalid calendar range must return before database reads"),
     );
     assert!(format!("{:?}", invalid.err().unwrap()).contains("calendar range"));
@@ -3214,6 +3225,7 @@ fn chat_report_sliced_reads_match_per_row_totals() {
                         ReportLayout::default(),
                         &Default::default(),
                         &groups,
+                        crate::HostKind::Station,
                         order,
                     )
                     .unwrap();
@@ -3276,6 +3288,7 @@ fn chat_report_sliced_bench() {
         ReportLayout::default(),
         &Default::default(),
         &[],
+        crate::HostKind::Station,
         |_| (Default::default(), TelegramReportAccess::Owner),
     )
     .unwrap();
@@ -3339,6 +3352,7 @@ fn paged_details_preserve_distinct_archived_cores_with_the_same_name() {
             Default::default(),
             &Default::default(),
             &groups,
+            crate::HostKind::Station,
             |cores| {
                 cores.sort_by_key(|(id, _)| *id);
                 (Default::default(), super::TelegramReportAccess::Owner)
@@ -3420,4 +3434,35 @@ fn mini_app_utc_top_n_segment_merge() {
     assert_eq!(trades.len(), 50);
     assert_eq!((trades[0].core_uid, trades[0].close_utc), (2, 9000));
     assert_eq!(trades.last().unwrap().close_utc, 8426);
+}
+
+/// A terminal-hosted bot with no saved groups has no station to wait for: keep the core rows.
+#[test]
+fn groups_view_without_groups_on_the_terminal_host_promises_no_station_send() {
+    use moon_core::config::telegram_menu::ReportView;
+    let _locale = crate::test_locale::force("en");
+    let conn = sliced_fixture(2, 1);
+    let page = super::read_page_with(
+        &conn,
+        ReportRequest::new(Period::Today, false).in_view(ReportView::Groups),
+        0,
+        1000,
+        chrono_tz::UTC,
+        ReportBasis::Close,
+        ReportLayout::default(),
+        &Default::default(),
+        &[],
+        crate::HostKind::Terminal,
+        |_| (Default::default(), TelegramReportAccess::Owner),
+    )
+    .unwrap();
+    let Response::Rich { html, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
+        panic!("expected report")
+    };
+    assert!(!html.contains(&*t!("telegram.report_groups_missing")));
+    assert!(html.contains("Core 1") && html.contains("Core 2"));
 }
