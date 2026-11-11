@@ -37,6 +37,7 @@ fn scheduled_reports_follow_the_chat_pick_and_only_fall_back_when_unset() {
             name: "GROUP_A".into(),
             cores: vec![1],
         }],
+        host: crate::HostKind::Station,
     };
     for (saved, expected, label) in [
         (

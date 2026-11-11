@@ -65,6 +65,7 @@ fn fixture_with_groups(
         ReportLayout::default(),
         &Default::default(),
         groups_override.unwrap_or(&groups),
+        crate::HostKind::Station,
         |_| {
             let mut venues = std::collections::HashMap::new();
             for id in (1..=active).chain([90, 91, 99]) {
