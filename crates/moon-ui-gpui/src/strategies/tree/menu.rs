@@ -272,7 +272,6 @@ impl StrategiesView {
                         }
                     }),
                 );
-                let pp = path.clone();
                 let folder_block = {
                     let store = self.backend.read(cx).session.store();
                     store
@@ -295,7 +294,7 @@ impl StrategiesView {
                     move |_, window, app| {
                         window.close_context_menu(app);
                         view.update(app, |this, cx| {
-                            this.request_delete_folder(core, pp.clone(), window, cx);
+                            this.request_delete_target(window, cx);
                         });
                     }
                 }));
@@ -424,6 +423,22 @@ impl StrategiesView {
                         });
                     }
                 }));
+                items.push(
+                    MoonMenuItem::with_key(
+                        "delete-empty-folders-all-cores",
+                        t!("strat.menu_delete_empty_all_cores").to_string(),
+                    )
+                    .tone(MoonTone::Danger)
+                    .on_click({
+                        let view = view.clone();
+                        move |_, window, app| {
+                            window.close_context_menu(app);
+                            view.update(app, |this, cx| {
+                                this.request_delete_all_empty_folders(window, cx);
+                            });
+                        }
+                    }),
+                );
                 items.push(MoonMenuItem::separator());
                 items.push(
                     MoonMenuItem::with_key(

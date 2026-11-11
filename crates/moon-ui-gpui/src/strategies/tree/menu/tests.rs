@@ -4,6 +4,22 @@ use super::reorder_entries;
 use crate::strategies::tree::ops::{MoveStep, reorder_folder_step};
 use moon_core::feed::StrategyRow;
 
+/// A right-click inside a multi-folder selection must not bypass strict bulk deletion and delete the
+/// clicked folder's disabled strategies through the one-folder path.
+#[test]
+fn folder_delete_menu_uses_the_current_selection_route() {
+    let source = include_str!("../menu.rs");
+    let folder = source
+        .split_once("MenuTarget::Folder(path) =>")
+        .expect("folder menu must exist")
+        .1
+        .split_once("MenuTarget::Strategy(id) =>")
+        .expect("folder menu end must be found")
+        .0;
+    assert!(folder.contains("this.request_delete_target(window, cx)"));
+    assert!(!folder.contains("this.request_delete_folder("));
+}
+
 /// Omitting the folder actions or enabling an empty folder would make the menu disagree with arrows.
 #[test]
 fn folder_menu_keeps_both_directions_and_explains_empty_refusal() {
