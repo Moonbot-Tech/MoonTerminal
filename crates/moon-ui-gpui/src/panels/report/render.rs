@@ -680,7 +680,7 @@ impl Render for ReportPanel {
                 this.child(window::report_header(
                     p,
                     &self.table_state,
-                    window::report_title(&self.sel_cores, &self.cores),
+                    self.standalone_title(),
                     cx,
                 ))
             })

@@ -281,7 +281,7 @@ impl Render for ReportScopeControl {
         let kind = panel.kind;
         let deleted_only = panel.deleted_only;
         let show_comment = panel.show_comment;
-        // An Analytics-scoped Report forces `RowScope::Closed` at the composition point, so the
+        // A strategy-scoped Report forces `RowScope::Closed` at the composition point, so the
         // switch cannot affect its query. Render it disabled and UNCHECKED rather than enabled and
         // on: an interactive row whose value the query ignores is a control that lies. This mirrors
         // how the comment row below already degrades when the panel carries no comment column.
@@ -350,7 +350,7 @@ impl Render for ReportScopeControl {
             move |app, kind| Self::select_kind(&kind_owner, kind, app),
         ));
         items.push(MoonMenuItem::separator());
-        // Absent, not disabled, under a host forcing closed rows: the Analytics-scoped window hands
+        // Absent, not disabled, under a host forcing closed rows: the strategy-scoped window hands
         // over close-date bounds, and it shows no basis choice anywhere.
         if !lifecycle_forced_closed {
             let basis_owner = self.owner.clone();

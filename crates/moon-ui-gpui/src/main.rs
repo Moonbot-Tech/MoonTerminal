@@ -499,9 +499,9 @@ struct Backend {
     profit_monitor_window: Option<WindowHandle<Root>>,
     /// Single-flight Profit Monitor create request, including monotonic foreground intent.
     profit_monitor_open_pending: Option<analytics::profit_monitor::ProfitMonitorOpenRequest>,
-    /// Singleton Report window opened from an Analytics strategy row.
+    /// Singleton Report window opened from an Analytics or Strategies strategy row.
     report_window: Option<WindowHandle<Root>>,
-    /// Live scoped Report panel retained weakly so repeated double-clicks can replace its filter.
+    /// Live scoped Report panel retained weakly so repeated open actions can replace its filter.
     report_window_view: Option<WeakEntity<crate::panels::ReportPanel>>,
     /// Built-in debug scenario runner (`--debug-script chart-smoke`). None in normal app runs.
     firetest: Option<firetest::Runtime>,

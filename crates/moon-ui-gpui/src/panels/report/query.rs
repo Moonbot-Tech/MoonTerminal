@@ -134,7 +134,7 @@ pub(super) struct ReportData {
     /// Still-running positions under the same filter, counted apart from `totals`.
     ///
     /// Empty whenever the resolved [`db::RowScope`] excludes open rows — the period not reaching
-    /// the present, the scope field's open-positions switch being off, or an Analytics-scoped
+    /// the present, the scope field's open-positions switch being off, or a strategy-scoped
     /// host. Every one of those is the same condition that keeps those rows out of the grid,
     /// because both come from one filter — so the footer can never name positions the table above
     /// it is not showing.

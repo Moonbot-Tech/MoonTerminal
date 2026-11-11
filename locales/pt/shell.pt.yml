@@ -300,6 +300,7 @@ coin_menu.tbl_left: "%{symbol}: resta %{left}"
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (offline)"
 coin_menu.tbl_clear: "Tirar o banimento"
 coin_menu.strategy_goto: "Ir para a estratégia"
+coin_menu.strategy_report: "Todas as negociações desta estratégia no relatório"
 coin_menu.where_listed: "Onde esta moeda está na lista negra…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title: "Layout da aba"

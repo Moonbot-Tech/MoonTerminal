@@ -266,7 +266,7 @@ pub(super) enum ReportPeriodBucket {
 ///
 /// THREE authorities meet here and their precedence is fixed rather than incidental.
 ///
-/// `closed_only` is a QUERY predicate the HOST set — today only the Analytics-owned scoped window
+/// `closed_only` is a QUERY predicate the HOST set — today only the strategy-scoped standalone window
 /// — so it wins outright: someone who asked for closed trades gets closed trades whatever else is
 /// showing. `show_open` is the USER's own toolbar switch and comes next: with it off, the panel
 /// excludes still-running positions however far into the present the period reaches. Only when
@@ -302,7 +302,7 @@ pub(super) fn row_scope_for(closed_only: bool, show_open: bool) -> db::RowScope 
 
 /// Resolve which timestamp the period bounds apply to.
 ///
-/// `closed_only` is the HOST's word, as in [`row_scope_for`]: the Analytics-scoped window hands
+/// `closed_only` is the HOST's word, as in [`row_scope_for`]: the strategy-scoped window hands
 /// over close-date bounds, so it stays on the close date whatever the user's dormant scope-menu
 /// value says — enforced here, at the one composition point, rather than by overwriting that value.
 ///
@@ -588,7 +588,7 @@ fn filters_ctx_id(detached: bool) -> String {
     crate::persistence::table_persist::ctx_id("report-filters", detached)
 }
 
-/// Initial or replacement filter applied by Analytics to a standalone Report window.
+/// Initial or replacement filter applied to a standalone strategy Report window.
 #[derive(Clone, Debug)]
 pub struct ReportScope {
     /// Exact strategy identity, including the core on which the id is meaningful.
@@ -599,10 +599,39 @@ pub struct ReportScope {
     pub date_from: Option<i64>,
     /// Inclusive UTC upper close-date bound.
     pub date_to: Option<i64>,
-    /// Direction copied from the Analytics filters.
+    /// Direction of the scoped query.
     pub side: SideFilter,
-    /// Emulator filter copied from Analytics.
+    /// Emulator filter of the scoped query.
     pub emulator: Option<bool>,
+}
+
+impl ReportScope {
+    /// Build the independent all-time scope opened from a strategy's context menu.
+    pub fn for_strategy(strategy: ReportStrategyKey, strategy_name: String) -> Self {
+        let filter = strategy_trades_filter(&ReportFilter::default(), strategy);
+        Self {
+            strategy,
+            strategy_name,
+            date_from: filter.date_from,
+            date_to: filter.date_to,
+            side: filter.side,
+            emulator: filter.emulator,
+        }
+    }
+}
+
+/// Clone a filter into a strategy-window preset without changing the source Report state.
+fn strategy_trades_filter(base: &ReportFilter, strategy: ReportStrategyKey) -> ReportFilter {
+    let mut preset = base.clone();
+    preset.core_uids = vec![strategy.core_uid];
+    preset.strategies = Some(vec![strategy]);
+    preset.strategy_name_mask.clear();
+    preset.date_from = None;
+    preset.date_to = None;
+    preset.coin.clear();
+    preset.exact_coins = None;
+    preset.side = SideFilter::All;
+    preset
 }
 
 /// Resolve the coin-search group for one Report core.
@@ -779,9 +808,9 @@ pub struct ReportPanel {
     /// pick. Persisted beside [`Self::side`]; [`Self::closed_only`] forces the close date, spelled
     /// once in [`period_basis_for`].
     pub(super) period_basis: db::PeriodBasis,
-    /// Whether Analytics owns this panel's filters.
+    /// Whether a caller owns this panel's strategy-scoped filters.
     ///
-    /// A scoped standalone window is handed its side, kind and dates by Analytics and forces
+    /// A scoped standalone window is handed its side, kind and dates by its caller and forces
     /// `Period::All`; persisted values neither apply to it nor are written from it, or reopening a
     /// strategy would show something other than that strategy. Set from the constructor's scope
     /// argument and by `apply_scope`, never from `detached` or `standalone` — the first is a host
@@ -797,7 +826,7 @@ pub struct ReportPanel {
     preference_revisions: state::ReportPreferenceRevisions,
     /// Retained owner-scoped dropdown whose popup invalidations never rebuild the Report body.
     scope_control: Entity<ReportScopeControl>,
-    /// Whether this Analytics-scoped panel excludes undated/non-positive close timestamps.
+    /// Whether this strategy-scoped panel excludes undated/non-positive close timestamps.
     ///
     /// Today it is written from the same fact as [`Self::scoped`] and always equals it. They are
     /// kept apart because they answer different questions — this one is a QUERY predicate that a
@@ -911,7 +940,7 @@ impl ReportPanel {
     }
     /// Resolve workspace scope for group-owned Report instances.
     ///
-    /// The Analytics-owned standalone window deliberately returns `None` and keeps its exact
+    /// The strategy-scoped standalone window deliberately returns `None` and keeps its exact
     /// `ReportScope`, including offline historical core identities.
     ///
     /// Args:
@@ -930,7 +959,7 @@ impl ReportPanel {
 
     /// Resolve the group's Report scope, widened when its session-derived universe is empty.
     ///
-    /// Like [`Self::workspace_scope`], the Analytics-owned standalone window returns `None` and
+    /// Like [`Self::workspace_scope`], the strategy-scoped standalone window returns `None` and
     /// keeps its exact `ReportScope`. Where it differs: an empty session-derived universe falls
     /// back to that group's configured, non-hidden active cores instead of resolving to the whole,
     /// unfiltered report database.
@@ -983,7 +1012,7 @@ impl ReportPanel {
     ///
     /// Returns:
     ///     A marker derived from the same Report scope that [`Self::query_core_uids`] resolves, or
-    ///     `None` for the Analytics-owned standalone report, which keeps its exact retained scope
+    ///     `None` for the strategy-scoped standalone report, which keeps its exact retained scope
     ///     untouched.
     pub(super) fn scope_marker(&self, b: &Backend) -> Option<ScopeMarker> {
         let scope = self.report_scope(b)?;

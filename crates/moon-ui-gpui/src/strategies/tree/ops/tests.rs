@@ -142,6 +142,61 @@ fn rows_under_includes_nested() {
     assert_eq!(ids, vec![1, 2]);
 }
 
+/// Multi-select must not treat a disabled strategy as permission to delete its folder, whether the
+/// row sits directly in that folder or in a descendant.
+#[test]
+fn multi_select_folder_delete_skips_folders_with_only_disabled_strategies() {
+    let rows = vec![
+        row(1, "direct-disabled", "occupied", false),
+        row(2, "nested-disabled", "parent/child/deep", false),
+    ];
+    let folders = vec![
+        (7, "empty".to_string()),
+        (7, "occupied".to_string()),
+        (7, "parent".to_string()),
+    ];
+
+    let plan = empty_folder_delete_plan(&[(7, rows.as_slice())], &folders);
+
+    assert_eq!(plan.skipped_non_empty, 2);
+    assert_eq!(plan.targets.len(), 1);
+    assert_eq!(plan.targets[0].path, "empty");
+    assert_eq!(
+        plan.targets[0].expected_placements,
+        vec![
+            (1, "occupied".to_string()),
+            (2, "parent/child/deep".to_string()),
+        ],
+        "the disabled rows remain in the snapshot and no strategy deletion is planned"
+    );
+}
+
+/// The all-cores cleanup shares the same strict occupancy rule and still deletes genuinely empty
+/// folders on every core.
+#[test]
+fn all_cores_folder_cleanup_never_deletes_a_disabled_strategys_folder() {
+    let core_a = vec![row(11, "disabled", "keep/nested", false)];
+    let core_b = Vec::new();
+    let folders = vec![
+        (7, "empty-a".to_string()),
+        (7, "keep".to_string()),
+        (8, "empty-b".to_string()),
+    ];
+
+    let plan =
+        empty_folder_delete_plan(&[(7, core_a.as_slice()), (8, core_b.as_slice())], &folders);
+
+    assert_eq!(plan.skipped_non_empty, 1);
+    assert_eq!(
+        plan.targets
+            .iter()
+            .map(|target| (target.core, target.path.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(7, "empty-a"), (8, "empty-b")]
+    );
+    assert!(plan.targets.iter().all(|target| target.path != "keep"));
+}
+
 #[test]
 fn new_strategy_uses_defaults_and_name() {
     let ns = new_strategy(&kind(), "My Strat", "folder/x");

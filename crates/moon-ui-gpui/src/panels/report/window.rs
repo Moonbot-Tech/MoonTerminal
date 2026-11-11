@@ -1,4 +1,4 @@
-//! Standalone scoped Report window opened from Analytics.
+//! Standalone scoped Report window opened from Analytics or Strategies.
 
 use super::*;
 
@@ -182,12 +182,75 @@ pub(super) fn report_title(
         .map_or(base.clone(), |(_, name)| format!("{base} — {name}"))
 }
 
-/// Open or retarget the singleton standalone Report window to one Analytics strategy.
+/// Build the standalone title for one exact strategy.
+pub(super) fn strategy_report_title(strategy_name: &str) -> String {
+    format!(
+        "{} — {strategy_name}",
+        crate::persistence::panel_meta::panel_title("Report")
+    )
+}
+
+impl ReportPanel {
+    /// Resolve the one exact strategy named by the current selection.
+    fn selected_strategy_name(&self) -> Option<&str> {
+        self.selected_strategies.as_ref().and_then(|selected| {
+            if selected.len() != 1 {
+                return None;
+            }
+            let key = selected.iter().next()?;
+            self.strategies
+                .iter()
+                .find(|strategy| strategy.key == *key)
+                .map(|strategy| strategy.name.as_str())
+        })
+    }
+
+    /// Resolve the visible title from the same exact strategy selection as the query.
+    pub(super) fn standalone_title(&self) -> String {
+        self.selected_strategy_name().map_or_else(
+            || report_title(&self.sel_cores, &self.cores),
+            strategy_report_title,
+        )
+    }
+
+    /// Queue native and locale-tracked title updates after a standalone filter edit.
+    ///
+    /// Deferral is required because the strategy callback runs while this window is already being
+    /// updated; the captured selection makes a later locale switch rebuild the same new title.
+    pub(super) fn sync_standalone_window_title(&self, cx: &mut Context<Self>) {
+        if !self.standalone {
+            return;
+        }
+        let Some(handle) = self.backend.read(cx).report_window else {
+            return;
+        };
+        let title = self.standalone_title();
+        let strategy_name = self.selected_strategy_name().map(str::to_owned);
+        let selected = self.sel_cores.clone();
+        let cores = self.cores.clone();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, app| {
+                window.set_window_title(&title);
+                crate::window::titles::retitle(
+                    handle.into(),
+                    move |_| {
+                        strategy_name
+                            .as_deref()
+                            .map_or_else(|| report_title(&selected, &cores), strategy_report_title)
+                    },
+                    app,
+                );
+            });
+        });
+    }
+}
+
+/// Open or retarget the singleton standalone Report window to one exact strategy.
 ///
 /// Args:
 ///     backend: Shared backend holding singleton handles.
 ///     scope: Exact replacement Report scope.
-///     owner: Optional Analytics owner window.
+///     owner: Optional Analytics or Strategies owner window.
 ///     owner_display: Owner display fallback for placement.
 ///     cx: Application context used to update or create the window.
 ///
@@ -206,6 +269,8 @@ pub fn open_scoped(
     };
     if let (Some(handle), Some(view)) = existing {
         let next = scope.clone();
+        let title_text = strategy_report_title(&next.strategy_name);
+        let title_strategy = next.strategy_name.clone();
         if handle
             .update(cx, |_, window, app| {
                 let updated = view
@@ -214,6 +279,12 @@ pub fn open_scoped(
                     })
                     .is_ok();
                 if updated {
+                    window.set_window_title(&title_text);
+                    crate::window::titles::retitle(
+                        handle.into(),
+                        move |_| strategy_report_title(&title_strategy),
+                        app,
+                    );
                     window.activate_window();
                 }
                 updated
@@ -258,7 +329,8 @@ pub fn open_scoped(
         px((REPORT_WINDOW_MIN_W * zoom).min(f32::from(bounds.size.width))),
         px((REPORT_WINDOW_MIN_H * zoom).min(f32::from(bounds.size.height))),
     );
-    let title = |_: &App| crate::persistence::panel_meta::panel_title("Report").to_string();
+    let title_strategy = scope.strategy_name.clone();
+    let title = move |_: &App| strategy_report_title(&title_strategy);
     let mut options = crate::window::windowing::tool_window_options(
         title(cx),
         crate::window::windowing::restored_window_bounds(saved, bounds),

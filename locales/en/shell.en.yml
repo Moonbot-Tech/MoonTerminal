@@ -300,6 +300,7 @@ coin_menu.tbl_left: "%{symbol}: %{left} left"
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (offline)"
 coin_menu.tbl_clear: "Lift the ban"
 coin_menu.strategy_goto: "Go to strategy"
+coin_menu.strategy_report: "All trades of this strategy in the report"
 coin_menu.where_listed: "Where is this coin blacklisted…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title: "Tab layout"

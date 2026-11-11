@@ -3,11 +3,11 @@
 //! Results are intents (`NewStrategy` or `(id, new path)` lists) that the dispatch layer converts
 //! into `moon-core` commands.
 //!
-//! A folder exists only as a prefix of strategy paths; the data model has no empty folders.
-//! Every operation therefore edits `folder_path` or a row set. That prefix arrives as ONE flat,
-//! unescaped string, so where its segment boundaries fall is decided in exactly one place —
-//! [`path_segments`] in `moon_core::feed::strategy_path`. Nothing else in the window may split a
-//! `folder_path` by hand.
+//! Most folder operations edit the `folder_path` prefix of a row set; cores and the window can also
+//! hold explicitly empty folders, which bulk cleanup deletes without touching any row. That prefix
+//! arrives as ONE flat, unescaped string, so where its segment boundaries fall is decided in exactly
+//! one place — [`path_segments`] in `moon_core::feed::strategy_path`. Nothing else in the window may
+//! split a `folder_path` by hand.
 
 use std::collections::HashSet;
 
@@ -130,6 +130,55 @@ pub fn rows_under<'a>(rows: &'a [StrategyRow], prefix: &[String]) -> Vec<&'a Str
 pub fn has_row_under(rows: &[StrategyRow], prefix: &[String]) -> bool {
     rows.iter()
         .any(|row| path_starts_with(&row.folder_path, prefix))
+}
+
+/// One strictly empty folder and the complete core placement snapshot guarding its deletion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptyFolderTarget {
+    pub core: CoreId,
+    pub path: String,
+    pub expected_placements: Vec<(u64, String)>,
+}
+
+/// Bulk folder deletion plan. Occupied folders are counted, never converted into strategy deletes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EmptyFolderDeletePlan {
+    pub targets: Vec<EmptyFolderTarget>,
+    pub skipped_non_empty: usize,
+}
+
+/// Plan deletion only for folders with no strategy at any depth, regardless of enabled state.
+///
+/// Every target carries its core's full placement snapshot so the feed can refuse the folder command
+/// if a create, move, or delete races this plan. Missing cores and root paths produce no target.
+pub fn empty_folder_delete_plan(
+    rows_by_core: &[(CoreId, &[StrategyRow])],
+    folders: &[(CoreId, String)],
+) -> EmptyFolderDeletePlan {
+    let mut plan = EmptyFolderDeletePlan::default();
+    let mut seen = HashSet::new();
+    for (core, candidate) in folders {
+        let path = join_path(&split_path(candidate));
+        if path.is_empty() || !seen.insert((*core, path.clone())) {
+            continue;
+        }
+        let Some((_, rows)) = rows_by_core.iter().find(|(id, _)| id == core) else {
+            continue;
+        };
+        if has_row_under(rows, &split_path(&path)) {
+            plan.skipped_non_empty += 1;
+            continue;
+        }
+        plan.targets.push(EmptyFolderTarget {
+            core: *core,
+            path,
+            expected_placements: rows
+                .iter()
+                .map(|row| (row.id, row.folder_path.clone()))
+                .collect(),
+        });
+    }
+    plan
 }
 
 /// Why a delete cannot go ahead: how many of the targeted rows the core still runs.

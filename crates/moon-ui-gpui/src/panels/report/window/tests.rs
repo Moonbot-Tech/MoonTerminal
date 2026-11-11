@@ -2,7 +2,7 @@
 
 use gpui::{Bounds, point, px, size};
 
-use super::{initial_report_bounds, report_title, restored_report_bounds};
+use super::{initial_report_bounds, report_title, restored_report_bounds, strategy_report_title};
 use moon_core::config::GeomRect;
 
 /// Restoring the old 1240x720 constants must fail this assertion and recreate the cramped window
@@ -148,4 +148,5 @@ fn report_title_names_only_an_explicit_sole_core() {
         "Report"
     );
     assert_eq!(report_title(&[99].into_iter().collect(), &cores), "Report");
+    assert_eq!(strategy_report_title("Momentum"), "Report — Momentum");
 }

@@ -175,3 +175,28 @@ fn shared_menu_navigation_revalidates_captured_workspace_scope() {
         .expect("strategy navigation must exist");
     assert!(goto.contains("workspace_group.clone(),"));
 }
+
+/// The scoped strategy Report belongs to the shared strategy section, immediately after Go to
+/// strategy, so every host exposes both actions under the same `strat_id` condition.
+#[test]
+fn strategy_report_action_follows_goto_in_the_same_strategy_section() {
+    let source = include_str!("../coin_menu.rs");
+    let section = source
+        .split("// Strategy actions.")
+        .nth(1)
+        .and_then(|tail| tail.split("// Order actions.").next())
+        .expect("shared strategy section must remain discoverable");
+    let goto = section
+        .find("\"coin-strat-goto\"")
+        .expect("strategy navigation must remain in the section");
+    let report = section
+        .find("\"coin-strat-report\"")
+        .expect("strategy Report action must share the section's strat_id condition");
+
+    assert!(
+        goto < report,
+        "Report action must directly follow strategy_goto"
+    );
+    assert!(section.contains("crate::panels::open_scoped_report("));
+    assert!(section.contains("crate::panels::ReportScope::for_strategy("));
+}

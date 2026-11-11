@@ -4,9 +4,10 @@ use super::controls::selected_auto_core_name;
 use super::export::{Format, run as run_export};
 use super::state::{ReportFilterSet, applied_filters};
 use super::{
-    Period, ReportKind, ReportPeriodBucket, SideFilter, apply_period_from_prefs,
+    Period, ReportKind, ReportPeriodBucket, ReportScope, SideFilter, apply_period_from_prefs,
     next_prefs_for_period_pick, period_basis_caption_key, period_basis_for,
     period_bucket_for_scope, row_scope_for, side_id, strategy_name_mask_enabled,
+    strategy_trades_filter,
 };
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
@@ -1073,11 +1074,90 @@ fn the_constructor_restores_persisted_filters_before_loading_metadata() {
     );
 }
 
-/// An Analytics-scoped standalone panel must neither restore stored filters nor write its own —
+/// The shared strategy action receives an independent all-time, exact-identity preset. Building it
+/// must not mutate the main Report filter used as the transform's source.
+#[test]
+fn strategy_trades_preset_leaves_the_main_report_filter_unchanged() {
+    let strategy = moon_core::db::ReportStrategyKey {
+        core_uid: 42,
+        strategy_id: 7,
+    };
+    let main = ReportFilter {
+        core_uids: vec![1, 2],
+        date_from: Some(100),
+        date_to: Some(200),
+        coin: "BTC ".to_string(),
+        exact_coins: Some(vec!["BTC".to_string()]),
+        side: SideFilter::Short,
+        emulator: Some(true),
+        strategies: Some(vec![moon_core::db::ReportStrategyKey {
+            core_uid: 1,
+            strategy_id: 99,
+        }]),
+        strategy_name_mask: "scalper".to_string(),
+        ..ReportFilter::default()
+    };
+    let before = main.clone();
+
+    let preset = strategy_trades_filter(&main, strategy);
+
+    assert_eq!(preset.core_uids, vec![42]);
+    assert_eq!(preset.strategies, Some(vec![strategy]));
+    assert!(preset.strategy_name_mask.is_empty());
+    assert_eq!((preset.date_from, preset.date_to), (None, None));
+    assert!(preset.coin.is_empty());
+    assert_eq!(preset.exact_coins, None);
+    assert_eq!(preset.side, SideFilter::All);
+    assert_eq!(
+        preset.emulator,
+        Some(true),
+        "unrelated kind state is retained"
+    );
+    assert_eq!(main, before, "the main Report filter must not be mutated");
+
+    let scope = ReportScope::for_strategy(strategy, "Momentum".to_string());
+    assert_eq!(scope.strategy, strategy);
+    assert_eq!(scope.strategy_name, "Momentum");
+    assert_eq!((scope.date_from, scope.date_to), (None, None));
+    assert_eq!(scope.side, SideFilter::All);
+}
+
+/// Selecting another strategy, or removing its core, must retitle the native standalone window as
+/// well as the visible header. Dropping either callback or the deferred registry update leaves the
+/// OS naming the old strategy after the query has moved on.
+#[test]
+fn standalone_strategy_changes_retarget_the_native_title() {
+    let actions = code_only(include_str!("actions.rs"));
+    for signature in [
+        "pub(super) fn set_strategy_choices(",
+        "pub(super) fn reconcile_strategy_core(",
+    ] {
+        let body = braced_body(&actions, signature);
+        assert!(
+            body.contains("self.sync_standalone_window_title(cx);"),
+            "{signature} must synchronize the native title"
+        );
+    }
+
+    let window = code_only(include_str!("window.rs"));
+    let sync = braced_body(&window, "pub(super) fn sync_standalone_window_title(");
+    for anchor in [
+        "cx.defer(",
+        "window.set_window_title(&title);",
+        "crate::window::titles::retitle(",
+    ] {
+        assert!(
+            sync.contains(anchor),
+            "standalone title synchronization is missing {anchor}"
+        );
+    }
+}
+
+/// A strategy-scoped standalone panel must neither restore stored filters nor write its own —
 /// two independent guards, because either can be dropped without breaking the other.
 ///
 /// Mutation: deleting the `if self.scoped { return false; }` guard from
-/// `state.rs::restore_persisted_filters` applies stored values over the strategy Analytics asked
+/// `state.rs::restore_persisted_filters` applies stored values over the strategy the caller asked
 /// for; deleting the `if self.scoped { return; }` guard from `actions.rs::persist_filters` writes
 /// that transient scope into the shared per-context store and corrupts the next ordinary Report
 /// opened in that same context.
@@ -1407,7 +1487,7 @@ fn period_basis_round_trips_through_the_panel_encoder_and_decoder() {
     );
 }
 
-/// `mod.rs::period_basis_for` -- an Analytics-scoped (`closed_only`) panel is handed close-date
+/// `mod.rs::period_basis_for` -- a strategy-scoped (`closed_only`) panel is handed close-date
 /// bounds, so it must query on the close date whatever the dormant toolbar value says; an
 /// unscoped panel carries the user's pick. Dropping the `closed_only` arm, or ignoring the user's
 /// pick, reddens one of the four rows.
@@ -1433,7 +1513,7 @@ fn analytics_scope_forces_the_close_date_basis() {
 }
 
 /// `mod.rs::period_basis_caption_key` -- the basis choice lives inside the closed scope menu, so
-/// only a non-default (open-date) basis marks the trigger caption, and an Analytics-scoped panel,
+/// only a non-default (open-date) basis marks the trigger caption, and a strategy-scoped panel,
 /// which queries on the close date regardless, never does. Marking the default, or honouring the
 /// dormant open-date pick under `closed_only`, reddens one of the four rows.
 #[test]

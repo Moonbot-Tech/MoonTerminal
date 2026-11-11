@@ -300,6 +300,7 @@ coin_menu.tbl_left: "%{symbol}: quedan %{left}"
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (sin conexión)"
 coin_menu.tbl_clear: "Levantar la prohibición"
 coin_menu.strategy_goto: "Ir a la estrategia"
+coin_menu.strategy_report: "Todas las operaciones de esta estrategia en el informe"
 coin_menu.where_listed: "Dónde está esta moneda en la lista negra…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title: "Disposición de pestaña"

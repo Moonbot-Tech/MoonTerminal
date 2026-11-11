@@ -14,7 +14,7 @@ fn delayed_group_request_requires_same_generation_and_core_authority() {
 }
 
 /// Replacing the `None` branch in `trade_log_request_is_current` with group authority would make
-/// Analytics-owned standalone Reports inherit whichever Auto workspace currently has focus.
+/// Strategy-scoped standalone Reports inherit whichever Auto workspace currently has focus.
 #[test]
 fn standalone_request_has_no_workspace_identity() {
     let request = super::scan::trade_log_request("core", Some("core"), "BTC", 9, 1, 2, 3);

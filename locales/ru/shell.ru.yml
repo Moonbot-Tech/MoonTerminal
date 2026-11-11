@@ -300,6 +300,7 @@ coin_menu.tbl_left: "%{symbol}: осталось %{left}"
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (нет связи)"
 coin_menu.tbl_clear: "Снять"
 coin_menu.strategy_goto: "Перейти к стратегии"
+coin_menu.strategy_report: "Все сделки стратегии в отчёте"
 coin_menu.where_listed: "Где монета в чёрных списках…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title: "Раскладка вкладки"

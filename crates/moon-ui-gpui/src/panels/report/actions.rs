@@ -183,8 +183,8 @@ impl ReportPanel {
 
     /// Replace the retained filter with the one the Profit Monitor broadcast.
     ///
-    /// A STANDALONE Report never adopts. That window is opened from Analytics already seeded with
-    /// an exact core and strategy, and `reconcile_strategy_core` would drop the pinned strategy
+    /// A STANDALONE Report never adopts. That window is opened already seeded with an exact core
+    /// and strategy, and `reconcile_strategy_core` would drop the pinned strategy
     /// with no way back — the same reason every other revision observer here excludes it.
     ///
     /// For a group Report, `apply_core_broadcast` owns the release / ignore / intersect rule. The
@@ -258,6 +258,7 @@ impl ReportPanel {
             return;
         }
         self.selected_strategies = selected_strategies;
+        self.sync_standalone_window_title(cx);
         self.request_requery(cx);
     }
 
@@ -281,6 +282,7 @@ impl ReportPanel {
         if became_empty {
             self.selected_strategies = None;
         }
+        self.sync_standalone_window_title(cx);
         self.queue_strategy_select_sync(false, cx);
     }
 
@@ -309,7 +311,7 @@ impl ReportPanel {
     ///
     /// Replaces one complete map entry per mutation because the six values form one filter set. The
     /// replacement still merges one value deliberately: unless this call represents an explicit
-    /// period-menu pick, it carries the already-stored period forward. An Analytics-scoped panel
+    /// period-menu pick, it carries the already-stored period forward. A strategy-scoped panel
     /// writes nothing — see [`ReportPanel::scoped`].
     ///
     /// The period is the ONE member that is not read off the live panel. `self.period` also shows
@@ -938,7 +940,7 @@ impl ReportPanel {
     }
 
     /// Capture the current effective export authority without applying workspace state to a
-    /// standalone Analytics-owned Report.
+    /// standalone strategy-scoped Report.
     ///
     /// Args:
     ///     cx: Application context used to read Backend and workspace revision state.

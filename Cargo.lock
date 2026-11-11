@@ -5019,6 +5019,7 @@ dependencies = [
  "moon-remote",
  "moon-tg",
  "moon-ui",
+ "moon-ui-components",
  "naga",
  "objc",
  "objc2 0.6.4",
