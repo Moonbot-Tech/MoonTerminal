@@ -75,6 +75,102 @@ fn folder_delete_authorized(
         && current_targets.iter().all(|(_, checked)| !checked)
 }
 
+/// Return whether an operation renders a text input whose state must be created and focused.
+fn op_uses_input(op: &TreeOp) -> bool {
+    matches!(
+        op,
+        TreeOp::CreateStrategy { .. }
+            | TreeOp::CreateFolder { .. }
+            | TreeOp::RenameFolder { .. }
+            | TreeOp::RenameStrategy { .. }
+    )
+}
+
+/// Request-time outcome for bulk empty-folder cleanup.
+enum EmptyFolderCleanupRequest {
+    /// A non-empty candidate set that requires user confirmation.
+    Confirm(TreeOp),
+    /// An empty plan that only needs the existing informational result.
+    Report(ops::EmptyFolderDeletePlan),
+}
+
+/// Convert a request-time plan into either a staged confirmation or an empty result to report.
+///
+/// Args:
+///     plan: Strictly empty candidates classified from the request-time snapshot.
+///     workspace_generation: Auto generation captured with the request, or Classic.
+///
+/// Returns:
+///     A confirmation containing only the current empty targets, or the empty plan unchanged.
+fn empty_folder_cleanup_request(
+    plan: ops::EmptyFolderDeletePlan,
+    workspace_generation: Option<u64>,
+) -> EmptyFolderCleanupRequest {
+    if plan.targets.is_empty() {
+        return EmptyFolderCleanupRequest::Report(plan);
+    }
+    let candidates = plan
+        .targets
+        .into_iter()
+        .map(|target| (target.core, target.path))
+        .collect();
+    EmptyFolderCleanupRequest::Confirm(TreeOp::ConfirmDeleteEmptyFolders {
+        candidates,
+        workspace_generation,
+    })
+}
+
+/// Capture each candidate core's current strategy rows once for confirmation-time classification.
+///
+/// Args:
+///     store: Current live core store.
+///     folders: Candidate identities whose cores must be represented when available.
+///
+/// Returns:
+///     One complete strategy slice per distinct candidate core present in the store.
+fn empty_folder_snapshots<'a>(
+    store: &'a CoreStore,
+    folders: &[(CoreId, String)],
+) -> Vec<(CoreId, &'a [StrategyRow])> {
+    let mut snapshots = Vec::new();
+    for (core, _) in folders {
+        if snapshots.iter().any(|(id, _)| id == core) {
+            continue;
+        }
+        if let Some(data) = store.core(*core) {
+            snapshots.push((*core, data.strategies.as_slice()));
+        }
+    }
+    snapshots
+}
+
+/// Reclassify confirmed candidates against current rows only while workspace authority is unchanged.
+///
+/// Args:
+///     candidates: Exact folder identities captured when the confirmation opened.
+///     captured_generation: Auto generation captured with the confirmation, or Classic.
+///     current_generation: Current Auto generation immediately before dispatch, or Classic.
+///     workspace: Current effective Auto core set, or `None` in Classic.
+///     rows_by_core: Current complete strategy snapshots for the candidate cores.
+///
+/// Returns:
+///     `None` when any captured core lost authority; otherwise a fresh conditional deletion plan
+///     that skips every candidate which gained a strategy.
+fn confirmed_empty_folder_plan(
+    candidates: &[(CoreId, String)],
+    captured_generation: Option<u64>,
+    current_generation: Option<u64>,
+    workspace: Option<&[CoreId]>,
+    rows_by_core: &[(CoreId, &[StrategyRow])],
+) -> Option<ops::EmptyFolderDeletePlan> {
+    if !candidates.iter().all(|(core, _)| {
+        tree_op_authorized(captured_generation, current_generation, workspace, *core)
+    }) {
+        return None;
+    }
+    Some(ops::empty_folder_delete_plan(rows_by_core, candidates))
+}
+
 fn op_title(op: &TreeOp) -> String {
     match op {
         TreeOp::CreateStrategy { .. } => t!("dialogs.new_strategy").to_string(),
@@ -847,8 +943,9 @@ impl StrategiesView {
         cx.notify();
     }
 
+    /// Create input state only for operations that render and focus a text field.
     fn ensure_op_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.op.is_some() && self.op_input.is_none() {
+        if self.op.as_ref().is_some_and(op_uses_input) && self.op_input.is_none() {
             let init = self.op_input_init.clone();
             self.op_input = Some(cx.new(|cx| MoonInputState::new(window, cx).default_value(init)));
         }
@@ -1191,21 +1288,16 @@ impl StrategiesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if plan.targets.is_empty() {
-            self.delete_empty_folders(plan, window, cx);
-            return;
+        match empty_folder_cleanup_request(plan, self.action_workspace_generation(cx)) {
+            EmptyFolderCleanupRequest::Report(plan) => {
+                self.delete_empty_folders(plan, window, cx);
+            }
+            EmptyFolderCleanupRequest::Confirm(op) => {
+                self.op = Some(op);
+                self.open_op_dialog(window, cx);
+                cx.notify();
+            }
         }
-        let candidates = plan
-            .targets
-            .into_iter()
-            .map(|target| (target.core, target.path))
-            .collect();
-        self.op = Some(TreeOp::ConfirmDeleteEmptyFolders {
-            candidates,
-            workspace_generation: self.action_workspace_generation(cx),
-        });
-        self.open_op_dialog(window, cx);
-        cx.notify();
     }
 
     /// Collect the same visible-core candidates for both the menu count and the delete request.
@@ -1234,15 +1326,7 @@ impl StrategiesView {
         cx: &Context<Self>,
     ) -> ops::EmptyFolderDeletePlan {
         let store = self.backend.read(cx).session.store();
-        let mut snapshots = Vec::new();
-        for (core, _) in folders {
-            if snapshots.iter().any(|(id, _)| id == core) {
-                continue;
-            }
-            if let Some(data) = store.core(*core) {
-                snapshots.push((*core, data.strategies.as_slice()));
-            }
-        }
+        let snapshots = empty_folder_snapshots(store, folders);
         ops::empty_folder_delete_plan(&snapshots, folders)
     }
 
@@ -1265,18 +1349,20 @@ impl StrategiesView {
         cx: &mut Context<Self>,
     ) {
         let current_generation = self.action_workspace_generation(cx);
-        if !candidates.iter().all(|(core, _)| {
-            tree_op_authorized(
+        let plan = {
+            let backend = self.backend.read(cx);
+            let snapshots = empty_folder_snapshots(backend.session.store(), candidates);
+            confirmed_empty_folder_plan(
+                candidates,
                 workspace_generation,
                 current_generation,
                 self.workspace_cores.as_deref(),
-                *core,
+                &snapshots,
             )
-        }) {
-            return;
+        };
+        if let Some(plan) = plan {
+            self.delete_empty_folders(plan, window, cx);
         }
-        let plan = self.empty_folder_plan(candidates, cx);
-        self.delete_empty_folders(plan, window, cx);
     }
 
     /// Queue conditional folder commands only; this path never deletes a strategy.

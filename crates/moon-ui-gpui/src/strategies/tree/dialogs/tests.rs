@@ -1,7 +1,8 @@
 //! Regression coverage for delayed Strategies tree modal authority and tree-op dialog width.
 
 use super::{
-    clamp_tree_op_dialog_width, folder_delete_authorized, tree_op_authorized,
+    EmptyFolderCleanupRequest, TreeOp, clamp_tree_op_dialog_width, confirmed_empty_folder_plan,
+    empty_folder_cleanup_request, folder_delete_authorized, op_uses_input, tree_op_authorized,
     tree_op_dialog_client_width, tree_op_field_width,
 };
 
@@ -135,6 +136,15 @@ fn enter_and_ok_share_tree_dialog_confirmation() {
     assert!(open.contains(".capture_action("));
     assert!(open.contains("gpui_component::dialog::ConfirmDialog"));
     assert!(open.contains("this.confirm_op_dialog_and_report(window, cx)"));
+    assert!(open.contains("window.focus(&dialog_focus, cx)"));
+    let ensure = source
+        .split_once("fn ensure_op_input(")
+        .expect("tree dialog input setup must exist")
+        .1
+        .split_once("fn close_op_dialog(")
+        .expect("tree dialog input setup end must be found")
+        .0;
+    assert!(ensure.contains("self.op.as_ref().is_some_and(op_uses_input)"));
 
     let footer = source
         .split_once("fn op_dialog_footer(")
@@ -154,6 +164,24 @@ fn enter_and_ok_share_tree_dialog_confirmation() {
         .0;
     assert!(report.contains("self.confirm_op_dialog(window, cx)"));
     assert!(report.contains("dialogs.name_required"));
+}
+
+/// Creating an unused input for a confirmation leaves Enter on MoonUI's default close action rather
+/// than the content's capture handler, dismissing the dialog without dispatching the operation.
+#[test]
+fn confirmation_ops_do_not_create_input_state() {
+    let confirmation = TreeOp::ConfirmDeleteEmptyFolders {
+        candidates: vec![(7, "empty".to_string())],
+        workspace_generation: Some(9),
+    };
+    assert!(!op_uses_input(&confirmation));
+
+    let create = TreeOp::CreateFolder {
+        core: 7,
+        target: String::new(),
+        workspace_generation: Some(9),
+    };
+    assert!(op_uses_input(&create));
 }
 
 /// Restoring a direct dispatcher call in either bulk request would delete before the user confirms.
@@ -190,19 +218,32 @@ fn bulk_folder_delete_requests_stage_confirmation_without_queueing() {
         .split_once("pub(super) fn all_empty_folder_candidates(")
         .expect("bulk confirmation staging end must be found")
         .0;
-    let empty = staging
-        .find("if plan.targets.is_empty()")
-        .expect("an empty plan must keep the existing note");
-    let note = staging
-        .find("self.delete_empty_folders(plan, window, cx);")
-        .expect("only the empty plan may reach the dispatcher during staging");
-    let staged = staging
-        .find("self.op = Some(TreeOp::ConfirmDeleteEmptyFolders")
-        .expect("a non-empty plan must stage the confirmation");
-    assert!(empty < note && note < staged);
-    assert!(staging[note..staged].contains("return;"));
+    assert!(staging.contains("empty_folder_cleanup_request("));
+    assert!(staging.contains("EmptyFolderCleanupRequest::Confirm(op)"));
+    assert!(staging.contains("self.op = Some(op)"));
     assert!(staging.contains("self.open_op_dialog(window, cx);"));
     assert!(!staging.contains(".delete_empty_folder("));
+
+    let rows = Vec::new();
+    let candidates = vec![(7, "empty-a".to_string()), (8, "empty-b".to_string())];
+    let plan = super::ops::empty_folder_delete_plan(
+        &[(7, rows.as_slice()), (8, rows.as_slice())],
+        &candidates,
+    );
+    let EmptyFolderCleanupRequest::Confirm(TreeOp::ConfirmDeleteEmptyFolders {
+        candidates: staged,
+        workspace_generation: Some(9),
+    }) = empty_folder_cleanup_request(plan, Some(9))
+    else {
+        panic!("a non-empty plan must stage the bulk confirmation");
+    };
+    assert_eq!(staged, candidates);
+
+    let empty = empty_folder_cleanup_request(Default::default(), None);
+    assert!(matches!(
+        empty,
+        EmptyFolderCleanupRequest::Report(plan) if plan.targets.is_empty()
+    ));
 }
 
 /// Both bulk entry points must retain the conditional dispatcher, which never deletes a strategy
@@ -227,6 +268,14 @@ fn bulk_folder_delete_is_conditional_and_never_deletes_strategies() {
 #[test]
 fn bulk_folder_delete_confirmation_replans_current_snapshot() {
     let source = include_str!("../dialogs.rs");
+    let dialog = source
+        .split_once("fn confirm_op_dialog(")
+        .expect("shared operation confirmation must exist")
+        .1
+        .split_once("pub(in crate::strategies) fn open_op_dialog(")
+        .expect("shared operation confirmation end must be found")
+        .0;
+    assert!(dialog.contains("self.confirm_delete_empty_folders("));
     let confirm = source
         .split_once("fn confirm_delete_empty_folders(")
         .expect("bulk empty-folder confirmation must exist")
@@ -234,20 +283,24 @@ fn bulk_folder_delete_confirmation_replans_current_snapshot() {
         .split_once("fn delete_empty_folders(")
         .expect("bulk confirmation end must be found")
         .0;
-    let authority = confirm
-        .find("tree_op_authorized(")
-        .expect("confirmation must revalidate workspace authority");
     let replan = confirm
-        .find("self.empty_folder_plan(candidates, cx)")
+        .find("confirmed_empty_folder_plan(")
         .expect("confirmation must reclassify the captured candidates");
     let dispatch = confirm
         .find("self.delete_empty_folders(plan, window, cx);")
         .expect("only the fresh plan may reach deletion");
-    assert!(authority < replan && replan < dispatch);
+    assert!(replan < dispatch);
 
     let candidates = vec![(7, "empty".to_string()), (7, "occupied-later".to_string())];
     let before = Vec::new();
-    let opened = super::ops::empty_folder_delete_plan(&[(7, before.as_slice())], &candidates);
+    let opened = confirmed_empty_folder_plan(
+        &candidates,
+        Some(7),
+        Some(7),
+        Some(&[7]),
+        &[(7, before.as_slice())],
+    )
+    .expect("matching workspace authority must permit re-planning");
     assert_eq!(opened.targets.len(), 2);
 
     let current = [moon_core::feed::StrategyRow {
@@ -260,7 +313,14 @@ fn bulk_folder_delete_confirmation_replans_current_snapshot() {
         is_short: false,
         fields: Vec::new(),
     }];
-    let confirmed = super::ops::empty_folder_delete_plan(&[(7, current.as_slice())], &candidates);
+    let confirmed = confirmed_empty_folder_plan(
+        &candidates,
+        Some(7),
+        Some(7),
+        Some(&[7]),
+        &[(7, current.as_slice())],
+    )
+    .expect("an occupied candidate must be skipped, not cancel its empty sibling");
     assert_eq!(confirmed.skipped_non_empty, 1);
     assert_eq!(
         confirmed
@@ -273,6 +333,17 @@ fn bulk_folder_delete_confirmation_replans_current_snapshot() {
     assert_eq!(
         confirmed.targets[0].expected_placements,
         vec![(42, "occupied-later".to_string())]
+    );
+    assert!(
+        confirmed_empty_folder_plan(
+            &candidates,
+            Some(7),
+            Some(9),
+            Some(&[7]),
+            &[(7, current.as_slice())],
+        )
+        .is_none(),
+        "a generation change must cancel the whole batch before any queue call"
     );
 }
 
