@@ -36,13 +36,49 @@ fn write_with_mode(path: &Path, bytes: &[u8], mode: u32) {
 fn sleeper(root: &Path, name: &str) -> (PathBuf, Child) {
     let image = root.join(name);
     fs::copy("/bin/sleep", &image).unwrap();
-    let child = Command::new(&image)
-        .arg("300")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    // Tests run on parallel threads, and several of them fork. A child forked by another test
+    // while `fs::copy` above still had the image open for writing keeps that descriptor until
+    // its own exec, and the kernel will not execute a file somebody holds open for writing
+    // ("Text file busy"). The holder is gone within moments, so that one error is retried; any
+    // other one, or a holder that never goes away, still fails the test.
+    let mut attempts = 0;
+    let mut child = loop {
+        let spawned = Command::new(&image)
+            .arg("300")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        match spawned {
+            Ok(child) => break child,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 500 =>
+            {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("spawn {}: {error}", image.display()),
+        }
+    };
+    // `spawn` returns once the child has begun its exec, and for a moment after that
+    // `/proc/<pid>/exe` still names the image the child was forked from — this test binary.
+    // The tests below are about a process that RUNS the image, so wait until it does. The real
+    // helper never meets this: the parent it binds has been running since the user started it.
+    let wanted = fs::metadata(&image).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let running = fs::metadata(format!("/proc/{}/exe", child.id()));
+        if running.is_ok_and(|exe| exe.dev() == wanted.dev() && exe.ino() == wanted.ino()) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            // The caller never receives this child, so nothing else would stop it.
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the child never started running {}", image.display());
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
     (image, child)
 }
 
