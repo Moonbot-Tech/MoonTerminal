@@ -455,11 +455,33 @@ fn venue_caps_unlisted_replay_without_terms_is_unknown() {
 #[test]
 fn the_price_tick_falls_back_to_the_precision_grid() {
     use super::read::tick_or_precision;
-    assert_eq!(tick_or_precision(0.0001, 2), Some(0.0001));
-    assert_eq!(tick_or_precision(0.0, 4), Some(0.0001));
-    assert_eq!(tick_or_precision(f64::NAN, 2), Some(0.01));
+    assert_eq!(tick_or_precision(0.0001, 2, 1.5), Some(0.0001));
+    assert_eq!(tick_or_precision(0.0, 4, 1.5), Some(0.0001));
+    assert_eq!(tick_or_precision(f64::NAN, 2, 1.5), Some(0.01));
     // Precision zero says nothing finer than a whole unit; the ladder keeps the glass instead.
-    assert_eq!(tick_or_precision(0.0, 0), None);
-    assert_eq!(tick_or_precision(0.0, -3), None);
-    assert_eq!(tick_or_precision(0.0, 40), None);
+    assert_eq!(tick_or_precision(0.0, 0, 1.5), None);
+    assert_eq!(tick_or_precision(0.0, -3, 1.5), None);
+    assert_eq!(tick_or_precision(0.0, 40, 1.5), None);
+}
+
+/// Hyperliquid stores a `1e-11` placeholder where the tick goes; against a price of hundreds that
+/// is no grid an `f32` axis coordinate can resolve, and printing it put 11 digits on the axis
+/// (#1289). A coin whose price really sits that fine keeps its tick.
+#[test]
+fn a_tick_finer_than_the_price_can_resolve_is_not_a_grid() {
+    use super::read::tick_or_precision;
+    assert_eq!(tick_or_precision(1e-11, 0, 277.53), None);
+    // The same placeholder arriving as a precision of eleven decimals.
+    assert_eq!(tick_or_precision(0.0, 11, 7652.07), None);
+    // A placeholder tick does not hide a precision that is a grid at this price.
+    assert_eq!(tick_or_precision(1e-11, 2, 277.53), Some(0.01));
+    // A coin priced at a few millionths really trades on that step.
+    assert_eq!(tick_or_precision(1e-11, 0, 2e-6), Some(1e-11));
+    // A real exchange grid at a large price: spot BTC on a cent, today and far past 2^24 steps.
+    assert_eq!(tick_or_precision(0.01, 2, 73_850.0), Some(0.01));
+    assert_eq!(tick_or_precision(0.01, 2, 500_000.0), Some(0.01));
+    // The placeholder is refused down to a price of one cent.
+    assert_eq!(tick_or_precision(1e-11, 0, 0.0101), None);
+    // No price yet: nothing is judged, and nothing is latched.
+    assert_eq!(tick_or_precision(0.01, 2, 0.0), None);
 }

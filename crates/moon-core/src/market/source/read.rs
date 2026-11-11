@@ -147,16 +147,43 @@ pub(super) fn positive(v: f64) -> Option<f64> {
     (v.is_finite() && v > 0.0).then_some(v)
 }
 
+/// The most grid steps a price may span and still be an exchange grid: nine significant figures.
+///
+/// Real grids stay well inside it (spot BTC on a cent is seven figures at 73 850, and keeps a
+/// hundredfold margin), so no venue's tick is ever refused. It is deliberately not the `f32`
+/// mantissa (`2^24` steps): that refused spot BTC's cent above ~167 772, and order lines and
+/// figures print the tick from `f64`. The cost is that a placeholder priced below `0.01` still
+/// passes as a grid.
+const MAX_STEPS_PER_PRICE: f64 = 1e9;
+
 /// The market's price tick, or the grid its price precision implies when the tick is not usable.
 ///
 /// Both arrive as zero while unset, so a zero precision says nothing and is not read as a grid of
 /// whole units. The precision is trusted only within `1..=12` decimals: past that the grid is
 /// finer than an `f32` price can hold, and a negative count is not a precision.
-pub(super) fn tick_or_precision(tick: f64, precision: i32) -> Option<f64> {
-    positive(tick).or_else(|| {
+///
+/// Either candidate is a grid only against the price it divides: one finer than
+/// [`MAX_STEPS_PER_PRICE`] steps per price is a placeholder. Hyperliquid stores `1e-11` there
+/// and prices on five significant figures instead; read as the tick, it put 11 decimals on the
+/// axis of a 277-dollar market and left the ladder without a readable row (#1289). A coin whose
+/// price really sits that fine keeps the step. Without a price nothing can be judged, so the
+/// answer waits for one rather than latching a placeholder.
+///
+/// Args:
+///     tick: The market's tick size as the wire holds it.
+///     precision: The market's price precision in decimals.
+///     price: The market's last price.
+///
+/// Returns:
+///     The step, or `None` while neither candidate is a usable grid at this price.
+pub(super) fn tick_or_precision(tick: f64, precision: i32, price: f64) -> Option<f64> {
+    let price = positive(price)?;
+    let resolvable = |step: &f64| price / step <= MAX_STEPS_PER_PRICE;
+    positive(tick).filter(resolvable).or_else(|| {
         (1..=12)
             .contains(&precision)
             .then(|| 10f64.powi(-precision))
+            .filter(resolvable)
     })
 }
 
@@ -616,9 +643,11 @@ impl MarketDataSource {
     /// unlike [`Self::price_step`]. The chart's price ladder buckets the book by it.
     ///
     /// A market whose tick did not arrive falls back to its price precision (`10^-precision`), the
-    /// grid the exchange prints prices at. `None` means the provider, snapshot, or market is
-    /// unavailable, or neither figure is usable; the ladder then keeps the glass instead of
-    /// inventing a grid.
+    /// grid the exchange prints prices at. Either figure is judged against the market's last price
+    /// (`tick_or_precision`), so a placeholder far finer than that price is not taken for the
+    /// grid. `None` means the provider, snapshot, market or price is unavailable, or neither
+    /// figure is usable; the ladder then keeps the glass instead of inventing a grid, and the
+    /// labels print at the price's magnitude.
     pub fn price_tick(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
@@ -629,9 +658,12 @@ impl MarketDataSource {
                 .and_then(SharedMoonClient::get)?
         };
         let snapshot = client.snapshot_versioned()?;
-        let handle = snapshot.markets().get(market)?;
-        let (tick, precision) = handle.with(|m| (m.tick_size(), m.price_precision()));
-        tick_or_precision(tick, precision)
+        let markets = snapshot.markets();
+        let (tick, precision) = markets
+            .get(market)?
+            .with(|m| (m.tick_size(), m.price_precision()));
+        let price = markets.price(market).map_or(0.0, |p| p.p_last);
+        tick_or_precision(tick, precision, price)
     }
 
     /// Return the last price and signed 1-hour and 24-hour percentage deltas for a market.

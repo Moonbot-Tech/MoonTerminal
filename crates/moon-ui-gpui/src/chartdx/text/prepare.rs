@@ -974,26 +974,42 @@ impl RenderState {
                 }
             }
 
-            // Place time labels at ROUND local-time boundaries (`nice_time_step`, from 1 s to 6 h
-            // with a target derived from plot width). Fixed window fractions previously produced
-            // non-round times with uneven steps, such as 19:46, 19:56, 20:05 (+10, then +9).
+            // Place time labels at ROUND local-time boundaries (`time_step`: 1 s to 6 h, then days
+            // and calendar months, the densest step whose measured captions fit). Fixed window
+            // fractions previously produced non-round times with uneven steps, such as 19:46,
+            // 19:56, 20:05 (+10, then +9).
             if !time_axis_visible {
                 continue;
             }
-            let step_ms = (moon_chart::axes::nice_time_step(
-                window_ms / 1000.0,
-                moon_chart::axes::time_label_target(plot_w),
-            ) * 1000.0)
-                .max(1000.0);
-            let with_sec = step_ms < 60_000.0;
             let now_ms = moon_core::util::time::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0.0, |d| d.as_millis() as f64);
             let right_unix = left_unix + window_ms;
-            // Thin labels horizontally in narrow windows: draw only when a label's left edge is
-            // separated from the RIGHT edge of the previously drawn label; otherwise skip it.
-            let min_h_gap = 6.0;
-            let mut last_right = f32::NEG_INFINITY;
+            // One caption of each kind, measured in the axis font. The left edge decides
+            // whether clocks carry a date (a window reaching back past today does); a 1 January
+            // date prints as a shorter year, so the wider of the two edges stands for dates.
+            let mut width_of = |label: String| self.measure_text(ctx, &label).width.as_f32();
+            let widths = moon_chart::axes::TimeCaptionWidths {
+                seconds: width_of(crate::chartdx::axes::format_clock_dated(
+                    left_unix, true, now_ms,
+                )),
+                minutes: width_of(crate::chartdx::axes::format_clock_dated(
+                    left_unix, false, now_ms,
+                )),
+                date: width_of(crate::chartdx::axes::format_date_caption(left_unix)).max(width_of(
+                    crate::chartdx::axes::format_date_caption(right_unix),
+                )),
+            };
+            let step_ms = (moon_chart::axes::time_step(window_ms / 1000.0, plot_w, &widths)
+                * 1000.0)
+                .max(1000.0);
+            let kind = moon_chart::axes::TimeCaptionKind::of_step(step_ms / 1000.0);
+            let with_sec = kind == moon_chart::axes::TimeCaptionKind::Seconds;
+            // Day and month steps land on local midnights: the date is the whole caption.
+            let date_only = kind == moon_chart::axes::TimeCaptionKind::Date;
+            // Thin labels horizontally in narrow windows. The kept set ignores the crosshair; the
+            // readout plate only hides the one it covers (`TimeCaptionWalk` says why).
+            let mut walk = moon_chart::axes::TimeCaptionWalk::new(plot_left);
             for unix in crate::chartdx::axes::aligned_ticks_ms(left_unix, right_unix + 0.5, step_ms)
             {
                 // The rightmost ~10% is future space beyond the live edge; do not label times that
@@ -1002,9 +1018,13 @@ impl RenderState {
                     break;
                 }
                 let x = plot_left + ((unix - left_unix) / window_ms) as f32 * plot_w;
-                // Include a "DD.MM" date on axis labels outside the current day; without it,
-                // labels in wide windows with steps over one day appeared to run backward.
-                let label = crate::chartdx::axes::format_clock_dated(unix, with_sec, now_ms);
+                // Clock captions carry a "DD.MM" date outside the current day; without it,
+                // labels in windows spanning several days appeared to run backward.
+                let label = if date_only {
+                    crate::chartdx::axes::format_date_caption(unix)
+                } else {
+                    crate::chartdx::axes::format_clock_dated(unix, with_sec, now_ms)
+                };
                 let metrics = self.measure_text(ctx, &label);
                 let half_w = metrics.width.as_f32() * 0.5;
                 let left = x - half_w;
@@ -1012,9 +1032,8 @@ impl RenderState {
                 let overlaps_readout = skip_time_label_x.is_some_and(|(skip_left, skip_right)| {
                     right >= skip_left && left <= skip_right
                 });
-                if !overlaps_readout && left >= last_right + min_h_gap && left >= plot_left - 1.0 {
+                if walk.place(left, right, overlaps_readout) {
                     self.draw_text(ctx, &label, x, pane_bottom - 2.0, 0.5, 1.0, ink)?;
-                    last_right = right;
                 }
             }
         }

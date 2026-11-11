@@ -190,3 +190,20 @@ fn uncurated_persisted_iana_zone_remains_exact() {
     assert_eq!(zone_or_utc(Some("Europe/Atlantis")), chrono_tz::UTC);
     assert_eq!(zone_or_utc(None), chrono_tz::UTC);
 }
+
+/// A date caption reads in the selected zone, and 1 January names the year instead: the same
+/// instant is 31 December in São Paulo and New Year's Day in Warsaw.
+#[test]
+fn chart_date_caption_names_the_year_on_new_years_day() {
+    let new_year_warsaw = Utc
+        .with_ymd_and_hms(2026, 12, 31, 23, 30, 0)
+        .unwrap()
+        .timestamp_millis();
+    assert_eq!(format_chart_date(new_year_warsaw, Warsaw), "2027");
+    assert_eq!(format_chart_date(new_year_warsaw, Sao_Paulo), "31.12");
+    let spring = Utc
+        .with_ymd_and_hms(2026, 3, 5, 12, 0, 0)
+        .unwrap()
+        .timestamp_millis();
+    assert_eq!(format_chart_date(spring, Warsaw), "05.03");
+}

@@ -67,3 +67,71 @@ fn super_zoom_axis_keeps_three_distinct_second_boundaries() {
         ]
     );
 }
+
+/// Week steps start the week: anchored on the epoch the lattice would fall on Thursdays.
+#[test]
+fn week_ticks_fall_on_monday_midnights() {
+    use chrono::Datelike as _;
+    let zone = chrono_tz::Europe::Warsaw;
+    let left = 1_767_222_000_000.0; // 2026-01-01 00:00 Warsaw, a Thursday.
+    let right = left + 60.0 * 86_400_000.0;
+    let ticks = aligned_ticks_ms_in_zone(left, right, 7.0 * 86_400_000.0, zone);
+    assert!(ticks.len() >= 8);
+    for tick in ticks {
+        let local = moon_core::util::display_time::at_millis(tick as i64, zone).unwrap();
+        assert_eq!(local.weekday(), chrono::Weekday::Mon);
+        assert_eq!((local.hour(), local.minute()), (0, 0));
+    }
+}
+
+/// Month steps fall on local first-of-month midnights, across a DST change, and three months
+/// fall on quarters; a fixed 30-day lattice would drift off the first within two months.
+#[test]
+fn month_ticks_fall_on_local_firsts_and_quarters() {
+    use chrono::Datelike as _;
+    let zone = chrono_tz::Europe::Warsaw;
+    let left = 1_767_222_000_000.0; // 2026-01-01 00:00 Warsaw.
+    let right = left + 400.0 * 86_400_000.0;
+    let month = moon_chart::axes::MONTH_SECS * 1000.0;
+    let dates = |step: f64| -> Vec<(i32, u32, u32, u32)> {
+        aligned_ticks_ms_in_zone(left, right, step, zone)
+            .into_iter()
+            .map(|tick| {
+                let local = moon_core::util::display_time::at_millis(tick as i64, zone).unwrap();
+                (local.year(), local.month(), local.day(), local.hour())
+            })
+            .collect()
+    };
+    let monthly = dates(month);
+    assert_eq!(monthly.len(), 14);
+    assert!(
+        monthly
+            .iter()
+            .all(|&(_, _, day, hour)| day == 1 && hour == 0)
+    );
+    assert_eq!(monthly[3], (2026, 4, 1, 0));
+    let quarterly: Vec<u32> = dates(3.0 * month).iter().map(|d| d.1).collect();
+    assert_eq!(quarterly, vec![1, 4, 7, 10, 1]);
+}
+
+/// Havana springs forward at midnight (2026-03-08 00:00 → 01:00), so that day has no 00:00.
+/// A day step must still caption it, at the first real instant, rather than drop the date.
+#[test]
+fn a_midnight_skipped_by_dst_still_gets_its_date_tick() {
+    use chrono::{Datelike as _, TimeZone as _};
+    let zone = chrono_tz::America::Havana;
+    let left = zone
+        .with_ymd_and_hms(2026, 3, 6, 0, 0, 0)
+        .unwrap()
+        .timestamp_millis() as f64;
+    let right = left + 4.5 * 86_400_000.0;
+    let ticks = aligned_ticks_ms_in_zone(left, right, 86_400_000.0, zone);
+    let days: Vec<(u32, u32)> = ticks
+        .iter()
+        .map(|tick| {
+            let local = moon_core::util::display_time::at_millis(*tick as i64, zone).unwrap();
+            (local.day(), local.hour())
+        })
+        .collect();
+    assert_eq!(days, vec![(6, 0), (7, 0), (8, 1), (9, 0), (10, 0)]);
+}
