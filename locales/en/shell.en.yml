@@ -330,6 +330,7 @@ chart.graphics.book_kind_bars: "Bars"
 chart.graphics.book_kind_ladder: "Ladder"
 chart.graphics.ladder_big: "Highlight large levels, % of the largest on screen"
 chart.graphics.ladder_big_off: "Off"
+chart.graphics.ladder_big_color: "Large volume colour"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "Trade history"

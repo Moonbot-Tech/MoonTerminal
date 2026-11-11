@@ -282,6 +282,41 @@ fn trade_volume_alpha_migrates_only_the_legacy_default() {
     }
 }
 
+/// The ladder highlight's own colour stays unset in a file written before it, survives both stores
+/// once picked, and reads a malformed value as unset instead of dropping the block.
+///
+/// Breakage: a concrete serde default would freeze today's dark-theme amber into every upgraded
+/// tab, so a light theme or a recoloured price line would see its digits jump; a strict reader
+/// would reset the whole chart-graphics block over one hand-edited colour; serializing `None` as
+/// a value would make TOML refuse to write the layout at all.
+#[test]
+fn ladder_big_color_stays_unset_until_picked_and_reads_leniently() {
+    let empty: WindowLayout = toml::from_str("").expect("an empty layout must load");
+    assert_eq!(empty.chart_graphics.ladder_big_color, None);
+
+    let picked = ChartGraphicsCfg {
+        ladder_big_color: Some([12, 200, 99]),
+        ..ChartGraphicsCfg::default()
+    };
+    let json: ChartGraphicsCfg =
+        serde_json::from_str(&serde_json::to_string(&picked).unwrap()).unwrap();
+    assert_eq!(json.ladder_big_color, Some([12, 200, 99]), "charts.json");
+    let toml_back: ChartGraphicsCfg = toml::from_str(&toml::to_string(&picked).unwrap()).unwrap();
+    assert_eq!(
+        toml_back.ladder_big_color,
+        Some([12, 200, 99]),
+        "layout.toml"
+    );
+    let unset = toml::to_string(&ChartGraphicsCfg::default()).expect("an unset colour must write");
+    assert!(!unset.contains("ladder_big_color"));
+
+    let bad: WindowLayout =
+        toml::from_str("[chart_graphics]\nladder_big_pct = 75\nladder_big_color = \"amber\"\n")
+            .expect("a malformed colour must not reject the layout");
+    assert_eq!(bad.chart_graphics.ladder_big_color, None);
+    assert_eq!(bad.chart_graphics.ladder_big_pct, 75);
+}
+
 /// The horizontal-volume fields load from a file written before them, round-trip their side
 /// spelling, and salvage a malformed one without dropping the rest of the block.
 ///

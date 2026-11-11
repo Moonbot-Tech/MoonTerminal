@@ -1,5 +1,7 @@
 //! Static contracts for the platform-specific chart shaders.
 
+use std::path::Path;
+
 use super::support::*;
 
 /// A missing candle interval must not become a filled volume trapezoid on any backend.
@@ -988,6 +990,64 @@ fn the_chart_popups_write_their_settings_through_the_tab_spec() {
         assert!(
             !source.contains(global),
             "{module}: only the shared ⧉ walk may write the global default these tabs inherit"
+        );
+    }
+}
+
+/// A chart popover that hosts a colour picker or a dropdown must not close on an outside click.
+///
+/// Both paint their palette or menu in a deferred layer of their own, outside the popover's box,
+/// and the popover's `on_mouse_down_out` is bounds-based in the capture phase: the click that picks
+/// a colour or an item reads as "outside", the popover closes, and the pick never lands. That is
+/// how the ladder highlight's colour swatch shipped in the graphics popup (#1311) — every click on
+/// the palette shut the popup and stored nothing.
+///
+/// The unit is a popup MODULE, not a file: a top-level `chart_tabs/*.rs` file on its own, or a
+/// whole first-level folder (`labels_popup/` builds its popover in `mod.rs` and its dropdowns in
+/// `rows.rs`). It is a source check, so it is as coarse as one: a module holding two popovers
+/// passes when either carries the flag.
+#[test]
+fn a_chart_popover_with_a_picker_or_dropdown_ignores_outside_clicks() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_sources(&root.join("chart_tabs"), &mut files);
+    let mut modules: std::collections::BTreeMap<String, String> = Default::default();
+    for path in files {
+        let rel = path
+            .strip_prefix(&root)
+            .expect("a chart_tabs source sits under src")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let mut parts = rel.split('/');
+        let unit = match (parts.next(), parts.next(), parts.next()) {
+            (Some(tabs), Some(dir), Some(_)) => format!("{tabs}/{dir}/"),
+            _ => rel.clone(),
+        };
+        let source = code_only(&read_src(&rel));
+        modules.entry(unit).or_default().push_str(&source);
+    }
+    let mut checked = Vec::new();
+    for (unit, source) in &modules {
+        let deferred = ["ColorPicker::new(", "MoonDropdown::new("]
+            .iter()
+            .any(|ctor| source.contains(ctor));
+        if !(deferred && source.contains("MoonPopover::new(")) {
+            continue;
+        }
+        checked.push(unit.as_str());
+        assert!(
+            source.contains(".overlay_closable(false)"),
+            "{unit}: a popover holding a picker or dropdown must keep `.overlay_closable(false)`"
+        );
+    }
+    for known in [
+        "chart_tabs/graphics_popup.rs",
+        "chart_tabs/volumes_popup.rs",
+        "chart_tabs/labels_popup/",
+    ] {
+        assert!(
+            checked.contains(&known),
+            "{known} must be found by the walk, or it checks less than it claims: {checked:?}"
         );
     }
 }

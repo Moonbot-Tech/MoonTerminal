@@ -1813,10 +1813,14 @@ impl ChartDataState {
             } else {
                 None
             };
-            // The highlight lives in the text layer only, so a changed threshold asks for a present
-            // and nothing else.
+            // The highlight lives in the text layer only, so a changed threshold or colour asks for
+            // a present and nothing else.
             if pr.ladder_big_pct != self.chart_graphics.ladder_big_pct {
                 pr.ladder_big_pct = self.chart_graphics.ladder_big_pct;
+                text_changed = true;
+            }
+            if pr.ladder_big_color != self.chart_graphics.ladder_big_color {
+                pr.ladder_big_color = self.chart_graphics.ladder_big_color;
                 text_changed = true;
             }
             // A new grid is a new picture: rebuild and bake now rather than on the next revision.

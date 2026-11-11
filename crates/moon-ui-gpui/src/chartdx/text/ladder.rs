@@ -37,7 +37,7 @@ impl RenderState {
     ///
     /// Rows too thin for a line print nothing — the bars still show the grid. A row whose notional
     /// reaches the tab's highlight threshold of the biggest visible row prints its volume in the
-    /// last-price line's colour.
+    /// tab's own highlight colour, or the last-price line's colour while the tab has picked none.
     ///
     /// The text goes through the pane's own run pool, a row's two runs fixed by its grid index, so
     /// it never moves the shared cursor the chart's other labels are cached on.
@@ -55,7 +55,7 @@ impl RenderState {
         idx: usize,
         sf: f32,
     ) -> anyhow::Result<()> {
-        let (grid, view, max_notional, big_pct) = {
+        let (grid, view, max_notional, big_pct, big_color) = {
             let pr = &self.panes[idx];
             let Some(grid) = pr.ladder_grid else {
                 return Ok(());
@@ -68,6 +68,7 @@ impl RenderState {
                 pr.orderbook_view,
                 pr.ladder_max_notional,
                 pr.ladder_big_pct,
+                pr.ladder_big_color,
             )
         };
         let row_h = grid.row_height();
@@ -84,7 +85,10 @@ impl RenderState {
         let big_at =
             (big_pct > 0 && max_notional > 0.0).then(|| max_notional * f32::from(big_pct) / 100.0);
         let ink = color(self.axis_label);
-        let big_ink = color(self.ladder_big_label);
+        // The tab's own colour once picked; until then the theme's price line, as before it existed.
+        let big_ink = color(big_color.map_or(self.ladder_big_label, |[r, g, b]| {
+            (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+        }));
         let delta = self.label_font_delta;
         let pr = &mut self.panes[idx];
         let mut result = Ok(());

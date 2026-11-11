@@ -330,6 +330,7 @@ chart.graphics.book_kind_bars: "条形"
 chart.graphics.book_kind_ladder: "阶梯"
 chart.graphics.ladder_big: "高亮大额档位，占屏内最大档位的 %"
 chart.graphics.ladder_big_off: "关"
+chart.graphics.ladder_big_color: "大单量颜色"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "交易历史"

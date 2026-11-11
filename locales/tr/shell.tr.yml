@@ -330,6 +330,7 @@ chart.graphics.book_kind_bars: "Çubuklar"
 chart.graphics.book_kind_ladder: "Merdiven"
 chart.graphics.ladder_big: "Büyük seviyeleri vurgula, ekrandaki en büyüğün %"
 chart.graphics.ladder_big_off: "Kapalı"
+chart.graphics.ladder_big_color: "Büyük hacim rengi"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "İşlem geçmişi"

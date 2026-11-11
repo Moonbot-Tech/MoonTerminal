@@ -330,6 +330,7 @@ chart.graphics.book_kind_bars: "Thanh"
 chart.graphics.book_kind_ladder: "Bậc thang"
 chart.graphics.ladder_big: "Tô sáng mức lớn, % của mức lớn nhất trên màn hình"
 chart.graphics.ladder_big_off: "Tắt"
+chart.graphics.ladder_big_color: "Màu khối lượng lớn"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "Lịch sử giao dịch"

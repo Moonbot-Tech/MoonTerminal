@@ -30,7 +30,7 @@
 //! number field asked for by name — and its state lives on the host beside the ⚙ popup's fields.
 
 use gpui::*;
-use moon_core::config::{BookKind, ChartGraphicsCfg, TradeKind, book_width};
+use moon_core::config::{BookKind, ChartBucket, ChartGraphicsCfg, TradeKind, book_width};
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent,
     MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex, v_flex,
@@ -204,6 +204,11 @@ struct BookToggles<'a> {
     zone: bool,
     /// The width field; its state belongs to the host.
     width_input: &'a Entity<MoonInputState>,
+    /// The tab spec the popup edits, so a colour picked after the target moved writes nowhere.
+    target: (u32, ChartBucket),
+    /// The active chart theme's last-price line colour: what the ladder highlight prints in, and
+    /// what its swatch shows, until the tab stores a colour of its own.
+    price_line: [u8; 3],
 }
 
 /// Render popup content by reading the stored values on every render for the stateless controls.
@@ -475,6 +480,33 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
     let ladder = cfg.book_kind == BookKind::Ladder;
+    // The highlight's colour, on its own line under the threshold: a hex field does not fit beside
+    // four segments in this width. Shown while the highlight is off too, so it can be chosen first.
+    let ladder_color_row = ladder.then(|| {
+        let entity = entity.clone();
+        let target = book.target;
+        h_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 6.0))
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text))
+                    .child(t!("chart.graphics.ladder_big_color").to_string()),
+            )
+            .child(crate::controls::color_picker::ColorPicker::new(
+                format!("{id}-ladder-big-color-{target:?}"),
+                cfg.ladder_big_color.unwrap_or(book.price_line),
+                move |color, app| {
+                    if entity.read(app).spec_key() == target {
+                        write_cfg(&entity, app, |c| c.ladder_big_color = Some(color));
+                    }
+                },
+            ))
+    });
     let ladder_big_row = ladder.then(|| {
         let entity = entity.clone();
         let pcts = moon_chart::ladder::LADDER_BIG_PCTS;
@@ -576,7 +608,8 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     .child(book_zone_cb)
                     .child(book_width_row)
                     .child(book_kind_row)
-                    .children(ladder_big_row),
+                    .children(ladder_big_row)
+                    .children(ladder_color_row),
             ),
         )
         .into_any_element()
@@ -774,6 +807,14 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         .placement(MoonPopoverPlacement::BottomEnd)
         .content_width(f32::from(content_width(cx)))
         .close_on_content_click(false)
+        // The ladder highlight's colour picker paints its palette in its OWN deferred layer outside
+        // this popover's box, and `on_mouse_down_out` is bounds-based in the CAPTURE phase: the
+        // click that picks a colour would read as "outside" and shut the popup before the pick
+        // lands. Same trade as the volumes and labels popups (see `volumes_popup_host` and the
+        // Popover entry in docs-internal/FORK_BUGS.md): the ✕, the toolbar button, Escape while
+        // the popup holds focus, and a press on a neighbouring settings button — they share one
+        // slot — are the ways out.
+        .overlay_closable(false)
         .open(this.popup_shows(ChartPopup::Graphics))
         .on_open_change(move |open, window, app| {
             open_entity.update(app, |this, cx| match open {
@@ -803,10 +844,21 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         cx,
     );
     let row = crate::chart_tabs::apply_row::render_apply_row(this, id_prefix, values, None, p, cx);
+    // The theme the chart draws with: the Settings draft while one is open, as the chart reads it.
+    let price_line = {
+        let b = this.backend().read(cx);
+        b.preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .chart_theme()
+            .price_line
+    };
     let book = BookToggles {
         shown: snap.orderbook,
         zone: snap.show_zone,
         width_input: this.book_width_input(),
+        target: this.spec_key(),
+        price_line,
     };
     popover = popover.content(
         v_flex()
