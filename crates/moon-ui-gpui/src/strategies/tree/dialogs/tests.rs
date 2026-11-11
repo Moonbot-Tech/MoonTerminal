@@ -120,6 +120,40 @@ fn folder_delete_empties_the_folder_before_removing_it() {
     assert!(strategies < omission);
 }
 
+/// Both bulk entry points must reach the conditional empty-folder dispatcher, which has no strategy
+/// deletion call and reports exactly how many occupied folders the planner skipped.
+#[test]
+fn bulk_folder_delete_is_conditional_and_never_deletes_strategies() {
+    let source = include_str!("../dialogs.rs");
+    for entry in [
+        "fn request_delete_target(",
+        "fn request_delete_all_empty_folders(",
+    ] {
+        let body = source.split_once(entry).expect(entry).1;
+        assert!(body.contains("self.delete_empty_folders(plan, window, cx)"));
+    }
+    let dispatch = source
+        .split_once("fn delete_empty_folders(")
+        .expect("bulk empty-folder dispatcher must exist")
+        .1
+        .split_once("pub(super) fn request_delete_selection(")
+        .expect("bulk dispatcher end must be found")
+        .0;
+    assert!(dispatch.contains(".delete_empty_folder("));
+    assert!(!dispatch.contains(".delete_strategy("));
+    assert!(dispatch.contains("skipped: plan.skipped_non_empty"));
+}
+
+/// The occupied-folder count is user-visible and explicitly says that containing strategies is why
+/// those folders stayed in place.
+#[test]
+fn bulk_folder_delete_note_reports_occupied_skips() {
+    let _locale = crate::test_locale::force("en");
+    let note = rust_i18n::t!("strat.note_empty_folders_skipped", deleted = 2, skipped = 3);
+    assert!(note.contains('2') && note.contains('3'));
+    assert!(note.contains("because they contain strategies"));
+}
+
 /// Dropping the hidden-kind filter from `create_kind_list` puts ChartWall back in the create menu;
 /// dropping the existing MoonShot reorder would separately regress the menu's primary choice.
 #[test]

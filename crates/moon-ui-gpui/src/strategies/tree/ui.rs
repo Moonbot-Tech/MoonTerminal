@@ -216,8 +216,12 @@ pub(crate) enum TreeNote {
     DeleteBlocked { enabled: usize, total: usize },
     /// A core row cannot be deleted from the tree at all.
     CoreNotDeletable,
-    /// Several folders are selected and deletion takes one at a time.
-    DeleteNeedsOneFolder { selected: usize },
+    /// A bulk cleanup deleted only empty folders; occupied ones were left untouched.
+    EmptyFoldersDeleted {
+        deleted: usize,
+        skipped: usize,
+        failed: usize,
+    },
     /// A rename was requested with a selection that is not exactly one strategy.
     RenameNeedsOne { selected: usize },
     /// A core is renamed in Settings, not from this tree.
@@ -299,8 +303,34 @@ impl TreeNote {
             Self::GotoMissing { strategy_id } => MoonNotification::warning(
                 t!("strat.note_goto_missing", id = strategy_id).to_string(),
             ),
-            Self::DeleteNeedsOneFolder { selected } => MoonNotification::warning(
-                t!("strat.note_delete_one_folder", n = selected).to_string(),
+            Self::EmptyFoldersDeleted {
+                deleted,
+                skipped,
+                failed,
+            } if *failed > 0 => MoonNotification::error(
+                t!(
+                    "strat.note_empty_folders_failed",
+                    deleted = deleted,
+                    skipped = skipped,
+                    failed = failed
+                )
+                .to_string(),
+            ),
+            Self::EmptyFoldersDeleted {
+                deleted, skipped, ..
+            } if *skipped > 0 => MoonNotification::warning(
+                t!(
+                    "strat.note_empty_folders_skipped",
+                    deleted = deleted,
+                    skipped = skipped
+                )
+                .to_string(),
+            ),
+            Self::EmptyFoldersDeleted { deleted: 0, .. } => {
+                MoonNotification::info(t!("strat.note_no_empty_folders").to_string())
+            }
+            Self::EmptyFoldersDeleted { deleted, .. } => MoonNotification::success(
+                t!("strat.note_empty_folders_deleted", n = deleted).to_string(),
             ),
             Self::RenameNeedsOne { selected } => {
                 MoonNotification::warning(t!("strat.note_rename_one", n = selected).to_string())

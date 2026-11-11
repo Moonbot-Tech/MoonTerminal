@@ -1061,9 +1061,8 @@ impl StrategiesView {
         );
     }
 
-    /// Requests deletion of the selected strategies after checking that all are disabled.
-    /// Delete whatever the tree currently addresses: the folder set if there is one, else the
-    /// strategy selection.
+    /// Delete whatever the tree addresses: one folder through its existing confirmation, several
+    /// folders through strictly-empty cleanup, otherwise the disabled strategy selection.
     ///
     /// One entry point so the Delete key, the menu and the toolbar cannot disagree about what
     /// "delete" means once folders and cores can be multi-selected.
@@ -1079,20 +1078,106 @@ impl StrategiesView {
             TreeNote::CoreNotDeletable.say(window, cx);
             return;
         }
-        // One folder is the ordinary case and keeps the existing confirmation verbatim. Several
-        // are refused for now rather than half-handled: each needs its own authorized snapshot,
-        // and a partial delete across folders is exactly the outcome that must not be possible.
-        let Some((core, path)) = folders.first().cloned() else {
-            return;
-        };
-        if folders.len() > 1 {
-            TreeNote::DeleteNeedsOneFolder {
-                selected: folders.len(),
-            }
-            .say(window, cx);
+        if let [(core, path)] = folders.as_slice() {
+            self.request_delete_folder(*core, strategy_path::split_path(path), window, cx);
             return;
         }
-        self.request_delete_folder(core, strategy_path::split_path(&path), window, cx);
+        let plan = self.empty_folder_plan(&folders, cx);
+        self.delete_empty_folders(plan, window, cx);
+    }
+
+    /// Delete every strictly empty folder reported by the visible cores, plus local empty markers.
+    pub(super) fn request_delete_all_empty_folders(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let folders = {
+            let backend = self.backend.read(cx);
+            let cores = visible_strategy_cores(self, backend);
+            let store = backend.session.store();
+            let mut folders = Vec::new();
+            for (core, _) in cores.iter() {
+                if let Some(data) = store.core(*core) {
+                    folders.extend(data.folders.paths.iter().map(|path| (*core, path.clone())));
+                }
+                folders.extend(
+                    self.ui_folder_paths(*core)
+                        .into_iter()
+                        .map(|path| (*core, strategy_path::join_path(&path))),
+                );
+            }
+            folders
+        };
+        let plan = self.empty_folder_plan(&folders, cx);
+        self.delete_empty_folders(plan, window, cx);
+    }
+
+    /// Capture current placements once and classify every candidate against the same live snapshot.
+    fn empty_folder_plan(
+        &self,
+        folders: &[(CoreId, String)],
+        cx: &Context<Self>,
+    ) -> ops::EmptyFolderDeletePlan {
+        let store = self.backend.read(cx).session.store();
+        let mut snapshots = Vec::new();
+        for (core, _) in folders {
+            if snapshots.iter().any(|(id, _)| id == core) {
+                continue;
+            }
+            if let Some(data) = store.core(*core) {
+                snapshots.push((*core, data.strategies.as_slice()));
+            }
+        }
+        ops::empty_folder_delete_plan(&snapshots, folders)
+    }
+
+    /// Queue conditional folder commands only; this path never deletes a strategy.
+    fn delete_empty_folders(
+        &mut self,
+        plan: ops::EmptyFolderDeletePlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut deleted = 0usize;
+        let mut failed = 0usize;
+        let mut removed = HashSet::new();
+        for target in plan.targets {
+            let queued = self.backend.read(cx).session.delete_empty_folder(
+                target.core,
+                target.path.clone(),
+                target.expected_placements,
+            );
+            match queued {
+                Ok(()) => {
+                    deleted += 1;
+                    removed.insert((target.core, target.path.clone()));
+                    self.remove_ui_folder(target.core, &strategy_path::split_path(&target.path));
+                }
+                Err(error) => {
+                    failed += 1;
+                    log::warn!("delete empty folder failed: {error}");
+                }
+            }
+        }
+        self.folder_sel.retain(|key| !removed.contains(key));
+        if self
+            .folder_anchor
+            .as_ref()
+            .is_some_and(|key| removed.contains(key))
+        {
+            self.folder_anchor = None;
+        }
+        if deleted > 0 {
+            self.persist_session(cx);
+        }
+        cx.notify();
+        TreeNote::EmptyFoldersDeleted {
+            deleted,
+            skipped: plan.skipped_non_empty,
+            failed,
+        }
+        .say(window, cx);
     }
 
     pub(super) fn request_delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
