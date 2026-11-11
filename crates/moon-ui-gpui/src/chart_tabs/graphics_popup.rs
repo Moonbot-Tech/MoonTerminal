@@ -8,6 +8,9 @@
 //! [`super::history_popup`], the band to [`super::volumes_popup`] beside the horizontal volumes it
 //! shares its colours with. What stayed is what a reader looking at the LIVE picture adjusts.
 //!
+//! It is laid out as a square: where the crosshair's values print ([`cursor_rows`]) and the lines
+//! each span the whole popup, then the trade marks sit beside the order book.
+//!
 //! Like the layout and candle popups beside it, these settings are PER TAB: the target is the tab
 //! strip's active tab or the detached window's panel. The tab spec persists them to `charts.json`
 //! through `ChartTabSpec::chart_graphics`, and a tab without an override follows the default of its
@@ -30,7 +33,7 @@
 //! number field asked for by name — and its state lives on the host beside the ⚙ popup's fields.
 
 use gpui::*;
-use moon_core::config::{BookKind, ChartGraphicsCfg, TradeKind, book_width};
+use moon_core::config::{BookKind, ChartBucket, ChartGraphicsCfg, TradeKind, book_width};
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent,
     MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSize, h_flex, v_flex,
@@ -73,9 +76,13 @@ const BOOK_KINDS: [(BookKind, &str); 2] = [
     (BookKind::Ladder, "chart.graphics.book_kind_ladder"),
 ];
 
-/// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
+/// Space between the popup's two columns of frames, before UI scaling.
+const COLUMN_GAP: f32 = 8.0;
+
+/// Popup CONTENT width in rendered pixels: two columns of frames and the gap between them.
+/// `MoonPopover` adds its own padding and border outside it.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    px(ROW_W + popup_group_inset_px(cx))
+    px((ROW_W + popup_group_inset_px(cx)) * 2.0) + design::ui_px(cx, COLUMN_GAP)
 }
 
 /// Index of the step nearest a stored value.
@@ -204,6 +211,11 @@ struct BookToggles<'a> {
     zone: bool,
     /// The width field; its state belongs to the host.
     width_input: &'a Entity<MoonInputState>,
+    /// The tab spec the popup edits, so a colour picked after the target moved writes nowhere.
+    target: (u32, ChartBucket),
+    /// The active chart theme's last-price line colour: what the ladder highlight prints in, and
+    /// what its swatch shows, until the tab stores a colour of its own.
+    price_line: [u8; 3],
 }
 
 /// Render popup content by reading the stored values on every render for the stateless controls.
@@ -475,6 +487,33 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
     let ladder = cfg.book_kind == BookKind::Ladder;
+    // The highlight's colour, on its own line under the threshold: a hex field does not fit beside
+    // four segments in this width. Shown while the highlight is off too, so it can be chosen first.
+    let ladder_color_row = ladder.then(|| {
+        let entity = entity.clone();
+        let target = book.target;
+        h_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 6.0))
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text))
+                    .child(t!("chart.graphics.ladder_big_color").to_string()),
+            )
+            .child(crate::controls::color_picker::ColorPicker::new(
+                format!("{id}-ladder-big-color-{target:?}"),
+                cfg.ladder_big_color.unwrap_or(book.price_line),
+                move |color, app| {
+                    if entity.read(app).spec_key() == target {
+                        write_cfg(&entity, app, |c| c.ladder_big_color = Some(color));
+                    }
+                },
+            ))
+    });
     let ladder_big_row = ladder.then(|| {
         let entity = entity.clone();
         let pcts = moon_chart::ladder::LADDER_BIG_PCTS;
@@ -517,6 +556,9 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
 
+    // Inner width of a frame spanning both columns: the whole content less one frame's inset.
+    let full_w = content_width(cx) - px(popup_group_inset_px(cx));
+
     // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     v_flex()
         .id(SharedString::from(format!("{id}-popup")))
@@ -538,46 +580,70 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     },
                 )),
         )
+        // A square rather than a tall strip: the crosshair's places and the lines each span the
+        // whole popup — the lines' four switches in two columns — then the trades beside the
+        // book. Group ids are `&'static str`: they only need to be unique among their siblings,
+        // and the enclosing root already carries the per-host prefix.
         .child(
-            // Group ids are `&'static str`: they only need to be unique among their siblings, and
-            // the enclosing root already carries the per-host prefix.
+            popup_group("frame-cursor", t!("chart.graphics.frame_cursor")).child(
+                cursor_rows::cursor_rows(id, &entity, &cfg.cursor_labels, full_w, p, cx),
+            ),
+        )
+        .child(
             popup_group("frame-lines", t!("chart.graphics.frame_lines")).child(
-                v_flex()
-                    .w(px(ROW_W))
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(last_line_cb)
-                    .child(mark_line_cb)
-                    .child(hide_move_cb)
-                    .child(moonshot_cb),
+                h_flex()
+                    .w(full_w)
+                    .items_start()
+                    .gap(design::ui_px(cx, COLUMN_GAP))
+                    .child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(last_line_cb)
+                            .child(mark_line_cb),
+                    )
+                    .child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(hide_move_cb)
+                            .child(moonshot_cb),
+                    ),
             ),
         )
         .child(
-            popup_group("frame-trade-marks", t!("chart.graphics.frame_trade_marks")).child(
-                v_flex()
-                    .w(px(ROW_W))
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(trade_kind_row)
-                    .children(trade_merge_row)
-                    .children(trade_small_row)
-                    .children(trade_bubbles_hint)
-                    // Kept in bubble mode too: the liquidations stay crosses.
-                    .child(marker_scale_row)
-                    .child(trade_volume_alpha_row)
-                    .child(trade_volume_alpha_hint)
-                    .child(liquidations_cb),
-            ),
-        )
-        .child(
-            popup_group("frame-book", t!("chart.graphics.frame_book")).child(
-                v_flex()
-                    .w(px(ROW_W))
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(book_show_cb)
-                    .child(book_zone_cb)
-                    .child(book_width_row)
-                    .child(book_kind_row)
-                    .children(ladder_big_row),
-            ),
+            h_flex()
+                .items_start()
+                .gap(design::ui_px(cx, COLUMN_GAP))
+                .child(
+                    popup_group("frame-trade-marks", t!("chart.graphics.frame_trade_marks")).child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(trade_kind_row)
+                            .children(trade_merge_row)
+                            .children(trade_small_row)
+                            .children(trade_bubbles_hint)
+                            // Kept in bubble mode too: the liquidations stay crosses.
+                            .child(marker_scale_row)
+                            .child(trade_volume_alpha_row)
+                            .child(trade_volume_alpha_hint)
+                            .child(liquidations_cb),
+                    ),
+                )
+                .child(
+                    popup_group("frame-book", t!("chart.graphics.frame_book")).child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(book_show_cb)
+                            .child(book_zone_cb)
+                            .child(book_width_row)
+                            .child(book_kind_row)
+                            .children(ladder_big_row)
+                            .children(ladder_color_row),
+                    ),
+                ),
         )
         .into_any_element()
 }
@@ -774,6 +840,14 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         .placement(MoonPopoverPlacement::BottomEnd)
         .content_width(f32::from(content_width(cx)))
         .close_on_content_click(false)
+        // The ladder highlight's colour picker paints its palette in its OWN deferred layer outside
+        // this popover's box, and `on_mouse_down_out` is bounds-based in the CAPTURE phase: the
+        // click that picks a colour would read as "outside" and shut the popup before the pick
+        // lands. Same trade as the volumes and labels popups (see `volumes_popup_host` and the
+        // Popover entry in docs-internal/FORK_BUGS.md): the ✕, the toolbar button, Escape while
+        // the popup holds focus, and a press on a neighbouring settings button — they share one
+        // slot — are the ways out.
+        .overlay_closable(false)
         .open(this.popup_shows(ChartPopup::Graphics))
         .on_open_change(move |open, window, app| {
             open_entity.update(app, |this, cx| match open {
@@ -803,10 +877,21 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
         cx,
     );
     let row = crate::chart_tabs::apply_row::render_apply_row(this, id_prefix, values, None, p, cx);
+    // The theme the chart draws with: the Settings draft while one is open, as the chart reads it.
+    let price_line = {
+        let b = this.backend().read(cx);
+        b.preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .chart_theme()
+            .price_line
+    };
     let book = BookToggles {
         shown: snap.orderbook,
         zone: snap.show_zone,
         width_input: this.book_width_input(),
+        target: this.spec_key(),
+        price_line,
     };
     popover = popover.content(
         v_flex()
@@ -816,6 +901,8 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
     );
     popover
 }
+
+mod cursor_rows;
 
 #[cfg(test)]
 mod tests;

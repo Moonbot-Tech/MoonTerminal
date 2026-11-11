@@ -546,6 +546,15 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) ladder_max_notional: f32,
     /// The tab's ladder highlight threshold, percent of `ladder_max_notional`; `0` is off.
     pub(in crate::chartdx) ladder_big_pct: u8,
+    /// The tab's own colour for those highlighted volumes; `None` follows the theme's price line
+    /// (`RenderState::ladder_big_label`). Copied from the tab's graphics like the threshold.
+    pub(in crate::chartdx) ladder_big_color: Option<[u8; 3]>,
+    /// Right end, in logical pixels, of the widest row volume the ladder printed THIS present;
+    /// `None` when it printed none. The crosshair's "past the volumes" home clears it.
+    pub(in crate::chartdx) ladder_volumes_right: Option<f32>,
+    /// The tab's places for the crosshair's values. Copied from the tab's graphics like the
+    /// ladder threshold.
+    pub(in crate::chartdx) cursor_labels: moon_core::config::CursorLabelsCfg,
     /// Own-pass X camera: time epoch, right-side future fraction, follow flag, and last QUANTIZED
     /// right-edge pixel position. The callback advances the camera from these fields on every
     /// whole-pixel vblank present, providing live scrolling without a separate timer.
@@ -805,6 +814,9 @@ impl PaneRender {
             cluster_placed: Vec::new(),
             ladder_max_notional: 0.0,
             ladder_big_pct: 0,
+            ladder_big_color: None,
+            ladder_volumes_right: None,
+            cursor_labels: moon_core::config::CursorLabelsCfg::default(),
             epoch_ms: 0.0,
             right_margin_frac: 0.10,
             follow: false,

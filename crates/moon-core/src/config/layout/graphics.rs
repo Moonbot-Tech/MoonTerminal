@@ -383,10 +383,21 @@ pub struct ChartGraphicsCfg {
     #[serde(default, deserialize_with = "de_book_kind")]
     pub book_kind: BookKind,
     /// Ladder rows whose volume reaches this percentage of the largest visible row print their
-    /// volume in the last-price line's colour, one of `moon_chart::ladder::LADDER_BIG_PCTS`; `0`
+    /// volume in [`Self::ladder_big_color`], one of `moon_chart::ladder::LADDER_BIG_PCTS`; `0`
     /// turns the highlight off.
     #[serde(default = "def_ladder_big_pct", deserialize_with = "de_ladder_big_pct")]
     pub ladder_big_pct: u8,
+    /// The colour those highlighted volumes print in, solid. `None` until the user picks one: the
+    /// digits then follow the active chart theme's last-price line colour, which is what they
+    /// printed in before this setting existed, so an upgrade repaints nothing and a light theme
+    /// keeps its own darker amber. Once picked it is this tab's own colour, and editing the price
+    /// line no longer touches it. Kept while the highlight is off, so it can be chosen then.
+    #[serde(
+        default,
+        deserialize_with = "de_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ladder_big_color: Option<[u8; 3]>,
     /// Width of the right-hand book zone in PHYSICAL pixels, before the pane's own limits narrow
     /// it (`chartdx::pane_layout`). Per tab like the book's kind: a scalping tab can give the book
     /// room while a crowded AddToChart stack keeps it slim. It used to be one app-wide value in
@@ -396,6 +407,13 @@ pub struct ChartGraphicsCfg {
         deserialize_with = "de_book_width"
     )]
     pub book_width_px: f32,
+
+    // --- Crosshair: where its values print. Last on purpose: a nested TOML table must follow
+    // every plain value of its parent. ---
+    /// Where the crosshair's order size, book depth and percent print, and their stacking order.
+    /// ABSENT, each keeps the home it had before it could move.
+    #[serde(default, deserialize_with = "super::cursor_labels::de_cursor_labels")]
+    pub cursor_labels: CursorLabelsCfg,
 }
 
 /// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
@@ -445,7 +463,9 @@ impl Default for ChartGraphicsCfg {
             hvol_hide_captions: false,
             book_kind: BookKind::Bars,
             ladder_big_pct: def_ladder_big_pct(),
+            ladder_big_color: None,
             book_width_px: crate::config::book_width::DEFAULT,
+            cursor_labels: CursorLabelsCfg::default(),
         }
     }
 }

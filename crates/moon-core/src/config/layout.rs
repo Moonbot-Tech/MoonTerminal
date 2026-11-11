@@ -31,6 +31,7 @@ use serde_compat::{
 pub use serde_compat::{de_lenient, de_lenient_bool};
 
 mod bounds;
+mod cursor_labels;
 mod first_run;
 mod geometry;
 mod graphics;
@@ -40,6 +41,7 @@ mod table_prefs;
 mod warnings;
 
 pub use bounds::*;
+pub use cursor_labels::{CursorLabel, CursorLabelAnchor, CursorLabelSpot, CursorLabelsCfg};
 pub use first_run::*;
 pub use geometry::*;
 pub use graphics::*;

@@ -107,6 +107,8 @@ impl RenderState {
             let plot_right = plot_left + plot_w;
             // The ladder's row text goes first, so every label laid out after it — the cursor's
             // values among them — prints over it rather than under it.
+            // The volume column's edge is this frame's: a hidden book or a bars book has none.
+            self.panes[idx].ladder_volumes_right = None;
             if orderbook_enabled {
                 self.draw_ladder_text(ctx, idx, sf)?;
             }
@@ -677,6 +679,8 @@ impl RenderState {
             let badge = self
                 .cursor_badge
                 .zip(self.cursor.filter(|cursor| cursor.pane == idx));
+            // Where the badge ends, so a crosshair value placed below-right starts under it.
+            let mut badge_bottom = None;
             if let Some((text, cursor)) = badge {
                 let cx_log = (self.slot_origin[0] + cursor.local[0]) / sf;
                 let cy_log = (self.slot_origin[1] + cursor.local[1]) / sf;
@@ -723,6 +727,7 @@ impl RenderState {
                         h: bh,
                         solid: true,
                     });
+                    badge_bottom = Some(y + bh);
                 }
             }
 
@@ -867,10 +872,10 @@ impl RenderState {
                     }
                 }
 
-                // Crosshair labels: order size ($) sits LEFT of the separator on the chart side,
-                // right-aligned to the separator at the cursor line. Order-book volume and percent
-                // sit RIGHT of the separator in the book zone: volume ABOVE the line and percent
-                // BELOW it. All three share a color: green below current price, red above it.
+                // Crosshair values — the armed order size, the book depth at the cursor, and the
+                // percent from the book's best price — print at the places the tab stored for them
+                // (`text::cursor_labels`). All three share a colour: green on this side of the
+                // reference price, red past it.
                 if cy_log >= plot_top && cy_log <= plot_bottom {
                     let cursor_price = y_min + (plot_bottom - cy_log) / price_to_px.max(1e-6);
                     // Percent and cursor color use the NEAREST side of the book, not last price, as
@@ -887,87 +892,38 @@ impl RenderState {
                             pct_hsla(r - cursor_price, self.label_positive, self.label_negative)
                         })
                         .unwrap_or(readout);
-                    let right_x = zone_left + READOUT_PAD_X;
-                    // Leave a gap so the label badge does not cut through the crosshair line.
-                    let gap = cursor_label_gap(self.cursor_thickness, sf);
-                    // Cursor values are foreground priority elements outside the label columns:
-                    // they occupy fixed positions at the crosshair and receive an opaque backdrop.
-                    // Place order size ABOVE the cursor line, left of and right-aligned to the
-                    // separator. Omit `$` and use compact lowercase SI without forced zeroes.
-                    if let Some(usd) = prospective_usd {
-                        let text = fmt_prospective_order_size(usd);
-                        let m = self.draw_label_text(
-                            ctx,
-                            &text,
-                            label_x,
-                            cy_log - gap,
-                            1.0,
-                            1.0,
-                            cur_col,
-                        )?;
-                        placed.push(PlacedLabel {
-                            x: label_x,
-                            y: cy_log - gap,
-                            ax: 1.0,
-                            ay: 1.0,
-                            w: m.width.as_f32(),
-                            h: m.line_height.as_f32(),
-                            solid: true,
-                        });
-                    }
-                    // Draw order-book volume at the cursor level right of the separator, above the line.
-                    if orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty() {
-                        let tol = 6.0 / price_to_px.max(1e-6);
-                        if let Some(q) = nearest_orderbook_notional(
-                            &self.panes[idx].orderbook_levels,
-                            cursor_price,
-                            tol,
-                        ) {
-                            let m = self.draw_label_text(
-                                ctx,
-                                &fmt_amount(q),
-                                right_x,
-                                cy_log - gap,
-                                0.0,
-                                1.0,
-                                cur_col,
-                            )?;
-                            placed.push(PlacedLabel {
-                                x: right_x,
-                                y: cy_log - gap,
-                                ax: 0.0,
-                                ay: 1.0,
-                                w: m.width.as_f32(),
-                                h: m.line_height.as_f32(),
-                                solid: true,
-                            });
-                        }
-                    }
-                    // Draw the cursor's percentage deviation from the nearest book side right of
-                    // the separator, below the line.
-                    if let Some(r) = cursor_ref
-                        && r > 0.0
-                    {
-                        let pct = (cursor_price - r) / r * 100.0;
-                        let m = self.draw_label_text(
-                            ctx,
-                            &fmt_pct(pct),
-                            right_x,
-                            cy_log + gap,
-                            0.0,
-                            0.0,
-                            cur_col,
-                        )?;
-                        placed.push(PlacedLabel {
-                            x: right_x,
-                            y: cy_log + gap,
-                            ax: 0.0,
-                            ay: 0.0,
-                            w: m.width.as_f32(),
-                            h: m.line_height.as_f32(),
-                            solid: true,
-                        });
-                    }
+                    // Book depth at the cursor level: only with a book, and only when a level lies
+                    // within a few pixels of the cursor.
+                    let depth = (orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty())
+                        .then(|| {
+                            let tol = 6.0 / price_to_px.max(1e-6);
+                            nearest_orderbook_notional(
+                                &self.panes[idx].orderbook_levels,
+                                cursor_price,
+                                tol,
+                            )
+                        })
+                        .flatten()
+                        .map(fmt_amount);
+                    let texts = super::cursor_labels::CursorLabelTexts {
+                        // No `$`, compact lowercase SI without forced zeroes.
+                        order_size: prospective_usd.map(fmt_prospective_order_size),
+                        depth,
+                        percent: cursor_ref
+                            .filter(|r| *r > 0.0)
+                            .map(|r| fmt_pct((cursor_price - r) / r * 100.0)),
+                    };
+                    let frame = super::cursor_labels::CursorLabelFrame {
+                        zone_left,
+                        cy: cy_log,
+                        cross_x: Some(cx_log),
+                        // Keep the plates off the crosshair line.
+                        gap: cursor_label_gap(self.cursor_thickness, sf),
+                        badge_bottom,
+                        pane_x: [pane_left, pane_right],
+                        color: cur_col,
+                    };
+                    self.draw_cursor_labels(ctx, idx, &frame, &texts, &mut placed)?;
                 }
             } else {
                 // With no real cursor on the pane, draw the compare-mode ghost (volume/percentage
