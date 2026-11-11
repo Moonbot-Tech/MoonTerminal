@@ -356,12 +356,13 @@ fn prospective_order_size_label_uses_shared_compact_formatter() {
 /// The retained chart render path must call the chart-specific compact order-size helper.
 ///
 /// Restoring the former fixed-hundredths expression fails this source-wiring oracle even when the
-/// helper's direct tests remain green.
+/// helper's direct tests remain green. The value now reaches the crosshair through
+/// `text::cursor_labels`, which places it, so the wiring is the order-size field's formatter.
 #[test]
 fn prepare_wires_compact_order_size_label() {
     let source = include_str!("prepare.rs");
 
-    assert!(source.contains("let text = fmt_prospective_order_size(usd);"));
+    assert!(source.contains("order_size: prospective_usd.map(fmt_prospective_order_size)"));
     assert!(!source.contains("format!(\"{usd:.2}\")"));
 }
 
