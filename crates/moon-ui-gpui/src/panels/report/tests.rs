@@ -1074,8 +1074,8 @@ fn the_constructor_restores_persisted_filters_before_loading_metadata() {
     );
 }
 
-/// The Strategies action receives an independent all-time, exact-identity preset. Building it must
-/// not mutate the main Report filter used as the transform's source.
+/// The shared strategy action receives an independent all-time, exact-identity preset. Building it
+/// must not mutate the main Report filter used as the transform's source.
 #[test]
 fn strategy_trades_preset_leaves_the_main_report_filter_unchanged() {
     let strategy = moon_core::db::ReportStrategyKey {
@@ -1122,11 +1122,42 @@ fn strategy_trades_preset_leaves_the_main_report_filter_unchanged() {
     assert_eq!(scope.side, SideFilter::All);
 }
 
+/// Selecting another strategy, or removing its core, must retitle the native standalone window as
+/// well as the visible header. Dropping either callback or the deferred registry update leaves the
+/// OS naming the old strategy after the query has moved on.
+#[test]
+fn standalone_strategy_changes_retarget_the_native_title() {
+    let actions = code_only(include_str!("actions.rs"));
+    for signature in [
+        "pub(super) fn set_strategy_choices(",
+        "pub(super) fn reconcile_strategy_core(",
+    ] {
+        let body = braced_body(&actions, signature);
+        assert!(
+            body.contains("self.sync_standalone_window_title(cx);"),
+            "{signature} must synchronize the native title"
+        );
+    }
+
+    let window = code_only(include_str!("window.rs"));
+    let sync = braced_body(&window, "pub(super) fn sync_standalone_window_title(");
+    for anchor in [
+        "cx.defer(",
+        "window.set_window_title(&title);",
+        "crate::window::titles::retitle(",
+    ] {
+        assert!(
+            sync.contains(anchor),
+            "standalone title synchronization is missing {anchor}"
+        );
+    }
+}
+
 /// A strategy-scoped standalone panel must neither restore stored filters nor write its own —
 /// two independent guards, because either can be dropped without breaking the other.
 ///
 /// Mutation: deleting the `if self.scoped { return false; }` guard from
-/// `state.rs::restore_persisted_filters` applies stored values over the strategy Analytics asked
+/// `state.rs::restore_persisted_filters` applies stored values over the strategy the caller asked
 /// for; deleting the `if self.scoped { return; }` guard from `actions.rs::persist_filters` writes
 /// that transient scope into the shared per-context store and corrupts the next ordinary Report
 /// opened in that same context.

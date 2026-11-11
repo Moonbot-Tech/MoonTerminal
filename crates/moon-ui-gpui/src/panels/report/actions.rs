@@ -258,6 +258,7 @@ impl ReportPanel {
             return;
         }
         self.selected_strategies = selected_strategies;
+        self.sync_standalone_window_title(cx);
         self.request_requery(cx);
     }
 
@@ -281,6 +282,7 @@ impl ReportPanel {
         if became_empty {
             self.selected_strategies = None;
         }
+        self.sync_standalone_window_title(cx);
         self.queue_strategy_select_sync(false, cx);
     }
 

@@ -191,9 +191,9 @@ pub(super) fn strategy_report_title(strategy_name: &str) -> String {
 }
 
 impl ReportPanel {
-    /// Resolve the visible title from the same exact strategy selection as the query.
-    pub(super) fn standalone_title(&self) -> String {
-        let strategy_name = self.selected_strategies.as_ref().and_then(|selected| {
+    /// Resolve the one exact strategy named by the current selection.
+    fn selected_strategy_name(&self) -> Option<&str> {
+        self.selected_strategies.as_ref().and_then(|selected| {
             if selected.len() != 1 {
                 return None;
             }
@@ -202,11 +202,46 @@ impl ReportPanel {
                 .iter()
                 .find(|strategy| strategy.key == *key)
                 .map(|strategy| strategy.name.as_str())
-        });
-        strategy_name.map_or_else(
+        })
+    }
+
+    /// Resolve the visible title from the same exact strategy selection as the query.
+    pub(super) fn standalone_title(&self) -> String {
+        self.selected_strategy_name().map_or_else(
             || report_title(&self.sel_cores, &self.cores),
             strategy_report_title,
         )
+    }
+
+    /// Queue native and locale-tracked title updates after a standalone filter edit.
+    ///
+    /// Deferral is required because the strategy callback runs while this window is already being
+    /// updated; the captured selection makes a later locale switch rebuild the same new title.
+    pub(super) fn sync_standalone_window_title(&self, cx: &mut Context<Self>) {
+        if !self.standalone {
+            return;
+        }
+        let Some(handle) = self.backend.read(cx).report_window else {
+            return;
+        };
+        let title = self.standalone_title();
+        let strategy_name = self.selected_strategy_name().map(str::to_owned);
+        let selected = self.sel_cores.clone();
+        let cores = self.cores.clone();
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, app| {
+                window.set_window_title(&title);
+                crate::window::titles::retitle(
+                    handle.into(),
+                    move |_| {
+                        strategy_name
+                            .as_deref()
+                            .map_or_else(|| report_title(&selected, &cores), strategy_report_title)
+                    },
+                    app,
+                );
+            });
+        });
     }
 }
 
