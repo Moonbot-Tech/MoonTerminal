@@ -738,7 +738,8 @@ fn run(
             };
             return_listing_proven(restore, fresh.as_deref(), retained_token.as_ref())?;
             let mut cores = Vec::new();
-            let mut retain = |returned: bot::ReturnedBot| {
+            let mut retain = |returned: bot::ReturnedBot| -> anyhow::Result<()> {
+                returned_listing_proven(&returned, fresh.as_deref(), retained_token.as_ref())?;
                 cores = return_core_listing(
                     &returned,
                     fresh.as_deref(),
@@ -746,6 +747,7 @@ fn run(
                     &retained_cores,
                 );
                 remember(returned, cores.clone());
+                Ok(())
             };
             let returned = bot::return_bot(&target, restore, recovered, &mut retain, say)?;
             Ok(Done::BotOff { returned, cores })
@@ -969,6 +971,21 @@ fn return_listing_proven(
     retained_token: Option<&Secret>,
 ) -> Result<(), CoresChanged> {
     if restore && fresh.is_none() && retained_token.is_none() {
+        return Err(CoresChanged);
+    }
+    Ok(())
+}
+
+/// A retry without a fresh listing can translate only the grants of the bot whose namespace it
+/// retained. A replacement bot read off the station would leave with every grant emptied and no
+/// copy on the station: refuse before it is removed, as a first return without a listing does.
+fn returned_listing_proven(
+    returned: &bot::ReturnedBot,
+    fresh: Option<&[moon_core::station_api::ListedCore]>,
+    retained_token: Option<&Secret>,
+) -> Result<(), CoresChanged> {
+    let same_bot = retained_token.is_some_and(|token| token.expose() == returned.token.expose());
+    if fresh.is_none() && !same_bot {
         return Err(CoresChanged);
     }
     Ok(())

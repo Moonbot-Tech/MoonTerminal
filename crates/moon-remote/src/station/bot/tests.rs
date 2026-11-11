@@ -175,7 +175,7 @@ fn return_read_failure_never_removes_the_bot() {
     let result = read_then_remove(
         true,
         || Err(BotReturnError::ReadFailed.into()),
-        &mut |_| {},
+        &mut |_| Ok(()),
         |_, _| {
             removed.set(true);
             Ok(())
@@ -198,7 +198,7 @@ fn returning_reads_before_removal_and_waits_for_it() {
                 access: Access::default(),
             })
         },
-        &mut |_| {},
+        &mut |_| Ok(()),
         |_, _| {
             steps.borrow_mut().push("remove");
             Ok(())
@@ -217,7 +217,7 @@ fn local_bot_skips_readback_but_removes_server_bot() {
     let returned = read_then_remove(
         false,
         || panic!("must not export another bot"),
-        &mut |_| {},
+        &mut |_| Ok(()),
         |_, _| {
             removed.set(true);
             Ok(())
@@ -270,7 +270,10 @@ fn removal_failure_retains_recovered_credentials_without_a_success() {
                 access: Access::default(),
             })
         },
-        &mut |returned| retained = Some(returned),
+        &mut |returned| {
+            retained = Some(returned);
+            Ok(())
+        },
         |_, _| Err(anyhow::anyhow!("synthetic restart failure")),
     );
     assert!(result.is_err());
@@ -305,7 +308,10 @@ fn a_retry_returns_the_current_bot_instead_of_a_superseded_snapshot() {
                 })
             })
         },
-        &mut |bot| remembered = Some(bot),
+        &mut |bot| {
+            remembered = Some(bot);
+            Ok(())
+        },
         |_, _| Ok(()),
     )
     .unwrap()
@@ -314,6 +320,30 @@ fn a_retry_returns_the_current_bot_instead_of_a_superseded_snapshot() {
     assert_eq!(returned.access.authorized_chat_ids, [73]);
     assert_eq!(returned.access.owner_chat_id, Some(73));
     assert_eq!(remembered.unwrap().token.expose(), "synthetic-bot-B");
+}
+
+/// Issue #1038: a retry that reads a replacement bot it cannot map used to remove it anyway, so
+/// its viewer grants were saved emptied with no copy left on the station. A refusal from
+/// `remember` must stop the return before anything is removed.
+#[test]
+fn issue_1038_a_refused_returned_bot_is_never_removed() {
+    let removed = std::cell::Cell::new(false);
+    let result = read_then_remove(
+        true,
+        || {
+            Ok(ReturnedBot {
+                token: Secret::new("synthetic-bot-B"),
+                access: Access::default(),
+            })
+        },
+        &mut |_| Err(anyhow::anyhow!("synthetic unproven namespace")),
+        |_, _| {
+            removed.set(true);
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+    assert!(!removed.get());
 }
 
 /// Requiring an already-deleted credential after partial removal would strand the only copy.

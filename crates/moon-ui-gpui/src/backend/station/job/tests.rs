@@ -1,8 +1,8 @@
 //! Validation failures retain kinds until the presentation boundary.
 
 use super::{
-    core_keys, first_access, picked_core_key, return_listing_proven, saved_local_cores,
-    show_journal, show_status, translation_proven,
+    core_keys, first_access, picked_core_key, return_listing_proven, returned_listing_proven,
+    saved_local_cores, show_journal, show_status, translation_proven,
 };
 use crate::backend::station::cores_sync;
 use moon_core::config::{CoreKeyEntry, Secret};
@@ -110,6 +110,30 @@ fn issue_1027_first_return_without_a_listing_refuses_before_removal() {
     assert!(return_listing_proven(true, None, Some(&token)).is_ok());
     assert!(return_listing_proven(true, Some(&[]), None).is_ok());
     assert!(return_listing_proven(false, None, None).is_ok());
+}
+
+/// Issue #1038: a retry whose API does not answer used to return a replacement bot found on the
+/// station with its viewer grants emptied, because only bot A's namespace was retained. The
+/// replacement must be refused before removal; the same bot and a fresh listing still go.
+#[test]
+fn issue_1038_retry_refuses_a_replacement_bot_without_a_listing() {
+    use moon_core::station_api::Access;
+    use moon_remote::station::bot::ReturnedBot;
+
+    let retained = Secret::new("synthetic-bot-A");
+    let same = ReturnedBot {
+        token: retained.clone(),
+        access: Access::default(),
+    };
+    let replacement = ReturnedBot {
+        token: Secret::new("synthetic-bot-B"),
+        access: Access::default(),
+    };
+    let error = returned_listing_proven(&replacement, None, Some(&retained)).unwrap_err();
+    assert_eq!(error.to_string(), "the station changed, refresh");
+    assert!(returned_listing_proven(&same, None, Some(&retained)).is_ok());
+    assert!(returned_listing_proven(&replacement, Some(&[]), Some(&retained)).is_ok());
+    assert!(returned_listing_proven(&replacement, Some(&[]), None).is_ok());
 }
 
 /// Create saved credentials without reading the vault or contacting a server.
