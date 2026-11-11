@@ -366,25 +366,23 @@ fn prepare_wires_compact_order_size_label() {
     assert!(!source.contains("format!(\"{usd:.2}\")"));
 }
 
-/// The chart time-step preparation must use the width-derived target rather than a fixed count.
+/// The chart time step must be fitted to the plot width and the captions measured in the font.
 ///
-/// Breakage this pins: restoring the former literal `6.0` target would under-label wide plots and
-/// crowd narrow plots even though the pure axis helper's direct tests remain green.
+/// Breakage this pins: feeding the step a fixed caption count, or literal widths, makes the axis
+/// sparse on wide plots or lets captions overlap once their real width differs, even though the
+/// pure helper's direct tests remain green.
 #[test]
-fn prepare_wires_width_derived_time_label_target() {
+fn prepare_fits_the_time_step_to_measured_captions() {
     let source = include_str!("prepare.rs");
     let compact: String = source.split_whitespace().collect();
-    let call = "moon_chart::axes::nice_time_step(window_ms/1000.0,";
 
     assert!(
-        compact.contains(&format!(
-            "{call}moon_chart::axes::time_label_target(plot_w),)"
-        )),
-        "prepared time steps must receive the plot-width target"
+        compact.contains("moon_chart::axes::time_step(window_ms/1000.0,plot_w,&widths)"),
+        "prepared time steps must receive the plot width and the measured caption widths"
     );
     assert!(
-        !compact.contains(&format!("{call}6.0)")),
-        "prepared time steps must not restore the fixed six-label target"
+        compact.contains("self.measure_text(ctx,&label).width.as_f32()"),
+        "caption widths must be measured in the axis font"
     );
 }
 

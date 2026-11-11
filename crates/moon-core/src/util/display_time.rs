@@ -377,6 +377,29 @@ pub fn format_chart_clock(unix_ms: i64, zone: Tz, with_seconds: bool, now_ms: i6
     )
 }
 
+/// Format a chart date caption: `DD.MM` in the selected zone, or the year on 1 January.
+///
+/// Used once the axis steps by whole days or months: every caption then sits on a local
+/// midnight, so a clock would only repeat `00:00`, and the year marks where the dates roll over.
+///
+/// Args:
+///     unix_ms: Event timestamp in UTC Unix milliseconds.
+///     zone: Selected display zone.
+///
+/// Returns:
+///     `DD.MM`, or `YYYY` on 1 January, or empty when the instant is unrepresentable.
+pub fn format_chart_date(unix_ms: i64, zone: Tz) -> String {
+    use chrono::Datelike as _;
+    let Some(value) = at_millis(unix_ms, zone) else {
+        return String::new();
+    };
+    if value.month() == 1 && value.day() == 1 {
+        value.format("%Y").to_string()
+    } else {
+        value.format("%d.%m").to_string()
+    }
+}
+
 /// Same as [`format_chart_clock`] with seconds, plus the millisecond fraction.
 ///
 /// A SEPARATE entry point rather than a flag on [`format_chart_clock`]: the caller decides by

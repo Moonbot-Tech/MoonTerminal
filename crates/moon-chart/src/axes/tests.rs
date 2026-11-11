@@ -1,6 +1,6 @@
-//! Regression coverage for the width-derived chart time-label target.
+//! Regression coverage for chart axis prices, time steps and caption placement.
 
-use super::time_label_target;
+use super::{TimeCaptionWidths, time_step};
 
 /// Axis and cursor prices must remain readable below the former four-decimal floor.
 #[test]
@@ -27,61 +27,92 @@ fn price_labels_share_grid_precision_and_an_unknown_tick_fallback() {
     assert_eq!(super::format_price(0.01_f32, None), "0.01000");
 }
 
-/// A wide plot must retain enough round time labels to use its available horizontal space.
-///
-/// Breakage this pins: removing the width divisor or restoring the former fixed target would
-/// leave wide charts under-labeled.
-#[test]
-fn time_label_target_wide_plot_is_ten() {
-    assert_eq!(time_label_target(1900.0), 10.0);
+/// Caption widths of the axis font at its default size: `HH:MM:SS`, `HH:MM`, `DD.MM`.
+const WIDTHS: TimeCaptionWidths = TimeCaptionWidths {
+    seconds: 55.0,
+    minutes: 35.0,
+    date: 35.0,
+};
+
+/// The step for a window of `window_sec` across `plot_px` with the default widths.
+fn step(window_sec: f64, plot_px: f32) -> f64 {
+    time_step(window_sec, plot_px, &WIDTHS)
 }
 
-/// A medium-width plot must reduce the target without reverting to a fixed label count.
+/// The densest step whose captions fit wins, not the first step past a fixed caption count.
 ///
-/// Breakage this pins: bypassing width scaling would keep narrow detached charts at the former
-/// fixed target and crowd their axis labels.
+/// The three windows are the ones reported as too sparse: a fixed one-caption-per-190 px target
+/// picked one minute, five seconds and fourteen days there, captions 200–425 px apart.
 #[test]
-fn time_label_target_medium_plot_is_four() {
-    assert_eq!(time_label_target(760.0), 4.0);
+fn the_densest_fitting_step_wins() {
+    // 7.5 minutes across 1500 px: 30 s marks are 100 px apart, room for `HH:MM:SS` plus a gap.
+    assert_eq!(step(450.0, 1500.0), 30.0);
+    // 56.6 px per second: two-second marks, 113 px apart.
+    assert_eq!(step(26.5, 1500.0), 2.0);
+    // 70 days across 1300 px: weekly dates 130 px apart; two days would be 37 px.
+    assert_eq!(step(70.0 * super::DAY_SECS, 1300.0), 7.0 * super::DAY_SECS);
 }
 
-/// Extremely narrow plots must retain a readable lower bound instead of targeting too few labels.
-///
-/// Breakage this pins: removing the floor would make small chart hosts lose their useful time
-/// scale.
+/// A step fits only with a gap beside its caption, so a narrow plot steps coarser instead of
+/// crowding: a one-second mark is 60 px at 180 px for three seconds, under `HH:MM:SS` + gap.
 #[test]
-fn time_label_target_sub_floor_plot_is_three() {
-    assert_eq!(time_label_target(1.0), 3.0);
+fn a_narrow_plot_steps_coarser_rather_than_crowding() {
+    assert_eq!(step(3.0, 760.0), 1.0);
+    assert_eq!(step(3.0, 180.0), 2.0);
 }
 
-/// Removing the one-second step leaves the three-second view without useful round labels.
+/// A dated clock (`DD.MM HH:MM`) is wider than today's `HH:MM`, so the same window steps
+/// coarser once the captions carry a date.
 #[test]
-fn super_zoom_has_one_second_time_labels() {
-    for width in [180.0, 760.0, 1900.0] {
-        assert_eq!(super::nice_time_step(3.0, time_label_target(width)), 1.0);
-    }
+fn a_wider_caption_takes_a_coarser_step() {
+    assert_eq!(step(super::DAY_SECS, 1600.0), 3600.0);
+    let dated = TimeCaptionWidths {
+        minutes: 76.0,
+        ..WIDTHS
+    };
+    assert_eq!(time_step(super::DAY_SECS, 1600.0, &dated), 4.0 * 3600.0);
+    // Four days of dated clocks: six-hour marks are 81 px, too close; twelve hours, not a day.
+    assert_eq!(
+        time_step(4.0 * super::DAY_SECS, 1300.0, &dated),
+        12.0 * 3600.0
+    );
 }
 
-/// A window that falls between two round steps takes the next coarser step.
+/// Past six hours the step moves on to whole days instead of staying on six-hour marks.
 ///
-/// One label across fifty seconds must be at least fifty seconds wide. Thirty seconds would
-/// crowd the axis, and two minutes would skip the one-minute mark. Ninety seconds likewise
-/// lands on two minutes. The three-second super-zoom test stays on the one-second step, so it
-/// cannot see a missing one-minute step.
+/// With the old six-hour cap a window of weeks kept marks a pixel apart and the spacing walk
+/// printed them at arbitrary hours.
 #[test]
-fn a_window_between_round_steps_takes_the_next_coarser_step() {
-    assert_eq!(super::nice_time_step(50.0, 1.0), 60.0);
-    assert_eq!(super::nice_time_step(90.0, 1.0), 2.0 * 60.0);
+fn a_window_past_six_hours_takes_a_day_step() {
+    assert_eq!(step(14.0 * super::DAY_SECS, 1300.0), super::DAY_SECS);
 }
 
-/// A window longer than six hours stays on the six-hour step.
-///
-/// Time labels stop at six hours. A longer window must not invent a raw interval such as the
-/// window length itself. The super-zoom test returns on the first step and never reaches this cap.
+/// Windows of years land on calendar-month steps, and a window too long for any step stays on
+/// years rather than inventing a raw interval such as the window length itself.
 #[test]
-fn a_window_past_the_coarsest_step_stays_on_six_hours() {
-    let six_hours = 6.0 * 60.0 * 60.0;
-    assert_eq!(super::nice_time_step(100_000.0, 1.0), six_hours);
+fn long_windows_step_by_calendar_months_then_years() {
+    let two_years = step(730.0 * super::DAY_SECS, 1700.0);
+    assert_eq!(super::calendar_months(two_years), Some(1));
+    let decade = step(3650.0 * super::DAY_SECS, 1700.0);
+    assert_eq!(super::calendar_months(decade), Some(6));
+    let century = step(36_500.0 * super::DAY_SECS, 1700.0);
+    assert_eq!(super::calendar_months(century), Some(12));
+}
+
+/// An empty window or plot has no density to fit; the coarsest step keeps the walk finite.
+#[test]
+fn a_degenerate_window_takes_the_coarsest_step() {
+    assert_eq!(super::calendar_months(step(0.0, 1500.0)), Some(12));
+    assert_eq!(super::calendar_months(step(450.0, 0.0)), Some(12));
+}
+
+/// Clock, day and week steps are not month steps, so their ticks keep the fixed lattice.
+#[test]
+fn only_month_steps_read_as_calendar_months() {
+    assert_eq!(super::calendar_months(21_600.0), None);
+    assert_eq!(super::calendar_months(super::DAY_SECS), None);
+    assert_eq!(super::calendar_months(14.0 * super::DAY_SECS), None);
+    assert_eq!(super::calendar_months(3.0 * super::MONTH_SECS), Some(3));
 }
 
 /// A price of one thousand keeps one decimal, and the next price below it keeps two.
@@ -125,4 +156,35 @@ fn price_grid_rounds_up_at_three() {
 fn price_grid_rounds_up_at_seven() {
     assert_eq!(super::nice_interval(69.0, 10.0), 5.0);
     assert_eq!(super::nice_interval(70.0, 10.0), 10.0);
+}
+
+/// Drawn caption indices for 76 px captions centred every 60 px, optionally with one covered.
+fn drawn_time_captions(covered: Option<usize>) -> Vec<usize> {
+    let mut walk = super::TimeCaptionWalk::new(0.0);
+    (0..12)
+        .filter(|&i| {
+            let centre = 50.0 + 60.0 * i as f32;
+            walk.place(centre - 38.0, centre + 38.0, covered == Some(i))
+        })
+        .collect()
+}
+
+/// The crosshair readout hides the caption it covers but must not shift the ones to its right:
+/// with the slot left empty, the row to the right of the cursor re-phased on every move (#1117).
+#[test]
+fn a_covered_time_caption_keeps_its_slot() {
+    let open = drawn_time_captions(None);
+    assert_eq!(open, vec![0, 2, 4, 6, 8, 10]);
+    let expected: Vec<usize> = open.iter().copied().filter(|&i| i != 4).collect();
+    assert_eq!(drawn_time_captions(Some(4)), expected);
+    // A covered caption that would have been dropped for spacing changes nothing at all.
+    assert_eq!(drawn_time_captions(Some(5)), open);
+}
+
+/// Without a usable tick the axis prints at the price's magnitude, which on Hyperliquid is the
+/// exchange's own five-figure step; the exact `f32` must not leak its binary tail (#1289).
+#[test]
+fn an_unknown_tick_prints_the_price_at_its_magnitude() {
+    assert_eq!(super::format_price(277.533_84_f32, None), "277.53");
+    assert_eq!(super::format_price(7652.068_f32, None), "7652.1");
 }
