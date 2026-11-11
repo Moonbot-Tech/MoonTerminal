@@ -192,6 +192,8 @@ pub fn normalize_chart_graphics(cfg: ChartGraphicsCfg) -> ChartGraphicsCfg {
         // The book width is bounded where the layout reads it, so the popup's field, the drawn
         // zone and the hit test all see the same clamp.
         book_width_px: moon_core::config::book_width::normalize(cfg.book_width_px),
+        // A stacking order that names each crosshair figure exactly once.
+        cursor_labels: cfg.cursor_labels.normalized(),
 
         ..cfg
     }

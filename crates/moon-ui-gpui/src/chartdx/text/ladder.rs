@@ -92,6 +92,8 @@ impl RenderState {
         let delta = self.label_font_delta;
         let pr = &mut self.panes[idx];
         let mut result = Ok(());
+        // The widest volume printed this frame: the crosshair's "past the volumes" home clears it.
+        let mut volumes_w: Option<f32> = None;
         for (row, (volume, price)) in pr.ladder_rows.iter().zip(&pr.ladder_labels) {
             let y = (view.bounds[1] + view.bounds[3]
                 - (row.price as f32 - view.view_price0) * view.price_to_px)
@@ -123,7 +125,9 @@ impl RenderState {
                 0.5,
                 row_ink,
             )
-            .and_then(|_| {
+            .and_then(|m| {
+                let w = m.width.as_f32();
+                volumes_w = Some(volumes_w.map_or(w, |widest| widest.max(w)));
                 draw_label_text_run(
                     &mut pr.ladder_runs,
                     &mut slot,
@@ -142,6 +146,7 @@ impl RenderState {
                 break;
             }
         }
+        pr.ladder_volumes_right = volumes_w.map(|w| left + w);
         result
     }
 }

@@ -1823,6 +1823,11 @@ impl ChartDataState {
                 pr.ladder_big_color = self.chart_graphics.ladder_big_color;
                 text_changed = true;
             }
+            // The crosshair's places live in the text layer too.
+            if pr.cursor_labels != self.chart_graphics.cursor_labels {
+                pr.cursor_labels = self.chart_graphics.cursor_labels;
+                text_changed = true;
+            }
             // A new grid is a new picture: rebuild and bake now rather than on the next revision.
             let ladder_grid_changed = pr.ladder_grid != ladder_grid;
             // The rebuild rides on the flag, not on resetting `last_book_rev`: the clean-up paths

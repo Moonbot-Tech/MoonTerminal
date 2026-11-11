@@ -728,6 +728,7 @@ fn nearest_orderbook_notional(
 mod caption;
 mod captions;
 mod column_scroll;
+mod cursor_labels;
 mod labels;
 pub(in crate::chartdx) use labels::hours_and_minutes;
 mod clusters;

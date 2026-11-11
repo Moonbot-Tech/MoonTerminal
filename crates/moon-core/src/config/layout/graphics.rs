@@ -407,6 +407,13 @@ pub struct ChartGraphicsCfg {
         deserialize_with = "de_book_width"
     )]
     pub book_width_px: f32,
+
+    // --- Crosshair: where its values print. Last on purpose: a nested TOML table must follow
+    // every plain value of its parent. ---
+    /// Where the crosshair's order size, book depth and percent print, and their stacking order.
+    /// ABSENT, each keeps the home it had before it could move.
+    #[serde(default, deserialize_with = "super::cursor_labels::de_cursor_labels")]
+    pub cursor_labels: CursorLabelsCfg,
 }
 
 /// The `hvol_tf_s` value that means "everything retained" — Moonbot's `Max`.
@@ -458,6 +465,7 @@ impl Default for ChartGraphicsCfg {
             ladder_big_pct: def_ladder_big_pct(),
             ladder_big_color: None,
             book_width_px: crate::config::book_width::DEFAULT,
+            cursor_labels: CursorLabelsCfg::default(),
         }
     }
 }

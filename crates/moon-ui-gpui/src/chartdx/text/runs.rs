@@ -291,9 +291,11 @@ impl RenderState {
 
     /// Draws compare-mode ghost-crosshair labels for a pane without a real cursor.
     ///
-    /// At `ghost_price`, draws only order-book volume at the level (above the line) and the
-    /// percentage from the same book reference the real cursor uses (below it), without
-    /// duplicating time, axis price, or order size. Also works in a collapsed broom chart by
+    /// At `ghost_price`, draws only the order-book depth at the level and the percentage from the
+    /// same book reference the real cursor uses, at the places the tab stored for them
+    /// (`text::cursor_labels`; a place beside the crosshair reads as the book edge, the ghost
+    /// having no crosshair here), without duplicating time, axis price, or order size. Also works
+    /// in a collapsed broom chart by
     /// mapping price to Y through the order-book view, whose height and price window match the
     /// collapsed chart. The backend cursor layer draws the line; see `sync_cursor_params`, which
     /// places the ghost's X outside the bounds.
@@ -353,9 +355,6 @@ impl RenderState {
             orderbook_view.bounds[0] / sf,
             self.order_book_width_px,
         );
-        let right_x = zone_left + READOUT_PAD_X;
-        // Keep the label badge from cutting through the horizontal line; see cursor_label_gap.
-        let gap = cursor_label_gap(self.cursor_thickness, sf);
         // Same reference as the real cursor: the nearest side of the book, so one price reads the
         // same percentage whether the pointer is on this chart or ghosted from its compare peer.
         let ghost_ref = cached_last_price
@@ -364,49 +363,33 @@ impl RenderState {
         let cur_col = ghost_ref
             .map(|r| pct_hsla(r - price, self.label_positive, self.label_negative))
             .unwrap_or(color(self.readout_label));
-        // Draw order-book volume at the ghost level above the line.
-        if orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty() {
-            let tol = 6.0 / price_to_px.max(1e-6);
-            if let Some(q) =
+        // Book depth at the ghost level, when a level lies within a few pixels of it.
+        let depth = (orderbook_enabled && !self.panes[idx].orderbook_levels.is_empty())
+            .then(|| {
+                let tol = 6.0 / price_to_px.max(1e-6);
                 nearest_orderbook_notional(&self.panes[idx].orderbook_levels, price, tol)
-            {
-                let m = self.draw_label_text(
-                    ctx,
-                    &fmt_amount(q),
-                    right_x,
-                    cy - gap,
-                    0.0,
-                    1.0,
-                    cur_col,
-                )?;
-                placed.push(PlacedLabel {
-                    x: right_x,
-                    y: cy - gap,
-                    ax: 0.0,
-                    ay: 1.0,
-                    w: m.width.as_f32(),
-                    h: m.line_height.as_f32(),
-                    solid: true,
-                });
-            }
-        }
-        // Draw the ghost's percentage deviation from this chart's book reference below the line.
+            })
+            .flatten()
+            .map(fmt_amount);
+        // The ghost repeats only what describes THIS chart's book at that price: no order size, and
+        // no crosshair of its own, so a value placed beside the crosshair prints at the book edge.
         // `ghost_ref` is Some only for a positive last price, and the book side it may return in
         // its place is positive too, so the division needs no further guard.
-        if let Some(r) = ghost_ref {
-            let pct = (price - r) / r * 100.0;
-            let m =
-                self.draw_label_text(ctx, &fmt_pct(pct), right_x, cy + gap, 0.0, 0.0, cur_col)?;
-            placed.push(PlacedLabel {
-                x: right_x,
-                y: cy + gap,
-                ax: 0.0,
-                ay: 0.0,
-                w: m.width.as_f32(),
-                h: m.line_height.as_f32(),
-                solid: true,
-            });
-        }
-        Ok(())
+        let texts = super::cursor_labels::CursorLabelTexts {
+            order_size: None,
+            depth,
+            percent: ghost_ref.map(|r| fmt_pct((price - r) / r * 100.0)),
+        };
+        let frame = super::cursor_labels::CursorLabelFrame {
+            zone_left,
+            cy,
+            cross_x: None,
+            // Keep the plates off the line; see cursor_label_gap.
+            gap: cursor_label_gap(self.cursor_thickness, sf),
+            badge_bottom: None,
+            pane_x: [pane_left, pane_right],
+            color: cur_col,
+        };
+        self.draw_cursor_labels(ctx, idx, &frame, &texts, placed)
     }
 }

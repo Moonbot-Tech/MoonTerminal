@@ -13,6 +13,7 @@ pub const TIME_AXIS_H: f32 = 16.0;
 pub mod axes;
 pub mod clusters;
 pub mod container;
+pub mod cursor_labels;
 // `data` / market-source models live in moon-core. Re-export them under the previous path.
 pub use moon_core::data;
 pub mod drawing_snap;

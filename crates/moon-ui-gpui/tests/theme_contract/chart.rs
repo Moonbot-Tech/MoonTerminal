@@ -1052,6 +1052,51 @@ fn a_chart_popover_with_a_picker_or_dropdown_ignores_outside_clicks() {
     }
 }
 
+/// Every crosshair place name fits whole in the shared dropdown width, in every shipped language.
+///
+/// The three crosshair rows of the chart-graphics popup share one dropdown width (`SPOT_DD_W`),
+/// so the rows line up. MoonUI draws the trigger monospaced at the control tier's 14 px: a name
+/// costs 0.6 × 14 px per cell (two for a CJK character), plus the two-cell caret and 14 px of
+/// padding. The key list is read from the enum's own `locale_key`, so a new place is checked too.
+///
+/// Breakage: a longer translation, or a narrower constant, would cut one language's name with an
+/// ellipsis while every other language still reads whole.
+#[test]
+fn crosshair_place_names_fit_their_dropdown_in_every_language() {
+    const CELL_PX: f32 = 0.6 * 14.0;
+    const CARET_CELLS: usize = 2;
+    const PAD_PX: f32 = 14.0;
+    let rows = read_src("chart_tabs/graphics_popup/cursor_rows.rs");
+    let width = parse_f32_const(&rows, "SPOT_DD_W").expect("SPOT_DD_W is a plain literal");
+    let spots = read_core_src("config/layout/cursor_labels.rs");
+    let keys: Vec<&str> = spots
+        .split('"')
+        .filter(|part| part.starts_with("chart.graphics.cursor_spot."))
+        .collect();
+    assert_eq!(keys.len(), 11, "every place names its dictionary key");
+    // CJK ideographs and their punctuation (U+2E80..U+9FFF, which takes in U+3000..U+303F) and
+    // full-width forms such as `，` take two cells; Vietnamese reads as precomposed letters, one each.
+    let wide = |c: char| matches!(c, '\u{2E80}'..='\u{9FFF}' | '\u{FF00}'..='\u{FFEF}');
+    // The width only means something if the rows draw with it, at the tier the 14 px assumes.
+    let code = code_only(&rows);
+    assert!(
+        code.contains(".trigger_width_scaled(SPOT_DD_W)")
+            && code.contains(".trigger_size(MoonButtonSize::density(cx))"),
+        "cursor_rows.rs: the dropdowns must draw at SPOT_DD_W on the density tier this test assumes"
+    );
+    for lang in SHIPPED {
+        for key in &keys {
+            let name = locale_value("shell", lang, key);
+            let cells: usize = name.chars().map(|c| if wide(c) { 2 } else { 1 }).sum();
+            let need = (cells + CARET_CELLS) as f32 * CELL_PX + PAD_PX;
+            assert!(
+                need <= width,
+                "{lang} {key} = {name:?} needs {need} px, the dropdown has {width}"
+            );
+        }
+    }
+}
+
 /// A chart host shows ONE overlay at a time, and that has to be structural rather than remembered.
 ///
 /// Both hosts used to carry a `bool` per popup, and nothing in the code kept them apart: two of the

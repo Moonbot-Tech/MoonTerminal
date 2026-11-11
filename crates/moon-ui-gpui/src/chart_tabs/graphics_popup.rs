@@ -8,6 +8,9 @@
 //! [`super::history_popup`], the band to [`super::volumes_popup`] beside the horizontal volumes it
 //! shares its colours with. What stayed is what a reader looking at the LIVE picture adjusts.
 //!
+//! It is laid out as a square: where the crosshair's values print ([`cursor_rows`]) and the lines
+//! each span the whole popup, then the trade marks sit beside the order book.
+//!
 //! Like the layout and candle popups beside it, these settings are PER TAB: the target is the tab
 //! strip's active tab or the detached window's panel. The tab spec persists them to `charts.json`
 //! through `ChartTabSpec::chart_graphics`, and a tab without an override follows the default of its
@@ -73,9 +76,13 @@ const BOOK_KINDS: [(BookKind, &str); 2] = [
     (BookKind::Ladder, "chart.graphics.book_kind_ladder"),
 ];
 
-/// Popup CONTENT width in rendered pixels. `MoonPopover` adds its own padding and border outside it.
+/// Space between the popup's two columns of frames, before UI scaling.
+const COLUMN_GAP: f32 = 8.0;
+
+/// Popup CONTENT width in rendered pixels: two columns of frames and the gap between them.
+/// `MoonPopover` adds its own padding and border outside it.
 pub(super) fn content_width(cx: &App) -> Pixels {
-    px(ROW_W + popup_group_inset_px(cx))
+    px((ROW_W + popup_group_inset_px(cx)) * 2.0) + design::ui_px(cx, COLUMN_GAP)
 }
 
 /// Index of the step nearest a stored value.
@@ -549,6 +556,9 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
         )
     };
 
+    // Inner width of a frame spanning both columns: the whole content less one frame's inset.
+    let full_w = content_width(cx) - px(popup_group_inset_px(cx));
+
     // Chrome is MoonPopover's; see `popover_contents_do_not_paint_a_second_surface`.
     v_flex()
         .id(SharedString::from(format!("{id}-popup")))
@@ -570,47 +580,70 @@ fn render_graphics_popup<T: GraphicsPopupHost>(
                     },
                 )),
         )
+        // A square rather than a tall strip: the crosshair's places and the lines each span the
+        // whole popup — the lines' four switches in two columns — then the trades beside the
+        // book. Group ids are `&'static str`: they only need to be unique among their siblings,
+        // and the enclosing root already carries the per-host prefix.
         .child(
-            // Group ids are `&'static str`: they only need to be unique among their siblings, and
-            // the enclosing root already carries the per-host prefix.
+            popup_group("frame-cursor", t!("chart.graphics.frame_cursor")).child(
+                cursor_rows::cursor_rows(id, &entity, &cfg.cursor_labels, full_w, p, cx),
+            ),
+        )
+        .child(
             popup_group("frame-lines", t!("chart.graphics.frame_lines")).child(
-                v_flex()
-                    .w(px(ROW_W))
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(last_line_cb)
-                    .child(mark_line_cb)
-                    .child(hide_move_cb)
-                    .child(moonshot_cb),
+                h_flex()
+                    .w(full_w)
+                    .items_start()
+                    .gap(design::ui_px(cx, COLUMN_GAP))
+                    .child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(last_line_cb)
+                            .child(mark_line_cb),
+                    )
+                    .child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(hide_move_cb)
+                            .child(moonshot_cb),
+                    ),
             ),
         )
         .child(
-            popup_group("frame-trade-marks", t!("chart.graphics.frame_trade_marks")).child(
-                v_flex()
-                    .w(px(ROW_W))
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(trade_kind_row)
-                    .children(trade_merge_row)
-                    .children(trade_small_row)
-                    .children(trade_bubbles_hint)
-                    // Kept in bubble mode too: the liquidations stay crosses.
-                    .child(marker_scale_row)
-                    .child(trade_volume_alpha_row)
-                    .child(trade_volume_alpha_hint)
-                    .child(liquidations_cb),
-            ),
-        )
-        .child(
-            popup_group("frame-book", t!("chart.graphics.frame_book")).child(
-                v_flex()
-                    .w(px(ROW_W))
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(book_show_cb)
-                    .child(book_zone_cb)
-                    .child(book_width_row)
-                    .child(book_kind_row)
-                    .children(ladder_big_row)
-                    .children(ladder_color_row),
-            ),
+            h_flex()
+                .items_start()
+                .gap(design::ui_px(cx, COLUMN_GAP))
+                .child(
+                    popup_group("frame-trade-marks", t!("chart.graphics.frame_trade_marks")).child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(trade_kind_row)
+                            .children(trade_merge_row)
+                            .children(trade_small_row)
+                            .children(trade_bubbles_hint)
+                            // Kept in bubble mode too: the liquidations stay crosses.
+                            .child(marker_scale_row)
+                            .child(trade_volume_alpha_row)
+                            .child(trade_volume_alpha_hint)
+                            .child(liquidations_cb),
+                    ),
+                )
+                .child(
+                    popup_group("frame-book", t!("chart.graphics.frame_book")).child(
+                        v_flex()
+                            .w(px(ROW_W))
+                            .gap(design::ui_px(cx, 6.0))
+                            .child(book_show_cb)
+                            .child(book_zone_cb)
+                            .child(book_width_row)
+                            .child(book_kind_row)
+                            .children(ladder_big_row)
+                            .children(ladder_color_row),
+                    ),
+                ),
         )
         .into_any_element()
 }
@@ -868,6 +901,8 @@ pub(super) fn graphics_popup_host<T: GraphicsPopupHost>(
     );
     popover
 }
+
+mod cursor_rows;
 
 #[cfg(test)]
 mod tests;
