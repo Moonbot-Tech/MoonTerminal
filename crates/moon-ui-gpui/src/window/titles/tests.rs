@@ -3,7 +3,7 @@
 use gpui::{App, VisualTestContext};
 use rust_i18n::t;
 
-use super::{follow_locale, track};
+use super::{follow_locale, retitle, track};
 
 /// A window to carry a title; it draws nothing.
 struct Host;
@@ -78,4 +78,31 @@ fn a_closed_window_leaves_the_registry(cx: &mut gpui::TestAppContext) {
     let turkish = t!("settings.window_title").to_string();
     let mut visual = VisualTestContext::from_window(kept.into(), cx);
     assert_eq!(visual.window_title().as_deref(), Some(turkish.as_str()));
+}
+
+/// Retargeting a singleton must replace its title builder, or the next locale switch restores the
+/// previous strategy's name.
+#[gpui::test]
+fn retitle_replaces_the_tracked_subject(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("ru");
+    let window = cx.add_window(|_, _| Host);
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        track(
+            window.window_handle(),
+            false,
+            |_: &App| t!("settings.window_title").to_string(),
+            cx,
+        );
+        retitle(
+            window.window_handle(),
+            |_: &App| t!("strat.window_title").to_string(),
+            cx,
+        );
+        rust_i18n::set_locale("tr");
+        follow_locale(cx);
+    });
+
+    let expected = t!("strat.window_title").to_string();
+    assert_eq!(visual.window_title().as_deref(), Some(expected.as_str()));
 }

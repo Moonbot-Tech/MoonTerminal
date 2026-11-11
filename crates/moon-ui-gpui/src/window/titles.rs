@@ -56,6 +56,22 @@ pub(crate) fn track(
     });
 }
 
+/// Replace the localized title builder after a singleton window changes its subject.
+pub(crate) fn retitle(
+    window: AnyWindowHandle,
+    title: impl Fn(&App) -> String + 'static,
+    cx: &mut App,
+) {
+    if let Some(entry) = cx
+        .default_global::<Titles>()
+        .0
+        .iter_mut()
+        .find(|entry| entry.window == window)
+    {
+        entry.title = Rc::new(title);
+    }
+}
+
 /// Write every tracked window's native title again, in the locale that is current now.
 ///
 /// Deferred to the end of the effect cycle: a switch is made from inside a window's own handler —

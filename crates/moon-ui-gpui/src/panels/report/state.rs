@@ -498,15 +498,15 @@ impl ReportPanel {
         Self::new_with_scope(backend, group, None, window, cx)
     }
 
-    /// Create a Report panel, applying its durable or Analytics-owned scope before its first query.
+    /// Create a Report panel, applying its durable or caller-owned scope before its first query.
     ///
-    /// An Analytics scope wins whole and opts out of persistence; otherwise the dock-host toolbar
+    /// A strategy scope wins whole and opts out of persistence; otherwise the dock-host toolbar
     /// filters restore synchronously so the first result set cannot describe stale defaults.
     ///
     /// Args:
     ///     backend: Shared application backend.
     ///     group: Group used by report coin search.
-    ///     scope: Optional exact Analytics filter to seed atomically.
+    ///     scope: Optional exact strategy filter to seed atomically.
     ///     window: Owning GPUI window.
     ///     cx: Construction context.
     ///
@@ -968,7 +968,7 @@ impl ReportPanel {
             focus: cx.focus_handle(),
         };
         // A group Report created while a filter is on air joins it, before its first query rather
-        // than after. A scoped one is the Analytics-owned standalone window in the making — its
+        // than after. A scoped one is the strategy-scoped standalone window in the making — its
         // core and strategy are already chosen, and `mark_standalone` has not run yet to say so.
         if scope.is_none() {
             this.adopt_broadcast_core_filter(cx);
@@ -1237,7 +1237,7 @@ impl ReportPanel {
     /// constructor that is what keeps the toolbar and the first result set describing the same
     /// filter — the first query is issued from the panel's first active render, well after this.
     ///
-    /// An Analytics-scoped panel is skipped whole: its filters belong to the strategy it was opened
+    /// A strategy-scoped panel is skipped whole: its filters belong to the strategy it was opened
     /// for. A missing field, and a missing entry, leave the current value standing rather than
     /// resetting it — so a panel that changes host context and finds nothing stored there keeps
     /// what it was showing. That is deliberately UNLIKE its neighbours in the same key space: an

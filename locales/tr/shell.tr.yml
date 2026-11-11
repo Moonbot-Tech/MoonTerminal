@@ -300,6 +300,7 @@ coin_menu.tbl_left: "%{symbol}: %{left} kaldı"
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (çevrimdışı)"
 coin_menu.tbl_clear: "Yasağı kaldır"
 coin_menu.strategy_goto: "Stratejiye git"
+coin_menu.strategy_report: "Bu stratejinin rapordaki tüm işlemleri"
 coin_menu.where_listed: "Bu coin kara listelerde nerede…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title: "Sekme yerleşimi"

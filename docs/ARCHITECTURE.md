@@ -274,7 +274,7 @@ and filters only the view, so a core switch neither loses nor replays events.
 they fall back to their saved filters. Selection, details and mutating `Strategies` commands
 are limited to the visible effective core, and group-owned `open_goto` re-checks the current Auto scope
 and refuses without changing the rail selection. The exceptions are deliberate: a standalone `Report` opened from Analytics
-keeps its explicit `ReportScope`; global `Assets`, Profit Monitor and Screener remain
+or the shared Report strategy menu keeps its explicit `ReportScope`; global `Assets`, Profit Monitor and Screener remain
 application-wide aggregate surfaces. The group's Auto status bar and the shared rail counters are also not narrowed
 by the selected core.
 

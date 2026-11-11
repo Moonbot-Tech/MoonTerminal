@@ -45,7 +45,7 @@ pub(super) struct TradeLogRequest {
     /// UTC days the trade spans, as `YYYY-MM-DD`.
     pub(super) dates: Vec<String>,
     /// Group-owned workspace authority captured when the row menu was built. Standalone Reports
-    /// deliberately leave this absent because Analytics owns their explicit scope.
+    /// deliberately leave this absent because their caller owns the explicit strategy scope.
     pub(super) workspace: Option<TradeLogWorkspaceIdentity>,
 }
 

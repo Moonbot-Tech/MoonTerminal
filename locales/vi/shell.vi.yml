@@ -300,6 +300,7 @@ coin_menu.tbl_left: "%{symbol}: còn %{left}"
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (ngoại tuyến)"
 coin_menu.tbl_clear: "Gỡ chặn"
 coin_menu.strategy_goto: "Tới chiến lược"
+coin_menu.strategy_report: "Tất cả giao dịch của chiến lược này trong báo cáo"
 coin_menu.where_listed: "Coin này nằm ở đâu trong danh sách chặn…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title: "Bố cục tab"

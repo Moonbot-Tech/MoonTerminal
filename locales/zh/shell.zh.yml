@@ -300,6 +300,7 @@ coin_menu.tbl_left: "%{symbol}：剩余 %{left}"
 coin_menu.tbl_left_stale: "%{symbol}：~%{left}（离线）"
 coin_menu.tbl_clear: "解除"
 coin_menu.strategy_goto: "前往策略"
+coin_menu.strategy_report: "报告中此策略的所有交易"
 coin_menu.where_listed: "该币种在哪些黑名单中…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---
 chart.layout.title: "标签页布局"

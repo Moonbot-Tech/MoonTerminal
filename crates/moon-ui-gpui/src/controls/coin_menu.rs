@@ -60,7 +60,7 @@ pub struct CoinMenuCtx {
     pub selected_cores: Vec<CoreId>,
     /// Order strategy when `strat_id != 0`, enabling the strategy section. None means manual or join.
     pub strat_id: Option<u64>,
-    /// Strategy name used in the entry label. None falls back to the strategy ID.
+    /// Strategy name used in labels and the scoped Report title. None falls back to the strategy ID.
     pub strat_name: Option<String>,
     /// Order UID enabling the order section. None represents a token point without an order.
     pub order_uid: Option<u64>,
@@ -230,6 +230,31 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
                         app,
                     );
                 }),
+        );
+        let backend_report = backend.clone();
+        let strategy_name = ctx.strat_name.clone().unwrap_or_else(|| sid.to_string());
+        items.push(
+            MoonMenuItem::with_key(
+                "coin-strat-report",
+                t!("coin_menu.strategy_report").to_string(),
+            )
+            .on_click(move |_, window, app| {
+                window.close_context_menu(app);
+                let owner_display = window.display(app).map(|display| display.id());
+                crate::panels::open_scoped_report(
+                    backend_report.clone(),
+                    crate::panels::ReportScope::for_strategy(
+                        moon_core::db::ReportStrategyKey {
+                            core_uid: core,
+                            strategy_id: sid as i64,
+                        },
+                        strategy_name.clone(),
+                    ),
+                    Some(window.window_handle()),
+                    owner_display,
+                    app,
+                );
+            }),
         );
     }
 
