@@ -534,6 +534,55 @@ struct ScopeGroup {
     local_to: Option<i64>,
 }
 
+/// Split a sort on a replicated date column into one branch per core-clock offset, if needed.
+///
+/// The column is core-local while the cell prints `ReportAxis::to_utc` of it, and every branch is
+/// truncated by `LIMIT` before the Rust merge, so cores on different clocks sorted together by
+/// the raw value return the wrong top rows. Within one branch the offset is constant, so the raw
+/// order is the corrected order and the column's index still serves it; the merge then orders
+/// the branches by the corrected instant. The branch bounds sit on the sort column itself because
+/// that value is what selects the row's segment. A NULL stamp goes to the earliest segment, the
+/// one unbounded below, so every row lands in exactly one branch.
+///
+/// Args:
+///     f: Complete Report filter, carrying the axis and the core scope.
+///     col: Validated sort column.
+///
+/// Returns:
+///     Extra predicates, one per branch, or a single `None` when one offset covers every row and
+///     the unsplit query is already correct.
+pub(super) fn date_sort_splits(f: &ReportFilter, col: &str) -> Vec<Option<String>> {
+    if !matches!(col, "buydate" | "closedate" | "sellsetdate") {
+        return vec![None];
+    }
+    let groups = historical_offset_groups(f);
+    if groups
+        .iter()
+        .all(|group| group.offset_secs == groups[0].offset_secs)
+    {
+        return vec![None];
+    }
+    groups
+        .iter()
+        .filter_map(|group| {
+            let mut split = group_guard(&group.cores, f)?;
+            split.push_str("1=1");
+            if let Some(bound) = group.local_from {
+                split.push_str(&format!(" AND r.\"{col}\" >= {bound}"));
+            }
+            if let Some(bound) = group.local_to {
+                let below = format!("r.\"{col}\" < {bound}");
+                split.push_str(&if group.local_from.is_none() {
+                    format!(" AND ({below} OR r.\"{col}\" IS NULL)")
+                } else {
+                    format!(" AND {below}")
+                });
+            }
+            Some(Some(format!(" AND ({split})")))
+        })
+        .collect()
+}
+
 /// Resolve every historical offset segment a dated row may occupy.
 ///
 /// Scoped reads expand only their selected cores. Unbounded reads add an identity catch-all for
