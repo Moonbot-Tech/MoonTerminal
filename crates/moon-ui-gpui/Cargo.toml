@@ -62,6 +62,7 @@ gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", 
 # just Command Line Tools on macOS; no-op on Windows/Linux.
 gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["font-kit", "runtime_shaders"] }
 moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
+gpui-component = { package = "moon-ui-components", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 
 anyhow = "1"
 log = "0.4"

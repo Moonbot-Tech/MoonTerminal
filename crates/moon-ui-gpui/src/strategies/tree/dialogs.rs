@@ -837,6 +837,30 @@ impl StrategiesView {
         cx.notify();
     }
 
+    /// Confirm through either OK or Enter, sharing validation, error reporting, and the close decision.
+    fn confirm_op_dialog_and_report(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.confirm_op_dialog(cx) {
+            Ok(close) => {
+                if !close {
+                    window.push_notification(
+                        MoonNotification::warning(t!("dialogs.name_required").to_string()),
+                        cx,
+                    );
+                }
+                close
+            }
+            Err(error) => {
+                log::warn!("strategies operation failed: {error}");
+                window.push_notification(MoonNotification::error(error.to_string()), cx);
+                false
+            }
+        }
+    }
+
     /// Confirm the current tree operation against the workspace-visible target at dispatch time.
     ///
     /// Hidden retained Classic selection and folder state never become fallback targets when Auto
@@ -986,6 +1010,9 @@ impl StrategiesView {
     ) {
         self.ensure_op_input(window, cx);
         let view = cx.entity();
+        let dialog_focus = cx.focus_handle();
+        let content_focus = dialog_focus.clone();
+        let focus_without_input = self.op_input.is_none();
         window.open_unique_moon_dialog(
             "strategies-tree-op-dialog",
             cx,
@@ -993,8 +1020,10 @@ impl StrategiesView {
                 let p = MoonPalette::active(cx);
                 let cancel_view = view.clone();
                 let close_view = view.clone();
+                let enter_view = view.clone();
                 let content_view = view.clone();
                 let footer_view = view.clone();
+                let content_focus = content_focus.clone();
 
                 let title = view
                     .read(cx)
@@ -1054,11 +1083,31 @@ impl StrategiesView {
                     .content(move |content, window, cx| {
                         let body = op_dialog_body(content_view.clone(), window, cx)
                             .unwrap_or_else(|| div().into_any_element());
-                        content.child(body)
+                        let key_view = enter_view.clone();
+                        content.child(
+                            div()
+                                .track_focus(&content_focus)
+                                .capture_action(
+                                    move |_: &gpui_component::dialog::ConfirmDialog, window, cx| {
+                                        // Capture before MoonDialog's default confirmation closes the
+                                        // dialog, so validation keeps the same dialog open on failure.
+                                        cx.stop_propagation();
+                                        if key_view.update(cx, |this, cx| {
+                                            this.confirm_op_dialog_and_report(window, cx)
+                                        }) {
+                                            window.close_dialog(cx);
+                                        }
+                                    },
+                                )
+                                .child(body),
+                        )
                     })
                     .footer(op_dialog_footer(footer_view, p, ok_label, ok_danger))
             },
         );
+        if focus_without_input {
+            window.focus(&dialog_focus, cx);
+        }
     }
 
     /// Delete whatever the tree addresses: one folder through its existing confirmation, several

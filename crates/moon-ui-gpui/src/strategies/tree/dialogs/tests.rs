@@ -120,6 +120,42 @@ fn folder_delete_empties_the_folder_before_removing_it() {
     assert!(strategies < omission);
 }
 
+/// Enter's `ConfirmDialog` action is captured before MoonUI's default close and shares OK's helper.
+#[test]
+fn enter_and_ok_share_tree_dialog_confirmation() {
+    let source = include_str!("../dialogs.rs");
+    let open = source
+        .split_once("fn open_op_dialog(")
+        .expect("tree dialog opener must exist")
+        .1
+        .split_once("fn request_delete_target(")
+        .expect("tree dialog opener end must be found")
+        .0;
+    assert!(open.contains("window.open_unique_moon_dialog("));
+    assert!(open.contains(".capture_action("));
+    assert!(open.contains("gpui_component::dialog::ConfirmDialog"));
+    assert!(open.contains("this.confirm_op_dialog_and_report(window, cx)"));
+
+    let footer = source
+        .split_once("fn op_dialog_footer(")
+        .expect("tree dialog footer must exist")
+        .1
+        .split_once("impl StrategiesView")
+        .expect("tree dialog footer end must be found")
+        .0;
+    assert!(footer.contains("this.confirm_op_dialog(cx)"));
+    assert!(footer.contains("dialogs.name_required"));
+    let report = source
+        .split_once("fn confirm_op_dialog_and_report(")
+        .expect("shared confirmation reporter must exist")
+        .1
+        .split_once("fn confirm_op_dialog(")
+        .expect("shared confirmation reporter end must be found")
+        .0;
+    assert!(report.contains("self.confirm_op_dialog(cx)"));
+    assert!(report.contains("dialogs.name_required"));
+}
+
 /// Both bulk entry points must reach the conditional empty-folder dispatcher, which has no strategy
 /// deletion call and reports exactly how many occupied folders the planner skipped.
 #[test]
