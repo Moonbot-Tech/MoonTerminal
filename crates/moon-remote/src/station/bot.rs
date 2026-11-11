@@ -81,11 +81,13 @@ fn decode_token(out: crate::ssh::SecretOutput) -> anyhow::Result<Secret> {
 }
 
 /// Read first, stop and remove second; a failed read preserves the station's only bot copy.
+/// `remember` sees the bot actually being returned before anything is removed, and an error from
+/// it stops the return with the bot still on the station.
 pub fn return_bot(
     target: &Target,
     restore: bool,
     recovered: Option<ReturnedBot>,
-    remember: &mut dyn FnMut(ReturnedBot),
+    remember: &mut dyn FnMut(ReturnedBot) -> anyhow::Result<()>,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<Option<ReturnedBot>> {
     read_then_remove(
@@ -135,7 +137,7 @@ pub fn return_bot(
                     access.adopt_legacy_owner();
                     access.check().map_err(|_| BotReturnError::ReadFailed)?;
                     returned.access = access;
-                    remember(returned.clone());
+                    remember(returned.clone())?;
                 }
             }
             super::push_telegram(target, None, &BotChange::default(), true, say)
@@ -157,12 +159,15 @@ fn current_or_recovered(
 fn read_then_remove(
     restore: bool,
     read: impl FnOnce() -> anyhow::Result<ReturnedBot>,
-    remember: &mut dyn FnMut(ReturnedBot),
-    remove: impl FnOnce(&mut Option<ReturnedBot>, &mut dyn FnMut(ReturnedBot)) -> anyhow::Result<()>,
+    remember: &mut dyn FnMut(ReturnedBot) -> anyhow::Result<()>,
+    remove: impl FnOnce(
+        &mut Option<ReturnedBot>,
+        &mut dyn FnMut(ReturnedBot) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()>,
 ) -> anyhow::Result<Option<ReturnedBot>> {
     let mut returned = if restore { Some(read()?) } else { None };
     if let Some(returned) = &returned {
-        remember(returned.clone());
+        remember(returned.clone())?;
     }
     remove(&mut returned, remember)?;
     Ok(returned)
