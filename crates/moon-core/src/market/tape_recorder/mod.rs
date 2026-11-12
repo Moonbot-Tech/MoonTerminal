@@ -114,6 +114,21 @@ const OPEN_HORIZON_MS: i64 = 24 * 3_600_000;
 /// (re)connect the core resends every open row (the open-row check), and the feed's tracker,
 /// rebuilt with the connection, sees them for the first time.
 const FRESH_OPEN_MS: i64 = 120_000;
+/// The first moment a closed trade's post-close tape is final for the recorder: the tail has
+/// run out and the live recording has had [`plan::GIVE_UP_MS`] to arrive. The catch-up touches
+/// no trade before it, and a reader that finds the tape short before it has asked too early —
+/// the trade is still being written, not missing.
+///
+/// Args:
+///     close_ms: The trade's close, true UTC milliseconds.
+///     margin_ms: The tape margin the trade is recorded with.
+///     tail_ms: The post-close tail it is recorded with.
+pub fn tail_settles_at_ms(close_ms: i64, margin_ms: i64, tail_ms: i64) -> i64 {
+    close_ms
+        .saturating_add(margin_ms.max(tail_ms).max(0))
+        .saturating_add(plan::GIVE_UP_MS)
+}
+
 /// How long a stopping recorder waits for its last writes.
 const SHUTDOWN_SYNC: Duration = Duration::from_secs(5);
 /// How often the summary line is written.

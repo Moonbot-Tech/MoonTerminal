@@ -49,6 +49,11 @@ const MAX_LINES: usize = 400;
 /// Render-time station facts, refreshed by host reads and backend status observations.
 static KNOWN: AtomicBool = AtomicBool::new(false);
 static TAIL_FINAL: AtomicU64 = AtomicU64::new(u64::MAX);
+static TAPE_TRADES: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// How often the station's status is read again while Entry/Exit holds rows the station left
+/// uncovered: its catch-up files tape once an hour, and only its status says that it did.
+const TAPE_STATUS_EVERY_MS: i64 = 3_600_000;
 
 /// Read station presence without accessing the hosts file.
 pub(crate) fn known_cached() -> bool {
@@ -58,6 +63,33 @@ pub(crate) fn known_cached() -> bool {
 /// Last reported final-tail count; an unread or unsupported count stays distinct from zero.
 pub(crate) fn tail_final_cached() -> u64 {
     TAIL_FINAL.load(Ordering::Acquire)
+}
+
+/// Last reported count of trades whose tape the station holds complete; an unread or
+/// unsupported count stays distinct from zero. It grows when the station's catch-up or its live
+/// recording completes a trade, which is what makes a refused row worth asking about again.
+pub(crate) fn tape_trades_cached() -> u64 {
+    TAPE_TRADES.load(Ordering::Acquire)
+}
+
+/// Wake channel of the station's tape for Entry/Exit ([`Backend::station_tape_tick`]). Only the
+/// Analytics window observes it, so the wake reaches the one table that can ask the station
+/// again and nothing else.
+pub(crate) struct StationTape;
+
+/// Whether the station's status is old enough to read again for Entry/Exit's refused rows: an
+/// interval after the newer of the last status read and the last such attempt. A status
+/// neither read nor asked for is due at once — the startup read may have failed, and refusals
+/// held under it would otherwise have nothing to lift them.
+///
+/// Args:
+///     now_ms: The clock, UTC milliseconds.
+///     read_ms: When the status was last read, by anyone.
+///     asked_ms: When this tick last started a read.
+fn tape_status_due(now_ms: i64, read_ms: Option<i64>, asked_ms: Option<i64>) -> bool {
+    read_ms
+        .max(asked_ms)
+        .is_none_or(|last| now_ms.saturating_sub(last) >= TAPE_STATUS_EVERY_MS)
 }
 
 /// Who started a job, which decides what its end may change.
@@ -112,6 +144,10 @@ pub(crate) struct StationJobs {
     pub(crate) bot: Option<BotState>,
     /// UTC milliseconds when `bot` was read, so a view can name how old its numbers are.
     pub(crate) bot_read_ms: Option<i64>,
+    /// UTC milliseconds of the last status read started for Entry/Exit's refused rows
+    /// ([`Backend::station_tape_tick`]). The attempt is stamped, not its success: a station
+    /// that does not answer is asked again an interval later, not on every tick.
+    tape_status_asked_ms: Option<i64>,
     /// Outer None means unread; inner None means an older station without listing support.
     pub(crate) cores_seen: Option<Option<Vec<moon_core::station_api::ListedCore>>>,
     /// Retain the allocation floor with its listing across restart gaps.
@@ -418,11 +454,22 @@ impl StationJobs {
 
     /// Retain a listing through restart gaps; station_next syncs the newly observed window.
     fn observe_bot(&mut self, bot: BotState) {
+        let catchup = bot
+            .station
+            .as_ref()
+            .and_then(|status| status.tape_catchup.as_ref());
         TAIL_FINAL.store(
-            bot.station
-                .as_ref()
-                .and_then(|status| status.tape_catchup.as_ref())
+            catchup
                 .and_then(|catchup| catchup.tail_final)
+                .map_or(u64::MAX, u64::from),
+            Ordering::Release,
+        );
+        // Entry/Exit drops its station refusals on a new count (`fetch::station`); the
+        // coordination tick sees the refusal memory move and wakes an open table
+        // ([`Backend::station_tape_tick`]).
+        TAPE_TRADES.store(
+            catchup
+                .and_then(|catchup| catchup.tape_trades)
                 .map_or(u64::MAX, u64::from),
             Ordering::Release,
         );
@@ -687,6 +734,50 @@ impl Backend {
             return;
         }
         if let Some((job, kind)) = self.station.reconnect_read(now_ms, known_target()) {
+            self.station_begin(job, false, kind, cx);
+        }
+    }
+
+    /// The station's tape wake channel, for the Analytics window to observe.
+    pub(crate) fn station_tape(&self) -> gpui::Entity<StationTape> {
+        self.station_tape.clone()
+    }
+
+    /// Keep Entry/Exit's rows without station tape moving, on the coordination tick.
+    ///
+    /// The changed input is the station's own tape file, which the terminal cannot hear: its
+    /// live recording completes a trade's tail minutes after the close, and its catch-up
+    /// completes older trades hourly, which only its status (`tape_trades`) says. The observer
+    /// is the refusal memory, which drops its rows on a new count; the consumer is the
+    /// Entry/Exit table alone. So two things happen here, each only when due:
+    ///
+    /// - the open table is woken ([`StationTape`]) when a refusal was lifted or a row asked
+    ///   about too early has reached the moment its tail is final — an idle table has no
+    ///   listener of its own, and nothing else would ask the station again;
+    /// - the status is read again while a refusal is held, never more often than the catch-up.
+    ///   The attempt is stamped before it starts, so a station that is gone or does not answer
+    ///   costs one cached check a tick, not a read of the hosts file.
+    ///
+    /// Args:
+    ///     now_ms: The tick's clock, UTC milliseconds.
+    ///     cx: Backend context that notifies the channel and starts the quiet read.
+    pub(crate) fn station_tape_tick(&mut self, now_ms: i64, cx: &mut Context<Self>) {
+        if crate::analytics::tape_autoload::station_wake_due(now_ms) {
+            self.station_tape.update(cx, |_, cx| cx.notify());
+        }
+        if !known_cached()
+            || self.station.running
+            || !tape_status_due(
+                now_ms,
+                self.station.bot_read_ms,
+                self.station.tape_status_asked_ms,
+            )
+            || !crate::analytics::tape_autoload::station_refusals_held()
+        {
+            return;
+        }
+        self.station.tape_status_asked_ms = Some(now_ms);
+        if let Some((job, kind)) = self.station.bot_read(known_target()) {
             self.station_begin(job, false, kind, cx);
         }
     }

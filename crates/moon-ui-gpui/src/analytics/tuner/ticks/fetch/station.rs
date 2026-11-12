@@ -25,9 +25,16 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 /// ([`note_axis`]).
 static AXIS_EPOCH: AtomicU64 = AtomicU64::new(0);
 
-/// What a refusal was judged under: the station's finalised-tail count, the tail floor, the
-/// margin and long-position window, and the report axis epoch.
-type Generation = (u64, u32, (i64, i64), u64);
+/// What a refusal was judged under: the station's finalised-tail count and its count of trades
+/// with complete tape, the tail floor, the margin and long-position window, and the report axis
+/// epoch.
+///
+/// The tape count is what moves when the station files a refused trade's tape afterwards — its
+/// hourly catch-up, or the live tail of a trade asked about too early: such a trade goes to the
+/// complete set, never to the finalised tails, so the finalised count alone kept the row
+/// refused until the terminal was quit. Every refusal is dropped on a new count; the next pass
+/// asks only for the stretches the file still lacks ([`lacking`]).
+type Generation = ((u64, u64), u32, (i64, i64), u64);
 
 /// A report uid is unique only inside its core's report database.
 type RefusalKey = (u64, i64);
@@ -54,7 +61,8 @@ impl Unfillable {
         (self.revision, Arc::clone(&self.snapshot))
     }
 
-    /// A changed window, floor, station finalisation or report axis permits another attempt.
+    /// A changed window, floor, station finalisation or tape count, or report axis permits
+    /// another attempt.
     fn refresh(&mut self, generation: Generation) {
         if self.generation != generation {
             self.generation = generation;
@@ -135,7 +143,10 @@ fn unfillable() -> MutexGuard<'static, Unfillable> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     rows.refresh((
-        crate::backend::station::tail_final_cached(),
+        (
+            crate::backend::station::tail_final_cached(),
+            crate::backend::station::tape_trades_cached(),
+        ),
         super::super::tail::effective_s(),
         (
             margin_ms(),
@@ -166,6 +177,66 @@ pub(in crate::analytics::tuner) fn note_axis(axis: &moon_core::db::ReportAxis) {
         *last = Some(axis.clone());
         AXIS_EPOCH.fetch_add(1, Ordering::AcqRel);
     }
+}
+
+/// Whether any station miss is remembered: only then is the station's status worth reading
+/// again (`Backend::station_tape_tick`).
+pub(super) fn refusals_held() -> bool {
+    !unfillable().uids.is_empty()
+}
+
+/// The earliest moment a row left unrefused because its tail could still arrive
+/// ([`tail_may_follow`]) is worth asking about again; `i64::MAX` when there is none.
+static RETRY_AT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(i64::MAX);
+/// The refusal revision the last wake was given for.
+static WOKEN_REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// Whether an open Entry/Exit table should ask the station again now, true once per cause.
+///
+/// The table hears the station only while a fetch batch of its own runs, and asks for missing
+/// rows only when it reloads. Two changes reach it no other way: a refusal dropped because the
+/// station's status moved (the refusal revision), and a row left unrefused whose post-close
+/// tail has now had time to be final ([`RETRY_AT`]).
+///
+/// Args:
+///     now_ms: The clock, true UTC milliseconds.
+pub(super) fn wake_due(now_ms: i64) -> bool {
+    let retry_at = RETRY_AT.swap(i64::MAX, Ordering::AcqRel);
+    let settled = retry_at <= now_ms;
+    if !settled {
+        // Not yet: put it back, unless a pass armed an earlier one meanwhile.
+        RETRY_AT.fetch_min(retry_at, Ordering::AcqRel);
+    }
+    let revision = unfillable().revision;
+    let moved = WOKEN_REVISION.swap(revision, Ordering::AcqRel) != revision;
+    settled || moved
+}
+
+/// Whether the station may still be writing a row's tape: before the recorder treats the
+/// trade's post-close tail as final (`tail_settles_at_ms`), a short answer says "asked too
+/// early", not "the station has none". Such a row is not remembered as refused, and the open
+/// table is woken to ask again once that moment has passed ([`wake_due`]) — one more request,
+/// instead of a row that reads "not on the station" until the terminal is quit.
+///
+/// The moment is computed from this terminal's margin and tail floor, which it keeps the
+/// station's in step with; a station still on longer ones answers short once more and the row
+/// is then refused, until its catch-up lifts that with the rest.
+///
+/// Args:
+///     window: The row's replay window.
+///     min_tail_s: The shortest tail in force, seconds.
+///     now_ms: The clock, true UTC milliseconds.
+fn tail_may_follow(window: &ReplayWindow, min_tail_s: u32, now_ms: i64) -> bool {
+    now_ms < tail_settles_at(window, min_tail_s)
+}
+
+/// When the recorder treats a row's post-close tail as final, true UTC milliseconds.
+fn tail_settles_at(window: &ReplayWindow, min_tail_s: u32) -> i64 {
+    moon_core::market::tape_recorder::tail_settles_at_ms(
+        window.close_ms,
+        window.margin_ms,
+        record_tail_ms(min_tail_s, window.margin_ms),
+    )
 }
 
 /// Whether a station-only row still deserves an automatic request in this generation.
@@ -373,6 +444,8 @@ pub(super) fn prefill_counted(
 /// File a station answer, then remember rows it left uncovered when nothing else can fetch them.
 ///
 /// Filing invalidates only the affected market's refusals before this answer is remembered.
+/// A row whose post-close tail the station may still be writing is not remembered
+/// ([`tail_may_follow`]).
 ///
 /// Args:
 ///     rows: Rows still missing after the station pass.
@@ -394,8 +467,20 @@ fn commit_station_answer(
         return;
     }
     let now = moon_core::util::time::now_unix_ms_i64();
+    let min_tail_s = super::super::tail::effective_s();
+    // A row asked about too early is left unrefused, and the earliest moment one of them can
+    // be asked about again is armed for the tick's wake.
+    if let Some(retry_at) = rows
+        .iter()
+        .filter(|row| tail_may_follow(&row.window, min_tail_s, now))
+        .map(|row| tail_settles_at(&row.window, min_tail_s))
+        .min()
+    {
+        RETRY_AT.fetch_min(retry_at, Ordering::AcqRel);
+    }
     let refused: Vec<_> = rows
         .iter()
+        .filter(|row| !tail_may_follow(&row.window, min_tail_s, now))
         .filter(|row| crate::backend::station::known_cached() || !row.fetchable_after_station(now))
         .collect();
     if filled.pieces > 0 && !refused.is_empty() {

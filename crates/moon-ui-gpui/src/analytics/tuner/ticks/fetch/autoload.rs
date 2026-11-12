@@ -3,7 +3,9 @@
 //! Startup reads thirty days; growth invalidates the running pass and reads the full history
 //! once. A configured station is the sole source, including while it is unreachable. Without
 //! one, core archives and venue routes fill the missing tape. Successful incomplete
-//! station answers are remembered until their window or source policy changes; transport
+//! station answers are remembered until their window or source policy changes or the station
+//! reports more trades with complete tape — but not for a row asked about before its
+//! post-close tail could be final, which is asked again once it is (`station`). Transport
 //! failures remain retryable. All report reads, resolution and transport run off the UI thread.
 //!
 //! The first pass waits for startup cleanup. Unresolved core addresses retry within a bounded
@@ -268,6 +270,18 @@ pub(crate) fn reset_for_station() {
         st.result = None;
     }
     job::stop_autoload();
+}
+
+/// Whether a station miss is remembered for some row: the backend re-reads the station's status
+/// only while there is one to lift (`Backend::station_tape_tick`).
+pub(crate) fn station_refusals_held() -> bool {
+    super::station::refusals_held()
+}
+
+/// Whether an open Entry/Exit table should ask the station again now (`station::wake_due`);
+/// true once per cause.
+pub(crate) fn station_wake_due(now_ms: i64) -> bool {
+    super::station::wake_due(now_ms)
 }
 
 /// The coordination tick's call: start, continue or finish the autoload. Cheap when nothing is

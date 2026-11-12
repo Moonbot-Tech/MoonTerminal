@@ -294,6 +294,31 @@ impl AnalyticsView {
         }
     }
 
+    /// The backend's station-tape wake (`Backend::station_tape_tick`): a refusal was lifted, or
+    /// a row asked about too early has reached the moment its tail is final. An idle table has
+    /// no listener and asks for missing rows only as a reload ends, so this is what makes it
+    /// ask again: a reload when the refusals moved, else a pass over the missing rows as they
+    /// stand.
+    pub(in crate::analytics) fn station_tape_woke(&mut self, cx: &mut Context<Self>) {
+        // A table that was never loaded has no row to ask about; its first load asks.
+        if self.ticks.data.data().is_none() {
+            return;
+        }
+        let seen = (
+            self.ticks.station_generation,
+            self.ticks.station_refusal_revision,
+        );
+        self.refresh_station_tape(cx);
+        let reloading = seen
+            != (
+                self.ticks.station_generation,
+                self.ticks.station_refusal_revision,
+            );
+        if !reloading {
+            self.ticks_fetch_missing(cx);
+        }
+    }
+
     /// Queue every fetchable row of the table with the job, oldest first: a fresh batch when
     /// none runs, or added to the running one — the startup autoload's, or a previous window's
     /// — which already knows some of them and takes the rest.
