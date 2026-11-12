@@ -49,6 +49,11 @@ struct Unfillable {
     changed: HashMap<(String, String), u64>,
     snapshot_revision: u64,
     snapshot: Arc<HashSet<RefusalKey>>,
+    /// Rows answered short while their post-close tail could still arrive, each with the
+    /// moment it is final. Not refusals — the table goes on showing them as waiting — but not
+    /// asked about again before that moment either: every pass asking meanwhile brought a
+    /// little more tape, and each filing reloaded the open table and stopped its search.
+    deferred: HashMap<RefusalKey, i64>,
 }
 
 impl Unfillable {
@@ -65,6 +70,15 @@ impl Unfillable {
     /// another attempt.
     fn refresh(&mut self, generation: Generation) {
         if self.generation != generation {
+            // The waits follow what their moments were computed from — the floor, the window
+            // and the axis, whose move shifts a row's close by its core's offset, hours at a
+            // time. The station's counts are not among them: a status read does not change when
+            // a tail is final, and dropping the waits there would ask about every such row
+            // again.
+            let (_, floor, window, axis) = self.generation;
+            if (floor, window, axis) != (generation.1, generation.2, generation.3) {
+                self.deferred.clear();
+            }
             self.generation = generation;
             if !self.uids.is_empty() {
                 self.revision += 1;
@@ -114,6 +128,21 @@ impl Unfillable {
             }
         }
         self.changed.retain(|market, _| markets.contains(market));
+        self.deferred.retain(|key, _| live.contains(key));
+    }
+
+    /// Whether a row is waiting out its post-close tail at `now_ms`; a wait that has run out
+    /// is forgotten here, so the row is asked about once more.
+    fn waiting_tail(&mut self, core_uid: u64, uid: i64, now_ms: i64) -> bool {
+        let key = (core_uid, uid);
+        match self.deferred.get(&key) {
+            Some(&until) if now_ms < until => true,
+            Some(_) => {
+                self.deferred.remove(&key);
+                false
+            }
+            None => false,
+        }
     }
 
     /// Bump the revision for a membership change on one market.
@@ -214,9 +243,10 @@ pub(super) fn wake_due(now_ms: i64) -> bool {
 
 /// Whether the station may still be writing a row's tape: before the recorder treats the
 /// trade's post-close tail as final (`tail_settles_at_ms`), a short answer says "asked too
-/// early", not "the station has none". Such a row is not remembered as refused, and the open
-/// table is woken to ask again once that moment has passed ([`wake_due`]) — one more request,
-/// instead of a row that reads "not on the station" until the terminal is quit.
+/// early", not "the station has none". Such a row is not remembered as refused; it is left
+/// alone until that moment (`Unfillable::deferred`) and the open table is then woken to ask
+/// once more ([`wake_due`]) — one more request, instead of a row that reads "not on the
+/// station" until the terminal is quit, or one asked about on every pass in between.
 ///
 /// The moment is computed from this terminal's margin and tail floor, which it keeps the
 /// station's in step with; a station still on longer ones answers short once more and the row
@@ -424,9 +454,15 @@ pub(super) fn prefill_counted(
             let Some(target) = target.filter(|_| !stop()) else {
                 return Filled::default();
             };
+            let now = moon_core::util::time::now_unix_ms_i64();
             let candidates: Vec<_> = rows
                 .iter()
                 .filter(|row| candidate(row.deal.core_uid, row.deal.report_uid))
+                // One short answer is enough until the tail can be final: asked every pass
+                // meanwhile, the station files a few more seconds each time.
+                .filter(|row| {
+                    !unfillable().waiting_tail(row.deal.core_uid, row.deal.report_uid, now)
+                })
                 .collect();
             let filled = fill(&candidates, |row| place(row), target, &stop);
             super::autoload::station_answered(filled.unreachable || filled.failed);
@@ -463,13 +499,12 @@ fn commit_station_answer(
     judged_under: Generation,
 ) {
     note_filed(filled);
-    if filled.markets == 0 || filled.unreachable || filled.failed || stopped {
-        return;
-    }
     let now = moon_core::util::time::now_unix_ms_i64();
     let min_tail_s = super::super::tail::effective_s();
-    // A row asked about too early is left unrefused, and the earliest moment one of them can
-    // be asked about again is armed for the tick's wake.
+    // A row whose tail can still arrive is left unrefused, and the earliest moment one of them
+    // can be asked about again is armed for the tick's wake. On every pass, an unanswered one
+    // included: the wake takes the armed moment with it, so the rows still waiting after it
+    // have only the next pass to arm theirs.
     if let Some(retry_at) = rows
         .iter()
         .filter(|row| tail_may_follow(&row.window, min_tail_s, now))
@@ -477,6 +512,9 @@ fn commit_station_answer(
         .min()
     {
         RETRY_AT.fetch_min(retry_at, Ordering::AcqRel);
+    }
+    if filled.markets == 0 || filled.unreachable || filled.failed || stopped {
+        return;
     }
     let refused: Vec<_> = rows
         .iter()
@@ -493,6 +531,15 @@ fn commit_station_answer(
     let mut refusals = unfillable();
     if refusals.generation != judged_under {
         return;
+    }
+    for row in rows
+        .iter()
+        .filter(|row| tail_may_follow(&row.window, min_tail_s, now))
+    {
+        refusals.deferred.insert(
+            (row.deal.core_uid, row.deal.report_uid),
+            tail_settles_at(&row.window, min_tail_s),
+        );
     }
     let before = refusals.revision;
     for row in refused {

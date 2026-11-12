@@ -49,6 +49,88 @@ fn a_catchup_filing_reopens_a_refused_row() {
     );
 }
 
+/// A row answered short while its tail could still arrive is asked about once, not on every
+/// pass: asked every 30 s it brought a few more seconds of tape each time, and each filing
+/// reloaded the open table and stopped the user's search (the regression of the first cut of
+/// #1070). It waits out the tail, stays a candidate throughout — never "not on the station" —
+/// and is asked about again once the tail is final.
+#[test]
+fn a_row_waiting_for_its_tail_is_not_asked_again_before_it_settles() {
+    let mut rows = Unfillable::default();
+    rows.deferred.insert((1, 42), 5_000);
+    assert!(rows.waiting_tail(1, 42, 4_999));
+    assert!(
+        !rows.uids.contains_key(&(1, 42)),
+        "waiting is not a refusal"
+    );
+    assert!(!rows.waiting_tail(1, 42, 5_000), "the tail is final: ask");
+    assert!(rows.deferred.is_empty(), "the wait is over for good");
+    assert!(
+        !rows.waiting_tail(2, 42, 0),
+        "another core's row never waited"
+    );
+    // A status read drops the refusals, not the waits: the tail is final when it is final,
+    // whatever the station counts, and a dropped wait is a row asked on every pass.
+    rows.refresh(((0, 0), 60, (600_000, 0), 1));
+    rows.deferred.insert((1, 43), 9_000);
+    rows.refuse(1, 44, "synthetic", "XALPHA");
+    rows.refresh(((0, 1), 60, (600_000, 0), 1));
+    assert!(rows.uids.is_empty(), "the refusal is lifted");
+    assert!(rows.waiting_tail(1, 43, 0), "the wait stands");
+    // An axis move shifts the row's close by its core's offset, a changed window or floor moves
+    // the tail: each makes the stored moment another row's, so the wait goes.
+    for moved in [
+        ((0, 1), 60, (600_000, 0), 2),
+        ((0, 1), 60, (900_000, 0), 2),
+        ((0, 1), 120, (900_000, 0), 2),
+    ] {
+        rows.deferred.insert((1, 43), 9_000);
+        rows.refresh(moved);
+        assert!(!rows.waiting_tail(1, 43, 0), "{moved:?}");
+    }
+    // A row that left the sample takes its wait with it.
+    rows.deferred.insert((1, 43), 9_000);
+    rows.retain(
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+    assert!(!rows.waiting_tail(1, 43, 0));
+}
+
+/// The answer that defers a row: a station asked seconds after the close answers short, and
+/// the row is neither refused nor left to be asked about on the next pass.
+#[test]
+fn a_short_answer_right_after_the_close_defers_the_row() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _guard = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    let mut queued = queued_unservable(-94_073);
+    let uid = queued.deal.report_uid;
+    forget(uid);
+    let now = moon_core::util::time::now_unix_ms_i64();
+    queued.window.close_ms = now;
+    let generation = super::unfillable().generation;
+    super::commit_station_answer(
+        &[queued],
+        Filled {
+            markets: 1,
+            ..Default::default()
+        },
+        false,
+        generation,
+    );
+    let mut rows = super::unfillable();
+    let refused = rows.uids.contains_key(&(1, uid));
+    let waiting = rows.waiting_tail(1, uid, now);
+    rows.deferred.remove(&(1, uid));
+    drop(rows);
+    super::RETRY_AT.store(i64::MAX, std::sync::atomic::Ordering::Release);
+    assert!(!refused, "asked too early is not a refusal");
+    assert!(
+        waiting,
+        "and is not asked about again until the tail settles"
+    );
+}
+
 /// An idle table hears nothing from the station, so the tick wakes it — once — when a row left
 /// unrefused reaches the moment its tail is final, and when the refusal memory moves. A wake
 /// armed for later stays armed, and an earlier one armed meanwhile is not lost.

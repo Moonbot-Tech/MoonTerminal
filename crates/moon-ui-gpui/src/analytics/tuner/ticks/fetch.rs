@@ -280,7 +280,16 @@ impl AnalyticsView {
     /// Re-read tape after filing or refusal changes so newly admitted tails regain their tape.
     /// A refusal change alone keeps the judged rows: the reload asks again only about the
     /// missing rows on the markets whose refusals changed (`station::refusals_since`).
+    ///
+    /// Not while a search runs: the re-read reloads the table, a reload stops the search, and
+    /// tape arriving in the background is no reason to throw the user's search away. Every
+    /// caller comes through here — the card's own paint, the end of a fetch pass, the fetch
+    /// listener, the backend's wake — so this is the one place that holds the reload back. The
+    /// generations stay unread, and the first paint after the search ends picks them up.
     pub(super) fn refresh_station_tape(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.ticks.sugg, super::state::SuggState::Running { .. }) {
+            return;
+        }
         let generation = station::filed_generation();
         let refusal_revision = station::refusal_revision();
         let filed = generation != self.ticks.station_generation;
@@ -304,6 +313,14 @@ impl AnalyticsView {
         if self.ticks.data.data().is_none() {
             return;
         }
+        // The reload is held back while a search runs (`refresh_station_tape`); the pass over
+        // the missing rows waits with it, so the search's own tape is not re-read under it
+        // (`TicksState::station_wake_pending`).
+        if matches!(self.ticks.sugg, super::state::SuggState::Running { .. }) {
+            self.ticks.station_wake_pending = true;
+            return;
+        }
+        self.ticks.station_wake_pending = false;
         let seen = (
             self.ticks.station_generation,
             self.ticks.station_refusal_revision,
