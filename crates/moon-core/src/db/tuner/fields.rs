@@ -301,6 +301,173 @@ pub const FIELDS: &[FieldSpec] = &[
     ),
 ];
 
+/// When the core checks a stored limit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Live {
+    /// While the value is above zero; zero switches the check off.
+    Positive,
+    /// At any value but zero: a negative one is a rule of its own, not "off".
+    NonZero,
+    /// While the value is below this; at or above it the check is off, and zero is the
+    /// strictest setting rather than "off".
+    Below(f64),
+}
+
+impl Live {
+    /// Whether a limit stored at `value` is checked.
+    pub fn at(self, value: f64) -> bool {
+        match self {
+            Self::Positive => value > 0.0,
+            Self::NonZero => value != 0.0,
+            Self::Below(off) => value < off,
+        }
+    }
+}
+
+/// A strategy limit OUTSIDE the tuner's grid that Ignore flags keep asleep.
+#[derive(Debug)]
+pub struct WakeExtra {
+    /// The strategy parameter.
+    pub key: &'static str,
+    /// The flags that switch it off; it works only while every one of them is `NO`.
+    pub gates: &'static [&'static str],
+    /// The values at which the core checks it at all.
+    pub live: Live,
+    /// Another parameter that must be above zero for this one to be checked.
+    pub needs: Option<&'static str>,
+}
+
+/// The limits outside the grid that wake when Save clears a flag to make a fitted bound apply:
+/// clearing `IgnoreFilters` turns on every group whose own flag is `NO`, and the report has no
+/// column to model these by, so the save dialog names them (`StratFilters::extras`).
+///
+/// The groups are Moonbot's own — Time, Price, Ping and Delta, each under its flag and all of
+/// them under `IgnoreFilters` (MoonDoc, `concepts/01-market-selection-and-filters.md`). Most
+/// limits are off at zero; the exceptions are the ones that read wrong when taken for the
+/// rule: a price step cap of `0` blocks every coin and only `100` or more switches it off,
+/// the session profit and funding limits mean something at a negative value, and the ping cap
+/// is checked only together with a latency cap.
+///
+/// Left out on purpose: limits whose check depends on the strategy type (the pauses after a
+/// detect) and the ones that are not a number (the schedule, token tags, the EMA formula). A
+/// `TopMarket` strategy skips the price step floor; the list names it all the same.
+pub const WAKE_EXTRAS: &[WakeExtra] = &[
+    WakeExtra {
+        key: "PenaltyTime",
+        gates: &["IgnoreFilters", "IgnoreTime"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "TradePenaltyTime",
+        gates: &["IgnoreFilters", "IgnoreTime"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "FundingBefore",
+        gates: &["IgnoreFilters", "IgnoreTime"],
+        live: Live::NonZero,
+        needs: None,
+    },
+    WakeExtra {
+        key: "FundingAfter",
+        gates: &["IgnoreFilters", "IgnoreTime"],
+        live: Live::NonZero,
+        needs: None,
+    },
+    WakeExtra {
+        key: "MaxBalance",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "MaxPosition",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "SessionProfitMin",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::NonZero,
+        needs: None,
+    },
+    WakeExtra {
+        key: "SessionProfitMax",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::NonZero,
+        needs: None,
+    },
+    WakeExtra {
+        key: "TotalLoss",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "WorkingPriceMin",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "WorkingPriceMax",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "PriceStepMin",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "PriceStepMax",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        live: Live::Below(100.0),
+        needs: None,
+    },
+    WakeExtra {
+        key: "MinPing",
+        gates: &["IgnoreFilters", "IgnorePing"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "MaxLatency",
+        gates: &["IgnoreFilters", "IgnorePing"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "MaxPing",
+        gates: &["IgnoreFilters", "IgnorePing"],
+        live: Live::Positive,
+        needs: Some("MaxLatency"),
+    },
+    WakeExtra {
+        key: "GlobalFilterPenalty",
+        gates: &["IgnoreFilters", "IgnoreDelta"],
+        live: Live::Positive,
+        needs: None,
+    },
+    WakeExtra {
+        key: "FilterMin",
+        gates: &["IgnoreFilters", "IgnoreDelta"],
+        live: Live::NonZero,
+        needs: None,
+    },
+    WakeExtra {
+        key: "FilterMax",
+        gates: &["IgnoreFilters", "IgnoreDelta"],
+        live: Live::NonZero,
+        needs: None,
+    },
+];
+
 /// `DeltaN_Type` value for a slot field (`None` means the field is not a slot).
 pub fn slot_type_for(field: &str) -> Option<&'static str> {
     FIELDS

@@ -42,6 +42,157 @@ fn checked_kinds_distinguishes_absent_and_broken_database() {
     );
 }
 
+/// Schema defaults of the parameters the cards below read, lowercase as the tuner keeps them.
+fn defaults() -> std::collections::HashMap<String, f64> {
+    [
+        ("minvolume", 100.0),
+        ("maxvolume", 100_000.0),
+        ("minhourlyvolume", 10.0),
+        ("maxhourlyvolume", 10_000.0),
+        ("maxhourlyvolfast", 0.0),
+        ("delta_3h_min", 0.0),
+        ("delta_3h_max", 20.0),
+        ("delta2_min", 0.0),
+        ("delta2_max", 20.0),
+        ("maxleverage", 0.0),
+        ("minleverage", 1.0),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .collect()
+}
+
+/// The corridor a strategy is born with is a bound Moonbot applies, so it must reach the card
+/// (#1072: the live daily volume 100..100000 came back as no bound at all); it is only marked.
+/// A side the core reads as "off" at zero stays out, default or not.
+#[test]
+fn a_factory_corridor_is_a_marked_bound_and_a_zero_off_side_is_none() {
+    let raw = r#"{
+        "IgnoreVolume": "NO",
+        "MinVolume": 100, "MaxVolume": 100000,
+        "MinHourlyVolume": 25, "MaxHourlyVolume": 10000,
+        "MinHourlyVolFast": 0, "MaxHourlyVolFast": 0,
+        "Delta_3h_Min": 0, "Delta_3h_Max": 20,
+        "MinLeverage": 1, "MaxLeverage": 0
+    }"#;
+    let card = filters_of(raw, &defaults()).expect("a card");
+    assert!(card.found && !card.ignore_volume);
+    assert_eq!(
+        card.bounds.get("dvol"),
+        Some(&(Some(100.0), Some(100_000.0)))
+    );
+    assert!(card.factory.contains("dvol"));
+    // One typed side makes the field the user's, the factory side still a bound.
+    assert_eq!(card.bounds.get("hvol"), Some(&(Some(25.0), Some(10_000.0))));
+    assert!(!card.factory.contains("hvol"));
+    // Zero is a real lower bound of a delta, and the factory one.
+    assert_eq!(card.bounds.get("d3h"), Some(&(Some(0.0), Some(20.0))));
+    assert!(card.factory.contains("d3h"));
+    // The fast hourly volume ignores zero on both sides; the leverage cap ignores it too.
+    assert_eq!(card.bounds.get("hvolf"), None);
+    assert_eq!(card.bounds.get("lev"), Some(&(Some(1.0), None)));
+}
+
+/// A slot's thresholds are bounds at their factory values too, and a slot of a type the report
+/// has no column for is a live filter the save must not treat as free.
+#[test]
+fn slot_thresholds_and_foreign_slots_count_at_factory_values() {
+    let raw = r#"{
+        "Delta2_Type": "1h", "Delta2_Min": 0, "Delta2_Max": 20,
+        "Delta3_Type": "2h", "Delta3_Min": 0, "Delta3_Max": 1000
+    }"#;
+    let card = filters_of(raw, &defaults()).expect("a card");
+    assert_eq!(card.slot_of("d1h"), Some((2, Some(0.0), Some(20.0))));
+    assert_eq!(card.foreign_slots, vec![(3, "2h".to_string())]);
+    assert!(
+        card.factory.contains("d1h"),
+        "a slot's factory thresholds are marked"
+    );
+    // One typed threshold makes the slot the user's.
+    let typed = r#"{"Delta2_Type": "1h", "Delta2_Min": 0, "Delta2_Max": 7}"#;
+    let card = filters_of(typed, &defaults()).expect("a card");
+    assert_eq!(card.slot_of("d1h"), Some((2, Some(0.0), Some(7.0))));
+    assert!(!card.factory.contains("d1h"));
+}
+
+/// The limits outside the grid are listed only where the core checks them: a zero price step
+/// blocks every coin and only 100 or more switches it off, a ping cap needs a latency cap, the
+/// other pings are off at zero.
+#[test]
+fn extras_list_the_limits_the_core_checks_at_their_stored_values() {
+    let listed = |raw: &str| -> Vec<(&'static str, f64)> {
+        filters_of(raw, &defaults())
+            .expect("a card")
+            .extras
+            .iter()
+            .map(|(extra, value)| (extra.key, *value))
+            .collect()
+    };
+    assert_eq!(
+        listed(r#"{"PenaltyTime": 300, "PriceStepMax": "0,5", "MinPing": 0, "MaxPing": 40}"#),
+        vec![("PenaltyTime", 300.0), ("PriceStepMax", 0.5)],
+        "a ping cap without a latency cap is not checked"
+    );
+    assert_eq!(
+        listed(r#"{"PenaltyTime": 0, "PriceStepMax": 0, "MaxLatency": 150, "MaxPing": 40}"#),
+        vec![
+            ("PriceStepMax", 0.0),
+            ("MaxLatency", 150.0),
+            ("MaxPing", 40.0)
+        ],
+        "a zero price step is a live limit"
+    );
+    assert!(listed(r#"{"PriceStepMax": 100}"#).is_empty());
+    assert!(
+        listed(r#"{"PriceStepMax": 250}"#).is_empty(),
+        "anything from 100 up is off"
+    );
+    // The rest of the Time, Price and Delta groups, in the table's order: a pause or a cap is
+    // off at zero, a session or funding limit means something below it.
+    assert_eq!(
+        listed(
+            r#"{"TradePenaltyTime": 60, "FundingBefore": -30, "FundingAfter": 0,
+                "MaxBalance": 0, "MaxPosition": 500, "SessionProfitMin": -20,
+                "SessionProfitMax": 0, "TotalLoss": 0, "WorkingPriceMin": 0.5,
+                "WorkingPriceMax": 0, "PriceStepMin": 0.01, "PriceStepMax": 100,
+                "GlobalFilterPenalty": 120, "FilterMin": 0, "FilterMax": -1.5}"#
+        ),
+        vec![
+            ("TradePenaltyTime", 60.0),
+            ("FundingBefore", -30.0),
+            ("MaxPosition", 500.0),
+            ("SessionProfitMin", -20.0),
+            ("WorkingPriceMin", 0.5),
+            ("PriceStepMin", 0.01),
+            ("GlobalFilterPenalty", 120.0),
+            ("FilterMax", -1.5),
+        ]
+    );
+    // Each one sleeps under its own group's flag as well as the master one.
+    let gates = |key: &str| {
+        WAKE_EXTRAS
+            .iter()
+            .find(|extra| extra.key == key)
+            .map(|extra| extra.gates.to_vec())
+    };
+    assert_eq!(
+        gates("TradePenaltyTime"),
+        Some(vec!["IgnoreFilters", "IgnoreTime"])
+    );
+    assert_eq!(
+        gates("PriceStepMin"),
+        Some(vec!["IgnoreFilters", "IgnorePrice"])
+    );
+    assert_eq!(
+        gates("FilterMax"),
+        Some(vec!["IgnoreFilters", "IgnoreDelta"])
+    );
+    let card = filters_of(r#"{"IgnoreTime": "YES", "IgnorePing": true}"#, &defaults()).unwrap();
+    assert!(card.ignores("IgnoreTime") && card.ignores("IgnorePing"));
+    assert!(!card.ignores("IgnorePrice") && !card.ignores("IgnoreFilters"));
+    assert!(filters_of("[]", &defaults()).is_none());
+}
+
 fn versions() -> Connection {
     let conn = Connection::open_in_memory().expect("memory db");
     conn.execute_batch(

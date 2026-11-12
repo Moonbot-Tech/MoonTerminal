@@ -526,6 +526,9 @@ impl AnalyticsView {
             log::info!("analytics: 'Save' — neither mapped thresholds nor changed ignore flags");
             return;
         }
+        // What else starts working with a cleared ignore goes with the save's own warnings.
+        let mut warns = warns;
+        warns.extend(super::wake::warnings(&self.tuner.strat, &changes, bulk));
         // No notes: a threshold reads perfectly well as "now → next".
         self.open_change_dialog(targets, changes, per_target, Vec::new(), warns, false, cx);
     }
@@ -551,6 +554,10 @@ impl AnalyticsView {
             .build_strategy_changes(false, self.scope_is_drops_only());
         changes.push(self.analyzer_comment());
         let (changes, _) = self.changes_for_targets(std::slice::from_ref(&target), &changes);
+        // A copy that clears an ignore is born with that section's old numbers live, like a
+        // save of the original.
+        let mut warns = warns;
+        warns.extend(super::wake::warnings(&self.tuner.strat, &changes, false));
         self.open_copy_with(target, changes, warns, window, cx);
     }
 
@@ -701,147 +708,68 @@ impl super::state::TunerState {
                 }
             }
         }
-        // Slot assignment: its own previous place (if the type is already set) —
-        // otherwise the first free one in order. Slots held by a type with no report
-        // column (2h/30m/Pump5m with thresholds — a 'foreign' live filter) are
-        // overwritten LAST and with a warn. Only two fit — the rest go to the log.
-        if !slot_wanted.is_empty() {
-            let cur2 = self
-                .strat
-                .slots
-                .iter()
-                .find(|(n, ..)| *n == 2)
-                .map(|(_, f, ..)| *f);
-            let cur3 = self
-                .strat
-                .slots
-                .iter()
-                .find(|(n, ..)| *n == 3)
-                .map(|(_, f, ..)| *f);
-            let foreign = self.strat.foreign_slots.clone();
-            let mut used = [false, false]; // [Delta2, Delta3]
-            for (n, _) in &foreign {
-                used[(*n - 2) as usize] = true;
-            }
-            let mut assigned: Vec<(u8, &'static str, Option<f64>, Option<f64>)> = Vec::new();
-            let mut dropped: Vec<&'static str> = Vec::new();
-            // First — the fields already sitting in their own slots.
-            for (col, lo, hi) in &slot_wanted {
-                if cur2 == Some(*col) && !used[0] {
-                    used[0] = true;
-                    assigned.push((2, col, *lo, *hi));
-                } else if cur3 == Some(*col) && !used[1] {
-                    used[1] = true;
-                    assigned.push((3, col, *lo, *hi));
-                }
-            }
-            // Then — the free slots; last — overwriting the 'foreign' ones.
-            for overwrite_foreign in [false, true] {
-                for (col, lo, hi) in &slot_wanted {
-                    if assigned.iter().any(|(_, f, ..)| f == col) {
-                        continue;
-                    }
-                    let Some(i) = (0..2).find(|i| {
-                        !used[*i]
-                            || (overwrite_foreign
-                                && foreign.iter().any(|(n, _)| *n == *i as u8 + 2)
-                                && !assigned.iter().any(|(n, ..)| *n == *i as u8 + 2))
-                    }) else {
-                        if overwrite_foreign {
-                            dropped.push(col);
-                        }
-                        continue;
-                    };
-                    used[i] = true;
-                    if let Some((_, ty)) = foreign.iter().find(|(n, _)| *n == i as u8 + 2) {
-                        let slot = format!("Delta{}", i + 2);
-                        log::warn!(
-                            "analytics: 'Save' — {slot} was held by type '{ty}' (no such \
-                             column in the report), overwriting with '{col}'"
-                        );
-                        warns.push(
-                            t!("analytics.tuner.warn_slot_replace", slot = slot, old = ty)
-                                .to_string(),
-                        );
-                    }
-                    assigned.push((i as u8 + 2, col, *lo, *hi));
-                }
-            }
-            if !dropped.is_empty() {
-                log::warn!(
-                    "analytics: 'To strategy' — only two Delta2/Delta3 slots, did not fit: {}",
-                    dropped.join(", ")
-                );
-                warns.push(
-                    t!(
-                        "analytics.tuner.warn_slot_drop",
-                        fields = dropped.join(", ")
-                    )
-                    .to_string(),
-                );
-            }
-            for (n, col, lo, hi) in assigned {
-                let Some(ty) = slot_type_for(col) else {
-                    continue;
-                };
-                // Order matters: the slot type first, then its thresholds.
-                changes.push((format!("Delta{n}_Type"), ty.to_string()));
-                if let Some(v) = lo {
-                    changes.push((format!("Delta{n}_Min"), fmt_plain(v)));
-                }
-                if let Some(v) = hi {
-                    changes.push((format!("Delta{n}_Max"), fmt_plain(v)));
-                }
-                delta_touched = true;
-                filter_touched = true;
-            }
+        // Slot assignment (`wake::plan_slots`): its own previous place first, then the first
+        // free one; slots held by a type with no report column (2h/30m/Pump5m with thresholds —
+        // a 'foreign' live filter) are overwritten LAST and with a warn. Only two fit — the
+        // rest go to the log.
+        let plan = super::wake::plan_slots(&self.strat, &slot_wanted);
+        for (n, ty, col) in &plan.replaced {
+            let slot = format!("Delta{n}");
+            log::warn!(
+                "analytics: 'Save' — {slot} was held by type '{ty}' (no such \
+                 column in the report), overwriting with '{col}'"
+            );
+            warns.push(t!("analytics.tuner.warn_slot_replace", slot = slot, old = ty).to_string());
         }
-        // Ignore flags: auto-enable the classes whose thresholds we write, PLUS explicit
-        // 'ignore' clicks on the subheaders (the staged value wins over the auto logic).
-        // `force` only fires when we ACTUALLY wrote at least one threshold — otherwise a bulk
-        // Save with a clean anchor would fan IgnoreFilters=NO to every target (flipping filters
-        // on where they were ignored) with nothing to justify it, and the empty-guard at the
-        // caller would never trip.
+        if !plan.dropped.is_empty() {
+            log::warn!(
+                "analytics: 'To strategy' — only two Delta2/Delta3 slots, did not fit: {}",
+                plan.dropped.join(", ")
+            );
+            warns.push(
+                t!(
+                    "analytics.tuner.warn_slot_drop",
+                    fields = plan.dropped.join(", ")
+                )
+                .to_string(),
+            );
+        }
+        for (n, col, lo, hi) in plan.assigned {
+            let Some(ty) = slot_type_for(col) else {
+                continue;
+            };
+            // Order matters: the slot type first, then its thresholds.
+            changes.push((format!("Delta{n}_Type"), ty.to_string()));
+            if let Some(v) = lo {
+                changes.push((format!("Delta{n}_Min"), fmt_plain(v)));
+            }
+            if let Some(v) = hi {
+                changes.push((format!("Delta{n}_Max"), fmt_plain(v)));
+            }
+            delta_touched = true;
+            filter_touched = true;
+        }
+        // Ignore flags (`wake::flag_changes`): auto-enable the classes whose thresholds we
+        // write, PLUS explicit 'ignore' clicks on the subheaders (the staged value wins over
+        // the auto logic). `force` only fires when we ACTUALLY wrote at least one threshold —
+        // otherwise a bulk Save with a clean anchor would fan IgnoreFilters=NO to every target
+        // (flipping filters on where they were ignored) with nothing to justify it, and the
+        // empty-guard at the caller would never trip.
         let has_params = !changes.is_empty();
         let force = force_enable && has_params;
-        let f = self.strat.clone();
-        let mut flags: Vec<(&'static str, bool)> = Vec::new(); // (flag, ignore)
-        // A detect threshold is live under IgnoreFilters, so writing it alone clears nothing.
-        if filter_touched && (force || f.ignore_filters) {
-            flags.push(("IgnoreFilters", false));
-        }
-        if delta_touched && (force || f.ignore_delta) {
-            flags.push(("IgnoreDelta", false));
-        }
-        // BV/SV is a Filters/Volume subgroup: its thresholds need IgnoreVolume cleared AND
-        // the filter itself enabled.
-        if (volume_touched || bvsv_touched) && (force || f.ignore_volume) {
-            flags.push(("IgnoreVolume", false));
-        }
-        if bvsv_touched && (force || !f.use_bvsv) {
-            flags.push(("UseBV_SV_Filter", false));
-        }
-        if ping_touched && (force || f.ignore_ping) {
-            flags.push(("IgnorePing", false));
-        }
-        if base_touched && (force || f.ignore_base) {
-            flags.push(("IgnoreBase", false));
-        }
-        for (flag, want) in self.staged_ignore.clone() {
-            flags.retain(|(fl, _)| *fl != flag);
-            let cur = match flag {
-                "IgnoreFilters" => f.ignore_filters,
-                "IgnorePing" => f.ignore_ping,
-                "IgnoreDelta" => f.ignore_delta,
-                "IgnoreVolume" => f.ignore_volume,
-                "IgnoreBase" => f.ignore_base,
-                "UseBV_SV_Filter" => !f.use_bvsv,
-                _ => continue,
-            };
-            if want != cur {
-                flags.push((flag, want));
-            }
-        }
+        let flags = super::wake::flag_changes(
+            &self.strat,
+            super::wake::Touched {
+                delta: delta_touched,
+                volume: volume_touched,
+                bvsv: bvsv_touched,
+                ping: ping_touched,
+                base: base_touched,
+                filter: filter_touched,
+            },
+            &self.staged_ignore,
+            force,
+        );
         for (flag, ignore) in flags {
             // UseBV_SV_Filter is an enabler (inverted ignore semantics).
             let value = if flag == "UseBV_SV_Filter" {

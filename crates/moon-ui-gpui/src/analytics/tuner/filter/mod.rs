@@ -15,6 +15,8 @@ mod actions;
 mod hist;
 /// Its own state: the threshold grid, the staged ignore flags, the suggestion settings.
 pub(in crate::analytics::tuner) mod state;
+/// What a save wakes besides the bounds it writes.
+mod wake;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -115,8 +117,9 @@ impl AnalyticsView {
             .and_then(|data| kind_of(&data.strategies, sid, core).map(str::to_string))
     }
 
-    /// Read numeric strategy-field defaults used to hide unconfigured threshold chips — the
-    /// same table the Entry/Exit model fills defaulted fields from
+    /// Read numeric strategy-field defaults used to mark the factory bounds among a strategy's
+    /// chips (`StratFilters::factory`; they hide nothing) — the same table the Entry/Exit model
+    /// fills defaulted fields from
     /// (`ticks::fetch::strategy_field_defaults`).
     ///
     /// Args:
@@ -195,7 +198,9 @@ impl AnalyticsView {
             .and_then(|(k, _)| super::parse_strat_key(k));
         let sid = anchor.map(|(s, _)| s);
         let core = anchor.and_then(|(_, c)| c);
-        let variants = self.tuner.variants(self.scope_is_drops_only());
+        let drops_only = self.scope_is_drops_only();
+        let variants = self.tuner.variants(drops_only);
+        let wake = self.wake_inputs();
         let field = FIELDS[self.tuner.sel_field].col.to_string();
         self.tuner.hist_seq = self.tuner.hist_seq.wrapping_add(1);
         self.tuner.hist_dirty = false;
@@ -217,11 +222,17 @@ impl AnalyticsView {
             show_overlay,
             cx,
             move || {
-                let result =
-                    moon_core::db::tuner::filter_tuner_data(&q, &variants, &field, HIST_BUCKETS);
+                // The card first: the bounds a save would wake belong to THIS scope's strategy,
+                // and the one held from the previous read may be another's.
                 let sf = sid
                     .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
                     .unwrap_or_default();
+                let variants = match &wake {
+                    Some(staged) => wake::with_woken(variants, &sf, staged, drops_only),
+                    None => variants,
+                };
+                let result =
+                    moon_core::db::tuner::filter_tuner_data(&q, &variants, &field, HIST_BUCKETS);
                 (result.stats, result.histogram, sf)
             },
             move |this, (stats, histogram, strat), cx| {
@@ -271,6 +282,13 @@ impl AnalyticsView {
         );
     }
 
+    /// The staged toggles the what-if needs to lay the woken bounds under its variants, or
+    /// `None` when it must not: with several strategies selected each wakes its own numbers,
+    /// and the anchor's card is not theirs (the bulk save dialog says so instead).
+    fn wake_inputs(&self) -> Option<HashMap<&'static str, bool>> {
+        self.current_if_single(self.tuner.staged_ignore.clone())
+    }
+
     /// Start a KPI-only query while preserving an unrelated completed histogram.
     ///
     /// Args:
@@ -299,7 +317,9 @@ impl AnalyticsView {
         let req = self.tuner.seq;
         let report_req = self.current_report_generation();
         let query = self.tuner_query();
-        let variants = self.tuner.variants(self.scope_is_drops_only());
+        let drops_only = self.scope_is_drops_only();
+        let variants = self.tuner.variants(drops_only);
+        let wake = self.wake_inputs();
         let anchor = self
             .sel_strategy
             .as_ref()
@@ -313,10 +333,15 @@ impl AnalyticsView {
             show_overlay,
             cx,
             move || {
-                let stats = moon_core::db::tuner::variant_stats(&query, &variants);
+                // The card first, as in the full reload: the woken bounds are this scope's.
                 let filters = sid
                     .map(|sid| moon_core::db::tuner::strategy_filters(sid, core, &defaults))
                     .unwrap_or_default();
+                let variants = match &wake {
+                    Some(staged) => wake::with_woken(variants, &filters, staged, drops_only),
+                    None => variants,
+                };
+                let stats = moon_core::db::tuner::variant_stats(&query, &variants);
                 (stats, filters)
             },
             move |this, (stats, filters), cx| {
@@ -624,6 +649,20 @@ impl AnalyticsView {
             .w_full()
             .flex_none()
             .child(head);
+        // The stored bounds a save of V1 wakes: their class is ignored now, so the column would
+        // stay empty, yet the what-if already counts them. A save wakes something only when V1
+        // holds a bound — the same rule the what-if applies (`wake::with_woken`) — so an empty
+        // V1, the state the grid idles in, costs nothing here.
+        let v1 = if strat.found {
+            self.tuner.variant_bounds(0, drops_only)
+        } else {
+            Vec::new()
+        };
+        let waking: Vec<wake::Woken> = if v1.is_empty() {
+            Vec::new()
+        } else {
+            wake::woken_by(&strat, &v1, &self.tuner.staged_ignore, drops_only)
+        };
         let mut last_class: Option<FieldClass> = None;
         for (fi, field) in FIELDS.iter().enumerate() {
             // Skipping the row also skips its header: the header is emitted from this loop,
@@ -719,26 +758,37 @@ impl AnalyticsView {
             if selected {
                 row = row.bg(moon_alpha(p.amber, 0.08));
             }
-            // Chip: the selected strategy's NON-default thresholds (informational).
+            // Chip: the bounds Moonbot applies for the selected strategy (informational).
             // Slot fields show the 'Δ2/Δ3' assignment plus the slot's thresholds. If
             // the class is ignored by the flags we show NO values (the 'ignore' label
-            // sits on the group's subheader).
-            let chip: Option<(Option<u8>, Option<f64>, Option<f64>)> =
-                if strat.found && !strat.class_ignored(class) {
-                    if class == FieldClass::DeltaSlot {
-                        strat
-                            .slot_of(FIELDS[fi].col)
-                            .map(|(n, lo, hi)| (Some(n), lo, hi))
-                    } else {
-                        strat
-                            .bounds
-                            .get(FIELDS[fi].col)
-                            .copied()
-                            .map(|(lo, hi)| (None, lo, hi))
-                    }
+            // sits on the group's subheader) — but for a bound a save of V1 would wake.
+            let wakes = waking.iter().find(|w| w.spec.col == FIELDS[fi].col);
+            // Drawn apart: the corridor the strategy was born with, and a bound still asleep.
+            let quiet = wakes.is_some() || strat.factory.contains(FIELDS[fi].col);
+            let chip_tip = if wakes.is_some() {
+                Some("analytics.tuner.chip_wakes")
+            } else if strat.factory.contains(FIELDS[fi].col) {
+                Some("analytics.tuner.chip_factory")
+            } else {
+                None
+            };
+            let chip: Option<(Option<u8>, Option<f64>, Option<f64>)> = if let Some(w) = wakes {
+                Some((w.slot, w.lo, w.hi))
+            } else if strat.found && !strat.class_ignored(class) {
+                if class == FieldClass::DeltaSlot {
+                    strat
+                        .slot_of(FIELDS[fi].col)
+                        .map(|(n, lo, hi)| (Some(n), lo, hi))
                 } else {
-                    None
-                };
+                    strat
+                        .bounds
+                        .get(FIELDS[fi].col)
+                        .copied()
+                        .map(|(lo, hi)| (None, lo, hi))
+                }
+            } else {
+                None
+            };
             let show_current = chip.is_some() || unmapped;
             let current = match chip {
                 Some((slot, lo, hi)) => {
@@ -769,9 +819,12 @@ impl AnalyticsView {
                         .truncate()
                         .cursor_pointer()
                         .text_size(design::t_body(cx))
-                        .text_color(moon(p.amber))
+                        .text_color(moon(if quiet { p.text_muted } else { p.amber }))
                         .hover(move |st| st.text_color(moon(p.text)))
                         .child(text)
+                        .when_some(chip_tip, |el, key| {
+                            el.tooltip(crate::panels::common::text_tooltip(t!(key).to_string()))
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.set_field_enabled(fi, false, cx);
                             this.apply_bounds(0, fi, from_s.clone(), to_s.clone(), cx);
@@ -1264,6 +1317,12 @@ impl AnalyticsView {
                             this.tuner.staged_ignore.insert(flag, !now);
                         }
                         this.tuner.mark_dialog_draft_changed();
+                        // The staged flags decide which stored bounds a save wakes, and the
+                        // what-if lays those under its variants (`wake::with_woken`) — for a
+                        // lone selection only, so a multi-select has nothing to recompute.
+                        if this.wake_inputs().is_some() {
+                            this.reload_tuner(cx);
+                        }
                         cx.notify();
                     })),
             );
