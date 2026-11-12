@@ -714,10 +714,10 @@ fn filters_of(
     let number = |key: &str| map.get(key).and_then(stored_number);
     for extra in WAKE_EXTRAS {
         let checked = number(extra.key).filter(|value| {
-            *value != extra.off_at
+            extra.live.at(*value)
                 && extra
                     .needs
-                    .is_none_or(|needed| number(needed).is_some_and(|n| n != 0.0))
+                    .is_none_or(|needed| number(needed).is_some_and(|n| n > 0.0))
         });
         if let Some(value) = checked {
             out.extras.push((extra, value));

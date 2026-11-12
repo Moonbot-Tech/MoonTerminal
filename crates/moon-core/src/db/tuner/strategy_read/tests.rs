@@ -115,9 +115,9 @@ fn slot_thresholds_and_foreign_slots_count_at_factory_values() {
     assert!(!card.factory.contains("d1h"));
 }
 
-/// The limits outside the grid are listed only where the core checks them, by MoonDoc's rules:
-/// a zero price step blocks every coin and only 100 switches it off, a ping cap needs a
-/// non-zero latency cap, the other pings are off at zero.
+/// The limits outside the grid are listed only where the core checks them: a zero price step
+/// blocks every coin and only 100 or more switches it off, a ping cap needs a latency cap, the
+/// other pings are off at zero.
 #[test]
 fn extras_list_the_limits_the_core_checks_at_their_stored_values() {
     let listed = |raw: &str| -> Vec<(&'static str, f64)> {
@@ -143,6 +143,50 @@ fn extras_list_the_limits_the_core_checks_at_their_stored_values() {
         "a zero price step is a live limit"
     );
     assert!(listed(r#"{"PriceStepMax": 100}"#).is_empty());
+    assert!(
+        listed(r#"{"PriceStepMax": 250}"#).is_empty(),
+        "anything from 100 up is off"
+    );
+    // The rest of the Time, Price and Delta groups, in the table's order: a pause or a cap is
+    // off at zero, a session or funding limit means something below it.
+    assert_eq!(
+        listed(
+            r#"{"TradePenaltyTime": 60, "FundingBefore": -30, "FundingAfter": 0,
+                "MaxBalance": 0, "MaxPosition": 500, "SessionProfitMin": -20,
+                "SessionProfitMax": 0, "TotalLoss": 0, "WorkingPriceMin": 0.5,
+                "WorkingPriceMax": 0, "PriceStepMin": 0.01, "PriceStepMax": 100,
+                "GlobalFilterPenalty": 120, "FilterMin": 0, "FilterMax": -1.5}"#
+        ),
+        vec![
+            ("TradePenaltyTime", 60.0),
+            ("FundingBefore", -30.0),
+            ("MaxPosition", 500.0),
+            ("SessionProfitMin", -20.0),
+            ("WorkingPriceMin", 0.5),
+            ("PriceStepMin", 0.01),
+            ("GlobalFilterPenalty", 120.0),
+            ("FilterMax", -1.5),
+        ]
+    );
+    // Each one sleeps under its own group's flag as well as the master one.
+    let gates = |key: &str| {
+        WAKE_EXTRAS
+            .iter()
+            .find(|extra| extra.key == key)
+            .map(|extra| extra.gates.to_vec())
+    };
+    assert_eq!(
+        gates("TradePenaltyTime"),
+        Some(vec!["IgnoreFilters", "IgnoreTime"])
+    );
+    assert_eq!(
+        gates("PriceStepMin"),
+        Some(vec!["IgnoreFilters", "IgnorePrice"])
+    );
+    assert_eq!(
+        gates("FilterMax"),
+        Some(vec!["IgnoreFilters", "IgnoreDelta"])
+    );
     let card = filters_of(r#"{"IgnoreTime": "YES", "IgnorePing": true}"#, &defaults()).unwrap();
     assert!(card.ignores("IgnoreTime") && card.ignores("IgnorePing"));
     assert!(!card.ignores("IgnorePrice") && !card.ignores("IgnoreFilters"));
