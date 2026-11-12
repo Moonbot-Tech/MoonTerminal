@@ -686,6 +686,9 @@ fn model(face: usize) -> SummaryModel {
         .to_string(),
         n: 31,
         fact: 13.71,
+        // A refusal over open held-back deals comes before the missing base is named, so that
+        // face can carry none: the dash is laid out too.
+        base: (face != 3).then_some(16.48),
         variant: 19.23,
         open_line: (hold && face == 3).then(|| open.clone()),
     };

@@ -863,6 +863,135 @@ fn the_holdout_is_scored_but_never_fitted_on() {
     assert!(result.holdout_loses);
 }
 
+/// search.rs `as_is`: the answer is held against the strategies' own replay, never the fact. The
+/// deals here really made 3.0 each, while the model replays the strategy's own 0.2 % take of
+/// 1000 spent as 2.0 — a fact passed through as the base would read 18.0 and 6.0.
+#[test]
+fn the_base_is_the_strategies_own_replay_not_the_fact() {
+    let deals: Vec<PreparedDeal> = (1..=6)
+        .map(|uid| prepared(uid * 60, 101.0))
+        .chain((7..=8).map(|uid| prepared(uid * 60, 100.5)))
+        .map(|mut deal| {
+            deal.deal.fact_pnl = 3.0;
+            deal
+        })
+        .collect();
+    let held = HashMap::new();
+    let defaults = HashMap::new();
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    locked.remove("SellPrice");
+    let params = SearchParams {
+        held: &held,
+        defaults: &defaults,
+        kind: "PumpsDetection",
+        vary_entry: false,
+        vary_exit: true,
+        locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
+        restarts: 1,
+        min_n: Some(3),
+        seed: Some(1),
+        train_frac: 0.75,
+        max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
+        risk: Default::default(),
+        screen_entry: false,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
+    assert!((result.fact_train.profit - 18.0).abs() < 1e-9);
+    let base_train = result.base_train.clone().expect("a replayed base");
+    assert_eq!(base_train.n, 6);
+    assert!((base_train.profit - 12.0).abs() < 1e-6, "{base_train:?}");
+    let base_holdout = result
+        .base_holdout
+        .clone()
+        .expect("a replayed holdout base");
+    assert_eq!(base_holdout.n, 2);
+    assert!((base_holdout.profit - 4.0).abs() < 1e-6, "{base_holdout:?}");
+    assert!(result.base_known());
+    assert!((result.train_reference().profit - 12.0).abs() < 1e-6);
+    assert!((result.holdout_reference().expect("a reference").profit - 4.0).abs() < 1e-6);
+}
+
+/// search/scoring.rs `whole_replay`: a base that trades under 80 % of its deals is the model
+/// failing to reproduce the strategies' entries, not a low bar for an answer to clear; neither
+/// is one that leaves a deal open or unjudged, whose losses are on no record.
+#[test]
+fn a_base_that_does_not_account_for_its_deals_is_no_base() {
+    let scored = |traded: usize, untraded: usize| {
+        let mut score = VariantScore::default();
+        for _ in 0..traded {
+            score.push(Some((2.0, 1_000.0)), false, None);
+        }
+        for _ in 0..untraded {
+            score.push(None, false, None);
+        }
+        score
+    };
+    assert!(scoring::whole_replay(scored(0, 8), 8).is_none());
+    // Half, and three in four: the search's own trade floor would pass both.
+    assert!(scoring::whole_replay(scored(4, 4), 8).is_none());
+    assert!(scoring::whole_replay(scored(6, 2), 8).is_none());
+    // Exactly four in five is enough.
+    let enough = scoring::whole_replay(scored(4, 1), 5).expect("80 % of the deals traded");
+    assert_eq!(enough.n, 4);
+    assert!((enough.profit - 8.0).abs() < 1e-9);
+    let mut open = scored(8, 0);
+    open.push(None, true, Some(-5.0));
+    assert!(scoring::whole_replay(open, 9).is_none());
+    let mut unjudged = scored(8, 0);
+    unjudged.unjudged = 1;
+    assert!(scoring::whole_replay(unjudged, 9).is_none());
+}
+
+/// search.rs `as_is`: a held edit is the user's change, not the strategies as they stand, so it
+/// is no part of the base — else a hand edit would be waved through unjudged, the answer held
+/// against itself. Held at a 1 % take the search's own start makes 10.0 a deal; the strategies'
+/// 0.2 % still make 2.0.
+#[test]
+fn a_held_edit_is_not_part_of_the_base() {
+    let deals: Vec<PreparedDeal> = (1..=8).map(|uid| prepared(uid * 60, 101.0)).collect();
+    let held: HashMap<String, String> = [("SellPrice".to_string(), "1".to_string())].into();
+    let defaults = HashMap::new();
+    let mut locked: HashSet<String> = TICK_PARAMS.iter().map(|f| f.key.to_string()).collect();
+    locked.remove("StopLoss");
+    let params = SearchParams {
+        held: &held,
+        defaults: &defaults,
+        kind: "PumpsDetection",
+        vary_entry: false,
+        vary_exit: true,
+        locked: &locked,
+        grids: crate::db::tuner::ticks::search::test_grids::legacy(),
+        restarts: 1,
+        min_n: Some(3),
+        seed: Some(1),
+        train_frac: 1.0,
+        max_passes: DEFAULT_MAX_PASSES,
+        keep_corridor: true,
+        risk: Default::default(),
+        screen_entry: false,
+        model: ModelSettings {
+            latency_ms: 0.0,
+            ..ModelSettings::default()
+        },
+    };
+    let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
+    assert!(
+        (result.train.profit - 80.0).abs() < 1e-6,
+        "{:?}",
+        result.train
+    );
+    let base = result.base_train.expect("a replayed base");
+    assert_eq!(base.n, 8);
+    assert!((base.profit - 16.0).abs() < 1e-6, "{base:?}");
+    assert!(result.base_holdout.is_none(), "no holdout, no holdout base");
+}
+
 /// search/scoring.rs `VariantScore::push`: a deal the variant bought and left open, or never traded, is
 /// counted beside the tally instead of silently dropping out — dropping it would let a variant
 /// that leaves its losers open read better than the fact over fewer deals.

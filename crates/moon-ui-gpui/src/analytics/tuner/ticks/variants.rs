@@ -371,7 +371,8 @@ impl AnalyticsView {
 
     /// Per group of `groups` the share of deals the model reproduces (not-judged ones counted
     /// against), plus a line for a group under the share gate, none reproduced included, and one
-    /// when the last search's point loses to the fact out of sample. The search
+    /// when the last search's point loses out of sample to what it is held against there
+    /// (`SearchResult::holdout_reference`). The search
     /// learns on the fit trades alone (`TicksData::under_gate`). The search's tooltips and the
     /// write dialogs carry it — the gate no longer locks such a group out, so a variant searched
     /// on a small share of the fact can reach a live strategy, and the dialog is the last place
@@ -661,11 +662,13 @@ impl AnalyticsView {
                     started.elapsed().as_millis(),
                     match &result {
                         Ok(found) => format!(
-                            "found {:?}, train {:.4} vs fact {:.4}, holdout {:?} vs fact {:?}, holdout_loses {}",
+                            "found {:?}, train {:.4} vs base {:?} vs fact {:.4}, holdout {:?} vs base {:?} vs fact {:?}, holdout_loses {}",
                             found.values,
                             found.train.profit,
+                            found.base_train.as_ref().map(|b| b.profit),
                             found.fact_train.profit,
                             found.holdout.as_ref().map(|h| h.profit),
+                            found.base_holdout.as_ref().map(|b| b.profit),
                             found.fact_holdout.as_ref().map(|f| f.profit),
                             found.holdout_loses
                         ),

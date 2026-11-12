@@ -120,6 +120,27 @@ impl VariantScore {
     }
 }
 
+/// The share of a slice's deals the strategies' own replay must trade to stand as the base, per
+/// cent. The Entry/Exit axis trusts a group the model reproduces on 80 % of its trades by
+/// default (its group gate), and the base is held to the same share.
+pub(super) const BASE_MIN_TRADED_PCT: i64 = 80;
+
+/// The tally of the strategies' own replay over `deals` deals, when it is an account of them:
+/// no deal left unjudged or open, and at least [`BASE_MIN_TRADED_PCT`] of them traded. Every
+/// one of these deals was really traded under those strategies, so each one the replay does not
+/// fill is the model failing to reproduce an entry — and the profit it leaves out of the base
+/// would read as a gain of any answer that does fill it. The share bounds that error; it does
+/// not remove it.
+///
+/// Args:
+///     scored: The replay's score over the slice.
+///     deals: How many deals the slice holds.
+pub(super) fn whole_replay(scored: VariantScore, deals: usize) -> Option<Tally> {
+    let traded = scored.tally.n;
+    let enough = traded > 0 && traded * 100 >= deals as i64 * BASE_MIN_TRADED_PCT;
+    (scored.unjudged == 0 && scored.open == 0 && enough).then_some(scored.tally)
+}
+
 /// The score of a point in simulated close order; arguments as for [`results`].
 pub(super) fn score(
     deals: &[PreparedDeal],
