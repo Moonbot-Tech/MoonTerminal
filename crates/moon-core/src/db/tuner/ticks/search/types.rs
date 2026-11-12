@@ -194,17 +194,47 @@ pub struct SearchResult {
     pub holdout_open_profit: f64,
     /// The fact over the deals the search was fitted on ([`fact_tally`]).
     pub fact_train: Tally,
+    /// The strategies as they stand — no held edit over them, no field moved — replayed by the
+    /// same model over the deals the search was fitted on: what a write of the answer replaces.
+    /// The answer is held against this rather than the fact, so the model's own error on the
+    /// scope sits on both sides and cancels. `None` where the model cannot judge them whole
+    /// there: a deal with an unknown take, one it leaves unjudged or open, or under
+    /// `scoring::BASE_MIN_TRADED_PCT` per cent of the deals traded (`scoring::whole_replay`).
+    pub base_train: Option<Tally>,
     /// Chronological training deals excluded because their replay windows reach the holdout.
     pub purged: usize,
     /// The fact over the deals held back, when any were — the slice `holdout` is scored on.
     pub fact_holdout: Option<Tally>,
-    /// Whether the answer loses to the fact on the holdout: it leaves a held-back deal open, or
-    /// its holdout profit is below the fact's there.
+    /// [`Self::base_train`]'s replay over the deals held back; `None` without a holdout too.
+    pub base_holdout: Option<Tally>,
+    /// Whether the answer loses on the holdout: it leaves a held-back deal open, or its holdout
+    /// profit is below what it is held against there ([`Self::holdout_reference`]).
     pub holdout_loses: bool,
     /// The seed the restarts were derived from.
     pub seed: u64,
     /// How the run went.
     pub stats: SearchStats,
+}
+
+impl SearchResult {
+    /// What the answer is held against on the deals it was fitted on: the strategies as they
+    /// stand under the same model, or the fact where the model could not replay them.
+    pub fn train_reference(&self) -> &Tally {
+        self.base_train.as_ref().unwrap_or(&self.fact_train)
+    }
+
+    /// What the answer is held against on the deals held back, when any were — chosen as
+    /// [`Self::train_reference`] is, per slice.
+    pub fn holdout_reference(&self) -> Option<&Tally> {
+        self.base_holdout.as_ref().or(self.fact_holdout.as_ref())
+    }
+
+    /// Whether every slice the answer is scored on has the strategies' own replay beside it.
+    /// Without one the comparison falls back to the fact and carries the model's error whole,
+    /// so it can refuse an answer but never recommend one.
+    pub fn base_known(&self) -> bool {
+        self.base_train.is_some() && (self.holdout.is_none() || self.base_holdout.is_some())
+    }
 }
 
 /// A point that leaves deals open inside the tape — an entry whose exits the tape is too short to

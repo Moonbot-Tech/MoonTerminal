@@ -306,13 +306,26 @@ fn search(
         }
         closed
     };
-    // The strategies as they stand on the training slice, which the log sets the answer
-    // against.
+    // Where the search starts on the training slice — the strategies under the held edits, held
+    // to the rules an answer must keep — which the log sets the answer against. Not the base the
+    // verdict uses: that one is `as_is` below.
     let base_score = score_point(&Point::new());
     // The fact on the same slice — the "Fact" column the KPI matrix compares a variant with, and
     // always there, where a replayed base may be refused — is what the risk limits hold a point
     // to (`risk`).
     let fact_train = fact_tally(&train);
+    // What a write of the answer replaces: the strategies with no held edit over them and no
+    // field moved, replayed by the same model. The answer's verdict is held against this, so the
+    // model's error on the scope is on both sides; `base_score` above carries the held edits and
+    // the rules an answer must keep, neither of which the strategies as they stand answer to.
+    // `None` where the replay is no account of them (`whole_replay`).
+    let as_is = |slice: &[PreparedDeal], of: &[usize]| -> Option<Tally> {
+        let none_held = HashMap::new();
+        let point = deps.complete(&Point::new(), &bases.owns, &none_held, params.defaults);
+        let per_base = bases.params(&none_held, params.defaults, &point, params.kind, model);
+        whole_replay(self::score(slice, of, &per_base), slice.len())
+    };
+    let base_train = as_is(&train, &train_of);
     let risky = std::sync::atomic::AtomicUsize::new(0);
     let within_risk = |tally: &Tally| {
         let allowed = params.risk.allows(tally, &fact_train);
@@ -665,8 +678,13 @@ fn search(
         (None, 0, 0.0)
     };
     let fact_holdout = holdout.is_some().then(|| fact_tally(&deals[train_n..]));
-    let holdout_loses = match (&holdout, &fact_holdout) {
-        (Some(ours), Some(fact)) => holdout_open > 0 || ours.profit < fact.profit,
+    let base_holdout = holdout
+        .as_ref()
+        .and_then(|_| as_is(&deals[train_n..], &bases.of_deal[train_n..]));
+    // Against the strategies' own replay where the model has one, the fact otherwise — the
+    // choice `SearchResult::holdout_reference` makes for the verdict.
+    let holdout_loses = match (&holdout, base_holdout.as_ref().or(fact_holdout.as_ref())) {
+        (Some(ours), Some(reference)) => holdout_open > 0 || ours.profit < reference.profit,
         _ => false,
     };
     let mut searched: Vec<String> = fields.iter().map(|f| f.key.to_string()).collect();
@@ -679,8 +697,10 @@ fn search(
         holdout_open,
         holdout_open_profit,
         fact_train,
+        base_train,
         purged,
         fact_holdout,
+        base_holdout,
         holdout_loses,
         seed,
         stats,

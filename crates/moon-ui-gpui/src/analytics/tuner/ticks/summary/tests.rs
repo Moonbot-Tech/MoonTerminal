@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use super::super::state::{NowValue, TicksData, TicksState};
-use super::{SummaryModel, Unchecked, Verdict, Why, WriteConfirm, verdict_of};
+use super::{Against, SummaryModel, Unchecked, Verdict, Why, WriteConfirm, verdict_of};
 use crate::analytics::tuner::shared::{InlineWrite, SaveAuthority, SaveTarget};
 use moon_core::db::metrics::Tally;
 use moon_core::db::tuner::ticks::search::{MIN_HOLDOUT, SearchResult};
@@ -83,18 +83,22 @@ fn tally(n: i64, profit: f64) -> Tally {
     tally
 }
 
-/// A synthetic result whose gains and sufficient holdout independently support Apply.
+/// A synthetic result whose gains and sufficient holdout independently support Apply: one moved
+/// field, and on both slices the fact below the strategies' own replay below V1 — the model
+/// over-estimates this scope by 1.0 a slice, which must not count toward V1.
 fn result() -> SearchResult {
     // Summary copy translates; the first lookup must not run on the 2 MiB test stack.
     crate::test_locale::warm();
     SearchResult {
-        values: Vec::new(),
+        values: vec![("TakeProfit".into(), "1.5".into())],
         searched: Vec::new(),
         train: tally(23, 17.0),
         fact_train: tally(23, 11.0),
+        base_train: Some(tally(23, 12.0)),
         purged: 0,
         holdout: Some(tally(9, 8.0)),
         fact_holdout: Some(tally(9, 3.0)),
+        base_holdout: Some(tally(9, 4.0)),
         holdout_open: 0,
         holdout_open_profit: 0.0,
         holdout_loses: false,
@@ -140,13 +144,19 @@ fn held_open_sample_mismatch_refuses_apply() {
 #[test]
 fn verdicts_agree_with_both_slices_and_require_strict_gains() {
     let mut cases = vec![(result(), Verdict::Apply)];
+    // Above the fact (11.0) and below the strategies' own replay (12.0): the model's error on
+    // the scope is not a gain of V1's.
     let mut train_loss = result();
-    train_loss.train.profit = 7.0;
-    cases.push((train_loss, Verdict::DontApply(Why::Train)));
+    train_loss.train.profit = 11.5;
+    cases.push((train_loss, Verdict::DontApply(Why::Train(Against::Base))));
+    // Likewise on the holdout: above the fact (3.0), below the base (4.0).
     let mut hold_loss = result();
-    hold_loss.holdout.as_mut().unwrap().profit = -2.0;
+    hold_loss.holdout.as_mut().unwrap().profit = 3.5;
     hold_loss.holdout_loses = true;
-    cases.push((hold_loss, Verdict::DontApply(Why::HoldoutWorse)));
+    cases.push((
+        hold_loss,
+        Verdict::DontApply(Why::HoldoutWorse(Against::Base)),
+    ));
     let mut open = result();
     open.holdout_open = 2;
     open.holdout_loses = true;
@@ -161,10 +171,10 @@ fn verdicts_agree_with_both_slices_and_require_strict_gains() {
     small.holdout_loses = true;
     cases.push((small, Verdict::Unchecked(Unchecked::Small(MIN_HOLDOUT - 1))));
     let mut train_tie = result();
-    train_tie.train.profit = train_tie.fact_train.profit;
+    train_tie.train.profit = train_tie.base_train.as_ref().unwrap().profit;
     cases.push((train_tie, Verdict::DontApply(Why::NoGain)));
     let mut hold_tie = result();
-    hold_tie.holdout.as_mut().unwrap().profit = hold_tie.fact_holdout.as_ref().unwrap().profit;
+    hold_tie.holdout.as_mut().unwrap().profit = hold_tie.base_holdout.as_ref().unwrap().profit;
     cases.push((hold_tie, Verdict::DontApply(Why::NoGain)));
     let mut flagged = result();
     flagged.holdout_loses = true;
@@ -172,15 +182,120 @@ fn verdicts_agree_with_both_slices_and_require_strict_gains() {
     for (r, expected) in cases {
         let actual = verdict_of(None, None, None, Some(&r), true);
         assert_eq!(actual, expected);
-        if actual == Verdict::DontApply(Why::HoldoutWorse) {
-            assert!(r.holdout.as_ref().unwrap().profit < r.fact_holdout.as_ref().unwrap().profit);
-        }
         if actual == Verdict::Apply {
             assert!(!r.holdout_loses && r.holdout_open == 0);
-            assert!(r.train.profit > r.fact_train.profit);
-            assert!(r.holdout.as_ref().unwrap().profit > r.fact_holdout.as_ref().unwrap().profit);
+            assert!(r.train.profit > r.base_train.as_ref().unwrap().profit);
+            assert!(r.holdout.as_ref().unwrap().profit > r.base_holdout.as_ref().unwrap().profit);
         }
     }
+}
+
+/// Without the strategies' own replay the fact stands in, and it may refuse V1 but never
+/// recommend it: the fact carries the model's whole error on the scope. Letting such a result
+/// reach Apply is the comparison this card was rebuilt to drop.
+#[test]
+fn a_missing_base_can_refuse_but_never_recommend() {
+    let mut no_base = result();
+    no_base.base_train = None;
+    no_base.base_holdout = None;
+    // Gains on the fact on both slices, a sufficient closed holdout: Apply before, never now.
+    assert_eq!(
+        verdict_of(None, None, None, Some(&no_base), true),
+        Verdict::Unchecked(Unchecked::NoBase)
+    );
+    let mut whole = no_base.clone();
+    whole.holdout = None;
+    whole.fact_holdout = None;
+    assert_eq!(
+        verdict_of(None, None, None, Some(&whole), true),
+        Verdict::Unchecked(Unchecked::NoBase),
+        "the missing base is the reason to name, not the missing holdout"
+    );
+    // The base replays the fitted deals but not the held-back ones: still no advice.
+    let mut half = result();
+    half.base_holdout = None;
+    assert_eq!(
+        verdict_of(None, None, None, Some(&half), true),
+        Verdict::Unchecked(Unchecked::NoBase)
+    );
+    let mut train_loss = no_base.clone();
+    train_loss.train.profit = 7.0;
+    assert_eq!(
+        verdict_of(None, None, None, Some(&train_loss), true),
+        Verdict::DontApply(Why::Train(Against::Fact))
+    );
+    let mut hold_loss = no_base;
+    hold_loss.holdout.as_mut().unwrap().profit = -2.0;
+    assert_eq!(
+        verdict_of(None, None, None, Some(&hold_loss), true),
+        Verdict::DontApply(Why::HoldoutWorse(Against::Fact))
+    );
+}
+
+/// The card sets the strategies' own replay between the fact and V1, so the model's error on
+/// the scope reads on its own line; a slice without one says so instead of repeating the fact.
+#[test]
+fn profit_rows_carry_the_base_beside_the_fact() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.last_result = Some(result());
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    let train = model.train.unwrap();
+    assert_eq!(
+        (train.fact, train.base, train.variant),
+        (11.0, Some(12.0), 17.0)
+    );
+    assert_eq!(train.reference(), 12.0);
+    let hold = model.holdout.unwrap();
+    assert_eq!((hold.fact, hold.base, hold.variant), (3.0, Some(4.0), 8.0));
+    let mut no_base = result();
+    no_base.base_holdout = None;
+    state.last_result = Some(no_base);
+    let hold = SummaryModel::from_state(&state, String::new(), false)
+        .holdout
+        .unwrap();
+    assert_eq!((hold.base, hold.reference()), (None, 3.0));
+}
+
+/// An empty answer with the user's own edits still in the column is their variant, not "the
+/// current settings": it is judged, never waved through as "nothing better".
+#[test]
+fn an_empty_answer_over_hand_edits_is_still_judged() {
+    let mut r = result();
+    r.values.clear();
+    assert_eq!(verdict_of(None, None, None, Some(&r), true), Verdict::Apply);
+    assert_eq!(
+        verdict_of(None, None, None, Some(&r), false),
+        Verdict::NoBetter
+    );
+}
+
+/// An answer that moved no field is the current settings, so no verdict may advise applying
+/// it or call it an unchecked variant.
+#[test]
+fn empty_answer_is_not_a_variant() {
+    let mut r = result();
+    r.values.clear();
+    // An answer that moved nothing is the strategies' own replay, which the model over-estimates
+    // on this scope: V1 (= base) beats the fact on both slices.
+    r.train = r.base_train.clone().unwrap();
+    r.holdout = r.base_holdout.clone();
+    assert!(r.train.profit > r.fact_train.profit);
+    let with_holdout = verdict_of(None, None, None, Some(&r), false);
+    let mut whole = r.clone();
+    whole.holdout = None;
+    whole.fact_holdout = None;
+    let without_holdout = verdict_of(None, None, None, Some(&whole), false);
+    assert_eq!(
+        with_holdout,
+        Verdict::NoBetter,
+        "empty answer judged as a variant"
+    );
+    assert_eq!(
+        without_holdout,
+        Verdict::NoBetter,
+        "empty answer shown as an unchecked variant"
+    );
 }
 
 /// Fatal refusal must not override a running search or a current successful result.

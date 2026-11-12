@@ -93,11 +93,21 @@ fn warning(text: String, p: MoonPalette, cx: &App) -> Div {
         .child(prose(text, p.text_soft, cx).flex_1())
 }
 
-/// Widths of the profit block's fact, arrow and V1 columns, shared by its head and every row.
+/// What the base column prints where the model could not replay the strategies as they stand.
+const NO_BASE: &str = "—";
+
+/// The base column's figure: the replayed strategies' profit, or the absence mark.
+fn base_text(base: Option<f64>) -> String {
+    base.map_or_else(|| NO_BASE.to_string(), fmt_signed)
+}
+
+/// Widths of the profit block's fact, base, arrow and V1 columns, shared by its head and every
+/// row. The arrow sits between the base and V1: that pair is the comparison the verdict makes.
 #[derive(Clone, Copy)]
 struct ProfitCols {
     fact: Pixels,
-    /// `None` on a narrow host: the arrow column drops and the other three stay aligned.
+    base: Pixels,
+    /// `None` on a narrow host: the arrow column drops and the other four stay aligned.
     arrow: Option<Pixels>,
     v1: Pixels,
 }
@@ -105,28 +115,35 @@ struct ProfitCols {
 impl ProfitCols {
     /// Size each figure column to the widest of its head and its figures, so heads sit over them.
     fn measure(rows: &[&ProfitRow], arrow: bool, cx: &App) -> Self {
-        let width = |head: &str, value: fn(&ProfitRow) -> f64| {
+        let width = |head: &str, text: fn(&ProfitRow) -> String| {
             let normal = FontWeight::NORMAL.0;
             let widest = rows
                 .iter()
-                .map(|row| design::mono_body_text_width(cx, &fmt_signed(value(row)), normal))
+                .map(|row| design::mono_body_text_width(cx, &text(row), normal))
                 .fold(design::ui_caption_text_width(cx, head, normal), f32::max);
             // The estimate sums advances without kerning; one pixel keeps a rounded glyph whole.
             px(widest.ceil() + 1.0)
         };
         Self {
-            fact: width(&t!("analytics.ticks.sum.col_fact"), |row| row.fact),
+            fact: width(&t!("analytics.ticks.sum.col_fact"), |row| {
+                fmt_signed(row.fact)
+            }),
+            base: width(&t!("analytics.ticks.sum.col_base"), |row| {
+                base_text(row.base)
+            }),
             arrow: arrow.then(|| {
                 px(design::mono_body_text_width(cx, "→", FontWeight::NORMAL.0).ceil() + 1.0)
             }),
-            v1: width(&t!("analytics.ticks.sum.col_v1"), |row| row.variant),
+            v1: width(&t!("analytics.ticks.sum.col_v1"), |row| {
+                fmt_signed(row.variant)
+            }),
         }
     }
 
     /// Lay a label column and the figure cells out as one grid row, each cell's content
     /// right-aligned inside its fixed column.
-    fn row(self, label: Div, cells: [Div; 3], cx: &App) -> Div {
-        let [fact, arrow, v1] = cells;
+    fn row(self, label: Div, cells: [Div; 4], cx: &App) -> Div {
+        let [fact, base, arrow, v1] = cells;
         let cell =
             |content: Div, w: Pixels| div().flex_none().w(w).flex().justify_end().child(content);
         h_flex()
@@ -135,6 +152,7 @@ impl ProfitCols {
             .gap(design::ui_px(cx, 12.0))
             .child(label.flex_1().min_w_0())
             .child(cell(fact, self.fact))
+            .child(cell(base, self.base))
             .children(self.arrow.map(|w| cell(arrow, w).justify_center()))
             .child(cell(v1, self.v1))
     }
@@ -151,18 +169,27 @@ fn profit_head(head: String, cols: ProfitCols, p: MoonPalette, cx: &App) -> Div 
             .whitespace_nowrap()
             .child(t!(key).to_string())
     };
-    cols.row(
-        div().child(label(head, p.text_muted, cx)),
-        [
-            caption("analytics.ticks.sum.col_fact", "an-ticks-sum-col-fact"),
-            div(),
-            caption("analytics.ticks.sum.col_v1", "an-ticks-sum-col-v1"),
-        ],
-        cx,
-    )
+    let heads = [
+        caption("analytics.ticks.sum.col_fact", "an-ticks-sum-col-fact"),
+        caption("analytics.ticks.sum.col_base", "an-ticks-sum-col-base"),
+        div(),
+        caption("analytics.ticks.sum.col_v1", "an-ticks-sum-col-v1"),
+    ];
+    let head = div().child(label(head, p.text_muted, cx));
+    // A narrow host has no room for the block's own head beside three column heads: it takes
+    // the line above them, and the column heads keep their places over the figures.
+    if cols.arrow.is_none() {
+        return v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 2.0))
+            .child(head)
+            .child(cols.row(div(), heads, cx));
+    }
+    cols.row(head, heads, cx)
 }
 
-/// Keep separate mono figures; the unseen variant uses danger when it underperforms Fact.
+/// Keep separate mono figures; the unseen variant uses danger when it underperforms what the
+/// verdict holds it against on that slice — the base, or the fact where there is no base.
 fn profit_row(
     row: &ProfitRow,
     id: &'static str,
@@ -171,15 +198,16 @@ fn profit_row(
     p: MoonPalette,
     cx: &App,
 ) -> Div {
-    let figure = |value: f64, sel: String, color: u32| {
+    let cell = |text: String, sel: String, color: u32| {
         div()
             .debug_selector(move || sel.clone())
             .font_family(design::mono())
             .text_size(design::t_body(cx))
             .whitespace_nowrap()
             .text_color(moon(color))
-            .child(fmt_signed(value))
+            .child(text)
     };
+    let figure = |value: f64, sel: String, color: u32| cell(fmt_signed(value), sel, color);
     v_flex()
         .w_full()
         .gap(design::ui_px(cx, 4.0))
@@ -196,6 +224,11 @@ fn profit_row(
                     ),
                 [
                     figure(row.fact, format!("{id}-fact"), sign_color(p, row.fact)),
+                    cell(
+                        base_text(row.base),
+                        format!("{id}-base"),
+                        row.base.map_or(p.text_muted, |base| sign_color(p, base)),
+                    ),
                     div()
                         .font_family(design::mono())
                         .text_size(design::t_body(cx))
@@ -207,7 +240,7 @@ fn profit_row(
                         if holdout {
                             crate::analytics::tuner::split::holdout_color(
                                 row.variant,
-                                Some(row.fact),
+                                Some(row.reference()),
                                 p,
                             )
                         } else {
@@ -295,7 +328,7 @@ pub(in crate::analytics::tuner) fn summary_card_el(
         Verdict::Apply => (MoonTag::positive(), p.green),
         Verdict::DontApply(_) => (MoonTag::warning(), p.amber),
         Verdict::Cannot(_) => (MoonTag::danger(), p.red),
-        Verdict::Idle | Verdict::Running { .. } | Verdict::Unchecked(_) => {
+        Verdict::Idle | Verdict::Running { .. } | Verdict::Unchecked(_) | Verdict::NoBetter => {
             (MoonTag::new(), p.text_muted)
         }
     };

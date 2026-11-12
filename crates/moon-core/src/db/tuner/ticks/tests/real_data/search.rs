@@ -162,6 +162,19 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
                 found.fact_train.n as usize + found.purged,
                 found.fact_train.n
             );
+            // What the answer is held against: the strategies as they stand under the same
+            // model, per slice — set beside the fact below, it shows the model's own error.
+            let base = |tally: &Option<crate::db::metrics::Tally>| {
+                tally
+                    .as_ref()
+                    .map(|t| (t.n, (t.profit * 1000.0).round() / 1000.0))
+            };
+            eprintln!(
+                "  base train {:?} · base holdout {:?} · base known {}",
+                base(&found.base_train),
+                base(&found.base_holdout),
+                found.base_known()
+            );
             eprintln!(
                 "  found {:?}\n  whole sample {:?} · train n {} profit {:.3} · holdout {:?} · fact train n {} profit {:.3} · fact holdout {:?} · holdout loses {} · {:?}",
                 found.values,

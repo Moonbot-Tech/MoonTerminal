@@ -57,13 +57,31 @@ pub(super) enum Verdict {
     Apply,
     DontApply(Why),
     Unchecked(Unchecked),
+    /// The search moved no field and the column holds no edit either: the "variant" is the
+    /// strategies as they stand, so there is nothing to apply and nothing left unchecked.
+    NoBetter,
+}
+
+/// What a slice of V1 lost to: the strategies' own replay under the same model, or — where the
+/// model could not replay them — the fact (`SearchResult::train_reference`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Against {
+    Base,
+    Fact,
+}
+
+impl Against {
+    /// The reference a slice was held against, from whether its base replay exists.
+    fn of(base_known: bool) -> Self {
+        if base_known { Self::Base } else { Self::Fact }
+    }
 }
 
 /// A numerical reason why the found variant should not be applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Why {
-    Train,
-    HoldoutWorse,
+    Train(Against),
+    HoldoutWorse(Against),
     HoldoutOpen {
         k: usize,
     },
@@ -80,9 +98,18 @@ pub(super) enum Unchecked {
     Whole,
     Small(i64),
     HandEdited,
+    /// The model could not replay the strategies as they stand, so V1 has only the fact beside
+    /// it: a comparison that carries the model's own error whole and cannot support advice.
+    NoBase,
 }
 
-/// Apply requires strict gains, a closed sufficient holdout, and no sample loss from held edits.
+/// Apply requires strict gains over the strategies' own replay, a closed sufficient holdout, and
+/// no sample loss from held edits.
+///
+/// V1 is held against the strategies as they stand replayed by the same model
+/// (`SearchResult::base_train`), not against the fact: on a scope the model over-estimates, the
+/// fact would credit that error to every V1, an answer that moved nothing included. Where the
+/// model has no such replay the fact stands in, and can only refuse.
 pub(super) fn verdict_of(
     running: Option<(usize, usize, Option<Duration>, usize, bool)>,
     too_few: Option<usize>,
@@ -116,22 +143,35 @@ pub(super) fn verdict_of(
             n: r.stats.left_open_by_held,
         });
     }
-    if r.train.profit < r.fact_train.profit {
-        return Verdict::DontApply(Why::Train);
+    // An answer that moved nothing is no variant. With edits of the user's still in the column
+    // it is one — theirs — and is judged like any other.
+    if r.values.is_empty() && !has_changes {
+        return Verdict::NoBetter;
     }
-    let (Some(hold), Some(fact)) = (&r.holdout, &r.fact_holdout) else {
+    let train_ref = r.train_reference();
+    if r.train.profit < train_ref.profit {
+        return Verdict::DontApply(Why::Train(Against::of(r.base_train.is_some())));
+    }
+    let held_back = r.holdout.as_ref().zip(r.holdout_reference());
+    // A holdout large enough to speak refuses first, whatever it is held against.
+    if let Some((hold, hold_ref)) = held_back.filter(|(hold, _)| hold.n >= MIN_HOLDOUT) {
+        if hold.profit < hold_ref.profit {
+            return Verdict::DontApply(Why::HoldoutWorse(Against::of(r.base_holdout.is_some())));
+        }
+        if r.holdout_open > 0 {
+            return Verdict::DontApply(Why::HoldoutOpen { k: r.holdout_open });
+        }
+    }
+    if !r.base_known() {
+        return Verdict::Unchecked(Unchecked::NoBase);
+    }
+    let Some((hold, hold_ref)) = held_back else {
         return Verdict::Unchecked(Unchecked::Whole);
     };
     if hold.n < MIN_HOLDOUT {
         return Verdict::Unchecked(Unchecked::Small(hold.n));
     }
-    if hold.profit < fact.profit {
-        return Verdict::DontApply(Why::HoldoutWorse);
-    }
-    if r.holdout_open > 0 {
-        return Verdict::DontApply(Why::HoldoutOpen { k: r.holdout_open });
-    }
-    if r.holdout_loses || r.train.profit <= r.fact_train.profit || hold.profit <= fact.profit {
+    if r.holdout_loses || r.train.profit <= train_ref.profit || hold.profit <= hold_ref.profit {
         return Verdict::DontApply(Why::NoGain);
     }
     Verdict::Apply
@@ -159,6 +199,7 @@ pub(super) fn tag(verdict: &Verdict) -> String {
         Verdict::Apply => "analytics.ticks.sum.tag_apply",
         Verdict::DontApply(_) => "analytics.ticks.sum.tag_dont",
         Verdict::Unchecked(_) => "analytics.ticks.sum.tag_unchecked",
+        Verdict::NoBetter => "analytics.ticks.sum.tag_no_better",
     })
     .to_string()
 }
@@ -196,8 +237,19 @@ pub(super) fn sentence(
             t!("analytics.ticks.sum.cannot_help", n = fetchable)
         ),
         Verdict::Apply => t!("analytics.ticks.sum.apply").to_string(),
-        Verdict::DontApply(Why::Train) => t!("analytics.ticks.sum.dont_train").to_string(),
-        Verdict::DontApply(Why::HoldoutWorse) => t!("analytics.ticks.sum.dont_holdout").to_string(),
+        Verdict::NoBetter => t!("analytics.ticks.sum.no_better").to_string(),
+        Verdict::DontApply(Why::Train(Against::Base)) => {
+            t!("analytics.ticks.sum.dont_train").to_string()
+        }
+        Verdict::DontApply(Why::Train(Against::Fact)) => {
+            t!("analytics.ticks.sum.dont_train_fact").to_string()
+        }
+        Verdict::DontApply(Why::HoldoutWorse(Against::Base)) => {
+            t!("analytics.ticks.sum.dont_holdout").to_string()
+        }
+        Verdict::DontApply(Why::HoldoutWorse(Against::Fact)) => {
+            t!("analytics.ticks.sum.dont_holdout_fact").to_string()
+        }
         Verdict::DontApply(Why::HoldoutOpen { k }) => {
             t!("analytics.ticks.sum.dont_open", n = k).to_string()
         }
@@ -210,6 +262,7 @@ pub(super) fn sentence(
             t!("analytics.ticks.sum.small", n = n, min = MIN_HOLDOUT).to_string()
         }
         Verdict::Unchecked(Unchecked::HandEdited) => t!("analytics.ticks.sum.hand").to_string(),
+        Verdict::Unchecked(Unchecked::NoBase) => t!("analytics.ticks.sum.no_base").to_string(),
     }
 }
 
@@ -236,8 +289,18 @@ pub(super) struct ProfitRow {
     pub sub: String,
     pub n: i64,
     pub fact: f64,
+    /// The strategies as they stand under the same model on this slice — what V1 is held
+    /// against; `None` where the model could not replay them, and the fact stands in.
+    pub base: Option<f64>,
     pub variant: f64,
     pub open_line: Option<String>,
+}
+
+impl ProfitRow {
+    /// What V1's figure on this slice is judged against: the base, or the fact without one.
+    pub(super) fn reference(&self) -> f64 {
+        self.base.unwrap_or(self.fact)
+    }
 }
 
 /// One field whose displayed V1 value differs from the loaded strategy values.
@@ -426,6 +489,7 @@ impl SummaryModel {
             },
             n: r.fact_train.n,
             fact: r.fact_train.profit,
+            base: r.base_train.as_ref().map(|base| base.profit),
             variant: r.train.profit,
             open_line: None,
         });
@@ -436,6 +500,7 @@ impl SummaryModel {
                 sub: t!("analytics.ticks.sum.hold_sub", n = fact.n).to_string(),
                 n: fact.n,
                 fact: fact.profit,
+                base: r.base_holdout.as_ref().map(|base| base.profit),
                 variant: hold.profit,
                 open_line: open_line(r.holdout_open, r.holdout_open_profit),
             })
@@ -643,7 +708,7 @@ impl AnalyticsView {
             .map(|uid| self.core_names.resolve(uid, &uid.to_string()).to_string())
             .unwrap_or_else(|| t!("analytics.cores_all").to_string());
         let model = self.ticks_summary_model(cx);
-        let holdout_worse = matches!(model.verdict, Verdict::DontApply(Why::HoldoutWorse));
+        let holdout_worse = matches!(model.verdict, Verdict::DontApply(Why::HoldoutWorse(_)));
         let reason = (!matches!(model.verdict, Verdict::Apply)).then_some(model.sentence);
         let warns = self.ticks_write_warns(&targets, &changes, cx);
         let n = changes.len();
