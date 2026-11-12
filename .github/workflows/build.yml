@@ -189,15 +189,25 @@ jobs:
     # compiles for Linux at all, so a `cfg(unix)` path or a C dependency that breaks there would
     # first show on a user's VPS. Only `moon-station` and what it pulls in: the terminal's GUI
     # crates are built for Linux by the diagnostic linux-probe.yml, which blocks nothing.
+    #
+    # It stays on `ubuntu-latest` on purpose while the release pins its image: the newest image
+    # builds the release's own recipe (the baseline flags below) and meets the smoke on a pull
+    # request. The flags override that compiler's default `-march`, so what this can still catch
+    # is past-baseline code they do not reach — a dependency that ignores CFLAGS, prebuilt objects.
+    env:
+      # The station's C at the x86_64 target's own baseline, whatever the image's compiler defaults
+      # to — the same flags the release builds with (release.yml, job `station`).
+      CFLAGS_x86_64_unknown_linux_musl: -march=x86-64 -mtune=generic
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: x86_64-unknown-linux-musl
           components: clippy
-      # `musl-gcc` for the C inside the station's dependencies (ring, SQLite).
+      # `musl-gcc` for the C inside the station's dependencies (ring, SQLite); `qemu-user` for the
+      # baseline smoke.
       - name: Install the musl C toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools qemu-user
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -211,6 +221,10 @@ jobs:
         run: bash .github/scripts/assert-only-moonui-moved.sh
       - name: Build the station
         run: cargo build -p moon-station --locked --target x86_64-unknown-linux-musl
+      # The runner's CPU has every extension; the user's server may not. A station whose C came out
+      # past baseline x86-64 dies there with SIGILL (v0.67.1) — and here, under an emulated CPU.
+      - name: Start the station on a CPU without AVX
+        run: bash .github/scripts/station-baseline-smoke.sh target/x86_64-unknown-linux-musl/debug/moon-station
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest

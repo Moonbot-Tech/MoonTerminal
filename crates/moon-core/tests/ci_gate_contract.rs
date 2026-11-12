@@ -41,6 +41,15 @@ const TEST_JOB: &str = "tests";
 /// The job that builds, tests and lints the station for the Linux target it ships for.
 const STATION_JOB: &str = "station-linux";
 
+/// The env line that holds the x86_64 station's C at the target's own baseline, in the gate and in
+/// the release alike: without it the C inherits the runner image's compiler default, and v0.67.1
+/// inherited AVX2/FMA from `ubuntu-latest` = 26.04 and died with SIGILL on pre-Haswell servers.
+const STATION_BASELINE_CFLAGS: &str =
+    "CFLAGS_x86_64_unknown_linux_musl: -march=x86-64 -mtune=generic";
+
+/// The script that starts an x86_64 station under an emulated CPU without AVX.
+const STATION_BASELINE_SMOKE: &str = "bash .github/scripts/station-baseline-smoke.sh";
+
 /// Every `build.yml` job that compiles the workspace and therefore runs the lockfile contract's
 /// three steps (verify -> refresh MoonUI -> assert nothing else moved). `audit` is deliberately
 /// excluded: it runs cargo-deny over the already-committed lock and never touches it.
@@ -677,12 +686,37 @@ fn the_clippy_job_is_a_gate_that_actually_runs_cargo_clippy() {
 /// Breakage guarded: the station's Linux gate quietly narrowing — its test step dropped, clippy
 /// allowed to warn, a command chained to swallow a failure, or the target switched away from the
 /// static musl build the terminal installs on the user's server. Any of those turns the only
-/// Linux compile in CI into a job that passes whatever the station does there.
+/// Linux compile in CI into a job that passes whatever the station does there. Or the baseline
+/// C flags or the smoke on a CPU without AVX dropping out, so a runner image whose compiler
+/// defaults past baseline x86-64 reaches a release before anything starts the station without
+/// AVX2.
 #[test]
 fn the_station_job_builds_tests_and_lints_for_linux() {
     let text = workflow_text();
     let body = job_body(&text, STATION_JOB)
         .unwrap_or_else(|| panic!("build.yml must keep a `{STATION_JOB}:` job"));
+    // Job-level `env:` (six spaces in): a step's own `env:` would not reach the cargo build.
+    assert!(
+        body.contains(&format!("      {STATION_BASELINE_CFLAGS}").as_str()),
+        "job `{STATION_JOB}` must build the station's C with `{STATION_BASELINE_CFLAGS}` in its \
+         job-level env"
+    );
+    let smoke = format!(
+        "run: {STATION_BASELINE_SMOKE} target/x86_64-unknown-linux-musl/debug/moon-station"
+    );
+    let build = body
+        .iter()
+        .position(|line| {
+            line.trim()
+                == "run: cargo build -p moon-station --locked --target x86_64-unknown-linux-musl"
+        })
+        .unwrap_or_else(|| panic!("job `{STATION_JOB}` must build the station"));
+    assert!(
+        body.iter()
+            .position(|line| line.trim() == smoke)
+            .is_some_and(|at| at > build),
+        "job `{STATION_JOB}` must `{smoke}` after the build"
+    );
     let commands: Vec<&str> = body
         .iter()
         .filter_map(|line| line.trim().strip_prefix("run:"))
@@ -1772,7 +1806,10 @@ fn releases_verify_the_published_windows_digest() {
 /// (`moon_core::update::station_asset_name_for_arch`), or one architecture quietly drops out — the
 /// release still publishes, and every server either cannot be installed from it or never sees an
 /// update. Or a station built without the tags goes out as `dev`, which its updater never offers
-/// anything to, or links a shared library the user's server does not have.
+/// anything to, or links a shared library the user's server does not have. Or the x86_64 station
+/// is built on a moving image (`ubuntu-latest`), without the baseline C flags, or ships without
+/// having started on a CPU without AVX — v0.67.1 did all three and died with SIGILL on every
+/// server older than Haswell.
 #[test]
 fn releases_ship_the_station_under_the_names_its_updater_reads() {
     let text = release_workflow_text();
@@ -1780,7 +1817,43 @@ fn releases_ship_the_station_under_the_names_its_updater_reads() {
     let publish = job_body(&text, "publish").expect("release.yml must keep the publish job");
     let has = |body: &[&str], want: &str| body.iter().any(|line| line.trim() == want);
 
-    for (arch, runner) in [("x86_64", "ubuntu-latest"), ("aarch64", "ubuntu-24.04-arm")] {
+    assert!(
+        !station.iter().any(|line| line.contains("ubuntu-latest")),
+        "the station job must build on pinned runner images, never `ubuntu-latest`"
+    );
+    // Job-level `env:` (six spaces in): a step's own `env:` would not reach the cargo build.
+    assert!(
+        station.contains(&format!("      {STATION_BASELINE_CFLAGS}").as_str()),
+        "the station job must build the x86_64 C with `{STATION_BASELINE_CFLAGS}` in its \
+         job-level env"
+    );
+    assert!(
+        !station
+            .iter()
+            .any(|line| line.contains("continue-on-error")),
+        "no step of the station job may be allowed to fail: the baseline smoke must block"
+    );
+    let smoke = format!("run: {STATION_BASELINE_SMOKE} dist/moon-station-x86_64");
+    let staged = station
+        .iter()
+        .position(|line| line.trim() == "- name: Stage the station")
+        .expect("the station job must stage the station");
+    let smoked = station.iter().position(|line| line.trim() == smoke);
+    let uploaded = station
+        .iter()
+        .position(|line| line.trim() == "- uses: actions/upload-artifact@v7");
+    assert!(
+        matches!((smoked, uploaded), (Some(s), Some(u)) if staged < s && s < u),
+        "the station job must `{smoke}` after staging and before the upload"
+    );
+    // Its condition is exactly the x86_64 leg: anything else (`if: false`, a wrong arch) skips it.
+    assert!(
+        smoked.is_some_and(|s| station[s - 1].trim() == "if: matrix.arch == 'x86_64'"),
+        "the baseline smoke must run on the x86_64 leg, guarded by exactly \
+         `if: matrix.arch == 'x86_64'`"
+    );
+
+    for (arch, runner) in [("x86_64", "ubuntu-24.04"), ("aarch64", "ubuntu-24.04-arm")] {
         let asset = moon_core::update::station_asset_name_for_arch(arch)
             .unwrap_or_else(|| panic!("the updater must know a station asset for {arch}"));
         assert_eq!(asset, format!("moon-station-{arch}"));
