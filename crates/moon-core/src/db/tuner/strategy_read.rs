@@ -1,4 +1,4 @@
-use super::fields::{FIELDS, FieldClass};
+use super::fields::{FIELDS, FieldClass, FieldSpec, WAKE_EXTRAS, WakeExtra};
 use rusqlite::Connection;
 
 /// Open strategies.sqlite READ-ONLY, or `None` when it is absent or will not open.
@@ -61,7 +61,7 @@ pub fn strategy_cores(strategy_id: i64) -> Vec<u64> {
         .unwrap_or_default()
 }
 
-/// Strategy filter card: Ignore flags plus NON-default thresholds for tuner fields.
+/// Strategy filter card: Ignore flags plus the bounds Moonbot applies for tuner fields.
 /// The flags drive both chips (hide ignored classes) and threshold persistence
 /// (enable the required classes before writing).
 #[derive(Clone, Debug, Default)]
@@ -87,6 +87,18 @@ pub struct StratFilters {
     /// Current strategy comment (`Comment` field); saving appends an analyzer stamp without
     /// erasing the user's description.
     pub comment: String,
+    /// Fields whose every bound in `bounds` equals its schema default — the corridor a new
+    /// strategy is born with (daily volume 100..100000, 3h delta 0..20). Moonbot filters by it
+    /// like by any typed number once the section is live; the grid only draws it apart.
+    pub factory: std::collections::HashSet<&'static str>,
+    /// Limits outside the tuner's grid the strategy holds at a value the core checks
+    /// ([`WAKE_EXTRAS`]), each with that value. They work while every one of their gates is
+    /// `NO`; the what-if cannot model them, so the save dialog names the ones a save wakes.
+    pub extras: Vec<(&'static WakeExtra, f64)>,
+    /// Every gate of [`Self::extras`] that is set. [`Self::ignores`] reads the flags the tuner
+    /// does not write (`IgnoreTime`, `IgnorePrice`) from here: a group asleep under its own
+    /// flag does not wake with `IgnoreFilters`.
+    pub other_ignores: std::collections::HashSet<&'static str>,
 }
 
 impl StratFilters {
@@ -105,6 +117,19 @@ impl StratFilters {
                 FieldClass::Delta | FieldClass::DeltaSlot => self.ignore_delta,
                 FieldClass::Volume => self.ignore_volume,
             }
+    }
+
+    /// Whether an Ignore flag is set: the five the tuner writes, and the other gates of
+    /// [`Self::extras`].
+    pub fn ignores(&self, flag: &str) -> bool {
+        match flag {
+            "IgnoreFilters" => self.ignore_filters,
+            "IgnoreDelta" => self.ignore_delta,
+            "IgnoreVolume" => self.ignore_volume,
+            "IgnoreBase" => self.ignore_base,
+            "IgnorePing" => self.ignore_ping,
+            other => self.other_ignores.contains(other),
+        }
     }
 
     /// Slot assigned to the field, if any: (number, min, max).
@@ -542,55 +567,83 @@ pub fn live_strategies(keys: &[String]) -> std::sync::Arc<Vec<LiveStrategy>> {
     strategies
 }
 
-/// Threshold parameters of the SELECTED strategy for tuner fields.
+/// Filter parameters of the SELECTED strategy for tuner fields.
 /// The source is the current strategies.sqlite version (raw_json normalized with schema
-/// defaults). `defaults` contains schema defaults (lowercase name -> number): a value EQUAL
-/// to its default is hidden because it means "filter not configured," not a deliberate
-/// threshold (such as ...100T). `found=false` means the database or row was not found.
+/// defaults). `found=false` means the database or row was not found.
+///
+/// Args:
+///     strategy_id: The strategy.
+///     core: Its core; rows are per-core, so the card is the one the write targets.
+///     defaults: Schema defaults (lowercase name -> number), which mark the factory bounds
+///         ([`StratFilters::factory`]); they hide nothing.
 pub fn strategy_filters(
     strategy_id: i64,
     core: Option<u64>,
     defaults: &std::collections::HashMap<String, f64>,
 ) -> StratFilters {
-    let mut out = StratFilters::default();
     // Rows are per-core: scope the strategy card (Ignore flags, thresholds) to the SELECTED
     // core so the save diff is computed against the exact core the write targets.
     let Some(conn) = open_strategies_ro() else {
-        return out;
+        return StratFilters::default();
     };
     let Some(raw) = load_head_raw_json(&conn, strategy_id, core) else {
-        return out;
+        return StratFilters::default();
     };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return out;
+    filters_of(&raw, defaults).unwrap_or_default()
+}
+
+/// A number as the strategy stores it: a JSON number, or text with a decimal comma or a
+/// trailing per cent sign.
+fn stored_number(value: &serde_json::Value) -> Option<f64> {
+    let number = match value {
+        serde_json::Value::Number(n) => n.as_f64()?,
+        serde_json::Value::String(s) => s
+            .trim()
+            .trim_end_matches('%')
+            .replace(',', ".")
+            .parse()
+            .ok()?,
+        _ => return None,
     };
-    let Some(map) = json.as_object() else {
-        return out;
-    };
-    let num = |key: Option<&str>| -> Option<f64> {
-        let key = key?;
-        let v = map.get(key)?;
-        let f = match v {
-            serde_json::Value::Number(n) => n.as_f64()?,
-            serde_json::Value::String(s) => s
-                .trim()
-                .trim_end_matches('%')
-                .replace(',', ".")
-                .parse()
-                .ok()?,
-            _ => return None,
-        };
-        if !f.is_finite() {
-            return None;
-        }
-        // A schema-default value means the filter was never configured, so hide it.
-        if let Some(d) = defaults.get(&key.to_ascii_lowercase()) {
-            if (f - d).abs() <= f64::EPSILON.max(d.abs() * 1e-9) {
+    number.is_finite().then_some(number)
+}
+
+/// The filter card of one strategy version.
+///
+/// A stored number is the bound Moonbot applies, whether the user typed it or the strategy was
+/// born with it: the factory corridors filter as soon as their section is live, and `0` does
+/// not switch them off. Only a side the core itself reads as "off" at that number is left out
+/// ([`FieldSpec::bound_is_off`]). A bound equal to the schema default is marked, not hidden
+/// ([`StratFilters::factory`]) — hidden, it vanished from the grid and from the save diff
+/// while still rejecting coins.
+///
+/// Args:
+///     raw: The version's `raw_json`.
+///     defaults: Schema defaults, lowercase name -> number.
+///
+/// Returns:
+///     The card, or `None` when `raw` is not a JSON object.
+fn filters_of(
+    raw: &str,
+    defaults: &std::collections::HashMap<String, f64>,
+) -> Option<StratFilters> {
+    let json = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let map = json.as_object()?;
+    let mut out = StratFilters::default();
+    // One side of a bound and whether it is the schema default. `spec` is absent for a slot's
+    // thresholds: no slot type reads zero as "off".
+    let side =
+        |key: Option<&str>, spec: Option<&FieldSpec>, max_side: bool| -> Option<(f64, bool)> {
+            let key = key?;
+            let value = stored_number(map.get(key)?)?;
+            if spec.is_some_and(|spec| spec.bound_is_off(max_side, value)) {
                 return None;
             }
-        }
-        Some(f)
-    };
+            let factory = defaults
+                .get(&key.to_ascii_lowercase())
+                .is_some_and(|d| (value - d).abs() <= f64::EPSILON.max(d.abs() * 1e-9));
+            Some((value, factory))
+        };
     // Ignore flags may be booleans or YES/TRUE/1 strings.
     let truthy = |key: &str| -> bool {
         match map.get(key) {
@@ -615,10 +668,18 @@ pub fn strategy_filters(
     out.use_bvsv = truthy("UseBV_SV_Filter");
     out.ignore_ping = truthy("IgnorePing");
     for spec in FIELDS {
-        let (lo, hi) = (num(spec.p_min), num(spec.p_max));
-        if lo.is_some() || hi.is_some() {
-            out.bounds.insert(spec.col, (lo, hi));
+        let (lo, hi) = (
+            side(spec.p_min, Some(spec), false),
+            side(spec.p_max, Some(spec), true),
+        );
+        if lo.is_none() && hi.is_none() {
+            continue;
         }
+        if lo.iter().chain(&hi).all(|(_, factory)| *factory) {
+            out.factory.insert(spec.col);
+        }
+        out.bounds
+            .insert(spec.col, (lo.map(|(v, _)| v), hi.map(|(v, _)| v)));
     }
     // Delta2/Delta3 slots: map a string type ("15m"/"Pump1h"/...) to a report field.
     for (n, prefix) in [(2u8, "Delta2"), (3u8, "Delta3")] {
@@ -626,23 +687,48 @@ pub fn strategy_filters(
             continue;
         };
         let t = t.trim();
-        let lo = num(Some(&format!("{prefix}_Min")));
-        let hi = num(Some(&format!("{prefix}_Max")));
+        let lo = side(Some(&format!("{prefix}_Min")), None, false);
+        let hi = side(Some(&format!("{prefix}_Max")), None, true);
+        // The thresholds a new strategy's slot is born with are marked like any factory bound;
+        // the slot's type has no numeric default to compare with, so it does not count.
+        let factory =
+            (lo.is_some() || hi.is_some()) && lo.iter().chain(&hi).all(|(_, factory)| *factory);
+        let (lo, hi) = (lo.map(|(v, _)| v), hi.map(|(v, _)| v));
         let Some(field) = FIELDS
             .iter()
             .find(|s| s.slot_type.is_some_and(|ty| ty.eq_ignore_ascii_case(t)))
             .map(|s| s.col)
         else {
-            // 2h/30m/Pump5m have no report column. With configured thresholds this is a
-            // live filter, so mark the slot as occupied by a foreign type.
+            // 2h/30m/Pump5m have no report column. Its thresholds are a live filter, the
+            // factory ones included, so mark the slot as occupied by a foreign type.
             if lo.is_some() || hi.is_some() {
                 out.foreign_slots.push((n, t.to_string()));
             }
             continue;
         };
+        if factory {
+            out.factory.insert(field);
+        }
         out.slots.push((n, field, lo, hi));
     }
-    out
+    let number = |key: &str| map.get(key).and_then(stored_number);
+    for extra in WAKE_EXTRAS {
+        let checked = number(extra.key).filter(|value| {
+            *value != extra.off_at
+                && extra
+                    .needs
+                    .is_none_or(|needed| number(needed).is_some_and(|n| n != 0.0))
+        });
+        if let Some(value) = checked {
+            out.extras.push((extra, value));
+        }
+        for &gate in extra.gates {
+            if truthy(gate) {
+                out.other_ignores.insert(gate);
+            }
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]

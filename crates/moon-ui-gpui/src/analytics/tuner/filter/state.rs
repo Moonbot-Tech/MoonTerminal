@@ -711,29 +711,40 @@ impl TunerState {
     /// Variants for the query: [the empty "Fact", v1..vN], limited to the offered scope.
     pub(in crate::analytics::tuner) fn variants(&self, drops_only: bool) -> Vec<Variant> {
         let mut out = vec![Variant::default()];
-        for v in &self.bounds {
-            let bounds = v
-                .iter()
-                .enumerate()
-                .filter_map(|(fi, (from, to))| {
-                    if !super::offer_field(FIELDS[fi].class, drops_only) {
-                        return None;
-                    }
-                    let from = parse_num(from);
-                    let to = parse_num(to);
-                    (from.is_some() || to.is_some()).then(|| Bound {
-                        field: FIELDS[fi].col.to_string(),
-                        from,
-                        to,
-                    })
-                })
-                .collect();
+        for vi in 0..self.bounds.len() {
             out.push(Variant {
-                bounds,
+                bounds: self.variant_bounds(vi, drops_only),
                 ..Default::default()
             });
         }
         out
+    }
+
+    /// One variant's typed bounds as the what-if takes them, limited to the offered scope;
+    /// `vi` counts the variant columns from zero (V1). Empty for a column that does not exist.
+    pub(in crate::analytics::tuner) fn variant_bounds(
+        &self,
+        vi: usize,
+        drops_only: bool,
+    ) -> Vec<Bound> {
+        self.bounds
+            .get(vi)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(fi, (from, to))| {
+                if !super::offer_field(FIELDS[fi].class, drops_only) {
+                    return None;
+                }
+                let from = parse_num(from);
+                let to = parse_num(to);
+                (from.is_some() || to.is_some()).then(|| Bound {
+                    field: FIELDS[fi].col.to_string(),
+                    from,
+                    to,
+                })
+            })
+            .collect()
     }
 }
 

@@ -30,7 +30,7 @@ pub mod threshold_search;
 pub mod ticks;
 mod time;
 
-pub use fields::{FIELDS, FieldClass, FieldSpec, slot_type_for};
+pub use fields::{FIELDS, FieldClass, FieldSpec, WAKE_EXTRAS, WakeExtra, slot_type_for};
 pub use strategy_read::{
     LiveStrategy, StratFilters, StrategyValuesReader, live_strategies, strategy_cores,
     strategy_current_values, strategy_current_values_opt, strategy_filters, strategy_kinds,

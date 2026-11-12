@@ -211,7 +211,7 @@ fn archived_market(
 }
 
 /// Strategy-field defaults off the first core schema — what the model fills a field the
-/// strategy leaves at default with, and what the tuner's filter hides unconfigured chips by.
+/// strategy leaves at default with, and what the tuner's filter marks factory bounds by.
 /// Lowercase field names to values: numbers as themselves, switches as 1/0, and zero for a
 /// field the schema sends no default for ([`schema_default`]).
 pub(in crate::analytics::tuner) fn strategy_field_defaults(

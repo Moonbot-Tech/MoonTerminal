@@ -301,6 +301,62 @@ pub const FIELDS: &[FieldSpec] = &[
     ),
 ];
 
+/// A strategy limit OUTSIDE the tuner's grid that Ignore flags keep asleep.
+#[derive(Debug)]
+pub struct WakeExtra {
+    /// The strategy parameter.
+    pub key: &'static str,
+    /// The flags that switch it off; it works only while every one of them is `NO`.
+    pub gates: &'static [&'static str],
+    /// The stored value at which the core does not check it at all.
+    pub off_at: f64,
+    /// Another parameter that must be non-zero for this one to be checked.
+    pub needs: Option<&'static str>,
+}
+
+/// The limits outside the grid that wake when Save clears a flag to make a fitted bound apply:
+/// clearing `IgnoreFilters` turns on every group whose own flag is `NO`, and the report has no
+/// column to model these by, so the save dialog names them (`StratFilters::extras`).
+///
+/// Source: MoonDoc (github.com/Moonbot-Tech/MoonDoc, revision f33dd97), `concepts/01-market-
+/// selection-and-filters.md` and `reference/params/01-filters-and-coins.md`: the six group
+/// switches under `IgnoreFilters`; `PenaltyTime` in the Time group; `PriceStepMax` in the Price
+/// group, off at `100` while `0` blocks every coin; the Ping limits off at `0`, `MaxPing`
+/// checked only with `MaxLatency > 0`. `NextDetectPenalty` is left out on purpose: whether
+/// `IgnoreFilters` lifts it depends on the strategy type.
+pub const WAKE_EXTRAS: &[WakeExtra] = &[
+    WakeExtra {
+        key: "PenaltyTime",
+        gates: &["IgnoreFilters", "IgnoreTime"],
+        off_at: 0.0,
+        needs: None,
+    },
+    WakeExtra {
+        key: "PriceStepMax",
+        gates: &["IgnoreFilters", "IgnorePrice"],
+        off_at: 100.0,
+        needs: None,
+    },
+    WakeExtra {
+        key: "MinPing",
+        gates: &["IgnoreFilters", "IgnorePing"],
+        off_at: 0.0,
+        needs: None,
+    },
+    WakeExtra {
+        key: "MaxLatency",
+        gates: &["IgnoreFilters", "IgnorePing"],
+        off_at: 0.0,
+        needs: None,
+    },
+    WakeExtra {
+        key: "MaxPing",
+        gates: &["IgnoreFilters", "IgnorePing"],
+        off_at: 0.0,
+        needs: Some("MaxLatency"),
+    },
+];
+
 /// `DeltaN_Type` value for a slot field (`None` means the field is not a slot).
 pub fn slot_type_for(field: &str) -> Option<&'static str> {
     FIELDS
