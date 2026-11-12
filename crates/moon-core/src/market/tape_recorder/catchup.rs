@@ -539,10 +539,7 @@ pub(super) fn plan_refs<H: Borrow<Coverage>>(
         }
         let tail_start_ms = trade.close_ms.saturating_add(shape.margin_ms.max(0));
         let tail_only = state::tail_only(&missing, tail_start_ms);
-        let fetch_at = trade
-            .close_ms
-            .saturating_add(shape.margin_ms.max(shape.tail_ms).max(0))
-            .saturating_add(super::plan::GIVE_UP_MS);
+        let fetch_at = super::tail_settles_at_ms(trade.close_ms, shape.margin_ms, shape.tail_ms);
         if fetch_at > now_ms {
             result.too_fresh += 1;
             result.too_fresh_ids.push((trade.id, fetch_at));

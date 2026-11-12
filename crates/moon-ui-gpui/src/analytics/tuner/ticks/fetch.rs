@@ -280,7 +280,16 @@ impl AnalyticsView {
     /// Re-read tape after filing or refusal changes so newly admitted tails regain their tape.
     /// A refusal change alone keeps the judged rows: the reload asks again only about the
     /// missing rows on the markets whose refusals changed (`station::refusals_since`).
+    ///
+    /// Not while a search runs: the re-read reloads the table, a reload stops the search, and
+    /// tape arriving in the background is no reason to throw the user's search away. Every
+    /// caller comes through here — the card's own paint, the end of a fetch pass, the fetch
+    /// listener, the backend's wake — so this is the one place that holds the reload back. The
+    /// generations stay unread, and the first paint after the search ends picks them up.
     pub(super) fn refresh_station_tape(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.ticks.sugg, super::state::SuggState::Running { .. }) {
+            return;
+        }
         let generation = station::filed_generation();
         let refusal_revision = station::refusal_revision();
         let filed = generation != self.ticks.station_generation;
@@ -291,6 +300,39 @@ impl AnalyticsView {
                 self.ticks.judged_under = None;
             }
             self.reload_ticks(cx);
+        }
+    }
+
+    /// The backend's station-tape wake (`Backend::station_tape_tick`): a refusal was lifted, or
+    /// a row asked about too early has reached the moment its tail is final. An idle table has
+    /// no listener and asks for missing rows only as a reload ends, so this is what makes it
+    /// ask again: a reload when the refusals moved, else a pass over the missing rows as they
+    /// stand.
+    pub(in crate::analytics) fn station_tape_woke(&mut self, cx: &mut Context<Self>) {
+        // A table that was never loaded has no row to ask about; its first load asks.
+        if self.ticks.data.data().is_none() {
+            return;
+        }
+        // The reload is held back while a search runs (`refresh_station_tape`); the pass over
+        // the missing rows waits with it, so the search's own tape is not re-read under it
+        // (`TicksState::station_wake_pending`).
+        if matches!(self.ticks.sugg, super::state::SuggState::Running { .. }) {
+            self.ticks.station_wake_pending = true;
+            return;
+        }
+        self.ticks.station_wake_pending = false;
+        let seen = (
+            self.ticks.station_generation,
+            self.ticks.station_refusal_revision,
+        );
+        self.refresh_station_tape(cx);
+        let reloading = seen
+            != (
+                self.ticks.station_generation,
+                self.ticks.station_refusal_revision,
+            );
+        if !reloading {
+            self.ticks_fetch_missing(cx);
         }
     }
 

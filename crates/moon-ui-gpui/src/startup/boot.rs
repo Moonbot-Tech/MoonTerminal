@@ -139,6 +139,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let core_filter_revision = cx.new(|_| crate::CoreFilterRevision);
     let traces_revision = cx.new(|_| crate::backend::traces::TracesRevision);
     let price_imports = cx.new(|_| crate::backend::station::prices_pull::PriceImports);
+    let station_tape = cx.new(|_| crate::backend::station::StationTape);
     // A run that is not a person watching the market gets the seeded stand-in: `--fixture` is a
     // bench on recorded data and `--debug-script` is FireTest, and both assert that nothing reaches
     // the network. The saved rule is handed over at construction, so a profile that opted in is
@@ -201,6 +202,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         traces: Default::default(),
         traces_revision,
         price_imports,
+        station_tape,
         core_filter: HashSet::new(),
         run_pending: Default::default(),
         core_filter_revision,
@@ -767,6 +769,11 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // background pass when one is due.
                     crate::settings::trades_cleanup_startup::tick(b, cx);
                     crate::analytics::tape_autoload::tick(b);
+                    // The station's tape for rows Entry/Exit left without it: wake the open
+                    // table when one is worth asking about again, and read the station's status
+                    // when its hourly catch-up may have filed tape for a row it refused. A
+                    // clock compare and a revision compare on every tick, a quiet read when due.
+                    b.station_tape_tick(moon_core::util::time::now_unix_ms_i64(), cx);
                     // The station's order traces, once per run a minute after start.
                     crate::backend::station::pull::tick(b, cx);
                     // Its market-list prices around trades, once per run after that; a pull that

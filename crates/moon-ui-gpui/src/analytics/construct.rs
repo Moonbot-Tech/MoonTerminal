@@ -141,6 +141,13 @@ impl AnalyticsView {
         })
         .detach();
 
+        // The station's tape for Entry/Exit rows left without it: its own narrow channel, which
+        // the backend notifies when one is worth asking about again, never the backend at large.
+        cx.observe(&backend.read(cx).station_tape(), |this, _, cx| {
+            this.station_tape_woke(cx);
+        })
+        .detach();
+
         // The strategy-name mask: restored before the first read, so the very first Summary the
         // window draws is already narrowed and the box already shows what narrowed it.
         let saved_strategy_mask = backend

@@ -675,6 +675,9 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) station_generation: u64,
     /// Refusal changes can admit rows whose retained tape must be loaded again.
     pub(in crate::analytics::tuner) station_refusal_revision: u64,
+    /// A station-tape wake arrived while a search was running and waits for its landing
+    /// (`AnalyticsView::station_tape_woke`); a search that is stopped drops it (`stop_search`).
+    pub(in crate::analytics::tuner) station_wake_pending: bool,
     /// Whether that task is still in its loop — it ends with the batch, and the next batch
     /// attaches a fresh one.
     pub(in crate::analytics::tuner) fetch_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -848,6 +851,7 @@ impl Default for TicksState {
             fetch_task: None,
             station_generation: 0,
             station_refusal_revision: 0,
+            station_wake_pending: false,
             fetch_listening: Default::default(),
             tape_reading: false,
             shown_verdict: Default::default(),
@@ -1075,6 +1079,11 @@ impl TicksState {
         }
         self.sugg = SuggState::Idle;
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
+        // A stopped search never lands, so it cannot run a wake held for its end, and the flag
+        // must not outlive it into another search. The wake is dropped, not replayed: a row it
+        // was for is asked about by the next pass over the missing rows — the reload that
+        // stopped the search usually ends in one — and no later than the table's next load.
+        self.station_wake_pending = false;
     }
 
     /// Ask a running search to stop and KEEP what it found so far: its completion still lands,

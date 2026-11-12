@@ -20,6 +20,170 @@ fn window_growth_invalidates_station_refusals() {
     assert!(retry, "the wider window must get a fresh station attempt");
 }
 
+/// The station's hourly catch-up completes a refused trade's tape: the trade then counts in
+/// `tape_trades`, never in `tail_final`, so a refusal keyed on the final-tail count alone is
+/// never dropped and the row reads "not on the station" until the terminal is quit (#1070).
+#[test]
+fn a_catchup_filing_reopens_a_refused_row() {
+    // The two station counts as two status reads report them: the finalised tails unchanged,
+    // one more trade with complete tape. The other inputs of the generation stay as they are.
+    // A store of its own, not the process-wide one: the counts are a global other tests write.
+    let generation = |tape_trades: u64| ((0, tape_trades), 60, (600_000, 0), 0);
+    let mut refused = Unfillable::default();
+    refused.refresh(generation(10));
+    refused.refuse(1, 42, "EX-XX", "XALPHA");
+    refused.refresh(generation(10));
+    assert!(
+        refused.uids.contains_key(&(1, 42)),
+        "an unchanged station keeps its refusal"
+    );
+    let revision = refused.revision;
+    refused.refresh(generation(11));
+    assert!(
+        !refused.uids.contains_key(&(1, 42)),
+        "the station filed this trade's tape, yet the row is still refused"
+    );
+    assert_ne!(
+        refused.revision, revision,
+        "the lift is what wakes an open table"
+    );
+}
+
+/// A row answered short while its tail could still arrive is asked about once, not on every
+/// pass: asked every 30 s it brought a few more seconds of tape each time, and each filing
+/// reloaded the open table and stopped the user's search (the regression of the first cut of
+/// #1070). It waits out the tail, stays a candidate throughout — never "not on the station" —
+/// and is asked about again once the tail is final.
+#[test]
+fn a_row_waiting_for_its_tail_is_not_asked_again_before_it_settles() {
+    let mut rows = Unfillable::default();
+    rows.deferred.insert((1, 42), 5_000);
+    assert!(rows.waiting_tail(1, 42, 4_999));
+    assert!(
+        !rows.uids.contains_key(&(1, 42)),
+        "waiting is not a refusal"
+    );
+    assert!(!rows.waiting_tail(1, 42, 5_000), "the tail is final: ask");
+    assert!(rows.deferred.is_empty(), "the wait is over for good");
+    assert!(
+        !rows.waiting_tail(2, 42, 0),
+        "another core's row never waited"
+    );
+    // A status read drops the refusals, not the waits: the tail is final when it is final,
+    // whatever the station counts, and a dropped wait is a row asked on every pass.
+    rows.refresh(((0, 0), 60, (600_000, 0), 1));
+    rows.deferred.insert((1, 43), 9_000);
+    rows.refuse(1, 44, "synthetic", "XALPHA");
+    rows.refresh(((0, 1), 60, (600_000, 0), 1));
+    assert!(rows.uids.is_empty(), "the refusal is lifted");
+    assert!(rows.waiting_tail(1, 43, 0), "the wait stands");
+    // An axis move shifts the row's close by its core's offset, a changed window or floor moves
+    // the tail: each makes the stored moment another row's, so the wait goes.
+    for moved in [
+        ((0, 1), 60, (600_000, 0), 2),
+        ((0, 1), 60, (900_000, 0), 2),
+        ((0, 1), 120, (900_000, 0), 2),
+    ] {
+        rows.deferred.insert((1, 43), 9_000);
+        rows.refresh(moved);
+        assert!(!rows.waiting_tail(1, 43, 0), "{moved:?}");
+    }
+    // A row that left the sample takes its wait with it.
+    rows.deferred.insert((1, 43), 9_000);
+    rows.retain(
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    );
+    assert!(!rows.waiting_tail(1, 43, 0));
+}
+
+/// The answer that defers a row: a station asked seconds after the close answers short, and
+/// the row is neither refused nor left to be asked about on the next pass.
+#[test]
+fn a_short_answer_right_after_the_close_defers_the_row() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _guard = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    let mut queued = queued_unservable(-94_073);
+    let uid = queued.deal.report_uid;
+    forget(uid);
+    let now = moon_core::util::time::now_unix_ms_i64();
+    queued.window.close_ms = now;
+    let generation = super::unfillable().generation;
+    super::commit_station_answer(
+        &[queued],
+        Filled {
+            markets: 1,
+            ..Default::default()
+        },
+        false,
+        generation,
+    );
+    let mut rows = super::unfillable();
+    let refused = rows.uids.contains_key(&(1, uid));
+    let waiting = rows.waiting_tail(1, uid, now);
+    rows.deferred.remove(&(1, uid));
+    drop(rows);
+    super::RETRY_AT.store(i64::MAX, std::sync::atomic::Ordering::Release);
+    assert!(!refused, "asked too early is not a refusal");
+    assert!(
+        waiting,
+        "and is not asked about again until the tail settles"
+    );
+}
+
+/// An idle table hears nothing from the station, so the tick wakes it — once — when a row left
+/// unrefused reaches the moment its tail is final, and when the refusal memory moves. A wake
+/// armed for later stays armed, and an earlier one armed meanwhile is not lost.
+#[test]
+fn the_tick_wakes_an_idle_table_once_per_cause() {
+    let _window = crate::test_support::SharedWindowGuard::take();
+    let _refusals = UNFILLABLE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+    use std::sync::atomic::Ordering;
+    // Settle the state other tests left: one call takes whatever moved before this test.
+    super::RETRY_AT.store(i64::MAX, Ordering::Release);
+    super::wake_due(0);
+    assert!(!super::wake_due(0), "nothing armed, nothing moved");
+    super::RETRY_AT.fetch_min(5_000, Ordering::AcqRel);
+    assert!(!super::wake_due(4_999), "the tail is not final yet");
+    assert_eq!(
+        super::RETRY_AT.load(Ordering::Acquire),
+        5_000,
+        "still armed"
+    );
+    assert!(super::wake_due(5_000));
+    assert!(!super::wake_due(5_001), "one wake for one settled tail");
+    // A refusal joins and leaves: each change of the memory is one wake.
+    super::unfillable().refuse(1, -94_072, "synthetic", "XALPHA");
+    assert!(super::wake_due(0));
+    assert!(!super::wake_due(0));
+    forget(-94_072);
+    assert!(super::wake_due(0));
+}
+
+/// A row asked about before the recorder treats its post-close tail as final is still being
+/// written, not missing: it must not be remembered as refused. The deadline is the station's
+/// own — the close, the longer of the margin and the tail, and its two-minute give-up.
+#[test]
+fn a_row_is_not_refused_while_its_tail_can_still_arrive() {
+    let window = ReplayWindow {
+        close_ms: 2_000_000,
+        margin_ms: 600_000,
+        ..queued_unservable(-94_071).window
+    };
+    // Ten minutes of margin outlast the one-minute floor; then 120 s.
+    let settled = 2_000_000 + 600_000 + 120_000;
+    assert!(super::tail_may_follow(&window, 60, settled - 1));
+    assert!(!super::tail_may_follow(&window, 60, settled));
+    // A floor longer than the margin moves the deadline with it.
+    let short_margin = ReplayWindow {
+        margin_ms: 30_000,
+        ..window
+    };
+    let settled = 2_000_000 + 900_000 + 120_000;
+    assert!(super::tail_may_follow(&short_margin, 900, settled - 1));
+    assert!(!super::tail_may_follow(&short_margin, 900, settled));
+}
+
 /// Reusing a report uid on another core must not suppress that core's station request.
 #[test]
 fn station_refusals_are_scoped_to_their_core() {
@@ -289,7 +453,7 @@ fn refusals_since_names_only_the_markets_that_changed() {
         [("EX-XX".to_string(), "XALPHAUSDT".to_string())].into()
     );
     let before_refresh = rows.since(0).0;
-    rows.refresh((1, 0, (0, 0), 0));
+    rows.refresh(((1, 0), 0, (0, 0), 0));
     assert_eq!(
         rows.since(before_refresh).1,
         [("EX-XX".to_string(), "XBETAUSDT".to_string())].into(),
@@ -444,7 +608,7 @@ fn already_held_rows_do_not_bump_the_station_filing_generation() {
 #[test]
 fn station_misses_survive_unrelated_filings() {
     let mut refused = Unfillable::default();
-    refused.refresh((7, 60, (180_000, 300_000), 0));
+    refused.refresh(((7, 0), 60, (180_000, 300_000), 0));
     refused.refuse(1, 91, "synthetic", "XALPHA");
     let revision = refused.revision;
     refused.filed("synthetic", "XBETA");
@@ -455,11 +619,13 @@ fn station_misses_survive_unrelated_filings() {
     assert!(refused.uids.is_empty());
     assert_ne!(refused.revision, revision);
     for generation in [
-        (8, 60, (180_000, 300_000), 0),
-        (8, 120, (180_000, 300_000), 0),
-        (8, 120, (600_000, 300_000), 0),
-        (8, 120, (600_000, 1_800_000), 0),
-        (8, 120, (600_000, 1_800_000), 1),
+        ((8, 0), 60, (180_000, 300_000), 0),
+        ((8, 0), 120, (180_000, 300_000), 0),
+        ((8, 0), 120, (600_000, 300_000), 0),
+        ((8, 0), 120, (600_000, 1_800_000), 0),
+        ((8, 0), 120, (600_000, 1_800_000), 1),
+        // The station filed tape for one more trade: its complete-tape count alone moved.
+        ((8, 1), 120, (600_000, 1_800_000), 1),
     ] {
         refused.refuse(1, 91, "synthetic", "XALPHA");
         let revision = refused.revision;

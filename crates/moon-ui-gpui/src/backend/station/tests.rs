@@ -1158,3 +1158,38 @@ fn a_failed_startup_read_stays_quiet() {
     assert!(jobs.outcome.is_none());
     assert!(jobs.lines.is_empty());
 }
+
+/// The status is read again for Entry/Exit's refused rows an hour after the newer of the last
+/// read and the last attempt: a station that does not answer must not be asked on every tick.
+/// A status neither read nor asked for is due at once: a failed startup read must not leave the
+/// refusals with nothing to lift them.
+#[test]
+fn the_tape_status_is_reread_hourly_and_a_failed_attempt_waits_too() {
+    const HOUR: i64 = 3_600_000;
+    let read = 10_000;
+    assert!(!super::tape_status_due(read + HOUR - 1, Some(read), None));
+    assert!(super::tape_status_due(read + HOUR, Some(read), None));
+    // An attempt half an hour ago that brought nothing: wait for its own hour.
+    let asked = read + HOUR + HOUR / 2;
+    assert!(!super::tape_status_due(
+        asked + HOUR - 1,
+        Some(read),
+        Some(asked)
+    ));
+    assert!(super::tape_status_due(
+        asked + HOUR,
+        Some(read),
+        Some(asked)
+    ));
+    // A newer read by anyone — Settings, a station job — restarts the wait.
+    let fresh = asked + 1_000;
+    assert!(!super::tape_status_due(
+        asked + HOUR,
+        Some(fresh),
+        Some(asked)
+    ));
+    // Never read: due at once, then an hour after the attempt.
+    assert!(super::tape_status_due(0, None, None));
+    assert!(!super::tape_status_due(asked + HOUR - 1, None, Some(asked)));
+    assert!(super::tape_status_due(asked + HOUR, None, Some(asked)));
+}
