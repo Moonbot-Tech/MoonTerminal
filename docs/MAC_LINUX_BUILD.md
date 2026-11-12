@@ -1,6 +1,6 @@
 # macOS / Linux Build Notes
 
-Last updated: 2026-11-10.
+Last updated: 2026-11-12.
 
 This file describes the current public stack: `MoonTerminal` + `Moonbot-Tech/MoonUI`.
 
@@ -12,6 +12,7 @@ Public dependencies in `crates/moon-ui-gpui/Cargo.toml` must remain git dependen
 gpui = { package = "moon-gpui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 gpui_platform = { package = "moon-gpui-platform", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master", features = ["font-kit", "runtime_shaders"] }
 moon-ui = { package = "moon-ui", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
+gpui-component = { package = "moon-ui-components", git = "https://github.com/Moonbot-Tech/MoonUI", branch = "master" }
 ```
 
 `Cargo.lock` is committed: third-party versions move only by a deliberate commit. MoonUI
@@ -38,6 +39,7 @@ Local development through a neighbouring `MoonUI` checkout is done only through 
 moon-gpui = { path = "../MoonUI/crates/moon-gpui" }
 moon-gpui-platform = { path = "../MoonUI/crates/moon-gpui-platform" }
 moon-ui = { path = "../MoonUI/crates/moon-ui" }
+moon-ui-components = { path = "../MoonUI/crates/moon-ui-components" }
 
 [patch."https://github.com/Moonbot-Tech/MoonProtoBeta"]
 moonproto = { path = "../MoonProtoBeta" }
