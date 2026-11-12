@@ -348,13 +348,18 @@ jobs:
     # asset name its updater looks for (`moon_core::update::station_asset_name`). Each is built on a
     # runner of its own architecture, so the musl C toolchain the station's C dependencies (ring,
     # SQLite) compile with is the distribution's native one — no cross compiler on the release path.
+    #
+    # Both runners are pinned images, never `ubuntu-latest`: that C toolchain's defaults decide
+    # which CPUs the station starts on. v0.67.1 was built the day `ubuntu-latest` became 26.04, its
+    # C came out with AVX2/FMA, and it died with SIGILL on every server older than Haswell. Moving
+    # an image is a deliberate edit, checked by the baseline smoke below.
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: aarch64
             runner: ubuntu-24.04-arm
     env:
@@ -362,6 +367,9 @@ jobs:
       # host C is left to the host compiler.
       CC_x86_64_unknown_linux_musl: musl-gcc
       CC_aarch64_unknown_linux_musl: musl-gcc
+      # The station's C at the x86_64 target's own baseline, whatever the image's compiler defaults
+      # to; cc-rs appends this after its own flags, so it wins over a default `-march`.
+      CFLAGS_x86_64_unknown_linux_musl: -march=x86-64 -mtune=generic
     steps:
       # Full history with tags: the station's version is the release tag (`build-support/git_meta.rs`),
       # and without the tags it builds as `dev`, which its updater never offers anything to.
@@ -402,6 +410,14 @@ jobs:
         run: |
           file dist/moon-station-${{ matrix.arch }}
           file dist/moon-station-${{ matrix.arch }} | grep -Eq 'statically linked|static-pie linked'
+      # The runner's CPU has every extension, so a station built past baseline x86-64 starts here
+      # and dies on the user's older server. Only an emulated CPU without them shows it.
+      - name: Install the emulator for the baseline smoke
+        if: matrix.arch == 'x86_64'
+        run: sudo apt-get install -y --no-install-recommends qemu-user
+      - name: Start the station on a CPU without AVX
+        if: matrix.arch == 'x86_64'
+        run: bash .github/scripts/station-baseline-smoke.sh dist/moon-station-x86_64
       - uses: actions/upload-artifact@v7
         with:
           name: station-${{ matrix.arch }}

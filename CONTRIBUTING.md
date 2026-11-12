@@ -114,7 +114,8 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 - Seven CI gates, all on every PR and all meant to be green before you merge: the Windows
   `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo nextest run --workspace` plus the doc-tests,
   `Clippy (x86_64-msvc)` running `cargo clippy --workspace --all-targets --locked -- -D warnings`,
-  `Station (x86_64-linux-musl)` building, testing and linting `moon-station` for Linux musl,
+  `Station (x86_64-linux-musl)` building, testing and linting `moon-station` for Linux musl and
+  starting it on an emulated CPU without AVX (`.github/scripts/station-baseline-smoke.sh`),
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
   `cargo fmt --all -- --check`. They run in parallel. The macOS probe is diagnostic and runs
   outside them, in its own `macos-probe.yml` workflow (`continue-on-error`; `macos-probe-retry.yml`
