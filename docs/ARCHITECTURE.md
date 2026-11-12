@@ -1368,6 +1368,7 @@ The local override is done only in the ignored `MoonTerminal/.cargo/config.toml`
 moon-gpui = { path = "../MoonUI/crates/moon-gpui" }
 moon-gpui-platform = { path = "../MoonUI/crates/moon-gpui-platform" }
 moon-ui = { path = "../MoonUI/crates/moon-ui" }
+moon-ui-components = { path = "../MoonUI/crates/moon-ui-components" }
 
 [patch."https://github.com/Moonbot-Tech/MoonProtoBeta"]
 moonproto = { path = "../MoonProtoBeta" }
