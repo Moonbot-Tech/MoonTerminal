@@ -14,7 +14,11 @@
 #      emulator is not enforcing the CPU model and a green result below would prove nothing;
 #   2. the station itself, from an empty data root with one inactive core and self-update off, so
 #      it opens its logger, config and SQLite replica and enters its main loop without the
-#      network. After ALIVE_SECS it gets SIGTERM and must log "stopped" and exit 0.
+#      network. After ALIVE_SECS it gets SIGTERM and must exit 0. That status is the proof it
+#      reached its main loop: SIGTERM only raises a flag (`signals.rs`), and the one place that
+#      reads it and returns `Ok` is that loop — a fault exits by signal, an error exits 1. Its own
+#      log lines are not used: on a fresh data root `diagnostics::ensure_file` resets the log
+#      filter without the station's `moon_station=info`, so they never reach the file.
 #
 # Usage: station-baseline-smoke.sh <path to an x86_64 moon-station>
 # Requires: qemu-x86_64 (Debian/Ubuntu package `qemu-user`) and musl-gcc (`musl-tools`).
@@ -127,13 +131,6 @@ wait "$pid" || status=$?
 if [ "$status" -ne 0 ]; then
     show_output
     echo "error: the station exited $status on SIGTERM" >&2
-    exit 1
-fi
-# The file log is TSV (`time level target message`); main.rs's own last line, not any writer's.
-tab=$(printf '\t')
-if ! grep -rqs "${tab}moon_station${tab}stopped\$" "$work/data/logs"; then
-    show_output
-    echo "error: the station exited without logging \"stopped\": it never reached its main loop" >&2
     exit 1
 fi
 echo "station: up ${alive_secs}s under -cpu $cpu, stopped cleanly on SIGTERM"
