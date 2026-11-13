@@ -333,6 +333,7 @@ impl AnalyticsView {
                     ))
                 {
                     this.ticks.resume();
+                    this.ticks.adopt_resumed_rows();
                     this.ticks.dirty = report_result_is_stale(
                         report_req,
                         this.current_report_generation(),
@@ -675,6 +676,7 @@ impl AnalyticsView {
             log_changed(&mut self.ticks.logged.1, line);
             self.ticks.entry_tape_moved = false;
             self.ticks.tape_reading = false;
+            self.ticks.mark_rows_judged();
             self.ticks.judged_under = Some(model);
             self.ticks
                 .settle_key(key, moon_core::util::time::now_unix_ms_i64());
@@ -757,6 +759,7 @@ impl AnalyticsView {
                     return;
                 }
                 this.ticks.tape_reading = false;
+                this.ticks.mark_rows_judged();
                 this.ticks.judged_under = Some(model);
                 // This stage's rows stand under the requirement in force.
                 this.ticks.entry_tape_moved = false;

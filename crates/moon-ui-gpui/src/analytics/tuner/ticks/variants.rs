@@ -852,6 +852,11 @@ impl AnalyticsView {
         warns.extend(self.ticks_unguarded_warning(targets, changes, cx));
         warns.extend(self.ticks_unmodelled_warns(targets, cx));
         warns.extend(self.ticks_gate_warnings(Self::changed_groups(changes)));
+        // Save stays available while the card re-replays the same scope (issue #1332); the
+        // warnings above are then built over rows not all judged yet, and the consent says so.
+        if self.ticks.rows_unjudged() {
+            warns.push(t!("analytics.ticks.sum.confirm_unjudged").to_string());
+        }
         warns
     }
 

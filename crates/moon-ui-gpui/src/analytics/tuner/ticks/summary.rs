@@ -177,6 +177,40 @@ pub(super) fn verdict_of(
     Verdict::Apply
 }
 
+/// The verdict and sentence a write's consent carries.
+///
+/// Outside a read they are the card's own. During a same-scope reload the card stands in its
+/// last verdict, which can predate the variant now in the column — a search runs on through a
+/// report reload and lands in it, and a hand edit replaces it — while Save stays available
+/// (issue #1332). So the consent judges the variant's own search answer instead
+/// ([`TicksState::current_result`]); the scope's sample count is left out, since until the
+/// tape answers it would read as a refusal of the sample, while the variant's own count, scored
+/// over the rows it ran on, still refuses an Apply that closes too few deals.
+///
+/// Args:
+///     state: The axis state the consent is prepared from.
+///     model: The card's model, built from the same state.
+///
+/// Returns:
+///     The verdict and its sentence, as the consent states them.
+pub(super) fn consent_verdict(state: &TicksState, model: &SummaryModel) -> (Verdict, String) {
+    if !model.loading {
+        return (model.verdict.clone(), model.sentence.clone());
+    }
+    let verdict = sample_verdict(
+        verdict_of(
+            None,
+            None,
+            state.sugg_refusal.as_deref(),
+            state.current_result(),
+            state.has_changes(),
+        ),
+        state.variant_too_few(),
+    );
+    let sentence = sentence(&verdict, 0, 0, state.population().readiness.fetchable);
+    (verdict, sentence)
+}
+
 /// Refuse automatic advice when the scored variant closes too few deals.
 pub(super) fn sample_verdict(verdict: Verdict, too_few: Option<usize>) -> Verdict {
     if verdict == Verdict::Apply
@@ -708,8 +742,9 @@ impl AnalyticsView {
             .map(|uid| self.core_names.resolve(uid, &uid.to_string()).to_string())
             .unwrap_or_else(|| t!("analytics.cores_all").to_string());
         let model = self.ticks_summary_model(cx);
-        let holdout_worse = matches!(model.verdict, Verdict::DontApply(Why::HoldoutWorse(_)));
-        let reason = (!matches!(model.verdict, Verdict::Apply)).then_some(model.sentence);
+        let (verdict, sentence) = consent_verdict(&self.ticks, &model);
+        let holdout_worse = matches!(verdict, Verdict::DontApply(Why::HoldoutWorse(_)));
+        let reason = (!matches!(verdict, Verdict::Apply)).then_some(sentence);
         let warns = self.ticks_write_warns(&targets, &changes, cx);
         let n = changes.len();
         let write = self.begin_inline_write(targets, changes, cx);

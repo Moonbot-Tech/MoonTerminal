@@ -74,6 +74,7 @@ analytics.ticks.pick.why_sale: "продажа по стопу за предел
 analytics.ticks.pick.why_pending: "ещё не проверено"
 analytics.ticks.sum.title: "Итог подбора"
 analytics.ticks.sum.confirm_stale: "Значения или стратегии изменились — откройте подтверждение заново"
+analytics.ticks.sum.confirm_unjudged: "Карточка пересчитывает ленты — предупреждения по сделкам могут быть неполными."
 analytics.ticks.kpi.sample: "годных %{n} из %{total} закрытых сделок"
 analytics.ticks.kpi.bias_worse: "Годные хуже всех: PF %{fit} против %{all}"
 analytics.ticks.kpi.bias_better: "Годные лучше всех: PF %{fit} против %{all}"

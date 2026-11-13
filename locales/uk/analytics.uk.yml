@@ -74,6 +74,7 @@ analytics.ticks.pick.why_sale: "продаж за стопом за межею A
 analytics.ticks.pick.why_pending: "ще не перевірено"
 analytics.ticks.sum.title: "Підсумок підбору"
 analytics.ticks.sum.confirm_stale: "Значення або стратегії змінилися — відкрийте підтвердження знову"
+analytics.ticks.sum.confirm_unjudged: "Картка перераховує стрічки — попередження щодо угод можуть бути неповними."
 analytics.ticks.kpi.sample: "придатних %{n} із %{total} закритих угод"
 analytics.ticks.kpi.bias_worse: "Придатні гірші за всі: PF %{fit} проти %{all}"
 analytics.ticks.kpi.bias_better: "Придатні кращі за всі: PF %{fit} проти %{all}"
