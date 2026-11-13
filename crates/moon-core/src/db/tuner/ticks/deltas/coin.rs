@@ -4,10 +4,11 @@
 //! The ranges (`d1m ... d24h`) follow the windows in [`super`]. Pump1h and Dump1h use the
 //! hour's high and low relative to the open of the oldest candle in that hour's window.
 //!
-//! Last5sDelta reads the range of prints over 5100 ms plus the border print at a 250 ms cadence.
+//! Last5sDelta reads the range of one sample per 250 ms slot over 5100 ms plus the border sample.
 //! It rises instantly, smooths a lower range with weights 0.8/0.2, and decays by 0.98 in an
-//! empty slot. The core samples its average price about every 250 ms; raw prints are the nearest
-//! observable input here.
+//! empty slot. The core's sample is its average price: of the trades since the last sample, the
+//! one closest to it — so a lone spike print does not widen the range, which reading every raw
+//! print did (median error at the report's stamp 0.157 → 0.104 pp, see [`closest_print`]).
 //! Source: https://moonbot.pro/documentation/filters-tab/filters-delta-tab
 //!
 //! The anchor on the report (see [`super::DeltaTrack`]) takes the offset out; what these carry
@@ -16,7 +17,7 @@
 use std::collections::VecDeque;
 
 use super::field::DeltaField;
-use super::series::{Extremes, Series};
+use super::series::{Extremes, Item, Series};
 use super::{CANDLE_MS, LOOKBACK_MS, MINUTE_MS, STEP_MS};
 
 /// How far back each window the coin's fields are read over reaches.
@@ -82,7 +83,10 @@ pub(super) const FIELDS: [DeltaField; 9] = [
     DeltaField::Dump1h,
 ];
 
-/// Sampling cadence for complete raw prints in Last5sDelta.
+/// Where d5s sits in [`CoinPoint`] / [`FIELDS`] — read alone at the anchor's stamp.
+pub(super) const D5S_SLOT: usize = 6;
+
+/// Sampling cadence of Last5sDelta: one sample per slot, chosen among its complete prints.
 const SLOT_MS: i64 = 250;
 /// Empty cadence slots retain this fraction of the previous short-range value.
 const QUIET_KEEP: f64 = 0.98;
@@ -98,13 +102,49 @@ pub(super) fn last5s_step(prev: f64, d5: Option<f64>) -> f64 {
     }
 }
 
-/// Walk raw prints at the short range's cadence without treating historical bars as samples.
+/// The print of a slot the core's average price would take: the one closest to the previous
+/// sample, the earliest on a tie. With no previous sample — the cold start — the one closest to
+/// the slot's mean price. `None` when the slot holds no print (bars never sample this cadence).
+///
+/// Args:
+///     slot: The items that arrived since the last sample.
+///     previous: The previous sample's price, if any.
+///
+/// Returns:
+///     The chosen print's index within `slot`.
+fn closest_print(slot: &[Item], previous: Option<f64>) -> Option<usize> {
+    let prints = || slot.iter().enumerate().filter(|(_, item)| item.is_print());
+    let target = match previous {
+        Some(price) => price,
+        None => {
+            let (sum, n) = prints().fold((0.0, 0usize), |(s, n), (_, p)| (s + p.close, n + 1));
+            if n == 0 {
+                return None;
+            }
+            sum / n as f64
+        }
+    };
+    let mut best: Option<(usize, f64)> = None;
+    for (i, item) in prints() {
+        let gap = (item.close - target).abs();
+        if best.is_none_or(|(_, b)| gap < b) {
+            best = Some((i, gap));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// Walk the slot samples at the short range's cadence without treating historical bars as
+/// samples.
 struct Last5sEval {
     next: usize,
     slot_ms: Option<i64>,
+    /// The sampled prints still inside the window, plus one before its edge.
     prints: VecDeque<usize>,
     window: Extremes,
     value: Option<f64>,
+    /// The last sample's price, which the next slot's sample is chosen against.
+    sample: Option<f64>,
 }
 
 impl Last5sEval {
@@ -124,6 +164,7 @@ impl Last5sEval {
             prints: VecDeque::new(),
             window: Extremes::new(),
             value: None,
+            sample: None,
         }
     }
 
@@ -147,16 +188,20 @@ impl Last5sEval {
                 self.slot_ms = Some(slot + empty * SLOT_MS);
                 continue;
             }
-            let mut printed = false;
+            // One sample per slot, as the core's average price: of the prints that arrived since
+            // the last sample, the one closest to that sample. A lone spike print beside prints
+            // at the old level never enters the range; a level the whole slot moved to does.
+            let first = self.next;
             while self.next < items.len() && items[self.next].end_ms <= slot {
-                if items[self.next].is_print() {
-                    self.prints.push_back(self.next);
-                    self.window.push(self.next, items);
-                    printed = true;
-                }
                 self.next += 1;
             }
-            let range = if printed {
+            let sample = closest_print(&items[first..self.next], self.sample).map(|i| first + i);
+            if let Some(i) = sample {
+                self.sample = Some(items[i].close);
+                self.prints.push_back(i);
+                self.window.push(i, items);
+            }
+            let range = if sample.is_some() {
                 let edge = slot - WINDOW_MS;
                 // Keep one record strictly before the edge along with everything after it.
                 while self.prints.get(1).is_some_and(|&i| items[i].from_ms < edge) {
