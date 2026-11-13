@@ -612,6 +612,22 @@ pub(in crate::analytics) struct TicksState {
     /// Whether a search of both groups screens the entry moves before an exit search under each
     /// (`SearchParams::screen_entry`). On unless the user turned it off.
     pub(in crate::analytics::tuner) screen_entry: bool,
+    /// "Recount on request only" (`TicksAxisLayout::manual_refresh`), the checkbox beside
+    /// "Enabled only": the strategy list's "Tuning" column is counted for the selected
+    /// strategies alone, once on selection, and not at all with none selected (`ready.rs`);
+    /// while the rows in force are the current scope's, a report move or a tape filing marks the
+    /// card behind (`report_behind`, `tape_behind`) instead of reloading it, and the column is
+    /// not recounted for them. Off unless the user turned it on.
+    pub(in crate::analytics::tuner) manual_refresh: bool,
+    /// The report moved since the rows in force were read, and `manual_refresh` held them.
+    pub(in crate::analytics::tuner) report_behind: bool,
+    /// The station filed tape or changed its refusals since the rows in force were judged, and
+    /// `manual_refresh` held them; the generations stay unread until a catch-up reads them.
+    pub(in crate::analytics::tuner) tape_behind: bool,
+    /// A search asked for while the card was behind: started once the catch-up load has judged
+    /// the current scope's rows, so it never runs on rows short of the newest trades. Holds the
+    /// search's `only` field.
+    pub(in crate::analytics::tuner) pending_search: Option<Option<&'static str>>,
     /// Whether the search settings popover is open.
     pub(in crate::analytics::tuner) sugg_cfg_open: bool,
     /// Whether the model settings popover is open.
@@ -698,6 +714,17 @@ pub(in crate::analytics) struct TicksState {
     /// Whether the tape stage of a load is still reading the rows' tape off the worker: until
     /// it folds, every addressed row reads "missing" without meaning it.
     pub(in crate::analytics::tuner) tape_reading: bool,
+    /// The selection scope's revision: moved by every scope change ([`Self::invalidate`]) and
+    /// by nothing else — a report that moved, a clock axis that moved or a model setting is the
+    /// same scope. Save and Make a copy are judged against it ([`Self::write_scope_settled`]).
+    scope_rev: u64,
+    /// The scope revision the rows in `data` were published under; `None` before any publish.
+    /// A failure that keeps the stale rows keeps their mark too.
+    rows_scope: Option<u64>,
+    /// The scope revision of the rows the last finished tape stage judged. A stage that
+    /// re-judges rows left over from a previous scope carries that scope's mark, not the
+    /// current one.
+    judged_scope: Option<u64>,
     /// The summary card's last verdict and its sentence outside a tape read, with the scope
     /// label they were for: shown again while the next read runs, so the card does not lose its
     /// rows and jump on every reload (`summary.rs`). A running search is never kept here, and a
@@ -825,6 +852,10 @@ impl Default for TicksState {
             wr_worse_pct: String::new(),
             keep_corridor: true,
             screen_entry: true,
+            manual_refresh: false,
+            report_behind: false,
+            tape_behind: false,
+            pending_search: None,
             sugg_cfg_open: false,
             model_cfg_open: false,
             sugg: SuggState::Idle,
@@ -854,6 +885,9 @@ impl Default for TicksState {
             station_wake_pending: false,
             fetch_listening: Default::default(),
             tape_reading: false,
+            scope_rev: 0,
+            rows_scope: None,
+            judged_scope: None,
             shown_verdict: Default::default(),
             shown_kpi: Default::default(),
             entry_tape_moved: false,
@@ -947,6 +981,7 @@ impl TicksState {
         self.trade.open = saved.trade_open;
         self.keep_corridor = !saved.allow_closer_corridor;
         self.screen_entry = !saved.exit_under_every_entry;
+        self.manual_refresh = saved.manual_refresh;
         self.steps = saved
             .steps_per_param
             .map(|n| n.to_string())
@@ -995,12 +1030,47 @@ impl TicksState {
             min_tail_s: Some(super::tail::current_s()),
             steps_per_param: number(&self.steps),
             ranges: self.ranges.clone(),
+            manual_refresh: self.manual_refresh,
         }
     }
 
-    /// Report-derived numbers are stale; the next entry into the mode reloads them.
+    /// Report-derived numbers are stale; the next entry into the mode reloads them — unless
+    /// "recount on request only" holds the rows in force, which then only say they are behind.
     pub(in crate::analytics) fn mark_report_stale(&mut self) {
-        self.dirty = true;
+        if self.holds_on_request() {
+            self.report_behind = true;
+        } else {
+            self.dirty = true;
+        }
+    }
+
+    /// Whether "recount on request only" holds the rows in force against report moves and tape
+    /// filings: the switch is on and the rows on screen are the current scope's. A scope change
+    /// (a selection, a period, a filter) is never held — those rows describe nothing any more.
+    pub(in crate::analytics::tuner) fn holds_on_request(&self) -> bool {
+        self.manual_refresh && self.data.data().is_some() && self.rows_scope == Some(self.scope_rev)
+    }
+
+    /// Whether the held rows are behind the report or the tape store.
+    pub(in crate::analytics::tuner) fn behind(&self) -> bool {
+        self.report_behind || self.tape_behind
+    }
+
+    /// Settle a finished load against the report it read: a newer commit keeps the card owing a
+    /// catch-up — a reload when it is live, a "behind" mark when the switch holds it. A failed
+    /// read always owes one: it is a retry, not a report move.
+    ///
+    /// Args:
+    ///     stale: Whether the report moved while the load read (`refresh::report_result_is_stale`).
+    ///     failed: Whether the load failed.
+    pub(in crate::analytics::tuner) fn settle_reload(&mut self, stale: bool, failed: bool) {
+        self.report_behind = false;
+        if stale && !failed && self.holds_on_request() {
+            self.report_behind = true;
+            self.dirty = false;
+        } else {
+            self.dirty = stale || failed;
+        }
     }
 
     /// The card search may start only while no search already owns the lane.
@@ -1014,7 +1084,14 @@ impl TicksState {
     /// The scope changed: every row belongs to the previous scope. The fetch batch is the
     /// process's, not the scope's, and runs on; its answers land on rows by id where present.
     pub(in crate::analytics) fn invalidate(&mut self) {
+        // The rows on screen now belong to the previous scope: no write until the new scope's
+        // rows are published and judged (`write_scope_settled`).
+        self.scope_rev = self.scope_rev.wrapping_add(1);
         self.write_confirm = None;
+        // What the previous scope was behind on, and a search asked for over it, go with it.
+        self.report_behind = false;
+        self.tape_behind = false;
+        self.pending_search = None;
         self.retire_rows();
         // A running search and its last answer describe the previous scope's deals.
         self.stop_search("scope change");
@@ -1149,6 +1226,63 @@ impl TicksState {
     /// Whether the variant holds anything to write.
     pub(in crate::analytics::tuner) fn has_changes(&self) -> bool {
         !self.variant_changes().is_empty()
+    }
+
+    /// Record that a tape stage finished judging the rows in force: they are judged for the
+    /// scope they were published under, which a stage re-judging a previous scope's rows does
+    /// not change.
+    pub(in crate::analytics::tuner) fn mark_rows_judged(&mut self) {
+        self.judged_scope = self.rows_scope;
+    }
+
+    /// Stamp rows a report catch-up kept as they stand with the current scope. The skip that
+    /// keeps them holds only for a reload key equal to the one their tape stage settled, and two
+    /// equal keys publish the same rows (`signature.rs`): they ARE this scope's judged rows,
+    /// even when the scope revision moved since, say a shared-filter reload that matched the same
+    /// deals.
+    pub(in crate::analytics::tuner) fn adopt_resumed_rows(&mut self) {
+        self.rows_scope = Some(self.scope_rev);
+        self.judged_scope = Some(self.scope_rev);
+    }
+
+    /// Whether Save and Make a copy may take the variant for the current selection.
+    ///
+    /// A write sends the variant's own values to the selected strategies; neither the report's
+    /// newest rows nor the card's figures go into it. So a report that moves under the same
+    /// scope — a trade closing, an open position updating, faster on a live fleet than any
+    /// reload ends — leaves the gate open, and the reload's loading face or tape stage does not
+    /// close it either (issue #1332): a same-scope reload carries every row it already judged,
+    /// so the consent's warnings miss only the trades that closed since — the staleness the
+    /// issue accepts. What it guards is the scope: after the selection changes, the previous
+    /// strategy's rows and verdict stay on screen until the new scope's rows are published and
+    /// judged by their tape stage, and a running search is still writing into the variant.
+    ///
+    /// A re-replay of the same scope's rows — a station filing republishes them blank, a model
+    /// change re-judges them — does not close it either: a filing follows every newly closed
+    /// trade's tape, so on a busy fleet it would hold the buttons as the report did. The
+    /// consent says instead that its warnings may be incomplete ([`Self::rows_unjudged`]).
+    ///
+    /// Returns:
+    ///     `true` when the rows and KPI on screen are the current scope's, judged at least once,
+    ///     and no search runs.
+    pub(in crate::analytics::tuner) fn write_scope_settled(&self) -> bool {
+        self.data.data().is_some()
+            && self.kpi.data().is_some()
+            && self.rows_judged_for_scope()
+            && self.search_available()
+    }
+
+    /// Whether the rows in force were published for the current scope and a tape stage has
+    /// judged them at least once.
+    pub(in crate::analytics::tuner) fn rows_judged_for_scope(&self) -> bool {
+        self.rows_scope == Some(self.scope_rev) && self.judged_scope == Some(self.scope_rev)
+    }
+
+    /// Whether the rows in force are being judged afresh, so the warnings a write builds from
+    /// them can miss what the re-replay has not reached: rows republished without a verdict
+    /// under the current model (`judged_under`), or a tape stage still reading.
+    pub(in crate::analytics::tuner) fn rows_unjudged(&self) -> bool {
+        self.judged_under.is_none() || self.tape_reading
     }
 
     /// The replayable rows while they are too few to search ([`search::sample_floor`]): the
@@ -1345,6 +1479,11 @@ impl TicksState {
             && !data.rows.is_empty()
         {
             data.rebuild_row_index();
+        }
+        // Published rows carry the scope they were loaded for; a failure keeps whatever rows,
+        // and mark, stood before it.
+        if result.is_ok() {
+            self.rows_scope = Some(self.scope_rev);
         }
         let kpi = result.as_ref().map(|d| d.kpi.clone()).map_err(Clone::clone);
         self.kpi.apply_or_keep(kpi, keep_on_failure);

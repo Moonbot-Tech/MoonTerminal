@@ -381,6 +381,20 @@ impl AnalyticsView {
         self.visible_targets(workspace).count()
     }
 
+    /// The read-visible selected rows as strategy-list row keys (`strategyid@core_uid`) — the
+    /// same rows [`Self::visible_target_keys`] scopes a read to, in the shape the "Tuning"
+    /// column keys its counts by.
+    fn selected_row_keys(&self) -> std::collections::HashSet<String> {
+        let workspace = self.read_core_ids();
+        self.sel_strategy
+            .iter()
+            .chain(self.sel_extra.iter())
+            .filter(|(key, _)| strategy_selection_visible(key, workspace))
+            .filter(|(key, _)| parse_strat_key(key).is_some())
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     /// The passing rows as bare query identities — the shape both scoped reads need.
     fn visible_target_keys(&self, workspace: Option<&[u64]>) -> Vec<(i64, Option<u64>)> {
         self.visible_targets(workspace)
@@ -848,11 +862,18 @@ impl AnalyticsView {
     ///
     /// Stale results remain useful on screen while cards refresh, but must not supply a
     /// previous strategy's thresholds or coin lists to a write after selection changes.
+    ///
+    /// "Entry/Exit" is judged by scope, not by report freshness: its write sends the variant's
+    /// own values, so a report that moved under the same selection does not hold it back — on a
+    /// strategy that keeps trading, no reload ever ended on the generation it started with and
+    /// the buttons never lit (issue #1332). The other axes still wait for a settled read.
     pub(in crate::analytics::tuner) fn axis_write_ready(&self, kind: shared::TunerKind) -> bool {
-        if self.strategy_data.data().is_none() || self.strategy_dirty {
+        if self.strategy_data.data().is_none() {
             return false;
         }
         match kind {
+            shared::TunerKind::Ticks => self.ticks.write_scope_settled(),
+            _ if self.strategy_dirty => false,
             shared::TunerKind::Filter => fresh_tuner_data(&self.tuner.stats, self.tuner.dirty),
             shared::TunerKind::Time => {
                 fresh_tuner_data(&self.time_tuner.stats, self.time_tuner.dirty)
@@ -860,11 +881,6 @@ impl AnalyticsView {
             shared::TunerKind::Coins => {
                 fresh_tuner_data(&self.coins.stats, self.coins.dirty)
                     && fresh_tuner_data(&self.coins.kpi, self.coins.dirty)
-            }
-            shared::TunerKind::Ticks => {
-                fresh_tuner_data(&self.ticks.data, self.ticks.dirty)
-                    && fresh_tuner_data(&self.ticks.kpi, self.ticks.dirty)
-                    && !self.ticks.tape_reading
             }
         }
     }
@@ -1017,6 +1033,9 @@ fn retire_hidden_axis_reads(
         ticks.seq = ticks.seq.wrapping_add(1);
         ticks.tape_seq = ticks.tape_seq.wrapping_add(1);
         ticks.tape_reading = false;
+        // A search waiting for the retired catch-up was asked for over rows the user left;
+        // it is not started by whatever load lands after a return.
+        ticks.pending_search = None;
     }
     if tick_base || retired.contains(&ReadLane::TicksVariants) || tick_timer {
         ticks.var_seq = ticks.var_seq.wrapping_add(1);

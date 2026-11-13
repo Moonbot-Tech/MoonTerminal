@@ -762,3 +762,251 @@ fn a_landing_run_picks_its_note() {
         (Some(empty.clone()), Some(empty))
     );
 }
+
+/// Judge the published rows the way a finished tape stage does: their scope and the model.
+fn judge(state: &mut TicksState) {
+    state.mark_rows_judged();
+    state.judged_under = Some(moon_core::db::tuner::ticks::ModelSettings::default());
+}
+
+/// Issue #1332: a report that moves under the SAME selected strategy must not take Save and
+/// Make a copy away. The values a write sends are the variant's, already on screen; a live fleet
+/// moves the report faster than a reload ends, and gating on a settled reload kept the buttons
+/// off for as long as the strategy traded. Breaks when the gate goes back to the report's
+/// staleness, to the reload's `Loading` state or to its tape stage.
+#[test]
+fn a_report_reload_of_the_same_scope_keeps_the_write_gate_open() {
+    let mut state = TicksState::default();
+    assert!(!state.write_scope_settled(), "nothing loaded yet");
+    state.publish(Ok(TicksData::default()), false);
+    assert!(
+        !state.write_scope_settled(),
+        "rows published but not judged by their tape stage yet"
+    );
+    judge(&mut state);
+    assert!(state.write_scope_settled());
+
+    // A trade closes: the report moves and the card reloads the same scope.
+    state.mark_report_stale();
+    state.data.begin();
+    state.kpi.begin();
+    state.tape_reading = true;
+    assert!(
+        state.write_scope_settled(),
+        "a report reload of the same scope keeps the gate open"
+    );
+    state.publish(Ok(TicksData::default()), false);
+    assert!(
+        state.write_scope_settled(),
+        "the same scope's next rows keep the gate open through their tape stage"
+    );
+}
+
+/// A station filing republishes the same scope's rows blank and every newly closed trade's tape
+/// brings one, so the gate stays open through the re-replay; the consent says its warnings may
+/// be incomplete instead. Breaks when `judged_under` returns to the gate, or when the consent's
+/// warning list stops asking `rows_unjudged`.
+#[test]
+fn a_re_replay_of_the_same_scope_keeps_the_gate_and_flags_the_consent() {
+    let mut state = TicksState::default();
+    state.publish(Ok(TicksData::default()), false);
+    judge(&mut state);
+    assert!(state.write_scope_settled());
+    assert!(!state.rows_unjudged());
+    // A filing: `refresh_station_tape` forgets the model the rows were judged under.
+    state.judged_under = None;
+    assert!(state.write_scope_settled());
+    assert!(state.rows_unjudged());
+    judge(&mut state);
+    state.tape_reading = true;
+    assert!(state.rows_unjudged(), "a tape stage still reading");
+    let warns = include_str!("../variants.rs")
+        .split("fn ticks_write_warns(")
+        .nth(1)
+        .and_then(|tail| tail.split("\n    }").next())
+        .expect("the consent's warning list");
+    assert!(warns.contains("if self.ticks.rows_unjudged()"));
+}
+
+/// The reason the gate exists: after the selection changes, the card still shows the previous
+/// strategy's rows, and nothing may be written until the new scope's rows are published AND
+/// judged. A tape stage that re-judges the PREVIOUS rows (a model-settings change landing
+/// before the new load) must not open it. Breaks when the scope revision is dropped or when the
+/// judged mark follows the tape stage instead of the rows it judged.
+#[test]
+fn a_scope_change_closes_the_write_gate_until_its_own_rows_are_judged() {
+    let mut state = TicksState::default();
+    state.publish(Ok(TicksData::default()), false);
+    judge(&mut state);
+    assert!(state.write_scope_settled());
+
+    state.invalidate();
+    assert!(
+        !state.write_scope_settled(),
+        "the previous scope's rows are on screen"
+    );
+    judge(&mut state);
+    assert!(
+        !state.write_scope_settled(),
+        "re-judging the previous scope's rows proves nothing about the new scope"
+    );
+    state.publish(Ok(TicksData::default()), false);
+    assert!(
+        !state.write_scope_settled(),
+        "the new scope's rows are published, their tape is not judged yet"
+    );
+    judge(&mut state);
+    assert!(state.write_scope_settled());
+}
+
+/// A report catch-up that keeps the rows under an unchanged reload key keeps rows that ARE the
+/// current scope's, even when the scope revision moved since (a shared-filter reload matching
+/// the same deals); without the stamp the buttons stayed grey until the next trade. Breaks
+/// when the skip path stops adopting the rows.
+#[test]
+fn rows_kept_by_a_report_catch_up_are_the_current_scopes() {
+    let mut state = TicksState::default();
+    state.publish(Ok(TicksData::default()), false);
+    judge(&mut state);
+    state.invalidate();
+    assert!(!state.write_scope_settled());
+    state.adopt_resumed_rows();
+    assert!(state.write_scope_settled());
+    // The skip path is the one caller, and it stamps the rows it resumes.
+    assert!(
+        include_str!("../load.rs")
+            .contains("this.ticks.resume();\n                    this.ticks.adopt_resumed_rows();")
+    );
+}
+
+/// While a same-scope reload reads, the card stands in its last verdict, but the consent must
+/// judge the variant now in the column: a search that landed during the reload with a worse
+/// holdout must still carry its bold reason. Breaks when `ticks_begin_write` goes back to the
+/// stand-in verdict.
+#[test]
+fn the_consent_judges_the_current_variant_while_the_card_reloads() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData::default()));
+    state.tape_reading = true;
+    let mut worse = result();
+    worse.holdout.as_mut().unwrap().profit = 3.5;
+    worse.holdout_loses = true;
+    state
+        .variant
+        .insert("TakeProfit".to_string(), "1.5".to_string());
+    state.result_variant = state.variant_changes();
+    state.last_result = Some(worse);
+    let model = SummaryModel::from_state(&state, "fixture".into(), false);
+    assert!(model.loading, "precondition: the card reads tape");
+    assert_ne!(
+        model.verdict,
+        Verdict::DontApply(Why::HoldoutWorse(Against::Base)),
+        "precondition: the card stands in its last verdict"
+    );
+    let (verdict, sentence) = super::consent_verdict(&state, &model);
+    assert_eq!(
+        verdict,
+        Verdict::DontApply(Why::HoldoutWorse(Against::Base))
+    );
+    assert!(!sentence.is_empty());
+
+    // A hand edit since the search: the answer no longer speaks for the column.
+    state
+        .variant
+        .insert("TakeProfit".to_string(), "1.7".to_string());
+    let model = SummaryModel::from_state(&state, "fixture".into(), false);
+    assert_eq!(
+        super::consent_verdict(&state, &model).0,
+        Verdict::Unchecked(Unchecked::HandEdited)
+    );
+    // The write's consent is built from it, not from the card's stand-in.
+    let begin = include_str!("../summary.rs")
+        .split("fn ticks_begin_write(")
+        .nth(1)
+        .and_then(|tail| tail.split("\n    }").next())
+        .expect("the write's entry point");
+    assert!(begin.contains("consent_verdict(&self.ticks, &model)"));
+    assert!(!begin.contains("model.verdict"));
+}
+
+/// The Parameters header lights Save and Make a copy from the write gate alone, not from the
+/// card's loading face: a report reload of the same scope shows the scope's last verdict and
+/// keeps the buttons. Breaks when `!m.loading` returns to the header's condition.
+#[test]
+fn the_header_write_ignores_a_same_scope_reload() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.data.apply(Ok(TicksData::default()));
+    state.tape_reading = true;
+    state
+        .variant
+        .insert("MShotPrice".to_string(), "1.5".to_string());
+    let mut model = SummaryModel::from_state(&state, "fixture".into(), false);
+    assert!(model.loading, "precondition: the card reads tape");
+    model.write_enabled = true;
+    assert!(super::card::header_write_enabled(&model));
+    model.write_enabled = false;
+    assert!(!super::card::header_write_enabled(&model));
+}
+
+/// "Recount on request only" holds the rows of the current scope: a report move marks them
+/// behind instead of dirtying them, and a load that finished under a newer commit does the
+/// same. Switched off, or over a scope that changed, the card reloads as it always did, and a
+/// failed read still owes its retry. Breaks when the switch stops holding (the card reloads on
+/// every closed trade) or holds what it must not (a new scope, a failure).
+#[test]
+fn recount_on_request_holds_report_moves_of_the_current_scope_only() {
+    let mut state = TicksState::default();
+    state.publish(Ok(TicksData::default()), false);
+    judge(&mut state);
+    state.dirty = false;
+
+    state.mark_report_stale();
+    assert!(state.dirty, "the switch is off: a report move reloads");
+    assert!(!state.behind());
+
+    state.dirty = false;
+    state.manual_refresh = true;
+    state.mark_report_stale();
+    assert!(!state.dirty, "held: no reload");
+    assert!(state.behind(), "held: the card says it is behind");
+
+    state.settle_reload(true, false);
+    assert!(
+        !state.dirty && state.report_behind,
+        "a newer commit during the read is held"
+    );
+    state.settle_reload(false, false);
+    assert!(
+        !state.dirty && !state.report_behind,
+        "a read of the latest report catches up"
+    );
+    state.settle_reload(true, true);
+    assert!(state.dirty, "a failed read owes its retry");
+
+    state.dirty = false;
+    state.report_behind = true;
+    state.tape_behind = true;
+    state.pending_search = Some(None);
+    state.invalidate();
+    assert!(
+        !state.behind() && state.pending_search.is_none(),
+        "a scope change drops what the previous scope was behind on"
+    );
+    state.mark_report_stale();
+    assert!(state.dirty, "the previous scope's rows are never held");
+}
+
+/// The switch survives a restart through the axis' persisted settings. Breaks when `saved` or
+/// `restore` leaves it out.
+#[test]
+fn recount_on_request_is_persisted_with_the_axis() {
+    let mut state = TicksState::default();
+    state.manual_refresh = true;
+    let saved = state.saved();
+    assert!(saved.manual_refresh);
+    let mut back = TicksState::default();
+    back.restore(&saved);
+    assert!(back.manual_refresh);
+}

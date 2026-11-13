@@ -105,6 +105,16 @@ pub(super) fn passes_of(text: &str) -> usize {
 
 /// Explain why the Search controls are waiting, deferring sample refusal until tape answers.
 fn search_status_tip(state: &super::state::TicksState) -> Option<String> {
+    // The selected strategies' deals are not read and judged yet: the buttons wait for them.
+    // Only while a read is under way — a failed one is the card's own error, not "loading".
+    if !state.rows_judged_for_scope()
+        && !matches!(
+            state.data,
+            crate::load_state::LoadState::Failed(_) | crate::load_state::LoadState::NotReady
+        )
+    {
+        return Some(t!("analytics.ticks.pick.loading").to_string());
+    }
     if state.tape_reading {
         return Some(t!("analytics.ticks.fetch_reading").to_string());
     }
@@ -475,7 +485,9 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.ticks.search_available() {
+        // A click from a frame drawn before the selection changed: the new scope's deals are
+        // not read and judged yet, so there is nothing to search.
+        if !self.ticks.search_available() || !self.ticks.rows_judged_for_scope() {
             return;
         }
         if !self.ticks_confirm_long_search(only, window, cx) {
@@ -512,6 +524,47 @@ impl AnalyticsView {
     /// every other held — at the strategies' value, or at В1's where В1 changes it. A searched
     /// field starts from the strategies whatever В1 holds for it.
     pub(super) fn ticks_start_search(
+        &mut self,
+        only: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        // The scope's deals must be read and judged: the confirmation dialogs re-enter here, and
+        // the selection may have changed while one was open.
+        if !self.ticks.search_available() || !self.ticks.rows_judged_for_scope() {
+            return;
+        }
+        // A catch-up asked for by an earlier click is still reading: this click replaces its
+        // request rather than searching the rows the catch-up is about to replace.
+        if self.ticks.pending_search.is_some() {
+            self.ticks.pending_search = Some(only);
+            return;
+        }
+        // "Recount on request only": a reload of the held rows already reading (a Refresh, a
+        // Save, the tail box) is a catch-up of its own, and searching now would take the rows it
+        // is about to replace; a card behind the newest trades or tape asks for one. Either way
+        // the search starts once the rows are judged (`start_pending_search`).
+        if self.ticks.holds_on_request() {
+            let reading = self.ticks.tape_reading
+                || matches!(
+                    self.ticks.data,
+                    crate::load_state::LoadState::Loading { .. }
+                );
+            if reading || self.ticks.behind() {
+                self.ticks.pending_search = Some(only);
+                if !reading {
+                    self.ticks_catch_up(cx);
+                }
+                cx.notify();
+                return;
+            }
+        }
+        self.ticks_start_search_now(only, cx);
+    }
+
+    /// Start the search over the rows in force, with no catch-up first: the click's path once it
+    /// is not behind, and the catch-up's own end (`start_pending_search`), which must not chase
+    /// a trade that closed while it read — on a live fleet it would never start.
+    pub(super) fn ticks_start_search_now(
         &mut self,
         only: Option<&'static str>,
         cx: &mut Context<Self>,
@@ -852,6 +905,11 @@ impl AnalyticsView {
         warns.extend(self.ticks_unguarded_warning(targets, changes, cx));
         warns.extend(self.ticks_unmodelled_warns(targets, cx));
         warns.extend(self.ticks_gate_warnings(Self::changed_groups(changes)));
+        // Save stays available while the card re-replays the same scope (issue #1332); the
+        // warnings above are then built over rows not all judged yet, and the consent says so.
+        if self.ticks.rows_unjudged() {
+            warns.push(t!("analytics.ticks.sum.confirm_unjudged").to_string());
+        }
         warns
     }
 

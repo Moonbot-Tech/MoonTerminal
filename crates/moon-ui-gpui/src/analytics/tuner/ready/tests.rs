@@ -111,6 +111,7 @@ fn key(scope_gen: u64, report_gen: u64) -> ReadyKey {
         refusal_revision: 0,
         addresses_rev: 0,
         calibration_rev: 0,
+        selection: 0,
     }
 }
 
@@ -1219,4 +1220,120 @@ fn a_calibration_move_recounts_the_cores_groups() {
         ..key(1, 1)
     };
     assert!(!pass.stands(&catalog, stale.as_ref()), "an address landed");
+}
+
+/// "Recount on request only": once a pass has counted a scope, a report, tape or refusal move
+/// recounts nothing; a new scope, a core's catalog, a failed pass and a recount asked for by
+/// hand still do. Breaks when the switch stops holding the column (it then recounts the whole
+/// list on every closed trade) or when it holds what the card cannot say it is behind on (the
+/// column would describe the previous scope, or stay unread with no Refresh).
+#[test]
+fn recount_on_request_holds_the_column_only_against_moves_of_the_same_scope() {
+    let mut pass = ReadyPass::default();
+    let first = key(1, 1);
+    assert!(
+        !pass.held_on_request(true, &first),
+        "no pass has counted the scope yet"
+    );
+    let _ = pass.begin(first, Instant::now());
+    let mut moved = key(1, 2);
+    moved.tape_rev = 7;
+    moved.refusal_revision = 3;
+    assert!(pass.held_on_request(true, &moved), "a report or tape move");
+    assert!(!pass.held_on_request(false, &moved), "the switch is off");
+    assert!(!pass.held_on_request(true, &key(2, 2)), "a new scope");
+    let mut picked = moved;
+    picked.selection = super::selection_signature(&[(7, Some(1))]);
+    assert!(
+        !pass.held_on_request(true, &picked),
+        "another selection is counted afresh"
+    );
+    assert_eq!(
+        super::selection_signature(&[(7, Some(1)), (3, None)]),
+        super::selection_signature(&[(3, None), (7, Some(1))]),
+        "the order rows were picked in is not a new selection"
+    );
+    assert_ne!(
+        super::selection_signature(&[]),
+        0,
+        "0 stands for the whole list, which a selection never is"
+    );
+    let mut catalog = moved;
+    catalog.addresses_rev = 1;
+    assert!(
+        !pass.held_on_request(true, &catalog),
+        "a core's catalog resolves rows the pass could not place"
+    );
+    pass.run = ReadyRun::Failed {
+        fail: moon_core::db::ReadFail::NotReady,
+        retrying: false,
+    };
+    assert!(
+        !pass.held_on_request(true, &moved),
+        "a failed pass holds nothing"
+    );
+    pass.run = ReadyRun::Done;
+    pass.recount_asked = true;
+    assert!(
+        !pass.held_on_request(true, &moved),
+        "a recount asked for by hand"
+    );
+}
+
+/// Counting the selected strategies alone, a row without a count was never examined: it reads
+/// pending, never "no tape", and the "Tuning" filter — which would hide every row still to be
+/// picked — is off. Nothing selected retires every count and the pass, once. Breaks when an
+/// uncounted row is judged again, or when the filter returns under the switch.
+#[test]
+fn selective_counts_judge_no_row_they_did_not_count() {
+    let mut pass = ReadyPass::default();
+    let (_seq, _progress) = pass.begin(key(1, 1), Instant::now());
+    pass.run = ReadyRun::Done;
+    assert_eq!(pass.view_missing(), ReadyClass::NoTape, "a whole-list pass");
+    assert_eq!(pass.filter(true), ReadyFilter::Can);
+
+    pass.selective = true;
+    assert_eq!(pass.view_missing(), ReadyClass::Pending);
+    assert_eq!(pass.class("9@9"), ReadyClass::Pending);
+    assert_eq!(pass.filter(true), ReadyFilter::All);
+    assert!(pass.empty_face(pass.filter(true)).is_none());
+
+    // A selected strategy the pass found no trade for was examined: the card's empty sample.
+    let (seq, _progress) = pass.begin(key(1, 2), Instant::now());
+    pass.counted_selection = ["5@1".to_string()].into();
+    let _ = pass.land(seq, Ok(Some(HashMap::new())));
+    assert_eq!(pass.class("5@1"), ReadyClass::NoTape);
+    assert_eq!(pass.class("9@9"), ReadyClass::Pending, "never selected");
+
+    let generation = pass.generation;
+    pass.retire_counts();
+    assert!(matches!(pass.run, ReadyRun::Idle));
+    assert!(pass.ran.is_none() && pass.launched.is_none() && pass.counts.is_empty());
+    assert!(pass.counted_selection.is_empty());
+    assert_ne!(pass.generation, generation, "the list re-sorts once");
+    let generation = pass.generation;
+    pass.retire_counts();
+    assert_eq!(pass.generation, generation, "and not on every render after");
+}
+
+/// The two guards that keep the whole list from being replayed under the switch: none selected
+/// arms nothing, and a pass whose selection emptied meanwhile reads nothing — an empty strategy
+/// scope reads every strategy. Breaks when either guard is dropped.
+#[test]
+fn recount_on_request_never_reads_the_whole_list() {
+    let source = include_str!("../ready.rs");
+    let ensure = source
+        .split("fn ensure_ready_pass(")
+        .nth(1)
+        .expect("ensure_ready_pass");
+    assert!(ensure.contains(
+        "self.ticks.manual_refresh && self.visible_target_count(self.read_core_ids()) == 0"
+    ));
+    assert!(ensure.contains("self.ready.retire_counts();"));
+    let run = source
+        .split("fn run_ready_pass(")
+        .nth(1)
+        .expect("run_ready_pass");
+    assert!(run.contains("self.tuner_query()"));
+    assert!(run.contains("if self.ticks.manual_refresh && q.strategies.is_empty()"));
 }

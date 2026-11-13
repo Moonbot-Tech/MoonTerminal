@@ -14,7 +14,10 @@ use super::super::super::STRAT_MODES;
 use super::super::super::StratMode;
 use super::super::super::auto_picks::{AutoClass, AutoFilter};
 use super::super::super::ready::{ReadyClass, ReadyFilter};
-use super::super::{auto_filter_el, auto_filter_on_axis, ready_filter_el, ready_filter_on_axis};
+use super::super::{
+    auto_filter_el, auto_filter_on_axis, manual_refresh_on_axis, ready_filter_el,
+    ready_filter_on_axis,
+};
 use super::{
     auto_cell_el, auto_cell_text, auto_computing_el, auto_empty_el, progress_row, ready_cell_el,
     ready_cell_text, ready_computing_el, ready_empty_el, strat_list_frame,
@@ -1416,7 +1419,9 @@ fn numeric_headers_fit_filter_markers_and_sort_arrows(cx: &mut gpui::TestAppCont
 
 /// The strategy list's filter bar as `strat_filter_bar` lays it out on one axis: the search
 /// box takes the rest, then the type and coin-list pickers, the auto-pick filter on "By coin"
-/// only, the enabled-only toggle and the column selector.
+/// only, the "Tuning" filter on "Entry/Exit" only, the enabled-only toggle, "Recount on
+/// request only" on "Entry/Exit" only — both drawn, as with the switch off — and the column
+/// selector.
 struct ToolbarProbe {
     mode: StratMode,
     filter: AutoFilter,
@@ -1464,6 +1469,7 @@ impl Render for ToolbarProbe {
                         .label(t!("analytics.strat.active_only").to_string()),
                 ),
             )
+            .children(manual_refresh_on_axis(self.mode, false, Rc::new(|_, _| {})))
             .child(fixed("probe-cols", 30.0, cx))
     }
 }
@@ -1515,7 +1521,17 @@ fn the_auto_filter_is_in_the_bar_on_by_coin_only(cx: &mut gpui::TestAppContext) 
                 if ready.is_some() {
                     row.push("an-strat-ready-tip");
                 }
-                row.extend(["probe-active", "probe-cols"]);
+                row.push("probe-active");
+                let manual = visual.debug_bounds("an-strat-manual-refresh-tip");
+                assert_eq!(
+                    manual.is_some(),
+                    mode == StratMode::Ticks,
+                    "recount-on-request toggle presence ({at})"
+                );
+                if manual.is_some() {
+                    row.push("an-strat-manual-refresh-tip");
+                }
+                row.push("probe-cols");
                 let mut prev: Option<gpui::Bounds<gpui::Pixels>> = None;
                 for sel in row {
                     let b = visual

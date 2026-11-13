@@ -758,6 +758,7 @@ fn model(face: usize) -> SummaryModel {
             warns: vec![open],
         }),
         write_error: None,
+        behind: false,
     }
 }
 
@@ -783,6 +784,7 @@ impl Render for Probe {
             reset: noop.clone(),
             stop: noop.clone(),
             details: noop.clone(),
+            refresh: noop.clone(),
         };
         let pick_acts = PickBarActs {
             one: noop.clone(),

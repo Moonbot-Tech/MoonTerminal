@@ -169,6 +169,10 @@ impl AnalyticsView {
     ) -> AnyElement {
         let running = matches!(self.ticks.sugg, SuggState::Running { .. });
         let too_few = self.ticks.search_too_few().is_some();
+        // Until the selected strategies' deals are read and judged by their tape stage there is
+        // no sample to search, and "too few" cannot say so yet; a reload of the same scope keeps
+        // the buttons (`rows_judged_for_scope`).
+        let loaded = self.ticks.rows_judged_for_scope();
         let placeholder = super::variants::DEFAULT_RESTARTS.to_string();
         let input = self.shell_cfg_input(
             TunerKind::Ticks,
@@ -183,8 +187,8 @@ impl AnalyticsView {
             all_tip.push_str(&format!("\n\n{estimate}"));
         }
         let model = PickBarModel {
-            one_enabled: !running && !too_few && self.ticks.sel_field.is_some(),
-            all_enabled: !running && !too_few,
+            one_enabled: loaded && !running && !too_few && self.ticks.sel_field.is_some(),
+            all_enabled: loaded && !running && !too_few,
             one_tip,
             all_tip,
             all_label: super::estimate::pick_all_label(self.ticks_estimate_time_text().as_deref()),
@@ -708,6 +712,30 @@ impl AnalyticsView {
             self.persist_ticks_settings(cx);
             self.ticks_replay_again(cx);
         }
+    }
+
+    /// Switch "recount on request only" (`TicksState::manual_refresh`) and persist it.
+    ///
+    /// Switched off, what the held card is behind on is caught up at once, through the report
+    /// refresh gate: that path keeps a running search going, where a reload by hand would stop
+    /// it. The station's filings need nothing here — their generations were left unread, so the
+    /// card's next paint reloads for them (`refresh_station_tape`), and the strategy list's
+    /// next render recounts its "Tuning" column for whatever moved.
+    pub(in crate::analytics::tuner) fn ticks_set_manual_refresh(
+        &mut self,
+        on: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.ticks.manual_refresh = on;
+        self.persist_ticks_settings(cx);
+        if !on {
+            if std::mem::take(&mut self.ticks.report_behind) {
+                self.ticks.dirty = true;
+            }
+            self.ticks.tape_behind = false;
+            self.request_axis_if_stale(self.strat_mode, cx);
+        }
+        cx.notify();
     }
 
     /// Put in force which kinds owe their entry order's life, as the ticks and В1 now say

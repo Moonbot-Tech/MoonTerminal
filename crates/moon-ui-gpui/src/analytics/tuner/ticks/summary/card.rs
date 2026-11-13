@@ -29,6 +29,8 @@ pub(in crate::analytics::tuner) struct SummaryActs {
     pub reset: Act,
     pub stop: Act,
     pub details: Act,
+    /// Catch a card held by "recount on request only" up with what it is behind on.
+    pub refresh: Act,
 }
 
 /// A wrapping prose line has no fixed height, so translations can grow vertically.
@@ -352,6 +354,34 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                 .child(tag)
                 .child(prose(m.sentence.clone(), p.text, cx).flex_1()),
         );
+    if m.behind {
+        // "Recount on request only": the card stands as last read; Refresh catches it up. Off
+        // while a search runs — the reload would stop it.
+        let running = matches!(m.verdict, Verdict::Running { .. });
+        body = body.child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    prose(
+                        t!("analytics.ticks.sum.behind").to_string(),
+                        p.text_muted,
+                        cx,
+                    )
+                    .flex_1(),
+                )
+                .child(button(
+                    "an-ticks-sum-refresh",
+                    "analytics.ticks.sum.refresh",
+                    MoonButtonVariant::Soft,
+                    !running,
+                    acts.refresh.clone(),
+                    cx,
+                )),
+        );
+    }
     if let Verdict::Running {
         done,
         total,
@@ -599,6 +629,16 @@ pub(in crate::analytics::tuner) fn summary_card_el(
         .into_any_element()
 }
 
+/// Whether the header lights Save and Make a copy.
+///
+/// The card's loading face is left out on purpose: a reload of the same scope shows the scope's
+/// last verdict and does not change what a write sends, and a reload follows every report move
+/// on a live fleet (issue #1332). A scope change is already refused by `write_enabled`
+/// (`TicksState::write_scope_settled`); a running search still holds the buttons.
+pub(super) fn header_write_enabled(m: &SummaryModel) -> bool {
+    m.write_enabled && m.can_reset && !matches!(m.verdict, Verdict::Running { .. })
+}
+
 /// Put Copy and Save in the shared header without changing their guarded consent callbacks.
 pub(in crate::analytics::tuner) fn parameters_header(
     m: &SummaryModel,
@@ -611,10 +651,7 @@ pub(in crate::analytics::tuner) fn parameters_header(
     };
     let write = crate::analytics::tuner::shell::ToolbarWrite {
         changed_coins: 0,
-        enabled: m.write_enabled
-            && m.can_reset
-            && !m.loading
-            && !matches!(m.verdict, Verdict::Running { .. }),
+        enabled: header_write_enabled(m),
         copy: m.copy_visible,
         dirty: m.can_reset,
     };
