@@ -13,6 +13,8 @@
 mod actions;
 /// Its histogram of the selected field.
 mod hist;
+/// What a save may write onto a target, given the strategy schema of its core.
+pub(in crate::analytics::tuner) mod schema_fit;
 /// Its own state: the threshold grid, the staged ignore flags, the suggestion settings.
 pub(in crate::analytics::tuner) mod state;
 /// What a save wakes besides the bounds it writes.
@@ -1480,7 +1482,8 @@ fn changes_for_kind(changes: &[(String, String)], kind: Option<&str>) -> Vec<(St
         .collect()
 }
 
-/// Per-target change lists, with Detect parameters removed from every non-Drops target.
+/// Per-target change lists, with Detect parameters removed from every non-Drops target and the
+/// thresholds a target's core cannot store removed from that target ([`schema_fit`]).
 ///
 /// When every target receives the same list, that list is the shared payload and the second
 /// value is `None`. A mixed selection has no shared list: the confirmation dialog draws the
@@ -1491,16 +1494,25 @@ fn changes_for_kind(changes: &[(String, String)], kind: Option<&str>) -> Vec<(St
 /// Args:
 ///     changes: Shared edits before the kind filter.
 ///     kinds: One kind per target, aligned with the target list. `None` is not Drops.
+///     shown: The fields each target's schema shows ([`schema_fit::shown_fields`]), aligned with
+///         the target list; a missing or `None` entry keeps every field.
+///     staged: The subheader toggles the user staged, which a removed threshold never takes back.
 ///
 /// Returns:
 ///     The shared payload (empty when the targets differ), and per-target lists when they differ.
 fn changes_by_target(
     changes: &[(String, String)],
     kinds: &[Option<&str>],
+    shown: &[Option<std::collections::HashSet<String>>],
+    staged: &HashMap<&'static str, bool>,
 ) -> (Vec<(String, String)>, Option<Vec<Vec<(String, String)>>>) {
     let tailored: Vec<Vec<(String, String)>> = kinds
         .iter()
-        .map(|kind| changes_for_kind(changes, *kind))
+        .enumerate()
+        .map(|(i, kind)| {
+            let shown = shown.get(i).and_then(Option::as_ref);
+            schema_fit::fit_to_schema(&changes_for_kind(changes, *kind), shown, staged)
+        })
         .collect();
     let uniform = tailored.windows(2).all(|pair| pair[0] == pair[1]);
     if uniform {

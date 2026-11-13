@@ -588,6 +588,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} op."
 analytics.write_failed_title: "La escritura no se realizó"
 analytics.write_failed: "No se escribió nada — el cambio sigue en el panel, reinténtelo. %{err}"
 analytics.write_failed_stale: "ninguna de las estrategias seleccionadas sigue en su núcleo (omitidas: %{n})"
+analytics.save_not_storable: "los núcleos de las estrategias seleccionadas no guardan estos campos (por ejemplo, apalancamiento y precio de marca en spot), así que no hay nada que escribir"
 analytics.write_failed_formula_stale: "No se enviaron los cambios: la fórmula EMA actual de un destino ya no contiene el umbral editado. Actualiza las estrategias e inténtalo de nuevo."
 analytics.write_partial: "Algunos núcleos no aceptaron la escritura: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /

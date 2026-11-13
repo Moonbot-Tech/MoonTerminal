@@ -806,3 +806,52 @@ fn schema_kind_names_hide_only_chart_wall() {
     assert_eq!(schema_kind_name(6, "MoonShot"), "MoonShot");
     assert_eq!(schema_kind_name(2, "DropsDetection"), "DropsDetection");
 }
+
+/// A spot core's schema has no leverage or mark-price bounds, and a TopMarket strategy no
+/// mark-price bounds on any core. Sent anyway, such a name is missing from the echo and moonproto
+/// resolves the whole strategy `Adjusted` (#1160), so the edit leaves it out — and keeps a field
+/// spelled the grid's way under the schema's own spelling, which the writer compares with `==`.
+#[test]
+fn an_edit_sends_only_the_fields_the_schema_shows_for_the_kind() {
+    let moonshot = StrategyKind::MOON_SHOT.ordinal();
+    let top = StrategyKind::TOP_MARKET.ordinal();
+    let spot = vec![
+        known(
+            "IgnoreBase",
+            StrategyFieldType::Bool,
+            None,
+            &[moonshot, top],
+        ),
+        known(
+            "BinancePriceBug",
+            StrategyFieldType::Double,
+            None,
+            &[moonshot, top],
+        ),
+        known("MarkPriceMin", StrategyFieldType::Double, None, &[moonshot]),
+    ];
+    let changes: Vec<(String, String)> = [
+        ("MaxLeverage", "0"),
+        ("binancepricebug", "1.5"),
+        ("MarkPriceMin", "0"),
+        ("IgnoreBase", "NO"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+
+    let (kept, dropped) = storable_known(&spot, StrategyKind::MOON_SHOT, &changes);
+    assert_eq!(
+        kept,
+        vec![
+            ("BinancePriceBug".to_string(), "1.5"),
+            ("MarkPriceMin".to_string(), "0"),
+            ("IgnoreBase".to_string(), "NO"),
+        ]
+    );
+    assert_eq!(dropped, vec!["MaxLeverage"]);
+
+    let (kept, dropped) = storable_known(&spot, StrategyKind::TOP_MARKET, &changes);
+    assert_eq!(kept.len(), 2);
+    assert_eq!(dropped, vec!["MaxLeverage", "MarkPriceMin"]);
+}

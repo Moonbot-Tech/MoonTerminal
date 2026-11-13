@@ -586,6 +586,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} tr."
 analytics.write_failed_title: "The write did not go through"
 analytics.write_failed: "Nothing was written — the edit is kept in the panel, try again. %{err}"
 analytics.write_failed_stale: "none of the selected strategies is on its core any more (skipped: %{n})"
+analytics.save_not_storable: "the selected strategies' cores do not store these fields (leverage and mark price on spot, for example), so there is nothing to write"
 analytics.write_failed_formula_stale: "Changes were not sent: a target's current EMA formula no longer exposes an edited threshold slot. Reload the strategies and try again."
 analytics.write_partial: "Some cores did not accept the write: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /

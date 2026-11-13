@@ -471,7 +471,9 @@ pub enum CoreCmd {
     /// name to string per strategy. All edits for the core must travel in one command: the feed
     /// clones the full snapshot, patches every listed strategy, and sends one
     /// `sync_local_strategies`. Separate commands are unsafe because each sync replaces the full
-    /// set, so the second sync would overwrite the first edit.
+    /// set, so the second sync would overwrite the first edit. A name the core's schema does not
+    /// show for the strategy's kind is not sent (`strategies::storable_edits`, #1160): the core
+    /// could not store it, and its absence from the echo would resolve the edit `Adjusted`.
     EditStrategyFields {
         edits: Vec<(u64, Vec<(String, String)>)>,
         /// Request a standing MoonShot BUY refresh with this submission only.

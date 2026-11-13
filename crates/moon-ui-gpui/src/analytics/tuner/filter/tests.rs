@@ -6,6 +6,8 @@
 use super::{
     changes_by_target, changes_for_kind, changes_remain, drops_only_scope, master_bit, offer_field,
 };
+use std::collections::HashMap;
+
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::tuner::FieldClass;
 
@@ -111,8 +113,12 @@ fn save_keeps_a_detect_parameter_only_for_a_drops_strategy() {
     assert_eq!(changes_for_kind(&changes, Some("Drops")), changes);
     assert_eq!(changes_for_kind(&changes, Some(" drops ")), changes);
 
-    let (preview, per_target) =
-        changes_by_target(&changes, &[Some("DropsDetection"), Some("MoonShot")]);
+    let (preview, per_target) = changes_by_target(
+        &changes,
+        &[Some("DropsDetection"), Some("MoonShot")],
+        &[],
+        &HashMap::new(),
+    );
     assert!(
         preview.is_empty(),
         "a mixed selection has no shared list: the dialog would show it on every target"
@@ -122,21 +128,30 @@ fn save_keeps_a_detect_parameter_only_for_a_drops_strategy() {
     assert_eq!(per_target[1], kept);
     assert!(changes_remain(&preview, Some(&per_target)));
 
-    let (preview, per_target) =
-        changes_by_target(&changes, &[Some("Drops"), Some("DropsDetection")]);
+    let (preview, per_target) = changes_by_target(
+        &changes,
+        &[Some("Drops"), Some("DropsDetection")],
+        &[],
+        &HashMap::new(),
+    );
     assert!(
         per_target.is_none(),
         "identical lists stay on the shared payload"
     );
     assert_eq!(preview, changes);
 
-    let (preview, per_target) = changes_by_target(&changes, &[Some("MoonShot")]);
+    let (preview, per_target) =
+        changes_by_target(&changes, &[Some("MoonShot")], &[], &HashMap::new());
     assert!(per_target.is_none());
     assert_eq!(preview, kept);
 
     let only_detect = vec![("DropsPriceDelta".to_string(), "3".to_string())];
-    let (preview, per_target) =
-        changes_by_target(&only_detect, &[Some("MoonShot"), Some("PumpDetection")]);
+    let (preview, per_target) = changes_by_target(
+        &only_detect,
+        &[Some("MoonShot"), Some("PumpDetection")],
+        &[],
+        &HashMap::new(),
+    );
     assert!(per_target.is_none());
     assert!(preview.is_empty());
     assert!(!changes_remain(&preview, per_target.as_deref()));
@@ -197,5 +212,48 @@ fn the_fields_grid_skips_a_field_the_scope_does_not_offer() {
     assert!(
         body.contains("all_mapped_enabled(drops_only)"),
         "the master tick must use the same scope the rows do"
+    );
+}
+
+/// A bulk save over a futures and a spot strategy (#1160): the spot target loses the leverage
+/// bound and the `IgnoreBase` it alone cleared, the futures target keeps both, so the targets
+/// no longer share one list. Breakage this pins: `changes_by_target` skipping the schema fit, or
+/// fitting before the per-target split and collapsing both lists into the futures one.
+#[test]
+fn a_mixed_venue_save_tailors_each_target_to_its_schema() {
+    let changes: Vec<(String, String)> = [
+        ("MaxLeverage", "20"),
+        ("BinancePriceBug", "1.5"),
+        ("IgnoreBase", "NO"),
+        ("IgnorePing", "NO"),
+        ("IgnoreFilters", "NO"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    let schema = |names: &[&str]| -> Option<std::collections::HashSet<String>> {
+        Some(names.iter().map(|n| n.to_ascii_lowercase()).collect())
+    };
+    let flags = [
+        "IgnoreBase",
+        "IgnorePing",
+        "IgnoreFilters",
+        "BinancePriceBug",
+    ];
+    let futures = schema(&[&flags[..], &["MaxLeverage"]].concat());
+    let spot = schema(&flags);
+    let (preview, per_target) = changes_by_target(
+        &changes,
+        &[Some("MoonShot"), Some("MoonShot")],
+        &[futures, spot],
+        &HashMap::new(),
+    );
+    assert!(preview.is_empty());
+    let per_target = per_target.expect("the two venues differ");
+    assert_eq!(per_target[0], changes);
+    let spot_keys: Vec<&str> = per_target[1].iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(
+        spot_keys,
+        ["BinancePriceBug", "IgnorePing", "IgnoreFilters"]
     );
 }

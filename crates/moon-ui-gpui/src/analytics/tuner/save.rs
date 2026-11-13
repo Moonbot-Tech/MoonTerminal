@@ -634,9 +634,17 @@ impl AnalyticsView {
             let taken: std::collections::HashSet<String> =
                 cd.strategies.iter().map(|r| r.name.clone()).collect();
             let name = unique_name(&taken, &desired);
+            // This core's own schema decides what the copy carries (#1160): a Classic target on
+            // every core reaches spot and futures copies alike.
+            let shown = super::filter::schema_fit::shown_fields([(cd.schema.as_ref(), Some(row))]);
+            let edits = super::filter::schema_fit::fit_to_schema(
+                &dlg.changes,
+                shown.as_ref(),
+                &self.tuner.staged_ignore,
+            );
             let Some(mut fields) = copy_target_fields(
                 &row.fields,
-                &dlg.changes,
+                &edits,
                 dlg.authority.producer.formula_identity(),
             ) else {
                 formula_stale = true;
@@ -821,6 +829,26 @@ impl AnalyticsView {
                     // A Classic aggregate target with no live copies retains the legacy skipped
                     // count; concrete stale targets already refused the whole operation above.
                     let skipped = resolved_cores.iter().filter(|cores| cores.is_empty()).count();
+                    // What each core can store of each target (#1160). A target on every core of
+                    // its strategy reaches spot and futures copies alike, and only here is the
+                    // core of a payload known: a spot copy must not get the leverage and mark
+                    // bounds, nor the ignore flags only they cleared.
+                    let staged = this.tuner.staged_ignore.clone();
+                    let shown: HashMap<(i64, u64), Option<std::collections::HashSet<String>>> = {
+                        let store = this.backend.read(cx).session.store();
+                        targets
+                            .iter()
+                            .zip(resolved_cores.iter())
+                            .flat_map(|(t, cores)| cores.iter().map(move |c| (t.sid, *c)))
+                            .map(|(sid, core)| {
+                                let copy = store.core(core).map(|cd| {
+                                    let row = cd.strategies.iter().find(|r| r.id == sid as u64);
+                                    (cd.schema.as_ref(), row)
+                                });
+                                ((sid, core), super::filter::schema_fit::shown_fields(copy))
+                            })
+                            .collect()
+                    };
                     for (i, (t, cores)) in targets.iter().zip(resolved_cores).enumerate() {
                         // Each target's OWN value when the axis supplied one — the coin
                         // lists differ per strategy, and one shared value would copy the
@@ -856,6 +884,17 @@ impl AnalyticsView {
                                 this.set_write_error(t!("analytics.write_failed_formula_stale").to_string(), cx);
                                 return false;
                             };
+                            let payload = super::filter::schema_fit::fit_to_schema(
+                                &payload,
+                                shown.get(&(t.sid, c)).and_then(Option::as_ref),
+                                &staged,
+                            );
+                            // Nothing this copy can store: sent empty, the feed would change
+                            // nothing and the watch would wait out its ceiling for a reply that
+                            // never comes.
+                            if payload.is_empty() {
+                                continue;
+                            }
                             by_core
                                 .entry(c)
                                 .or_default()
@@ -909,16 +948,20 @@ impl AnalyticsView {
                          skipped {skipped}",
                         targets.len()
                     );
-                    // NOTHING left the terminal — every core refused, or every target was
-                    // filtered out as stale. Reloading now would put the strategies' current
+                    // NOTHING left the terminal — every core refused, every target was filtered
+                    // out as stale, or no core could store any of it. Reloading now would put the strategies' current
                     // values back over the pending edit, which is precisely what a SUCCESSFUL
                     // write looks like: the user would be shown a saved-looking panel with
                     // their change silently discarded. Keep the edit, say what happened.
                     if sent_cores == 0 {
-                        let detail = if failed.is_empty() {
+                        // A third cause since #1160: every payload fitted to empty, because no
+                        // core reached can store what the save wrote.
+                        let detail = if !failed.is_empty() {
+                            failed.join("; ")
+                        } else if skipped > 0 {
                             t!("analytics.write_failed_stale", n = skipped).to_string()
                         } else {
-                            failed.join("; ")
+                            t!("analytics.save_not_storable").to_string()
                         };
                         this.set_write_error(
                             t!("analytics.write_failed", err = detail).to_string(),

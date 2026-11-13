@@ -588,6 +588,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} op."
 analytics.write_failed_title: "A gravação não passou"
 analytics.write_failed: "Nada foi gravado — a edição fica no painel, tente de novo. %{err}"
 analytics.write_failed_stale: "nenhuma das estratégias selecionadas ainda está no núcleo (puladas: %{n})"
+analytics.save_not_storable: "os núcleos das estratégias selecionadas não guardam estes campos (por exemplo, alavancagem e preço de marcação no spot), então não há nada a gravar"
 analytics.write_failed_formula_stale: "As alterações não foram enviadas: a fórmula EMA atual de um destino já não contém o limiar editado. Atualize as estratégias e tente novamente."
 analytics.write_partial: "Alguns núcleos não aceitaram a gravação: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /

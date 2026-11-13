@@ -13,7 +13,7 @@ use super::shared_config::SharedConfigSequence;
 use super::telegram;
 use crate::config::ServerConfig;
 use crate::feed::assets::to_exchange_kind;
-use crate::feed::strategies::{fields_from_text, fv_from_str, strat_kind_name};
+use crate::feed::strategies::{fields_from_text, fv_from_str, storable_edits, strat_kind_name};
 use crate::feed::{
     CoreCmd, CoreConfigEditEvent, FeedMsg, FeedTx, LatestMarketRole, MarketRoleAssignment,
     UpdateTarget, order_edit, trade,
@@ -551,9 +551,24 @@ pub(super) fn drain_commands(
                                 continue;
                             };
                             let mut applied = 0usize;
-                            for (name, val) in changes {
-                                let existing = sc.fields.get(name).cloned();
-                                let stype = schema.and_then(|s| s.field(name)).map(|f| f.type_id);
+                            // Visibility follows the kind the strategy has once this edit lands.
+                            let kind = changes
+                                .iter()
+                                .find(|(n, _)| n.eq_ignore_ascii_case("SignalType"))
+                                .and_then(|(_, sig)| signaltype_to_kind_ordinal(schema, sig))
+                                .map_or(sc.kind(), StrategyKind::from_ordinal);
+                            let (storable, dropped) = storable_edits(schema, kind, changes);
+                            if !dropped.is_empty() {
+                                log::warn!(
+                                    "core {} edit strategy {}: not sent, the core's schema has no such field for this kind: {}",
+                                    crate::feed::core_label(server.id),
+                                    sc.strategy_id,
+                                    dropped.join(", ")
+                                );
+                            }
+                            for (name, val) in storable {
+                                let existing = sc.fields.get(&name).cloned();
+                                let stype = schema.and_then(|s| s.field(&name)).map(|f| f.type_id);
                                 let Some(value) = fv_from_str(existing.as_ref(), stype, val) else {
                                     // Leave the field at its current value. Inserting a fallback
                                     // here would send a number the user never typed, and the core

@@ -588,6 +588,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} işl."
 analytics.write_failed_title: "Yazma geçmedi"
 analytics.write_failed: "Hiçbir şey yazılmadı — düzenleme panelde duruyor, yeniden deneyin. %{err}"
 analytics.write_failed_stale: "seçili stratejilerin hiçbiri artık çekirdeğinde yok (atlanan: %{n})"
+analytics.save_not_storable: "seçili stratejilerin çekirdekleri bu alanları saklamıyor (örneğin spotta kaldıraç ve mark fiyatı), yazılacak bir şey yok"
 analytics.write_failed_formula_stale: "Değişiklikler gönderilmedi: bir hedefin mevcut EMA formülü artık düzenlenen eşik alanını içermiyor. Stratejileri yenileyip tekrar deneyin."
 analytics.write_partial: "Bazı çekirdekler yazmayı kabul etmedi: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /

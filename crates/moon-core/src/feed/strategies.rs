@@ -505,6 +505,57 @@ fn fields_from_known(
     fields
 }
 
+/// The edits of one strategy the core can store, under the schema's own spelling.
+///
+/// A name the schema does not show for the strategy's kind is never written by the core: a spot
+/// core's schema has no `MaxLeverage` or `MarkPriceMin`, a TopMarket strategy no mark-price bounds.
+/// Patched onto the snapshot anyway, such a name is absent from the echo, and moonproto's
+/// `field_matches` reads that as the core having saved something else — the whole strategy
+/// resolves `Adjusted` although every field it can hold was written (#1160). So it is not sent.
+/// Without a schema nothing can be judged, and every pair passes as sent.
+///
+/// Args:
+///     schema: Live strategy schema, or `None` before the core has sent one.
+///     kind: Kind the strategy has once this edit lands — the new one when it sets `SignalType`.
+///     changes: `(name, text)` pairs as the caller sent them.
+///
+/// Returns:
+///     The pairs to apply, renamed to the schema's spelling, and the names left out.
+pub(super) fn storable_edits<'a>(
+    schema: Option<&StrategySchema>,
+    kind: StrategyKind,
+    changes: &'a [(String, String)],
+) -> (Vec<(String, &'a str)>, Vec<&'a str>) {
+    let Some(schema) = schema else {
+        return (
+            changes
+                .iter()
+                .map(|(name, val)| (name.clone(), val.as_str()))
+                .collect(),
+            Vec::new(),
+        );
+    };
+    storable_known(&known_fields(schema), kind, changes)
+}
+
+/// [`storable_edits`] against the schema's fields once they are read out.
+fn storable_known<'a>(
+    known: &[KnownStrategyField],
+    kind: StrategyKind,
+    changes: &'a [(String, String)],
+) -> (Vec<(String, &'a str)>, Vec<&'a str>) {
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for (name, val) in changes {
+        match paste_slot(known, name).filter(|slot| slot.visible_ordinals.contains(&kind.ordinal()))
+        {
+            Some(slot) => kept.push((slot.name.clone(), val.as_str())),
+            None => dropped.push(name.as_str()),
+        }
+    }
+    (kept, dropped)
+}
+
 /// Zero moonproto uses when a schema field has no explicit default.
 ///
 /// `field_matches` does `default_value.or_else(zero_for_type_id)`. The zero helper is crate-private
