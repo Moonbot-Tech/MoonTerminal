@@ -611,7 +611,9 @@ fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
             to,
         } => t!(
             "shell.engine_action.transfer",
-            qty = controls::fmt_adaptive(*qty),
+            // The amount as sent, cut at the core's places: a two-digit rounding read
+            // `0.012648` as `0.013`, a figure the exchange would have refused (#1316).
+            qty = moon_core::util::fmt::transfer_amount(*qty),
             asset = asset,
             from = from.label(),
             to = to.label()

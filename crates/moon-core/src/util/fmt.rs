@@ -39,6 +39,43 @@ pub fn fixed_trimmed(v: f64, decimals: usize) -> String {
     trim_fraction(&format!("{v:.decimals$}")).to_string()
 }
 
+/// Format at most `decimals` places, cutting toward zero instead of rounding, and trim fractional
+/// trailing zeros: `0.01264789` at 3 places is "0.012", never "0.013".
+///
+/// For a figure the user may send back as an amount — a free balance offered for a transfer. A
+/// rounded-up figure exceeds what the exchange holds and is refused (`-5013 insufficient balance`,
+/// #1316). The cut is made on the shortest decimal that reads back as the same float (`{}`),
+/// not on a fixed-precision print: a float stored a hair under its decimal (`0.01264789` is
+/// `0.0126478899…` in binary) is then not cut one unit short at any magnitude, and since that
+/// decimal parses back to `v` exactly, nothing cut from it can parse back above `v`.
+pub fn truncated_trimmed(v: f64, decimals: usize) -> String {
+    if !v.is_finite() {
+        return format!("{v}");
+    }
+    let mut s = format!("{}", v.abs());
+    if let Some(dot) = s.find('.') {
+        s.truncate(dot + 1 + decimals);
+    }
+    let digits = trim_fraction(&s);
+    if v < 0.0 && digits.bytes().any(|b| (b'1'..=b'9').contains(&b)) {
+        format!("-{digits}")
+    } else {
+        digits.to_string()
+    }
+}
+
+/// Places the core prints a transfer amount with when it forwards it to the exchange.
+pub const TRANSFER_DECIMALS: usize = 8;
+
+/// The text a transfer amount is shown, seeded and reported with.
+///
+/// Cut down, never rounded up, at the places the core sends: a free balance rounded up past
+/// itself is refused by the exchange (`-5013 insufficient balance`, #1316), while the eight-place
+/// cut is what MoonBot's own transfer window offers and the exchange accepts.
+pub fn transfer_amount(v: f64) -> String {
+    truncated_trimmed(v, TRANSFER_DECIMALS)
+}
+
 /// Format a compact number to `decimals` places, trimming trailing fractional zeros and the point
 /// ("1.500000" → "1.5", "2.000000" → "2"). Zeros are trimmed ONLY from the fractional
 /// part: with `decimals=0`, the string has no point, and blindly trimming zeros used to corrupt
@@ -186,15 +223,32 @@ fn trim_keep_one(v: f64, decimals: usize) -> String {
 /// places): at most thousandths and at least tenths. "0.16206"→"0.162", "7.7972"→"7.797",
 /// "35483"→"35483.0".
 pub fn qty(v: f64) -> String {
+    trim_keep_one(v, qty_decimals(v))
+}
+
+/// [`qty`] cut toward zero instead of rounded: the same places, but `0.0126` reads "0.012".
+///
+/// For a balance the user may copy into an amount field: a rounded-up free balance is a figure
+/// the exchange refuses (#1316).
+pub fn qty_down(v: f64) -> String {
+    let s = truncated_trimmed(v, qty_decimals(v));
+    if s.contains('.') || !v.is_finite() {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
+/// The places [`qty`] and [`qty_down`] print: fewer as the magnitude grows.
+fn qty_decimals(v: f64) -> usize {
     let a = v.abs();
-    let decimals = if a >= 100.0 {
+    if a >= 100.0 {
         1
     } else if a >= 10.0 {
         2
     } else {
         3
-    };
-    trim_keep_one(v, decimals)
+    }
 }
 
 /// Format a dollar amount without the symbol, using at most hundredths and at least tenths.
