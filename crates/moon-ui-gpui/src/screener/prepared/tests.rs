@@ -49,20 +49,21 @@ fn selection_matches_owned_rows_for_all_controls_and_columns() {
             ("", f64::INFINITY),
             ("XBETA", 0.0),
         ] {
+            let query = &crate::screener::view::CoinQuery::new(coin);
             for key in COLS.iter().map(|column| column.0) {
                 for desc in [false, true] {
                     let owned: Vec<_> = entries(4, 5)
                         .into_iter()
                         .filter(|entry| allowed[entry.row.core as usize])
                         .collect();
-                    let (expected, total, shown) = filter_and_sort(owned, coin, volume, key, desc);
+                    let (expected, total, shown) = filter_and_sort(owned, query, volume, key, desc);
                     let ranks: Vec<_> = prepared
                         .cores
                         .iter()
                         .map(|&core| allowed[core as usize].then_some(core as usize))
                         .collect();
                     let (indices, actual_total, actual_shown) =
-                        prepared.select(&ranks, coin, volume, key, desc);
+                        prepared.select(&ranks, query, volume, key, desc);
                     assert_eq!((actual_total, actual_shown), (total, shown));
                     let identity = |entry: &Entry| (entry.row.core, entry.row.market.clone());
                     assert_eq!(
@@ -86,7 +87,13 @@ fn latest_controls_apply_to_both_publications() {
     let replacement = Prepared::new(entries(4, 6), "market", false);
     let allowed = [None, Some(1), None, None];
     for data in [&old, &replacement] {
-        let (indices, _, shown) = data.select(&allowed, "ALPHA1", 0.0, "market", false);
+        let (indices, _, shown) = data.select(
+            &allowed,
+            &crate::screener::view::CoinQuery::new("ALPHA1"),
+            0.0,
+            "market",
+            false,
+        );
         assert_eq!(shown, 1);
         assert_eq!(indices.len(), 1);
         assert_eq!(
@@ -118,7 +125,13 @@ fn hidden_first_member_does_not_reorder_visible_group_ties() {
             _ => Some(2),
         })
         .collect();
-    let (order, _, _) = prepared.select(&ranks, "", 0.0, "market", true);
+    let (order, _, _) = prepared.select(
+        &ranks,
+        &crate::screener::view::CoinQuery::new(""),
+        0.0,
+        "market",
+        true,
+    );
     assert_eq!(
         order
             .iter()
@@ -134,6 +147,7 @@ fn hidden_first_member_does_not_reorder_visible_group_ties() {
 fn scale_probe_prepared_selection() {
     let prepared = Prepared::new(entries(10, 800), "vol24", true);
     for coin in ["", "ALPHA1"] {
+        let query = &crate::screener::view::CoinQuery::new(coin);
         let start = std::time::Instant::now();
         for _ in 0..100 {
             std::hint::black_box(prepared.select(
@@ -149,7 +163,7 @@ fn scale_probe_prepared_selection() {
                     Some(8),
                     Some(9),
                 ],
-                coin,
+                query,
                 0.0,
                 "vol24",
                 true,

@@ -74,7 +74,7 @@ impl Prepared {
     pub fn select(
         &self,
         ranks: &[Option<usize>],
-        coin: &str,
+        coin: &super::view::CoinQuery,
         min_vol: f64,
         key: &str,
         desc: bool,
