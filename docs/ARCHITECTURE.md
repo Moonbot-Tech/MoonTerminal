@@ -734,12 +734,14 @@ latest list, so a closed trade's mark exists nowhere unless it was held when the
 `market::price_recorder` holds it, on the terminal and on an `Account` station alike (a `Reports`
 station builds its clients without the periodic list and records nothing).
 
-- **One source per exchange** (`source.rs`): the first core whose list arrives owns its exchange
-  while its lists keep coming; one silent for five seconds is replaced by the next that delivers.
+- **One source per exchange and account currency** (`source.rs`): the first core whose list
+  arrives owns its exchange and currency group while its lists keep coming; one silent for five
+  seconds is replaced by the next core of that group that delivers. The primary currency keeps the
+  exchange's legacy storage key; another currency's group stores under `exchange|CURRENCY`.
   The rows are read on the feed thread right after the list was applied, before the station's
   event filter, from `MarketHandle::price` alone. Only markets with a mark are kept.
 - **A ring per market** (`ring.rs`): changes only, cut by time at the tape margin (at most ten
-  minutes) plus a minute. Whether lists were arriving is kept per exchange: a run of lists
+  minutes) plus a minute. Whether lists were arriving is kept per exchange and currency group: a run of lists
   vouches for eight seconds past its last one, and a later list starts a new run.
 - **Windows like the tape's** (`plan.rs`): entry − margin through exit + the tape's tail; a long
   position as its two ends. Trades of one market from any core share one key, and ground a done
@@ -768,7 +770,7 @@ station builds its clients without the periodic list and records nothing).
   holds — as far back as its tape settings keep it (`prices.index`, paged) — subtracts what its own file holds, and fetches
   the rest (`prices.fetch`, paged like `tape.fetch`): each station segment cut to the stretch,
   opening with the state in force there. Ground younger than the recorder's ring plus a flush is
-  left for the next run — but per exchange never earlier than the first list that exchange recorded
+  left for the next run — but per group never earlier than the first list that group recorded
   in this run, so a run younger than that edge still pulls a trade closed just before it started.
   A piece is filed only where the file holds nothing of its stretch, so
   the terminal's own recording is never replaced. Only a station whose status carries
