@@ -72,7 +72,8 @@ core in two groups is listed under both and counts in both subtotals, while the 
 counts it once; a group of one core carries that core's total, and when one group would hold every core the
 list stays flat. A report long enough to page repeats a group's header on the page that continues
 it. The view by group has one summary row per saved group; a core in two groups counts in both
-rows. A terminal-hosted bot reads the terminal's groups; a station keeps the set it
+rows. With no saved groups, a terminal-hosted bot shows the view by core instead, while a station
+that has not received any groups yet shows a note in place of the rows. A terminal-hosted bot reads the terminal's groups; a station keeps the set it
 was last sent. The terminal sends its groups to the station by itself when they differ from the
 station's set and every member core is found on the station — once per changed set and station,
 and never an empty set, so a terminal without groups cannot wipe the set another one sent. The
