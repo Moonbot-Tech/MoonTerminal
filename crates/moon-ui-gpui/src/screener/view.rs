@@ -321,7 +321,7 @@ impl ScreenerView {
 
     /// Filter a prepared publication using the live preset and controls without cloning rows.
     fn filter_cached(&mut self, cx: &mut Context<Self>) {
-        let coin = normalize_coin_filter(&self.coin_input.read(cx).value());
+        let coin = CoinQuery::new(&self.coin_input.read(cx).value());
         let min_vol = parse_vol(self.dvol_input.read(cx).value().trim());
         let b = self.backend.read(cx);
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
@@ -832,13 +832,45 @@ fn entries_for(
         .collect()
 }
 
-/// Fold the Report keyboard layout and case without swallowing the exact-mode trailing space.
-fn normalize_coin_filter(raw: &str) -> String {
-    crate::controls::coin_search::normalize_layout(raw).to_uppercase()
+/// The Market box text in both spellings it can legitimately mean, uppercased, with the
+/// exact-mode trailing space kept.
+///
+/// Why two: a Latin ticker typed on the Russian layout (`ыиук`) means `SBER`, while a coin whose
+/// real name is Cyrillic (`ОФЗ 26254` on a T-Invest core) is only reachable by the text as typed.
+/// Folding alone made every Cyrillic name unfindable (#1303).
+pub(super) struct CoinQuery {
+    /// The query as typed, uppercased.
+    typed: String,
+    /// The Russian-layout keys mapped to Latin, uppercased; `None` when that changes nothing.
+    folded: Option<String>,
 }
 
-/// Match normalized search text, admitting only the ticker and its `_` tails in exact mode.
-pub(super) fn matches_coin_filter(entry: &Entry, filter_uc: &str) -> bool {
+impl CoinQuery {
+    /// Builds both spellings from the raw box text.
+    pub(super) fn new(raw: &str) -> Self {
+        let typed = raw.to_uppercase();
+        let folded = crate::controls::coin_search::normalize_layout(raw).to_uppercase();
+        let folded = (folded != typed).then_some(folded);
+        Self { typed, folded }
+    }
+
+    /// True when the box is empty, so no row is filtered out.
+    pub(super) fn is_empty(&self) -> bool {
+        self.typed.is_empty()
+    }
+}
+
+/// Match either spelling of the query, admitting only the ticker and its `_` tails in exact mode.
+pub(super) fn matches_coin_filter(entry: &Entry, query: &CoinQuery) -> bool {
+    matches_one_spelling(entry, &query.typed)
+        || query
+            .folded
+            .as_deref()
+            .is_some_and(|folded| matches_one_spelling(entry, folded))
+}
+
+/// Match one uppercased spelling against the market and coin search text.
+fn matches_one_spelling(entry: &Entry, filter_uc: &str) -> bool {
     let exact = moon_core::db::report_coin_is_exact(filter_uc);
     let query = filter_uc.trim();
     let matches = |text: &str| {

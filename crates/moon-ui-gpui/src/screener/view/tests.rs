@@ -1,7 +1,7 @@
 //! Filtering regressions independent of the displayed market spelling.
 
 use super::super::table::tests::sort_entries;
-use super::{Entry, matches_coin_filter, normalize_coin_filter};
+use super::{CoinQuery, Entry, matches_coin_filter};
 use moon_core::market::ScreenerRow;
 
 /// Cached-only control handlers would miss market-only feed updates until another backend event.
@@ -58,9 +58,9 @@ fn filter_matches_uppercased_market_or_coin() {
         market_uc: "ALPHAUSDT".into(),
         coin_uc: "BETA".into(),
     };
-    assert!(matches_coin_filter(&entry, "ALPHA"));
-    assert!(matches_coin_filter(&entry, "BETA"));
-    assert!(!matches_coin_filter(&entry, "GAMMA"));
+    assert!(matches_coin_filter(&entry, &CoinQuery::new("ALPHA")));
+    assert!(matches_coin_filter(&entry, &CoinQuery::new("BETA")));
+    assert!(!matches_coin_filter(&entry, &CoinQuery::new("GAMMA")));
 }
 
 /// Treating an empty query as absent data would hide every market when the input is cleared.
@@ -72,7 +72,7 @@ fn empty_filter_keeps_all() {
         market_uc: "".into(),
         coin_uc: "BETA".into(),
     };
-    assert!(matches_coin_filter(&entry, ""));
+    assert!(matches_coin_filter(&entry, &CoinQuery::new("")));
 }
 
 /// Trimming before mode detection would retain substring coins and lose contract-tail semantics.
@@ -101,7 +101,7 @@ fn trailing_space_selects_exact_ticker_or_contract_tail_in_either_search_string(
         &Default::default(),
     );
     let selected = |raw: &str| {
-        let query = normalize_coin_filter(raw);
+        let query = CoinQuery::new(raw);
         entries
             .iter()
             .filter(|entry| matches_coin_filter(entry, &query))
@@ -144,7 +144,7 @@ fn russian_layout_preserves_exact_mode() {
             .collect(),
         &Default::default(),
     );
-    let query = normalize_coin_filter("шщ ");
+    let query = CoinQuery::new("шщ ");
     assert_eq!(
         entries
             .iter()
@@ -153,6 +153,38 @@ fn russian_layout_preserves_exact_mode() {
             .collect::<Vec<_>>(),
         ["IO", "IO_0925"]
     );
+}
+
+/// Folding every Cyrillic query to the Latin keys made a Russian coin name unreachable: `офз`
+/// became `JAP` and missed `ОФЗ 26254` (#1303). Both spellings must find their own rows, and the
+/// Russian-layout ticker must still find its Latin coin.
+#[test]
+fn cyrillic_query_matches_a_russian_coin_name_and_the_layout_fold_still_works() {
+    let entries = super::entries_for(
+        [("SU26254RMFS1", "ОФЗ 26254"), ("SBER", "SBER")]
+            .into_iter()
+            .map(|(market, coin)| {
+                ScreenerRow {
+                    market: market.into(),
+                    coin: coin.into(),
+                    ..Default::default()
+                }
+                .into()
+            })
+            .collect(),
+        &Default::default(),
+    );
+    let selected = |raw: &str| {
+        let query = CoinQuery::new(raw);
+        entries
+            .iter()
+            .filter(|entry| matches_coin_filter(entry, &query))
+            .map(|entry| entry.row.market.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(selected("офз"), ["SU26254RMFS1"]);
+    assert_eq!(selected("ыиук"), ["SBER"]);
+    assert_eq!(selected("su26254"), ["SU26254RMFS1"]);
 }
 
 /// Scale probe of one market rebuild's pure part — search forms, the coin count and the sort —
@@ -183,7 +215,13 @@ fn scale_probe_market_rebuild() {
                 core_name: "CORE_A".into(),
             })
             .collect();
-        std::hint::black_box(filter_and_sort(entries, "", 0.0, "vol24", true));
+        std::hint::black_box(filter_and_sort(
+            entries,
+            &CoinQuery::new(""),
+            0.0,
+            "vol24",
+            true,
+        ));
     }
     let ms = start.elapsed().as_secs_f64() * 1_000.0 / f64::from(iters);
     println!("[probe] screener rows={} rebuild={ms:.3}ms", rows.len());
@@ -209,15 +247,17 @@ fn footer_counts_keep_provider_identity_and_filter_semantics() {
             })
             .collect()
     };
-    let (rows, total, shown) = filter_and_sort(entries(), "", 0.0, "vol24", true);
+    let (rows, total, shown) = filter_and_sort(entries(), &CoinQuery::new(""), 0.0, "vol24", true);
     assert_eq!((rows.len(), total, shown), (6, 2, 2));
-    let (rows, total, shown) = filter_and_sort(entries(), "ALPHA", 4.0, "vol24", true);
+    let (rows, total, shown) =
+        filter_and_sort(entries(), &CoinQuery::new("ALPHA"), 4.0, "vol24", true);
     assert_eq!((rows.len(), total, shown), (2, 2, 1));
     assert_eq!(
         rows.iter().map(|row| row.row.core).collect::<Vec<_>>(),
         [5, 4]
     );
-    let (rows, total, shown) = filter_and_sort(entries(), "XBETA", 0.0, "vol24", true);
+    let (rows, total, shown) =
+        filter_and_sort(entries(), &CoinQuery::new("XBETA"), 0.0, "vol24", true);
     assert_eq!((rows.len(), total, shown), (0, 2, 0));
 }
 
@@ -294,7 +334,8 @@ fn scale_probe_shared_market_rebuild() {
     let start = std::time::Instant::now();
     for _ in 0..iters {
         let entries = super::entries_for(rows.clone(), &names);
-        let (entries, total, shown) = filter_and_sort(entries, "", 0.0, "vol24", true);
+        let (entries, total, shown) =
+            filter_and_sort(entries, &CoinQuery::new(""), 0.0, "vol24", true);
         assert_eq!((entries.len(), total, shown), (8_000, 800, 800));
         std::hint::black_box(entries);
     }
@@ -327,7 +368,7 @@ fn distinct_markets(entries: &[Entry]) -> usize {
 /// Apply the current filters and order, reusing the total when no filter can remove a market.
 pub(in crate::screener) fn filter_and_sort(
     mut entries: Vec<Entry>,
-    coin_filter: &str,
+    coin_filter: &super::CoinQuery,
     min_vol: f64,
     key: &str,
     desc: bool,
