@@ -11,6 +11,8 @@ use super::{CoreId, SessionManager};
 use crate::feed::{ConnStatus, CoreCmd, ExchangeId};
 use crate::market::MarketDataMode;
 
+mod election;
+
 /// Keep serving a market for this long after its last chart closes so a quick reopen does not
 /// interrupt subscriptions or reads and reload history from scratch.
 const UNSUB_DELAY: Duration = Duration::from_secs(5);
