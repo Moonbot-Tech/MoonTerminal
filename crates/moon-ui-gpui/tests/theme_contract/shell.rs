@@ -1471,6 +1471,44 @@ fn market_popups_occlude_the_wheel_from_the_surface_behind() {
     );
 }
 
+/// Protects the header ticker picker from closing when the pointer moves onto its result list.
+///
+/// The results list occludes (see the test above), so GPUI's hit test stops at it and the popup
+/// box behind it reports `on_hover(false)` the moment the pointer steps from the query field onto
+/// a row — before any click. Closing from the box's leave therefore closed the picker on the way
+/// to the venue (#1313). The plausible edit is moving the close back into the box's hover handler,
+/// where it reads as the natural place; the leave must come from the dismiss layer, which both
+/// occluders hide and which is therefore hovered only when the pointer is outside the popup.
+#[test]
+fn header_ticker_picker_closes_on_the_dismiss_layer_hover_not_the_box_leave() {
+    let ticker = read_src("shell/ticker.rs");
+    let layers = braced_body(&ticker, "pub(super) fn ticker_popup_layers(");
+    let box_at = layers
+        .find("\"header-ticker-popup-box\"")
+        .expect("the popup box id must stay in ticker_popup_layers");
+    let dismiss_at = layers
+        .find("\"header-ticker-popup-dismiss\"")
+        .expect("the dismiss layer id must stay in ticker_popup_layers");
+    assert!(
+        box_at < dismiss_at,
+        "the box is built before its dismiss layer"
+    );
+    let popup_box = &layers[box_at..dismiss_at];
+    let dismiss = &layers[dismiss_at..];
+    assert!(
+        !popup_box.contains("close_ticker_popup"),
+        "the popup box must not close the picker: its leave fires when the pointer steps onto \
+         the occluding result list, still inside the popup"
+    );
+    let hover_at = dismiss
+        .find(".on_hover(")
+        .expect("the dismiss layer must carry the leave-to-close hover handler");
+    assert!(
+        dismiss[hover_at..].contains("close_ticker_popup"),
+        "the dismiss layer's hover must close the picker"
+    );
+}
+
 /// Protects every stack card's gutter from being decided by a literal at the call site.
 ///
 /// The plausible edit is passing `true` (or `!fullscreen`) straight into `chart_stack_card`.
