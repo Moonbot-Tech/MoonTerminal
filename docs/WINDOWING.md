@@ -35,6 +35,13 @@ Current factories:
 - `login_window_options` - the startup login prompt. Standalone, with the application icon and
   a taskbar button, because it can open before any group window exists.
 
+Every window root is built as `windowing::frame(Root::new(...))`, which sets MoonUI's client-side
+shadow margin to zero. Only Linux decorates on the client side, and there that margin is not
+see-through: the window is cleared to an opaque ground (the chart draws under the scene), so it
+showed as a solid band around the window, in the previous theme's colour after a light/dark
+switch. The test `every_window_root_is_framed_in_windowing` in
+`crates/moon-ui-gpui/tests/theme_contract/` pins it.
+
 ## Auto workspace: rail, dock, and group windows
 
 Auto is a full workspace inside an already existing group window, not a new kind of
