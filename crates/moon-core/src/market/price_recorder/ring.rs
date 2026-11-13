@@ -7,7 +7,7 @@
 //! also why trimming keeps the newest point at or before the cut — it is the state from the cut
 //! onwards.
 //!
-//! Whether the source was listening at all is kept apart, per exchange ([`ExchangeRing::valid`]):
+//! Whether the source was listening at all is kept per exchange and currency group ([`ExchangeRing::valid`]):
 //! "no new point" means "unchanged" only while lists keep arriving.
 
 use std::collections::{HashMap, VecDeque};
@@ -181,7 +181,7 @@ impl Run {
     }
 }
 
-/// Every market of one exchange, and when its lists arrived.
+/// The markets of one exchange and currency group, and when that group's lists arrived.
 #[derive(Default)]
 pub(super) struct ExchangeRing {
     markets: HashMap<String, MarketRing>,

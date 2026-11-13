@@ -132,10 +132,18 @@ impl Store {
                 "INSERT INTO segments (exchange, market, from_ms, to_ms, data)
                  SELECT ?1, ?2, ?3, ?4, ?5
                  WHERE NOT EXISTS (SELECT 1 FROM segments
-                     WHERE exchange = ?1 AND market = ?2 AND from_ms <= ?4 AND to_ms >= ?3)",
+                     WHERE (exchange = ?6 OR (exchange >= ?6 || '|' AND exchange < ?6 || '}'))
+                       AND market = ?2 AND from_ms <= ?4 AND to_ms >= ?3)",
             )?;
             for p in segments {
-                filed += stmt.execute(params![p.exchange, p.market, p.from_ms, p.to_ms, p.data])?;
+                filed += stmt.execute(params![
+                    p.exchange,
+                    p.market,
+                    p.from_ms,
+                    p.to_ms,
+                    p.data,
+                    p.exchange.split('|').next().unwrap_or(&p.exchange)
+                ])?;
             }
         }
         tx.commit()?;
@@ -191,6 +199,21 @@ impl Store {
     /// (no segment is longer), so a pass costs its gaps, not the file. Returns the segments
     /// removed or cut.
     pub(super) fn keep_only(
+        &mut self,
+        exchange: &str,
+        market: &str,
+        keep: &Coverage,
+        max_segment_ms: i64,
+    ) -> rusqlite::Result<usize> {
+        let mut changed = 0;
+        for key in storage_keys(&self.conn, exchange, market)? {
+            changed += self.keep_key_only(&key, market, keep, max_segment_ms)?;
+        }
+        Ok(changed)
+    }
+
+    /// Apply tape retention to one physical group key, preserving that key on cut pieces.
+    fn keep_key_only(
         &mut self,
         exchange: &str,
         market: &str,
@@ -381,8 +404,88 @@ pub(super) fn held_bounds(
     bounds
 }
 
-/// [`read`] over an open connection.
+/// Physical keys for a market, group-first then legacy, including catalogs unavailable offline.
+/// Explicit group keys used by the station protocol stay exact; coarse public readers see all
+/// historical group assignments, so adding or removing a currency never hides stored rows.
+pub(super) fn storage_keys(
+    conn: &Connection,
+    exchange: &str,
+    market: &str,
+) -> rusqlite::Result<Vec<String>> {
+    if exchange.contains('|') {
+        return Ok(vec![exchange.to_owned()]);
+    }
+    let preferred = super::source::market_key(exchange, market);
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT exchange FROM segments WHERE market = ?2 AND
+         (exchange = ?1 OR (exchange >= ?1 || '|' AND exchange < ?1 || '}'))",
+    )?;
+    let mut keys = stmt
+        .query_map(params![exchange, market], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    keys.sort_by_key(|key| (key == exchange, key != &preferred, key.clone()));
+    Ok(keys)
+}
+
+/// Bounds across every historical group assignment, for local import deduplication.
+pub(super) fn market_bounds(
+    conn: &Connection,
+    exchange: &str,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> rusqlite::Result<Vec<(i64, i64)>> {
+    let coarse = exchange.split('|').next().unwrap_or(exchange);
+    let mut bounds = Vec::new();
+    for key in storage_keys(conn, coarse, market)? {
+        bounds.extend(held_bounds(conn, &key, market, from_ms, to_ms)?);
+    }
+    Ok(bounds)
+}
+
+/// Read group keys before the legacy key; old data fills only uncovered ground.
 pub(super) fn read_conn(
+    conn: &Connection,
+    exchange_key: &str,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+) -> rusqlite::Result<Vec<PriceSpan>> {
+    let keys = storage_keys(conn, exchange_key, market)?;
+    let mut spans = Vec::new();
+    let mut covered = Coverage::none();
+    for key in keys {
+        for span in read_key(conn, &key, market, from_ms, to_ms)? {
+            let uncovered = Coverage::one((span.from_ms, span.to_ms)).minus(&covered);
+            for &(from, to) in uncovered.spans() {
+                let mut samples = Vec::new();
+                if let Some(sample) = span.samples.iter().rev().find(|sample| sample.t_ms <= from) {
+                    samples.push(PriceSample {
+                        t_ms: from,
+                        ..*sample
+                    });
+                }
+                samples.extend(
+                    span.samples
+                        .iter()
+                        .filter(|s| s.t_ms > from && s.t_ms <= to)
+                        .copied(),
+                );
+                spans.push(PriceSpan {
+                    from_ms: from,
+                    to_ms: to,
+                    samples,
+                });
+                covered.add((from, to));
+            }
+        }
+    }
+    spans.sort_by_key(|span| span.from_ms);
+    Ok(spans)
+}
+
+/// Decode one physical key, retaining its broken-segment boundaries.
+fn read_key(
     conn: &Connection,
     exchange_key: &str,
     market: &str,

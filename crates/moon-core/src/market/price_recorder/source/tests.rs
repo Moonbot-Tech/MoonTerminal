@@ -42,15 +42,18 @@ fn a_core_that_moves_to_another_exchange_releases_the_old_one() {
     assert_eq!(claim(b, 1_002).as_deref(), Some("src-move-a:00000000"));
 }
 
-/// Collapsing owners to the exchange alone would discard the USDC core's market lists.
+/// Collapsing ring keys would let a delivering USDT core vouch for a silent USDC list.
 #[test]
-fn different_account_currencies_record_under_the_same_storage_exchange() {
+fn different_account_currencies_have_independent_storage_keys() {
     let (a, b) = (9_100_041, 9_100_042);
     let exchange = "src-currencies:00000000";
     set_exchange(a, exchange, Some("USDT".into()));
     set_exchange(b, exchange, Some("USDC".into()));
     assert_eq!(claim(a, 1_000).as_deref(), Some(exchange));
-    assert_eq!(claim(b, 1_001).as_deref(), Some(exchange));
+    assert_eq!(
+        claim(b, 1_001).as_deref(),
+        Some("src-currencies:00000000|USDC")
+    );
     assert_eq!(claim(a, 2_000).as_deref(), Some(exchange));
 }
 
@@ -77,11 +80,17 @@ fn unknown_currency_joins_alphabetical_then_usdt_group() {
     set_exchange(btc, exchange, Some("BTC".into()));
     assert_eq!(claim(unknown, 1_003).as_deref(), Some(exchange));
     assert_eq!(claim(btc, 1_004), None);
-    assert_eq!(claim(usdc, 1_005).as_deref(), Some(exchange));
+    assert_eq!(
+        claim(usdc, 1_005).as_deref(),
+        Some("src-fallback:00000000|USDC")
+    );
     set_exchange(usdt, exchange, Some("USDT".into()));
     assert_eq!(claim(unknown, 1_006).as_deref(), Some(exchange));
     assert_eq!(claim(usdt, 1_007), None);
-    assert_eq!(claim(btc, 1_008).as_deref(), Some(exchange));
+    assert_eq!(
+        claim(btc, 1_008).as_deref(),
+        Some("src-fallback:00000000|BTC")
+    );
 }
 
 /// A late account currency must free the old owner slot instead of waiting for takeover.
@@ -93,6 +102,52 @@ fn a_late_currency_releases_the_previous_group() {
     set_exchange(b, exchange, Some("USDT".into()));
     assert!(claim(a, 1_000).is_some());
     set_exchange(a, exchange, Some("USDC".into()));
-    assert_eq!(claim(a, 1_001).as_deref(), Some(exchange));
+    assert_eq!(claim(a, 1_001).as_deref(), Some("src-late:00000000|USDC"));
     assert_eq!(claim(b, 1_002).as_deref(), Some(exchange));
+}
+
+/// Shared catalogs must produce each quote's rows once; unmatched quotes belong to the primary.
+#[test]
+fn shared_markets_are_partitioned_by_catalog_quote_then_name() {
+    let (a, b) = (9_100_081, 9_100_082);
+    let exchange = "src-partition:00000000";
+    set_exchange(a, exchange, Some("USDT".into()));
+    set_exchange(b, exchange, Some("USDC".into()));
+    let primary = claim(a, 0).unwrap();
+    let secondary = claim(b, 0).unwrap();
+    for (name, catalog, owner) in [
+        ("BTCUSDT", None, 0),
+        ("XALPHA-USDC", None, 1),
+        ("ETHBTC", None, 0),
+        ("BTCPERP", Some(" usdc "), 1),
+        ("BTCUSDT", Some("USDC"), 1),
+    ] {
+        let owners: Vec<_> = [&primary, &secondary]
+            .iter()
+            .enumerate()
+            .filter(|(_, claim)| claim.accepts(name, catalog))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(owners, vec![owner], "{name}");
+    }
+    with(|r| {
+        r.quotes
+            .insert((Arc::from(exchange), "BTCPERP".into()), "USDC".into());
+    });
+    assert_eq!(
+        market_key(exchange, "BTCPERP"),
+        "src-partition:00000000|USDC"
+    );
+    assert_eq!(
+        market_key(exchange, "XALPHA-USDC"),
+        "src-partition:00000000|USDC"
+    );
+    assert_eq!(market_key(exchange, "ETHBTC"), exchange);
+    forget(a);
+    let single = claim(b, 1).unwrap();
+    assert_eq!(&*single, exchange);
+    for name in ["BTCUSDT", "XALPHA-USDC", "ETHBTC"] {
+        assert!(single.accepts(name, None));
+    }
+    forget(b);
 }

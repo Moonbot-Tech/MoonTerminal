@@ -60,12 +60,23 @@ pub(in crate::market) fn market_provider(
     market: &str,
     catalog_quote: Option<&str>,
 ) -> Option<CoreId> {
-    let from_name = crate::symbol::parse::split_market(market, exchange);
-    let quote = catalog_quote
+    quote_provider(
+        provider,
+        overrides,
+        market_quote(exchange, market, catalog_quote),
+    )
+}
+
+/// Share the catalog-first quote rule with recording, including opaque market names.
+pub(in crate::market) fn market_quote<'a>(
+    exchange: Exchange,
+    market: &'a str,
+    catalog_quote: Option<&'a str>,
+) -> &'a str {
+    catalog_quote
         .map(str::trim)
         .filter(|quote| !quote.is_empty())
-        .unwrap_or(from_name.quote);
-    quote_provider(provider, overrides, quote)
+        .unwrap_or_else(|| crate::symbol::parse::split_market(market, exchange).quote)
 }
 
 /// Resolve a known quote directly, without requiring an exchange-specific market spelling.

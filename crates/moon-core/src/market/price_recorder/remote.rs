@@ -240,9 +240,13 @@ pub fn lacking(held: Vec<PriceHeld>, now_ms: i64) -> rusqlite::Result<Vec<TapeWa
     let conn = store::open_read(&path)?;
     lacking_with(
         held,
-        |exchange| pull_edge_ms(now_ms, super::recording_since_ms(exchange)),
+        |exchange, market| {
+            let coarse = exchange.split('|').next().unwrap_or(exchange);
+            let group = super::source::market_key(coarse, market);
+            pull_edge_ms(now_ms, super::recording_since_ms(&group))
+        },
         |exchange, market, from_ms, to_ms| match &conn {
-            Some(conn) => store::held_bounds(conn, exchange, market, from_ms, to_ms),
+            Some(conn) => store::market_bounds(conn, exchange, market, from_ms, to_ms),
             None => Ok(Vec::new()),
         },
     )
@@ -267,11 +271,11 @@ pub(super) fn pull_edge_ms(now_ms: i64, recording_since_ms: Option<i64>) -> i64 
         .max(since.saturating_sub(super::SETTLE_MS))
 }
 
-/// [`lacking`] cut at `edge_ms` of each exchange, against `local`: `(exchange, market, from_ms,
+/// [`lacking`] cut at `edge_ms` of each market's group, against `local`: `(exchange, market, from_ms,
 /// to_ms)` → the bounds this file holds.
 pub(super) fn lacking_with(
     held: Vec<PriceHeld>,
-    edge_ms: impl Fn(&str) -> i64,
+    edge_ms: impl Fn(&str, &str) -> i64,
     mut local: impl FnMut(&str, &str, i64, i64) -> rusqlite::Result<Vec<(i64, i64)>>,
 ) -> rusqlite::Result<Vec<TapeWant>> {
     let mut wanted: BTreeMap<(String, String), Coverage> = BTreeMap::new();
@@ -287,7 +291,7 @@ pub(super) fn lacking_with(
     }
     let mut wants = Vec::new();
     for ((exchange, market), need) in wanted {
-        let need = need.clip(&Coverage::one((i64::MIN, edge_ms(&exchange))));
+        let need = need.clip(&Coverage::one((i64::MIN, edge_ms(&exchange, &market))));
         let Some((from_ms, to_ms)) = need.hull() else {
             continue;
         };

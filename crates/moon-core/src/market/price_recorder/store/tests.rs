@@ -1,6 +1,76 @@
 use super::super::ring::{Point, Segment};
 use super::*;
 
+/// Station and terminal primaries may differ; imports must not duplicate local group coverage.
+#[test]
+fn imports_and_local_bounds_deduplicate_across_group_assignments() {
+    let mut store = Store::in_memory().unwrap();
+    let mut local = segment(1_000, 1_999, &[(1_000, 2.0)]);
+    local.exchange.push_str("|USDC");
+    store.write(&[local]).unwrap();
+    let remote = segment(1_000, 1_999, &[(1_000, 3.0)]);
+    let packed = Packed {
+        exchange: remote.exchange,
+        market: remote.market,
+        from_ms: remote.segment.from_ms,
+        to_ms: remote.segment.to_ms,
+        data: codec::encode(&remote.segment),
+    };
+    assert_eq!(store.insert_packed(&[packed]).unwrap(), 0);
+    assert_eq!(
+        market_bounds(store.conn(), "ex:00000000", "XUSDT", 0, 3_000).unwrap(),
+        vec![(1_000, 1_999)]
+    );
+}
+
+/// Coarse replay reads must find secondary groups offline and retain nonoverlapping legacy data.
+#[test]
+fn grouped_prices_override_legacy_only_where_the_group_recorded() {
+    let mut store = Store::in_memory().unwrap();
+    let legacy = segment(0, 9_999, &[(0, 1.0), (7_000, 3.0)]);
+    let mut grouped = segment(2_000, 5_999, &[(2_000, 2.0)]);
+    grouped.exchange.push_str("|USDC");
+    store.write(&[legacy, grouped]).unwrap();
+    let spans = read_conn(store.conn(), "ex:00000000", "XUSDT", 0, 10_000).unwrap();
+    assert_eq!(
+        spans
+            .iter()
+            .map(|s| (s.from_ms, s.to_ms))
+            .collect::<Vec<_>>(),
+        vec![(0, 1_999), (2_000, 5_999), (6_000, 9_999)]
+    );
+    assert_eq!(spans[1].samples[0].bid, 2.0);
+    assert_eq!(
+        spans[2]
+            .samples
+            .iter()
+            .map(|s| (s.t_ms, s.bid))
+            .collect::<Vec<_>>(),
+        vec![(6_000, 1.0), (7_000, 3.0)]
+    );
+    // Station requests identify a physical key and must not fetch another group's legacy rows.
+    assert_eq!(
+        read_conn(store.conn(), "ex:00000000|USDC", "XUSDT", 0, 10_000)
+            .unwrap()
+            .len(),
+        1
+    );
+    // A tape keep map still uses the coarse key and must purge the secondary group's gap too.
+    store
+        .keep_only(
+            "ex:00000000",
+            "XUSDT",
+            &Coverage::from_spans([(0, 999), (8_000, 9_999)]),
+            10_000,
+        )
+        .unwrap();
+    assert!(
+        held_bounds(store.conn(), "ex:00000000|USDC", "XUSDT", 0, 10_000)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 fn segment(from_ms: i64, to_ms: i64, bids: &[(i64, f64)]) -> Filed {
     Filed {
         exchange: "ex:00000000".to_owned(),
