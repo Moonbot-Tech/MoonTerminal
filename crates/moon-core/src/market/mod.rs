@@ -3,8 +3,9 @@
 //! so one elected core (the provider) fetches it instead of all 200 cores.
 //!
 //! The store key is the PROVIDER CORE id (the core that actually owns the subscription).
-//! The same mechanism supports both modes: dedup uses one provider per exchange, while
-//! per-core makes each core its own provider (see `MarketDataMode`).
+//! The same mechanism supports both modes: dedup uses one provider per exchange and account
+//! currency; a pair quoted in another group's currency reads that group's provider. Per-core
+//! makes each core its own provider (see `MarketDataMode`).
 
 pub mod candles;
 pub mod kline_cache;
@@ -47,7 +48,8 @@ pub type SharedMarketStore = Arc<RwLock<MarketStore>>;
 /// `"dedup"` or `"percore"`; an unknown code falls back to the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MarketDataMode {
-    /// One provider per exchange: all cores on the exchange read market data from it. Default.
+    /// One provider per exchange and account currency. A pair quoted in another group's currency
+    /// reads that group's provider. Default.
     #[default]
     Dedup,
     /// No deduplication: each chart reads market data from its own core.

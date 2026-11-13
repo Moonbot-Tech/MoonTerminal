@@ -13,8 +13,8 @@
 //!
 //! # Where the lists come from
 //!
-//! Every core's client receives its core's list; one core per exchange is the source ([`source`]),
-//! read right after the list was applied, before any filter of the station's
+//! Every core's client receives its core's list; one core per exchange and account currency is
+//! the source ([`source`]), read right after the list was applied, before any filter of the station's
 //! ([`on_prices_updated`]). Rows are taken as they arrived — nothing is recomputed, nothing
 //! interpolated. Only markets with a mark are kept, so spot drops out by itself.
 //!
@@ -118,10 +118,10 @@ pub fn enabled() -> bool {
     crate::feed::station::profile() != Some(crate::feed::station::Profile::Reports)
 }
 
-/// A core named its exchange (`"{code}:{dex:08x}"`, the replay address's spelling).
-pub fn core_exchange(core: CoreId, exchange_key: &str) {
+/// Register an exchange (the replay address's spelling) and normalized account currency.
+pub fn core_exchange(core: CoreId, exchange_key: &str, currency: Option<Box<str>>) {
     if enabled() {
-        source::set_exchange(core, exchange_key);
+        source::set_exchange(core, exchange_key, currency);
     }
 }
 
@@ -130,7 +130,7 @@ pub fn core_down(core: CoreId) {
     source::forget(core);
 }
 
-/// A list was applied on `core`'s client: when this core is its exchange's source, read the rows
+/// A list was applied on `core`'s client: when this core is its currency group's source, read the rows
 /// and queue them. Called on the core's feed thread before any event filter; costs one lock when
 /// another core is the source.
 ///

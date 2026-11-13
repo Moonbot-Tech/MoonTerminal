@@ -295,8 +295,8 @@ pub(super) fn run(
 
     // 3. Initialize WITHOUT market subscriptions. The coordinator assigns the core's market role
     //    via SetMarket after learning its exchange (Identity) and electing a provider. Only ONE
-    //    core per exchange calls subscribe_all_trades; the others publish account data only. This
-    //    fetches exchange trades once instead of once from each of up to 200 cores.
+    //    core per exchange and account currency calls subscribe_all_trades; the others publish
+    //    account data only. This fetches each group's trades once instead of once per core.
     //    initial_strategies IS REQUIRED, or initialization hangs after Connected.
     //    Whether the core sends its log at all is the user's `log_delivery` (Connections). The
     //    station never asks for it — the clock offset comes from the Ping (`ping_clock`) and it

@@ -300,7 +300,8 @@ pub struct AppConfig {
     pub core_groups: Vec<CoreGroup>,
     /// Interface language (settings.toml). Defaults to the system locale.
     pub language: Language,
-    /// Market-data source (settings.toml). Defaults to Dedup, one provider per exchange.
+    /// Market-data source (settings.toml). Defaults to Dedup, one provider per exchange and account
+    /// currency; a pair quoted in another group's currency reads that group's provider.
     pub market_mode: MarketDataMode,
     /// Separate AddToChart tab per core (settings.toml).
     pub charts_split_by_core: bool,
