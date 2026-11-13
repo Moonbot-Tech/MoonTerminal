@@ -260,6 +260,10 @@ impl Shell {
                 });
                 self.classic_only_panels.clear();
                 self.auto_only_panels.clear();
+                // The rail's ⚙ popup lives only in Auto. Leaving with it open removes it with the
+                // rail and reports no close, so the flag would survive and the popup would be
+                // standing open on the next return — where the first ⚙ click shuts it instead.
+                self.rail_settings_open = false;
                 self.applied_workspace_mode = WorkspaceMode::Classic;
                 crate::window::detached::respawn_all(&self.backend, cx);
             }
@@ -728,7 +732,17 @@ impl Shell {
         };
         let gear = match density {
             // 52 px holds the count and nothing else; the preferences only govern the dot there anyway.
-            WorkspaceRailDensity::Icon => None,
+            WorkspaceRailDensity::Icon => {
+                // Narrowing to this width drops an open popup without reporting a close, and the
+                // flag would reopen it on the way back out. Cleared once, after this frame.
+                if self.rail_settings_open {
+                    let shell = cx.entity();
+                    cx.defer(move |app| {
+                        shell.update(app, |this, cx| this.set_rail_settings_open(false, cx));
+                    });
+                }
+                None
+            }
             WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => {
                 Some(rail_settings::rail_settings_popover(
                     &cx.entity(),

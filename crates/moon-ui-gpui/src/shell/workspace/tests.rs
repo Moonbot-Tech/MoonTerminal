@@ -1303,3 +1303,33 @@ fn rehome_auto_panel_leaves_pinned_and_unknown_names_unchanged() {
     assert_eq!(rehome_auto_panel(topology.clone(), "ChartTabs"), topology);
     assert_eq!(rehome_auto_panel(topology.clone(), "News"), topology);
 }
+
+/// Catches the rail's ⚙ popup flag outliving the rail. The popup disappears without reporting a
+/// close both when the workspace leaves Auto and when the rail narrows to Icon density; a flag left
+/// true stands the popup open on the way back, and the user's first ⚙ click then shuts it.
+#[test]
+fn rail_settings_flag_is_cleared_wherever_the_popup_stops_being_drawn() {
+    let source = include_str!("../workspace.rs");
+    let classic = source
+        .split("pub(super) fn apply_workspace_mode")
+        .nth(1)
+        .and_then(|tail| tail.split("WorkspaceMode::Classic => {").nth(1))
+        .and_then(|tail| tail.split("fn rehome_auto_panel_from_user").next())
+        .expect("the Classic branch of workspace mode application must remain bounded");
+    assert!(
+        classic.contains("self.rail_settings_open = false;"),
+        "leaving Auto must close the rail's settings popup flag"
+    );
+    let icon = source
+        .split("let gear = match density {")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact")
+                .next()
+        })
+        .expect("the rail's gear must still be chosen per density");
+    assert!(
+        icon.contains("set_rail_settings_open(false, cx)"),
+        "Icon density, which draws no gear, must close the popup flag"
+    );
+}
