@@ -1,4 +1,4 @@
-//! Market-plan coordinator: in `Dedup` mode it elects one provider core per exchange and handles
+//! Market-plan coordinator: `Dedup` elects one provider per exchange and account currency and handles
 //! failover, while in `PerCore` mode every core is its own provider. It computes served markets
 //! from the union of open charts plus linger and distributes market roles to cores. This logic
 //! extends the existing per-core feed and lives as `SessionManager` methods so the child module
@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 use super::{CoreId, SessionManager};
 use crate::feed::{ConnStatus, CoreCmd, ExchangeId};
 use crate::market::MarketDataMode;
+
+pub(super) mod election;
 
 /// Keep serving a market for this long after its last chart closes so a quick reopen does not
 /// interrupt subscriptions or reads and reload history from scratch.
@@ -31,7 +33,7 @@ impl SessionManager {
     /// This runs when desired market or order-book state is dirty and as an infrequent wall-clock
     /// fallback, not on every present or render frame. It re-elects providers, computes served
     /// markets per provider, and sends each core a market role only when that role changes.
-    /// Returns whether provider routing changed, invalidating consumers of the routed catalogs.
+    /// Returns whether catalog or per-market routing changed, invalidating their consumers.
     pub fn set_open(
         &mut self,
         desired: &[(CoreId, String)],
@@ -41,12 +43,12 @@ impl SessionManager {
         let providers_changed = self.reconcile_providers();
         self.sweep_coin_naming();
 
-        // 1. A provider's desired markets are the union of open charts for cores assigned to that
-        //    provider. The input is a list of pairs because one core may have several open markets
+        // 1. A provider's desired markets are the union of open charts routed to that quote group.
+        //    The input is a list of pairs because one core may have several open markets
         //    across multiple panels; aggregate them into one set per provider.
         let mut desired_pm: HashMap<CoreId, HashSet<String>> = HashMap::new();
         for (core, market) in desired {
-            if let Some(&p) = self.core_provider.get(core) {
+            if let Some(p) = self.market_source.provider_of_market(*core, market) {
                 desired_pm.entry(p).or_default().insert(market.clone());
             }
         }
@@ -55,7 +57,7 @@ impl SessionManager {
         // reopen wait on a cold subscribe while klines were still in the store.
         let mut orderbook_pm: HashMap<CoreId, HashSet<String>> = HashMap::new();
         for (core, market) in desired_orderbook {
-            if let Some(&p) = self.core_provider.get(core) {
+            if let Some(p) = self.market_source.provider_of_market(*core, market) {
                 orderbook_pm.entry(p).or_default().insert(market.clone());
             }
         }
@@ -175,14 +177,14 @@ impl SessionManager {
         self.reconcile_providers();
     }
 
-    /// Rebuild `core_provider` (core to provider core) and `providers` (exchange to provider).
-    /// `Dedup` prefers one Ready core per exchange, retaining the current Ready provider when
-    /// possible and falling back to the exchange's first available core when none are Ready. In
+    /// Rebuild core routing and retain one provider per exchange and account currency.
+    /// `Dedup` prefers a Ready member, retaining the group's current Ready provider when
+    /// possible and falling back to its first available core when none are Ready. In
     /// `PerCore`, every core is its own provider.
-    /// Returns whether the effective catalog routing changed.
+    /// Returns whether effective catalog or quote-group routing changed.
     fn reconcile_providers(&mut self) -> bool {
-        // Snapshot `(id, exchange, Ready?)` so later mutations do not retain borrows of `self`.
-        let infos: Vec<(CoreId, Option<ExchangeId>, bool)> = self
+        // Preserve session order so readiness ties never depend on HashMap iteration.
+        let infos: Vec<election::ElectionCore<'_>> = self
             .sessions
             .iter()
             .map(|s| {
@@ -192,7 +194,12 @@ impl SessionManager {
                     .core(s.id)
                     .map(|d| matches!(d.status, ConnStatus::Ready))
                     .unwrap_or(false);
-                (s.id, key, ready)
+                election::ElectionCore {
+                    id: s.id,
+                    exchange: key,
+                    currency: self.core_base.get(&s.id).map(String::as_str),
+                    ready,
+                }
             })
             .collect();
 
@@ -200,54 +207,25 @@ impl SessionManager {
 
         match self.mode {
             MarketDataMode::PerCore => {
-                for (id, _, _) in &infos {
-                    new_core_provider.insert(*id, *id);
+                for core in &infos {
+                    new_core_provider.insert(core.id, core.id);
                 }
                 self.providers.clear();
             }
             MarketDataMode::Dedup => {
-                // Group cores by exchange, excluding cores whose exchange identity is unknown.
-                let mut by_key: HashMap<ExchangeId, Vec<CoreId>> = HashMap::new();
-                for (id, key, _) in &infos {
-                    if let Some(k) = key {
-                        by_key.entry(*k).or_default().push(*id);
-                    }
-                }
-                let ready_of = |id: CoreId| {
-                    infos
-                        .iter()
-                        .find(|(i, _, _)| *i == id)
-                        .map(|(_, _, r)| *r)
-                        .unwrap_or(false)
-                };
-                // Keep the current provider when it is present and Ready; otherwise choose the
-                // exchange's first Ready core, falling back to its first core of any status.
-                let mut elected: HashMap<ExchangeId, CoreId> = HashMap::new();
-                for (k, cores) in &by_key {
-                    let cur = self.providers.get(k).copied();
-                    let keep = cur.filter(|c| cores.contains(c) && ready_of(*c));
-                    let chosen = keep
-                        .or_else(|| cores.iter().copied().find(|c| ready_of(*c)))
-                        .or_else(|| cores.first().copied());
-                    if let Some(p) = chosen {
-                        elected.insert(*k, p);
-                        for &c in cores {
-                            new_core_provider.insert(c, p);
-                        }
-                    }
-                }
-                // When an exchange changes provider, clear the old provider's data, `wanted`, and
-                // `last_cmd`. It will receive a fresh `(false, [])` role and unsubscribe all trades.
-                for (k, &p) in &elected {
-                    if self.providers.get(k).copied() != Some(p) {
-                        if let Some(old) = self.providers.get(k).copied() {
-                            self.market_source.drop_provider(old);
-                            self.wanted.remove(&old);
-                            self.wanted_orderbook.remove(&old);
-                            self.last_cmd.remove(&old);
-                            self.pending_drop.retain(|(pp, _), _| *pp != old);
-                            self.pending_ob_drop.retain(|(pp, _), _| *pp != old);
-                        }
+                let (elected, mapping) = election::elect(&infos, &self.providers);
+                new_core_provider = mapping;
+                // A key change may retain a tape. Drop only providers no longer elected anywhere.
+                let retained: HashSet<_> = elected.values().copied().collect();
+                let old_providers: HashSet<_> = self.providers.values().copied().collect();
+                for old in old_providers {
+                    if !retained.contains(&old) {
+                        self.market_source.drop_provider(old);
+                        self.wanted.remove(&old);
+                        self.wanted_orderbook.remove(&old);
+                        self.last_cmd.remove(&old);
+                        self.pending_drop.retain(|(pp, _), _| *pp != old);
+                        self.pending_ob_drop.retain(|(pp, _), _| *pp != old);
                     }
                 }
                 self.providers = elected;
@@ -255,6 +233,27 @@ impl SessionManager {
         }
 
         self.market_source.set_provider_map(&new_core_provider);
+        // Catalogs stay within the core's group; individual markets may use another currency's
+        // tape, but only on the exact same exchange (including the DEX identity).
+        let mut overrides: HashMap<CoreId, HashMap<Box<str>, CoreId>> = HashMap::new();
+        for core in &infos {
+            for (key, &provider) in &self.providers {
+                if core.exchange == Some(key.exchange)
+                    && new_core_provider.get(&core.id) != Some(&provider)
+                    && infos
+                        .iter()
+                        .any(|candidate| candidate.id == provider && candidate.ready)
+                {
+                    if let Some(currency) = &key.currency {
+                        overrides
+                            .entry(core.id)
+                            .or_default()
+                            .insert(currency.clone(), provider);
+                    }
+                }
+            }
+        }
+        let overrides_changed = self.market_source.set_market_provider_overrides(&overrides);
         // Stable provider exchange identities key the local kline cache, allowing cores on one
         // exchange to share cached data and preserving that cache across provider elections.
         let provider_exchange: HashMap<CoreId, ExchangeId> = new_core_provider
@@ -267,7 +266,7 @@ impl SessionManager {
         // own exchange out of its own column, and a pane sits on a core whether or not that core
         // serves prices.
         self.market_source.set_core_venues(&self.core_venue);
-        let changed = self.core_provider != new_core_provider;
+        let changed = self.core_provider != new_core_provider || overrides_changed;
         self.core_provider = new_core_provider;
         changed
     }

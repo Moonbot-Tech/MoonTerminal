@@ -53,6 +53,122 @@ fn key(market: &str) -> Key {
     (EX.to_owned(), market.to_owned())
 }
 
+/// Sharing a ring would turn a silent USDC owner's missing lists into unchanged coverage.
+#[test]
+fn a_silent_currency_does_not_borrow_another_groups_validity() {
+    let exchange = "rec-groups:00000000";
+    let (usdt, usdc) = (9_200_001, 9_200_002);
+    core_exchange(usdt, exchange, Some("USDT".into()));
+    core_exchange(usdc, exchange, Some("USDC".into()));
+    let primary = source::claim(usdt, 0).unwrap().ring_key();
+    let secondary = source::claim(usdc, 0).unwrap().ring_key();
+    let mut rec = Recorder::new(Some(Store::in_memory().unwrap()));
+    for (index, market) in ["BTCUSDT", "XALPHA-USDC"].iter().enumerate() {
+        rec.plan((exchange.into(), (*market).into()))
+            .closed(trade(index as i64), 0, 22_000);
+    }
+    for t in (0..=22_000).step_by(2_000) {
+        for (group, market) in [(&primary, "BTCUSDT"), (&secondary, "XALPHA-USDC")] {
+            if group == &secondary && t != 0 && t != 20_000 {
+                continue;
+            }
+            let mut batch = list(t, 10.0);
+            batch.exchange = group.clone();
+            batch.rows[0].market = market.into();
+            rec.list(batch);
+        }
+    }
+    rec.flush(
+        22_000,
+        22_000,
+        Window {
+            margin_ms: 0,
+            long_ms: 60_000,
+            tail_ms: 0,
+        },
+    );
+    let conn = rec.store.as_ref().unwrap().conn();
+    let bounds = |market| {
+        read_conn(conn, exchange, market, 0, 22_000)
+            .unwrap()
+            .iter()
+            .map(|s| (s.from_ms, s.to_ms))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bounds("BTCUSDT"), vec![(0, 22_000)]);
+    assert_eq!(bounds("XALPHA-USDC"), vec![(0, 8_000), (20_000, 22_000)]);
+    assert_eq!(source::market_key(exchange, "BTCUSDT"), exchange);
+    assert_eq!(&*secondary, "rec-groups:00000000|USDC");
+    core_down(usdt);
+    core_down(usdc);
+}
+
+/// Reusing the primary's coarse storage key must not reuse the former primary's listening run.
+#[test]
+fn a_new_primary_cannot_inherit_the_previous_currency_run() {
+    let exchange = "rec-primary:00000000";
+    let (usdc, usdt) = (9_200_011, 9_200_012);
+    source::set_exchange(usdc, exchange, Some("USDC".into()));
+    let first = source::claim(usdc, 0).unwrap();
+    let mut rec = Recorder::new(Some(Store::in_memory().unwrap()));
+    let mut batch = list(0, 10.0);
+    batch.exchange = first.ring_key();
+    rec.list(batch);
+    note_recording(&first.ring_key(), 0);
+    source::set_exchange(usdt, exchange, Some("USDT".into()));
+    assert_eq!(recording_since_ms(exchange), None);
+    rec.plan((exchange.into(), "XUSDT".into()))
+        .closed(trade(1), 0, 6_000);
+    rec.flush(
+        6_000,
+        6_000,
+        Window {
+            margin_ms: 0,
+            long_ms: 60_000,
+            tail_ms: 0,
+        },
+    );
+    assert!(
+        read_conn(
+            rec.store.as_ref().unwrap().conn(),
+            exchange,
+            "XUSDT",
+            0,
+            6_000
+        )
+        .unwrap()
+        .is_empty()
+    );
+    // The USDC group keeps its own run after changing from primary to secondary.
+    assert_eq!(recording_since_ms("rec-primary:00000000|USDC"), Some(0));
+    source::forget(usdc);
+    source::forget(usdt);
+}
+
+/// A dropped list and the first-list timestamp must affect only the batch's physical group.
+#[test]
+fn broken_lists_and_recording_starts_are_per_group() {
+    let primary: Arc<str> = Arc::from("rec-broken:00000000");
+    let secondary: Arc<str> = Arc::from("rec-broken:00000000|USDC");
+    let mut rec = Recorder::new(None);
+    for (key, first) in [(&primary, 0), (&secondary, 1_000)] {
+        note_recording(key, first);
+        for t in [first, 6_000] {
+            let mut batch = list(t, 10.0);
+            batch.exchange = key.clone();
+            batch.broken = key == &secondary && t == 6_000;
+            rec.list(batch);
+        }
+    }
+    assert_eq!(recording_since_ms(&primary), Some(0));
+    assert_eq!(recording_since_ms(&secondary), Some(1_000));
+    assert_eq!(rec.rings[&*primary].valid(8_000).spans(), &[(0, 8_000)]);
+    assert_eq!(
+        rec.rings[&*secondary].valid(8_000).spans(),
+        &[(1_000, 1_000), (6_000, 8_000)]
+    );
+}
+
 fn read(rec: &Recorder, market: &str) -> Vec<PriceSpan> {
     let store = rec.store.as_ref().unwrap();
     read_conn(store.conn(), EX, market, 0, i64::MAX).unwrap()

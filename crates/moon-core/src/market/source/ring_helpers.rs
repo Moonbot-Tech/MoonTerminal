@@ -10,7 +10,7 @@ use super::*;
 /// `MarketStore`, then exposes a read-only view by consumer core/market.
 #[derive(Clone)]
 pub struct MarketDataSource {
-    pub(super) inner: Arc<RwLock<MarketDataSourceInner>>,
+    pub(in crate::market) inner: Arc<RwLock<MarketDataSourceInner>>,
 }
 
 pub(super) fn moon_time_from_rel_ms(epoch_ms: f64, rel_ms: f32) -> MoonTime {

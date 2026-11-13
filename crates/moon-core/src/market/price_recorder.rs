@@ -13,8 +13,8 @@
 //!
 //! # Where the lists come from
 //!
-//! Every core's client receives its core's list; one core per exchange is the source ([`source`]),
-//! read right after the list was applied, before any filter of the station's
+//! Every core's client receives its core's list; one core per exchange and account currency is
+//! the source ([`source`]), read right after the list was applied, before any filter of the station's
 //! ([`on_prices_updated`]). Rows are taken as they arrived — nothing is recomputed, nothing
 //! interpolated. Only markets with a mark are kept, so spot drops out by itself.
 //!
@@ -106,7 +106,7 @@ const TAIL_EXTRA_MS: i64 = 10_000;
 const RETENTION_EVERY: Duration = Duration::from_secs(600);
 /// How often the summary line is written to the application log.
 const SUMMARY_EVERY: Duration = Duration::from_secs(300);
-/// Lists queued for the thread. A full queue drops the list and breaks that exchange's run.
+/// Lists queued for the thread. A full queue drops the list and breaks that currency group's run.
 const PRICE_QUEUE: usize = 256;
 /// Segments a failing file may hold back for the next flush; past it the oldest are lost.
 const MAX_UNFILED: usize = 5_000;
@@ -118,10 +118,10 @@ pub fn enabled() -> bool {
     crate::feed::station::profile() != Some(crate::feed::station::Profile::Reports)
 }
 
-/// A core named its exchange (`"{code}:{dex:08x}"`, the replay address's spelling).
-pub fn core_exchange(core: CoreId, exchange_key: &str) {
+/// Register an exchange (the replay address's spelling) and normalized account currency.
+pub fn core_exchange(core: CoreId, exchange_key: &str, currency: Option<Box<str>>) {
     if enabled() {
-        source::set_exchange(core, exchange_key);
+        source::set_exchange(core, exchange_key, currency);
     }
 }
 
@@ -130,7 +130,7 @@ pub fn core_down(core: CoreId) {
     source::forget(core);
 }
 
-/// A list was applied on `core`'s client: when this core is its exchange's source, read the rows
+/// A list was applied on `core`'s client: when this core is its currency group's source, read the rows
 /// and queue them. Called on the core's feed thread before any event filter; costs one lock when
 /// another core is the source.
 ///
@@ -143,16 +143,16 @@ pub fn on_prices_updated(core: CoreId, included_funding: bool, client: &moonprot
         return;
     }
     let now_ms = crate::util::now_unix_ms_i64();
-    let Some(exchange) = source::claim(core, now_ms) else {
+    let Some(claim) = source::claim(core, now_ms) else {
         return;
     };
     let Some(snapshot) = client.snapshot() else {
         return;
     };
-    let rows = source::rows_of(snapshot.markets(), included_funding);
+    let rows = source::rows_of(snapshot.markets(), included_funding, &claim);
     drop(snapshot);
     send_prices(Batch {
-        exchange,
+        exchange: claim.ring_key(),
         t_ms: now_ms,
         rows,
         broken: false,
@@ -231,12 +231,12 @@ pub fn shutdown(timeout: Duration) -> bool {
 /// `(exchange key, market)`.
 type Key = (String, String);
 
-/// One list of one exchange.
+/// One list of one exchange and currency group, using its stable in-memory group key.
 struct Batch {
     exchange: Arc<str>,
     t_ms: i64,
     rows: Vec<Row>,
-    /// A list of this exchange before this one was dropped on a full queue.
+    /// A list of this group before this one was dropped on a full queue.
     broken: bool,
 }
 
@@ -269,27 +269,29 @@ struct Tx {
 }
 
 static TX: OnceLock<Option<Tx>> = OnceLock::new();
-/// Exchanges whose list a full queue dropped: their next queued list is marked broken.
+/// Currency groups whose list a full queue dropped: their next queued list is marked broken.
 static DROPPED: Mutex<Vec<Arc<str>>> = Mutex::new(Vec::new());
 /// Lists a full queue dropped since the last summary line.
 static DROPPED_LISTS: AtomicU64 = AtomicU64::new(0);
-/// Per exchange, the earliest stamp of a list this process queued for its recorder.
+/// Per exchange and currency group, the earliest stamp queued for its recorder.
 static RECORDING_SINCE: Mutex<Vec<(Arc<str>, i64)>> = Mutex::new(Vec::new());
 
-/// The earliest stamp this process queued for `exchange_key`, or `None` before its first list.
+/// The earliest queued stamp for the currency group addressed by this storage key.
+/// A coarse key denotes the current primary group; `None` means no list for that group yet.
 ///
 /// A list is stamped by the process clock when it arrives, an exchange's ring vouches only from
 /// its own first list, and a filed segment starts at one of its points or later — so nothing this
 /// process files for that exchange speaks for ground before this moment. The price pull reads it
 /// to take everything older from the station, rather than leave the stretch between its own edge
 /// and this start empty for the whole run. Per exchange: one whose core connects later starts
-/// later.
+/// later. The underlying timestamps use stable currency identities even when the primary changes.
 pub fn recording_since_ms(exchange_key: &str) -> Option<i64> {
+    let group = source::recording_key(exchange_key);
     RECORDING_SINCE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .iter()
-        .find(|(exchange, _)| &**exchange == exchange_key)
+        .find(|(exchange, _)| exchange.as_ref() == group.as_str())
         .map(|&(_, since)| since)
 }
 
@@ -532,13 +534,14 @@ impl Recorder {
             plan.expire(now_ms);
             let due = plan.need(window).clip(&up_to_horizon).minus(&plan.settled);
             if !due.is_empty() {
-                let ring = rings.get(exchange.as_str());
+                let (storage_key, ring_key) = source::market_keys(exchange, market);
+                let ring = rings.get(ring_key.as_str());
                 let valid = ring.map_or_else(Coverage::none, |r| r.valid(horizon_ms).clip(&bounds));
                 let writable = due.clip(&valid);
                 for &(from, to) in writable.spans() {
                     match ring.and_then(|r| r.segment(market, from, to)) {
                         Some(segment) => filed.push(Filed {
-                            exchange: exchange.clone(),
+                            exchange: storage_key.clone(),
                             market: market.clone(),
                             segment,
                         }),

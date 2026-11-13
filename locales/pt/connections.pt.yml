@@ -4,7 +4,7 @@
 _version: 1
 
 conn.market_src: "Fonte dos dados de mercado"
-conn.market_dedup: "Dados compartilhados — um núcleo por corretora"
+conn.market_dedup: "Dados compartilhados — um núcleo por corretora e moeda"
 conn.market_percore: "Separado — cada gráfico no próprio núcleo"
 conn.core_sort: "Ordem dos núcleos"
 conn.core_sort.name: "Por nome — alfabética"
@@ -81,7 +81,7 @@ conn.list.menu_icon: "Ícone do grupo…"
 conn.list.menu_mode: "Modo para todos os núcleos do grupo"
 conn.list.add_core: "Adicionar um núcleo ao grupo"
 conn.market_src.hint: "De onde os gráficos tiram negócios e o livro de ofertas."
-conn.market_src.more: "«Compartilhados» economiza tráfego: os dados de cada exchange vêm de um núcleo. «Separados»: cada gráfico lê seu próprio núcleo; necessário se núcleos em contas diferentes veem coisas diferentes."
+conn.market_src.more: "«Compartilhados» economiza tráfego: os dados de cada exchange e moeda da conta vêm de um núcleo. «Separados»: cada gráfico lê seu próprio núcleo; necessário se núcleos em contas diferentes veem coisas diferentes."
 conn.core_sort.hint: "Em todas as listas do aplicativo."
 conn.card.active: "ativo"
 conn.card.name: "Nome"

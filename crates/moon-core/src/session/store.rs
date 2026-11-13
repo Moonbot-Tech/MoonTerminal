@@ -1,5 +1,6 @@
 //! Per-core account data: status, orders, detects, and strategies. Each core has its own state.
-//! Market data such as price ticks and order books is shared per exchange and lives separately in
+//! Market data such as price ticks and order books is shared per exchange and account currency,
+//! and lives separately in
 //! `crate::market::MarketStore`, deduplicated through a provider core; it never enters this store.
 //!
 //! Revision counters replace dirty flags: each panel decides when to reload its data, which matters

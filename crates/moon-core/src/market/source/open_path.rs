@@ -62,7 +62,7 @@ impl OpenPathHistory {
         let (core, market) = target;
         let open = (now_ms / tf_ms.max(1)) * tf_ms.max(1);
         let inner = source.inner.read().expect("market source poisoned");
-        let provider = inner.core_provider.get(&core).copied().unwrap_or(core);
+        let provider = inner.market_provider(core, market).unwrap_or(core);
         let exchange = inner
             .provider_exchange
             .get(&provider)

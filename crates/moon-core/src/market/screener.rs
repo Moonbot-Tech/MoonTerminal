@@ -1,8 +1,8 @@
 //! Screener data (the "Coin Table"): a snapshot of ALL markets from a provider core.
 //!
-//! Market fields (volumes, deltas, funding, and price step) are read once from the provider
-//! core, using the same per-exchange deduplication as the rest of the market layer: the
-//! `BTCUSDT@Bybit` market is identical across all cores on that exchange. Account fields are
+//! Catalog membership stays on the core's exchange/currency provider; market fields (volumes,
+//! deltas, funding and price step) follow each market's quote-group tape on that exchange.
+//! The `BTCUSDT@Bybit` market is identical across all cores on that exchange. Account fields are
 //! specific to each core, so a row is a market ON ONE CORE: [`MarketDataSource::screener_rows`]
 //! states the market half once and repeats it per supplied member with that member's own PnL,
 //! Session, position and leverage. Until 2026-09-12 those were SUMMED across the members into one
@@ -24,12 +24,11 @@ use super::source::{MarketDataSource, max_order_notional, session_base_rate, ses
 /// One market on one core: the provider's market data with that core's account fields.
 #[derive(Clone, Debug, Default)]
 pub struct ScreenerRow {
-    /// Market-data provider core the market half was read from — the row's EXCHANGE identity:
-    /// `(provider, market)` is unique across a whole screener, while `market` alone repeats across
-    /// exchanges and `(core, market)` repeats across the cores sharing one.
+    /// Catalog provider identifying this row's exchange/currency universe. Individual market
+    /// values may come from another quote group's tape on the same exchange.
     pub provider: CoreId,
     /// The core whose account fields this row states — the one a chart opened from it belongs to.
-    /// Equal to `provider` on a market-only row from [`MarketDataSource::screener_market_rows`].
+    /// Equal to `provider` on a market-only row, even when another quote group's tape serves it.
     pub core: CoreId,
     /// Canonical market name from `MarketHandle::name()` (exchange `bn_market_name`).
     /// `handles_by_name`, subscriptions, and searches use this key. The Moonbot display name
@@ -258,10 +257,10 @@ impl MarketDataSource {
         rows
     }
 
-    /// Builds the market half of the screener: one row per market of `provider`, no account fields.
+    /// Builds the market half of the screener: the catalog provider's list, no account fields.
     ///
-    /// What every core on the exchange shares — volumes, deltas, funding, caps — read once from the
-    /// provider. `core` is the provider and the account fields stay at their defaults; a
+    /// Each market's volumes, deltas, funding and caps follow its quote-group tape. `core` remains
+    /// the catalog provider and the account fields stay at their defaults; a
     /// caller that wants them per core goes through [`Self::screener_rows`], which builds on this.
     ///
     /// Args:
@@ -282,34 +281,69 @@ impl MarketDataSource {
         let hour_cutoff_ms = MoonTime::now().unix_millis() - 3_600_000;
 
         let markets = snap.markets();
+        // Capture each routed snapshot once for this scan, including unavailable tapes. Never
+        // substitute the catalog's stale values when a market's elected tape has no snapshot.
+        let mut snapshots = std::collections::HashMap::new();
+        snapshots.insert(provider, Some(snap.clone()));
         let mut rows = Vec::with_capacity(markets.market_count());
+        // Only copy routing state under the source lock; the scan and snapshot reads run outside it.
+        let (catalog_provider, exchange, overrides) = self
+            .inner
+            .read()
+            .expect("market source poisoned")
+            .market_routing(provider);
         for handle in markets.iter() {
             let name = handle.name();
-            let mut row = handle.with(|m| ScreenerRow {
+            let market_provider = handle.with(|m| {
+                super::source::routing::market_provider(
+                    catalog_provider,
+                    exchange,
+                    overrides.as_ref(),
+                    name,
+                    Some(&m.base_currency),
+                )
+            });
+            let Some(market_provider) = market_provider else {
+                continue;
+            };
+            let data = snapshots.entry(market_provider).or_insert_with(|| {
+                self.core_client(market_provider)
+                    .and_then(|client| client.snapshot_versioned())
+            });
+            let mut row = ScreenerRow {
                 provider,
                 core: provider,
                 market: name.to_string(),
-                coin: m.market_currency.clone(),
-                vol_24h: m.volume,
-                ask: m.price.ask,
-                max_order: max_order_notional(
+                coin: handle.with(|m| m.market_currency.clone()),
+                ..ScreenerRow::default()
+            };
+            let Some(data) = data.as_ref() else {
+                rows.push(row);
+                continue;
+            };
+            let Some(handle) = data.markets().get(name) else {
+                rows.push(row);
+                continue;
+            };
+            handle.with(|m| {
+                row.vol_24h = m.volume;
+                row.ask = m.price.ask;
+                row.max_order = max_order_notional(
                     &m.base_currency,
                     m.max_notional(),
                     m.max_qty(),
                     m.price.ask,
                     m.contract_size(),
                 )
-                .value,
-                funding_pct: m.funding_rate,
-                mark_delta_pct: (m.price.mark_price_found
-                    && m.price.p_last > 0.0
-                    && m.price.mark_price > 0.0)
-                    .then(|| (m.price.mark_price / m.price.p_last - 1.0) * 100.0),
-                price_step: m.price.chart_price_step,
-                max_leverage: m.max_leverage,
-                ..ScreenerRow::default()
+                .value;
+                row.funding_pct = m.funding_rate;
+                row.mark_delta_pct =
+                    (m.price.mark_price_found && m.price.p_last > 0.0 && m.price.mark_price > 0.0)
+                        .then(|| (m.price.mark_price / m.price.p_last - 1.0) * 100.0);
+                row.price_step = m.price.chart_price_step;
+                row.max_leverage = m.max_leverage;
             });
-            let derived = snap.market_history_derived_snapshot_now(name);
+            let derived = data.market_history_derived_snapshot_now(name);
             row.apply_range_deltas(derived.map(|snapshot| snapshot.deltas));
             if let Some(d) = derived {
                 row.vol_1h = d.candle_volumes.one_hour;
@@ -320,7 +354,7 @@ impl MarketDataSource {
                     row.high_1h = f64::from(c.high());
                 }
             }
-            if let Some(candles) = snap.market_history_readers(name).and_then(|r| r.candles_5m) {
+            if let Some(candles) = data.market_history_readers(name).and_then(|r| r.candles_5m) {
                 candles.with_last(12, |view| {
                     view.for_each(|c| {
                         if c.time().unix_millis() >= hour_cutoff_ms {

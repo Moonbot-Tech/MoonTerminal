@@ -35,9 +35,9 @@ impl MarketDataSource {
         out.mark_points.clear();
         let (provider, client, epoch, archive) = {
             let inner = self.inner.read().expect("market source poisoned");
-            inner.core_provider.get(&core).and_then(|provider| {
-                let (client, epoch) = inner.clients.get(provider)?.get_with_epoch()?;
-                Some((*provider, client, epoch, inner.archive.clone()))
+            inner.market_provider(core, market).and_then(|provider| {
+                let (client, epoch) = inner.clients.get(&provider)?.get_with_epoch()?;
+                Some((provider, client, epoch, inner.archive.clone()))
             })
         }?;
         let readers = client

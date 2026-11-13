@@ -4,6 +4,39 @@ use super::*;
 
 const EX: &str = "ex:00000000";
 
+/// Secondary-group keys must survive station listing and fetching before the replay reads them.
+#[test]
+fn station_prices_preserve_group_keys_and_market_specific_pull_edges() {
+    let mut store = Store::in_memory().unwrap();
+    let mut secondary = filed("XALPHA-USDC", 1_000, 2_000, &[(1_000, 7.0)]);
+    secondary.exchange.push_str("|USDC");
+    store
+        .write(&[secondary, filed("BTCUSDT", 1_000, 2_000, &[(1_000, 3.0)])])
+        .unwrap();
+    let held = index_conn(store.conn(), 0, None, usize::MAX)
+        .unwrap()
+        .markets;
+    let wants = lacking_with(
+        held,
+        |_, market| {
+            if market == "XALPHA-USDC" {
+                2_000
+            } else {
+                1_500
+            }
+        },
+        |_, _, _, _| Ok(Vec::new()),
+    )
+    .unwrap();
+    assert_eq!(wants[0].spans, vec![(1_000, 1_500)]);
+    assert_eq!(wants[1].exchange, "ex:00000000|USDC");
+    assert_eq!(wants[1].spans, vec![(1_000, 2_000)]);
+    let answer = fetch_conn(store.conn(), &wants, usize::MAX).unwrap();
+    assert_eq!(answer.pieces.len(), 2);
+    let data = checked(&answer.pieces[1]).unwrap();
+    assert_eq!(codec::decode(1_000, &data).unwrap()[0].bid, 7.0);
+}
+
 fn filed(market: &str, from_ms: i64, to_ms: i64, bids: &[(i64, f64)]) -> Filed {
     Filed {
         exchange: EX.to_owned(),
@@ -201,7 +234,7 @@ fn a_run_younger_than_the_edge_pulls_up_to_its_own_first_stamp() {
     }];
     let wants = lacking_with(
         held,
-        |_| pull_edge_ms(now, Some(started)),
+        |_, _| pull_edge_ms(now, Some(started)),
         |_, _, _, _| Ok(Vec::new()),
     )
     .unwrap();
@@ -230,7 +263,7 @@ fn each_exchange_is_cut_at_its_own_start() {
     let since = |exchange: &str| (exchange == "1:00000000").then_some(now - 3_600_000);
     let wants = lacking_with(
         held,
-        |exchange| pull_edge_ms(now, since(exchange)),
+        |exchange, _| pull_edge_ms(now, since(exchange)),
         |_, _, _, _| Ok(Vec::new()),
     )
     .unwrap();
@@ -263,7 +296,7 @@ fn lacking_is_what_the_station_holds_minus_what_is_here_before_the_edge() {
     ];
     let wants = lacking_with(
         held,
-        |_| pull_edge_ms(now, Some(0)),
+        |_, _| pull_edge_ms(now, Some(0)),
         |_, market, _, _| {
             Ok(match market {
                 "XUSDT" => vec![(2_000, 2_999)],

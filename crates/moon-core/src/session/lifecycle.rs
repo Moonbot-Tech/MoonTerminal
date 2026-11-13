@@ -698,7 +698,13 @@ impl SessionManager {
                         // The replay address's spelling (`MarketDataSource::replay_address`),
                         // which the recorders' keys and donors are matched by.
                         let exchange_key = format!("{}:{:08x}", venue.id.code, venue.id.dex);
-                        crate::market::price_recorder::core_exchange(sess.id, &exchange_key);
+                        crate::market::price_recorder::core_exchange(
+                            sess.id,
+                            &exchange_key,
+                            self.core_base.get(&sess.id).and_then(|base| {
+                                super::coordinator::election::normalize_currency(base)
+                            }),
+                        );
                         crate::market::tape_recorder::core_exchange(sess.id, exchange_key);
                         self.core_venue.insert(sess.id, venue);
                         stats.identity = true;
@@ -731,6 +737,14 @@ impl SessionManager {
                         self.identity_respawns.request(sess.id);
                     }
                     FeedMsg::CoreBase { base } => {
+                        if let Some(venue) = self.core_venue.get(&sess.id) {
+                            let exchange_key = format!("{}:{:08x}", venue.id.code, venue.id.dex);
+                            crate::market::price_recorder::core_exchange(
+                                sess.id,
+                                &exchange_key,
+                                super::coordinator::election::normalize_currency(&base),
+                            );
+                        }
                         self.core_base.insert(sess.id, base);
                         stats.ui_state = true;
                     }
@@ -1250,7 +1264,10 @@ impl SessionManager {
         now_ms: i64,
         span_ms: i64,
     ) -> bool {
-        let provider = self.core_provider.get(&core).copied().unwrap_or(core);
+        let provider = self
+            .market_source
+            .provider_of_market(core, market)
+            .unwrap_or(core);
         let Some(sess) = self.sessions.iter().find(|s| s.id == provider) else {
             log::warn!(
                 "diag history fill skipped: provider core={} not found",
@@ -1298,7 +1315,10 @@ impl SessionManager {
         now_ms: i64,
         span_ms: i64,
     ) -> bool {
-        let provider = self.core_provider.get(&core).copied().unwrap_or(core);
+        let provider = self
+            .market_source
+            .provider_of_market(core, market)
+            .unwrap_or(core);
         log::warn!(
             "diag history fill disabled: MoonProto diagnostics feature is forbidden in terminal \
              core={} provider={} market={market} now_ms={now_ms} span_ms={span_ms}",

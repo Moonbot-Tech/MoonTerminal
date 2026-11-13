@@ -295,8 +295,8 @@ pub(super) fn run(
 
     // 3. Initialize WITHOUT market subscriptions. The coordinator assigns the core's market role
     //    via SetMarket after learning its exchange (Identity) and electing a provider. Only ONE
-    //    core per exchange calls subscribe_all_trades; the others publish account data only. This
-    //    fetches exchange trades once instead of once from each of up to 200 cores.
+    //    core per exchange and account currency calls subscribe_all_trades; the others publish
+    //    account data only. This fetches each group's trades once instead of once per core.
     //    initial_strategies IS REQUIRED, or initialization hangs after Connected.
     //    Whether the core sends its log at all is the user's `log_delivery` (Connections). The
     //    station never asks for it — the clock offset comes from the Ping (`ping_clock`) and it
@@ -392,6 +392,7 @@ pub(super) fn run(
     }
 
     let mut identity_sent = false;
+    let mut last_base_sent: Option<String> = None;
     // Tracked separately from `identity_sent`: the two facts come from one payload but are gated
     // on different fields, so one can be publishable while the other is not.
     let mut version_sent = false;
@@ -656,85 +657,83 @@ pub(super) fn run(
         }
 
         // Publish what `server_info` reported after BaseCheck: the core's exchange (for grouping
-        // and provider election) and its MoonBot build. One snapshot read, TWO independent
-        // publications, each once.
+        // and provider election), its MoonBot build and account currency. Account currency can
+        // arrive later or change after identity, so examine it on every snapshot.
         //
         // The build number deliberately does NOT ride the identity gate below. A venue is what
         // `exchange_code` establishes; a build number is a fact about the core process itself, and
         // a core that reports no exchange code — which lands it in the unidentified group, the
         // rows an operator inspects most — would otherwise never report its build either.
-        if !identity_sent || (is_ready && !version_sent) {
-            if let Some(snap) = client.snapshot() {
-                // Address of the Arc's `ServerInfo`, not of this clone. `set_session_identity`
-                // allocates a new Arc when the new process's BaseCheck lands, even if the bytes
-                // compare equal. Held only for the comparison below.
-                let info_addr = snap.server_info() as *const _ as usize;
-                let info = snap.server_info().clone();
-                // Gated on `is_ready`, which carries the last drained lifecycle batch's verdict.
-                // MoonProto sets the snapshot behind `server_info` ONCE, at the first Ready, and
-                // never clears it for an internal reconnect — so it keeps answering `Some` all
-                // through a `Reconnecting` episode. Without this gate the latch release below would
-                // republish the build on the very next pass and repopulate a store that had just
-                // cleared it, leaving a core displaying a build while it is visibly not connected.
-                //
-                // A `ServerRestart` withholds only the letter from the pinned snapshot: event
-                // draining and snapshot refresh are unordered, so the pin can already be fresh.
-                // Always publish the number so Waiting can advance. The respawned client's new
-                // run has no pin and publishes the fresh letter; judging requires that new epoch.
-                //
-                // The flag itself latches on having EXAMINED a snapshot, not on
-                // having sent something: a core that honestly reports no build will not start
-                // reporting one later, and latching only inside the `Some` arm would re-clone
-                // `server_info` every iteration for the life of the connection — for exactly the
-                // absent case this column has to render.
-                let predates_restart = publish_gate::server_info_predates_restart(
-                    info_addr,
-                    version_restart_info.as_ref().map(PinnedRestartInfo::addr),
-                );
-                if is_ready && !version_sent {
-                    if let Some(version) = info.server_version {
-                        // Outside the restart pin, preserve the snapshot's letter distinction:
-                        // `Some("")` is a release and `None` means no letter was reported.
-                        let _ = tx.send(FeedMsg::CoreVersion {
-                            version,
-                            suffix: publish_gate::letter_to_publish(
-                                info.version_suffix.clone(),
-                                predates_restart,
-                            ),
-                        });
-                    }
-                    version_sent = true;
-                    version_restart_info = None;
+        if let Some(snap) = client.snapshot() {
+            // Address of the Arc's `ServerInfo`. `set_session_identity`
+            // allocates a new Arc when the new process's BaseCheck lands, even if the bytes
+            // compare equal. Held only for the comparison below.
+            let info_addr = snap.server_info() as *const _ as usize;
+            let info = snap.server_info();
+            // Gated on `is_ready`, which carries the last drained lifecycle batch's verdict.
+            // MoonProto sets the snapshot behind `server_info` ONCE, at the first Ready, and
+            // never clears it for an internal reconnect — so it keeps answering `Some` all
+            // through a `Reconnecting` episode. Without this gate the latch release below would
+            // republish the build on the very next pass and repopulate a store that had just
+            // cleared it, leaving a core displaying a build while it is visibly not connected.
+            //
+            // A `ServerRestart` withholds only the letter from the pinned snapshot: event
+            // draining and snapshot refresh are unordered, so the pin can already be fresh.
+            // Always publish the number so Waiting can advance. The respawned client's new
+            // run has no pin and publishes the fresh letter; judging requires that new epoch.
+            //
+            // `version_sent` limits only CoreVersion publication, including an absent build.
+            // The snapshot is still examined every pass for account-currency changes.
+            let predates_restart = publish_gate::server_info_predates_restart(
+                info_addr,
+                version_restart_info.as_ref().map(PinnedRestartInfo::addr),
+            );
+            if is_ready && !version_sent {
+                if let Some(version) = info.server_version {
+                    // Outside the restart pin, preserve the snapshot's letter distinction:
+                    // `Some("")` is a release and `None` means no letter was reported.
+                    let _ = tx.send(FeedMsg::CoreVersion {
+                        version,
+                        suffix: publish_gate::letter_to_publish(
+                            info.version_suffix.clone(),
+                            predates_restart,
+                        ),
+                    });
                 }
-                if !identity_sent {
-                    if let Some(code) = info.exchange_code {
-                        // dex_name is nonempty only for Hyperliquid HIP-3 futures. Include it in
-                        // the identity so cores from different DEXes are NOT deduplicated onto one
-                        // provider with an incomplete market list; see ExchangeId.
-                        let dex = info.dex_name.as_deref().unwrap_or("");
-                        let id = ExchangeId::with_dex(code.stable_id(), dex);
-                        log::info!(
-                            "core {} identity: exchange_code={} dex_name={:?} -> {:?}",
-                            crate::feed::core_label(server.id),
-                            code.stable_id(),
-                            dex,
-                            id
-                        );
-                        let _ = tx.send(FeedMsg::Identity {
-                            id,
-                            dex: dex.to_string(),
-                            // The core's own caption travels with the identity so no consumer has
-                            // to reach back into a client snapshot for it while rendering.
-                            reported: info.exchange_name.clone().unwrap_or_default(),
-                        });
-                        // The account base currency selects the USD conversion used for manual
-                        // orders.
-                        let base = info.base_currency_name.unwrap_or_default();
-                        if !base.is_empty() {
-                            let _ = tx.send(FeedMsg::CoreBase { base });
-                        }
-                        identity_sent = true;
-                    }
+                version_sent = true;
+                version_restart_info = None;
+            }
+            if !identity_sent {
+                if let Some(code) = info.exchange_code {
+                    // dex_name is nonempty only for Hyperliquid HIP-3 futures. Include it in
+                    // the identity so cores from different DEXes are NOT deduplicated onto one
+                    // provider with an incomplete market list; see ExchangeId.
+                    let dex = info.dex_name.as_deref().unwrap_or("");
+                    let id = ExchangeId::with_dex(code.stable_id(), dex);
+                    log::info!(
+                        "core {} identity: exchange_code={} dex_name={:?} -> {:?}",
+                        crate::feed::core_label(server.id),
+                        code.stable_id(),
+                        dex,
+                        id
+                    );
+                    let _ = tx.send(FeedMsg::Identity {
+                        id,
+                        dex: dex.to_string(),
+                        // The core's own caption travels with the identity so no consumer has
+                        // to reach back into a client snapshot for it while rendering.
+                        reported: info.exchange_name.clone().unwrap_or_default(),
+                    });
+                    identity_sent = true;
+                }
+            }
+            if identity_sent {
+                if let Some(base) = publish_gate::base_to_publish(
+                    last_base_sent.as_deref(),
+                    info.base_currency_name.as_deref(),
+                ) {
+                    let _ = tx.send(FeedMsg::CoreBase { base: base.clone() });
+                    last_base_sent = Some(base);
                 }
             }
         }
