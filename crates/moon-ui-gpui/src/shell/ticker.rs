@@ -185,12 +185,12 @@ impl Shell {
             // the caption and the query input — and that band would otherwise pass the wheel
             // straight through to whatever the header sits on.
             .occlude()
-            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+            // Only ARMS the leave-to-close. The result list occludes on its own, so the step from
+            // the query field onto the list un-hovers this box while the pointer is still inside
+            // the popup (#1313); the close itself is driven by the dismiss layer below.
+            .on_hover(cx.listener(|this, hovered: &bool, _window, _cx| {
                 if *hovered {
                     this.ticker_popup_hovered = true;
-                } else if this.ticker_popup_hovered && !cx.has_active_drag() {
-                    this.close_ticker_popup(cx);
-                    crate::controls::coin_search::release_focus(&this.ticker_input, window, cx);
                 }
             }))
             .child(
@@ -232,10 +232,19 @@ impl Shell {
                     .child(list),
             )
             .into_any_element();
+        // The dismiss layer spans the window beneath the popup, and both the popup box and its
+        // result list occlude it, so this layer is hovered exactly when the pointer is over neither:
+        // that is the real leave, wherever inside the popup the pointer was before.
         let dismiss = div()
             .id("header-ticker-popup-dismiss")
             .absolute()
             .inset_0()
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                if *hovered && this.ticker_popup_hovered && !cx.has_active_drag() {
+                    this.close_ticker_popup(cx);
+                    crate::controls::coin_search::release_focus(&this.ticker_input, window, cx);
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _ev, window, cx| {

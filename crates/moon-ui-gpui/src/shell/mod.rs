@@ -245,6 +245,8 @@ pub(crate) struct Shell {
     /// Whether the header price-ticker source picker is open.
     ticker_popup_open: bool,
     /// Whether the pointer has entered the ticker popup, enabling dismissal when it later leaves.
+    /// Set by the popup box's hover; the leave itself is read from the dismiss layer's hover,
+    /// because the occluding result list un-hovers the box while the pointer is still inside.
     ticker_popup_hovered: bool,
     /// Coin search field used to build the ticker popup's market/core result list.
     ticker_input: Entity<MoonInputState>,
