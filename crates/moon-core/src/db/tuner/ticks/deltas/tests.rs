@@ -246,6 +246,46 @@ fn the_anchor_puts_the_track_on_the_report_at_its_stamp() {
     assert_eq!(track.stamp().error[DeltaField::D1m.index()], Some(-1.0));
 }
 
+/// The core refreshes d5s every 250 ms and a MoonShot report stamps it at the fill, inside the
+/// spike that filled the order. Comparing that against the evaluation at the step BEFORE the fill
+/// turns the spike into an offset and paints it onto the whole wait (#1150).
+#[test]
+fn the_five_second_range_is_anchored_at_the_stamp_itself() {
+    let mut ticks: Vec<Tick> = (-10_000..7_000)
+        .step_by(250)
+        .map(|ms| tick(T0 + ms, 100.0))
+        .collect();
+    ticks.extend((7_000..8_000).step_by(250).map(|ms| tick(T0 + ms, 103.0)));
+    // What the core held at the fill, +8 s: the 100 → 103 range of the last five seconds.
+    let snapshot = Deltas {
+        d5s: 3.0,
+        ..Deltas::default()
+    };
+    let track = DeltaTrack::build(TrackInputs {
+        coin_bars: &[],
+        ticks: &ticks,
+        covered: &[(T0 - 10_000, T0 + 60_000)],
+        btc_bars: &[],
+        eval: (T0, T0 + 60_000),
+        anchor: Some((T0 + 8_000, &snapshot)),
+    })
+    .unwrap();
+    let error = track.stamp().error[DeltaField::D5s.index()].unwrap();
+    assert!(close(error, 0.0), "evaluation at the stamp: {error}");
+    // While the order waited, before the spike, the range was flat.
+    let waiting = track.apply(T0 + 5_000, &snapshot).d5s;
+    assert!(
+        close(waiting, 0.0),
+        "the spike painted onto the wait: {waiting}"
+    );
+    // At the fill the track is the report, through to the step's end.
+    for at in [T0 + 8_000, T0 + 9_999] {
+        let at_fill = track.apply(at, &snapshot).d5s;
+        assert!(close(at_fill, 3.0), "{at}: {at_fill}");
+    }
+    assert!(close(track.apply(T0 + 7_999, &snapshot).d5s, 0.0));
+}
+
 #[test]
 fn an_anchor_the_track_does_not_reach_is_no_track() {
     let ticks = [tick(T0 + 1_000, 100.0)];
@@ -361,6 +401,32 @@ fn last5s_excludes_a_print_at_the_boundary_until_the_next_slot() {
     let mut eval = coin::CoinEval::new(&series);
     assert!(close(eval.at(T0)[6].0.unwrap(), 0.0));
     assert!(close(eval.at(T0 + 250)[6].0.unwrap(), 1.0));
+}
+
+/// The core samples one price per slot — the trade closest to the previous sample — so a lone
+/// spike print beside prints at the old level never widens d5s. Reading every raw print did,
+/// and missed the core at the report's stamp by a median 0.157 pp against 0.022 sampled.
+#[test]
+fn last5s_samples_the_print_closest_to_the_previous_sample() {
+    let mut ticks: Vec<Tick> = (0..5_000)
+        .step_by(250)
+        .map(|ms| tick(T0 + ms, 100.0))
+        .collect();
+    ticks.push(tick(T0 + 5_010, 103.0));
+    ticks.push(tick(T0 + 5_020, 100.0));
+    let series = series::Series::new(&[], &ticks, &[]);
+    let mut eval = coin::CoinEval::new(&series);
+    let spiked = eval.at(T0 + 5_250)[coin::D5S_SLOT].0.unwrap();
+    assert!(
+        close(spiked, 0.0),
+        "a lone spike print widened d5s: {spiked}"
+    );
+    // A slot whose every print moved to the new level is sampled there.
+    ticks.push(tick(T0 + 5_300, 103.0));
+    let series = series::Series::new(&[], &ticks, &[]);
+    let mut eval = coin::CoinEval::new(&series);
+    let moved = eval.at(T0 + 5_500)[coin::D5S_SLOT].0.unwrap();
+    assert!(close(moved, 3.0), "{moved}");
 }
 
 /// Empty cadence slots must decay in closed form even across a long coverage gap.

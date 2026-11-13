@@ -32,8 +32,15 @@
 //! equals the report exactly, and elsewhere it moves by what the tape and the bars moved. The
 //! offset absorbs what those inputs cannot see — the phase of the core's candles, the holes in the
 //! history, a core that follows the averaged price instead of raw trades (its `DeltasByTrades`
-//! switch off). Without the anchor there is no track ([`track_for`]): evaluated alone over the
-//! whole replica (2026-09-23, 1 140 trades) the bars and the tape met the report's snapshot to a
+//! switch off). d5s is the one field compared at the stamp itself rather than at the step before
+//! it: the core refreshes it every 250 ms, and a MoonShot report stamps it inside the fill's spike,
+//! which the step before has not seen. The stamp's own point is kept apart from the step's, so a
+//! read at the fill meets the report while the wait before it keeps the move without the spike
+//! (#1150). Measured on the frozen tuner bench (2026-11-13), d5s's median error at the stamp was
+//! 0.157 pp reading every raw print at the step before, 0.104 with the core's slot sample
+//! (`coin::closest_print`), 0.022 with the sample read at the stamp (1 914 tracks).
+//! Without the anchor there is no track ([`track_for`]): evaluated alone over
+//! the whole replica (2026-09-23, 1 140 trades) the bars and the tape met the report's snapshot to a
 //! median of 0.03 pp on d1h, d3h and d24h but 0.15–0.16 pp on d1m, d5m and d15m, and placed 89
 //! MoonHook takes further from the core's than the snapshot did (median 0.19 pp against 0.09).
 //!
@@ -146,6 +153,10 @@ pub struct StampCheck {
 #[derive(Clone, PartialEq)]
 pub struct DeltaTrack {
     segments: Vec<Segment>,
+    /// The stamp's own point when it lies past its step, and that moment: it holds from the stamp
+    /// to the step's end, so a read at the fill sees the report while the wait before it keeps
+    /// the step's value (d5s moves inside a step — see the module doc).
+    stamp_point: Option<(i64, Values)>,
     /// Per field: whether the track answers for it. One that does not keeps the snapshot.
     live: [bool; DeltaField::COUNT],
     stamp: StampCheck,
@@ -201,6 +212,7 @@ impl DeltaTrack {
             .anchor
             .map(|(at, _)| at.div_euclid(STEP_MS) * STEP_MS);
         let mut at_stamp: Option<(Values, [f64; DeltaField::COUNT])> = None;
+        let mut stamp_point: Option<(i64, Values)> = None;
         let mut segments = Vec::new();
         for &(span_from, span_to) in inputs.covered {
             let (from, to) = (span_from.max(inputs.eval.0), span_to.min(inputs.eval.1));
@@ -224,7 +236,26 @@ impl DeltaTrack {
                     coverage[field.index()] = covered;
                 }
                 if stamp_at == Some(at) {
-                    at_stamp = Some((point, coverage));
+                    let mut at_fill = point;
+                    let mut fill_coverage = coverage;
+                    // d5s is refreshed every 250 ms, not on the step grid, and a MoonShot report
+                    // stamps it at the fill — inside the spike that filled the order. Read at the
+                    // step before the fill, the spike would become the anchor's offset and lift
+                    // the whole wait (#1150), so its estimate is taken at the stamp itself.
+                    // Moments stay ascending: the stamp lies before the next step. A tape that
+                    // ends before the stamp has nothing to read there, and d5s keeps the step's.
+                    let past_step = inputs
+                        .anchor
+                        .map(|(stamp_ms, _)| stamp_ms)
+                        .filter(|&stamp_ms| stamp_ms > at && stamp_ms <= span_to);
+                    if let Some(stamp_ms) = past_step {
+                        let d5s = DeltaField::D5s.index();
+                        let (value, covered) = coin_eval.at(stamp_ms)[coin::D5S_SLOT];
+                        at_fill[d5s] = value.unwrap_or(f64::NAN);
+                        fill_coverage[d5s] = covered;
+                        stamp_point = Some((stamp_ms, at_fill));
+                    }
+                    at_stamp = Some((at_fill, fill_coverage));
                 }
                 values.push(point);
                 at += STEP_MS;
@@ -233,6 +264,7 @@ impl DeltaTrack {
         }
         let mut track = Self {
             segments,
+            stamp_point,
             live: [false; DeltaField::COUNT],
             stamp: StampCheck::default(),
         };
@@ -276,21 +308,37 @@ impl DeltaTrack {
             self.live[i] = true;
             offset[i] = report - estimate[i];
         }
-        for segment in &mut self.segments {
-            for point in &mut segment.values {
-                for field in DeltaField::ALL {
-                    let i = field.index();
-                    let shifted = point[i] + offset[i];
-                    // BTC's hour deviation carries a sign; every other field is a size.
-                    point[i] = if shifted.is_nan() {
-                        f64::NAN
-                    } else if field == DeltaField::Btc1h {
-                        shifted
-                    } else {
-                        shifted.max(0.0)
-                    };
-                }
+        let points = self
+            .segments
+            .iter_mut()
+            .flat_map(|s| s.values.iter_mut())
+            .chain(self.stamp_point.as_mut().map(|(_, p)| p));
+        for point in points {
+            for field in DeltaField::ALL {
+                let i = field.index();
+                let shifted = point[i] + offset[i];
+                // BTC's hour deviation carries a sign; every other field is a size.
+                point[i] = if shifted.is_nan() {
+                    f64::NAN
+                } else if field == DeltaField::Btc1h {
+                    shifted
+                } else {
+                    shifted.max(0.0)
+                };
             }
+        }
+    }
+
+    /// The point a moment reads: the stamp's own from the stamp to its step's end, else the step's.
+    fn point(&self, t_ms: i64) -> Option<&Values> {
+        match &self.stamp_point {
+            Some((stamp_ms, point))
+                if t_ms >= *stamp_ms
+                    && t_ms.div_euclid(STEP_MS) == stamp_ms.div_euclid(STEP_MS) =>
+            {
+                Some(point)
+            }
+            _ => self.segments.iter().find_map(|s| s.point(t_ms)),
         }
     }
 
@@ -298,7 +346,7 @@ impl DeltaTrack {
     /// replaced. Outside the covered stretches, the snapshot as it is.
     pub fn apply(&self, t_ms: i64, snapshot: &Deltas) -> Deltas {
         let mut out = *snapshot;
-        if let Some(point) = self.segments.iter().find_map(|s| s.point(t_ms)) {
+        if let Some(point) = self.point(t_ms) {
             for field in DeltaField::ALL {
                 let value = point[field.index()];
                 if self.live[field.index()] && value.is_finite() {
@@ -311,7 +359,7 @@ impl DeltaTrack {
 
     /// One field's value at a moment, or `None` where the track does not answer for it.
     pub fn value(&self, t_ms: i64, field: DeltaField) -> Option<f64> {
-        let point = self.segments.iter().find_map(|s| s.point(t_ms))?;
+        let point = self.point(t_ms)?;
         let value = point[field.index()];
         (self.live[field.index()] && value.is_finite()).then_some(value)
     }
