@@ -381,6 +381,20 @@ impl AnalyticsView {
         self.visible_targets(workspace).count()
     }
 
+    /// The read-visible selected rows as strategy-list row keys (`strategyid@core_uid`) — the
+    /// same rows [`Self::visible_target_keys`] scopes a read to, in the shape the "Tuning"
+    /// column keys its counts by.
+    fn selected_row_keys(&self) -> std::collections::HashSet<String> {
+        let workspace = self.read_core_ids();
+        self.sel_strategy
+            .iter()
+            .chain(self.sel_extra.iter())
+            .filter(|(key, _)| strategy_selection_visible(key, workspace))
+            .filter(|(key, _)| parse_strat_key(key).is_some())
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     /// The passing rows as bare query identities — the shape both scoped reads need.
     fn visible_target_keys(&self, workspace: Option<&[u64]>) -> Vec<(i64, Option<u64>)> {
         self.visible_targets(workspace)

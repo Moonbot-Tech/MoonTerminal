@@ -612,10 +612,12 @@ pub(in crate::analytics) struct TicksState {
     /// Whether a search of both groups screens the entry moves before an exit search under each
     /// (`SearchParams::screen_entry`). On unless the user turned it off.
     pub(in crate::analytics::tuner) screen_entry: bool,
-    /// "Recount on request only" (`TicksAxisLayout::manual_refresh`): while the rows in force
-    /// are the current scope's, a report move or a tape filing marks the card behind
-    /// (`report_behind`, `tape_behind`) instead of reloading it, and the strategy list's
-    /// "Tuning" column is not recounted for them (`ready.rs`). Off unless the user turned it on.
+    /// "Recount on request only" (`TicksAxisLayout::manual_refresh`), the checkbox beside
+    /// "Enabled only": the strategy list's "Tuning" column is counted for the selected
+    /// strategies alone, once on selection, and not at all with none selected (`ready.rs`);
+    /// while the rows in force are the current scope's, a report move or a tape filing marks the
+    /// card behind (`report_behind`, `tape_behind`) instead of reloading it, and the column is
+    /// not recounted for them. Off unless the user turned it on.
     pub(in crate::analytics::tuner) manual_refresh: bool,
     /// The report moved since the rows in force were read, and `manual_refresh` held them.
     pub(in crate::analytics::tuner) report_behind: bool,

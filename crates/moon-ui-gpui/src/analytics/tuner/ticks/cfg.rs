@@ -359,25 +359,6 @@ impl AnalyticsView {
                 cx,
             ))
             .child(popup_section(
-                t!("analytics.ticks.cfg_refresh_section").to_string(),
-                p,
-                cx,
-            ))
-            .child(
-                MoonCheckbox::new("tun-cfg-manual-refresh-x")
-                    .label(t!("analytics.ticks.cfg_manual_refresh").to_string())
-                    .description(t!("analytics.ticks.cfg_manual_refresh_help").to_string())
-                    .checked(self.ticks.manual_refresh)
-                    // `on_change` hands the callback an `&mut App`, not a `Context`.
-                    .on_change({
-                        let view = cx.entity();
-                        move |checked: &bool, _w, app| {
-                            let on = *checked;
-                            view.update(app, |this, cx| this.ticks_set_manual_refresh(on, cx));
-                        }
-                    }),
-            )
-            .child(popup_section(
                 t!("analytics.tuner.cfg_search_section").to_string(),
                 p,
                 cx,

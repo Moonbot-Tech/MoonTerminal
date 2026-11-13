@@ -21,11 +21,13 @@ impl AnalyticsView {
     ///
     /// Args:
     ///     p: Active palette.
-    ///     total: The header's "of Y": rows passing every filter but this one.
+    ///     total: The header's "of Y": rows passing every filter but this one — replaced by the
+    ///         selected strategies under "recount on request only", which counts them alone.
     ///     cx: View context, for sizing.
     ///
     /// Returns:
-    ///     The line, or `None` off "Entry/Exit" and before the first pass.
+    ///     The line, or `None` off "Entry/Exit", before the first pass, and with nothing
+    ///     selected under "recount on request only".
     pub(super) fn ready_progress_el(
         &self,
         p: MoonPalette,
@@ -33,6 +35,15 @@ impl AnalyticsView {
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         if !self.strat_mode.shows_ready() {
+            return None;
+        }
+        // "Recount on request only" counts the selected strategies alone: "of Y" is them.
+        let total = if self.ticks.manual_refresh {
+            self.visible_target_count(self.read_core_ids())
+        } else {
+            total
+        };
+        if self.ticks.manual_refresh && total == 0 {
             return None;
         }
         let (text, warn) = self.ready.status(total)?;

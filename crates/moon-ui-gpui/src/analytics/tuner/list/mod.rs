@@ -611,8 +611,26 @@ impl AnalyticsView {
                             }),
                     ),
             )
+            .children(self.strat_manual_refresh_toggle(cx))
             .child(self.strat_column_menu(cx))
             .into_any_element()
+    }
+
+    /// "Recount on request only" beside "Enabled only", on "Entry/Exit" alone — the axis whose
+    /// "Tuning" column and card it governs (`TicksState::manual_refresh`). What it does is in
+    /// the tooltip.
+    ///
+    /// Returns:
+    ///     The checkbox, or `None` on the other axes.
+    fn strat_manual_refresh_toggle(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let view = cx.entity();
+        manual_refresh_on_axis(
+            self.strat_mode,
+            self.ticks.manual_refresh,
+            std::rc::Rc::new(move |on, app| {
+                view.update(app, |this, cx| this.ticks_set_manual_refresh(on, cx));
+            }),
+        )
     }
 
     /// Strategy-type dropdown ("All" + each distinct kind); selecting sets `strat_type`.
@@ -716,8 +734,12 @@ impl AnalyticsView {
     }
 
     /// The "Tuning" filter: all / can tune. Amber while it narrows the list, like the
-    /// auto-pick filter on "By coin".
+    /// auto-pick filter on "By coin". Absent under "recount on request only", which counts the
+    /// selected strategies alone: there is no whole-list count to filter on (`ReadyPass::filter`).
     fn strat_ready_menu(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
+        if self.ticks.manual_refresh {
+            return None;
+        }
         let view = cx.entity();
         ready_filter_on_axis(
             self.strat_mode,
@@ -833,6 +855,40 @@ pub(in crate::analytics::tuner) fn auto_filter_on_axis(
     cx: &App,
 ) -> Option<impl IntoElement + use<>> {
     mode.shows_auto().then(|| auto_filter_el(cur, pick, cx))
+}
+
+/// The toolbar's "Recount on request only" checkbox on one axis: drawn on "Entry/Exit" only,
+/// absent elsewhere; what it does is in its tooltip. A free function so the toolbar's layout
+/// probe draws the very element the list does.
+///
+/// Args:
+///     mode: The axis on screen.
+///     checked: Whether the switch is on.
+///     toggle: Applies a new state.
+///
+/// Returns:
+///     The checkbox, or `None` off "Entry/Exit".
+pub(in crate::analytics::tuner) fn manual_refresh_on_axis(
+    mode: StratMode,
+    checked: bool,
+    toggle: std::rc::Rc<dyn Fn(bool, &mut App)>,
+) -> Option<AnyElement> {
+    mode.shows_ready().then(|| {
+        div()
+            .id("an-strat-manual-refresh-tip")
+            .debug_selector(|| "an-strat-manual-refresh-tip".into())
+            .font_family(design::ui_font())
+            .tooltip(crate::panels::common::text_tooltip(
+                t!("analytics.ticks.manual_refresh_tip").to_string(),
+            ))
+            .child(
+                MoonCheckbox::new("an-strat-manual-refresh")
+                    .checked(checked)
+                    .label(t!("analytics.ticks.manual_refresh").to_string())
+                    .on_change(move |on: &bool, _w, app| toggle(*on, app)),
+            )
+            .into_any_element()
+    })
 }
 
 /// The toolbar's "Tuning" filter on one axis: drawn on "Entry/Exit" only, absent elsewhere.

@@ -203,14 +203,21 @@ pub(in crate::analytics) struct ReadyKey {
     /// The step-lag calibration ([`super::ticks::lags::revision`]): a group replayed on a core
     /// whose calibration moved is recounted ([`group_signature`]).
     pub(in crate::analytics) calibration_rev: u64,
+    /// The strategies the pass counts under "recount on request only": the selected ones,
+    /// folded ([`selection_signature`]); `0` with the switch off, when the pass counts the whole
+    /// list.
+    pub(in crate::analytics) selection: u64,
 }
 
 impl ReadyKey {
     /// Whether moving from `self` to `next` makes every count wrong at once (another scope,
-    /// model or sample policy), rather than a few strategies' counts stale (a report, tape,
-    /// station refusal, address or calibration change).
+    /// model, sample policy or counted selection), rather than a few strategies' counts stale (a
+    /// report, tape, station refusal, address or calibration change).
     pub(in crate::analytics) fn restarts(&self, next: &ReadyKey) -> bool {
-        self.scope_gen != next.scope_gen || self.model != next.model || self.sample != next.sample
+        self.scope_gen != next.scope_gen
+            || self.model != next.model
+            || self.sample != next.sample
+            || self.selection != next.selection
     }
 
     /// Whether moving to `next` must read the deals again to know which strategies changed.
@@ -459,6 +466,14 @@ pub(in crate::analytics) struct ReadyPass {
     /// A recount asked for by hand (the Entry/Exit card's Refresh, a search start while behind):
     /// it lifts "recount on request only" for one launch, without the [`RERUN_GAP`] wait.
     pub(in crate::analytics) recount_asked: bool,
+    /// "Recount on request only" is on: the pass counts the selected strategies alone, so a
+    /// row without a count was never examined — it reads pending, never "no tape", and the
+    /// "Tuning" filter, which would judge the whole list on a few counts, is off.
+    pub(in crate::analytics) selective: bool,
+    /// The selected strategy-list row keys the running selective pass counts: one it finds no
+    /// trade for in the scope still gets a count — the card's own empty sample, "no tape" —
+    /// rather than reading as never examined. Empty for a whole-list pass.
+    pub(in crate::analytics) counted_selection: HashSet<String>,
 }
 
 impl Default for ReadyPass {
@@ -485,6 +500,8 @@ impl Default for ReadyPass {
             ticker: None,
             deadline_task: None,
             recount_asked: false,
+            selective: false,
+            counted_selection: HashSet::new(),
         }
     }
 }
@@ -497,10 +514,12 @@ impl ReadyPass {
     ///
     /// Returns:
     ///     "all" on every other axis, whatever the menu holds: the filter is drawn only on
-    ///     "Entry/Exit", so it must not narrow a list where it cannot be seen. There, the
+    ///     "Entry/Exit", so it must not narrow a list where it cannot be seen. "All" too while
+    ///     the pass counts the selected strategies alone ([`Self::selective`]): the filter would
+    ///     hide every row nobody counted, the ones still to be picked among them. Otherwise the
     ///     user's menu choice, "can tune" until one is made.
     pub(in crate::analytics) fn filter(&self, ticks_axis: bool) -> ReadyFilter {
-        if ticks_axis {
+        if ticks_axis && !self.selective {
             self.chosen.unwrap_or(ReadyFilter::Can)
         } else {
             ReadyFilter::All
@@ -517,12 +536,15 @@ impl ReadyPass {
         }
     }
 
-    /// The class of a row the pass holds no count for: unread after a failure; after a
-    /// finished pass, a strategy without trades in the scope, which the card refuses as having
-    /// nothing to tune on; pending otherwise.
+    /// The class of a row the pass holds no count for: unread after a failure; pending while
+    /// the pass counts the selected strategies alone ([`Self::selective`]) — the row was never
+    /// examined; after a finished pass over the whole list, a strategy without trades in the
+    /// scope, which the card refuses as having nothing to tune on; pending otherwise.
     pub(in crate::analytics) fn view_missing(&self) -> ReadyClass {
         if matches!(self.run, ReadyRun::Failed { .. }) {
             ReadyClass::Unread
+        } else if self.selective {
+            ReadyClass::Pending
         } else if matches!(self.run, ReadyRun::Done) {
             ReadyClass::of(&Readiness::default())
         } else {
@@ -570,6 +592,43 @@ impl ReadyPass {
                     && ran.addresses_rev == key.addresses_rev
                     && ran.calibration_rev == key.calibration_rev
             })
+    }
+
+    /// Retire every count and any pass armed or running. "Recount on request only" with nothing
+    /// selected counts nothing, and a whole-list pass started before the switch went on must not
+    /// go on replaying the list; a switch flipped either way leaves counts of the other kind,
+    /// which would be read under the wrong rules until the next pass lands. Cheap and
+    /// idempotent: the list calls it on every render while nothing is selected, and only a
+    /// first call moves the generation the list re-sorts on.
+    pub(in crate::analytics) fn retire_counts(&mut self) {
+        if matches!(self.run, ReadyRun::Idle)
+            && self.launched.is_none()
+            && self.ran.is_none()
+            && self.counts.is_empty()
+        {
+            return;
+        }
+        self.counted_selection.clear();
+        if let ReadyRun::Running { progress } = &self.run {
+            progress.cancel();
+        }
+        // A reply of the retired pass is dropped by its generation.
+        self.seq = self.seq.wrapping_add(1);
+        self.run = ReadyRun::Idle;
+        self.launched = None;
+        self.ran = None;
+        self.started = None;
+        self.queued = false;
+        self.launch_task = None;
+        self.ticker = None;
+        self.deadline_task = None;
+        self.counts.clear();
+        self.classes = Arc::default();
+        self.signatures.clear();
+        self.pending.clear();
+        self.deadlines.clear();
+        self.due.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// How long to wait before launching a pass for `key`.
@@ -739,6 +798,11 @@ impl ReadyPass {
                     self.signatures = pending;
                     self.deadlines.clear();
                     self.counts = counts;
+                }
+                // A selected strategy without a trade in the scope was examined all the same:
+                // the card's empty sample, as a whole-list pass reads it.
+                for key in &self.counted_selection {
+                    self.counts.entry(key.clone()).or_default();
                 }
                 for (key, deadline, _) in deadlines {
                     match deadline {
@@ -952,7 +1016,9 @@ impl ReadyPass {
     /// The progress sentence and whether it is a warning.
     ///
     /// Args:
-    ///     total: The strategy list after every filter but this one — the header's "of Y".
+    ///     total: The strategies the pass counts, as the caller has them: the strategy list after
+    ///         every filter but this one — the header's "of Y" — or, under "recount on request
+    ///         only", the selected strategies.
     ///
     /// Returns:
     ///     `None` before the first pass, or when the database is simply absent.
@@ -1394,6 +1460,20 @@ pub(in crate::analytics::tuner) fn count_strategies(
     finished.then_some(out)
 }
 
+/// The selected strategies a "recount on request only" pass counts, folded order-free into
+/// [`ReadyKey::selection`]; never `0`, which stands for the whole list.
+///
+/// Args:
+///     keys: The selected `(strategy id, core)` pairs.
+pub(in crate::analytics) fn selection_signature(keys: &[(i64, Option<u64>)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut sorted = keys.to_vec();
+    sorted.sort_unstable();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    sorted.hash(&mut hasher);
+    hasher.finish() | 1
+}
+
 impl AnalyticsView {
     /// The inputs a pass for the current view would run with.
     fn ready_key(&self, cx: &App) -> ReadyKey {
@@ -1409,6 +1489,11 @@ impl AnalyticsView {
             refusal_revision: super::ticks::fetch::station::refusal_revision(),
             addresses_rev: self.catalogs_revision(cx),
             calibration_rev: super::ticks::lags::revision(),
+            selection: if self.ticks.manual_refresh {
+                selection_signature(&self.visible_target_keys(self.read_core_ids()))
+            } else {
+                0
+            },
         }
     }
 
@@ -1432,11 +1517,27 @@ impl AnalyticsView {
         if !self.strat_mode.shows_ready() {
             return;
         }
+        if self.ready.selective != self.ticks.manual_refresh {
+            self.ready.selective = self.ticks.manual_refresh;
+            // The counts in force were taken under the other rules — a few selected strategies,
+            // or the whole list — and the class of an uncounted row and the filter both moved:
+            // the counts go, the next pass counts under the new rules, and the list's memo,
+            // which compares the generation, sorts and filters again.
+            self.ready.retire_counts();
+            self.ready.generation = self.ready.generation.wrapping_add(1);
+        }
         let loaded = self.strategy_data.data().is_some()
             && !matches!(
                 self.strategy_data,
                 crate::analytics::profit_load::ProfitLoadState::Loading
             );
+        // "Recount on request only" counts the selected strategies alone: with none selected
+        // there is nothing to count, and the whole list is never replayed — a pass armed or
+        // running for an earlier selection, or for the whole list, is retired with its counts.
+        if self.ticks.manual_refresh && self.visible_target_count(self.read_core_ids()) == 0 {
+            self.ready.retire_counts();
+            return;
+        }
         let key = self.ready_key(cx);
         if !loaded {
             return;
@@ -1525,7 +1626,25 @@ impl AnalyticsView {
         only: Option<HashSet<String>>,
         cx: &mut Context<Self>,
     ) {
-        let q = self.tuner_query_all();
+        // "Recount on request only" reads the selected strategies' deals alone; the key carries
+        // that selection, so a pass whose selection moved is retired before it runs.
+        let q = if self.ticks.manual_refresh {
+            self.tuner_query()
+        } else {
+            self.tuner_query_all()
+        };
+        // An empty strategy scope reads every strategy: a debounce or a retry that outlived
+        // the selection must not turn into the whole-list pass the switch exists to avoid.
+        if self.ticks.manual_refresh && q.strategies.is_empty() {
+            return;
+        }
+        // The selected rows this pass covers, so one without a trade in the scope still reads
+        // as examined when it lands (`ReadyPass::land`).
+        self.ready.counted_selection = if self.ticks.manual_refresh {
+            self.selected_row_keys()
+        } else {
+            HashSet::new()
+        };
         let mut resolver = self.address_resolver(cx);
         let (seq, progress) = match &only {
             Some(only) => self.ready.begin_partial(key, Instant::now(), only),
