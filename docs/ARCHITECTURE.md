@@ -379,7 +379,9 @@ The Auto rail and `DockArea` use the standard `MoonResizablePanelGroup`. Backend
 persists one draggable global rail width, while each window applies its own fit clamp without
 rewriting that preference. The virtualized rail is a tree: Overview is the root, exchanges are
 section headings, and canonically ordered cores are indented leaves with branch connectors and
-status dots. Sections are keyed by venue identity — see the venue directory below — not by the name
+status dots. Optional server grouping (`workspace::roster`, off by default) puts machine headings
+above the exchange headings; both levels are switched in the rail's ⚙ popup (see
+`docs/WINDOWING.md`). Sections are keyed by venue identity — see the venue directory below — not by the name
 a core reported, so two cores on one venue always share a heading however their builds spell it.
 Logos appear only on known exchange headings; unknown exchanges keep their text label
 without a placeholder, and core rows never inherit a logo. Entering Auto starts process-wide

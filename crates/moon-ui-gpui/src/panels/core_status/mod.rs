@@ -48,6 +48,7 @@ mod version_mark;
 mod warnings;
 
 pub(crate) use open::open_updates;
+pub(crate) use ordering::server_display_name;
 pub(crate) use presentation::connection_status_text;
 pub(crate) use startup::{problem_diagnostic_text, startup_diagnostic_text};
 

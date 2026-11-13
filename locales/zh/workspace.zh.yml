@@ -50,8 +50,16 @@ workspace.scope.all_hidden: "所有核心都被当前的工作区模式隐藏"
 # disabled by the active workspace, and this is the only place that says why (`panels::common`).
 workspace.scope.pinned_hint: "范围由工作区决定：%{scope}。可在左侧面板中更改"
 # The rail's ⚙ popup: which core-run controls the rows carry. The checkbox labels reuse
-# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title and the
-# exchange-scope row are the rail's own.
+# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title, the
+# group-heading row and the grouping rows are the rail's own.
 workspace.settings.title: "核心列表设置"
-# One press there reaches every core under the heading, which is why it is its own opt-out.
-workspace.settings.exchange_controls: "交易所标题行也显示这些按钮，作用于其全部核心"
+# One press there reaches every core under the heading — exchange or server — which is why it is
+# its own opt-out. The key keeps its historical name; the layout key it labels does too.
+workspace.settings.exchange_controls: "分组标题行也显示这些按钮，作用于其全部核心"
+# The rail popup's first group: how the core list is split. Server grouping is the outer level
+# and is off by default; exchange grouping is the inner one and is on by default.
+workspace.settings.grouping: "分组"
+workspace.settings.group_by_server: "按服务器"
+workspace.settings.group_by_exchange: "按交易所"
+# The server heading for cores that neither their feed nor their key places on an IP address.
+workspace.server_unknown: "未知服务器"

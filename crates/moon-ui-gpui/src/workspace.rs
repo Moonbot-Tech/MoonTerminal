@@ -6,6 +6,7 @@
 //! retained Classic filter.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 
 use gpui::Context;
 use moon_core::config::{NO_MATCH_CORE_UID, TransportVersion, WorkspaceMode};
@@ -690,6 +691,9 @@ pub(crate) struct WorkspaceRosterInput {
     /// A fleet-wide "try this mode instead" suggestion for this core, when the evidence supports
     /// one (`conn_diag::fleet_mode_suggestion`).
     pub(crate) mode_suggestion: Option<TransportVersion>,
+    /// Address of the machine this core runs on (`shell::workspace::core_machine`), filled only
+    /// while the rail groups by server. Keys that grouping.
+    pub(crate) server: Option<IpAddr>,
 }
 
 /// Derived roster row rendered by the Auto workspace rail.
@@ -710,13 +714,6 @@ pub(crate) struct WorkspaceRosterRow {
     pub(crate) mode_suggestion: Option<TransportVersion>,
 }
 
-/// One venue section in the all-core roster.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct WorkspaceRosterSection {
-    pub(crate) venue: Option<CoreVenue>,
-    pub(crate) rows: Vec<WorkspaceRosterRow>,
-}
-
 /// Application-wide health counts displayed above the roster.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WorkspaceRosterSummary {
@@ -727,10 +724,10 @@ pub(crate) struct WorkspaceRosterSummary {
     pub(crate) problem: usize,
 }
 
-/// Exchange-grouped all-core roster plus the current group's Overview selection.
+/// Server- and/or exchange-grouped all-core roster plus the current group's Overview selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorkspaceRoster {
-    pub(crate) sections: Vec<WorkspaceRosterSection>,
+    pub(crate) servers: Vec<WorkspaceRosterServer>,
     pub(crate) summary: WorkspaceRosterSummary,
     pub(crate) overview_selected: bool,
 }
@@ -745,64 +742,52 @@ pub(crate) struct WorkspaceRoster {
 ///     configured_total: Configured cores BEFORE the membership filter ran, supplied by the
 ///         caller — this function stays a pure "render every input you were given" and never
 ///         filters or recomputes the pre-membership count itself.
+///     grouping: Which levels of grouping the rail draws (`roster::RosterGrouping`).
 ///
 /// Returns:
-///     Exchange-grouped roster and application-wide configured/ready/problem counts. Unknown
-///     exchange identities remain an explicit first section instead of being guessed from names.
+///     Grouped roster and application-wide configured/ready/problem counts. Unknown exchange
+///     identities remain an explicit first section instead of being guessed from names.
 pub(crate) fn derive_workspace_roster(
     inputs: &[WorkspaceRosterInput],
     current_group: &str,
     selected_core: Option<CoreId>,
     configured_total: usize,
+    grouping: RosterGrouping,
 ) -> WorkspaceRoster {
     let mut summary = WorkspaceRosterSummary {
         configured: inputs.len(),
         configured_total,
         ..WorkspaceRosterSummary::default()
     };
-    let exchange_sections = moon_core::session::core_order::exchange_sections(
-        inputs
-            .iter()
-            .enumerate()
-            .map(|(index, input)| (index, input.venue.as_ref())),
-    );
-    let mut sections = Vec::with_capacity(exchange_sections.len());
-    for (venue, indices) in exchange_sections {
-        let rows = indices
-            .into_iter()
-            .map(|index| {
-                let input = &inputs[index];
-                let status = input.availability.roster_status(input.ready);
-                if status == WorkspaceCoreStatus::Ready {
-                    summary.ready += 1;
-                } else if matches!(
-                    status,
-                    WorkspaceCoreStatus::Unavailable | WorkspaceCoreStatus::Problem
-                ) {
-                    summary.problem += 1;
-                }
-                WorkspaceRosterRow {
-                    core: input.core,
-                    name: input.name.clone(),
-                    group: input.group.clone(),
-                    status,
-                    selectable: input.availability.is_available(),
-                    selected: input.group == current_group && selected_core == Some(input.core),
-                    connection: input.connection.clone(),
-                    startup: input.startup,
-                    fault: input.fault.clone(),
-                    mode_suggestion: input.mode_suggestion,
-                }
-            })
-            .collect();
-        sections.push(WorkspaceRosterSection {
-            venue: venue.cloned(),
-            rows,
-        });
-    }
+    let rows = inputs
+        .iter()
+        .map(|input| {
+            let status = input.availability.roster_status(input.ready);
+            if status == WorkspaceCoreStatus::Ready {
+                summary.ready += 1;
+            } else if matches!(
+                status,
+                WorkspaceCoreStatus::Unavailable | WorkspaceCoreStatus::Problem
+            ) {
+                summary.problem += 1;
+            }
+            WorkspaceRosterRow {
+                core: input.core,
+                name: input.name.clone(),
+                group: input.group.clone(),
+                status,
+                selectable: input.availability.is_available(),
+                selected: input.group == current_group && selected_core == Some(input.core),
+                connection: input.connection.clone(),
+                startup: input.startup,
+                fault: input.fault.clone(),
+                mode_suggestion: input.mode_suggestion,
+            }
+        })
+        .collect();
 
     WorkspaceRoster {
-        sections,
+        servers: group_roster_rows(inputs, rows, grouping),
         summary,
         overview_selected: selected_core.is_none(),
     }
@@ -937,7 +922,13 @@ pub(crate) fn is_auto_overview_scope(
     mode == WorkspaceMode::AutoTrading && valid_selected_core.is_none()
 }
 
+pub(crate) mod roster;
 pub(crate) mod scope_marker;
+
+use roster::group_roster_rows;
+pub(crate) use roster::{
+    RosterGrouping, RosterSectionHeading, RosterServer, WorkspaceRosterServer,
+};
 
 #[cfg(test)]
 mod tests;
