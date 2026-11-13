@@ -586,6 +586,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} 笔"
 analytics.write_failed_title: "写入未成功"
 analytics.write_failed: "更改未写入——编辑内容已保留在面板中，请重试。%{err}"
 analytics.write_failed_stale: "所选策略均已不在其核心上（已跳过：%{n}）"
+analytics.save_not_storable: "所选策略的核心不保存这些字段（例如现货上的杠杆和标记价格），没有可写入的内容"
 analytics.write_failed_formula_stale: "更改未发送：某个目标当前的 EMA 公式已不再包含所编辑的阈值。请刷新策略后重试。"
 analytics.write_partial: "部分核心未接受写入：%{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /

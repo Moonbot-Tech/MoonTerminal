@@ -521,14 +521,22 @@ impl AnalyticsView {
         if !bulk {
             changes.push(self.analyzer_comment());
         }
-        let (changes, per_target) = self.changes_for_targets(&targets, &changes);
+        let (changes, per_target) = self.changes_for_targets(&targets, &changes, cx);
         if !super::changes_remain(&changes, per_target.as_deref()) {
-            log::info!("analytics: 'Save' — neither mapped thresholds nor changed ignore flags");
+            // Save was lit by bounds no selected core can store — leverage and mark price on a
+            // spot core (#1160). Silence here would leave a button that does nothing.
+            log::info!("analytics: 'Save' — nothing the selected strategies' cores can store");
+            self.set_write_error(t!("analytics.save_not_storable").to_string(), cx);
             return;
         }
-        // What else starts working with a cleared ignore goes with the save's own warnings.
+        // What else starts working with a cleared ignore goes with the save's own warnings, read
+        // off the anchor's own list: a mixed selection has no shared one.
+        let anchor = per_target
+            .as_ref()
+            .and_then(|all| all.first())
+            .unwrap_or(&changes);
         let mut warns = warns;
-        warns.extend(super::wake::warnings(&self.tuner.strat, &changes, bulk));
+        warns.extend(super::wake::warnings(&self.tuner.strat, anchor, bulk));
         // No notes: a threshold reads perfectly well as "now → next".
         self.open_change_dialog(targets, changes, per_target, Vec::new(), warns, false, cx);
     }
@@ -553,7 +561,7 @@ impl AnalyticsView {
             .tuner
             .build_strategy_changes(false, self.scope_is_drops_only());
         changes.push(self.analyzer_comment());
-        let (changes, _) = self.changes_for_targets(std::slice::from_ref(&target), &changes);
+        let (changes, _) = self.changes_for_targets(std::slice::from_ref(&target), &changes, cx);
         // A copy that clears an ignore is born with that section's old numbers live, like a
         // save of the original.
         let mut warns = warns;
@@ -561,21 +569,40 @@ impl AnalyticsView {
         self.open_copy_with(target, changes, warns, window, cx);
     }
 
-    /// Apply the Drops-only Detect filter to one shared change list.
+    /// Tailor one shared change list to each target: the Drops-only Detect filter, then the
+    /// thresholds the target's core cannot store (#1160, `schema_fit`).
     ///
     /// Kinds come from the loaded strategy list. A target that list does not name is not
-    /// treated as Drops, so a stale xPriceDelta cannot be written onto it.
+    /// treated as Drops, so a stale xPriceDelta cannot be written onto it. The schema is each
+    /// core's live one: a target on one core reads that core, a target on every core of its
+    /// strategy reads every core holding it.
     fn changes_for_targets(
         &self,
         targets: &[SaveTarget],
         changes: &[(String, String)],
+        cx: &App,
     ) -> (Vec<(String, String)>, Option<Vec<Vec<(String, String)>>>) {
         let kinds: Vec<Option<String>> = targets
             .iter()
             .map(|target| self.strategy_kind(target.sid, target.core))
             .collect();
         let kind_refs: Vec<Option<&str>> = kinds.iter().map(|kind| kind.as_deref()).collect();
-        super::changes_by_target(changes, &kind_refs)
+        let store = self.backend.read(cx).session.store();
+        let shown: Vec<_> = targets
+            .iter()
+            .map(|target| {
+                let sid = target.sid as u64;
+                let copies = store
+                    .cores()
+                    .filter(|(core, _)| target.core.is_none_or(|selected| selected == *core))
+                    .filter_map(|(_, cd)| {
+                        let row = cd.strategies.iter().find(|row| row.id == sid)?;
+                        Some((cd.schema.as_ref(), Some(row)))
+                    });
+                super::schema_fit::shown_fields(copies)
+            })
+            .collect();
+        super::changes_by_target(changes, &kind_refs, &shown, &self.tuner.staged_ignore)
     }
 
     /// The SHARED tail of "Make a copy" (all axes): an auto-uniqued name for the new

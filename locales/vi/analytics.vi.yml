@@ -588,6 +588,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} lệnh"
 analytics.write_failed_title: "Ghi không thành công"
 analytics.write_failed: "Không ghi gì — sửa vẫn nằm trong bảng, hãy thử lại. %{err}"
 analytics.write_failed_stale: "không chiến lược đã chọn nào còn trên core của nó (bỏ qua: %{n})"
+analytics.save_not_storable: "core của các chiến lược đã chọn không lưu các trường này (ví dụ đòn bẩy và giá đánh dấu trên spot), nên không có gì để ghi"
 analytics.write_failed_formula_stale: "Chưa gửi thay đổi: công thức EMA hiện tại của một đích không còn chứa ngưỡng đang chỉnh sửa. Hãy làm mới các chiến lược rồi thử lại."
 analytics.write_partial: "Một số core không nhận lần ghi: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /

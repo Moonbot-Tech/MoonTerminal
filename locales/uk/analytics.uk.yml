@@ -588,6 +588,7 @@ analytics.coins.tag_line: "%{coin} %{profit} · %{n} уг."
 analytics.write_failed_title: "Запис не пройшов"
 analytics.write_failed: "Зміни НЕ записано — правка збережена в панелі, повторіть. %{err}"
 analytics.write_failed_stale: "жодна з вибраних стратегій більше не числиться на своєму ядрі (пропущено: %{n})"
+analytics.save_not_storable: "ядра вибраних стратегій не зберігають ці поля (наприклад, плече й марк-ціну на споті) — записувати нічого"
 analytics.write_failed_formula_stale: "Зміни не надіслано: поточна формула EMA однієї з цілей більше не містить редагованого порога. Оновіть стратегії та спробуйте ще раз."
 analytics.write_partial: "Частина ядер не прийняла запис: %{err}"
 # Bulk-write resolution watch: a queued write's real outcome (Confirmed / Adjusted / Superseded /
