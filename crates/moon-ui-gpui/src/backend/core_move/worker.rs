@@ -18,7 +18,7 @@ use rust_i18n::t;
 
 use super::steps::{StepEvent, StepId, StepNote, StepState};
 use super::{Event, FailOutcome, text};
-use crate::backend::core_new::state_text;
+use crate::backend::core_new::{login_failure_text, state_text};
 
 /// How often a move that waits on its old core looks whether it went down.
 const WATCH: Duration = Duration::from_secs(30);
@@ -83,7 +83,8 @@ pub(super) fn probe(target: Target, tx: &mpsc::Sender<Event>) {
 struct Progress<'a> {
     tx: &'a mpsc::Sender<Event>,
     start: Instant,
-    /// The step under way: a failure is reported there.
+    /// The step a failure is reported at: the step under way, unless [`Progress::fail_at`] named
+    /// another one for the failure about to follow.
     current: Cell<StepId>,
     /// The old core's strategy count, once read.
     strategies: Cell<Option<usize>>,
@@ -112,6 +113,16 @@ impl<'a> Progress<'a> {
         }
         let event = StepEvent::Mark { id, state, note };
         let _ = self.tx.send(Event::Step(event, self.start.elapsed()));
+    }
+
+    /// Name step `id` as where the failure about to be returned is reported, although `id` was
+    /// never marked running. Sends nothing: [`run`] reports the failure at `current`.
+    ///
+    /// For the provider login: it runs while the settings row is under way, yet a refusal there
+    /// is the new server turning the move away, not the old core failing to hand its settings
+    /// over (#1319).
+    fn fail_at(&self, id: StepId) {
+        self.current.set(id);
     }
 
     /// Report `step` as a log line and note what the step rows need from it.
@@ -147,7 +158,9 @@ pub(super) fn run(
     let event = match moved {
         Ok(event) => event,
         Err(e) => {
-            let reason = format!("{e:#}");
+            // A refused password names the login that was tried, in the user's language,
+            // exactly as the new-core wizard says it; any other failure keeps its own text.
+            let reason = login_failure_text(&e, &form.first);
             let step = Some(progress.current.get());
             let outcome = match stage {
                 Stage::Nothing => FailOutcome::OldRuns,
@@ -209,7 +222,8 @@ fn run_move(
     );
     // Before the login: a core with no known address has nothing to move from.
     let from = old_core_from(&old?)?;
-    let (conn, privilege) = setup::provider_login(&form.target, &form.first, &form.pin)?;
+    let (conn, privilege) = setup::provider_login(&form.target, &form.first, &form.pin)
+        .inspect_err(|_| progress.fail_at(StepId::Server))?;
     send(Event::Line(
         t!("core_move.logged_in", user = conn.user()).to_string(),
     ));

@@ -115,15 +115,7 @@ pub(super) fn run(form: NewForm, tx: &mpsc::Sender<Event>, commands: &mpsc::Rece
 
 /// Explain a refused password with the attempted login, retaining the existing check error path.
 fn check_failure(error: &anyhow::Error, first: &FirstAccess) -> String {
-    let reason = if matches!(
-        error.downcast_ref::<moon_remote::ssh::OpenError>(),
-        Some(moon_remote::ssh::OpenError::Refused { .. })
-    ) && let FirstAccess::Password { user, .. } = first
-    {
-        t!("connect_wizard.server.login_refused", user = user).to_string()
-    } else {
-        format!("{error:#}")
-    };
+    let reason = super::login_failure_text(error, first);
     t!("connect_wizard.check_failed", reason = reason).to_string()
 }
 

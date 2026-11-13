@@ -688,6 +688,28 @@ fn reset_core_new_for_login(job: &mut Option<NewJob>) -> bool {
     replace
 }
 
+/// Why a provider login failed, in the user's words when the server refused the password.
+///
+/// A refused password names the login that was tried and where to find the right one — the raw
+/// `the server refused the login` says neither, and a grey `root` hint in an empty Login field is
+/// sent as `root`. Every other failure keeps its own diagnostic text: a changed host key must
+/// never read as a wrong password. Shared by the new-core wizard, the login-only path and the
+/// move, which all log in with the same provider credentials.
+pub(crate) fn login_failure_text(
+    error: &anyhow::Error,
+    first: &moon_remote::setup::FirstAccess,
+) -> String {
+    if matches!(
+        error.downcast_ref::<moon_remote::ssh::OpenError>(),
+        Some(moon_remote::ssh::OpenError::Refused { .. })
+    ) && let moon_remote::setup::FirstAccess::Password { user, .. } = first
+    {
+        t!("connect_wizard.server.login_refused", user = user).to_string()
+    } else {
+        format!("{error:#}")
+    }
+}
+
 /// A core's `--status` state in the user's words.
 pub(crate) fn state_text(state: &CoreState) -> String {
     match state {
