@@ -4,7 +4,7 @@
 _version: 1
 
 conn.market_src: "行情数据来源"
-conn.market_dedup: "共享数据——每个交易所一个核心"
+conn.market_dedup: "共享数据——每个交易所和币种组合一个核心"
 conn.market_percore: "独立——每个图表用自己的核心"
 conn.core_sort: "核心顺序"
 conn.core_sort.name: "按名称——字母顺序"
@@ -81,7 +81,7 @@ conn.list.menu_icon: "分组图标…"
 conn.list.menu_mode: "分组内全部核心的模式"
 conn.list.add_core: "向分组添加核心"
 conn.market_src.hint: "图表从哪里获取成交和订单簿。"
-conn.market_src.more: "“共享”节省流量：每个交易所的数据来自一个核心。“独立”：每个图表读取自己的核心；当不同账户上的核心看到的内容不同时才需要。"
+conn.market_src.more: "“共享”节省流量：每个交易所和账户币种组合的数据来自一个核心。“独立”：每个图表读取自己的核心；当不同账户上的核心看到的内容不同时才需要。"
 conn.core_sort.hint: "适用于应用内的所有列表。"
 conn.card.active: "启用"
 conn.card.name: "名称"

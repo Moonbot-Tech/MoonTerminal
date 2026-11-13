@@ -4,7 +4,7 @@
 _version: 1
 
 conn.market_src: "Piyasa verisi kaynağı"
-conn.market_dedup: "Ortak veri — borsa başına bir çekirdek"
+conn.market_dedup: "Ortak veri — borsa ve para birimi başına bir çekirdek"
 conn.market_percore: "Ayrı — her grafiğin kendi çekirdeği"
 conn.core_sort: "Çekirdek sırası"
 conn.core_sort.name: "Ada göre — alfabetik"
@@ -81,7 +81,7 @@ conn.list.menu_icon: "Grup simgesi…"
 conn.list.menu_mode: "Gruptaki tüm çekirdekler için mod"
 conn.list.add_core: "Gruba çekirdek ekle"
 conn.market_src.hint: "Grafiklerin işlemleri ve emir defterini nereden aldığı."
-conn.market_src.more: "«Ortak» trafikten tasarruf eder: her borsanın verisi tek çekirdekten gelir. «Ayrı»: her grafik kendi çekirdeğini okur; farklı hesaplardaki çekirdekler farklı şeyler görüyorsa gerekir."
+conn.market_src.more: "«Ortak» trafikten tasarruf eder: her borsa ve hesap para birimi için veriler tek çekirdekten gelir. «Ayrı»: her grafik kendi çekirdeğini okur; farklı hesaplardaki çekirdekler farklı şeyler görüyorsa gerekir."
 conn.core_sort.hint: "Uygulamadaki tüm listelerde."
 conn.card.active: "etkin"
 conn.card.name: "Ad"

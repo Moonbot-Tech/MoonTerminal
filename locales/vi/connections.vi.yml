@@ -4,7 +4,7 @@
 _version: 1
 
 conn.market_src: "Nguồn dữ liệu thị trường"
-conn.market_dedup: "Dữ liệu chung — một core mỗi sàn"
+conn.market_dedup: "Dữ liệu chung — một core cho mỗi sàn và loại tiền"
 conn.market_percore: "Riêng — mỗi biểu đồ một core"
 conn.core_sort: "Thứ tự core"
 conn.core_sort.name: "Theo tên — bảng chữ cái"
@@ -81,7 +81,7 @@ conn.list.menu_icon: "Biểu tượng nhóm…"
 conn.list.menu_mode: "Chế độ cho mọi lõi trong nhóm"
 conn.list.add_core: "Thêm lõi vào nhóm"
 conn.market_src.hint: "Biểu đồ lấy giao dịch và sổ lệnh từ đâu."
-conn.market_src.more: "«Chung» tiết kiệm lưu lượng: dữ liệu mỗi sàn lấy từ một lõi. «Riêng»: mỗi biểu đồ đọc lõi của nó; cần khi các lõi trên tài khoản khác nhau thấy khác nhau."
+conn.market_src.more: "«Chung» tiết kiệm lưu lượng: dữ liệu cho mỗi sàn và loại tiền tài khoản lấy từ một lõi. «Riêng»: mỗi biểu đồ đọc lõi của nó; cần khi các lõi trên tài khoản khác nhau thấy khác nhau."
 conn.core_sort.hint: "Trong mọi danh sách của ứng dụng."
 conn.card.active: "bật"
 conn.card.name: "Tên"

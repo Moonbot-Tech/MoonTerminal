@@ -4,7 +4,7 @@
 _version: 1
 
 conn.market_src: "Market data source"
-conn.market_dedup: "Shared data — one core per exchange"
+conn.market_dedup: "Shared data — one core per exchange and currency"
 conn.market_percore: "Separate — each chart its own core"
 conn.core_sort: "Core order"
 conn.core_sort.name: "By name — alphabetical"
@@ -81,7 +81,7 @@ conn.list.menu_icon: "Group icon…"
 conn.list.menu_mode: "Mode for every core of the group"
 conn.list.add_core: "Add a core to the group"
 conn.market_src.hint: "Where charts take trades and the order book from."
-conn.market_src.more: "\"Shared\" saves traffic: each exchange's data comes from one core. \"Separate\": every chart reads its own core; needed when cores on different accounts see different things."
+conn.market_src.more: "\"Shared\" saves traffic: data for each exchange and account currency comes from one core. \"Separate\": every chart reads its own core; needed when cores on different accounts see different things."
 conn.core_sort.hint: "In every list of the app."
 conn.card.active: "active"
 conn.card.name: "Name"
