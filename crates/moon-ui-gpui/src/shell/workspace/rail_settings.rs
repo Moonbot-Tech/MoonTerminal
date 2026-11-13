@@ -1,4 +1,4 @@
-//! The Auto rail's ⚙ settings popup and the run-control preferences it edits.
+//! The Auto rail's ⚙ settings popup and the grouping and run-control preferences it edits.
 //!
 //! Same shape as the Profit Monitor's popup (`analytics/profit_monitor/settings.rs`): a
 //! `MoonPopover` anchored to a gear in the rail's summary bar, contents built only while it is
@@ -17,27 +17,32 @@ use crate::design;
 use crate::panels::{
     popup_close_button, popup_gear_trigger, popup_group, popup_group_inset_px, popup_title,
 };
-use crate::workspace::WorkspaceRailDensity;
+use crate::workspace::{RosterGrouping, WorkspaceRailDensity};
 
 /// Popup CONTENT width in design units, before the group frame's own inset.
 ///
-/// Sized for the longest localized checkbox label so no row wraps: the exchange-heading row
-/// measures ~290 px in EN and ~375 px in ES at the default face, and `MoonCheckbox` wraps its
+/// Sized for the longest localized checkbox label so no row wraps: the heading-controls row
+/// measured ~290 px in EN and ~375 px in ES at the default face, and `MoonCheckbox` wraps its
 /// label column rather than truncating. The popup grows rightward into the dock, where width
 /// costs nothing.
 const CONTENT_WIDTH: f32 = 400.0;
 
-/// Run-control preferences of the Auto workspace rail.
+/// Grouping and run-control preferences of the Auto workspace rail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RailPrefs {
+    /// Whether cores are grouped by the machine they run on, as the outer level.
+    pub(super) group_by_server: bool,
+    /// Whether cores are grouped by exchange (inside a server block when that is on too).
+    pub(super) group_by_exchange: bool,
     /// Whether a row leads with its core's run status, and a restart button when it is stopped.
     pub(super) core_status: bool,
     /// Whether the start/stop control for the strategy engine is shown at all.
     pub(super) trading_buttons: bool,
     /// Whether the AutoDetect on/off switch is shown at all.
     pub(super) auto_buttons: bool,
-    /// Whether an exchange heading ALSO carries whichever of those controls are on, acting on every
-    /// core the group names.
+    /// Whether a group heading — exchange or server — ALSO carries whichever of those controls are
+    /// on, acting on every core under it. The field keeps its historical name because its
+    /// `layout.toml` key does.
     pub(super) exchange_controls: bool,
 }
 
@@ -48,8 +53,14 @@ impl Default for RailPrefs {
     /// plain connection dot at the user's request — the popup is the way to turn a control off,
     /// not the way to discover it. (The Profit Monitor chooses the opposite default for its own
     /// reason, `MonitorPrefs::default`.)
+    ///
+    /// The grouping defaults are the shape the rail had before they existed — exchange headings
+    /// only — so an upgrade changes nothing until the user asks for servers.
     fn default() -> Self {
+        let grouping = RosterGrouping::default();
         Self {
+            group_by_server: grouping.by_server,
+            group_by_exchange: grouping.by_exchange,
             core_status: true,
             trading_buttons: true,
             auto_buttons: true,
@@ -68,12 +79,23 @@ impl RailPrefs {
     ///     Saved values, with each unset key taking its default.
     pub(super) fn restore(layout: &WindowLayout) -> Self {
         let mut prefs = Self::default();
-        for row in &PREF_ROWS {
+        for row in GROUPING_ROWS.iter().chain(&CONTROL_ROWS) {
             if let Some(saved) = (row.saved)(layout) {
                 (row.set)(&mut prefs, saved);
             }
         }
         prefs
+    }
+
+    /// The roster shape these preferences ask for.
+    ///
+    /// Returns:
+    ///     Server and exchange grouping switches for `derive_workspace_roster`.
+    pub(super) fn grouping(self) -> RosterGrouping {
+        RosterGrouping {
+            by_server: self.group_by_server,
+            by_exchange: self.group_by_exchange,
+        }
     }
 
     /// The slots every rail line reserves at this density.
@@ -104,7 +126,8 @@ impl RailPrefs {
 
 /// One editable preference: its label, the field it lives in, and the key it is saved under.
 ///
-/// Every row is DATA, not a closure. Adding another preference is one entry in [`PREF_ROWS`], and
+/// Every row is DATA, not a closure. Adding another preference is one entry in [`GROUPING_ROWS`]
+/// or [`CONTROL_ROWS`], and
 /// the four mechanical parts — restore it, show it, set it, save it — cannot drift apart because
 /// none of them is written more than once.
 struct PrefRow {
@@ -126,11 +149,32 @@ struct PrefRow {
     store: fn(&mut WindowLayout, bool),
 }
 
-/// Every preference, in the order the popup shows them.
+/// The grouping preferences, shown first: they decide what the list IS before the controls decide
+/// what each line carries. Server grouping leads because it is the outer level.
+static GROUPING_ROWS: [PrefRow; 2] = [
+    PrefRow {
+        id: "group-by-server",
+        label: "workspace.settings.group_by_server",
+        read: |prefs| prefs.group_by_server,
+        set: |prefs, value| prefs.group_by_server = value,
+        saved: |layout| layout.workspace_rail_group_by_server,
+        store: |layout, value| layout.workspace_rail_group_by_server = Some(value),
+    },
+    PrefRow {
+        id: "group-by-exchange",
+        label: "workspace.settings.group_by_exchange",
+        read: |prefs| prefs.group_by_exchange,
+        set: |prefs, value| prefs.group_by_exchange = value,
+        saved: |layout| layout.workspace_rail_group_by_exchange,
+        store: |layout, value| layout.workspace_rail_group_by_exchange = Some(value),
+    },
+];
+
+/// The run-control preferences, in the order the popup shows them.
 ///
 /// The first three labels are the Profit Monitor's own — the same controls, the same wording; only
-/// the exchange-scope row is the rail's.
-const PREF_ROWS: [PrefRow; 4] = [
+/// the group-heading row is the rail's.
+static CONTROL_ROWS: [PrefRow; 4] = [
     PrefRow {
         id: "core-status",
         label: "profit_monitor.settings.core_status",
@@ -220,7 +264,7 @@ pub(super) fn rail_settings_popover(
 ///     cx: Application context supplying scaled geometry.
 ///
 /// Returns:
-///     Title row and the core-control group.
+///     Title row, the grouping group and the core-control group.
 fn settings_content(
     prefs: RailPrefs,
     shell: &Entity<Shell>,
@@ -248,34 +292,69 @@ fn settings_content(
                     }
                 })),
         )
-        .child(
-            popup_group(
-                "workspace-rail-core-control",
-                t!("profit_monitor.settings.core_control").to_string(),
-            )
-            .children(PREF_ROWS.iter().enumerate().map(|(index, row)| {
-                let backend = backend.clone();
-                let shell = shell.clone();
-                MoonCheckbox::new(SharedString::from(format!(
-                    "workspace-rail-pref-{}",
-                    row.id
-                )))
-                .label(t!(row.label).to_string())
-                .checked((row.read)(&prefs))
-                .on_change(move |checked: &bool, _window, app| {
-                    let checked = *checked;
-                    backend.update(app, |backend, backend_cx| {
-                        if (PREF_ROWS[index].saved)(&backend.layout) == Some(checked) {
-                            return;
-                        }
-                        (PREF_ROWS[index].store)(&mut backend.layout, checked);
-                        backend.layout_dirty = true;
-                        backend_cx.notify();
-                    });
-                    shell.update(app, |_, cx| cx.notify());
-                })
-                .into_any_element()
-            })),
-        )
+        .child(pref_group(
+            "workspace-rail-grouping",
+            t!("workspace.settings.grouping").to_string(),
+            &GROUPING_ROWS,
+            prefs,
+            shell,
+            backend,
+        ))
+        .child(pref_group(
+            "workspace-rail-core-control",
+            t!("profit_monitor.settings.core_control").to_string(),
+            &CONTROL_ROWS,
+            prefs,
+            shell,
+            backend,
+        ))
         .into_any_element()
 }
+
+/// One titled group of preference checkboxes.
+///
+/// Args:
+///     id: Element identity of the group frame.
+///     title: Localized group caption.
+///     rows: The preferences the group edits, in display order.
+///     prefs: Values the checkboxes display.
+///     shell: Shell receiving the rail repaint.
+///     backend: Shared terminal state receiving the layout writes.
+///
+/// Returns:
+///     The framed group with one checkbox per row.
+fn pref_group(
+    id: &'static str,
+    title: String,
+    rows: &'static [PrefRow],
+    prefs: RailPrefs,
+    shell: &Entity<Shell>,
+    backend: &Entity<Backend>,
+) -> impl IntoElement {
+    popup_group(id, title).children(rows.iter().map(|row| {
+        let backend = backend.clone();
+        let shell = shell.clone();
+        MoonCheckbox::new(SharedString::from(format!(
+            "workspace-rail-pref-{}",
+            row.id
+        )))
+        .label(t!(row.label).to_string())
+        .checked((row.read)(&prefs))
+        .on_change(move |checked: &bool, _window, app| {
+            let checked = *checked;
+            backend.update(app, |backend, backend_cx| {
+                if (row.saved)(&backend.layout) == Some(checked) {
+                    return;
+                }
+                (row.store)(&mut backend.layout, checked);
+                backend.layout_dirty = true;
+                backend_cx.notify();
+            });
+            shell.update(app, |_, cx| cx.notify());
+        })
+        .into_any_element()
+    }))
+}
+
+#[cfg(test)]
+mod tests;

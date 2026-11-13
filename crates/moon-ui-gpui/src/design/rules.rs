@@ -91,8 +91,9 @@ pub fn status_dot_stale(color: u32, cx: &App) -> impl IntoElement {
 
 // ---- goal B: Auto workspace rail ----
 
-/// Top gap paid out of the rail's fixed 30-unit cell before an exchange heading, so the section
-/// separates from the row above it without a taller cell.
+/// Top gap paid out of the rail's fixed 30-unit cell before a top-level group heading (a server, or
+/// an exchange when servers are not grouped), so the section separates from the row above it
+/// without a taller cell. An exchange heading nested under a server does not pay it.
 pub const RAIL_SECTION_GAP: f32 = 6.0;
 
 /// Amount added to a core row's status-dot size for `Problem` and `Unavailable` — the two

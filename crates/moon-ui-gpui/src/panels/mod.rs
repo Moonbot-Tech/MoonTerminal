@@ -64,6 +64,8 @@ pub use chart::ChartPanel;
 pub(crate) use chart::shot;
 pub use core_status::CoreStatusView;
 pub(crate) use core_status::open_updates;
+/// Shared with the Auto rail's server headings, so a renamed machine reads the same in both.
+pub(crate) use core_status::server_display_name;
 pub(crate) use core_status::{
     connection_status_text, problem_diagnostic_text, startup_diagnostic_text,
 };

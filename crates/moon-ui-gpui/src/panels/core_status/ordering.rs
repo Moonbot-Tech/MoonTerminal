@@ -198,15 +198,12 @@ pub(super) fn assign_server_names(
     for group in groups.iter_mut() {
         group.display_name = match group.address {
             Some(address) => {
-                let ip = address.to_string();
-                names.get(&ip).cloned().unwrap_or_else(|| {
-                    let ordinal = addresses
-                        .iter()
-                        .position(|candidate| *candidate == address)
-                        .map(|index| index + 1)
-                        .unwrap_or(0);
-                    t!("core_status.server_n", n = ordinal).to_string()
-                })
+                let ordinal = addresses
+                    .iter()
+                    .position(|candidate| *candidate == address)
+                    .map(|index| index + 1)
+                    .unwrap_or(0);
+                server_display_name(address, ordinal, names)
             }
             None => {
                 let core = group
@@ -218,6 +215,30 @@ pub(super) fn assign_server_names(
             }
         };
     }
+}
+
+/// Name one machine: the user's custom name for its address, else `Server N`.
+///
+/// The one naming rule shared by Core Status and the Auto rail's server headings, so a machine the
+/// user renamed in one place reads the same in the other. The ranking behind N is the caller's:
+/// both rank feed-reported addresses in address order.
+///
+/// Args:
+///     address: The machine's endpoint address.
+///     ordinal: Its 1-based rank among the machines being named.
+///     names: Custom names keyed by endpoint IP string (`layout.core_server_names`).
+///
+/// Returns:
+///     The custom name, or `Server N`.
+pub(crate) fn server_display_name(
+    address: IpAddr,
+    ordinal: usize,
+    names: &HashMap<String, String>,
+) -> String {
+    names
+        .get(&address.to_string())
+        .cloned()
+        .unwrap_or_else(|| t!("core_status.server_n", n = ordinal).to_string())
 }
 
 /// Return a stable ordinal for sorting the flat table's status column.

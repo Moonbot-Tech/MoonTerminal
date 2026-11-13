@@ -6,11 +6,11 @@ use moon_core::venue::CoreVenue;
 
 use super::{
     AutoWorkspaceSurface, AutoWorkspaceSurfaceRequests, EffectiveScopeLabel, RetainedCoreScope,
-    WORKSPACE_RAIL_COMPACT_MIN_WIDTH, WORKSPACE_RAIL_FULL_MIN_WIDTH, WorkspaceCoreAvailability,
-    WorkspaceCoreStatus, WorkspaceFocus, WorkspaceNavigationAction, WorkspaceRailDensity,
-    WorkspaceRosterInput, WorkspaceWindowState, changed_auto_workspace_rail_width,
-    derive_workspace_roster, focus_workspace_owner, is_auto_overview_scope,
-    plan_workspace_navigation, query_core_ids, reconcile_workspace_focus,
+    RosterGrouping, RosterSectionHeading, WORKSPACE_RAIL_COMPACT_MIN_WIDTH,
+    WORKSPACE_RAIL_FULL_MIN_WIDTH, WorkspaceCoreAvailability, WorkspaceCoreStatus, WorkspaceFocus,
+    WorkspaceNavigationAction, WorkspaceRailDensity, WorkspaceRosterInput, WorkspaceWindowState,
+    changed_auto_workspace_rail_width, derive_workspace_roster, focus_workspace_owner,
+    is_auto_overview_scope, plan_workspace_navigation, query_core_ids, reconcile_workspace_focus,
     resolve_auto_workspace_surface, resolve_group_scope, resolve_singleton_workspace,
     should_persist_normal_dock, should_remember_classic_trade_core,
     should_return_to_report_after_main_close, workspace_rail_density,
@@ -378,25 +378,26 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
         ),
         connecting,
     ];
-    let roster = derive_workspace_roster(&inputs, "alpha", Some(11), inputs.len());
+    let roster = derive_workspace_roster(
+        &inputs,
+        "alpha",
+        Some(11),
+        inputs.len(),
+        RosterGrouping::default(),
+    );
 
-    assert_eq!(roster.sections[0].venue, None);
+    assert_eq!(roster.servers.len(), 1, "server grouping is off by default");
+    assert_eq!(roster.servers[0].server, None);
+    let sections = &roster.servers[0].sections;
+    let venue_label = |index: usize| match &sections[index].heading {
+        RosterSectionHeading::Exchange(venue) => venue.as_ref().map(crate::controls::venue_label),
+        RosterSectionHeading::None => panic!("exchange grouping is on by default"),
+    };
+    assert_eq!(sections[0].heading, RosterSectionHeading::Exchange(None));
+    assert_eq!(venue_label(1), Some("Binance Futures".to_string()));
+    assert_eq!(venue_label(2), Some("Bybit Futures".to_string()));
     assert_eq!(
-        roster.sections[1]
-            .venue
-            .as_ref()
-            .map(crate::controls::venue_label),
-        Some("Binance Futures".to_string())
-    );
-    assert_eq!(
-        roster.sections[2]
-            .venue
-            .as_ref()
-            .map(crate::controls::venue_label),
-        Some("Bybit Futures".to_string())
-    );
-    assert_eq!(
-        roster.sections[1]
+        sections[1]
             .rows
             .iter()
             .map(|row| row.core)
@@ -408,11 +409,7 @@ fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
     assert_eq!(roster.summary.ready, 1);
     assert_eq!(roster.summary.problem, 2);
     assert!(!roster.overview_selected);
-    let rows: Vec<_> = roster
-        .sections
-        .iter()
-        .flat_map(|section| &section.rows)
-        .collect();
+    let rows: Vec<_> = sections.iter().flat_map(|section| &section.rows).collect();
     assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].status, WorkspaceCoreStatus::Disabled);
     assert!(!rows[0].selectable);
@@ -540,6 +537,7 @@ fn roster_input(
     WorkspaceRosterInput {
         fault: None,
         mode_suggestion: None,
+        server: None,
         core,
         name: name.to_string(),
         group: group.to_string(),

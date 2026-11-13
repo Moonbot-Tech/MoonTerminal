@@ -104,21 +104,40 @@ pub(super) fn render_rail_item(
                 })
                 .into_any_element()
         }
+        RailItem::Server {
+            id,
+            label,
+            short,
+            section,
+            cores,
+        } => {
+            let compact_label = match density {
+                WorkspaceRailDensity::Icon => short.to_string(),
+                WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => label.to_string(),
+            };
+            let controls = heading_controls(run, density, section, cores, &backend, p, cx);
+            render_heading(
+                id,
+                HeadingLevel::Server,
+                controls,
+                None,
+                Some(compact_label),
+                label.to_string(),
+                density,
+                p,
+                cx,
+            )
+        }
         RailItem::Exchange {
+            id,
             venue,
             logo,
             section,
             cores,
+            nested,
         } => {
             let label = crate::controls::venue_section_label(venue.as_ref());
             let tooltip = label.clone();
-            // Keyed on the venue IDENTITY, never on the caption: an element id built from rendered
-            // text changes with the locale and with a core build's spelling, which makes GPUI treat
-            // the same heading as a different element and drop its hover and tooltip state.
-            let row_id = SharedString::from(match venue.as_ref() {
-                Some(venue) => format!("workspace-exchange-{}-{}", venue.id.code, venue.id.dex),
-                None => "workspace-exchange-unknown".to_string(),
-            });
             let compact_label = match density {
                 WorkspaceRailDensity::Icon if logo.is_none() => {
                     Some(label.chars().next().unwrap_or('?').to_string())
@@ -126,75 +145,29 @@ pub(super) fn render_rail_item(
                 WorkspaceRailDensity::Icon => None,
                 WorkspaceRailDensity::Full | WorkspaceRailDensity::Compact => Some(label),
             };
-            let controls = (run.exchange_controls
-                && density != WorkspaceRailDensity::Icon
-                && !cores.is_empty())
-            .then_some(RunScope {
-                key: RunKey::Section(section),
-                cores,
-                reserve: run.slots,
-                offers: run.slots,
-            })
-            .and_then(|scope| run_cell(&scope, &backend, p, cx));
-            // The gap is paid out of this 30-unit cell (`design::RAIL_SECTION_GAP`), which is why
-            // it is 6 and not 8: at font +6 the caption line box is ~18 px, leaving room inside
-            // the remaining 23 units. The outer element stays transparent so the rail's own
-            // `p.gutter` shows through as the section gap; the inner row alone paints the solid
-            // one-step-up background, so the heading itself reads as elevated, not the gap above
-            // it.
-            //
-            // Facet skin: the rail is unfilled, so the heading is lit instead of stepped up — a
-            // sheen from its top edge in place of the solid fill, over a rule that fades toward
-            // the rail's edges.
-            let facet = design::is_facet(cx);
-            div()
-                .id(row_id)
-                .size_full()
-                .min_w_0()
-                .pt(design::ui_px(cx, design::RAIL_SECTION_GAP))
-                .child(
-                    h_flex()
-                        .flex_1()
-                        .h_full()
-                        .items_center()
-                        .gap(design::ui_px(cx, 6.0))
-                        .px(design::ui_px(cx, 8.0))
-                        .min_w_0()
-                        .text_size(design::t_caption(cx))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(p.text_muted))
-                        .bg(rgb(p.panel_high))
-                        .border_b_1()
-                        .border_color(rgb(p.border_soft))
-                        .when(facet, |heading| {
-                            design::facet_bottom_rule(
-                                heading.bg(design::facet_sheen(p, design::FACET_SECTION_SHEEN)),
-                                design::facet_ink(p, design::FACET_PANEL_RULE),
-                            )
-                        })
-                        .children(controls)
-                        .when_some(logo, |row, logo| {
-                            row.child(
-                                img(logo)
-                                    .flex_none()
-                                    .w(design::ui_px(cx, 13.0))
-                                    .h(design::ui_px(cx, 13.0))
-                                    .rounded(design::ui_px(cx, 2.0)),
-                            )
-                        })
-                        .when_some(compact_label, |row, label| {
-                            row.child(div().min_w_0().truncate().child(label))
-                        }),
-                )
-                .tooltip(move |_window, cx| {
-                    cx.new(|_| MoonTooltipView::new(tooltip.clone())).into()
-                })
-                .into_any_element()
+            let controls = heading_controls(run, density, section, cores, &backend, p, cx);
+            let level = if nested {
+                HeadingLevel::NestedExchange
+            } else {
+                HeadingLevel::Exchange
+            };
+            render_heading(
+                id,
+                level,
+                controls,
+                logo,
+                compact_label,
+                tooltip,
+                density,
+                p,
+                cx,
+            )
         }
         RailItem::Core {
             row,
             is_last_in_section,
             cores,
+            nested,
         } => {
             let status = workspace_status_text(row.status);
             let tooltip = workspace_core_tooltip(&row);
@@ -242,6 +215,15 @@ pub(super) fn render_rail_item(
                 .size_full()
                 .min_w_0()
                 .gap(design::ui_px(cx, metrics.gap))
+                // One connector's width in, so the stem hangs under the nested exchange heading's
+                // caption rather than under the server heading's.
+                .when(nested, |content| {
+                    content.child(
+                        div()
+                            .flex_none()
+                            .w(design::ui_px(cx, metrics.connector_width)),
+                    )
+                })
                 .child(
                     div()
                         .relative()
@@ -318,4 +300,150 @@ pub(super) fn render_rail_item(
             root.into_any_element()
         }
     }
+}
+
+/// Where a group heading sits in the rail's hierarchy, which decides how it is drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeadingLevel {
+    /// A machine heading of the server grouping: the outermost level.
+    Server,
+    /// An exchange heading at the top level, as the rail drew every heading before server grouping.
+    Exchange,
+    /// An exchange heading inside a server block.
+    NestedExchange,
+}
+
+/// The run cell a group heading carries for every core under it, when the preference allows.
+///
+/// Args:
+///     run: Slots and the heading-controls preference resolved once per rail render.
+///     density: Current responsive rail rung; Icon has no room for the buttons.
+///     section: The heading's position among the drawn headings — the cell's stable identity.
+///     cores: Every core under the heading.
+///     backend: Shared state the buttons command.
+///     p: Active Moon palette.
+///     cx: Application context.
+///
+/// Returns:
+///     The cell, or `None` when the preference is off, the rail is at Icon density, or nothing
+///     sits under the heading.
+fn heading_controls(
+    run: RailRun,
+    density: WorkspaceRailDensity,
+    section: usize,
+    cores: Rc<[CoreId]>,
+    backend: &Entity<Backend>,
+    p: MoonPalette,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    (run.exchange_controls && density != WorkspaceRailDensity::Icon && !cores.is_empty())
+        .then_some(RunScope {
+            key: RunKey::Section(section),
+            cores,
+            reserve: run.slots,
+            offers: run.slots,
+        })
+        .and_then(|scope| run_cell(&scope, backend, p, cx))
+}
+
+/// Render one group heading — a machine or an exchange — in its fixed-height virtual row.
+///
+/// Args:
+///     id: Element identity, keyed on the group's identity and never on its caption: an id built
+///         from rendered text changes with the locale and with a core build's spelling, which makes
+///         GPUI treat the same heading as a different element and drop its hover and tooltip state.
+///     level: Where the heading sits in the hierarchy.
+///     controls: The run cell for every core under the heading, if any.
+///     logo: The exchange's logo, if any.
+///     label: Visible caption, `None` when the logo stands in for it at Icon density.
+///     tooltip: Full caption shown on hover.
+///     density: Current responsive rail rung.
+///     p: Active Moon palette.
+///     cx: Application context used for scaled geometry.
+///
+/// Returns:
+///     The complete heading row.
+#[allow(clippy::too_many_arguments)] // One call per heading kind; a struct would only rename them.
+fn render_heading(
+    id: SharedString,
+    level: HeadingLevel,
+    controls: Option<AnyElement>,
+    logo: Option<Arc<RenderImage>>,
+    label: Option<String>,
+    tooltip: String,
+    density: WorkspaceRailDensity,
+    p: MoonPalette,
+    cx: &mut App,
+) -> AnyElement {
+    let nested = level == HeadingLevel::NestedExchange;
+    // The gap is paid out of this 30-unit cell (`design::RAIL_SECTION_GAP`), which is why it is 6
+    // and not 8: at font +6 the caption line box is ~18 px, leaving room inside the remaining 23
+    // units. The outer element stays transparent so the rail's own `p.gutter` shows through as the
+    // section gap; the inner row alone paints the solid one-step-up background, so the heading
+    // itself reads as elevated, not the gap above it.
+    //
+    // A nested exchange heading is a sub-heading of the server above it: no gap, no fill of its
+    // own, and indented by one connector so it reads as part of that server's block.
+    //
+    // Facet skin: the rail is unfilled, so a top-level heading is lit instead of stepped up — a
+    // sheen from its top edge in place of the solid fill, over a rule that fades toward the rail's
+    // edges.
+    let facet = design::is_facet(cx);
+    let indent = if nested {
+        8.0 + core_rail_metrics(density).connector_width
+    } else {
+        8.0
+    };
+    let text_color = match level {
+        // The outer level reads one step stronger than the exchange headings it contains.
+        HeadingLevel::Server => p.text_soft,
+        HeadingLevel::Exchange | HeadingLevel::NestedExchange => p.text_muted,
+    };
+    div()
+        .id(id)
+        .size_full()
+        .min_w_0()
+        .when(!nested, |row| {
+            row.pt(design::ui_px(cx, design::RAIL_SECTION_GAP))
+        })
+        .child(
+            h_flex()
+                .flex_1()
+                .h_full()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .pr(design::ui_px(cx, 8.0))
+                .pl(design::ui_px(cx, indent))
+                .min_w_0()
+                .text_size(design::t_caption(cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(text_color))
+                .when(!nested, |heading| {
+                    heading
+                        .bg(rgb(p.panel_high))
+                        .border_b_1()
+                        .border_color(rgb(p.border_soft))
+                })
+                .when(facet && !nested, |heading| {
+                    design::facet_bottom_rule(
+                        heading.bg(design::facet_sheen(p, design::FACET_SECTION_SHEEN)),
+                        design::facet_ink(p, design::FACET_PANEL_RULE),
+                    )
+                })
+                .children(controls)
+                .when_some(logo, |row, logo| {
+                    row.child(
+                        img(logo)
+                            .flex_none()
+                            .w(design::ui_px(cx, 13.0))
+                            .h(design::ui_px(cx, 13.0))
+                            .rounded(design::ui_px(cx, 2.0)),
+                    )
+                })
+                .when_some(label, |row, label| {
+                    row.child(div().min_w_0().truncate().child(label))
+                }),
+        )
+        .tooltip(move |_window, cx| cx.new(|_| MoonTooltipView::new(tooltip.clone())).into())
+        .into_any_element()
 }

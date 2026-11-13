@@ -50,8 +50,16 @@ workspace.scope.all_hidden: "Tüm çekirdekler etkin çalışma alanı moduyla g
 # disabled by the active workspace, and this is the only place that says why (`panels::common`).
 workspace.scope.pinned_hint: "Kapsamı çalışma alanı belirledi: %{scope}. Soldaki panelden değiştirin"
 # The rail's ⚙ popup: which core-run controls the rows carry. The checkbox labels reuse
-# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title and the
-# exchange-scope row are the rail's own.
+# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title, the
+# group-heading row and the grouping rows are the rail's own.
 workspace.settings.title: "Çekirdek listesi ayarları"
-# One press there reaches every core under the heading, which is why it is its own opt-out.
-workspace.settings.exchange_controls: "Aynı düğmeler borsa başlığında, onun tüm çekirdekleri için"
+# One press there reaches every core under the heading — exchange or server — which is why it is
+# its own opt-out. The key keeps its historical name; the layout key it labels does too.
+workspace.settings.exchange_controls: "Aynı düğmeler grup başlıklarında, tüm çekirdekleri için"
+# The rail popup's first group: how the core list is split. Server grouping is the outer level
+# and is off by default; exchange grouping is the inner one and is on by default.
+workspace.settings.grouping: "Gruplama"
+workspace.settings.group_by_server: "Sunucuya göre"
+workspace.settings.group_by_exchange: "Borsaya göre"
+# The server heading for cores that neither their feed nor their key places on an IP address.
+workspace.server_unknown: "Bilinmeyen sunucu"

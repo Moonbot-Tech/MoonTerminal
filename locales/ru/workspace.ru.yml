@@ -50,8 +50,16 @@ workspace.scope.all_hidden: "Все ядра скрыты активным ре�
 # disabled by the active workspace, and this is the only place that says why (`panels::common`).
 workspace.scope.pinned_hint: "Область задана рабочим пространством: %{scope}. Сменить её можно в панели слева"
 # The rail's ⚙ popup: which core-run controls the rows carry. The checkbox labels reuse
-# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title and the
-# exchange-scope row are the rail's own.
+# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title, the
+# group-heading row and the grouping rows are the rail's own.
 workspace.settings.title: "Настройки списка ядер"
-# One press there reaches every core under the heading, which is why it is its own opt-out.
-workspace.settings.exchange_controls: "Эти кнопки — и у биржи, на все её ядра"
+# One press there reaches every core under the heading — exchange or server — which is why it is
+# its own opt-out. The key keeps its historical name; the layout key it labels does too.
+workspace.settings.exchange_controls: "Эти кнопки — и у групп, на все их ядра"
+# The rail popup's first group: how the core list is split. Server grouping is the outer level
+# and is off by default; exchange grouping is the inner one and is on by default.
+workspace.settings.grouping: "Группировка"
+workspace.settings.group_by_server: "По серверам"
+workspace.settings.group_by_exchange: "По биржам"
+# The server heading for cores that neither their feed nor their key places on an IP address.
+workspace.server_unknown: "Сервер не определён"

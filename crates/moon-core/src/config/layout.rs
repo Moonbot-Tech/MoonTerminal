@@ -497,6 +497,15 @@ pub struct WindowLayout {
     /// enabled, commanding every core under that heading with one command each.
     #[serde(default, deserialize_with = "de_lenient")]
     pub workspace_rail_exchange_controls: Option<bool>,
+    /// Auto workspace rail: whether cores are grouped by the machine they run on (endpoint IP),
+    /// outermost, before any exchange grouping. `None` = the rail's default (OFF), so a profile
+    /// that never opened the popup keeps the exchange-only list it always had.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub workspace_rail_group_by_server: Option<bool>,
+    /// Auto workspace rail: whether cores are grouped by exchange (inside a server block when
+    /// server grouping is on too). `None` = the rail's default (ON).
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub workspace_rail_group_by_exchange: Option<bool>,
     /// Standalone "Report" window geometry opened from Analytics.
     #[serde(default, deserialize_with = "de_lenient")]
     pub report_window: Option<GeomRect>,

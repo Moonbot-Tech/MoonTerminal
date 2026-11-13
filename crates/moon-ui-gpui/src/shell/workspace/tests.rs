@@ -185,6 +185,19 @@ fn rail_availability(
     }
 }
 
+/// A machine for every third core uid, so the oracle catches a machine attached to the wrong row
+/// after canonical reordering.
+fn rail_machine(server: &moon_core::config::ServerConfig) -> Option<std::net::IpAddr> {
+    server.uid.is_multiple_of(3).then(|| {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+            203,
+            0,
+            113,
+            (server.uid % 200) as u8,
+        ))
+    })
+}
+
 /// Independent old per-row searches pin duplicate membership, order, lifecycle, and advice.
 #[test]
 fn rail_inputs_match_per_core_linear_path() {
@@ -256,6 +269,7 @@ fn rail_inputs_match_per_core_linear_path() {
             get_core,
             get_venue,
             rail_availability,
+            rail_machine,
         );
         let mut servers = config.servers.clone();
         order.sort_by(&mut servers, |server| server.id);
@@ -285,6 +299,7 @@ fn rail_inputs_match_per_core_linear_path() {
                         &servers,
                         |id| get_core(id).is_some_and(|core| core.status == ConnStatus::Ready),
                     ),
+                    server: rail_machine(server),
                 }
             })
             .filter(|input| {
@@ -326,6 +341,7 @@ fn bench_workspace_rail_inputs_200() {
             |id| (id % 3 != 0).then_some(&ready),
             |_| None,
             rail_availability,
+            |_| None,
         ));
     }
     println!(
@@ -954,7 +970,11 @@ fn icon_core_geometry_reserves_a_deterministic_label_budget() {
 #[test]
 fn core_section_shape_marks_only_the_final_leaf_terminal() {
     let mut items = Vec::new();
-    append_core_section_items(&mut items, vec![rail_row(10), rail_row(20), rail_row(30)]);
+    append_core_section_items(
+        &mut items,
+        vec![rail_row(10), rail_row(20), rail_row(30)],
+        false,
+    );
     let actual = items
         .into_iter()
         .map(|item| match item {
@@ -969,7 +989,7 @@ fn core_section_shape_marks_only_the_final_leaf_terminal() {
     assert_eq!(actual, vec![(10, false), (20, false), (30, true)]);
 
     let mut singleton = Vec::new();
-    append_core_section_items(&mut singleton, vec![rail_row(40)]);
+    append_core_section_items(&mut singleton, vec![rail_row(40)], false);
     assert!(matches!(
         singleton.as_slice(),
         [RailItem::Core {

@@ -54,6 +54,16 @@ their core leaves retain canonical `core_order::CoreOrder`. Known brand logos ap
 headings only, never on core rows. Core names do not infer exchange identity. Disabled or
 unavailable rows remain visible with status and reject clicks.
 
+The rail's ⚙ popup opens with a "Grouping" group: "By server" (off by default) adds an outer level
+of machine headings, and "By exchange" (on by default) keeps the exchange headings, nested inside a
+server when both are on. With both off the cores form one flat list under Overview. A machine is
+the address its feed reported (`CoreData::endpoint`), else the IP the core's key or address override
+names, so a reconnecting or disabled core keeps its block; host names that are not resolved yet and
+keys without an address fall into a last "unknown server" block. Machine headings are named the way
+Core Status names servers — the custom name from `layout.core_server_names`, else `Server N`, ranked
+over feed-reported addresses — and carry the same run controls as exchange headings, under the same
+checkbox, for every core of that machine.
+
 A core is selectable when it and its group are active, a live session exists and the group window is in
 the `Opening` or `Live` state. There is no per-core window switch: a core is available through its
 group's shared live window. A click inside the current group only changes that group's Auto scope. A click

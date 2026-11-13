@@ -625,11 +625,13 @@ fn auto_body_keeps_a_visible_dock_resizable_rail_and_exchange_sections() {
     );
 
     let rail = code_only(braced_body(&workspace, "fn workspace_rail("));
+    let flatten = code_only(braced_body(&workspace, "fn append_roster_items("));
     assert!(
         rail.contains("core_venues()")
             && rail.contains("venues.get(&server.id).cloned()")
-            && rail.contains("RailItem::Exchange {")
-            && rail.contains("venue: section.venue"),
+            && rail.contains("append_roster_items(")
+            && flatten.contains("RosterSectionHeading::Exchange(venue)")
+            && flatten.contains("RailItem::Exchange {"),
         "the rail must section canonical rows by venue identity, not by a reported caption"
     );
 }
@@ -649,8 +651,13 @@ fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
     );
 
     let rail = code_only(braced_body(&workspace, "fn workspace_rail("));
-    let ready = rail
-        .find("if self.exchange_logos_ready")
+    let ready_edge = rail
+        .find("let logos_ready = self.exchange_logos_ready")
+        .expect("logo resolution must read the ready edge");
+    // The gate itself: the venue passes on only once the ready edge has fired.
+    let ready = rail[ready_edge..]
+        .find(".then_some(venue)")
+        .map(|offset| ready_edge + offset)
         .expect("logo resolution must be gated by the ready edge");
     let resolve = rail
         .find("and_then(crate::media::exchange_logos::exchange_logo)")
@@ -660,20 +667,29 @@ fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
         .expect("the rail must remain virtualized");
     assert!(ready < resolve && resolve < virtual_list);
 
+    // Exchange headings hand their resolved logo to the shared heading renderer; server headings
+    // pass none, and core leaves never reach it.
     let render = code_only(braced_body(&workspace, "fn render_rail_item("));
     let exchange = render
         .find("RailItem::Exchange {")
         .expect("exchange headings must own the resolved logo");
-    let image = render[exchange..]
-        .find("img(logo)")
-        .map(|offset| exchange + offset)
-        .expect("exchange headings must render known brand logos");
     let core = render
         .find("RailItem::Core {")
         .expect("core leaves must remain explicit");
-    assert!(exchange < image && image < core);
+    assert!(exchange < core);
+    assert!(
+        render[exchange..core].contains("render_heading(")
+            && render[exchange..core].contains("logo,"),
+        "exchange headings must forward their logo to the heading renderer"
+    );
+    let heading = code_only(braced_body(&workspace, "fn render_heading("));
+    assert!(
+        heading.contains("img(logo)"),
+        "the heading renderer must draw known brand logos"
+    );
     assert!(
         !render[core..].contains("img(")
+            && !render[core..].contains("render_heading(")
             && workspace.matches("exchange_logos::exchange_logo").count() == 1,
         "core rows and the virtual row closure must never resolve or render exchange logos"
     );
