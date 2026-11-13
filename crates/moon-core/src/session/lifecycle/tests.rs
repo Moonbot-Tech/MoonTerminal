@@ -49,6 +49,100 @@ fn dedup_elects_one_provider_per_account_currency() {
     assert_eq!(source.provider_of(1), Some(1));
 }
 
+/// Subscribing a cross-quote chart on the catalog tape leaves its prints and book unavailable.
+#[test]
+fn dedup_routes_cross_quote_chart_and_book_to_the_currency_provider() {
+    let (mut session, _tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    let desired = [(3, "BTCUSDT".into()), (3, "XALPHA-USDC".into())];
+    assert!(session.set_open(&desired, &desired));
+    for wanted in [&session.wanted, &session.wanted_orderbook] {
+        assert!(wanted[&1].contains("BTCUSDT"));
+        assert!(!wanted[&1].contains("XALPHA-USDC"));
+        assert!(wanted[&3].contains("XALPHA-USDC"));
+        assert!(!wanted[&3].contains("BTCUSDT"));
+    }
+    assert_eq!(
+        session.last_cmd[&1],
+        (true, vec!["BTCUSDT".into()], vec!["BTCUSDT".into()])
+    );
+    assert_eq!(
+        session.last_cmd[&3],
+        (true, vec!["XALPHA-USDC".into()], vec!["XALPHA-USDC".into()])
+    );
+    assert!(!session.set_open(&desired, &desired));
+}
+
+/// Changing a quote group without changing core ownership must still wake routing consumers.
+#[test]
+fn quote_group_changes_invalidate_even_when_catalog_providers_stay_the_same() {
+    let (mut session, tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    session.set_open(&[], &[]);
+    assert_eq!(
+        session.market_source().provider_of_market(1, "XALPHA-USDC"),
+        Some(3)
+    );
+    tx[2]
+        .send(FeedMsg::CoreBase { base: "BTC".into() })
+        .unwrap();
+    session.drain();
+    assert!(session.set_open(&[], &[]));
+    let source = session.market_source();
+    assert_eq!(source.provider_of(3), Some(3));
+    assert_eq!(source.provider_of_market(1, "XALPHA-USDC"), Some(1));
+    assert_eq!(source.provider_of_market(1, "ETHBTC"), Some(3));
+}
+
+/// Entering Separate mode must remove shared quote overrides as well as catalog deduplication.
+#[test]
+fn per_core_mode_clears_cross_quote_routing() {
+    let (mut session, _tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    session.set_open(&[], &[]);
+    assert_eq!(
+        session.market_source().provider_of_market(3, "BTCUSDT"),
+        Some(1)
+    );
+    session.set_market_mode(crate::market::MarketDataMode::PerCore);
+    let desired = [(3, "BTCUSDT".into())];
+    session.set_open(&desired, &desired);
+    assert_eq!(
+        session.market_source().provider_of_market(3, "BTCUSDT"),
+        Some(3)
+    );
+    assert_eq!(
+        session.market_source().provider_of_market(2, "XALPHA-USDC"),
+        Some(2)
+    );
+    assert!(session.wanted[&3].contains("BTCUSDT"));
+    assert!(session.wanted_orderbook[&3].contains("BTCUSDT"));
+}
+
+/// A provider with the right currency on another exchange must never serve this core's market.
+#[test]
+fn cross_quote_routing_stays_on_the_exact_exchange_identity() {
+    let (mut session, tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    tx[2]
+        .send(FeedMsg::Identity {
+            id: crate::feed::ExchangeId::new(4),
+            dex: String::new(),
+            reported: String::new(),
+        })
+        .unwrap();
+    session.drain();
+    let desired = [(3, "BTCUSDT".into())];
+    session.set_open(&desired, &desired);
+    assert_eq!(
+        session.market_source().provider_of_market(3, "BTCUSDT"),
+        Some(3)
+    );
+    assert!(session.wanted[&3].contains("BTCUSDT"));
+    assert!(
+        !session
+            .wanted
+            .get(&1)
+            .is_some_and(|markets| markets.contains("BTCUSDT"))
+    );
+}
+
 /// Electing per core instead of per currency would duplicate full-tape subscriptions.
 #[test]
 fn dedup_single_currency_keeps_one_full_tape() {

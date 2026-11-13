@@ -37,12 +37,14 @@ fn aggregate_recorder_trade(
 }
 
 impl MarketDataSource {
+    /// Create an unrouted source; the coordinator publishes catalog and quote ownership together.
     pub fn new(store: SharedMarketStore) -> Self {
         Self {
             inner: Arc::new(RwLock::new(MarketDataSourceInner {
                 store,
                 clients: HashMap::new(),
                 core_provider: HashMap::new(),
+                market_provider_overrides: HashMap::new(),
                 provider_orderbook_kind: HashMap::new(),
                 cursors: HashMap::new(),
                 market_revisions: HashMap::new(),
@@ -317,6 +319,10 @@ impl MarketDataSource {
         inner.market_revisions.remove(&core);
         inner.provider_orderbook_kind.remove(&core);
         inner.core_provider.remove(&core);
+        inner.market_provider_overrides.remove(&core);
+        for overrides in inner.market_provider_overrides.values_mut() {
+            overrides.retain(|_, provider| *provider != core);
+        }
         inner.core_venue.remove(&core);
         inner.archive.forget_provider(core);
         inner.native_backfill.forget_provider(core);
@@ -383,6 +389,19 @@ impl MarketDataSource {
         let connected_cores = inner.clients.keys().copied().collect();
         inner.archive.retain_providers(&connected_cores);
         inner.native_backfill.retain_providers(&active_providers);
+    }
+
+    /// Publish quote routing and report changes even when catalog ownership stays the same.
+    pub fn set_market_provider_overrides(
+        &self,
+        overrides: &HashMap<CoreId, HashMap<Box<str>, CoreId>>,
+    ) -> bool {
+        let mut inner = self.inner.write().expect("market source poisoned");
+        if inner.market_provider_overrides == *overrides {
+            return false;
+        }
+        inner.market_provider_overrides = overrides.clone();
+        true
     }
 
     pub fn set_orderbook_kind(&self, core: CoreId, kind: OrderBookKind) {
@@ -508,10 +527,12 @@ impl MarketDataSource {
             .drop_provider(provider);
     }
 
+    /// Clear catalog and quote routing together when the source mode changes.
     pub fn clear(&self) {
         let store = {
             let mut inner = self.inner.write().expect("market source poisoned");
             inner.core_provider.clear();
+            inner.market_provider_overrides.clear();
             inner.cursors.clear();
             inner.market_revisions.clear();
             inner.provider_generations.clear();
@@ -566,10 +587,11 @@ impl MarketDataSource {
         archive.answered(core, market, epoch);
     }
 
+    /// Pull this market's book from its routed tape, refusing an ownership change mid-read.
     pub fn refresh_market(&self, core: CoreId, market: &str) -> bool {
         let (provider, client, store, elapsed_ms, orderbook_kind) = {
             let inner = self.inner.read().expect("market source poisoned");
-            let Some(provider) = inner.core_provider.get(&core).copied() else {
+            let Some(provider) = inner.market_provider(core, market) else {
                 if market_diag_enabled()
                     && market_diag_due(format!("no-provider:{core}:{market}"), market_diag_floor())
                 {
@@ -656,7 +678,7 @@ impl MarketDataSource {
 
         {
             let mut inner = self.inner.write().expect("market source poisoned");
-            if inner.core_provider.get(&core).copied() != Some(provider) {
+            if inner.market_provider(core, market) != Some(provider) {
                 return false;
             }
             book_dirty_revision = inner

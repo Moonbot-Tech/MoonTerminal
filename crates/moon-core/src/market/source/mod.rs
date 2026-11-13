@@ -90,10 +90,13 @@ struct CandleSubState {
     subscribed: bool,
 }
 
+/// Shared catalog ownership, quote routing and retained market state behind the source lock.
 struct MarketDataSourceInner {
     store: SharedMarketStore,
     clients: HashMap<CoreId, SharedMoonClient>,
     core_provider: HashMap<CoreId, CoreId>,
+    /// Same-exchange quote groups whose elected tape differs from the core's catalog provider.
+    market_provider_overrides: HashMap<CoreId, HashMap<Box<str>, CoreId>>,
     provider_orderbook_kind: HashMap<CoreId, OrderBookKind>,
     cursors: HashMap<(CoreId, String), MarketPullCursor>,
     market_revisions: HashMap<CoreId, HashMap<String, MarketRevisionCounters>>,

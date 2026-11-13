@@ -15,6 +15,19 @@ use super::{
 };
 use crate::market::candles::ChartCandle;
 
+impl super::MarketDataSourceInner {
+    /// Resolve under the caller's guard so provider, client and naming share one snapshot.
+    pub(super) fn market_provider(&self, core: CoreId, market: &str) -> Option<CoreId> {
+        let provider = self.core_provider.get(&core).copied();
+        crate::session::coordinator::market_provider(
+            provider,
+            self.exchange_of_provider(provider.unwrap_or(core)),
+            self.market_provider_overrides.get(&core),
+            market,
+        )
+    }
+}
+
 /// Why a core's exchange could not be addressed for a trade replay.
 ///
 /// A venue this build's directory does not know is NOT a failure here: the address carries
@@ -254,7 +267,7 @@ impl MarketDataSource {
     /// charts compare this one number before pulling retained rows or books.
     pub fn market_revisions(&self, core: CoreId, market: &str) -> Option<MarketRevisions> {
         let inner = self.inner.read().expect("market source poisoned");
-        let provider = inner.core_provider.get(&core).copied()?;
+        let provider = inner.market_provider(core, market)?;
         let generation = inner
             .provider_generations
             .get(&provider)
@@ -276,22 +289,19 @@ impl MarketDataSource {
         })
     }
 
+    /// Read the latest retained trade, last-price ring or catalog price from the market's tape.
     pub fn latest_price(&self, core: CoreId, market: &str) -> Result<f32, LatestPriceError> {
-        let (provider, client) = {
+        let client = {
             let inner = self.inner.read().expect("market source poisoned");
             let provider = inner
-                .core_provider
-                .get(&core)
-                .copied()
+                .market_provider(core, market)
                 .ok_or(LatestPriceError::NoProvider)?;
-            let client = inner
+            inner
                 .clients
                 .get(&provider)
                 .and_then(SharedMoonClient::get)
-                .ok_or(LatestPriceError::NoClient)?;
-            (provider, client)
+                .ok_or(LatestPriceError::NoClient)?
         };
-        let _ = provider;
         let snapshot = client
             .snapshot_versioned()
             .ok_or(LatestPriceError::NoSnapshot)?;
@@ -339,7 +349,7 @@ impl MarketDataSource {
     pub fn latest_trade_ms(&self, core: CoreId, market: &str) -> Option<i64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             inner
                 .clients
                 .get(&provider)
@@ -370,12 +380,16 @@ impl MarketDataSource {
         // market for another's.
         let (client, exchange) = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let catalog_provider = inner.core_provider.get(&core).copied()?;
+            let exchange = inner.exchange_of_provider(catalog_provider);
+            let base = currency.to_ascii_uppercase();
+            let market = crate::symbol::parse::market_names_for(&base, "USDT", exchange).next()?;
+            let provider = inner.market_provider(core, &market)?;
             let client = inner
                 .clients
                 .get(&provider)
                 .and_then(SharedMoonClient::get)?;
-            (client, inner.exchange_of_provider(provider))
+            (client, exchange)
         };
         let snapshot = client.snapshot_versioned()?;
         // How the coin/USDT market is spelled depends on the exchange; the shared helper asks the
@@ -594,8 +608,8 @@ impl MarketDataSource {
 
     /// Return the market-data provider core for a consumer core.
     ///
-    /// This is the exchange deduplication key: cores on the same exchange share a provider. The
-    /// screener groups cores by this value so the market half of its rows is read once per exchange.
+    /// This is the catalog deduplication key: cores in the same exchange/currency group share it.
+    /// Individual market values use [`Self::provider_of_market`] instead.
     pub fn provider_of(&self, core: CoreId) -> Option<CoreId> {
         self.inner
             .read()
@@ -603,6 +617,15 @@ impl MarketDataSource {
             .core_provider
             .get(&core)
             .copied()
+    }
+
+    /// Return the tape for this market's quote group, falling back to the core's catalog provider.
+    /// Separate mode publishes no overrides, so every market stays on its own core.
+    pub fn provider_of_market(&self, core: CoreId, market: &str) -> Option<CoreId> {
+        self.inner
+            .read()
+            .expect("market source poisoned")
+            .market_provider(core, market)
     }
 
     /// Return the live MoonProto client for the specific core, not its market-data provider.
@@ -628,7 +651,7 @@ impl MarketDataSource {
     pub fn price_step(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             inner
                 .clients
                 .get(&provider)
@@ -651,7 +674,7 @@ impl MarketDataSource {
     pub fn price_tick(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             inner
                 .clients
                 .get(&provider)
@@ -675,7 +698,7 @@ impl MarketDataSource {
     pub fn market_ticker(&self, core: CoreId, market: &str) -> Option<MarketTickerReadout> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             inner
                 .clients
                 .get(&provider)
@@ -697,8 +720,8 @@ impl MarketDataSource {
 
     /// Return the market-wide context for a chart caption: background deltas and funding.
     ///
-    /// The background deltas are the CORE's own, not a per-market figure: `global_deltas` is one
-    /// record per provider, so every pane on that core reads the same exchange and BTC movement.
+    /// The background deltas belong to the catalog provider, while funding follows the market's
+    /// quote-group provider, so a cross-currency pane still shares its core's background context.
     /// Funding is per market and is reported only where the venue charges it — a spot market
     /// returns `None` for both halves rather than a confident zero, which would read as "funding
     /// is free here".
@@ -710,17 +733,26 @@ impl MarketDataSource {
     /// Returns:
     ///     The context, or `None` when the provider, snapshot, or market is unavailable.
     pub fn market_context(&self, core: CoreId, market: &str) -> Option<MarketContextReadout> {
-        let client = {
+        let (client, catalog_client) = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
-            inner
+            let provider = inner.market_provider(core, market)?;
+            let client = inner
                 .clients
                 .get(&provider)
-                .and_then(SharedMoonClient::get)?
+                .and_then(SharedMoonClient::get)?;
+            let catalog_client = inner
+                .core_provider
+                .get(&core)
+                .and_then(|provider| inner.clients.get(provider))
+                .and_then(SharedMoonClient::get);
+            (client, catalog_client)
         };
         let snapshot = client.snapshot_versioned()?;
         let markets = snapshot.markets();
-        let globals = markets.global_deltas();
+        let globals = catalog_client
+            .and_then(|client| client.snapshot_versioned())
+            .map(|snapshot| snapshot.markets().global_deltas())
+            .unwrap_or_default();
         let price = markets.price(market);
         // Both halves of the funding reading go through one shared function; see
         // `super::funding_from_wire` for why each of them is not the obvious conversion.
@@ -770,7 +802,7 @@ impl MarketDataSource {
     ) -> Option<MarketFiguresReadout> {
         let mut out = MarketFiguresReadout::default();
         let provider_snapshot = self
-            .provider_of(core)
+            .provider_of_market(core, market)
             .and_then(|provider| self.core_client(provider))
             .and_then(|client| client.snapshot_versioned());
         let mut any = false;
@@ -984,7 +1016,7 @@ impl MarketDataSource {
     /// Returns:
     ///     The windows, or `None` when the provider, its client, or its snapshot is unavailable.
     pub fn market_windows(&self, core: CoreId, market: &str) -> Option<MarketWindowsReadout> {
-        let provider = self.provider_of(core)?;
+        let provider = self.provider_of_market(core, market)?;
         let snapshot = self.core_client(provider)?.snapshot_versioned()?;
         let derived = snapshot.market_history_derived_snapshot_now(market)?;
         let deltas = derived.deltas;
@@ -1054,7 +1086,7 @@ impl MarketDataSource {
     pub fn market_limits(&self, core: CoreId, market: &str) -> Option<MarketLimits> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             inner
                 .clients
                 .get(&provider)
@@ -1099,7 +1131,7 @@ impl MarketDataSource {
     pub fn market_contract_terms(&self, core: CoreId, market: &str) -> Option<(String, f64)> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             inner
                 .clients
                 .get(&provider)
@@ -1129,7 +1161,7 @@ impl MarketDataSource {
     pub fn order_size_rules(&self, core: CoreId, market: &str) -> Option<OrderSizeRules> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             inner
                 .clients
                 .get(&provider)
@@ -1190,15 +1222,15 @@ impl MarketDataSource {
             .map_or(0, |d| d.as_millis() as i64);
         let address = {
             let inner = self.inner.read().expect("market source poisoned");
-            inner.core_provider.get(&core).and_then(|provider| {
+            inner.market_provider(core, market).and_then(|provider| {
                 inner
                     .clients
-                    .get(provider)
+                    .get(&provider)
                     .and_then(SharedMoonClient::get)
                     .map(|client| {
                         let exchange_key = inner
                             .provider_exchange
-                            .get(provider)
+                            .get(&provider)
                             .map(|e| format!("{}:{:08x}", e.code, e.dex));
                         (client, inner.kline_cache.clone(), exchange_key)
                     })
@@ -1379,6 +1411,7 @@ impl MarketDataSource {
         Some(coins)
     }
 
+    /// Read the book stored under the market's current provider without holding the source lock.
     pub fn with_orderbook_view<R>(
         &self,
         core: CoreId,
@@ -1387,7 +1420,7 @@ impl MarketDataSource {
     ) -> R {
         let (provider, store) = {
             let inner = self.inner.read().expect("market source poisoned");
-            (inner.core_provider.get(&core).copied(), inner.store.clone())
+            (inner.market_provider(core, market), inner.store.clone())
         };
         let store = store.read().expect("market store poisoned");
         f(provider

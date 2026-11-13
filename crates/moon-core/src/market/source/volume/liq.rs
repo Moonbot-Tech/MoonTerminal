@@ -64,7 +64,7 @@ impl MarketDataSource {
         if to <= from {
             return None;
         }
-        let provider = self.provider_of(core)?;
+        let provider = self.provider_of_market(core, market)?;
         // Cached on the same terms as the traded figures beside it: the pointer path asks once per
         // quantized moment, and a stack of panes on one coin must not each pay for the read.
         if let Some(hit) = self.liq_cached(provider, market, span, at, now) {

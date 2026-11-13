@@ -231,6 +231,7 @@ impl MarketDataSource {
         };
         // The chart's own price, which every borrowed row states its spread against.
         let own_price = self.arb_own_price(core, market);
+        let own_quote_group = self.provider_of_market(core, market) == self.provider_of(core);
         // The pane's own venue never appears in its own column: a row reading `BybitF +0.00%` on a
         // Bybit chart is not a spread, and it is the one row a reader would act on by mistake. Its
         // SPOT counterpart is a different venue and stays.
@@ -246,8 +247,9 @@ impl MarketDataSource {
             // The donor's own pair of prices where it exists — both stamped at one instant, which
             // is what makes a percentage a spread rather than a subtraction of two moments. Only
             // for the SAME market: one core can hold `ENAUSDT` and `ENAUSDC`, and the quote a pane
-            // borrows from the other one carries the other one's price.
-            let base = match row.donor == core && row.market == market {
+            // borrows from the other one carries the other one's price. A cross-quote pane must
+            // use its routed price even when its own core supplied an arbitrage row.
+            let base = match row.donor == core && row.market == market && own_quote_group {
                 true => positive(row.my_price).or(own_price),
                 false => own_price,
             };
@@ -274,12 +276,18 @@ impl MarketDataSource {
     /// pane's own core is second and not first for the same reason: under deduplication it may not
     /// be the one draining prices, and a core that has stopped draining keeps its last price
     /// frozen in the snapshot, which would state a spread that grows on its own.
+    /// A cross-quote market never falls back to the consumer's different-currency tape.
     fn arb_own_price(&self, core: CoreId, market: &str) -> Option<f64> {
         let read = |from: CoreId| -> Option<f64> {
             let snapshot = self.core_client(from)?.snapshot_versioned()?;
             last_or_ask(&snapshot.markets().get(market)?)
         };
-        self.provider_of(core).and_then(read).or_else(|| read(core))
+        let provider = self.provider_of_market(core, market)?;
+        read(provider).or_else(|| {
+            (self.provider_of(core) == Some(provider))
+                .then(|| read(core))
+                .flatten()
+        })
     }
 
     /// Keep one row per venue: the reader's OWN core first, then the freshest quote.

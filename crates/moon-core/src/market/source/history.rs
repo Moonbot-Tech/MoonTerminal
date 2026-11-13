@@ -112,7 +112,7 @@ impl MarketDataSource {
         // lock, a second client lookup and a third lock inside the slot, on the frame path.
         let (provider, client, client_epoch, archive) = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.core_provider.get(&core).copied()?;
+            let provider = inner.market_provider(core, market)?;
             let (client, epoch) = inner.clients.get(&provider)?.get_with_epoch()?;
             (provider, client, epoch, inner.archive.clone())
         };

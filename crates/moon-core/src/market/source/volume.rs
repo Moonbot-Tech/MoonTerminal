@@ -447,7 +447,7 @@ impl MarketDataSource {
         if !span.is_useful() {
             return None;
         }
-        let provider = self.provider_of(core)?;
+        let provider = self.provider_of_market(core, market)?;
         let now = now_unix_ms_i64();
         if let Some(hit) = self.volume_cached(provider, market, span, at, now) {
             return Some(hit);

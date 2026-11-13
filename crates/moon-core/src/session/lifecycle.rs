@@ -1250,7 +1250,10 @@ impl SessionManager {
         now_ms: i64,
         span_ms: i64,
     ) -> bool {
-        let provider = self.core_provider.get(&core).copied().unwrap_or(core);
+        let provider = self
+            .market_source
+            .provider_of_market(core, market)
+            .unwrap_or(core);
         let Some(sess) = self.sessions.iter().find(|s| s.id == provider) else {
             log::warn!(
                 "diag history fill skipped: provider core={} not found",
@@ -1298,7 +1301,10 @@ impl SessionManager {
         now_ms: i64,
         span_ms: i64,
     ) -> bool {
-        let provider = self.core_provider.get(&core).copied().unwrap_or(core);
+        let provider = self
+            .market_source
+            .provider_of_market(core, market)
+            .unwrap_or(core);
         log::warn!(
             "diag history fill disabled: MoonProto diagnostics feature is forbidden in terminal \
              core={} provider={} market={market} now_ms={now_ms} span_ms={span_ms}",

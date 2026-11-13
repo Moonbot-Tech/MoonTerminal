@@ -2,6 +2,101 @@ use super::*;
 use moonproto::MoonTime;
 use moonproto::state::TradeHistoryRow;
 
+/// Independent tapes without connecting clients, for routing and revision regression coverage.
+fn quote_source(code: u8) -> MarketDataSource {
+    use std::collections::HashMap;
+    let source = MarketDataSource::new(crate::market::MarketStore::shared(0.0));
+    source.set_provider_map(&HashMap::from([(1, 1), (2, 1), (3, 3)]));
+    source.set_provider_exchanges(&HashMap::from([
+        (1, crate::feed::ExchangeId::new(code)),
+        (3, crate::feed::ExchangeId::new(code)),
+    ]));
+    source.set_market_provider_overrides(&HashMap::from([
+        (1, HashMap::from([("USDC".into(), 3)])),
+        (2, HashMap::from([("USDC".into(), 3)])),
+        (3, HashMap::from([("USDT".into(), 1)])),
+    ]));
+    source
+}
+
+/// A USDT market on a USDC core must read the USDT tape, without moving its catalog.
+#[test]
+fn quote_routing_keeps_catalogs_and_unmatched_quotes_on_their_group() {
+    let source = quote_source(4);
+    assert_eq!(source.provider_of_market(3, "BTCUSDT"), Some(1));
+    assert_eq!(source.provider_of_market(3, "ethusdt"), Some(1));
+    assert_eq!(source.provider_of_market(3, "XALPHAUSDC"), Some(3));
+    assert_eq!(source.provider_of_market(1, "BTCUSDT"), Some(1));
+    assert_eq!(source.provider_of_market(3, "ETHBTC"), Some(3));
+    assert_eq!(source.provider_of_market(2, "XALPHAUSDC"), Some(3));
+    assert_eq!(source.provider_of(3), Some(3));
+    assert_eq!(source.provider_of_market(99, "BTCUSDT"), None);
+}
+
+/// Applying concatenated-only rules would leave OKX and Gate markets on the wrong tape.
+#[test]
+fn quote_routing_obeys_exchange_market_spelling() {
+    let okx = quote_source(15);
+    assert_eq!(okx.provider_of_market(3, "BTC-USDT-SWAP"), Some(1));
+    assert_eq!(okx.provider_of_market(3, "BTC-usdt"), Some(1));
+    assert_eq!(okx.provider_of_market(3, "XALPHA-USDC-SWAP"), Some(3));
+    let gate = quote_source(9);
+    assert_eq!(gate.provider_of_market(3, "BTC_USDT"), Some(1));
+    assert_eq!(gate.provider_of_market(3, "XALPHA_USDC"), Some(3));
+}
+
+/// Missing quote groups must fall back, while a newly elected BTC group must route ETHBTC too.
+#[test]
+fn quote_routing_is_not_specific_to_stablecoins() {
+    use std::collections::HashMap;
+    let source = quote_source(4);
+    source.set_market_provider_overrides(&HashMap::new());
+    assert_eq!(source.provider_of_market(3, "BTCUSDT"), Some(3));
+    assert_eq!(source.provider_of_market(2, "ETHBTC"), Some(1));
+    source.set_market_provider_overrides(&HashMap::from([(3, HashMap::from([("BTC".into(), 1)]))]));
+    assert_eq!(source.provider_of_market(3, "ETHBTC"), Some(1));
+}
+
+/// Watching the catalog tape's counters would leave a cross-quote chart asleep on real prints.
+#[test]
+fn cross_quote_market_revisions_follow_the_routed_tape() {
+    let source = quote_source(4);
+    source.mark_dirty(
+        1,
+        &[crate::feed::MarketDirty::new(
+            "BTCUSDT",
+            crate::feed::MarketDirtyFlags::HISTORY,
+        )],
+    );
+    let routed = source.market_revisions(3, "BTCUSDT").unwrap();
+    assert_eq!((routed.provider, routed.history), (1, 1));
+    let own = source.market_revisions(3, "XALPHAUSDC").unwrap();
+    assert_eq!((own.provider, own.history), (3, 0));
+}
+
+/// The stored book is provider-keyed; resolving only the catalog core returns the wrong book.
+#[test]
+fn cross_quote_orderbook_reads_the_routed_store_view() {
+    let source = quote_source(4);
+    let store = source.inner.read().unwrap().store.clone();
+    {
+        let mut store = store.write().unwrap();
+        for provider in [1, 3] {
+            store.reset(provider, "BTCUSDT");
+        }
+        store.apply_book(1, "BTCUSDT", &crate::feed::OrderBook::default());
+    }
+    assert_eq!(
+        source.with_orderbook_view(3, "BTCUSDT", |view| view.map(|(_, rev)| rev)),
+        Some(1)
+    );
+    source.set_market_provider_overrides(&std::collections::HashMap::new());
+    assert_eq!(
+        source.with_orderbook_view(3, "BTCUSDT", |view| view.map(|(_, rev)| rev)),
+        Some(0)
+    );
+}
+
 /// Currency-specific tapes must retain the same coarse exchange address for replay caches.
 #[test]
 fn currency_providers_keep_the_coarse_replay_exchange_key() {
