@@ -2524,6 +2524,7 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
             trade_open: true,
             allow_closer_corridor: true,
             exit_under_every_entry: true,
+            manual_refresh: true,
             model: crate::db::tuner::ticks::ModelSettings {
                 latency_ms: 250.0,
                 entry_method: crate::db::tuner::ticks::EntryMethod::Shift,
@@ -2557,6 +2558,14 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
             .as_ref()
             .expect("the block")
             .exit_under_every_entry
+    );
+    // And the live recounts it had: "recount on request only" starts off.
+    assert!(
+        !before
+            .analytics_ticks
+            .as_ref()
+            .expect("the block")
+            .manual_refresh
     );
 
     let partial: WindowLayout =

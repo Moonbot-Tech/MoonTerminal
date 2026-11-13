@@ -949,3 +949,64 @@ fn the_header_write_ignores_a_same_scope_reload() {
     model.write_enabled = false;
     assert!(!super::card::header_write_enabled(&model));
 }
+
+/// "Recount on request only" holds the rows of the current scope: a report move marks them
+/// behind instead of dirtying them, and a load that finished under a newer commit does the
+/// same. Switched off, or over a scope that changed, the card reloads as it always did, and a
+/// failed read still owes its retry. Breaks when the switch stops holding (the card reloads on
+/// every closed trade) or holds what it must not (a new scope, a failure).
+#[test]
+fn recount_on_request_holds_report_moves_of_the_current_scope_only() {
+    let mut state = TicksState::default();
+    state.publish(Ok(TicksData::default()), false);
+    judge(&mut state);
+    state.dirty = false;
+
+    state.mark_report_stale();
+    assert!(state.dirty, "the switch is off: a report move reloads");
+    assert!(!state.behind());
+
+    state.dirty = false;
+    state.manual_refresh = true;
+    state.mark_report_stale();
+    assert!(!state.dirty, "held: no reload");
+    assert!(state.behind(), "held: the card says it is behind");
+
+    state.settle_reload(true, false);
+    assert!(
+        !state.dirty && state.report_behind,
+        "a newer commit during the read is held"
+    );
+    state.settle_reload(false, false);
+    assert!(
+        !state.dirty && !state.report_behind,
+        "a read of the latest report catches up"
+    );
+    state.settle_reload(true, true);
+    assert!(state.dirty, "a failed read owes its retry");
+
+    state.dirty = false;
+    state.report_behind = true;
+    state.tape_behind = true;
+    state.pending_search = Some(None);
+    state.invalidate();
+    assert!(
+        !state.behind() && state.pending_search.is_none(),
+        "a scope change drops what the previous scope was behind on"
+    );
+    state.mark_report_stale();
+    assert!(state.dirty, "the previous scope's rows are never held");
+}
+
+/// The switch survives a restart through the axis' persisted settings. Breaks when `saved` or
+/// `restore` leaves it out.
+#[test]
+fn recount_on_request_is_persisted_with_the_axis() {
+    let mut state = TicksState::default();
+    state.manual_refresh = true;
+    let saved = state.saved();
+    assert!(saved.manual_refresh);
+    let mut back = TicksState::default();
+    back.restore(&saved);
+    assert!(back.manual_refresh);
+}

@@ -370,6 +370,9 @@ pub(super) struct SummaryModel {
     pub can_reset: bool,
     pub confirm: Option<ConfirmModel>,
     pub write_error: Option<String>,
+    /// "Recount on request only" holds the card behind the report or the tape store: the card
+    /// says so beside its Refresh (`TicksState::behind`).
+    pub behind: bool,
 }
 
 /// Render tape-end profit separately so it never appears to be part of the closed tally.
@@ -635,6 +638,7 @@ impl SummaryModel {
                 }
             }),
             write_error: None,
+            behind: state.holds_on_request() && state.behind(),
         }
     }
 }
@@ -713,6 +717,7 @@ impl AnalyticsView {
             }),
             reset: act(|this, cx| this.ticks_clear_variant(cx)),
             stop: act(|this, cx| this.ticks_stop_suggest(cx)),
+            refresh: act(|this, cx| this.ticks_catch_up(cx)),
             details: act(|this, cx| {
                 this.ticks.details_open = !this.ticks.details_open;
                 cx.notify();

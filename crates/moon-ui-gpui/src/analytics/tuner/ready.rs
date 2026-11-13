@@ -456,6 +456,9 @@ pub(in crate::analytics) struct ReadyPass {
     /// Wakes the view at the earliest verdict deadline, so a passed one is acted on without
     /// waiting for an unrelated render.
     deadline_task: Option<Task<()>>,
+    /// A recount asked for by hand (the Entry/Exit card's Refresh, a search start while behind):
+    /// it lifts "recount on request only" for one launch, without the [`RERUN_GAP`] wait.
+    pub(in crate::analytics) recount_asked: bool,
 }
 
 impl Default for ReadyPass {
@@ -481,6 +484,7 @@ impl Default for ReadyPass {
             launch_task: None,
             ticker: None,
             deadline_task: None,
+            recount_asked: false,
         }
     }
 }
@@ -543,6 +547,29 @@ impl ReadyPass {
         } else {
             Some(AutoEmpty::Computing)
         }
+    }
+
+    /// Whether "recount on request only" keeps the counts as they stand for `key`: a pass has
+    /// run on this scope, model, sample policy, catalogs and calibration without failing, and no
+    /// recount was asked for by hand. A report, tape or station-refusal move, or a verdict
+    /// deadline — the moves the card says it is behind on, or the clock — then recounts
+    /// nothing; anything else still does.
+    ///
+    /// Args:
+    ///     manual: Whether the switch is on (`TicksState::manual_refresh`).
+    ///     key: The inputs now.
+    pub(in crate::analytics) fn held_on_request(&self, manual: bool, key: &ReadyKey) -> bool {
+        manual
+            && !self.recount_asked
+            // A failed pass counted nothing to hold: it may run again.
+            && !matches!(self.run, ReadyRun::Failed { .. })
+            && self.ran.is_some_and(|ran| {
+                // A core's catalog or a calibration that moved resolves rows the pass could not
+                // place; nothing on the card would say so, so those recount as before.
+                !ran.restarts(key)
+                    && ran.addresses_rev == key.addresses_rev
+                    && ran.calibration_rev == key.calibration_rev
+            })
     }
 
     /// How long to wait before launching a pass for `key`.
@@ -1414,6 +1441,11 @@ impl AnalyticsView {
         if !loaded {
             return;
         }
+        if self.ready.held_on_request(self.ticks.manual_refresh, &key) {
+            return;
+        }
+        // A recount asked for by hand runs once, after the debounce alone.
+        let asked = std::mem::take(&mut self.ready.recount_asked);
         let now_ms = moon_core::util::time::now_unix_ms_i64();
         if self.ready.launched == Some(key) {
             // The inputs stand, but the clock may have flipped some strategy's verdict.
@@ -1432,7 +1464,11 @@ impl AnalyticsView {
         }
         // Marked as launched now so the next render does not re-arm the timer.
         self.ready.launched = Some(key);
-        let delay = self.ready.delay(&key, Instant::now());
+        let delay = if asked {
+            LAUNCH_DEBOUNCE
+        } else {
+            self.ready.delay(&key, Instant::now())
+        };
         self.ready.launch_task = Some(cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             executor.timer(delay).await;
@@ -1448,6 +1484,9 @@ impl AnalyticsView {
                         && this.ready.ran.is_some_and(|ran| !ran.restarts(&key))
                     {
                         this.ready.queued = true;
+                        // A hand-asked recount waits with it rather than being held once the
+                        // running pass ends.
+                        this.ready.recount_asked |= asked;
                         return;
                     }
                     let stale = this.ready_stale(&key, moon_core::util::time::now_unix_ms_i64());

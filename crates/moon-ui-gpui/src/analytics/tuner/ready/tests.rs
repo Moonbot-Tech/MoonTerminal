@@ -1220,3 +1220,45 @@ fn a_calibration_move_recounts_the_cores_groups() {
     };
     assert!(!pass.stands(&catalog, stale.as_ref()), "an address landed");
 }
+
+/// "Recount on request only": once a pass has counted a scope, a report, tape or refusal move
+/// recounts nothing; a new scope, a core's catalog, a failed pass and a recount asked for by
+/// hand still do. Breaks when the switch stops holding the column (it then recounts the whole
+/// list on every closed trade) or when it holds what the card cannot say it is behind on (the
+/// column would describe the previous scope, or stay unread with no Refresh).
+#[test]
+fn recount_on_request_holds_the_column_only_against_moves_of_the_same_scope() {
+    let mut pass = ReadyPass::default();
+    let first = key(1, 1);
+    assert!(
+        !pass.held_on_request(true, &first),
+        "no pass has counted the scope yet"
+    );
+    let _ = pass.begin(first, Instant::now());
+    let mut moved = key(1, 2);
+    moved.tape_rev = 7;
+    moved.refusal_revision = 3;
+    assert!(pass.held_on_request(true, &moved), "a report or tape move");
+    assert!(!pass.held_on_request(false, &moved), "the switch is off");
+    assert!(!pass.held_on_request(true, &key(2, 2)), "a new scope");
+    let mut catalog = moved;
+    catalog.addresses_rev = 1;
+    assert!(
+        !pass.held_on_request(true, &catalog),
+        "a core's catalog resolves rows the pass could not place"
+    );
+    pass.run = ReadyRun::Failed {
+        fail: moon_core::db::ReadFail::NotReady,
+        retrying: false,
+    };
+    assert!(
+        !pass.held_on_request(true, &moved),
+        "a failed pass holds nothing"
+    );
+    pass.run = ReadyRun::Done;
+    pass.recount_asked = true;
+    assert!(
+        !pass.held_on_request(true, &moved),
+        "a recount asked for by hand"
+    );
+}

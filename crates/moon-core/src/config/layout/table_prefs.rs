@@ -144,6 +144,11 @@ pub struct TicksAxisLayout {
     #[serde(deserialize_with = "de_tick_ranges")]
     pub ranges:
         std::collections::BTreeMap<String, crate::db::tuner::ticks::params::range::TickRange>,
+    /// Whether the axis recounts only on request: a closed trade, a filed tape or a passing
+    /// clock no longer reload the card or recount the strategy list's "Tuning" column; the card
+    /// says what it is behind on and its Refresh, a search start or a scope change catch up.
+    /// Off by default — a layout written before the switch keeps the live recounts it had.
+    pub manual_refresh: bool,
 }
 
 /// The "By coin" tuner's persisted settings ([`WindowLayout::analytics_coins`]): the table's

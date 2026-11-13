@@ -29,6 +29,8 @@ pub(in crate::analytics::tuner) struct SummaryActs {
     pub reset: Act,
     pub stop: Act,
     pub details: Act,
+    /// Catch a card held by "recount on request only" up with what it is behind on.
+    pub refresh: Act,
 }
 
 /// A wrapping prose line has no fixed height, so translations can grow vertically.
@@ -352,6 +354,34 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                 .child(tag)
                 .child(prose(m.sentence.clone(), p.text, cx).flex_1()),
         );
+    if m.behind {
+        // "Recount on request only": the card stands as last read; Refresh catches it up. Off
+        // while a search runs — the reload would stop it.
+        let running = matches!(m.verdict, Verdict::Running { .. });
+        body = body.child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    prose(
+                        t!("analytics.ticks.sum.behind").to_string(),
+                        p.text_muted,
+                        cx,
+                    )
+                    .flex_1(),
+                )
+                .child(button(
+                    "an-ticks-sum-refresh",
+                    "analytics.ticks.sum.refresh",
+                    MoonButtonVariant::Soft,
+                    !running,
+                    acts.refresh.clone(),
+                    cx,
+                )),
+        );
+    }
     if let Verdict::Running {
         done,
         total,

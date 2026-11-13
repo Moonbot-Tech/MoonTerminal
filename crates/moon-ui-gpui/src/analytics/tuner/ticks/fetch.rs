@@ -294,6 +294,15 @@ impl AnalyticsView {
         let refusal_revision = station::refusal_revision();
         let filed = generation != self.ticks.station_generation;
         if filed || refusal_revision != self.ticks.station_refusal_revision {
+            // "Recount on request only": the generations stay unread and the card says it is
+            // behind; its Refresh or a search start reads them (`ticks_catch_up`).
+            if self.ticks.holds_on_request() {
+                if !self.ticks.tape_behind {
+                    self.ticks.tape_behind = true;
+                    cx.notify();
+                }
+                return;
+            }
             self.ticks.station_generation = generation;
             self.ticks.station_refusal_revision = refusal_revision;
             if filed {
@@ -301,6 +310,36 @@ impl AnalyticsView {
             }
             self.reload_ticks(cx);
         }
+    }
+
+    /// Catch the held card up with what it is behind on — the report, the station's filings and
+    /// refusals — in one reload, and recount the strategy list's "Tuning" column with it. The
+    /// card's Refresh and a search start while behind come here; switching the setting off
+    /// catches up through the report refresh gate instead (`ticks_set_manual_refresh`).
+    ///
+    /// Not while a search runs: the reload would stop it. The Refresh is off then, and a search
+    /// start never comes here with one running.
+    pub(in crate::analytics::tuner) fn ticks_catch_up(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.ticks.sugg, super::state::SuggState::Running { .. }) {
+            return;
+        }
+        self.ticks.report_behind = false;
+        self.ready.recount_asked = true;
+        // The reload by hand reads the station's filings too (`ticks_sync_station_tape`).
+        self.reload_ticks(cx);
+    }
+
+    /// Read the station's filing and refusal generations that "recount on request only" left
+    /// unread, for a reload about to read the tape: rows a filing may complete are replayed, not
+    /// carried, as `refresh_station_tape` does, and the card is no longer behind on them.
+    pub(super) fn ticks_sync_station_tape(&mut self) {
+        let generation = station::filed_generation();
+        if generation != self.ticks.station_generation {
+            self.ticks.judged_under = None;
+        }
+        self.ticks.station_generation = generation;
+        self.ticks.station_refusal_revision = station::refusal_revision();
+        self.ticks.tape_behind = false;
     }
 
     /// The backend's station-tape wake (`Backend::station_tape_tick`): a refusal was lifted, or

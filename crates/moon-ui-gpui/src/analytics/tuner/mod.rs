@@ -1019,6 +1019,9 @@ fn retire_hidden_axis_reads(
         ticks.seq = ticks.seq.wrapping_add(1);
         ticks.tape_seq = ticks.tape_seq.wrapping_add(1);
         ticks.tape_reading = false;
+        // A search waiting for the retired catch-up was asked for over rows the user left;
+        // it is not started by whatever load lands after a return.
+        ticks.pending_search = None;
     }
     if tick_base || retired.contains(&ReadLane::TicksVariants) || tick_timer {
         ticks.var_seq = ticks.var_seq.wrapping_add(1);

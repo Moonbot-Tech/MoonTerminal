@@ -88,11 +88,19 @@ impl AnalyticsView {
     }
 
     /// Recompute report-stale data through the writer-driven catch-up path.
+    ///
+    /// Held when "recount on request only" holds the rows in force and nothing but the report
+    /// owes a reload: the list's refresh chains here after every commit, and the card then only
+    /// says it is behind (`TicksState::mark_report_stale`). A scope change, a failed read or a
+    /// moved axis leaves the card dirty and still reloads.
     pub(in crate::analytics) fn reload_ticks_after_report(
         &mut self,
         show_overlay: bool,
         cx: &mut Context<Self>,
     ) {
+        if !self.ticks.dirty && self.ticks.holds_on_request() {
+            return;
+        }
         self.reload_ticks_inner(true, show_overlay, cx);
     }
 
@@ -106,6 +114,11 @@ impl AnalyticsView {
         let show_overlay = self.axis_read_overlay(show_overlay);
         if !after_report {
             self.report_busy_retries.reset();
+            // A reload by hand of rows "recount on request only" holds reads the station's
+            // filings too, so the card stops saying it is behind on them.
+            if self.ticks.holds_on_request() {
+                self.ticks_sync_station_tape();
+            }
         }
         // Whether the rows in force were fully judged when this reload was asked: only then can
         // a reload that finds nothing changed keep them (`signature.rs`). A tape stage the
@@ -287,11 +300,16 @@ impl AnalyticsView {
                     Ok(read) => read,
                     Err(error) => {
                         let outcome = CatchUpOutcome::of_read::<()>(&Err(error.clone()));
-                        this.ticks.dirty = report_result_is_stale(
-                            report_req,
-                            this.current_report_generation(),
+                        this.ticks.settle_reload(
+                            report_result_is_stale(
+                                report_req,
+                                this.current_report_generation(),
+                                true,
+                            ),
                             true,
                         );
+                        // A search waiting for this catch-up is not started over a failed read.
+                        this.ticks.pending_search = None;
                         let keep = this.keep_on_catch_up(after_report, outcome, report_req);
                         this.ticks.publish(Err(error), keep);
                         if after_report {
@@ -334,9 +352,12 @@ impl AnalyticsView {
                 {
                     this.ticks.resume();
                     this.ticks.adopt_resumed_rows();
-                    this.ticks.dirty = report_result_is_stale(
-                        report_req,
-                        this.current_report_generation(),
+                    this.ticks.settle_reload(
+                        report_result_is_stale(
+                            report_req,
+                            this.current_report_generation(),
+                            false,
+                        ),
                         false,
                     );
                     // The reload's cancel may have stopped a variant scoring in flight.
@@ -556,8 +577,6 @@ impl AnalyticsView {
                 if this.ticks.seq != req {
                     return;
                 }
-                this.ticks.dirty =
-                    report_result_is_stale(report_req, this.current_report_generation(), false);
                 super::fetch::station::retain_rows(data.rows.iter().map(|row| {
                     (
                         row.deal.core_uid,
@@ -568,6 +587,12 @@ impl AnalyticsView {
                     )
                 }));
                 this.ticks.publish(Ok(data), false);
+                // Settled after the publish: the rows now stand for the current scope, so a
+                // commit during the read is held as "behind" when the switch is on.
+                this.ticks.settle_reload(
+                    report_result_is_stale(report_req, this.current_report_generation(), false),
+                    false,
+                );
                 this.ticks.loaded_period = Some(period);
                 // The rows just published are judged once their tape stage folds.
                 this.ticks.reload_key = None;
@@ -685,6 +710,7 @@ impl AnalyticsView {
             // narrower selection over deals already judged would keep the edits and show
             // nothing for them.
             self.arm_ticks_variants(cx);
+            self.start_pending_search(cx);
             return;
         }
         let defaults = self.filter_defaults(cx);
@@ -799,9 +825,22 @@ impl AnalyticsView {
 
                 // The replayable set may have changed under the variant columns: rescore them.
                 this.arm_ticks_variants(cx);
+                this.start_pending_search(cx);
                 cx.notify();
             },
         );
+    }
+
+    /// Start the search asked for while "recount on request only" held the card behind, once
+    /// the catch-up load has judged the current scope's rows (`TicksState::pending_search`).
+    /// A scope change or a failed catch-up drops the request instead.
+    fn start_pending_search(&mut self, cx: &mut Context<Self>) {
+        if !self.ticks.rows_judged_for_scope() {
+            return;
+        }
+        if let Some(only) = self.ticks.pending_search.take() {
+            self.ticks_start_search_now(only, cx);
+        }
     }
 }
 
