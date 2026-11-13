@@ -213,13 +213,5 @@ fn finish_login(
 
 /// Reuse the install wizard's credential-refusal explanation without exposing the underlying error.
 fn login_failure(error: &anyhow::Error, first: &FirstAccess) -> String {
-    if matches!(
-        error.downcast_ref::<moon_remote::ssh::OpenError>(),
-        Some(moon_remote::ssh::OpenError::Refused { .. })
-    ) && let FirstAccess::Password { user, .. } = first
-    {
-        t!("connect_wizard.server.login_refused", user = user).to_string()
-    } else {
-        format!("{error:#}")
-    }
+    crate::backend::core_new::login_failure_text(error, first)
 }
