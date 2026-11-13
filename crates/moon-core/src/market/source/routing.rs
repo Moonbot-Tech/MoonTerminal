@@ -8,6 +8,21 @@ use crate::session::CoreId;
 use crate::symbol::Exchange;
 
 impl MarketDataSourceInner {
+    /// Copy a core's small routing table so catalog scans release the source lock before iterating.
+    pub(in crate::market) fn market_routing(
+        &self,
+        core: CoreId,
+    ) -> (Option<CoreId>, Exchange, Option<HashMap<Box<str>, CoreId>>) {
+        let provider = self.core_provider.get(&core).copied();
+        (
+            provider,
+            provider.map_or(Exchange::Unknown, |provider| {
+                self.exchange_of_provider(provider)
+            }),
+            self.market_provider_overrides.get(&core).cloned(),
+        )
+    }
+
     /// Resolve under the caller's guard, keeping catalog ownership and tape routing consistent.
     pub(in crate::market) fn market_provider(&self, core: CoreId, market: &str) -> Option<CoreId> {
         let provider = self.core_provider.get(&core).copied()?;
@@ -15,25 +30,30 @@ impl MarketDataSourceInner {
         if overrides.is_none() {
             return Some(provider);
         }
-        let catalog_quote = self
+        let exchange = self.exchange_of_provider(provider);
+        let handle = self
             .clients
             .get(&provider)
             .and_then(SharedMoonClient::get)
             .and_then(|client| client.snapshot_versioned())
-            .and_then(|snapshot| snapshot.markets().get(market))
-            .map(|handle| handle.with(|market| market.base_currency.clone()));
-        market_provider(
-            Some(provider),
-            self.exchange_of_provider(provider),
-            overrides,
-            market,
-            catalog_quote.as_deref(),
-        )
+            .and_then(|snapshot| snapshot.markets().get(market));
+        match handle {
+            Some(handle) => handle.with(|row| {
+                market_provider(
+                    Some(provider),
+                    exchange,
+                    overrides,
+                    market,
+                    Some(&row.base_currency),
+                )
+            }),
+            None => market_provider(Some(provider), exchange, overrides, market, None),
+        }
     }
 }
 
 /// Prefer an explicit catalog quote, since opaque spot and perpetual names omit the currency.
-fn market_provider(
+pub(in crate::market) fn market_provider(
     provider: Option<CoreId>,
     exchange: Exchange,
     overrides: Option<&HashMap<Box<str>, CoreId>>,

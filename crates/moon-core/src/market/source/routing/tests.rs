@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// Dropping cross-quote routing during a scan would make the screener disagree with chart reads.
+#[test]
+fn screener_catalog_routing_matches_per_market_reads() {
+    let source = super::super::MarketDataSource::new(crate::market::MarketStore::shared(0.0));
+    source.set_provider_map(&HashMap::from([(1, 1), (3, 3)]));
+    source
+        .set_market_provider_overrides(&HashMap::from([(3, HashMap::from([("USDT".into(), 1)]))]));
+    let (provider, exchange, overrides) = source.inner.read().unwrap().market_routing(3);
+    // A successful writer proves the scan's copied routing state retains no source guard.
+    assert!(source.inner.try_write().is_ok());
+    for (name, quote, expected) in [("BTCUSDT", "USDT", 1), ("XALPHAUSDC", "USDC", 3)] {
+        let routed = market_provider(provider, exchange, overrides.as_ref(), name, Some(quote));
+        assert_eq!(routed, Some(expected));
+        assert_eq!(routed, source.provider_of_market(3, name));
+    }
+}
+
 /// Guessing from opaque or misleading names would select a tape in the wrong quote currency.
 #[test]
 fn catalog_quote_wins_over_market_spelling() {

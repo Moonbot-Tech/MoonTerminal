@@ -286,17 +286,28 @@ impl MarketDataSource {
         let mut snapshots = std::collections::HashMap::new();
         snapshots.insert(provider, Some(snap.clone()));
         let mut rows = Vec::with_capacity(markets.market_count());
-        let inner = self.inner.read().expect("market source poisoned");
+        // Only copy routing state under the source lock; the scan and snapshot reads run outside it.
+        let (catalog_provider, exchange, overrides) = self
+            .inner
+            .read()
+            .expect("market source poisoned")
+            .market_routing(provider);
         for handle in markets.iter() {
             let name = handle.name();
-            let Some(market_provider) = inner.market_provider(provider, name) else {
+            let market_provider = handle.with(|m| {
+                super::source::routing::market_provider(
+                    catalog_provider,
+                    exchange,
+                    overrides.as_ref(),
+                    name,
+                    Some(&m.base_currency),
+                )
+            });
+            let Some(market_provider) = market_provider else {
                 continue;
             };
             let data = snapshots.entry(market_provider).or_insert_with(|| {
-                inner
-                    .clients
-                    .get(&market_provider)
-                    .and_then(crate::feed::SharedMoonClient::get)
+                self.core_client(market_provider)
                     .and_then(|client| client.snapshot_versioned())
             });
             let mut row = ScreenerRow {

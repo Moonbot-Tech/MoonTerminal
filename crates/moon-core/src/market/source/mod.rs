@@ -17,7 +17,7 @@ mod read;
 mod refresh;
 mod replay;
 mod replay_prices;
-mod routing;
+pub(super) mod routing;
 #[cfg(test)]
 mod tests;
 mod volume;
