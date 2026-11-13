@@ -58,7 +58,7 @@ use moon_ui::{
 
 use crate::Backend;
 use crate::design;
-use crate::panels::{RenderGate, num};
+use crate::panels::RenderGate;
 use crate::workspace::scope_marker::ScopeMarker;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};

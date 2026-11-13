@@ -442,3 +442,32 @@ fn core_build_named_appends_a_trimmed_letter() {
     assert_eq!(core_build_named(771, Some(" R3 ")), "7.71 R3");
     assert_eq!(core_build_named(770, None), "7.70");
 }
+
+/// A free balance offered for a transfer was rounded up past itself (`0.01264789` → `0.012648` in
+/// the field, `0.013` in the wallet row) and Binance refused it with `-5013` (#1316). Every figure
+/// a user can send back must be cut down, and a float a hair under its decimal must not lose a unit.
+#[test]
+fn transfer_figures_never_exceed_the_free_balance() {
+    let free = 0.01264789_f64;
+    assert_eq!(transfer_amount(free), "0.01264789");
+    assert!(transfer_amount(free).parse::<f64>().unwrap() <= free);
+    // Below the eighth place is cut, not carried into it.
+    assert_eq!(transfer_amount(0.012647899), "0.01264789");
+    assert_eq!(transfer_amount(0.1 + 0.2), "0.3");
+    assert_eq!(transfer_amount(3.0), "3");
+    assert_eq!(transfer_amount(0.0), "0");
+    assert_eq!(qty_down(0.0126), "0.012");
+    assert_eq!(qty_down(12.349), "12.34");
+    assert_eq!(qty_down(35483.0), "35483.0");
+    assert_eq!(truncated_trimmed(-0.0129, 3), "-0.012");
+    assert_eq!(truncated_trimmed(-0.0001, 3), "0");
+    // Above ~8192 a fixed-precision print loses the last unit to binary error; the round-trip
+    // decimal must keep it at any magnitude.
+    for free in [8192.12345678_f64, 123456.87654321, 9_999_999.00000001] {
+        let shown = transfer_amount(free);
+        assert_eq!(shown.parse::<f64>().unwrap(), free, "{shown}");
+    }
+    assert_eq!(transfer_amount(1e-9), "0");
+    assert_eq!(transfer_amount(0.00000001), "0.00000001");
+    assert_eq!(qty_down(f64::NAN), "NaN");
+}

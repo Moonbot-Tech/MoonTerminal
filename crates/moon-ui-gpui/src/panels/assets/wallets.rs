@@ -4,6 +4,7 @@
 
 use super::*;
 use anyhow::Result;
+use moon_core::util::fmt::transfer_amount;
 use moon_ui::{MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
 
@@ -16,7 +17,7 @@ pub(super) struct AssetDrag {
     pub(super) core: CoreId,
     pub(super) asset: String,
     pub(super) from: WalletKind,
-    /// Raw available quantity passed through `num` to seed the dialog input.
+    /// Raw available quantity, seeded into the dialog input through [`transfer_amount`].
     pub(super) free: f64,
 }
 
@@ -27,7 +28,7 @@ pub(super) struct PendingTransfer {
     asset: String,
     from: WalletKind,
     to: WalletKind,
-    /// Raw available quantity displayed through `num` and used to derive the input's initial text.
+    /// Raw available quantity, shown and seeded into the input through [`transfer_amount`].
     free: f64,
 }
 
@@ -166,12 +167,14 @@ impl AssetsView {
                 from: kind,
                 free: a.amount,
             };
-            let fmt_qty = moon_core::util::fmt::qty;
+            // Cut down rather than rounded: a user copies this figure into the amount field, and
+            // a free balance rounded up past itself is refused by the exchange (#1316).
+            let fmt_qty = moon_core::util::fmt::qty_down;
             let preview_label: SharedString =
                 format!("{} {}", a.currency, fmt_qty(a.amount)).into();
             // Match the Moonbot Transfer row: `COIN available / total (value$)`, all left-aligned.
             // Value is based on `total`; an unknown conversion rate displays `(?$)`. Keep output
-            // bounded: `fmt::qty` uses up to three decimal places and `fmt::usd` up to two,
+            // bounded: `fmt::qty_down` uses up to three decimal places and `fmt::usd` up to two,
             // rather than emitting long adaptive decimals.
             let qty_txt = format!("{} / {}", fmt_qty(a.amount), fmt_qty(a.total));
             let value_txt = if a.value_usdt > 0.0 {
@@ -296,8 +299,8 @@ impl AssetsView {
 
     /// Opens an amount dialog for a dropped coin.
     ///
-    /// Seeds the input with `num(drag.free)`, an adaptive representation that may round and need
-    /// not equal the exact raw available quantity. A stale drag whose core no longer owns the
+    /// Seeds the input with [`transfer_amount`] of `drag.free`: the free balance cut down at
+    /// the core's eight places, so confirming the untouched field never asks for more than it. A stale drag whose core no longer owns the
     /// wallet surface is ignored.
     ///
     /// Args:
@@ -318,7 +321,7 @@ impl AssetsView {
         if self.effective_wallet_core(self.backend.read(cx)) != Some(drag.core) {
             return;
         }
-        let default_qty = num(drag.free);
+        let default_qty = transfer_amount(drag.free);
         let input = cx.new(|cx| MoonInputState::new(window, cx).default_value(&default_qty));
         let pending = PendingTransfer {
             core: drag.core,
@@ -385,7 +388,10 @@ impl AssetsView {
                                 .font_family(design::mono())
                                 .text_size(design::t_body(cx))
                                 .text_color(rgb(p.text_muted))
-                                .child(t!("assets.free", n = num(pending.free)).to_string()),
+                                .child(
+                                    t!("assets.free", n = transfer_amount(pending.free))
+                                        .to_string(),
+                                ),
                         );
                     if let Some(input) = input {
                         body = body.child(
