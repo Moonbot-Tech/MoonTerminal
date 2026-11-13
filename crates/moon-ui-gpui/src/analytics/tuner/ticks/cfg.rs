@@ -169,6 +169,10 @@ impl AnalyticsView {
     ) -> AnyElement {
         let running = matches!(self.ticks.sugg, SuggState::Running { .. });
         let too_few = self.ticks.search_too_few().is_some();
+        // Until the selected strategies' deals are read and judged by their tape stage there is
+        // no sample to search, and "too few" cannot say so yet; a reload of the same scope keeps
+        // the buttons (`rows_judged_for_scope`).
+        let loaded = self.ticks.rows_judged_for_scope();
         let placeholder = super::variants::DEFAULT_RESTARTS.to_string();
         let input = self.shell_cfg_input(
             TunerKind::Ticks,
@@ -183,8 +187,8 @@ impl AnalyticsView {
             all_tip.push_str(&format!("\n\n{estimate}"));
         }
         let model = PickBarModel {
-            one_enabled: !running && !too_few && self.ticks.sel_field.is_some(),
-            all_enabled: !running && !too_few,
+            one_enabled: loaded && !running && !too_few && self.ticks.sel_field.is_some(),
+            all_enabled: loaded && !running && !too_few,
             one_tip,
             all_tip,
             all_label: super::estimate::pick_all_label(self.ticks_estimate_time_text().as_deref()),

@@ -105,6 +105,16 @@ pub(super) fn passes_of(text: &str) -> usize {
 
 /// Explain why the Search controls are waiting, deferring sample refusal until tape answers.
 fn search_status_tip(state: &super::state::TicksState) -> Option<String> {
+    // The selected strategies' deals are not read and judged yet: the buttons wait for them.
+    // Only while a read is under way — a failed one is the card's own error, not "loading".
+    if !state.rows_judged_for_scope()
+        && !matches!(
+            state.data,
+            crate::load_state::LoadState::Failed(_) | crate::load_state::LoadState::NotReady
+        )
+    {
+        return Some(t!("analytics.ticks.pick.loading").to_string());
+    }
     if state.tape_reading {
         return Some(t!("analytics.ticks.fetch_reading").to_string());
     }
@@ -475,7 +485,9 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.ticks.search_available() {
+        // A click from a frame drawn before the selection changed: the new scope's deals are
+        // not read and judged yet, so there is nothing to search.
+        if !self.ticks.search_available() || !self.ticks.rows_judged_for_scope() {
             return;
         }
         if !self.ticks_confirm_long_search(only, window, cx) {
@@ -516,7 +528,9 @@ impl AnalyticsView {
         only: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
-        if !self.ticks.search_available() {
+        // The scope's deals must be read and judged: the confirmation dialogs re-enter here, and
+        // the selection may have changed while one was open.
+        if !self.ticks.search_available() || !self.ticks.rows_judged_for_scope() {
             return;
         }
         // A catch-up asked for by an earlier click is still reading: this click replaces its
