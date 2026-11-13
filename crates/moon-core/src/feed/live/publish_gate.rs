@@ -1,6 +1,12 @@
-//! Version-letter and order publication decisions and the retained-table throttle.
+//! Account-currency, version-letter and order publication decisions and retained-table throttle.
 
 use super::*;
+
+/// Publish a newly known or changed account currency without clearing a known base on empty input.
+pub(super) fn base_to_publish(last: Option<&str>, now: Option<&str>) -> Option<String> {
+    now.filter(|base| !base.is_empty() && last != Some(*base))
+        .map(str::to_owned)
+}
 
 /// Publication period for the retained order table, about 4 Hz.
 ///

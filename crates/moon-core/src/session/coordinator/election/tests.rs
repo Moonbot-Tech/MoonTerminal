@@ -184,7 +184,7 @@ fn first_ready_core_replaces_non_ready_current_provider() {
 
 /// Reusing a current provider from another group would cross currency boundaries.
 #[test]
-fn current_provider_must_belong_to_the_group() {
+fn tie_breaks_by_core_order_when_the_current_provider_left_the_group() {
     let (providers, mapping) = elect(
         &[
             core(CORE_C, Some("USDT"), true),

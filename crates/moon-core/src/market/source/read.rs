@@ -16,15 +16,9 @@ use super::{
 use crate::market::candles::ChartCandle;
 
 impl super::MarketDataSourceInner {
-    /// Resolve under the caller's guard so provider, client and naming share one snapshot.
-    pub(super) fn market_provider(&self, core: CoreId, market: &str) -> Option<CoreId> {
-        let provider = self.core_provider.get(&core).copied();
-        crate::session::coordinator::market_provider(
-            provider,
-            self.exchange_of_provider(provider.unwrap_or(core)),
-            self.market_provider_overrides.get(&core),
-            market,
-        )
+    /// Keep execution rules on the chart core's catalog provider, independent of tape overrides.
+    fn order_rule_provider(&self, core: CoreId) -> Option<CoreId> {
+        self.core_provider.get(&core).copied()
     }
 }
 
@@ -382,9 +376,11 @@ impl MarketDataSource {
             let inner = self.inner.read().expect("market source poisoned");
             let catalog_provider = inner.core_provider.get(&core).copied()?;
             let exchange = inner.exchange_of_provider(catalog_provider);
-            let base = currency.to_ascii_uppercase();
-            let market = crate::symbol::parse::market_names_for(&base, "USDT", exchange).next()?;
-            let provider = inner.market_provider(core, &market)?;
+            let provider = super::routing::quote_provider(
+                Some(catalog_provider),
+                inner.market_provider_overrides.get(&core),
+                "USDT",
+            )?;
             let client = inner
                 .clients
                 .get(&provider)
@@ -651,7 +647,7 @@ impl MarketDataSource {
     pub fn price_step(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.market_provider(core, market)?;
+            let provider = inner.order_rule_provider(core)?;
             inner
                 .clients
                 .get(&provider)
@@ -674,7 +670,7 @@ impl MarketDataSource {
     pub fn price_tick(&self, core: CoreId, market: &str) -> Option<f64> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.market_provider(core, market)?;
+            let provider = inner.order_rule_provider(core)?;
             inner
                 .clients
                 .get(&provider)
@@ -751,8 +747,7 @@ impl MarketDataSource {
         let markets = snapshot.markets();
         let globals = catalog_client
             .and_then(|client| client.snapshot_versioned())
-            .map(|snapshot| snapshot.markets().global_deltas())
-            .unwrap_or_default();
+            .map(|snapshot| snapshot.markets().global_deltas())?;
         let price = markets.price(market);
         // Both halves of the funding reading go through one shared function; see
         // `super::funding_from_wire` for why each of them is not the obvious conversion.
@@ -1086,7 +1081,7 @@ impl MarketDataSource {
     pub fn market_limits(&self, core: CoreId, market: &str) -> Option<MarketLimits> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.market_provider(core, market)?;
+            let provider = inner.order_rule_provider(core)?;
             inner
                 .clients
                 .get(&provider)
@@ -1131,7 +1126,7 @@ impl MarketDataSource {
     pub fn market_contract_terms(&self, core: CoreId, market: &str) -> Option<(String, f64)> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.market_provider(core, market)?;
+            let provider = inner.order_rule_provider(core)?;
             inner
                 .clients
                 .get(&provider)
@@ -1161,7 +1156,7 @@ impl MarketDataSource {
     pub fn order_size_rules(&self, core: CoreId, market: &str) -> Option<OrderSizeRules> {
         let client = {
             let inner = self.inner.read().expect("market source poisoned");
-            let provider = inner.market_provider(core, market)?;
+            let provider = inner.order_rule_provider(core)?;
             inner
                 .clients
                 .get(&provider)

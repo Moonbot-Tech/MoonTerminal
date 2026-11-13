@@ -18,29 +18,6 @@ pub(crate) fn normalize_currency(raw: &str) -> Option<Box<str>> {
     (!trimmed.is_empty()).then(|| trimmed.to_ascii_uppercase().into_boxed_str())
 }
 
-/// Resolve a market against same-exchange currency overrides, retaining the catalog provider
-/// when the quote has no elected group. Parsing and case folding borrow the market name.
-pub(crate) fn market_provider(
-    provider: Option<CoreId>,
-    exchange: crate::symbol::Exchange,
-    overrides: Option<&HashMap<Box<str>, CoreId>>,
-    market: &str,
-) -> Option<CoreId> {
-    let provider = provider?;
-    let Some(overrides) = overrides else {
-        return Some(provider);
-    };
-    let quote = crate::symbol::parse::split_market(market, exchange)
-        .quote
-        .trim();
-    Some(
-        overrides
-            .iter()
-            .find(|(currency, _)| currency.eq_ignore_ascii_case(quote))
-            .map_or(provider, |(_, target)| *target),
-    )
-}
-
 /// The session facts needed for election, supplied in deterministic session order.
 pub(crate) struct ElectionCore<'a> {
     pub(crate) id: CoreId,

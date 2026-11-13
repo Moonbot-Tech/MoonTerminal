@@ -12,7 +12,6 @@ use crate::feed::{ConnStatus, CoreCmd, ExchangeId};
 use crate::market::MarketDataMode;
 
 pub(super) mod election;
-pub(crate) use election::market_provider;
 
 /// Keep serving a market for this long after its last chart closes so a quick reopen does not
 /// interrupt subscriptions or reads and reload history from scratch.
@@ -241,6 +240,9 @@ impl SessionManager {
             for (key, &provider) in &self.providers {
                 if core.exchange == Some(key.exchange)
                     && new_core_provider.get(&core.id) != Some(&provider)
+                    && infos
+                        .iter()
+                        .any(|candidate| candidate.id == provider && candidate.ready)
                 {
                     if let Some(currency) = &key.currency {
                         overrides

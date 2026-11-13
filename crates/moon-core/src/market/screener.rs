@@ -286,13 +286,17 @@ impl MarketDataSource {
         let mut snapshots = std::collections::HashMap::new();
         snapshots.insert(provider, Some(snap.clone()));
         let mut rows = Vec::with_capacity(markets.market_count());
+        let inner = self.inner.read().expect("market source poisoned");
         for handle in markets.iter() {
             let name = handle.name();
-            let Some(market_provider) = self.provider_of_market(provider, name) else {
+            let Some(market_provider) = inner.market_provider(provider, name) else {
                 continue;
             };
             let data = snapshots.entry(market_provider).or_insert_with(|| {
-                self.core_client(market_provider)
+                inner
+                    .clients
+                    .get(&market_provider)
+                    .and_then(crate::feed::SharedMoonClient::get)
                     .and_then(|client| client.snapshot_versioned())
             });
             let mut row = ScreenerRow {

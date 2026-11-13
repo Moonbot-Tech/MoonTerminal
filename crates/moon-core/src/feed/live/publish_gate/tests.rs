@@ -1,5 +1,19 @@
 use super::*;
 
+/// A one-shot identity gate would miss late currencies and leave changed bases on the old tape.
+#[test]
+fn account_base_publishes_only_nonempty_changes() {
+    assert_eq!(base_to_publish(None, None), None);
+    assert_eq!(base_to_publish(None, Some("")), None);
+    assert_eq!(base_to_publish(None, Some("USDT")), Some("USDT".into()));
+    assert_eq!(base_to_publish(Some("USDT"), Some("USDT")), None);
+    assert_eq!(base_to_publish(Some("USDT"), Some("")), None);
+    assert_eq!(
+        base_to_publish(Some("USDT"), Some("USDC")),
+        Some("USDC".into())
+    );
+}
+
 /// Removing the cooldown rebuilds on every 5 ms event instead of publishing at 0/50/100/150/200.
 #[test]
 fn lines_burst_is_leading_edge_and_coalesced() {

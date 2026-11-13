@@ -37,6 +37,36 @@ fn currency_sessions(bases: [Option<&str>; 3]) -> (SessionManager, Vec<crate::fe
     (session, senders)
 }
 
+/// Routing to an elected but disconnected currency group would freeze a live core's chart.
+#[test]
+fn cross_quote_market_stays_home_while_the_other_group_is_down() {
+    let (mut session, tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    for sender in &tx[..2] {
+        sender
+            .send(FeedMsg::Status(ConnStatus::Disconnected))
+            .unwrap();
+    }
+    session.drain();
+    let desired = [(3, "BTCUSDT".into())];
+    session.set_open(&desired, &desired);
+    assert_eq!(
+        session.market_source().provider_of_market(3, "BTCUSDT"),
+        Some(3)
+    );
+    assert!(session.wanted[&3].contains("BTCUSDT"));
+    assert!(session.wanted_orderbook[&3].contains("BTCUSDT"));
+
+    tx[0].send(FeedMsg::Status(ConnStatus::Ready)).unwrap();
+    session.drain();
+    session.set_open(&desired, &desired);
+    assert_eq!(
+        session.market_source().provider_of_market(3, "BTCUSDT"),
+        Some(1)
+    );
+    assert!(session.wanted[&1].contains("BTCUSDT"));
+    assert!(session.wanted_orderbook[&1].contains("BTCUSDT"));
+}
+
 /// Collapsing account currencies would leave the USDC core reading the USDT tape.
 #[test]
 fn dedup_elects_one_provider_per_account_currency() {

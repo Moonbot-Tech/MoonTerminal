@@ -57,12 +57,6 @@ mod trace_backfill;
 mod ui_trace_asks;
 mod watchdog;
 
-/// Publish a newly known or changed account currency without clearing a known base on empty input.
-fn base_to_publish(last: &Option<String>, now: Option<&str>) -> Option<String> {
-    now.filter(|base| !base.is_empty() && last.as_deref() != Some(*base))
-        .map(str::to_owned)
-}
-
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
@@ -688,8 +682,8 @@ pub(super) fn run(
             // Always publish the number so Waiting can advance. The respawned client's new
             // run has no pin and publishes the fresh letter; judging requires that new epoch.
             //
-            // The flag itself latches on having EXAMINED a snapshot, not on
-            // having sent something: an absent build must settle the publication attempt too.
+            // `version_sent` limits only CoreVersion publication, including an absent build.
+            // The snapshot is still examined every pass for account-currency changes.
             let predates_restart = publish_gate::server_info_predates_restart(
                 info_addr,
                 version_restart_info.as_ref().map(PinnedRestartInfo::addr),
@@ -734,9 +728,10 @@ pub(super) fn run(
                 }
             }
             if identity_sent {
-                if let Some(base) =
-                    base_to_publish(&last_base_sent, info.base_currency_name.as_deref())
-                {
+                if let Some(base) = publish_gate::base_to_publish(
+                    last_base_sent.as_deref(),
+                    info.base_currency_name.as_deref(),
+                ) {
                     let _ = tx.send(FeedMsg::CoreBase { base: base.clone() });
                     last_base_sent = Some(base);
                 }

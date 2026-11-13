@@ -19,6 +19,17 @@ fn quote_source(code: u8) -> MarketDataSource {
     source
 }
 
+/// Borrowing a cross-quote tape's execution rules would size an order using another core.
+#[test]
+fn order_rule_provider_ignores_cross_quote_tape_overrides() {
+    let source = quote_source(4);
+    let inner = source.inner.read().unwrap();
+    assert_eq!(inner.market_provider(3, "BTCUSDT"), Some(1));
+    assert_eq!(inner.order_rule_provider(3), Some(3));
+    assert_eq!(inner.order_rule_provider(2), Some(1));
+    assert_eq!(inner.order_rule_provider(99), None);
+}
+
 /// A USDT market on a USDC core must read the USDT tape, without moving its catalog.
 #[test]
 fn quote_routing_keeps_catalogs_and_unmatched_quotes_on_their_group() {

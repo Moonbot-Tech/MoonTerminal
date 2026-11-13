@@ -17,6 +17,7 @@ mod read;
 mod refresh;
 mod replay;
 mod replay_prices;
+mod routing;
 #[cfg(test)]
 mod tests;
 mod volume;
@@ -91,9 +92,9 @@ struct CandleSubState {
 }
 
 /// Shared catalog ownership, quote routing and retained market state behind the source lock.
-struct MarketDataSourceInner {
+pub(super) struct MarketDataSourceInner {
     store: SharedMarketStore,
-    clients: HashMap<CoreId, SharedMoonClient>,
+    pub(super) clients: HashMap<CoreId, SharedMoonClient>,
     core_provider: HashMap<CoreId, CoreId>,
     /// Same-exchange quote groups whose elected tape differs from the core's catalog provider.
     market_provider_overrides: HashMap<CoreId, HashMap<Box<str>, CoreId>>,
