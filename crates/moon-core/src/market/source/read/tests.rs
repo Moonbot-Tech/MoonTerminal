@@ -2,6 +2,20 @@ use super::*;
 use moonproto::MoonTime;
 use moonproto::state::TradeHistoryRow;
 
+/// Currency-specific tapes must retain the same coarse exchange address for replay caches.
+#[test]
+fn currency_providers_keep_the_coarse_replay_exchange_key() {
+    let source = MarketDataSource::new(crate::market::MarketStore::shared(0.0));
+    source.set_provider_map(&std::collections::HashMap::from([(1, 1), (2, 1), (3, 3)]));
+    source.set_provider_exchanges(&std::collections::HashMap::from([
+        (1, crate::feed::ExchangeId::new(1)),
+        (3, crate::feed::ExchangeId::new(1)),
+    ]));
+    assert_eq!(source.provider_of(3), Some(3));
+    assert_eq!(source.replay_address(3).unwrap().exchange_key, "1:00000000");
+    assert_eq!(source.replay_address(2).unwrap().exchange_key, "1:00000000");
+}
+
 /// Synthetic retained print; negative quantities retain the wire sell-side encoding.
 fn trade(ms: i64, index: usize) -> TradeHistoryRow {
     TradeHistoryRow {

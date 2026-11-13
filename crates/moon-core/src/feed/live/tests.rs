@@ -4,6 +4,18 @@ use moonproto::state::BalanceEvent;
 use moonproto::{ImportedIpVersion, ImportedNetworkConfig};
 use std::net::{IpAddr, Ipv4Addr};
 
+/// A one-shot identity gate would miss late currencies and leave changed bases on the old tape.
+#[test]
+fn account_base_publishes_only_nonempty_changes() {
+    assert_eq!(base_to_publish(&None, None), None);
+    assert_eq!(base_to_publish(&None, Some("")), None);
+    assert_eq!(base_to_publish(&None, Some("USDT")), Some("USDT".into()));
+    let last = Some("USDT".into());
+    assert_eq!(base_to_publish(&last, Some("USDT")), None);
+    assert_eq!(base_to_publish(&last, Some("")), None);
+    assert_eq!(base_to_publish(&last, Some("USDC")), Some("USDC".into()));
+}
+
 /// `feed/mod.rs:CoreCmdTx::send` publishing market roles only through the bounded FIFO would let a
 /// stale provider marker resubscribe a replacement client before a queued account-only assignment.
 #[test]

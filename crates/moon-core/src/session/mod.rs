@@ -5,7 +5,7 @@
 //! - the account plane (status, orders, detects, and strategies) is specific to each core and
 //!   stored in `CoreStore` by `CoreId`;
 //! - the market plane (price ticks and order books) is stored in `MarketStore` (see
-//!   `crate::market`). In `Dedup` mode, cores on one exchange share a provider core; in `PerCore`
+//!   `crate::market`). In `Dedup` mode, cores on one exchange and account currency share a provider; in `PerCore`
 //!   mode, every core is its own provider.
 //!
 //! The coordinator (see `coordinator.rs`) learns each core's exchange from `Identity`, selects
@@ -191,11 +191,11 @@ pub struct SessionManager {
     /// Core-to-account-base mapping from `CoreBase`, such as "USDT" or "BTC". The UI uses it for
     /// group-USD-to-base order-size conversion. It remains empty until the core is identified.
     core_base: HashMap<CoreId, String>,
-    /// Core-to-market-provider mapping: one provider per exchange in deduplicated mode, or the
+    /// Core-to-market-provider mapping: one provider per exchange and account currency, or the
     /// core itself in per-core mode.
     core_provider: HashMap<CoreId, CoreId>,
-    /// Exchange-to-selected-provider mapping for retention and failover in deduplicated mode.
-    providers: HashMap<ExchangeId, CoreId>,
+    /// Selected provider per exchange and account currency for shared-mode retention and failover.
+    providers: HashMap<coordinator::election::ProviderKey, CoreId>,
     /// Provider-to-served-markets mapping: the union of open charts and lingering markets.
     wanted: HashMap<CoreId, HashSet<String>>,
     /// Deadline for releasing each `(provider, market)` after its last chart closes.

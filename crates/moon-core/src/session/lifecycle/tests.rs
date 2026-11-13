@@ -4,6 +4,127 @@ use super::*;
 use crate::db::{ReportAxis, ReportStamp};
 use crate::feed::{ConnStatus, FeedMsg, MarketDirty, MarketDirtyFlags};
 
+/// Feed three inert sessions through the real drain, preserving their configured election order.
+fn currency_sessions(bases: [Option<&str>; 3]) -> (SessionManager, Vec<crate::feed::FeedTx>) {
+    let (mut session, first_tx) = super::trade_sound_tests::fixture();
+    session.sessions[0].name = "CORE_A".into();
+    let mut senders = vec![first_tx];
+    for (id, name) in [(2, "CORE_B"), (3, "CORE_C")] {
+        let (tx, handle) = crate::feed::trade_sound_test_feed();
+        session.store.ensure(id);
+        session.sessions.push(CoreSession {
+            id,
+            name: name.into(),
+            group: String::new(),
+            conn_sig: 0,
+            handle,
+        });
+        senders.push(tx);
+    }
+    for (tx, base) in senders.iter().zip(bases) {
+        tx.send(FeedMsg::Identity {
+            id: crate::feed::ExchangeId::new(1),
+            dex: String::new(),
+            reported: String::new(),
+        })
+        .unwrap();
+        if let Some(base) = base {
+            tx.send(FeedMsg::CoreBase { base: base.into() }).unwrap();
+        }
+        tx.send(FeedMsg::Status(ConnStatus::Ready)).unwrap();
+    }
+    session.drain();
+    (session, senders)
+}
+
+/// Collapsing account currencies would leave the USDC core reading the USDT tape.
+#[test]
+fn dedup_elects_one_provider_per_account_currency() {
+    let (mut session, _tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    session.set_open(&[], &[]);
+    assert_eq!(session.last_cmd.values().filter(|c| c.0).count(), 2);
+    let source = session.market_source();
+    assert_eq!(source.provider_of(3), Some(3));
+    assert_eq!(source.provider_of(1), source.provider_of(2));
+    assert_eq!(source.provider_of(1), Some(1));
+}
+
+/// Electing per core instead of per currency would duplicate full-tape subscriptions.
+#[test]
+fn dedup_single_currency_keeps_one_full_tape() {
+    let (mut session, _tx) = currency_sessions([Some("USDT"); 3]);
+    session.set_open(&[], &[]);
+    assert_eq!(session.last_cmd.values().filter(|c| c.0).count(), 1);
+    assert_eq!(session.market_source().provider_of(3), Some(1));
+}
+
+/// A lone unavailable USDC member must not fail over to another currency's incomplete tape.
+#[test]
+fn dedup_usdc_provider_failover_stays_in_its_currency() {
+    let (mut session, tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    session.set_open(&[], &[]);
+    tx[2]
+        .send(FeedMsg::Status(ConnStatus::Disconnected))
+        .unwrap();
+    session.drain();
+    session.set_open(&[], &[]);
+    assert_eq!(session.market_source().provider_of(3), Some(3));
+    assert_eq!(session.last_cmd.values().filter(|c| c.0).count(), 2);
+}
+
+/// Currency grouping must not deduplicate tapes when Separate mode is selected.
+#[test]
+fn per_core_mode_ignores_currency() {
+    let (mut session, _tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    session.set_market_mode(crate::market::MarketDataMode::PerCore);
+    session.set_open(&[], &[]);
+    for id in 1..=3 {
+        assert_eq!(session.market_source().provider_of(id), Some(id));
+    }
+    assert_eq!(session.last_cmd.values().filter(|c| c.0).count(), 3);
+}
+
+/// Switching modes must keep the open USDC chart subscribed on its own currency's tape.
+#[test]
+fn separate_to_shared_keeps_an_open_usdc_chart_on_the_usdc_core() {
+    let (mut session, _tx) = currency_sessions([Some("USDT"), Some("USDT"), Some("USDC")]);
+    let desired = [(3, "XALPHA-USDC".into())];
+    session.set_market_mode(crate::market::MarketDataMode::PerCore);
+    session.set_open(&desired, &desired);
+    session.set_market_mode(crate::market::MarketDataMode::Dedup);
+    session.set_open(&desired, &desired);
+    assert_eq!(session.market_source().provider_of(3), Some(3));
+    assert!(session.wanted[&3].contains("XALPHA-USDC"));
+    assert!(
+        !session
+            .wanted
+            .get(&1)
+            .is_some_and(|markets| markets.contains("XALPHA-USDC"))
+    );
+    assert_eq!(
+        session.last_cmd[&3],
+        (true, vec!["XALPHA-USDC".into()], vec!["XALPHA-USDC".into()])
+    );
+}
+
+/// A late CoreBase must leave the heuristic group and subscribe its newly known currency tape.
+#[test]
+fn late_core_base_moves_a_core_into_its_currency_group() {
+    let (mut session, tx) = currency_sessions([Some("USDT"), Some("USDT"), None]);
+    session.set_open(&[], &[]);
+    assert_eq!(session.market_source().provider_of(3), Some(1));
+    assert_eq!(session.last_cmd.values().filter(|c| c.0).count(), 1);
+    tx[2]
+        .send(FeedMsg::CoreBase {
+            base: "USDC".into(),
+        })
+        .unwrap();
+    session.drain();
+    session.set_open(&[], &[]);
+    assert_eq!(session.market_source().provider_of(3), Some(3));
+    assert_eq!(session.last_cmd.values().filter(|c| c.0).count(), 2);
+}
+
 /// A later resolved or empty page must not erase the protecting identity skipped earlier.
 #[test]
 fn skipped_rows_keep_the_listing_incomplete() {

@@ -82,7 +82,10 @@ fn unknown_currency_joins_the_usdt_group() {
         ],
         &HashMap::new(),
     );
-    assert_eq!(providers.len(), 2);
+    assert_eq!(
+        providers,
+        HashMap::from([(key(Some("USDC")), CORE_A), (key(Some("USDT")), CORE_B)])
+    );
     assert_eq!(
         mapping,
         HashMap::from([(CORE_A, CORE_A), (CORE_B, CORE_B), (CORE_C, CORE_B)])
@@ -100,7 +103,10 @@ fn unknown_currency_joins_alphabetically_first_without_usdt() {
         ],
         &HashMap::new(),
     );
-    assert_eq!(providers.len(), 2);
+    assert_eq!(
+        providers,
+        HashMap::from([(key(Some("USDC")), CORE_A), (key(Some("BTC")), CORE_B)])
+    );
     assert_eq!(mapping[&CORE_C], CORE_B);
 }
 
@@ -181,6 +187,7 @@ fn first_ready_core_replaces_non_ready_current_provider() {
 fn current_provider_must_belong_to_the_group() {
     let (providers, mapping) = elect(
         &[
+            core(CORE_C, Some("USDT"), true),
             core(CORE_A, Some("USDT"), true),
             core(CORE_B, Some("USDC"), true),
         ],
@@ -188,9 +195,23 @@ fn current_provider_must_belong_to_the_group() {
     );
     assert_eq!(
         providers,
-        HashMap::from([(key(Some("USDT")), CORE_A), (key(Some("USDC")), CORE_B)])
+        HashMap::from([(key(Some("USDT")), CORE_C), (key(Some("USDC")), CORE_B)])
     );
-    assert_eq!(mapping[&CORE_A], CORE_A);
+    assert_eq!(mapping[&CORE_A], CORE_C);
+}
+
+/// A provider moving currencies must not displace that group's healthy retained tape.
+#[test]
+fn exact_key_provider_beats_a_provider_moving_in() {
+    let (providers, mapping) = elect(
+        &[
+            core(CORE_A, Some("USDC"), true),
+            core(CORE_B, Some("USDC"), true),
+        ],
+        &HashMap::from([(key(Some("USDT")), CORE_A), (key(Some("USDC")), CORE_B)]),
+    );
+    assert_eq!(providers, HashMap::from([(key(Some("USDC")), CORE_B)]));
+    assert_eq!(mapping, HashMap::from([(CORE_A, CORE_B), (CORE_B, CORE_B)]));
 }
 
 /// An unidentified core must neither get a provider nor supply a fallback currency.
