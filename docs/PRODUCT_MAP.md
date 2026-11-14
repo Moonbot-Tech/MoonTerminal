@@ -95,7 +95,8 @@ feature — a row in the map, a new user word — a row in the dictionary.
 ## Feature map by area
 
 **Workspaces**: Classic and Auto (AUTO mode — an overview of Auto cores:
-core rail, their own panels, problem cores highlighted); a core can be assigned
+core rail grouped by exchange and, when switched on, by server above that, their own panels,
+problem cores highlighted); a core can be assigned
 to a workspace preset.
 
 **Header**: MANUAL/AUTO mode, the active core, the Real/Emulator badge, balance,
@@ -106,10 +107,12 @@ percentages. Clusters with dividers; on a narrow window it compresses in a casca
 
 **Chart**: tick trail + candles with TF, history is pulled from the core's
 archives, a “trades only” zone, the order book on the sides (walls + level lines,
-or a price ladder per tab; shown or hidden and sized per tab), trades as crosses or bubbles per tab,
+or a price ladder per tab, its large levels in a colour of their own; shown or hidden and sized
+per tab), trades as crosses or bubbles per tab,
 volumes at the bottom (in quote currency), horizontal volumes by price beside the
 plot (Moonbot's HVol), bought/sold volume by the chart,
-volume measure around the cursor, liquidation count, news marks (gems by
+volume measure around the cursor, the crosshair's values (armed order size, book depth,
+percent from the best price) each placed or hidden per tab, liquidation count, news marks (gems by
 tags, Ctrl-hover card), own-trade markers, chart stacks/columns,
 detach into separate windows, chart screenshot to the clipboard (with the header baked in), favourite
 coins and a temporary coin ban (as in MB), coin search with tabs, where a coin is blacklisted
@@ -131,7 +134,8 @@ strategy is owned by the core (MS/Hook popups, Moonbot's stop rule).
 live-row map + catch-up frontier, survives drops and restarts mid-download; the
 status bar shows a running download), USDT valuation at trade time
 (two modes, COIN-M in BTC), filters on everything, multi-select of rows, marking
-deleted, comments, the core log for a trade.
+deleted, comments, the core log for a trade, all trades of one strategy in their own Report
+window (from the coin menu).
 
 **Analytics**: KPI summary, profit calendar (year in GitHub style / month),
 live Profit Monitor (by cores/groups, start/stop cores right
@@ -142,7 +146,8 @@ By coin and By time axes (heatmap sliders for week/day/hour), an Entry/Exit
 axis that replays every closed trade on its recorded tape of prints and searches
 the strategy's entry and exit fields (MoonShot corridor, MoonHook take, sell line,
 SellByCustomEMA formula thresholds, stops, delta modifiers) on the trades the model reproduces, a check
-on held-out data, writing thresholds back into the core's strategy; history of
+on held-out data, writing thresholds back into the core's strategy (optionally recounted only on
+request, for the selected strategies alone); history of
 strategy versions with each version's profit (a station with the Account profile keeps the archive
 too and exchanges it with its terminals on its own, so a fresh terminal gets the whole history); a
 strategy-name mask everywhere.
@@ -150,7 +155,8 @@ strategy-name mask everywhere.
 **Strategies**: a tree with file-manager operations, order and folders —
 as on the core, human labels under Moonbot field names (on by
 default), editing a field = the core confirms it actually applied,
-filter by exchange, copy between cores.
+filter by exchange, copy between cores, deleting empty folders in bulk (the selected ones, or
+in every visible core; folders holding strategies are left alone).
 
 **Core status**: grouping by servers/IP, live CPU/RAM/ping charts
 (client↔core and core→exchange), alerts with thresholds/history/sound and marks
