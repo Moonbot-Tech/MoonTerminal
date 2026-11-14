@@ -3,6 +3,64 @@
 use super::{STRAT_MODES, StratMode, strategy_selection_visible};
 use moon_core::config::layout::StratColsByMode;
 
+/// Requiring display KPIs after adoption swallows Add-and-save before its dialog can open.
+/// A selection change must still block writes even while old aggregates remain renderable.
+#[test]
+fn coins_write_ready_after_adoption_while_kpi_recomputes() {
+    use super::{CoinsState, coins_write_ready};
+    use crate::load_state::LoadState;
+    use moon_core::db::tuner::coin_pick::{CoinPick, CoinSuggestion, PickVerdict};
+
+    let mut coins = CoinsState::default();
+    coins.stats.apply(Ok(Vec::new()));
+    coins.kpi.apply(Ok(Vec::new()));
+    coins.dirty = false;
+    let seq = coins.begin_pick();
+    assert!(coins.land_pick(
+        seq,
+        coins.lists_rev,
+        coins.report_gen,
+        30,
+        Ok(CoinPick {
+            black: vec![CoinSuggestion {
+                token: "XALPHA".into(),
+                n: 10,
+                profit: -50.0,
+            }],
+            white: Vec::new(),
+            train_n: 70,
+            holdout_n: 30,
+            fact_holdout: Default::default(),
+            manual_holdout: Default::default(),
+            pick_holdout: Default::default(),
+            verdict: PickVerdict::Useful,
+        })
+    ));
+    assert!(coins_write_ready(&coins));
+
+    coins.adopt_pick();
+    assert!(coins.has_changes());
+    assert_eq!(coins.pending_delta().added_bl, ["XALPHA"]);
+    coins.bump_kpi();
+    assert!(matches!(coins.kpi, LoadState::Loading { .. }));
+    assert!(coins_write_ready(&coins), "the same click must reach Save");
+
+    coins.invalidate();
+    assert!(coins.stats.data().is_some(), "the old figures are retained");
+    assert!(!coins_write_ready(&coins), "selection changes block writes");
+    coins.stats.begin();
+    assert!(!coins_write_ready(&coins));
+    coins.dirty = false;
+    assert!(
+        !coins_write_ready(&coins),
+        "a pending stats read still blocks"
+    );
+    coins.stats.apply(Ok(Vec::new()));
+    assert!(coins_write_ready(&coins));
+    coins.stats.apply(Err(moon_core::db::ReadFail::NotReady));
+    assert!(!coins_write_ready(&coins));
+}
+
 /// Leaving an axis cancels its ordinary work, without claiming searches or another axis' reads.
 #[test]
 fn axis_navigation_retires_only_hidden_ordinary_reads_and_preserves_drafts() {
