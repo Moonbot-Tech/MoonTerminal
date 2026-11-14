@@ -867,6 +867,8 @@ impl AnalyticsView {
     /// own values, so a report that moved under the same selection does not hold it back — on a
     /// strategy that keeps trading, no reload ever ended on the generation it started with and
     /// the buttons never lit (issue #1332). The other axes still wait for a settled read.
+    /// Coins waits for current per-coin stats, but not its display-only KPI matrix: a local
+    /// list edit re-arms that matrix before the same click requests the Save dialog.
     pub(in crate::analytics::tuner) fn axis_write_ready(&self, kind: shared::TunerKind) -> bool {
         if self.strategy_data.data().is_none() {
             return false;
@@ -878,10 +880,7 @@ impl AnalyticsView {
             shared::TunerKind::Time => {
                 fresh_tuner_data(&self.time_tuner.stats, self.time_tuner.dirty)
             }
-            shared::TunerKind::Coins => {
-                fresh_tuner_data(&self.coins.stats, self.coins.dirty)
-                    && fresh_tuner_data(&self.coins.kpi, self.coins.dirty)
-            }
+            shared::TunerKind::Coins => coins_write_ready(&self.coins),
         }
     }
 
@@ -968,6 +967,11 @@ impl AnalyticsView {
 /// Renderable stale data is insufficient authority for a new write while a read is pending.
 fn fresh_tuner_data<T>(state: &crate::load_state::LoadState<T>, dirty: bool) -> bool {
     !dirty && matches!(state, crate::load_state::LoadState::Ready(_))
+}
+
+/// Check the Coins baseline independently of the window and its shared strategy-list guard.
+fn coins_write_ready(coins: &CoinsState) -> bool {
+    fresh_tuner_data(&coins.stats, coins.dirty)
 }
 
 /// Retire only ordinary reads of the axis being left, preserving its edits and explicit jobs.
