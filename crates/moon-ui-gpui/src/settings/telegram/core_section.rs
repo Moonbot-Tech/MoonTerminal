@@ -17,7 +17,7 @@ use rust_i18n::t;
 use super::super::SettingsView;
 use crate::design;
 use crate::panels::common::text_tooltip;
-use master::{TgTag, tg_tag};
+use master::{CardBody, TgTag, card_plan, tg_tag};
 use moon_core::feed::{
     AuthStep, ConnStatus, CoreTelegramProxy, CoreTelegramState, ResendState, TelegramCmd,
     auth_controls_visible, auth_step, resend_state,
@@ -202,9 +202,10 @@ impl SettingsView {
         let live = data.telegram_fresh;
         let state = data.telegram.as_deref();
         let tag = tg_tag(Some(&data.status), live, state);
-        let toggle = state
-            .filter(|s| s.state_supported)
-            .map(|s| self.enable_toggle(s.enabled, live, cx).into_any_element());
+        let plan = card_plan(state);
+        let toggle = plan
+            .switch
+            .map(|on| self.enable_toggle(on, live, cx).into_any_element());
         let mut children = vec![master::card_header(name, tag, toggle, cx)];
         children.extend(error_banners(state, cx));
         children.push(self.telegram_pulse_hook(cx).into_any_element());
@@ -228,23 +229,28 @@ impl SettingsView {
         if !live && state.is_some() {
             children.push(muted_line(t!("telegram_core.stale").to_string(), muted));
         }
-        let Some(state) = state else {
-            children.push(master::note_box(
-                "tgcore-no-snapshot",
-                t!("telegram_core.no_snapshot").to_string(),
-                cx,
-            ));
-            children.push(self.actions_row(core, false, None, cx));
-            return master::card(children, cx);
+        let state = match plan.body {
+            CardBody::NoSnapshot => {
+                children.push(master::note_box(
+                    "tgcore-no-snapshot",
+                    t!("telegram_core.no_snapshot").to_string(),
+                    cx,
+                ));
+                children.push(self.actions_row(core, false, None, cx));
+                return master::card(children, cx);
+            }
+            CardBody::NoRemoteLogin(version) => {
+                let line = match version {
+                    Some(v) => t!("telegram_core.unsupported_ver", v = v).to_string(),
+                    None => t!("telegram_core.unsupported").to_string(),
+                };
+                children.push(master::note_box("tgcore-unsupported", line, cx));
+                return master::card(children, cx);
+            }
+            // Reader off, or its service has not answered yet: the reader's own rows, where the
+            // state row carries the core's status. Login stays behind `auth_controls_visible`.
+            CardBody::Reader(state) => state,
         };
-        if !state.state_supported {
-            let line = match state.service_version.as_deref() {
-                Some(v) if !v.is_empty() => t!("telegram_core.unsupported_ver", v = v).to_string(),
-                _ => t!("telegram_core.unsupported").to_string(),
-            };
-            children.push(master::note_box("tgcore-unsupported", line, cx));
-            return master::card(children, cx);
-        }
         let mut body = v_flex()
             .debug_selector(|| "tgcore-body".into())
             .w_full()

@@ -1,6 +1,7 @@
 use super::{
-    ALL_TAGS, TgTag, card, card_header, card_row, core_list, core_row, disconnected, error_banner,
-    note_box, short_tag_text, split, split_side, tag_text, tg_tag,
+    ALL_TAGS, CardBody, CardPlan, TgTag, card, card_header, card_plan, card_row, core_list,
+    core_row, disconnected, error_banner, note_box, short_tag_text, split, split_side, tag_text,
+    tg_tag,
 };
 use crate::design;
 use gpui::{AnyElement, App, InteractiveElement, IntoElement, ParentElement, Styled, div, px};
@@ -62,7 +63,6 @@ fn each_reader_state_maps_to_its_tag() {
     );
     assert_eq!(tag(snapshot(false, true, None)), TgTag::ReaderOff);
     assert_eq!(tag(snapshot(true, false, None)), TgTag::Unsupported);
-    assert_eq!(tag(snapshot(false, false, None)), TgTag::Unsupported);
     let mut err = snapshot(true, true, Some("ready"));
     if let Some(svc) = err.service.as_mut() {
         svc.proxy_error = Some(CoreTelegramError {
@@ -76,6 +76,95 @@ fn each_reader_state_maps_to_its_tag() {
         svc.proxy_error = Some(CoreTelegramError::default());
     }
     assert_eq!(tag(err), TgTag::LoggedIn);
+}
+
+/// A snapshot of a reader whose service the core is not connected to: nothing was asked, so
+/// recoverable remote login reads as unsupported.
+fn unanswered(enabled: bool) -> CoreTelegramState {
+    CoreTelegramState {
+        service_online: false,
+        ..snapshot(enabled, false, None)
+    }
+}
+
+/// `held` with the service version the core reported beside it.
+fn versioned(held: CoreTelegramState, version: &str) -> CoreTelegramState {
+    CoreTelegramState {
+        service_version: Some(version.to_string()),
+        ..held
+    }
+}
+
+/// "No remote login" is said only of a service the core is connected to. A reader that is off
+/// never asked the service, so the core reports the capability false: tagging that "no remote
+/// login" reads as a dead end on a core whose reader only has to be switched on (#1339).
+#[test]
+fn only_a_connected_service_is_tagged_without_remote_login() {
+    let ready = Some(&ConnStatus::Ready);
+    let tag = |s: CoreTelegramState| tg_tag(ready, true, Some(&s));
+    // Reader off, the service was never asked.
+    assert_eq!(tag(unanswered(false)), TgTag::ReaderOff);
+    // Reader off beats what a service still connected reports.
+    assert_eq!(tag(snapshot(false, false, None)), TgTag::ReaderOff);
+    // Reader on, the service not connected yet: nothing is known about it.
+    assert_eq!(tag(unanswered(true)), TgTag::Unknown);
+    // Neither a version nor a service snapshot left from before stands in for its answer.
+    let mut leftover = versioned(unanswered(true), "7.21");
+    leftover.service = Some(CoreTelegramService {
+        auth_state: "ready".into(),
+        ..Default::default()
+    });
+    assert_eq!(tag(leftover), TgTag::Unknown);
+    // A connected service that says no, whether or not it names its version.
+    assert_eq!(
+        tag(versioned(snapshot(true, false, None), "7.21")),
+        TgTag::Unsupported
+    );
+}
+
+/// The card keeps the reader switch for every snapshot and saves the "no remote login" note for
+/// a service that answered. Hiding the switch until the capability is reported leaves a
+/// switched-off reader with no control that switches it on (#1339).
+#[test]
+fn the_card_offers_the_reader_switch_before_the_service_answers() {
+    assert_eq!(
+        card_plan(None),
+        CardPlan {
+            switch: None,
+            body: CardBody::NoSnapshot,
+        }
+    );
+    // Reader off, service never asked; reader on, service not connected yet; logged in.
+    for held in [
+        unanswered(false),
+        unanswered(true),
+        snapshot(true, true, Some("ready")),
+    ] {
+        assert_eq!(
+            card_plan(Some(&held)),
+            CardPlan {
+                switch: Some(held.enabled),
+                body: CardBody::Reader(&held),
+            }
+        );
+    }
+    // A connected service without remote login: the note with its version when it gave one, a
+    // blank one counting as none, and still the switch.
+    for (version, shown) in [
+        (Some("7.21"), Some("7.21")),
+        (Some(" "), None),
+        (None, None),
+    ] {
+        let mut refused = snapshot(true, false, None);
+        refused.service_version = version.map(str::to_string);
+        assert_eq!(
+            card_plan(Some(&refused)),
+            CardPlan {
+                switch: Some(true),
+                body: CardBody::NoRemoteLogin(shown),
+            }
+        );
+    }
 }
 
 /// A long synthetic core name, so the name truncates and the tag must keep its room.
@@ -107,7 +196,8 @@ fn probe_page(column_w: f32, cx: &App) -> AnyElement {
         .into_any_element();
     let body = card(
         vec![
-            card_header(LONG_NAME.to_string(), TgTag::ProxyError, Some(toggle), cx),
+            // The longest tag the header shows beside the switch, in every language.
+            card_header(LONG_NAME.to_string(), TgTag::Unsupported, Some(toggle), cx),
             error_banner(
                 "tgcore-err-proxy".into(),
                 t!("telegram_core.proxy_error").to_string(),
