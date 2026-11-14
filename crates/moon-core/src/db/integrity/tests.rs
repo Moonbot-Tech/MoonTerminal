@@ -2,31 +2,20 @@ use super::*;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-/// Losing watchdog classification exposes SQLite's raw interruption as the banner detail.
+/// A scan error that is corruption stays `Damaged`; any other one is a check that could not run.
+///
+/// Mapping every scan error to `CheckFailed` would send the worst damage — the kind that aborts
+/// the pragma instead of producing rows — into the retry path, and no recovery would ever start.
 #[test]
-fn watchdog_interruption_is_a_typed_timeout() {
-    let interrupted = || rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(9), None);
-    assert_eq!(
-        classify_scan_error(interrupted(), true),
-        Integrity::TimeLimitExceeded
-    );
-    assert!(matches!(
-        classify_scan_error(interrupted(), false),
-        Integrity::CheckFailed(_)
-    ));
-}
-
-/// A deadline must never hide confirmed corruption or relabel unrelated failures as a timeout.
-#[test]
-fn watchdog_does_not_reclassify_damage_or_other_errors() {
+fn scan_errors_keep_damage_apart_from_a_check_that_could_not_run() {
     let corrupt = rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(11), None);
     assert!(matches!(
-        classify_scan_error(corrupt, true),
+        classify_pragma_error(corrupt, "fixture"),
         Integrity::Damaged(_)
     ));
     let unreadable = rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(14), None);
     assert!(matches!(
-        classify_scan_error(unreadable, true),
+        classify_pragma_error(unreadable, "fixture"),
         Integrity::CheckFailed(_)
     ));
 }
@@ -70,7 +59,7 @@ fn background_check_accepts_files_above_the_startup_size_limit() {
     assert_eq!(
         run(&path),
         Integrity::Ok,
-        "the bounded background check must actually run"
+        "the background check must actually run"
     );
     let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     assert_eq!(

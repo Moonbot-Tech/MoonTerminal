@@ -1559,27 +1559,31 @@ fn attach_databases_attaches_valuation_only_when_requested() {
     test_support::remove_db(&path);
 }
 
-/// Feed start-state reads must wait until asynchronous writer initialization finishes.
+/// Feed start-state reads must not be answered until asynchronous writer initialization finishes,
+/// and a feed that asked early must be woken when it does.
 ///
-/// Publishing an empty map before `rep::init` would turn an existing replica into a full re-sync.
+/// Answering before `rep::init` would publish an empty map and turn an existing replica into a
+/// full re-sync. Dropping the wake leaves a core that connected during the integrity check
+/// without report replication until its next reconnect. Blocking instead of answering `false` is
+/// the fault #1190 removed: the test would hang on its first assertion.
 #[test]
-fn writer_init_releases_checkpoint_readers_only_after_completion() {
-    let init = Arc::new(WriterInit::default());
-    let waiter_init = init.clone();
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let (started_tx, started_rx) = std::sync::mpsc::channel();
-    let waiter = std::thread::spawn(move || {
-        started_tx.send(()).unwrap();
-        waiter_init.wait();
-        done_tx.send(()).unwrap();
-    });
+fn writer_init_answers_checkpoint_readers_only_after_completion_and_wakes_them() {
+    let init = WriterInit::default();
+    let (woken_tx, woken_rx) = std::sync::mpsc::channel();
 
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(!init.is_done());
+    let early = woken_tx.clone();
+    init.wake_when_done(move || early.send("early").unwrap());
     assert!(matches!(
-        done_rx.try_recv(),
+        woken_rx.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)
     ));
+
     init.finish();
-    done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    waiter.join().unwrap();
+    assert!(init.is_done());
+    assert_eq!(woken_rx.try_recv(), Ok("early"));
+
+    // A feed that asks after the fact is woken at once, not left waiting for a second finish.
+    init.wake_when_done(move || woken_tx.send("late").unwrap());
+    assert_eq!(woken_rx.try_recv(), Ok("late"));
 }

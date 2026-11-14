@@ -206,7 +206,7 @@ pub enum DbMsg {
 pub struct ReportSink {
     pub(super) tx: SyncSender<DbMsg>,
     pub(super) starts: Arc<Mutex<HashMap<u64, ReportStart>>>,
-    /// Initialization latch that keeps feeds from reading checkpoints before they exist.
+    /// Initialization latch that tells feeds whether their checkpoints exist yet.
     pub(in crate::db) init: Arc<super::report_writer::WriterInit>,
     /// Coalesces the terminal channel-closed diagnostic if the writer thread panics.
     pub(super) send_failed: Arc<AtomicBool>,
@@ -220,18 +220,38 @@ impl ReportSink {
         }
     }
 
-    /// Where this core's replication starts, defaulting to [`ReportStart::Fresh`].
+    /// Where this core's replication starts, or `None` while the writer has not got that far.
     ///
-    /// The feed thread waits for asynchronous writer initialization before reading this map.
-    /// A core absent after initialization has no local rows, and a poisoned lock has no
-    /// trustworthy answer; both resolve to a full re-sync rather than to a guessed position.
-    pub(crate) fn next_start(&self, core_uid: u64) -> ReportStart {
-        self.init.wait();
-        self.starts
-            .lock()
-            .ok()
-            .and_then(|m| m.get(&core_uid).copied())
-            .unwrap_or(ReportStart::Fresh)
+    /// Never blocks. The writer computes the start states when it opens the replica, which waits
+    /// for the startup integrity check — minutes on a large file. A feed that has no answer yet
+    /// keeps running its core and asks again when [`Self::wake_when_started`] wakes it; before
+    /// #1190 it waited here, and the whole core stood still for as long as the check ran.
+    ///
+    /// Once the writer is through, a core absent from the map has no local rows, and a poisoned
+    /// lock has no trustworthy answer; both resolve to [`ReportStart::Fresh`], a full re-sync,
+    /// rather than to a guessed position. A writer that failed to start answers the same way.
+    pub(crate) fn try_start(&self, core_uid: u64) -> Option<ReportStart> {
+        if !self.is_started() {
+            return None;
+        }
+        Some(
+            self.starts
+                .lock()
+                .ok()
+                .and_then(|m| m.get(&core_uid).copied())
+                .unwrap_or(ReportStart::Fresh),
+        )
+    }
+
+    /// Whether the writer is through its initialization — with the replica open, or having
+    /// failed to open it. Never blocks.
+    pub(crate) fn is_started(&self) -> bool {
+        self.init.is_done()
+    }
+
+    /// Have `wake` called once [`Self::try_start`] can answer — at once when it already can.
+    pub(crate) fn wake_when_started(&self, wake: impl FnOnce() + Send + 'static) {
+        self.init.wake_when_done(wake);
     }
 }
 

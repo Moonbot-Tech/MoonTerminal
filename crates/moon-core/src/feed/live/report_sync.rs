@@ -1,11 +1,102 @@
-//! Report catch-up progress for the status bar, read off the events the replica writer gets.
+//! Report catch-up for one core: declaring it to the core once the replica writer knows where it
+//! starts, and its progress for the status bar, read off the events that writer gets.
 
 use moonproto::state::ReportEvent;
+use moonproto::{MoonClient, ReportHistoryDepth, ReportSyncRequest};
 
+use crate::config::ServerConfig;
+use crate::db::{DbMsg, ReportStart, ReportTx};
 use crate::feed::ReportSyncProgress;
 
 #[cfg(test)]
 mod tests;
+
+/// Whether the replica writer has yet to open the replica — declaring this core's catch-up the
+/// moment it has, when the core replicates its reports.
+///
+/// The feed asks on every pass while the answer is `true` and never again afterwards. A core
+/// with its report feed off declares nothing but is told the same thing: the writer also stores
+/// what such a core measures (its clock offset), and the feed holds that back until then.
+///
+/// Args:
+///     client: This core's connection.
+///     sink: The replica writer's channel and start states.
+///     server: The core, for its feed flags and replica uid.
+///
+/// Returns:
+///     `true` while the writer is not through its initialization.
+pub(super) fn writer_pending(client: &MoonClient, sink: &ReportTx, server: &ServerConfig) -> bool {
+    if server.feed.reports {
+        !declare(client, sink, server)
+    } else {
+        !sink.is_started()
+    }
+}
+
+/// Declare this core's report catch-up, if the replica writer can say where it starts.
+///
+/// The declaration is an intent: the library sends it once connected and repeats it by itself
+/// after a hard reconnect. Where it starts comes from the writer's durable start state — a
+/// checkpoint pairs the numeric cursor with the core's database epoch, so a replaced core database
+/// is detected even when the new one already grew past the old ids. Catch-up is PAGED: the next
+/// page is not requested until the writer commits and acknowledges the current one.
+///
+/// The writer has no start state until it has opened the replica, and it opens it only after the
+/// startup integrity check — minutes on a file of several gigabytes. So this never waits: with no
+/// answer yet it declares nothing and returns `false`, and the feed calls it again on a later
+/// pass (it left a wake with [`ReportTx::wake_when_started`]). Until then the core sends no report
+/// rows at all — asking for the schema is what turns live delivery on — so nothing queues up
+/// behind a writer that is not running, and the catch-up that follows carries what was missed.
+///
+/// Args:
+///     client: This core's connection.
+///     sink: The replica writer's channel and start states.
+///     server: The core, for its replica uid and the log line.
+///
+/// Returns:
+///     `true` once the catch-up has been declared (or its declaration failed and was logged).
+fn declare(client: &MoonClient, sink: &ReportTx, server: &ServerConfig) -> bool {
+    let Some(start) = sink.try_start(server.uid) else {
+        return false;
+    };
+    let started = match start {
+        ReportStart::Fresh => client
+            .reports()
+            .sync(ReportSyncRequest::fresh(ReportHistoryDepth::All))
+            .map(|_| "fresh(All)".to_string()),
+        ReportStart::Resume(from) => client
+            .reports()
+            .sync(ReportSyncRequest::resume(from))
+            .map(|_| format!("resume(from_rec_id={from}) — миграция без epoch")),
+        ReportStart::Checkpoint(checkpoint) => client.reports().sync_from(checkpoint).map(|_| {
+            format!(
+                "sync_from(epoch={}, from_rec_id={})",
+                checkpoint.epoch, checkpoint.next_from_rec_id
+            )
+        }),
+    };
+    match started {
+        Ok(how) => log::info!(
+            "отчёты: core={} «{}» sync запрошен: {how}",
+            server.uid,
+            server.name
+        ),
+        Err(e) => log::warn!(
+            "отчёты: core={} «{}» sync не запустился: {e:?}",
+            server.uid,
+            server.name
+        ),
+    }
+    // Open rows may have closed or been deleted offline BELOW the catch-up start. The writer
+    // reads them and registers them for checking; the results arrive as ordinary
+    // RowUpsert/RowDelete events. The feed repeats this on every reconnect.
+    sink.send(DbMsg::RecheckOpenRows {
+        core_uid: server.uid,
+        after: None,
+        reports: client.reports(),
+    });
+    true
+}
 
 /// Follows one core's report catch-up from its start to its completion.
 #[derive(Default)]

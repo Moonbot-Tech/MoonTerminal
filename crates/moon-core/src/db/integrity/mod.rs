@@ -2,9 +2,10 @@
 //!
 //! Individual reads only detect damage on pages they touch, so narrow period
 //! windows can succeed while wider ones fail. Startup uses one cheap `quick_check`
-//! gate, then one bounded full `integrity_check` off the UI thread and publishes a
-//! pollable verdict, including setup and timeout failures. Large replicas skip only the
-//! synchronous gate; the bounded background scan must still be able to authorize the writer.
+//! gate, then one full `integrity_check` off the UI thread and publishes a pollable
+//! verdict, including a check that could not run. Large replicas skip only the
+//! synchronous gate; the background scan runs to completion whatever the file size,
+//! because it is the only thing that can authorize the writer.
 //!
 //! The full check remains mandatory before the writer opens: `quick_check` skips
 //! the index-vs-table content comparison, so a replica whose index row counts have
@@ -13,7 +14,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard};
+use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags};
@@ -29,8 +30,6 @@ pub enum Integrity {
     Damaged(Vec<String>),
     /// No replica file exists; this is the only silent terminal state.
     NotPresent,
-    /// The watchdog stopped the scan at its time limit; damage was not confirmed.
-    TimeLimitExceeded,
     /// The check itself could not run or complete. Never silent: an
     /// auto-detector that fails quietly is worse than none.
     CheckFailed(String),
@@ -40,16 +39,16 @@ pub enum Integrity {
 /// unbounded report. This bounds output, not scan work.
 const MAX_PROBLEM_ROWS: usize = 20;
 
-/// Avoid scanning large replicas on the startup thread. The full background scan uses a time
-/// budget instead: skipping it by size would permanently disable recording for healthy files.
+/// Avoid scanning large replicas on the startup thread. The full background scan has neither a
+/// size nor a time limit: skipping or cutting it would permanently disable recording for healthy
+/// files.
 const MAX_QUICK_CHECK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Poll interval while the background full check is still running.
 const POLL_HINT: Duration = Duration::from_millis(500);
 
-/// Hard ceiling on the scan itself. The reader must let go of its WAL snapshot
-/// even on a pathological file, or the writer's checkpoint never completes.
-const MAX_SCAN_TIME: Duration = Duration::from_secs(120);
+/// Poll interval once the check has run long enough for its still-running notice.
+const SLOW_POLL_HINT: Duration = Duration::from_secs(5);
 
 static RESULT: OnceLock<Integrity> = OnceLock::new();
 static LIVE_DAMAGE: OnceLock<Integrity> = OnceLock::new();
@@ -57,7 +56,7 @@ static LIVE_DAMAGE_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub(super) static WRITES_BLOCKED: AtomicBool = AtomicBool::new(false);
 static WRITE_BARRIER: RwLock<()> = RwLock::new(());
 #[cfg(test)]
-static TEST_STATE_LOCK: Mutex<()> = Mutex::new(());
+static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Current verdict, or `None` before startup or while the check is pending.
 ///
@@ -80,9 +79,18 @@ pub fn status() -> Option<&'static Integrity> {
 /// How long a poller should wait before asking [`status`] again.
 ///
 /// The full check starts immediately, so a short interval notices its verdict without
-/// delaying damage visibility behind the old fixed startup delay.
+/// delaying damage visibility behind the old fixed startup delay. A check that has run long
+/// enough to be announced is a large replica with minutes still to go: the interval then
+/// stretches, or a window polling it would repaint twice a second for all of that time.
 pub fn poll_hint() -> Duration {
-    POLL_HINT
+    if matches!(
+        super::report_recovery::status(),
+        Some(super::report_recovery::RecoveryNotice::CheckRunning)
+    ) {
+        SLOW_POLL_HINT
+    } else {
+        POLL_HINT
+    }
 }
 
 /// Publish the first terminal verdict and block future writes after confirmed damage.
@@ -171,7 +179,15 @@ pub(super) fn reset_test_state() {
     WRITES_BLOCKED.store(false, Ordering::Release);
 }
 
-/// Run the time-bounded full check, including replicas too large for the synchronous cheap gate.
+/// Run the full check to completion, including replicas too large for the synchronous cheap gate.
+///
+/// There is no deadline. The scan holds a WAL read snapshot for as long as it runs, which would
+/// stall a running writer's `wal_checkpoint(TRUNCATE)` — but its only caller is the startup
+/// recovery worker, and the writer does not open the replica until this verdict is in. The
+/// two-minute limit that used to interrupt the scan therefore protected nothing, and a replica of
+/// several gigabytes never finished inside it: every launch ended without a verdict and the whole
+/// session recorded nothing (#1190).
+///
 /// Called on the recovery worker; tests may also drive it against an isolated file.
 pub(crate) fn run(path: &Path) -> Integrity {
     // A metadata failure is not an absent replica; Path::exists would hide that distinction.
@@ -189,59 +205,9 @@ pub(crate) fn run(path: &Path) -> Integrity {
     let _ = conn.busy_timeout(Duration::from_secs(30));
     super::trace::install_on(&mut conn);
 
-    // HARD DEADLINE. `busy_timeout` bounds lock waiting, not statement runtime,
-    // and the scan holds a WAL read snapshot for its whole duration — which
-    // blocks the writer's `wal_checkpoint(TRUNCATE)` from reclaiming space, so
-    // an unbounded scan lets the -wal file grow while the writer stalls. The
-    // watchdog interrupts the statement so the reader always lets go.
-    let handle = conn.get_interrupt_handle();
-    // Condvar rather than a sleep-poll loop: the watchdog wakes exactly once,
-    // and a healthy sub-second scan is not followed by a poll-interval tail
-    // before `join` returns.
-    let done = Arc::new((Mutex::new(false), Condvar::new()));
-    let timed_out = Arc::new(AtomicBool::new(false));
-    let watchdog = {
-        let done = Arc::clone(&done);
-        let timed_out = Arc::clone(&timed_out);
-        std::thread::Builder::new()
-            .name("reports-integrity-watchdog".into())
-            .spawn(move || {
-                let (lock, cv) = &*done;
-                let finished = lock.lock().unwrap_or_else(|p| p.into_inner());
-                let (finished, timeout) = cv
-                    .wait_timeout_while(finished, MAX_SCAN_TIME, |done| !*done)
-                    .unwrap_or_else(|p| p.into_inner());
-                if timeout.timed_out() && !*finished {
-                    log::warn!(
-                        "отчёты(integrity): превышен лимит {MAX_SCAN_TIME:?} — проверка прервана"
-                    );
-                    timed_out.store(true, Ordering::Release);
-                    handle.interrupt();
-                }
-            })
-    };
-
-    // The deadline is only as real as the thread enforcing it, so the scan may
-    // not start until that thread exists. Running it anyway would hold a WAL
-    // read snapshot for an unbounded time and stall the writer's checkpoint —
-    // precisely the harm the deadline is here to prevent.
-    let watchdog = match watchdog {
-        Ok(w) => w,
-        Err(e) => {
-            log::warn!("отчёты(integrity): сторож не запустился ({e}) — проверка не выполнена");
-            return Integrity::CheckFailed(format!("сторож не запустился: {e}"));
-        }
-    };
-
     // Take EVERY diagnostic row, and split each one: SQLite versions differ on
     // whether the N problems come back as N rows or one newline-joined row.
     let verdict = collect_problems(&conn);
-    {
-        let (lock, cv) = &*done;
-        *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
-        cv.notify_all();
-    }
-    let _ = watchdog.join();
     let elapsed = started.elapsed();
 
     match verdict {
@@ -261,7 +227,7 @@ pub(crate) fn run(path: &Path) -> Integrity {
         }
         // Severe corruption can abort the pragma instead of producing diagnostic
         // rows, so corruption-class errors still map to `Damaged`.
-        Err(e) => classify_scan_error(e, timed_out.load(Ordering::Acquire)),
+        Err(e) => classify_pragma_error(e, "проверка"),
     }
 }
 
@@ -304,21 +270,6 @@ pub(crate) fn quick(path: &Path) -> Integrity {
         ),
         Err(error) => classify_pragma_error(error, "quick check"),
     }
-}
-
-/// Classify a scan error using the watchdog's fact, keeping corruption diagnostics intact.
-///
-/// Args:
-///     error: SQLite failure from the full scan.
-///     timed_out: Whether this scan's watchdog reached its unchanged deadline.
-///
-/// Returns:
-///     A typed timeout only for a watchdog interruption; otherwise the existing error verdict.
-fn classify_scan_error(error: rusqlite::Error, timed_out: bool) -> Integrity {
-    if timed_out && error.sqlite_error_code() == Some(rusqlite::ErrorCode::OperationInterrupted) {
-        return Integrity::TimeLimitExceeded;
-    }
-    classify_pragma_error(error, "проверка")
 }
 
 /// All diagnostic lines of `PRAGMA integrity_check`, flattened.

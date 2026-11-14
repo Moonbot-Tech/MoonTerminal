@@ -522,6 +522,7 @@ impl Render for ReportPanel {
         let recovery_notice = self
             .recovery_notice
             .filter(|notice| match notice {
+                db::report_recovery::RecoveryNotice::CheckRunning => true,
                 db::report_recovery::RecoveryNotice::CheckIncomplete { .. } => true,
                 db::report_recovery::RecoveryNotice::Recovered { .. } => {
                     !matches!(self.data, LoadState::Failed(_))

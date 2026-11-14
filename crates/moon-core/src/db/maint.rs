@@ -63,6 +63,15 @@ pub(crate) fn compact_due_at(now_ms: i64) -> anyhow::Result<crate::backups::DueO
             if db == crate::config::paths::trades_db_path() {
                 return compact_daily_trades(crate::market::trade_replay::trade_cache::handle());
             }
+            // The replica's startup integrity check runs for minutes on a large file. Waiting
+            // for it here would hold the strategies and trades databases behind it for the whole
+            // slot; deferring only the replica lets them through, and the job's own retry comes
+            // back for it.
+            if db == crate::config::paths::reports_db_path()
+                && super::report_recovery::write_access_pending()
+            {
+                anyhow::bail!("the reports integrity check is still running");
+            }
             compact_daily_db(
                 db,
                 &crate::config::paths::reports_db_path(),

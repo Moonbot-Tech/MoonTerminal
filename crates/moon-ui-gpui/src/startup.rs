@@ -213,8 +213,36 @@ struct TickEdges {
     valuation: bool,
     /// Published valuation health changed shape this tick.
     valuation_status: bool,
-    /// Startup recovery or incomplete-check guidance became available, even if no writer exists.
+    /// Startup recovery or integrity-check guidance appeared, changed, or went away, even if no
+    /// writer exists.
     recovery_notice: bool,
+}
+
+/// Whether the reports recovery notice differs from the one the UI was last told about.
+///
+/// A change in either direction counts. The still-running-check notice appears minutes after the
+/// start and goes away with the verdict; a once-only "a notice exists" latch published the first
+/// and then left the panel holding it — the writer's own start is a background commit, which may
+/// reach the UI a minute later — or never showed the notice that replaced it.
+///
+/// Args:
+///     shown: The notice published last; updated to `now`.
+///     now: The notice in force this tick.
+///
+/// Returns:
+///     `true` when the two differ. Compared by identity: every notice is a process-lifetime
+///     value, so the same address is the same notice and no text is compared on the tick.
+fn recovery_notice_changed(
+    shown: &mut Option<&'static moon_core::db::report_recovery::RecoveryNotice>,
+    now: Option<&'static moon_core::db::report_recovery::RecoveryNotice>,
+) -> bool {
+    let same = match (*shown, now) {
+        (None, None) => true,
+        (Some(before), Some(after)) => std::ptr::eq(before, after),
+        _ => false,
+    };
+    *shown = now;
+    !same
 }
 
 /// Coalesce background report data without delaying live report commits or valuation work.

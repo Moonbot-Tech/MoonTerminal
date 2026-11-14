@@ -12,6 +12,14 @@ use rust_i18n::t;
 ///     Human-readable title and detail, excluding the technical diagnostics kept in the log.
 pub(crate) fn recovery_notice_text(notice: Option<&RecoveryNotice>) -> (String, String) {
     let (title, detail) = match notice {
+        // Returned whole, like a completed recovery: recording is about to start by itself, so
+        // the stopped-recording paragraph below — fix the cause, restart — would be false here.
+        Some(RecoveryNotice::CheckRunning) => {
+            return (
+                t!("analytics.integrity_running").to_string(),
+                t!("analytics.integrity_running_detail").to_string(),
+            );
+        }
         Some(RecoveryNotice::CheckIncomplete { .. }) => (
             t!("analytics.integrity_unchecked").to_string(),
             t!("analytics.integrity_read_only_detail").to_string(),

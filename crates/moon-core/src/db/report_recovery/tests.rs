@@ -468,25 +468,105 @@ fn writer_permit_waits_for_the_full_verdict() {
 
 /// Writer authorization must require a conclusive full check, not merely the absence of damage.
 ///
-/// Treating a timeout, setup failure, or size-limit skip as a pass would let schema and index
-/// writes reach a replica that was never fully checked.
+/// Treating a check that could not run as a pass would let schema and index writes reach a
+/// replica that was never fully checked.
 #[test]
 fn inconclusive_full_verdicts_do_not_pass_the_write_gate() {
     assert!(conclusive(&Integrity::Ok));
     assert!(conclusive(&Integrity::NotPresent));
-    assert!(!conclusive(&Integrity::TimeLimitExceeded));
     assert!(!conclusive(&Integrity::CheckFailed("fixture".into())));
 }
 
-/// A timeout must preserve readable history without permitting writes or implicit checkpoints.
-/// A conclusive pass must still allow Report preference writes; confirmed damage closes both.
+/// A check that could not run is repeated after each configured pause, then its failure stands.
+///
+/// Returning the first `CheckFailed` — the behaviour before #1190 — fails the first half: a file
+/// an antivirus held for a few seconds after start cost the whole session's recording. Repeating
+/// without a bound fails the second: a scan that fails late would re-read the replica forever.
+#[test]
+fn a_check_that_could_not_run_is_repeated_a_bounded_number_of_times() {
+    let failed = || Integrity::CheckFailed("fixture".into());
+
+    let mut verdicts = vec![Integrity::Ok, failed(), failed()];
+    let mut pauses = Vec::new();
+    assert_eq!(
+        full_check(|| verdicts.pop().unwrap(), |pause| pauses.push(pause)),
+        Integrity::Ok
+    );
+    assert_eq!(pauses, CHECK_RETRY_DELAYS);
+
+    let mut runs = 0;
+    let mut pauses = Vec::new();
+    assert_eq!(
+        full_check(
+            || {
+                runs += 1;
+                failed()
+            },
+            |pause| pauses.push(pause)
+        ),
+        failed()
+    );
+    assert_eq!(runs, CHECK_RETRY_DELAYS.len() + 1);
+    assert_eq!(pauses, CHECK_RETRY_DELAYS);
+}
+
+/// Confirmed damage, a pass and an absent file are final on the first attempt.
+///
+/// Repeating a `Damaged` verdict would delay the copy-first recovery by the whole retry budget
+/// while readers keep opening a file already known to be corrupt.
+#[test]
+fn a_verdict_that_stands_is_never_repeated() {
+    for verdict in [
+        Integrity::Ok,
+        Integrity::NotPresent,
+        Integrity::Damaged(vec!["fixture".into()]),
+    ] {
+        let mut runs = 0;
+        let expected = verdict.clone();
+        assert_eq!(
+            full_check(
+                || {
+                    runs += 1;
+                    verdict.clone()
+                },
+                |_| panic!("a final verdict must not be followed by a pause")
+            ),
+            expected
+        );
+        assert_eq!(runs, 1);
+    }
+}
+
+/// The still-running notice appears only once a check has run for the announced time.
+///
+/// Announcing it from the first second would flash a notice on every start of a small replica;
+/// never announcing it leaves a large one recording nothing for minutes with no explanation.
+#[test]
+fn a_running_check_is_announced_only_after_it_has_run_long() {
+    let started = Instant::now();
+    assert!(!check_is_slow(None, started + SLOW_CHECK_NOTICE_AFTER));
+    assert!(!check_is_slow(Some(started), started));
+    assert!(!check_is_slow(
+        Some(started),
+        started + SLOW_CHECK_NOTICE_AFTER - Duration::from_millis(1)
+    ));
+    assert!(check_is_slow(
+        Some(started),
+        started + SLOW_CHECK_NOTICE_AFTER
+    ));
+}
+
+/// A check that could not run must preserve readable history without permitting writes or
+/// implicit checkpoints. A conclusive pass must still allow Report preference writes; confirmed
+/// damage closes both. While the check is pending the still-running notice follows its age and
+/// goes away with the verdict.
 #[test]
 fn background_verdict_preserves_read_history_without_bypassing_writes() {
     const CHILD: &str = "MOON_REPORT_GATE_TEST_CASE";
     const ROOT: &str = "MOON_REPORT_GATE_TEST_ROOT";
     let Ok(case) = std::env::var(CHILD) else {
         // Each process owns its own lease and one-shot verdict; no global test reset can model that.
-        for case in ["pending", "timeout", "setup", "healthy", "damage"] {
+        for case in ["pending", "setup", "healthy", "damage"] {
             let root = test_root(case);
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "db::report_recovery::tests::background_verdict_preserves_read_history_without_bypassing_writes", "--nocapture"])
@@ -523,6 +603,15 @@ fn background_verdict_preserves_read_history_without_bypassing_writes() {
             .is_ok()
     );
     READ_ACCESS_ENABLED.store(true, Ordering::Release);
+    // What `prepare` does before it starts the worker; the notice is then read as of a later
+    // moment, so the test does not wait two minutes for it.
+    let started = Instant::now();
+    let later = started + SLOW_CHECK_NOTICE_AFTER;
+    assert!(CHECK_STARTED.set(started).is_ok());
+    CHECK_PENDING.store(true, Ordering::Release);
+    assert_eq!(status_at(started), None);
+    assert_eq!(status_at(later), Some(&RecoveryNotice::CheckRunning));
+    assert!(write_access_pending());
     if case != "pending" {
         if case == "damage" {
             integrity::record_corruption(&rusqlite::Error::SqliteFailure(
@@ -531,7 +620,6 @@ fn background_verdict_preserves_read_history_without_bypassing_writes() {
             ));
         }
         let verdict = match case.as_str() {
-            "timeout" => Integrity::TimeLimitExceeded,
             "setup" => Integrity::CheckFailed("fixture setup failure".into()),
             _ => Integrity::Ok,
         };
@@ -540,6 +628,17 @@ fn background_verdict_preserves_read_history_without_bypassing_writes() {
             case == "healthy"
         );
         assert_eq!(wait_for_write_access().is_ok(), case == "healthy");
+        assert!(!write_access_pending());
+        // The verdict replaces the still-running notice: nothing after a pass, the latched
+        // recording-off notice after a check that could not run.
+        match case.as_str() {
+            "healthy" => assert_eq!(status_at(later), None),
+            "setup" => assert!(matches!(
+                status_at(later),
+                Some(RecoveryNotice::CheckIncomplete { .. })
+            )),
+            _ => assert_ne!(status_at(later), Some(&RecoveryNotice::CheckRunning)),
+        }
     }
     let reader = super::super::open_reader();
     if case == "damage" {

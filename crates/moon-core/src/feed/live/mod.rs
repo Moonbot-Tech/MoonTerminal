@@ -68,7 +68,7 @@ use moonproto::state::{
 use moonproto::{
     ClientConfig, ConnectConfig, Event, InitConfig, InitialStrategies, LifecycleEvent, MoonClient,
     MoonEventSink, MoonStateSnapshot, ReportAliveMapOutcome, ReportAliveMapTicket, ReportEvent,
-    ReportHistoryDepth, ReportSyncCheckpoint, ReportSyncComplete, ReportSyncRequest, TransportMode,
+    ReportSyncCheckpoint, ReportSyncComplete, TransportMode,
 };
 
 use self::trace_backfill::TracePacer;
@@ -85,7 +85,7 @@ use super::{
 };
 use crate::config::{ServerConfig, TransportVersion};
 use crate::db::order_traces::{AskSink, TraceDbMsg};
-use crate::db::{DbMsg, ReportStart, ReportTx};
+use crate::db::{DbMsg, ReportTx};
 use crate::session::core_time_offset::OffsetSource;
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
@@ -332,13 +332,6 @@ pub(super) fn run(
     };
     let _ = tx.send(FeedMsg::MarketCatalogChanged);
 
-    // Typed report-database replica: declare catch-up immediately. It remains an intent that the
-    // library sends after connection and repeats on its own after a hard reconnect. Where it
-    // starts comes from the writer's durable start state: a checkpoint pairs the numeric cursor
-    // with the core's database epoch, so a replaced core database is detected even when the new
-    // one already grew past the old ids. Catch-up is PAGED: the next page is not requested until
-    // the writer commits and acknowledges the current one (backpressure by design).
-    //
     // Whether an open-row check has STARTED since this feed last asked for one. An
     // `OpenRowsCheckComplete` names only its ids, not the request it answers, so a completion of a
     // check that started before a reconnect can be read after the reconnect restarted the walk —
@@ -347,46 +340,20 @@ pub(super) fn run(
     let mut open_rows_check_started = false;
     // Catch-up progress for the status bar, published only while the replica is written.
     let mut report_sync = report_sync::ReportSyncTracker::default();
-    if server.feed.reports {
-        if let Some(sink) = reports {
-            let start = sink.next_start(server.uid);
-            let started = match start {
-                ReportStart::Fresh => client
-                    .reports()
-                    .sync(ReportSyncRequest::fresh(ReportHistoryDepth::All))
-                    .map(|_| "fresh(All)".to_string()),
-                ReportStart::Resume(from) => client
-                    .reports()
-                    .sync(ReportSyncRequest::resume(from))
-                    .map(|_| format!("resume(from_rec_id={from}) — миграция без epoch")),
-                ReportStart::Checkpoint(checkpoint) => {
-                    client.reports().sync_from(checkpoint).map(|_| {
-                        format!(
-                            "sync_from(epoch={}, from_rec_id={})",
-                            checkpoint.epoch, checkpoint.next_from_rec_id
-                        )
-                    })
-                }
-            };
-            match started {
-                Ok(how) => log::info!(
-                    "отчёты: core={} «{}» sync запрошен: {how}",
-                    server.uid,
-                    server.name
-                ),
-                Err(e) => log::warn!(
-                    "отчёты: core={} «{}» sync не запустился: {e:?}",
-                    server.uid,
-                    server.name
-                ),
-            }
-            // Open rows may have closed or been deleted offline BELOW the catch-up start. The
-            // writer reads them and registers them for checking; the results arrive as ordinary
-            // RowUpsert/RowDelete events. Repeated on every reconnect below.
-            sink.send(DbMsg::RecheckOpenRows {
-                core_uid: server.uid,
-                after: None,
-                reports: client.reports(),
+    // Typed report-database replica: declare catch-up as soon as the writer knows where it starts
+    // (`report_sync::writer_pending`). That is at once when the writer is already running. During
+    // a start it is not: the writer waits for the replica's integrity check, and this thread must
+    // not wait with it — it leaves a wake behind and declares from the loop below. `true` while
+    // the writer has not opened the replica: the declaration is owed for as long, and nothing
+    // that tells the UI about a fact the writer is meant to store may go out, whether or not
+    // this core replicates its reports.
+    let mut report_writer_pending = false;
+    if let Some(sink) = reports {
+        report_writer_pending = report_sync::writer_pending(&client, sink, server);
+        if report_writer_pending {
+            let wake = wake_tx.clone();
+            sink.wake_when_started(move || {
+                let _ = wake.send(());
             });
         }
     }
@@ -571,6 +538,13 @@ pub(super) fn run(
         true
     };
     loop {
+        // The report catch-up the writer could not place when this feed started: one lock read
+        // per pass until the writer's wake arrives, nothing afterwards.
+        if report_writer_pending {
+            if let Some(sink) = reports {
+                report_writer_pending = report_sync::writer_pending(&client, sink, server);
+            }
+        }
         // `SetMarket` contains complete desired state; the other coordinator commands are deltas
         // or actions. A closed channel means the coordinator has exited, so disconnect.
         let mut orders_mutated = false;
@@ -971,8 +945,9 @@ pub(super) fn run(
                 // cursor, so catch-up will not bring it. The library does repeat its retained
                 // open-row check after a reconnect, but with the set it was last given, which
                 // cannot hold a trade opened since then. Replace it with the replica's open rows
-                // as they are now (#742).
-                if server.feed.reports {
+                // as they are now (#742). Not while the catch-up itself is still owed: its
+                // declaration asks for this same check, with the open rows as they are then.
+                if server.feed.reports && !report_writer_pending {
                     if let Some(sink) = reports {
                         open_rows_check_started = false;
                         sink.send(DbMsg::RecheckOpenRows {
@@ -2815,8 +2790,15 @@ pub(super) fn run(
         // The core's timezone, on its own deadline: nothing announces a new Ping, so this runs on
         // every pass and `ping_clock` decides whether a reading is due — and reads only while
         // Ready, since the getter holds the previous connection's last Ping through a reconnect.
+        // Not while the replica writer has yet to open the replica, either: an offset adopted
+        // now would reach Core Status minutes before the segment it claims reaches the table the
+        // report reader takes it from.
         let recv_ms = now_ms_i64();
-        let reading = ping_clock.poll(Instant::now(), client.server_utc_offset_minutes(), is_ready);
+        let reading = ping_clock.poll(
+            Instant::now(),
+            client.server_utc_offset_minutes(),
+            is_ready && !report_writer_pending,
+        );
         // A confirmation stores nothing — the offset in force is already the newest segment — but
         // tells Core Status the value is live, with the Ping as its source. Its instant
         // stays the segment's own start, so the axis built from this status is the same axis.

@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use rusqlite::Connection;
@@ -52,6 +52,30 @@ static READ_ACCESS_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Process-lifetime recovery notice consumed by Report and Analytics.
 static NOTICE: OnceLock<RecoveryNotice> = OnceLock::new();
+
+/// How long the background full check may run before Report and Analytics say that it is running.
+///
+/// A replica of a few hundred megabytes is checked in seconds and needs no notice. Past this
+/// point the user has been reading a history that records nothing new for long enough to wonder
+/// why, and the answer is not an error: the check of a large file takes minutes.
+const SLOW_CHECK_NOTICE_AFTER: Duration = Duration::from_secs(120);
+
+/// Pauses before repeating a full check that could not run at all.
+///
+/// Such a failure is a file held or briefly unreadable far more often than a lasting fault —
+/// antivirus and sync software take large files right after a start — and accepting the first
+/// one costs the whole session's recording. Bounded, because a scan that fails late repeats its
+/// entire read every time.
+const CHECK_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(10), Duration::from_secs(60)];
+
+/// Whether the background full check has started and has not published its verdict yet.
+static CHECK_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// When the background full check started; read only while [`CHECK_PENDING`] is set.
+static CHECK_STARTED: OnceLock<Instant> = OnceLock::new();
+
+/// The one notice that is not latched: it stands only while the full check is still running.
+static CHECK_RUNNING_NOTICE: RecoveryNotice = RecoveryNotice::CheckRunning;
 
 /// Private capability required to start the reports writer.
 ///
@@ -122,7 +146,12 @@ impl ReportWritePermit {
 /// User-facing startup recovery state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RecoveryNotice {
-    /// The full check did not finish; existing history remains readable but recording is off.
+    /// The full check is still running; history is readable and recording starts when it passes.
+    ///
+    /// Unlike every other notice this one goes away by itself, so [`status`] derives it from the
+    /// running check instead of storing it.
+    CheckRunning,
+    /// The full check could not run; existing history remains readable but recording is off.
     CheckIncomplete {
         /// Technical reason recorded for diagnostics.
         detail: String,
@@ -200,9 +229,93 @@ struct SnapshotFile {
 /// Current recovery notice.
 ///
 /// Returns:
-///     Process-lifetime notice, or `None` when no recovery action was needed.
+///     [`RecoveryNotice::CheckRunning`] while a long full check is still in flight, otherwise the
+///     process-lifetime notice, or `None` when no recovery action was needed.
 pub fn status() -> Option<&'static RecoveryNotice> {
+    status_at(Instant::now())
+}
+
+/// [`status`] as of a given moment, so the age of a running check can be tested without waiting.
+fn status_at(now: Instant) -> Option<&'static RecoveryNotice> {
+    if CHECK_PENDING.load(Ordering::Acquire) && check_is_slow(CHECK_STARTED.get().copied(), now) {
+        return Some(&CHECK_RUNNING_NOTICE);
+    }
     NOTICE.get()
+}
+
+/// Whether a full check that began at `started` has run long enough to be announced.
+///
+/// Args:
+///     started: When the check began; `None` before any check was started.
+///     now: The moment the question is asked.
+///
+/// Returns:
+///     `true` from [`SLOW_CHECK_NOTICE_AFTER`] on.
+fn check_is_slow(started: Option<Instant>, now: Instant) -> bool {
+    started.is_some_and(|started| now.saturating_duration_since(started) >= SLOW_CHECK_NOTICE_AFTER)
+}
+
+/// Whether the full check has yet to decide if this process may write the replica.
+///
+/// A caller that would otherwise park a shared worker in [`wait_for_write_access`] asks this
+/// first: on a large replica the answer stays `true` for minutes.
+pub fn write_access_pending() -> bool {
+    WRITE_ACCESS
+        .allowed
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .is_none()
+}
+
+/// Clears [`CHECK_PENDING`] when the recovery worker ends, however it ends.
+///
+/// The verdict paths clear it themselves, before they publish; this covers a worker that panics,
+/// which would otherwise leave the still-running notice standing for the rest of the session.
+struct PendingCheck;
+
+impl Drop for PendingCheck {
+    fn drop(&mut self) {
+        CHECK_PENDING.store(false, Ordering::Release);
+    }
+}
+
+/// The pause before repeating a full check, or `None` when its verdict stands.
+///
+/// Only a check that could not run is repeated. A pass, an absent file and confirmed damage are
+/// final, and so is a failure once the attempts are spent.
+///
+/// Args:
+///     verdict: What the check just returned.
+///     failed_attempts: How many earlier attempts already failed to run.
+///
+/// Returns:
+///     The pause to take before the next attempt.
+fn retry_delay(verdict: &Integrity, failed_attempts: usize) -> Option<Duration> {
+    match verdict {
+        Integrity::CheckFailed(_) => CHECK_RETRY_DELAYS.get(failed_attempts).copied(),
+        Integrity::Ok | Integrity::NotPresent | Integrity::Damaged(_) => None,
+    }
+}
+
+/// Run the full check, repeating one that could not run, and return the verdict that stands.
+///
+/// Args:
+///     run: One attempt at the full check.
+///     pause: Waits out the pause between two attempts; injected so tests do not sleep.
+///
+/// Returns:
+///     The first verdict [`retry_delay`] does not ask to repeat.
+fn full_check(mut run: impl FnMut() -> Integrity, mut pause: impl FnMut(Duration)) -> Integrity {
+    let mut failed_attempts = 0;
+    loop {
+        let verdict = run();
+        let Some(delay) = retry_delay(&verdict, failed_attempts) else {
+            return verdict;
+        };
+        failed_attempts += 1;
+        log::warn!("reports: the full integrity check could not run; repeating it in {delay:?}");
+        pause(delay);
+    }
 }
 
 /// Return whether this process owns the reports-replica lease and may write or checkpoint it.
@@ -223,7 +336,11 @@ pub(crate) fn ensure_access() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Wait on a background writer thread until the full check authorizes replica writes.
+/// Wait until the full check has decided whether this process may write the replica.
+///
+/// Blocks for as long as the check runs — minutes on a large replica — so it is for a thread
+/// with nothing else to do: the parked Report preference writes own one. Anything that serves
+/// other work asks [`write_access_pending`] first and comes back later, as daily compaction does.
 pub fn wait_for_write_access() -> anyhow::Result<()> {
     anyhow::ensure!(
         WRITE_ACCESS.wait(),
@@ -262,12 +379,16 @@ fn startup_read_anchor(path: &Path) -> anyhow::Result<Option<Connection>> {
     }
 }
 
-/// Acquire the process lease, run the cheap recovery gate, and start one full check.
+/// Acquire the process lease, run the cheap recovery gate, and start the full check.
 ///
 /// A lease failure publishes its own notice because recovery has not started in that case.
 /// Confirmed page damage is still recovered synchronously. A cheap pass enables readers and the
 /// first window immediately, while the returned permit keeps the writer closed until the
-/// background full check and any recovery it requires have finished.
+/// background full check and any recovery it requires have finished. That check has no time
+/// limit and is repeated when it could not run ([`full_check`]), so the permit resolves late on
+/// a large replica rather than resolving closed. A thread that serves anything else must not
+/// wait on it: a core's feed asks for its start state without blocking, and daily compaction
+/// defers the replica while [`write_access_pending`].
 ///
 /// Returns:
 ///     A private writer permit after the cheap gate, or `None` on a fail-closed decision.
@@ -311,11 +432,17 @@ pub fn prepare() -> Option<ReportWritePermit> {
             READ_ACCESS_ENABLED.store(true, Ordering::Release);
             let gate = StartupGate::pending();
             let thread_gate = gate.clone();
+            let _ = CHECK_STARTED.set(Instant::now());
+            CHECK_PENDING.store(true, Ordering::Release);
             let spawned = std::thread::Builder::new()
                 .name("reports-integrity".into())
                 .spawn(move || {
-                    let verdict = integrity::run(&files[0]);
+                    let _pending = PendingCheck;
+                    let verdict = full_check(|| integrity::run(&files[0]), std::thread::sleep);
                     let _readers = if matches!(verdict, Integrity::Damaged(_)) {
+                        // The check is over, and what follows closes the readers and replaces
+                        // the replica: "still running, history is readable" would be false.
+                        CHECK_PENDING.store(false, Ordering::Release);
                         thread_anchor
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
@@ -325,6 +452,7 @@ pub fn prepare() -> Option<ReportWritePermit> {
                         match super::reader_budget::quiesce() {
                             Some(readers) => Some(readers),
                             None => {
+                                CHECK_PENDING.store(false, Ordering::Release);
                                 integrity::publish(verdict.clone());
                                 thread_gate.finish(false);
                                 WRITE_ACCESS.finish(false);
@@ -349,6 +477,7 @@ pub fn prepare() -> Option<ReportWritePermit> {
             match spawned {
                 Ok(_) => Some(ReportWritePermit { gate, anchor }),
                 Err(error) => {
+                    CHECK_PENDING.store(false, Ordering::Release);
                     ACCESS_ENABLED.store(false, Ordering::Release);
                     let detail = format!("reports integrity thread did not start: {error}");
                     log::error!("{detail}");
@@ -387,7 +516,7 @@ pub fn prepare() -> Option<ReportWritePermit> {
     }
 }
 
-/// Return whether the full check completed conclusively rather than skipping or timing out.
+/// Return whether the full check completed conclusively rather than failing to run.
 fn conclusive(verdict: &Integrity) -> bool {
     matches!(verdict, Integrity::Ok | Integrity::NotPresent)
 }
@@ -395,12 +524,15 @@ fn conclusive(verdict: &Integrity) -> bool {
 /// Apply the background full-check decision and publish its final writer authorization.
 ///
 /// Args:
-///     decision: Recovery result after the one full scan.
+///     decision: Recovery result after the full scan.
 ///     verdict: Full-scan diagnostics retained for status and write blocking.
 ///
 /// Returns:
 ///     `true` only after a conclusive pass or completed recovery with no damage latched.
 fn finish_background(decision: Decision, verdict: Integrity) -> bool {
+    // Before anything is published: a poller that reads the verdict must not still be told that
+    // the check is running, or it stops polling with that notice on screen.
+    CHECK_PENDING.store(false, Ordering::Release);
     let allowed = match decision {
         Decision::Ready => {
             let readable = !integrity::writes_blocked();
@@ -585,7 +717,7 @@ fn remove_staging_file(path: &Path) -> anyhow::Result<()> {
 ///     files: Current main/WAL/SHM paths.
 ///     recovery_root: Directory for published snapshots.
 ///     now_ms: Current UTC Unix timestamp in milliseconds.
-///     verdict: Bounded integrity-check outcome.
+///     verdict: Integrity-check outcome.
 ///
 /// Returns:
 ///     Recovery decision after cooldown and snapshot handling.
@@ -597,12 +729,6 @@ fn decide_integrity(
 ) -> Decision {
     match verdict {
         Integrity::Ok | Integrity::NotPresent => Decision::Ready,
-        Integrity::TimeLimitExceeded => {
-            log::warn!(
-                "reports: startup integrity preflight hit its time limit; leaving the replica untouched"
-            );
-            Decision::Ready
-        }
         Integrity::CheckFailed(reason) => {
             log::warn!(
                 "reports: startup integrity preflight was inconclusive; leaving the replica \
