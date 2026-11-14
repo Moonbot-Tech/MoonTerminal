@@ -43,9 +43,9 @@ pub(crate) enum TgTag {
     ReaderOff,
     /// The core itself is not connected.
     NoCore,
-    /// The service has no recoverable remote login.
+    /// A connected service told an enabled reader it has no recoverable remote login.
     Unsupported,
-    /// No current snapshot for this core yet.
+    /// No current snapshot for this core yet, or its service has not answered.
     Unknown,
 }
 
@@ -57,8 +57,9 @@ pub(crate) enum TgTag {
 ///     state: The held snapshot, if any.
 ///
 /// Returns:
-///     [`TgTag::Unknown`] for a stale or missing snapshot, or a service snapshot that has not
-///     arrived — never a guess.
+///     [`TgTag::Unknown`] for a stale or missing snapshot, or a service that has not answered —
+///     never a guess. A reader that is off is [`TgTag::ReaderOff`] whatever else the snapshot
+///     holds, and [`TgTag::Unsupported`] is kept for [`remote_login_refused`].
 pub(crate) fn tg_tag(
     status: Option<&ConnStatus>,
     fresh: bool,
@@ -70,11 +71,16 @@ pub(crate) fn tg_tag(
     let Some(s) = state.filter(|_| fresh) else {
         return TgTag::Unknown;
     };
-    if !s.state_supported {
-        return TgTag::Unsupported;
-    }
     if !s.enabled {
         return TgTag::ReaderOff;
+    }
+    if !s.state_supported {
+        // A false flag is a refusal only from a service the core is connected to.
+        return if remote_login_refused(s) {
+            TgTag::Unsupported
+        } else {
+            TgTag::Unknown
+        };
     }
     let Some(service) = s.service.as_ref() else {
         return TgTag::Unknown;
@@ -90,6 +96,61 @@ pub(crate) fn tg_tag(
         TgTag::LoggedIn
     } else {
         TgTag::NotLoggedIn
+    }
+}
+
+/// Whether the service itself told this core's enabled reader that it has no recoverable remote
+/// login.
+///
+/// `state_supported` alone does not tell "refused" from "never asked". The core learns the flag
+/// from the service once the two are connected, and a reader that is off, or a service still
+/// being installed or connected, has not been asked: the flag is false there as well. Only a
+/// connected service (`service_online`) beside the false flag is the service saying no.
+fn remote_login_refused(s: &CoreTelegramState) -> bool {
+    s.enabled && s.service_online && !s.state_supported
+}
+
+/// What the picked core's card draws under its header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CardBody<'a> {
+    /// No snapshot has arrived from the core.
+    NoSnapshot,
+    /// A connected service without recoverable remote login, with its version when it gave one.
+    NoRemoteLogin(Option<&'a str>),
+    /// The reader's own rows: state, login once it is actionable, proxy.
+    Reader(&'a CoreTelegramState),
+}
+
+/// The parts of the picked core's card that depend on the snapshot it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CardPlan<'a> {
+    /// The reader switch in the header and its position, `None` without a snapshot.
+    pub(super) switch: Option<bool>,
+    /// What goes under the header.
+    pub(super) body: CardBody<'a>,
+}
+
+/// Plan the card for the snapshot a connected core holds.
+///
+/// The switch is there for every snapshot. Switching the reader on is what makes the core
+/// install its Telegram service and ask it about remote login, so a card that waited for that
+/// answer before offering the switch could never get one (#1339).
+pub(super) fn card_plan(state: Option<&CoreTelegramState>) -> CardPlan<'_> {
+    let Some(s) = state else {
+        return CardPlan {
+            switch: None,
+            body: CardBody::NoSnapshot,
+        };
+    };
+    let body = if remote_login_refused(s) {
+        let version = s.service_version.as_deref();
+        CardBody::NoRemoteLogin(version.filter(|v| !v.trim().is_empty()))
+    } else {
+        CardBody::Reader(s)
+    };
+    CardPlan {
+        switch: Some(s.enabled),
+        body,
     }
 }
 
