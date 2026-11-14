@@ -17,7 +17,7 @@ use moon_ui::Root;
 
 use super::{
     ReportRevisionGate, TickEdges, apply_persistence_ack, consume_report_commit,
-    dispatch_live_persistence, install_moon_theme_for_config,
+    dispatch_live_persistence, install_moon_theme_for_config, recovery_notice_changed,
 };
 use crate::persistence::coordinator::{PersistenceCoordinator, PersistenceSnapshot};
 use crate::persistence::{chart_persist, dock_persist};
@@ -696,7 +696,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     cx.spawn(async move |cx| {
         let executor = cx.update(|cx| cx.background_executor().clone());
         let mut report_revision_gate = ReportRevisionGate::new(Instant::now());
-        let mut recovery_notice_seen = false;
+        let mut recovery_notice_shown = None;
         let mut last_report = Instant::now();
         // GPUI times every `Window::draw` itself when frame tracing is on; the collector
         // hands over the ones recorded since the previous poll. Created before tracing is
@@ -751,10 +751,10 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 consume_report_commit(coord_valuation_status_dirty.as_deref(), || {
                     edges.valuation_status = true;
                 });
-                if !recovery_notice_seen && moon_core::db::report_recovery::status().is_some() {
-                    recovery_notice_seen = true;
-                    edges.recovery_notice = true;
-                }
+                edges.recovery_notice = recovery_notice_changed(
+                    &mut recovery_notice_shown,
+                    moon_core::db::report_recovery::status(),
+                );
                 let revision = report_revision_gate.observe(edges, Instant::now());
                 let (show_reqs, open_debug_10) = coord_backend.update(cx, |b, cx| {
                     if revision.wake_valuation

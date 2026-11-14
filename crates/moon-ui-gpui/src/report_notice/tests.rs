@@ -110,6 +110,23 @@ fn report_access_denial_without_notice_still_warns_about_recording() {
     assert!(detail.contains("restarting the terminal"));
 }
 
+/// A check still in flight is not a fault: the notice must say that history is readable and that
+/// recording starts by itself. Routing it through the stopped-recording paragraph tells the user
+/// to fix a cause and restart, and a restart only starts the same check over.
+#[test]
+fn running_check_notice_promises_recording_without_asking_for_a_restart() {
+    let _locale = crate::test_locale::force("en");
+    let (title, detail) = recovery_notice_text(Some(&RecoveryNotice::CheckRunning));
+    assert_eq!(
+        title,
+        "The reports replica integrity check is still running."
+    );
+    assert!(detail.contains("history remains available for reading"));
+    assert!(detail.contains("once the check finishes"));
+    assert!(!detail.contains("restarting"));
+    assert!(!detail.contains("not being recorded in this reports replica"));
+}
+
 /// An inconclusive scan must explain readable history and stopped recording without falsely
 /// blaming a second terminal, asserting corruption, or displaying internal diagnostics.
 #[test]

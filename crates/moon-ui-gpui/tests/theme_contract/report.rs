@@ -42,6 +42,9 @@ fn report_successful_recovery_notice_coexists_with_content() {
     assert!(recovered.contains("crate::report_notice::recovery_notice_text(Some(notice))"));
     assert!(recovered.contains("MoonAlert::info(\"rep-recovered-note\", detail).title(title)"));
     assert!(recovered.contains("RecoveryNotice::CheckIncomplete { .. } => true"));
+    // A check still running records nothing either; without this arm a large replica shows a
+    // history that stops growing for minutes with no word on why.
+    assert!(recovered.contains("RecoveryNotice::CheckRunning => true"));
     assert!(report.contains(".children(recovery_notice)\n            .child(table_el)"));
 }
 

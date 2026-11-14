@@ -301,6 +301,36 @@ fn recovery_notice_publishes_without_a_writer_or_a_second_pending_refresh() {
     );
 }
 
+/// The recovery notice is published when it appears, when another replaces it, and when it goes
+/// away — and not on the ticks in between.
+///
+/// The latch this replaced fired once, on the first notice. With it the still-running-check
+/// notice stayed in Report after the check had passed, until a commit happened to repaint the
+/// panel, and a check that then failed never showed its own recording-off notice. Reporting a
+/// change on every tick instead would publish a report revision ten times a second.
+#[test]
+fn recovery_notice_edge_follows_every_change_and_nothing_else() {
+    use moon_core::db::report_recovery::RecoveryNotice;
+
+    let running: &'static RecoveryNotice = Box::leak(Box::new(RecoveryNotice::CheckRunning));
+    let incomplete: &'static RecoveryNotice =
+        Box::leak(Box::new(RecoveryNotice::CheckIncomplete {
+            detail: "fixture".into(),
+        }));
+    let mut shown = None;
+
+    assert!(!super::recovery_notice_changed(&mut shown, None));
+    assert!(super::recovery_notice_changed(&mut shown, Some(running)));
+    assert!(!super::recovery_notice_changed(&mut shown, Some(running)));
+    assert!(super::recovery_notice_changed(&mut shown, Some(incomplete)));
+    assert!(!super::recovery_notice_changed(
+        &mut shown,
+        Some(incomplete)
+    ));
+    assert!(super::recovery_notice_changed(&mut shown, None));
+    assert!(!super::recovery_notice_changed(&mut shown, None));
+}
+
 /// Read the startup source governed by the ordering contract.
 ///
 /// Returns:

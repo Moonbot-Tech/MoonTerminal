@@ -1,29 +1,59 @@
 use super::*;
-use std::sync::{Condvar, Mutex};
+use std::sync::Mutex;
 
 /// Latch published after the writer has computed every core's replication start state.
+///
+/// Nothing may block on it. The writer opens the replica only after the startup integrity check,
+/// which on a file of several gigabytes runs for minutes, and a feed thread parked here handled
+/// none of its core's events for that long (#1190). A feed asks [`Self::is_done`] and leaves a
+/// wake behind instead.
 #[derive(Default)]
 pub(in crate::db) struct WriterInit {
+    /// The latch and the wakes it owes, under one lock so a wake cannot be left behind a finish.
+    state: Mutex<WriterInitState>,
+}
+
+/// What [`WriterInit`] guards.
+#[derive(Default)]
+struct WriterInitState {
     /// Whether initialization has either completed or failed.
-    done: Mutex<bool>,
-    /// Wakes feed threads waiting to read their checkpoints.
-    ready: Condvar,
+    done: bool,
+    /// Feed wakes owed once `done` turns true.
+    wakes: Vec<Box<dyn FnOnce() + Send>>,
 }
 
 impl WriterInit {
-    /// Wait on the writer thread's initialization result without blocking the UI.
-    pub(in crate::db) fn wait(&self) {
-        let mut done = self.done.lock().unwrap_or_else(|p| p.into_inner());
-        while !*done {
-            done = self.ready.wait(done).unwrap_or_else(|p| p.into_inner());
-        }
+    /// Whether the start states can be read now. Never blocks.
+    pub(in crate::db) fn is_done(&self) -> bool {
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).done
     }
 
-    /// Publish initialization and wake every feed waiting for its start state.
+    /// Call `wake` once initialization is over — at once when it already is.
+    ///
+    /// Args:
+    ///     wake: Runs exactly once, on the thread that finishes initialization or on the caller's.
+    pub(in crate::db) fn wake_when_done(&self, wake: impl FnOnce() + Send + 'static) {
+        {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            if !state.done {
+                state.wakes.push(Box::new(wake));
+                return;
+            }
+        }
+        wake();
+    }
+
+    /// Publish initialization and wake every feed that asked to be told.
     pub(in crate::db) fn finish(&self) {
-        let mut done = self.done.lock().unwrap_or_else(|p| p.into_inner());
-        *done = true;
-        self.ready.notify_all();
+        let wakes = {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.done = true;
+            std::mem::take(&mut state.wakes)
+        };
+        // Outside the lock: a wake is foreign code and must not run under it.
+        for wake in wakes {
+            wake();
+        }
     }
 }
 
@@ -38,7 +68,7 @@ impl WriterInitCompletion {
 }
 
 impl Drop for WriterInitCompletion {
-    /// Release waiting feeds even when initialization failed before success was published.
+    /// Wake the feeds even when initialization failed before success was published.
     fn drop(&mut self) {
         self.0.finish();
     }
@@ -275,7 +305,7 @@ pub(in crate::db) fn passive_wal_checkpoint(
 ///
 /// Returns:
 ///     The writer handle after its thread spawns. Database and schema initialization run on
-///     that thread; an early failure is logged and releases feeds waiting for start states.
+///     that thread; an early failure is logged and wakes the feeds that asked for start states.
 pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<ReportsHandle> {
     let (tx, rx): (std::sync::mpsc::SyncSender<DbMsg>, Receiver<DbMsg>) =
         std::sync::mpsc::sync_channel(REPORT_QUEUE_CAP);

@@ -3,18 +3,21 @@
 
 use super::support::*;
 
-/// Dropping the typed timeout branch must not restore an untranslated SQLite banner detail.
+/// The still-running check notice must fall through to the verdict poll in `integrity_note`.
+///
+/// Returning it from the early notice branch, like the latched notices, stops the poll: nothing
+/// then repaints Analytics when the check passes, and "the check is still running" stays on
+/// screen over a replica that is already recording.
 #[test]
-fn integrity_timeout_uses_localized_unchecked_banner() {
+fn running_check_notice_keeps_the_integrity_poll_alive() {
     let toolbar = read_src("analytics/toolbar.rs");
-    let note = braced_body(&toolbar, "fn integrity_note(");
-    let timeout = note
-        .split("Integrity::TimeLimitExceeded =>")
-        .nth(1)
+    let note = code_only(braced_body(&toolbar, "fn integrity_note("));
+    let early = note
+        .split("moon_core::db::integrity::status()")
+        .next()
         .unwrap();
-    let timeout = timeout.split("Integrity::Ok").next().unwrap();
-    assert!(timeout.contains("t!(\"analytics.integrity_unchecked\")"));
-    assert!(timeout.contains("t!(\"analytics.integrity_time_limit\")"));
+    assert!(early.contains("RecoveryNotice::Recovered { .. } | RecoveryNotice::CheckRunning"));
+    assert!(note.contains("integrity_poll_armed = true"));
 }
 
 /// `analytics/observe.rs:observe_report_axis` must refresh through the Writer path and must call

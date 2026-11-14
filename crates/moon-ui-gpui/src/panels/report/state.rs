@@ -263,6 +263,56 @@ static REPORT_DOCK_COMMENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static REPORT_WINDOW_COMMENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static REPORT_PREFERENCE_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+/// One Report preference write, ready to run on whichever thread ends up owning it.
+type ReportPreferenceJob = Box<dyn FnOnce() + Send>;
+
+/// Preference writes held back until the replica's startup integrity check has decided.
+static REPORT_PREFERENCE_PARKED: Mutex<Vec<ReportPreferenceJob>> = Mutex::new(Vec::new());
+
+/// Hold a preference write until the startup integrity check decides, then run it.
+///
+/// Every parked write shares ONE waiting thread: the first one starts it, the rest only queue
+/// behind it, so a user who keeps changing columns through a ten-minute check costs a vector
+/// entry per change rather than a thread. The jobs run in the order they were parked, and each
+/// still drops itself when a newer request has superseded it.
+///
+/// Args:
+///     job: The write, complete with its own staleness check and write-access wait.
+fn park_report_preference(job: ReportPreferenceJob) {
+    {
+        let mut parked = REPORT_PREFERENCE_PARKED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        parked.push(job);
+        if parked.len() > 1 {
+            return;
+        }
+    }
+    let spawned = std::thread::Builder::new()
+        .name("report-preference".into())
+        .spawn(|| {
+            // The outcome is each job's to read: a closed gate makes every one of them return.
+            let _ = db::report_recovery::wait_for_write_access();
+            let jobs = std::mem::take(
+                &mut *REPORT_PREFERENCE_PARKED
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            );
+            for job in jobs {
+                job();
+            }
+        });
+    if let Err(error) = spawned {
+        // Best effort, like the write itself. Emptied, so the next change starts a thread again
+        // instead of queueing behind one that never ran.
+        REPORT_PREFERENCE_PARKED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        log::warn!("report preferences were not saved: their writer thread did not start: {error}");
+    }
+}
+
 /// Return the process-wide last-write marker for one independent preference authority.
 ///
 /// Args:
@@ -287,6 +337,12 @@ fn preference_sequence(write: &ReportPreferenceWrite) -> &'static AtomicU64 {
 /// an older request already owns the lock, the newer request necessarily writes after it. This
 /// preserves last-write-wins ordering across every live Report panel without blocking GPUI.
 ///
+/// The write waits for the replica's startup integrity check, which on a large file runs for
+/// minutes. While that verdict is pending the write is parked ([`park_report_preference`]): on
+/// the background executor it would hold one worker per preference change, and that pool is
+/// fixed-size on Linux — a few clicks on a column header during the check would stall every
+/// query behind them.
+///
 /// Args:
 ///     cx: Application context used only to clone the background executor.
 ///     write: Complete visible-column, sort-pair, or host-specific comment preference.
@@ -299,34 +355,39 @@ pub(super) fn schedule_report_preference(cx: &App, write: ReportPreferenceWrite)
         .wrapping_add(1);
     let latest = preference_sequence(&write);
     latest.store(request, Ordering::Release);
+    let job = move || {
+        let _guard = REPORT_PREFERENCE_WRITE_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if latest.load(Ordering::Acquire) != request {
+            return;
+        }
+        if db::report_recovery::wait_for_write_access().is_err() {
+            return;
+        }
+        let Ok(connection) = db::open_reader() else {
+            return;
+        };
+        match write {
+            ReportPreferenceWrite::Visible(columns) => {
+                let columns = columns.iter().map(String::as_str).collect::<Vec<_>>();
+                db::save_visible(&connection, &columns);
+            }
+            ReportPreferenceWrite::Sort { key, desc } => {
+                db::save_sort(&connection, &key, desc);
+            }
+            ReportPreferenceWrite::Comment { detached, visible } => {
+                db::save_comment_pane(&connection, detached, visible);
+            }
+        }
+    };
+    if db::report_recovery::write_access_pending() {
+        park_report_preference(Box::new(job));
+        return;
+    }
     cx.background_executor()
-        .spawn(async move {
-            let _guard = REPORT_PREFERENCE_WRITE_LOCK
-                .get_or_init(|| Mutex::new(()))
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if latest.load(Ordering::Acquire) != request {
-                return;
-            }
-            if db::report_recovery::wait_for_write_access().is_err() {
-                return;
-            }
-            let Ok(connection) = db::open_reader() else {
-                return;
-            };
-            match write {
-                ReportPreferenceWrite::Visible(columns) => {
-                    let columns = columns.iter().map(String::as_str).collect::<Vec<_>>();
-                    db::save_visible(&connection, &columns);
-                }
-                ReportPreferenceWrite::Sort { key, desc } => {
-                    db::save_sort(&connection, &key, desc);
-                }
-                ReportPreferenceWrite::Comment { detached, visible } => {
-                    db::save_comment_pane(&connection, detached, visible);
-                }
-            }
-        })
+        .spawn(async move { job() })
         .detach();
 }
 

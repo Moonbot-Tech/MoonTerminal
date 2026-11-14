@@ -192,16 +192,36 @@ Rules that are easy to break unnoticed:
 - **A damaged report replica is recovered only after the uid-floor and before the writer.**
   `db::report_recovery::prepare` first takes an inter-process lease, then runs a cheap
   `quick_check` before the first window. Page damage it confirms is recovered synchronously;
-  a clean or inconclusive cheap result opens read access and starts one bounded full
+  a clean or inconclusive cheap result opens read access and starts the full
   `integrity_check` in the background. Writes and maintenance wait for a conclusive full pass;
-  a timeout or failed check does not authorize them. The writer also waits before opening the
+  a check that could not run does not authorize them. The writer also waits before opening the
   database, so index-only damage that `quick_check` cannot see still receives no writes.
-  File size may skip only the synchronous cheap gate; the background scan uses its time budget
-  even above 2 GiB. An inconclusive full scan preserves access to existing history through SQLite
-  read-only connections and publishes a stopped-recording notice. New reader connections become
+  File size may skip only the synchronous cheap gate. The background scan has **no time limit**:
+  it holds a WAL read snapshot, but nothing writes the replica until its verdict, so a deadline
+  protected no one — and a replica of several gigabytes never finished inside the old two-minute
+  one, which left every session of such a user recording nothing (#1190). A check that could not
+  run at all (`CheckFailed`: the file held by antivirus or sync software, an I/O error) is
+  repeated after 10 s and after 60 s before its failure stands. While the check runs past two
+  minutes `report_recovery::status()` answers `CheckRunning` — a notice derived from the running
+  check, not latched like the others — and it goes away with the verdict. A check that still
+  could not run preserves access to existing history through SQLite read-only connections and
+  publishes the stopped-recording notice. New reader connections become
   writable only after the full gate opens, preserving the Report preference-write API.
-  The existing report revision channel publishes a recovery notice even when no writer commits;
-  Report repaints the notice without requerying unchanged rows. A
+  **A thread that serves anything else must not wait on that gate.** A core's feed thread does
+  not: it asks the writer for its start state without blocking (`ReportSink::try_start`), runs
+  its core, and declares report catch-up from its loop when the writer's wake arrives
+  (`feed/live/report_sync.rs::writer_pending`). Until then the core sends no report rows —
+  asking for the schema is what turns live delivery on — and the catch-up carries what was
+  missed. No core's clock offset is adopted until then either, report feed on or off, so Core
+  Status never shows a correction whose segment the writer has not stored. Before #1190 the feed waited there, so every core stood
+  still for as long as the check ran. Daily compaction defers the replica while the gate is
+  pending and compacts the strategies and trades databases; its retry returns for the replica.
+  Report preference writes that find the gate pending are parked behind one shared waiting
+  thread rather than on the background executor, whose pool is fixed-size on Linux. Analytics
+  polls the verdict every 500 ms, and every 5 s once the still-running notice is up.
+  The report revision channel publishes a recovery notice when it appears, changes or goes
+  away, even when no writer commits; Report repaints the notice without requerying unchanged
+  rows. A
   read-only WAL anchor held by the permit keeps early read-write preference readers from
   triggering a last-connection checkpoint before the writer opens.
   Confirmed damage is never "repaired" in place:

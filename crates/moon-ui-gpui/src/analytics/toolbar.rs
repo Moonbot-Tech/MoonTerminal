@@ -1015,7 +1015,7 @@ impl AnalyticsView {
     /// know when every core has completed its independent catch-up.
     ///
     /// Args:
-    ///     cx: View context used to schedule the bounded integrity re-poll.
+    ///     cx: View context used to schedule the integrity re-poll while the check runs.
     ///
     /// Returns:
     ///     Localized title/detail pair, or `None` when no notice is required.
@@ -1023,15 +1023,23 @@ impl AnalyticsView {
         let recovery_note = moon_core::db::report_recovery::status();
         let recovered =
             recovery_note.map(|notice| crate::report_notice::recovery_notice_text(Some(notice)));
-        if matches!(recovery_note, Some(notice) if !matches!(notice, RecoveryNotice::Recovered { .. }))
-        {
+        // A still-running check is the one notice that goes away by itself, so it must not
+        // return here: the poll below is what notices the verdict and takes the notice down.
+        if matches!(
+            recovery_note,
+            Some(notice) if !matches!(
+                notice,
+                RecoveryNotice::Recovered { .. } | RecoveryNotice::CheckRunning
+            )
+        ) {
             return recovered;
         }
 
         let Some(verdict) = moon_core::db::integrity::status() else {
-            // Still running. Re-poll once per armed timer; the check cannot
-            // publish before its own startup delay, so the first wait matches
-            // that rather than hammering a repaint every few seconds.
+            // Still running. Re-poll once per armed timer, at the interval the check itself
+            // suggests: short while a verdict is seconds away, stretched once the check has
+            // run long enough to be announced — a large replica takes minutes, and this
+            // repaints the window on every firing.
             if !self.integrity_poll_armed {
                 self.integrity_poll_armed = true;
                 let wait = moon_core::db::integrity::poll_hint();
@@ -1057,10 +1065,6 @@ impl AnalyticsView {
             Integrity::CheckFailed(msg) => {
                 Some((t!("analytics.integrity_unchecked").to_string(), msg.clone()))
             }
-            Integrity::TimeLimitExceeded => Some((
-                t!("analytics.integrity_unchecked").to_string(),
-                t!("analytics.integrity_time_limit").to_string(),
-            )),
             Integrity::Ok | Integrity::NotPresent => recovered,
         }
     }
