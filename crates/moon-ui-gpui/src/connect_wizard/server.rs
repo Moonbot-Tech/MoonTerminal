@@ -164,10 +164,7 @@ impl ServerFields {
         if dir.is_empty() || dir.contains(char::is_whitespace) {
             return Err(t!("connect_wizard.server.need_dir").to_string());
         }
-        let proto_port = text(&self.port, cx)
-            .parse::<u16>()
-            .ok()
-            .filter(|port| *port > 0)
+        let proto_port = super::by_key::logic::parse_port(&text(&self.port, cx))
             .ok_or_else(|| t!("connect_wizard.server.need_port").to_string())?;
         Ok(ServerAccess {
             target,

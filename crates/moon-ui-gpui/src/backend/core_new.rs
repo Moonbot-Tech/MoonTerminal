@@ -461,7 +461,7 @@ impl Backend {
             Event::OwnKeys => job.demo = false,
             Event::Key(key) => {
                 let added = match (job.uid, job.dir.clone()) {
-                    (Some(uid), _) => self.wizard_set_key(uid, &key, cx).map(|()| None),
+                    (Some(uid), _) => self.wizard_set_key(uid, &key, cx).map(|_| None),
                     (None, dir) => {
                         let dir = dir.unwrap_or_default();
                         let base = dir.rsplit('/').next().unwrap_or(&dir).to_owned();
@@ -604,13 +604,13 @@ impl Backend {
     /// Point the wizard's core row `uid` at connection key `key` — the key of the exchange the
     /// user picked again after a failed login, which MoonBot may keep apart from the previous
     /// exchange's. Saved like [`Backend::wizard_add_row`], into an open Settings draft too; an
-    /// unchanged key changes nothing, so the session does not reconnect for no reason.
+    /// unchanged key returns false so the caller can explicitly request a retry.
     pub(crate) fn wizard_set_key(
         &mut self,
         uid: u64,
         key: &str,
         cx: &mut Context<Self>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let key = key.trim();
         let point = |servers: &mut Vec<moon_core::config::ServerConfig>| -> Option<bool> {
             let row = servers.iter_mut().find(|s| s.uid == uid)?;
@@ -624,7 +624,7 @@ impl Backend {
         let mut candidate = self.config.clone();
         match point(&mut candidate.servers) {
             None => anyhow::bail!("the core is no longer in the settings"),
-            Some(false) => return Ok(()),
+            Some(false) => return Ok(false),
             Some(true) => {}
         }
         self.finish_pending_persistence();
@@ -637,7 +637,7 @@ impl Backend {
         let reports = self.reports.as_ref().map(|h| &h.tx);
         self.session.reconcile(&self.config, reports);
         cx.notify();
-        Ok(())
+        Ok(true)
     }
 
     /// The wizard's language or theme pick: applied at once to every window and saved, as a saved
@@ -676,6 +676,31 @@ impl Backend {
         Ok(())
     }
 
+    /// Save only the wizard's missing host; the effective port and station ownership stay intact.
+    /// Return whether the saved row changed and reconciliation will replace the session.
+    pub(crate) fn wizard_set_address(
+        &mut self,
+        uid: u64,
+        host: &str,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        self.finish_pending_persistence();
+        if !save_wizard_address(
+            &mut self.config,
+            &mut self.preview,
+            uid,
+            host,
+            moon_core::config::AppConfig::save,
+        )? {
+            return Ok(false);
+        }
+        self.servers_changed_outside = self.servers_changed_outside.wrapping_add(1);
+        let reports = self.reports.as_ref().map(|h| &h.tx);
+        self.session.reconcile(&self.config, reports);
+        cx.notify();
+        Ok(true)
+    }
+
     /// Take a wizard's core row out of the saved settings and an open draft — the row of a
     /// removed install, or of a core the user gave up connecting to.
     pub(crate) fn wizard_drop_row(
@@ -701,6 +726,65 @@ impl Backend {
         cx.notify();
         Ok(())
     }
+}
+
+/// A by-key host correction must contain an IP address or DNS name without a port.
+#[derive(Debug)]
+pub(crate) struct InvalidWizardAddress;
+
+impl std::fmt::Display for InvalidWizardAddress {
+    /// Describe the accepted input without interpreting persistence failures as validation errors.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("expected an IP address or host name without a port")
+    }
+}
+
+impl std::error::Error for InvalidWizardAddress {}
+
+/// Commit a host correction before publishing it to either config, preserving the effective port.
+/// Return false without saving when the stored address already matches.
+fn save_wizard_address(
+    saved: &mut moon_core::config::AppConfig,
+    draft: &mut Option<moon_core::config::AppConfig>,
+    uid: u64,
+    host: &str,
+    save: impl FnOnce(&mut moon_core::config::AppConfig) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    let endpoint = moon_core::config::parse_endpoint_override(host)
+        .map_err(|_| InvalidWizardAddress)?
+        .filter(|endpoint| endpoint.host.is_some() && endpoint.port.is_none())
+        .ok_or(InvalidWizardAddress)?;
+    let mut candidate = saved.clone();
+    let row = candidate
+        .servers
+        .iter_mut()
+        .find(|row| row.uid == uid)
+        .ok_or_else(|| anyhow::anyhow!("the core is no longer in the settings"))?;
+    let port = moon_core::config::parse_endpoint_override(&row.endpoint_override)
+        .map_err(|_| anyhow::anyhow!("invalid saved core endpoint"))?
+        .and_then(|endpoint| endpoint.port);
+    let host = endpoint.host.expect("validated host");
+    let address = match port {
+        Some(port) => moon_core::config::CoreTarget {
+            host,
+            port,
+            localhost_fallback: false,
+        }
+        .text(),
+        None => host.to_string(),
+    };
+    if row.endpoint_override == address {
+        return Ok(false);
+    }
+    row.endpoint_override = address.clone();
+    save(&mut candidate)?;
+    *saved = candidate;
+    if let Some(draft) = draft
+        && let Some(row) = draft.servers.iter_mut().find(|row| row.uid == uid)
+    {
+        row.endpoint_override = address;
+    }
+    Ok(true)
 }
 
 /// Cancel a probe or non-busy install whose state must not leak into a login-only wizard.
