@@ -130,22 +130,18 @@ impl ConnectWizardView {
             .as_ref()
             .filter(|job| !job.phase.ended())
             .map(|job| job.demo);
-        v_flex()
-            .pt(design::ui_px(cx, 8.0))
-            .gap(design::ui_px(cx, 2.0))
-            .child(
-                MoonCheckbox::new("cw-opt-new-demo")
-                    .checked(live.unwrap_or(self.demo))
-                    .disabled(live.is_some())
-                    .label(t!("connect_wizard.start.demo").to_string())
-                    .on_change(cx.listener(|this, on: &bool, _, cx| {
-                        this.demo = *on;
-                        this.choice = Branch::NewCore;
-                        cx.notify();
-                    })),
-            )
-            .child(note(t!("connect_wizard.start.demo_desc"), cx))
-            .into_any_element()
+        demo_tick(
+            MoonCheckbox::new("cw-opt-new-demo")
+                .checked(live.unwrap_or(self.demo))
+                .disabled(live.is_some())
+                .on_change(cx.listener(|this, on: &bool, _, cx| {
+                    this.demo = *on;
+                    this.choice = Branch::NewCore;
+                    cx.notify();
+                })),
+            cx,
+        )
+        .into_any_element()
     }
 
     /// One way to connect a core, as a card the user picks. The card is returned as itself, so a
@@ -194,6 +190,26 @@ impl ConnectWizardView {
         self.option(Branch::Move, title, description, None, cx)
             .into_any_element()
     }
+}
+
+/// The demo tick, labelled, with what it means under it — the block under the new-core card's
+/// own text.
+///
+/// The tick sits in a row of its own so that it is only as wide as its box and label. Put
+/// straight into the column it stretches across the card, and a click meant to pick the card —
+/// anywhere on that line — turns the demo on instead.
+fn demo_tick(tick: MoonCheckbox, cx: &App) -> impl IntoElement {
+    v_flex()
+        .pt(design::ui_px(cx, 8.0))
+        .gap(design::ui_px(cx, 2.0))
+        .child(
+            h_flex().child(
+                div()
+                    .debug_selector(|| "cw-demo-tick".into())
+                    .child(tick.label(t!("connect_wizard.start.demo").to_string())),
+            ),
+        )
+        .child(note(t!("connect_wizard.start.demo_desc"), cx))
 }
 
 /// A card's title, its badge and its description.
