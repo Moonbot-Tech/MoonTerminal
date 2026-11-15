@@ -384,6 +384,7 @@ impl ConnectWizardView {
             dir: access.dir,
             proto_port: access.proto_port,
             demo: self.demo_install(cx),
+            close_password: access.close_password,
         };
         self.backend
             .update(cx, |b, bcx| b.core_new_start(form, bcx));

@@ -25,6 +25,9 @@ connect_wizard.line.row_added: "Ядро добавлено в Настройк�
 connect_wizard.line.keys_sent: "Биржа %{exchange} выбрана, ключи переданы ядру"
 connect_wizard.line.retry: "Повторный вход с сохранёнными ключами"
 connect_wizard.line.connected: "Терминал подключился к ядру"
+connect_wizard.line.password_closed: "Вход по паролю отключён: сервер пускает только по ключу"
+connect_wizard.line.password_already_closed: "Вход по паролю на сервере уже был отключён"
+connect_wizard.line.password_not_closed: "Вход по паролю не отключён: %{reason}"
 
 # --- The rail of steps ---
 connect_wizard.rail.way: "Способ"
@@ -92,6 +95,8 @@ connect_wizard.server.need_port: "Укажите UDP-порт от 1 до 65535.
 # --- The server's key ---
 connect_wizard.review.sub: "Сервер %{addr} предъявляет такой ключ. Сверьте его с ключом, который показывает провайдер."
 connect_wizard.review.matches: "Ключ совпадает с указанным у провайдера"
+connect_wizard.review.close_password: "Отключить вход по паролю"
+connect_wizard.review.close_password_note: "После установки ядра сервер будет пускать только по ключу. Если файл ключа потеряется, войти можно будет только через консоль в панели провайдера."
 connect_wizard.review.secrets: "После этого терминал войдёт на сервер с вашим логином и паролем."
 connect_wizard.review.login: "Войти и проверить"
 

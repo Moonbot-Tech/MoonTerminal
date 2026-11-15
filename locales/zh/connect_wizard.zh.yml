@@ -25,6 +25,9 @@ connect_wizard.line.row_added: "核心已添加到“设置 → 核心”"
 connect_wizard.line.keys_sent: "已选择交易所 %{exchange}，密钥已发送给核心"
 connect_wizard.line.retry: "使用已保存的密钥重新登录"
 connect_wizard.line.connected: "终端已连接到核心"
+connect_wizard.line.password_closed: "密码登录已关闭：服务器只接受密钥登录"
+connect_wizard.line.password_already_closed: "服务器上的密码登录此前已关闭"
+connect_wizard.line.password_not_closed: "密码登录未能关闭：%{reason}"
 
 # --- The rail of steps ---
 connect_wizard.rail.way: "方式"
@@ -92,6 +95,8 @@ connect_wizard.server.need_port: "请输入 1 到 65535 之间的 UDP 端口。"
 # --- The server's key ---
 connect_wizard.review.sub: "服务器 %{addr} 出示了以下密钥。请与服务商显示的密钥核对。"
 connect_wizard.review.matches: "密钥与服务商显示的一致"
+connect_wizard.review.close_password: "关闭密码登录"
+connect_wizard.review.close_password_note: "核心安装后，服务器只允许使用密钥登录。如果密钥文件丢失，就只能通过服务商面板里的控制台进入。"
 connect_wizard.review.secrets: "之后终端将使用你的登录名和密码登录服务器。"
 connect_wizard.review.login: "登录并检查"
 

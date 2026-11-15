@@ -18,7 +18,7 @@ use rust_i18n::t;
 
 use super::steps::{StepEvent, StepId, StepNote, StepState};
 use super::{Event, FailOutcome, text};
-use crate::backend::core_new::{login_failure_text, state_text};
+use crate::backend::core_new::{close_password_line, login_failure_text, state_text};
 
 /// How often a move that waits on its old core looks whether it went down.
 const WATCH: Duration = Duration::from_secs(30);
@@ -37,6 +37,9 @@ pub(crate) struct MoveForm {
     pub(crate) dir: String,
     /// The new core's MoonProto UDP port.
     pub(crate) proto_port: u16,
+    /// Turn the server's password logins off once the new core is installed; set only with a
+    /// key login in `first`.
+    pub(crate) close_password: bool,
 }
 
 /// The user's answer to an old core that refuses to stop.
@@ -281,6 +284,14 @@ fn run_move(
         StepState::Done,
         StepNote::Installed { dir: dir.clone() },
     );
+    // After the install, so a server the core never got onto is left exactly as it was found;
+    // before the old core's stop, which may wait for hours with no session to do it through.
+    if form.close_password
+        && let Some(line) =
+            close_password_line(&conn, &privilege, &form.target, &form.first, &form.pin)
+    {
+        send(Event::Line(line));
+    }
     // The stop may wait for hours: no session is held open over it.
     drop(conn);
     'stop: loop {

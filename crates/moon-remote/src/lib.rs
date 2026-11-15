@@ -13,6 +13,7 @@ pub mod core_move;
 pub mod core_new;
 pub mod error;
 pub mod hosts;
+pub mod key_only;
 pub mod keys;
 pub mod progress;
 pub mod release;

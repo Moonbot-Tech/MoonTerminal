@@ -25,6 +25,9 @@ connect_wizard.line.row_added: "The core is added to Settings → Cores"
 connect_wizard.line.keys_sent: "Exchange %{exchange} selected, the keys went to the core"
 connect_wizard.line.retry: "Logging in again with the stored keys"
 connect_wizard.line.connected: "The terminal is connected to the core"
+connect_wizard.line.password_closed: "Password login is off: the server takes key logins only"
+connect_wizard.line.password_already_closed: "Password login was already off on the server"
+connect_wizard.line.password_not_closed: "Password login was not turned off: %{reason}"
 
 # --- The rail of steps ---
 connect_wizard.rail.way: "Way"
@@ -92,6 +95,8 @@ connect_wizard.server.need_port: "Enter a UDP port from 1 to 65535."
 # --- The server's key ---
 connect_wizard.review.sub: "Server %{addr} presents this key. Compare it with the key your provider shows."
 connect_wizard.review.matches: "The key matches the one my provider shows"
+connect_wizard.review.close_password: "Turn off password login"
+connect_wizard.review.close_password_note: "Once the core is installed, the server lets you in by key only. If the key file is lost, the only way in is the console in your provider's panel."
 connect_wizard.review.secrets: "Then the terminal logs in to the server with your login and password."
 connect_wizard.review.login: "Log in and check"
 

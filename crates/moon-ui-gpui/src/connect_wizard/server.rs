@@ -13,6 +13,7 @@ use moon_ui::{
 use rust_i18n::t;
 use zeroize::Zeroizing;
 
+use super::render::note;
 use crate::backend::station::job;
 use crate::design;
 use crate::settings::telegram::server_bot::parse_target;
@@ -31,6 +32,9 @@ pub(crate) struct ServerAccess {
     pub(crate) public_ip: Ipv4Addr,
     pub(crate) dir: String,
     pub(crate) proto_port: u16,
+    /// Turn the server's password logins off once the core is on it. Only ever set for a key
+    /// login: a password login has no key to come back in with.
+    pub(crate) close_password: bool,
 }
 
 /// The server step's fields.
@@ -46,6 +50,9 @@ pub(super) struct ServerFields {
     pub(super) by_key: bool,
     /// The user ticked that the host key matches the provider's.
     pub(super) fingerprint_ok: bool,
+    /// The user's choice to turn password logins off behind a key login; ticked from the start,
+    /// since a server that still takes a password is guessed at for as long as it runs.
+    pub(super) close_password: bool,
     /// Whether this form logs in only, hiding and skipping the install destination fields.
     pub(super) login_only: bool,
 }
@@ -77,8 +84,41 @@ impl ServerFields {
             port: input(false, DEFAULT_PROTO_PORT, window, cx),
             by_key: false,
             fingerprint_ok: false,
+            close_password: true,
             login_only: false,
         }
+    }
+
+    /// Whether closing the password logins is on offer: the login is a key, and this form
+    /// installs something — the login-only form changes nothing on its server.
+    pub(super) fn offers_close_password(&self) -> bool {
+        self.by_key && !self.login_only
+    }
+
+    /// The choice to turn password logins off, for the host-key review; `None` where it is not
+    /// on offer ([`Self::offers_close_password`]).
+    pub(super) fn close_password_choice<V: 'static>(
+        &self,
+        on_change: impl Fn(&mut V, bool, &mut Context<V>) + 'static,
+        cx: &mut Context<V>,
+    ) -> Option<Div> {
+        if !self.offers_close_password() {
+            return None;
+        }
+        Some(
+            v_flex()
+                .gap(design::ui_px(cx, 4.0))
+                .child(
+                    MoonCheckbox::new("cw-close-password")
+                        .checked(self.close_password)
+                        .label(t!("connect_wizard.review.close_password").to_string())
+                        .on_change(cx.listener(move |this, v: &bool, _, cx| {
+                            on_change(this, *v, cx);
+                            cx.notify();
+                        })),
+                )
+                .child(note(t!("connect_wizard.review.close_password_note"), cx)),
+        )
     }
 
     /// The server to read the host key of, or what is wrong with the address and login.
@@ -135,6 +175,7 @@ impl ServerFields {
             public_ip,
             dir,
             proto_port,
+            close_password: self.offers_close_password() && self.close_password,
         })
     }
 

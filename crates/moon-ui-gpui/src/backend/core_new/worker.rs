@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use moon_core::diagnostics::CORE_MOVE_TARGET;
 use moon_remote::core_move;
 use moon_remote::core_new::{self, ApiKeys, CoreState, CoreStatus};
+use moon_remote::key_only::{self, Closed};
 use moon_remote::script::Privilege;
 use moon_remote::setup::{self, FirstAccess};
 use moon_remote::ssh::{Conn, Target};
@@ -34,6 +35,35 @@ pub(crate) struct NewForm {
     /// Start the core on MoonBot's demo settings: it logs in to MoonBot's demo exchange account by
     /// itself, in the emulator, so the install goes on to the connection without asking for keys.
     pub(crate) demo: bool,
+    /// Turn the server's password logins off once the core is installed; set only with a key
+    /// login in `first`.
+    pub(crate) close_password: bool,
+}
+
+/// Turn the server's password logins off behind the key login `first`, and word the outcome as a
+/// progress line. It never fails its caller: a server left open is said so, and the core stays.
+///
+/// Returns `None` for a password login — it has no key to come back in with, so nothing is
+/// closed.
+pub(crate) fn close_password_line(
+    conn: &Conn,
+    privilege: &Privilege,
+    target: &Target,
+    first: &FirstAccess,
+    pin: &str,
+) -> Option<String> {
+    let FirstAccess::Key { user, key, .. } = first else {
+        return None;
+    };
+    let line = match key_only::close(conn, privilege, target, user, key, pin) {
+        Ok(Closed::Now) => t!("connect_wizard.line.password_closed"),
+        Ok(Closed::Already) => t!("connect_wizard.line.password_already_closed"),
+        Err(e) => t!(
+            "connect_wizard.line.password_not_closed",
+            reason = format!("{e:#}")
+        ),
+    };
+    Some(line.to_string())
 }
 
 /// The user's next step.
@@ -180,6 +210,13 @@ fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
     send(Event::Line(
         t!("connect_wizard.line.installed", dir = &dir).to_string(),
     ));
+    // After the install, so a server the core never got onto is left exactly as it was found.
+    if form.close_password
+        && let Some(line) =
+            close_password_line(&conn, &privilege, &form.target, &form.first, &form.pin)
+    {
+        send(Event::Line(line));
+    }
     let after = || -> anyhow::Result<_> {
         core_new::wait_initialized(&conn, &privilege, &dir, None, core_new::SETTLE_TIMEOUT)?;
         core_new::exchanges(&conn, &privilege, &dir)
