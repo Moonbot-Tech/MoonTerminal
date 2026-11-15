@@ -18,6 +18,7 @@ connect_wizard.install_failed: "O núcleo não foi instalado e nada ficou no ser
 # --- Progress lines ---
 connect_wizard.line.logged_in: "Entrou no servidor como %{user}"
 connect_wizard.line.downloading: "Baixando o Moonbot e instalando o serviço…"
+connect_wizard.line.downloading_demo: "Baixando o Moonbot, adicionando as configurações de demo e instalando o serviço…"
 connect_wizard.line.installed: "O núcleo está instalado em %{dir} e em execução"
 connect_wizard.line.key: "O núcleo entregou a chave de conexão — %{address}"
 connect_wizard.line.row_added: "O núcleo foi adicionado em Configurações → Núcleos"
@@ -46,6 +47,8 @@ connect_wizard.start.new_title: "Novo núcleo em um servidor Linux"
 connect_wizard.start.new_first: "Primeiro alugue uma VPS: um servidor Linux de um provedor de hospedagem (Ubuntu 24.04 ou mais recente, ou Debian 13 ou mais recente; x86-64, 1 GB de memória ou mais). O provedor enviará o IP, o usuário e a senha para você inserir a seguir. O núcleo funcionará lá dia e noite."
 connect_wizard.start.new_more: "Alugue uma VPS: Ubuntu 24.04+ ou Debian 13+, x86-64, mínimo de 1 GB de RAM. O núcleo usará suas próprias chaves da corretora."
 connect_wizard.start.recommended: "recomendado"
+connect_wizard.start.demo: "Modo demo"
+connect_wizard.start.demo_desc: "O núcleo inicia com as configurações do Moonbot Demo: a conta demo do Moonbot na Binance, com negociação no emulador — nenhuma operação vai para a corretora. Suas chaves da corretora não são necessárias; você pode adicioná-las depois."
 connect_wizard.start.move_title: "Mover um núcleo para um servidor Linux"
 connect_wizard.start.move_desc: "Do Windows ou de outro servidor Linux: chaves, estratégias e histórico de operações."
 connect_wizard.start.move_no_cores: "nenhum núcleo conectado"
@@ -150,6 +153,8 @@ connect_wizard.stuck.reason_ip: "O IP do servidor %{ip} não está na lista de I
 connect_wizard.stuck.reason_rights: "Falta à chave uma permissão necessária (futuros, por exemplo)."
 connect_wizard.stuck.reason_copy: "A chave ou o segredo não foram copiados por inteiro, ou a chave foi apagada na corretora."
 connect_wizard.stuck.fix_keys: "Corrigir as chaves"
+connect_wizard.stuck.own_keys: "Conectar minhas chaves"
+connect_wizard.stuck.demo: "Esta é uma instalação demo: as chaves da corretora são do Moonbot e não podem ser corrigidas aqui. Verifique de novo um pouco mais tarde ou conecte suas próprias chaves da corretora."
 
 # --- Connecting the terminal ---
 connect_wizard.connect.title: "Conectando o terminal"
@@ -182,6 +187,7 @@ connect_wizard.done.real: "Negociação real"
 connect_wizard.done.real_warning: "Na negociação real o núcleo envia ordens à corretora com o seu dinheiro."
 connect_wizard.done.real_confirm: "Ligar a negociação real"
 connect_wizard.done.mode_failed: "O modo não foi trocado: %{reason}"
+connect_wizard.done.demo: "O núcleo roda na conta demo do Moonbot, no emulador: nenhuma operação vai para a corretora. Para negociar na sua própria conta, dê ao núcleo suas chaves da corretora pelos comandos do núcleo."
 
 # --- Connect to a Moonbot core by its key ---
 connect_wizard.by_key.title: "Conectar a um núcleo do Moonbot"

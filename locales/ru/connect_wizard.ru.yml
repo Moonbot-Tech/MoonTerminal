@@ -18,6 +18,7 @@ connect_wizard.install_failed: "Ядро не установлено, на се�
 # --- Progress lines ---
 connect_wizard.line.logged_in: "Вход на сервер: %{user}"
 connect_wizard.line.downloading: "Скачиваем Moonbot и ставим службу…"
+connect_wizard.line.downloading_demo: "Скачиваем Moonbot, кладём демо-настройки и ставим службу…"
 connect_wizard.line.installed: "Ядро установлено в %{dir} и запущено"
 connect_wizard.line.key: "Ядро выдало ключ подключения — %{address}"
 connect_wizard.line.row_added: "Ядро добавлено в Настройки → Ядра"
@@ -46,6 +47,8 @@ connect_wizard.start.new_title: "Новое ядро на Linux-сервере"
 connect_wizard.start.new_first: "Сначала арендуйте VPS — Linux-сервер у хостинг-провайдера (Ubuntu 24.04 или новее либо Debian 13 или новее; x86-64, от 1 ГБ памяти). Провайдер пришлёт IP, логин и пароль — их и введёте дальше. Ядро будет работать там круглосуточно."
 connect_wizard.start.new_more: "Нужен арендованный VPS: Ubuntu 24.04+ или Debian 13+, x86-64, от 1 ГБ памяти. Ядро — со своими ключами биржи."
 connect_wizard.start.recommended: "рекомендуем"
+connect_wizard.start.demo: "Демо-режим"
+connect_wizard.start.demo_desc: "Ядро встанет с настройками Moonbot Demo: демо-аккаунт Moonbot на Binance, торговля в эмуляторе — сделки на биржу не уходят. Свои ключи биржи не нужны, подключить их можно позже."
 connect_wizard.start.move_title: "Перенести ядро на Linux-сервер"
 connect_wizard.start.move_desc: "С Windows или с другого Linux-сервера: ключи, стратегии и история сделок."
 connect_wizard.start.move_no_cores: "нет подключённых ядер"
@@ -150,6 +153,8 @@ connect_wizard.stuck.reason_ip: "IP сервера %{ip} не добавлен �
 connect_wizard.stuck.reason_rights: "У ключа не включены нужные права (например, фьючерсы)."
 connect_wizard.stuck.reason_copy: "Ключ или секрет скопированы не полностью, либо ключ удалён на бирже."
 connect_wizard.stuck.fix_keys: "Исправить ключи"
+connect_wizard.stuck.own_keys: "Подключить свои ключи"
+connect_wizard.stuck.demo: "Это демо-установка: ключи биржи в ней принадлежат Moonbot, исправить их нельзя. Проверьте снова чуть позже или подключите свои ключи биржи."
 
 # --- Connecting the terminal ---
 connect_wizard.connect.title: "Подключение терминала"
@@ -182,6 +187,7 @@ connect_wizard.done.real: "Реальная торговля"
 connect_wizard.done.real_warning: "В реальной торговле ядро ставит ордера на биржу на ваши деньги."
 connect_wizard.done.real_confirm: "Включить реальную торговлю"
 connect_wizard.done.mode_failed: "Режим не переключён: %{reason}"
+connect_wizard.done.demo: "Ядро работает на демо-аккаунте Moonbot в эмуляторе: сделки на биржу не уходят. Чтобы торговать на своём аккаунте, задайте ядру свои ключи биржи через команды ядра."
 
 # --- Connect to a Moonbot core by its key ---
 connect_wizard.by_key.title: "Подключиться к ядру Moonbot"

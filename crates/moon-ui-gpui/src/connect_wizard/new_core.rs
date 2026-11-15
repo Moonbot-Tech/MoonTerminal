@@ -104,9 +104,16 @@ impl ConnectWizardView {
                 )
                 .with_log(),
             NewPhase::Done => {
+                let demo = self.job_demo(cx);
                 let body = uid.map(|uid| {
-                    self.done_body(uid, Some(address), status.and_then(|s| s.emulator), cx)
-                        .into_any_element()
+                    self.done_body(
+                        uid,
+                        Some(address),
+                        status.and_then(|s| s.emulator),
+                        demo,
+                        cx,
+                    )
+                    .into_any_element()
                 });
                 let mut screen = Screen::new(t!("connect_wizard.done.title"));
                 if let Some(body) = body {
@@ -495,6 +502,9 @@ impl ConnectWizardView {
         cx: &mut Context<Self>,
     ) -> Screen {
         let state = status.map(|s| &s.state);
+        // On a demo install the keys are MoonBot's: the user has no whitelist or rights to fix,
+        // only a later retry or keys of their own.
+        let demo = self.job_demo(cx);
         let title = match state {
             Some(CoreState::LoginError) => t!("connect_wizard.stuck.login_title"),
             Some(CoreState::RegistrationError) => t!("connect_wizard.stuck.registration_title"),
@@ -504,7 +514,11 @@ impl ConnectWizardView {
         let p = MoonPalette::active(cx);
         let mut screen = Screen::new(title);
         if installed {
-            screen = screen.sub(t!("connect_wizard.stuck.sub"));
+            screen = screen.sub(if demo {
+                t!("connect_wizard.stuck.demo")
+            } else {
+                t!("connect_wizard.stuck.sub")
+            });
         }
         if let Some(status) = status {
             if !status.login_error.is_empty() {
@@ -531,7 +545,7 @@ impl ConnectWizardView {
         if let Some(error) = error {
             screen = screen.child(div().text_color(rgba_from(p.red_text, 1.0)).child(error));
         }
-        if matches!(state, Some(CoreState::LoginError)) {
+        if !demo && matches!(state, Some(CoreState::LoginError)) {
             screen = screen
                 .child(
                     div()
@@ -566,7 +580,11 @@ impl ConnectWizardView {
                     MoonButton::new("cw-fix-keys")
                         .primary()
                         .size(design::CONTROL_TIER)
-                        .label(t!("connect_wizard.stuck.fix_keys").to_string())
+                        .label(if demo {
+                            t!("connect_wizard.stuck.own_keys").to_string()
+                        } else {
+                            t!("connect_wizard.stuck.fix_keys").to_string()
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fixing_keys = true;
                             cx.notify();

@@ -72,6 +72,15 @@ steps:
         <code>ufw</code> is active on the server, the wizard opens the port there itself.
       html: true
   - sub:
+      ru: Чтобы сначала попробовать терминал без своих ключей биржи, отметьте «Демо-режим» в карточке
+        нового ядра на первом экране мастера. Ядро встанет с настройками Moonbot Demo — демо-аккаунт
+        Moonbot на Binance, торговля в эмуляторе, сделки на биржу не уходят, — и шаг с биржей и
+        ключами мастер пропустит.
+      en: To try the terminal without exchange keys of your own first, tick Demo mode in the new-core
+        card on the wizard's first screen. The core starts on the Moonbot Demo settings — Moonbot's
+        demo account on Binance, trading in the emulator, no trade goes to the exchange — and the
+        wizard skips the exchange and keys step.
+  - sub:
       ru: После установки выберите биржу и введите её API-ключи в мастере. Добавьте IP-адрес VPS в список
         разрешённых адресов API-ключа на бирже. Мастер сам сохранит подключение в терминале и проверит
         связь с ядром.

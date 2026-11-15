@@ -131,7 +131,7 @@ impl ConnectWizardView {
             .is_some_and(|since| since.elapsed() >= CONNECT_WAIT);
         match status {
             Some(ConnStatus::Ready) => Screen::new(t!("connect_wizard.done.title"))
-                .child(self.done_body(uid, None, None, cx))
+                .child(self.done_body(uid, None, None, false, cx))
                 .left(self.again_button(cx))
                 .right(self.finish_button(cx)),
             status if timed_out => {

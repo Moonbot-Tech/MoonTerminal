@@ -18,6 +18,7 @@ connect_wizard.install_failed: "Çekirdek kurulmadı, sunucuda hiçbir şey kalm
 # --- Progress lines ---
 connect_wizard.line.logged_in: "Sunucuya %{user} olarak girildi"
 connect_wizard.line.downloading: "Moonbot indiriliyor ve hizmeti kuruluyor…"
+connect_wizard.line.downloading_demo: "Moonbot indiriliyor, demo ayarları ekleniyor ve hizmeti kuruluyor…"
 connect_wizard.line.installed: "Çekirdek %{dir} içine kuruldu ve çalışıyor"
 connect_wizard.line.key: "Çekirdek bağlantı anahtarını verdi — %{address}"
 connect_wizard.line.row_added: "Çekirdek Ayarlar → Çekirdekler bölümüne eklendi"
@@ -46,6 +47,8 @@ connect_wizard.start.new_title: "Linux sunucusunda yeni çekirdek"
 connect_wizard.start.new_first: "Önce bir barındırma sağlayıcısından VPS, yani bir Linux sunucusu kiralayın (Ubuntu 24.04 veya üzeri ya da Debian 13 veya üzeri; x86-64, en az 1 GB bellek). Sağlayıcı, sonraki adımda gireceğiniz IP adresini, kullanıcı adını ve parolayı gönderecektir. Çekirdek orada gece gündüz çalışacaktır."
 connect_wizard.start.new_more: "VPS kiralayın: Ubuntu 24.04+ veya Debian 13+, x86-64, en az 1 GB RAM. Çekirdek burada kendi borsa anahtarlarıyla çalışır."
 connect_wizard.start.recommended: "önerilen"
+connect_wizard.start.demo: "Demo modu"
+connect_wizard.start.demo_desc: "Çekirdek Moonbot Demo ayarlarıyla başlar: Moonbot'un Binance'teki demo hesabı, emülatörde işlem — hiçbir işlem borsaya gitmez. Kendi borsa anahtarlarınız gerekmez; daha sonra ekleyebilirsiniz."
 connect_wizard.start.move_title: "Çekirdeği Linux sunucusuna taşı"
 connect_wizard.start.move_desc: "Windows'tan ya da başka bir Linux sunucusundan: anahtarlar, stratejiler ve işlem geçmişi."
 connect_wizard.start.move_no_cores: "bağlı çekirdek yok"
@@ -150,6 +153,8 @@ connect_wizard.stuck.reason_ip: "Sunucu IP'si %{ip} borsada anahtarın IP beyaz 
 connect_wizard.stuck.reason_rights: "Anahtarda gerekli bir yetki eksik (örneğin vadeli işlemler)."
 connect_wizard.stuck.reason_copy: "Anahtar ya da gizli anahtar eksik kopyalandı veya anahtar borsada silindi."
 connect_wizard.stuck.fix_keys: "Anahtarları düzelt"
+connect_wizard.stuck.own_keys: "Kendi anahtarlarımı bağla"
+connect_wizard.stuck.demo: "Bu bir demo kurulumu: borsa anahtarları Moonbot'a aittir ve buradan düzeltilemez. Biraz sonra yeniden denetleyin ya da kendi borsa anahtarlarınızı bağlayın."
 
 # --- Connecting the terminal ---
 connect_wizard.connect.title: "Terminal bağlanıyor"
@@ -182,6 +187,7 @@ connect_wizard.done.real: "Gerçek işlem"
 connect_wizard.done.real_warning: "Gerçek işlemde çekirdek borsaya sizin paranızla emir verir."
 connect_wizard.done.real_confirm: "Gerçek işlemi aç"
 connect_wizard.done.mode_failed: "Mod değiştirilmedi: %{reason}"
+connect_wizard.done.demo: "Çekirdek Moonbot'un demo hesabında, emülatörde çalışıyor: hiçbir işlem borsaya gitmez. Kendi hesabınızda işlem yapmak için çekirdek komutlarından çekirdeğe kendi borsa anahtarlarınızı verin."
 
 # --- Connect to a Moonbot core by its key ---
 connect_wizard.by_key.title: "Moonbot çekirdeğine bağlan"

@@ -8,8 +8,13 @@
 //! keeping the provider's login in memory only for as long as the install lives. Both report
 //! through a channel the backend drains on a timer.
 //!
+//! A demo install ([`NewForm::demo`]) starts the core on MoonBot's demo settings: the core logs in
+//! to MoonBot's demo account by itself, so the worker goes from the install straight to the
+//! connection key and the keys step is skipped.
+//!
 //! Once the core hands out its connection key — after the user picked the exchange, since MoonBot
-//! keeps MoonProto settings per exchange — the backend adds the core's row to the settings
+//! keeps MoonProto settings per exchange, or right after a demo install, for the exchange the
+//! demo settings selected — the backend adds the core's row to the settings
 //! ([`Backend::wizard_add_row`]), and points it at the new key when another exchange is picked
 //! later ([`Backend::wizard_set_key`]); once the core is logged in, the wizard waits until this
 //! terminal is connected to it — the one check that the core can be reached from outside.
@@ -59,7 +64,8 @@ pub(crate) enum NewPhase {
     Installing,
     /// The core runs and waits for its exchange and keys.
     Keys,
-    /// The keys went to the core; it is logging in.
+    /// The core is logging in: with the keys the user gave it or, on a demo install, with those
+    /// of its demo settings.
     LoggingIn,
     /// The core stopped on something only the user can change, or a step failed while the core
     /// is on the server. `status` is the core's last word, `error` the failed step's.
@@ -114,6 +120,10 @@ pub(crate) struct NewJob {
     pub(crate) dir: Option<String>,
     /// The core's row in the settings, once it was added.
     pub(crate) uid: Option<u64>,
+    /// The install is a demo one: the core runs on MoonBot's demo settings and account, so no
+    /// keys are asked for. Cleared once keys of the user's own reached the core
+    /// ([`Event::OwnKeys`]): from then on it is an ordinary install.
+    pub(crate) demo: bool,
     /// Why the row could not be added or pointed at the exchange's key. The worker goes on with
     /// the login meanwhile, so this outlives the phases it passes through and decides where the
     /// settled login lands: a core this terminal has no row for cannot be connected to.
@@ -151,6 +161,7 @@ impl NewJob {
             proto_port: 5160,
             dir: Some("mbcore".to_string()),
             uid: Some(1),
+            demo: false,
             row_error: None,
             commands: None,
             _task: Task::ready(()),
@@ -184,6 +195,8 @@ pub(super) enum Event {
     },
     /// The picked exchange's connection key: the row is added with it, or follows it.
     Key(Zeroizing<String>),
+    /// Keys of the user's own reached the core: it left MoonBot's demo account, if it was on it.
+    OwnKeys,
     /// The exchanges the core offers, read again by a retry.
     Exchanges(Vec<Exchange>),
     /// A step began: the worker is busy until its result.
@@ -200,8 +213,10 @@ pub(super) enum Event {
 }
 
 impl Backend {
-    /// Read the host key of the server a new core goes to. Sends no credential.
-    pub(crate) fn core_new_probe(&mut self, target: Target, cx: &mut Context<Self>) {
+    /// Read the host key of the server a new core goes to. Sends no credential. `demo` is the
+    /// wizard's demo tick: the job carries it from here on, so a wizard window opened again over
+    /// the job reads it back rather than forgetting it.
+    pub(crate) fn core_new_probe(&mut self, target: Target, demo: bool, cx: &mut Context<Self>) {
         if self.core_new.as_ref().is_some_and(|job| !job.phase.ended()) {
             return;
         }
@@ -210,7 +225,7 @@ impl Backend {
             .name("core-new-probe".into())
             .spawn(move || worker::probe(target, &tx))
             .ok();
-        self.core_new_track(NewPhase::Probing, None, rx, String::new(), 0, cx);
+        self.core_new_track(NewPhase::Probing, None, rx, String::new(), 0, demo, cx);
     }
 
     /// Log in with the form the user confirmed in the review and check the server; the worker
@@ -223,6 +238,7 @@ impl Backend {
             return;
         }
         let (public_ip, proto_port) = (form.public_ip.to_string(), form.proto_port);
+        let demo = form.demo;
         let (tx, rx) = mpsc::channel();
         let (commands, answers) = mpsc::channel();
         std::thread::Builder::new()
@@ -235,6 +251,7 @@ impl Backend {
             rx,
             public_ip,
             proto_port,
+            demo,
             cx,
         );
     }
@@ -303,6 +320,7 @@ impl Backend {
         rx: mpsc::Receiver<Event>,
         public_ip: String,
         proto_port: u16,
+        demo: bool,
         cx: &mut Context<Self>,
     ) {
         // The probe opens a fresh install; the install itself continues the probe's log.
@@ -369,6 +387,7 @@ impl Backend {
             proto_port,
             dir: None,
             uid: None,
+            demo,
             row_error: None,
             commands,
             _task: task,
@@ -399,7 +418,7 @@ impl Backend {
             Event::Key(_) => {
                 log::info!(target: CORE_MOVE_TARGET, "core install: the exchange's connection key arrived")
             }
-            Event::Busy(_) | Event::Status(_) | Event::Exchanges(_) => {}
+            Event::Busy(_) | Event::Status(_) | Event::Exchanges(_) | Event::OwnKeys => {}
             Event::Settled(status) => log::info!(
                 target: CORE_MOVE_TARGET,
                 "core install: settled {:?} listening={} {}",
@@ -430,9 +449,16 @@ impl Backend {
             Event::Installed { dir, exchanges } => {
                 job.dir = Some(dir);
                 job.exchanges = exchanges;
-                job.phase = NewPhase::Keys;
+                // A demo core needs no keys: its worker goes straight on to the connection, so
+                // the keys form must not come up between the two.
+                job.phase = if job.demo {
+                    NewPhase::LoggingIn
+                } else {
+                    NewPhase::Keys
+                };
             }
             Event::Exchanges(exchanges) => job.exchanges = exchanges,
+            Event::OwnKeys => job.demo = false,
             Event::Key(key) => {
                 let added = match (job.uid, job.dir.clone()) {
                     (Some(uid), _) => self.wizard_set_key(uid, &key, cx).map(|()| None),

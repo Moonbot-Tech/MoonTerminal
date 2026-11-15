@@ -31,6 +31,9 @@ pub(crate) struct NewForm {
     pub(crate) dir: String,
     /// The core's MoonProto UDP port.
     pub(crate) proto_port: u16,
+    /// Start the core on MoonBot's demo settings: it logs in to MoonBot's demo exchange account by
+    /// itself, in the emulator, so the install goes on to the connection without asking for keys.
+    pub(crate) demo: bool,
 }
 
 /// The user's next step.
@@ -78,8 +81,14 @@ pub(super) fn run(form: NewForm, tx: &mpsc::Sender<Event>, commands: &mpsc::Rece
         let result = match (&command, dir.as_deref()) {
             (NewCommand::Install, None) => match install(&form, &send) {
                 Ok(done) => {
+                    // A demo core is past its login already: nothing is asked of the user.
+                    let connected = if form.demo {
+                        connect_demo(&form, &done, &send)
+                    } else {
+                        Ok(())
+                    };
                     dir = Some(done);
-                    Ok(())
+                    connected
                 }
                 Err(Installing::Nothing(e)) => {
                     send(Event::Failed(
@@ -146,11 +155,17 @@ fn check(
 
 /// Install the package and the service, start the core, wait out its initialization and read its
 /// exchanges. MoonProto waits for the exchange: MoonBot keeps its settings per exchange, so the key
-/// handed out now would belong to the default exchange rather than the user's.
+/// handed out now would belong to the default exchange rather than the user's. A demo core starts
+/// on MoonBot's demo settings, so its initialization is its login to the demo account as well.
 fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
     let (conn, privilege) = login(form).map_err(Installing::Nothing)?;
     send(Event::Line(
-        t!("connect_wizard.line.downloading").to_string(),
+        if form.demo {
+            t!("connect_wizard.line.downloading_demo")
+        } else {
+            t!("connect_wizard.line.downloading")
+        }
+        .to_string(),
     ));
     let installed = core_new::install(
         &conn,
@@ -158,6 +173,7 @@ fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
         &form.dir,
         form.proto_port,
         core_move::RELEASE_PACKAGE,
+        form.demo.then_some(core_new::DEMO_SETTINGS),
     )
     .map_err(Installing::Nothing)?;
     let dir = installed.dir;
@@ -189,6 +205,23 @@ fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
     }
 }
 
+/// Connect a demo core: turn on MoonProto for the exchange its demo settings selected, hand the
+/// key to the backend and wait for the login those settings started to settle. The exchange is
+/// left as the settings have it — the demo account's keys belong to it.
+fn connect_demo(form: &NewForm, dir: &str, send: &dyn Fn(Event)) -> anyhow::Result<()> {
+    let (conn, privilege) = login(form)?;
+    let key = core_new::setup_moonproto(&conn, &privilege, dir, form.public_ip, form.proto_port)?;
+    send(Event::Line(
+        t!(
+            "connect_wizard.line.key",
+            address = format!("{}:{}", form.public_ip, form.proto_port)
+        )
+        .to_string(),
+    ));
+    send(Event::Key(key));
+    settle(&conn, &privilege, dir, send)
+}
+
 /// Switch to the exchange and take its connection key, give it the keys and wait for the login to
 /// settle. Every pick of an exchange — the first, or another one after a failed login — asks the
 /// core for that exchange's own key: the row follows it rather than keeping the previous one.
@@ -217,6 +250,10 @@ fn set_keys(
     ));
     send(Event::Key(key));
     core_new::set_api_keys(&conn, &privilege, dir, keys)?;
+    // Only now does a demo core hold keys of the user's own. Until then whatever it can log in
+    // with — on the exchange it started on or the one just switched to — came with the demo
+    // settings, so a step that failed above leaves the install a demo one.
+    send(Event::OwnKeys);
     send(Event::Line(
         t!("connect_wizard.line.keys_sent", exchange = exchange).to_string(),
     ));

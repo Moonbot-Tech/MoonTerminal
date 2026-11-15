@@ -23,12 +23,15 @@ const LABEL_W: f32 = 130.0;
 impl ConnectWizardView {
     /// The connected core `uid`: name, address, status, license and the trading mode switch.
     /// `address` is shown when the wizard knows it; `emulator` is the mode the core reported
-    /// over SSH, the fallback until its ClientSettings arrive.
+    /// over SSH, the fallback until its ClientSettings arrive. A `demo` core runs on MoonBot's
+    /// demo account: it gets a note in place of the mode switch, since real trading there is not
+    /// the user's to turn on.
     pub(super) fn done_body(
         &self,
         uid: u64,
         address: Option<String>,
         emulator: Option<bool>,
+        demo: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let b = self.backend.read(cx);
@@ -86,7 +89,7 @@ impl ConnectWizardView {
                 .into_any_element(),
             None => note(t!("connect_wizard.done.license_pending"), cx).into_any_element(),
         };
-        let mut summary = v_flex()
+        let summary = v_flex()
             .gap(design::ui_px(cx, 6.0))
             .child(row(
                 t!("connect_wizard.done.name").to_string(),
@@ -119,8 +122,23 @@ impl ConnectWizardView {
                 license_value,
                 cx,
             ));
-        summary = summary.child(self.mode_switch(uid, emu, settings_known, cx));
-        summary
+        if demo {
+            summary.child(
+                v_flex()
+                    .gap(design::ui_px(cx, 6.0))
+                    .pt(design::ui_px(cx, 8.0))
+                    .child(
+                        h_flex().child(
+                            MoonBadge::new(t!("connect_wizard.start.demo").to_string())
+                                .tone(MoonTone::Info)
+                                .render(),
+                        ),
+                    )
+                    .child(note(t!("connect_wizard.done.demo"), cx)),
+            )
+        } else {
+            summary.child(self.mode_switch(uid, emu, settings_known, cx))
+        }
     }
 
     /// "Emulator / Real trading": the core's mode, switchable once its ClientSettings are known.
