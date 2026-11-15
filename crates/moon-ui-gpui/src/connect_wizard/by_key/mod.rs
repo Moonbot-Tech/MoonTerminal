@@ -473,7 +473,7 @@ impl ConnectWizardView {
         }
     }
 
-    /// Validate a replacement export before updating the same configured row.
+    /// Validate a replacement export and explicitly retry when the saved key already matches.
     fn by_key_new_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = text(&self.by_key.key, cx);
         if !moon_core::config::key_is_readable(&key) {
@@ -492,11 +492,15 @@ impl ConnectWizardView {
             .backend
             .update(cx, |b, cx| b.wizard_set_key(uid, &key, cx))
         {
-            Ok(()) => {
+            Ok(changed) => {
                 self.by_key
                     .key
                     .update(cx, |state, cx| state.set_value(String::new(), window, cx));
                 self.by_key.accepted_mismatch = None;
+                if !changed {
+                    self.by_key_retry(cx);
+                    return;
+                }
                 self.error = None;
                 self.start_by_key_wait(cx);
                 self.by_key.awaiting_reconnect = true;
@@ -509,7 +513,7 @@ impl ConnectWizardView {
         }
     }
 
-    /// Let the backend validate the host and preserve the effective port before restarting the wait.
+    /// Save the host while preserving the port, or explicitly retry an unchanged address.
     fn by_key_set_address(&mut self, cx: &mut Context<Self>) {
         let ip = text(&self.by_key.ip, cx);
         let Some(uid) = self.by_key.uid else {
@@ -519,7 +523,11 @@ impl ConnectWizardView {
             .backend
             .update(cx, |b, cx| b.wizard_set_address(uid, &ip, cx))
         {
-            Ok(()) => {
+            Ok(changed) => {
+                if !changed {
+                    self.by_key_retry(cx);
+                    return;
+                }
                 self.error = None;
                 self.start_by_key_wait(cx);
                 self.by_key.awaiting_reconnect = true;

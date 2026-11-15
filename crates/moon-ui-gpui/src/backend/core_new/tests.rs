@@ -1,6 +1,30 @@
 use super::{NewJob, NewPhase, reset_core_new_for_login, unique_name};
 use gpui::Task;
 
+/// Re-entering the same host must report a retry without saving or overwriting an edited draft.
+#[test]
+fn address_save_reports_changed_then_unchanged() {
+    let mut saved = address_config();
+    saved.servers[0].endpoint_override = ":5010".into();
+    let mut draft = Some(saved.clone());
+    assert!(
+        super::save_wizard_address(&mut saved, &mut draft, 42, "203.0.113.24", |_| Ok(())).unwrap()
+    );
+    assert_eq!(saved.servers[0].endpoint_override, "203.0.113.24:5010");
+    draft.as_mut().unwrap().servers[0].endpoint_override = "203.0.113.25:6000".into();
+    assert!(
+        !super::save_wizard_address(&mut saved, &mut draft, 42, "203.0.113.24", |_| {
+            panic!("unchanged address reached persistence")
+        })
+        .unwrap()
+    );
+    assert_eq!(saved.servers[0].endpoint_override, "203.0.113.24:5010");
+    assert_eq!(
+        draft.unwrap().servers[0].endpoint_override,
+        "203.0.113.25:6000"
+    );
+}
+
 /// Host correction must preserve the exported port and must not acquire station ownership.
 #[test]
 fn address_save_preserves_key_port_and_open_draft() {
