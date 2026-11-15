@@ -2586,3 +2586,96 @@ fn admissible_keeps_archive_jobs_in_plan_order_and_bounds_the_pass() {
         expected
     );
 }
+
+/// A trade whose window is stored while its pass is still out counts at once, and the
+/// settlement does not count it twice (#1258).
+#[test]
+fn a_window_stored_mid_pass_counts_before_the_pass_settles() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    catchup::set_switches(true, true);
+    let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let (sender, receiver) = mpsc::channel();
+    let mut state = RecorderCatchup {
+        worker: Some(sender),
+        ..RecorderCatchup::default()
+    };
+    let rows: Vec<_> = (0..2)
+        .map(|i| {
+            let mut trade = row();
+            trade.id.rec_id = i;
+            trade.close_ms -= i * 3_600_000;
+            trade.open_ms = trade.close_ms - 60_000;
+            trade
+        })
+        .collect();
+    state.submit(rows);
+    let shape = catchup::Shape {
+        margin_ms: 0,
+        long_ms: DAY,
+        tail_ms: 0,
+    };
+    state.tick(&cache, NOW, &shape);
+    let pass = receiver.try_recv().expect("the pass starts");
+    assert_eq!(pass.jobs.len(), 2);
+    let before = catchup::status().filled;
+    // The fetch thread files the first job's window; the second is still being fetched.
+    let first = pass.jobs[0].clone();
+    for &(from, to) in first.missing.spans() {
+        cache.insert(
+            &first.trade.exchange,
+            &first.trade.market,
+            from,
+            to,
+            vec![],
+            crate::market::trade_replay::tick_tiles::TileSource::Venue,
+        );
+    }
+    state.filed(&cache, &first.trade.exchange, &first.trade.market);
+    // The read answers off the recorder thread; a running pass's tick collects it.
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    state.tick(&cache, NOW, &shape);
+    let status = catchup::status();
+    assert!(status.running, "the pass is still out");
+    assert_eq!(
+        status.filled,
+        before + 1,
+        "the stored window counts at once"
+    );
+    assert!(
+        state.tape_complete.contains(&first.trade.id),
+        "the stored-trade count includes it"
+    );
+    assert!(!state.tape_complete.contains(&pass.jobs[1].trade.id));
+    state.finish(
+        &cache,
+        PassResult {
+            finished: pass
+                .jobs
+                .into_iter()
+                .enumerate()
+                .map(|(i, job)| executor::FinishedJob {
+                    filed: if i == 0 {
+                        job.missing.clone()
+                    } else {
+                        Coverage::none()
+                    },
+                    job,
+                    failure: None,
+                    fault: None,
+                    attempted: true,
+                })
+                .collect(),
+            archive_bytes: 0,
+        },
+        NOW,
+    );
+    let status = catchup::status();
+    assert!(!status.running);
+    assert_eq!(
+        status.filled,
+        before + 1,
+        "the settlement does not count it twice"
+    );
+}
