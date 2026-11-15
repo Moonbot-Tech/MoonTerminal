@@ -1,13 +1,78 @@
-//! The returning user's new-core card must explain the VPS without clipping its description.
+//! The returning user's new-core card must explain the VPS without clipping its description, and
+//! its demo tick must leave the rest of its line to the card.
 
 use gpui::{Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window, px};
 use moon_core::config::{Language, UiThemeMode};
-use moon_ui::{MoonSelectableCard, MoonTheme, v_flex};
+use moon_ui::{MoonCheckbox, MoonSelectableCard, MoonTheme, v_flex};
 use rust_i18n::t;
 
-use super::option_body;
-use crate::connect_wizard::MIN_SIZE;
+use super::{demo_tick, option_body};
+use crate::connect_wizard::{DEFAULT_SIZE, MIN_SIZE};
 use crate::design;
+
+/// The new-core card as the start screen draws it: its text, then the demo tick.
+struct DemoTickProbe;
+
+impl Render for DemoTickProbe {
+    /// The card under the wizard's own text settings, at the window's full width.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .p(design::ui_px(cx, 22.0))
+            .font_family(design::ui_font())
+            .text_size(design::t_body(cx))
+            .line_height(design::line_px(cx, 14.0))
+            .child(
+                MoonSelectableCard::new("cw-opt-new")
+                    .child(option_body(
+                        t!("connect_wizard.start.new_title").to_string(),
+                        t!("connect_wizard.start.new_more").to_string(),
+                        None,
+                        cx,
+                    ))
+                    .child(demo_tick(MoonCheckbox::new("cw-opt-new-demo"), cx)),
+            )
+    }
+}
+
+/// A click on the tick's line but away from its label is a click on the card: it must pick the
+/// card, not turn the demo on. A tick stretched across the card takes every such click.
+#[gpui::test]
+fn the_demo_tick_takes_no_more_room_than_its_label(cx: &mut gpui::TestAppContext) {
+    cx.update(|app| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            app,
+        );
+    });
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let handle = cx.open_window(
+            gpui::size(px(DEFAULT_SIZE.0), px(DEFAULT_SIZE.1)),
+            |_, _| DemoTickProbe,
+        );
+        let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+        for _ in 0..3 {
+            visual.update(|window, app| {
+                let _ = window.draw(app);
+            });
+        }
+        let card = visual
+            .debug_bounds("moon-selectable-card:cw-opt-new")
+            .expect("card");
+        let tick = visual.debug_bounds("cw-demo-tick").expect("tick");
+        assert!(
+            tick.origin.x >= card.origin.x && tick.right() <= card.right(),
+            "{language:?}: tick outside the card"
+        );
+        assert!(
+            tick.size.width < card.size.width / 2.0,
+            "{language:?}: the tick is {:?} wide in a card of {:?}",
+            tick.size.width,
+            card.size.width
+        );
+    }
+}
 
 /// Render the production card body under the minimum-width start screen's prose and padding.
 struct StartCardProbe;
