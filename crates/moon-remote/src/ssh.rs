@@ -46,14 +46,26 @@ impl Target {
 
 /// How to log in.
 pub enum Auth<'a> {
-    Password { user: &'a str, password: &'a str },
-    Key { user: &'a str, key: &'a PrivateKey },
+    Password {
+        user: &'a str,
+        password: &'a str,
+    },
+    Key {
+        user: &'a str,
+        key: &'a PrivateKey,
+    },
+    /// No credential at all. A server answers it with the methods it would take
+    /// ([`OpenError::Refused`]): how a closed password login is seen from outside without sending
+    /// a password, which sshd would log as a failed attempt.
+    None {
+        user: &'a str,
+    },
 }
 
 impl Auth<'_> {
     pub fn user(&self) -> &str {
         match self {
-            Self::Password { user, .. } | Self::Key { user, .. } => user,
+            Self::Password { user, .. } | Self::Key { user, .. } | Self::None { user } => user,
         }
     }
 }
@@ -254,6 +266,7 @@ impl Conn {
                     let key = signing_key(key, server_hash);
                     handle.authenticate_publickey(*user, key).await
                 }
+                Auth::None { user } => handle.authenticate_none(*user).await,
             }
         });
         match result {

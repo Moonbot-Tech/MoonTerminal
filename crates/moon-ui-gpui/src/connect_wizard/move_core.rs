@@ -193,6 +193,7 @@ impl ConnectWizardView {
             public_ip: access.public_ip,
             dir: access.dir,
             proto_port: access.proto_port,
+            close_password: access.close_password,
         };
         self.backend
             .update(cx, |b, bcx| b.core_move_start(uid, form, bcx));
@@ -245,7 +246,11 @@ impl ConnectWizardView {
             } => {
                 let ok = self.server.fingerprint_ok;
                 let (t2, f2) = (target.clone(), fingerprint.clone());
-                Screen::new(t!("connect_wizard.server.title"))
+                let close_password = self.server.close_password_choice(
+                    |this: &mut Self, on, _| this.server.close_password = on,
+                    cx,
+                );
+                let mut screen = Screen::new(t!("connect_wizard.server.title"))
                     .sub(t!("connect_wizard.review.sub", addr = target.addr()))
                     .child(div().font_family(design::mono()).child(fingerprint))
                     .child(
@@ -256,7 +261,11 @@ impl ConnectWizardView {
                                 this.server.fingerprint_ok = *v;
                                 cx.notify();
                             })),
-                    )
+                    );
+                if let Some(choice) = close_password {
+                    screen = screen.child(choice);
+                }
+                screen
                     .child(
                         div()
                             .text_color(rgba_from(MoonPalette::active(cx).red_text, 1.0))

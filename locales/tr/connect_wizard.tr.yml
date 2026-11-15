@@ -25,6 +25,9 @@ connect_wizard.line.row_added: "Çekirdek Ayarlar → Çekirdekler bölümüne e
 connect_wizard.line.keys_sent: "%{exchange} borsası seçildi, anahtarlar çekirdeğe gönderildi"
 connect_wizard.line.retry: "Kayıtlı anahtarlarla yeniden giriş"
 connect_wizard.line.connected: "Terminal çekirdeğe bağlandı"
+connect_wizard.line.password_closed: "Parolayla giriş kapatıldı: sunucu yalnızca anahtarı kabul ediyor"
+connect_wizard.line.password_already_closed: "Sunucuda parolayla giriş zaten kapalıydı"
+connect_wizard.line.password_not_closed: "Parolayla giriş kapatılmadı: %{reason}"
 
 # --- The rail of steps ---
 connect_wizard.rail.way: "Yöntem"
@@ -92,6 +95,8 @@ connect_wizard.server.need_port: "1 ile 65535 arasında bir UDP portu girin."
 # --- The server's key ---
 connect_wizard.review.sub: "%{addr} sunucusu bu anahtarı sunuyor. Sağlayıcınızın gösterdiği anahtarla karşılaştırın."
 connect_wizard.review.matches: "Anahtar, sağlayıcımın gösterdiğiyle aynı"
+connect_wizard.review.close_password: "Parolayla girişi kapat"
+connect_wizard.review.close_password_note: "Çekirdek kurulduktan sonra sunucuya yalnızca anahtarla girilir. Anahtar dosyası kaybolursa tek yol sağlayıcı panelindeki konsoldur."
 connect_wizard.review.secrets: "Ardından terminal kullanıcı adınız ve parolanızla sunucuya girer."
 connect_wizard.review.login: "Gir ve kontrol et"
 

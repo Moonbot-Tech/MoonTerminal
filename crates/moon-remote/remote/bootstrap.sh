@@ -4,12 +4,16 @@
 # Runs as root, delivered by `moon-remote setup` as `sh -c '<this file>' moon-bootstrap <step>
 # [args]`; secrets arrive on stdin, never in argv. Every step checks the state it is about to
 # change first, so running the setup again is harmless.
+#
+# The `key-only` pair of steps is the one part a core's install uses as well (`moon-remote`'s
+# `key_only`): it closes password logins on a server whose user came in by a key.
 set -eu
 umask 022
 
 HELPER=/usr/local/sbin/moon-station-admin
 SUDOERS=/etc/sudoers.d/moon-station
 SSHD_DROPIN=/etc/ssh/sshd_config.d/00-moon-station.conf
+KEY_ONLY_DROPIN=/etc/ssh/sshd_config.d/00-moon-key-only.conf
 UNIT=/etc/systemd/system/moon-station.service
 REMOVED=/etc/moon-station/removed
 UPDATE_PATH_UNIT=/etc/systemd/system/moon-station-update.path
@@ -84,10 +88,25 @@ sshd_includes_dropins() {
     grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config
 }
 
+# sshd's effective settings, in lower case. OpenSSH prints the keywords of `sshd -T` in lower
+# case up to 10.0 and capitalised since (`PasswordAuthentication no`, seen on 10.5): compared as
+# printed, a newer sshd would read as one that never took the setting.
+sshd_effective() {
+    LC_ALL=C sshd -T 2>/dev/null | tr '[:upper:]' '[:lower:]'
+}
+
+# Whether sshd, as its files stand now, takes no password of either kind.
+sshd_refuses_passwords() {
+    effective=$(sshd_effective || true)
+    for want in 'passwordauthentication no' 'kbdinteractiveauthentication no'; do
+        printf '%s\n' "$effective" | grep -qx "$want" || return 1
+    done
+}
+
 # The ports sshd really listens on, one per line; nothing when sshd cannot say. A provider's NAT
 # may forward the port the client dials to another one here.
 ssh_ports() {
-    LC_ALL=C sshd -T 2>/dev/null | awk '$1=="port"{print $2}' | sort -u || true
+    sshd_effective | awk '$1=="port"{print $2}' | sort -u || true
 }
 
 # fw_ports <given_port>: the ports the firewall must keep open for SSH — sshd's own and the one
@@ -287,7 +306,7 @@ step_harden() {
         rm -f "$SSHD_DROPIN"
         die "sshd rejected the configuration; removed it"
     fi
-    effective=$(sshd -T 2>/dev/null || true)
+    effective=$(sshd_effective || true)
     for want in 'permitrootlogin no' 'passwordauthentication no' 'kbdinteractiveauthentication no'; do
         if ! printf '%s\n' "$effective" | grep -qx "$want"; then
             rm -f "$SSHD_DROPIN"
@@ -302,6 +321,48 @@ step_harden() {
 # unharden: the rollback of harden, for when the new logins do not work.
 step_unharden() {
     rm -f "$SSHD_DROPIN"
+    sshd -t
+    reload_sshd
+    echo "sshd=reopened"
+}
+
+# key-only: password logins off, nothing else touched — for a server a core was put on through
+# a key login. That key keeps working, so no account and no key is added here, and root's own
+# login stays as it was: the core runs as root and its user logs in as root. `PermitRootLogin` is
+# left out on purpose: this file sorts before the station's, and naming it here would reopen a
+# root login the station closed. Prints `sshd=already` when sshd takes no password as it stands,
+# `sshd=changed` when this step closed it.
+step_key_only() {
+    # Asked first: a server closed in its main sshd_config needs no drop-in directory at all.
+    if sshd_refuses_passwords; then
+        echo "sshd=already"
+        return 0
+    fi
+    sshd_includes_dropins ||
+        die "sshd_config does not include sshd_config.d"
+    printf '%s\n' \
+        '# MoonBot core: key logins only. Sorted first so no later file can reopen it.' \
+        'PasswordAuthentication no' \
+        'KbdInteractiveAuthentication no' | put_file "$KEY_ONLY_DROPIN" 644 root:root >/dev/null
+    if ! sshd -t; then
+        rm -f "$KEY_ONLY_DROPIN"
+        die "sshd rejected the configuration; removed it"
+    fi
+    if ! sshd_refuses_passwords; then
+        rm -f "$KEY_ONLY_DROPIN"
+        die "sshd would still take a password; removed our file"
+    fi
+    # A file left behind an sshd that never read it would make the next run say `already`.
+    if ! reload_sshd; then
+        rm -f "$KEY_ONLY_DROPIN"
+        die "sshd did not reload; removed our file"
+    fi
+    echo "sshd=changed"
+}
+
+# key-only-off: the rollback of key-only, for when the key login does not work afterwards.
+step_key_only_off() {
+    rm -f "$KEY_ONLY_DROPIN"
     sshd -t
     reload_sshd
     echo "sshd=reopened"
@@ -429,6 +490,8 @@ helper) step_helper "$@" ;;
 service) step_service ;;
 harden) step_harden ;;
 unharden) step_unharden ;;
+key-only) step_key_only ;;
+key-only-off) step_key_only_off ;;
 ufw-install) step_ufw_install ;;
 firewall) step_firewall "$@" ;;
 firewall-off) step_firewall_off "$@" ;;

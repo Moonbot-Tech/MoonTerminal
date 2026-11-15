@@ -25,6 +25,9 @@ connect_wizard.line.row_added: "Ядро додано в Налаштуванн�
 connect_wizard.line.keys_sent: "Біржу %{exchange} обрано, ключі передано ядру"
 connect_wizard.line.retry: "Повторний вхід зі збереженими ключами"
 connect_wizard.line.connected: "Термінал підключився до ядра"
+connect_wizard.line.password_closed: "Вхід за паролем вимкнено: сервер пускає лише за ключем"
+connect_wizard.line.password_already_closed: "Вхід за паролем на сервері вже було вимкнено"
+connect_wizard.line.password_not_closed: "Вхід за паролем не вимкнено: %{reason}"
 
 # --- The rail of steps ---
 connect_wizard.rail.way: "Спосіб"
@@ -92,6 +95,8 @@ connect_wizard.server.need_port: "Вкажіть UDP-порт від 1 до 6553
 # --- The server's key ---
 connect_wizard.review.sub: "Сервер %{addr} пред'являє такий ключ. Звірте його з ключем, який показує провайдер."
 connect_wizard.review.matches: "Ключ збігається з указаним у провайдера"
+connect_wizard.review.close_password: "Вимкнути вхід за паролем"
+connect_wizard.review.close_password_note: "Після встановлення ядра сервер пускатиме лише за ключем. Якщо файл ключа загубиться, увійти можна буде тільки через консоль у панелі провайдера."
 connect_wizard.review.secrets: "Після цього термінал увійде на сервер з вашим логіном і паролем."
 connect_wizard.review.login: "Увійти й перевірити"
 

@@ -25,6 +25,9 @@ connect_wizard.line.row_added: "Lõi đã được thêm vào Cài đặt → L�
 connect_wizard.line.keys_sent: "Đã chọn sàn %{exchange}, khóa đã được gửi tới lõi"
 connect_wizard.line.retry: "Đăng nhập lại bằng khóa đã lưu"
 connect_wizard.line.connected: "Terminal đã kết nối với lõi"
+connect_wizard.line.password_closed: "Đã tắt đăng nhập bằng mật khẩu: máy chủ chỉ nhận khóa"
+connect_wizard.line.password_already_closed: "Đăng nhập bằng mật khẩu trên máy chủ đã được tắt từ trước"
+connect_wizard.line.password_not_closed: "Chưa tắt được đăng nhập bằng mật khẩu: %{reason}"
 
 # --- The rail of steps ---
 connect_wizard.rail.way: "Cách"
@@ -92,6 +95,8 @@ connect_wizard.server.need_port: "Nhập cổng UDP từ 1 đến 65535."
 # --- The server's key ---
 connect_wizard.review.sub: "Máy chủ %{addr} đưa ra khóa này. Hãy đối chiếu với khóa mà nhà cung cấp hiển thị."
 connect_wizard.review.matches: "Khóa trùng với khóa nhà cung cấp hiển thị"
+connect_wizard.review.close_password: "Tắt đăng nhập bằng mật khẩu"
+connect_wizard.review.close_password_note: "Sau khi cài lõi, máy chủ chỉ cho đăng nhập bằng khóa. Nếu mất tệp khóa, chỉ còn cách vào qua bảng điều khiển trong trang quản lý của nhà cung cấp."
 connect_wizard.review.secrets: "Sau đó terminal đăng nhập máy chủ bằng tên đăng nhập và mật khẩu của bạn."
 connect_wizard.review.login: "Đăng nhập và kiểm tra"
 

@@ -12,7 +12,12 @@
 //! moon-remote --data <dir> core-move-start  --host <h> ... --dir <instance dir> --old-stopped
 //! moon-remote --data <dir> core-move-finish --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-move-remove --host <h> ... --dir <instance dir>
+//! moon-remote --data <dir> core-close-password --host <h> [--port 22] --login <user>
+//!             --login-key <file> [--host-key <SHA256:...>]
 //! ```
+//!
+//! `core-close-password` turns password logins off on a core's server: the key given keeps
+//! working, root's login is left as it is, and a check that fails puts sshd back.
 //!
 //! `--core` keeps that core's MoonProto key, rebuilds its report database from this terminal's
 //! replica, takes the settings snapshot straight from the running core unless `--zip` is given
@@ -36,6 +41,7 @@ use moon_core::core_move::old_core::StopAnswer;
 use moon_remote::core_move::plan::{KeySource, Plan, Request};
 use moon_remote::core_move::{self, MoveStep};
 use moon_remote::hosts;
+use moon_remote::key_only::{self, Closed};
 use moon_remote::script::Privilege;
 use moon_remote::ssh::{Auth, Conn, Target};
 
@@ -74,6 +80,7 @@ pub fn run(command: &str, target: Target, args: &mut Args) -> anyhow::Result<()>
             args.done()?;
             core_move::remove(&conn, &privilege, &dir, &mut say)
         }
+        "core-close-password" => close_password(&target, args),
         other => anyhow::bail!("unknown command {other:?}"),
     }
 }
@@ -233,10 +240,46 @@ pub(super) fn required(args: &mut Args, name: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("{name} is required"))
 }
 
+/// What `--login`, `--login-key` and `--host-key` name.
+struct Login {
+    user: String,
+    key: russh::keys::PrivateKey,
+    /// The host key to trust: the pinned one, or `--host-key`.
+    pin: String,
+}
+
+/// `core-close-password`: turn password logins off on the server, for the key login given.
+fn close_password(target: &Target, args: &mut Args) -> anyhow::Result<()> {
+    let login = login(target, args)?;
+    args.done()?;
+    let (conn, privilege) = open(target, &login)?;
+    let closed = key_only::close(
+        &conn,
+        &privilege,
+        target,
+        &login.user,
+        &login.key,
+        &login.pin,
+    )?;
+    match closed {
+        Closed::Now => println!(
+            "password logins are closed: {} takes key logins only",
+            target.addr()
+        ),
+        Closed::Already => println!("{} took no password login already", target.addr()),
+    }
+    Ok(())
+}
+
 /// Log in with `--login`/`--login-key` against the pinned or `--host-key` fingerprint, and find
 /// how that login reaches root.
 pub(super) fn connect(target: &Target, args: &mut Args) -> anyhow::Result<(Conn, Privilege)> {
-    let login = required(args, "--login")?;
+    open(target, &login(target, args)?)
+}
+
+/// Read the login's arguments and settle the host key it is checked against.
+fn login(target: &Target, args: &mut Args) -> anyhow::Result<Login> {
+    let user = required(args, "--login")?;
     let key = read_key(&required(args, "--login-key")?)?;
     let pin = match args.value("--host-key")? {
         Some(pin) => pin,
@@ -251,13 +294,18 @@ pub(super) fn connect(target: &Target, args: &mut Args) -> anyhow::Result<(Conn,
             }
         },
     };
+    Ok(Login { user, key, pin })
+}
+
+/// Open the login and find how it reaches root.
+fn open(target: &Target, login: &Login) -> anyhow::Result<(Conn, Privilege)> {
     let conn = Conn::open(
         target,
         &Auth::Key {
-            user: &login,
-            key: &key,
+            user: &login.user,
+            key: &login.key,
         },
-        &pin,
+        &login.pin,
     )?;
     let password = std::env::var("MOON_REMOTE_LOGIN_PASSWORD")
         .ok()

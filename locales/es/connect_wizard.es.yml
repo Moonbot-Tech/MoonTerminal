@@ -25,6 +25,9 @@ connect_wizard.line.row_added: "El núcleo se añadió a Ajustes → Núcleos"
 connect_wizard.line.keys_sent: "Exchange %{exchange} elegido, las claves se enviaron al núcleo"
 connect_wizard.line.retry: "Nuevo inicio de sesión con las claves guardadas"
 connect_wizard.line.connected: "El terminal está conectado al núcleo"
+connect_wizard.line.password_closed: "Acceso por contraseña desactivado: el servidor solo admite la clave"
+connect_wizard.line.password_already_closed: "El acceso por contraseña ya estaba desactivado en el servidor"
+connect_wizard.line.password_not_closed: "El acceso por contraseña no se desactivó: %{reason}"
 
 # --- The rail of steps ---
 connect_wizard.rail.way: "Modo"
@@ -92,6 +95,8 @@ connect_wizard.server.need_port: "Indique un puerto UDP de 1 a 65535."
 # --- The server's key ---
 connect_wizard.review.sub: "El servidor %{addr} presenta esta clave. Compárela con la que muestra su proveedor."
 connect_wizard.review.matches: "La clave coincide con la que muestra mi proveedor"
+connect_wizard.review.close_password: "Desactivar el acceso por contraseña"
+connect_wizard.review.close_password_note: "Tras instalar el núcleo, el servidor solo dejará entrar con la clave. Si se pierde el archivo de clave, solo quedará la consola del panel del proveedor."
 connect_wizard.review.secrets: "Después el terminal entra en el servidor con su usuario y contraseña."
 connect_wizard.review.login: "Entrar y comprobar"
 
