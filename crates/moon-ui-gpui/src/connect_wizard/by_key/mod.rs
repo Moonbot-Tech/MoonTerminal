@@ -14,6 +14,15 @@ use super::render::{Screen, note};
 use super::server::{field, text};
 use crate::design;
 
+#[allow(dead_code)] // wired in batch 2
+mod logic;
+#[allow(dead_code)] // wired in batch 2
+mod parts;
+#[allow(dead_code)] // wired in batch 2
+mod steps;
+#[allow(dead_code)] // wired in batch 2
+mod failure;
+
 /// How long the terminal may take to get through to a core before the wizard says it did not.
 const CONNECT_WAIT: Duration = Duration::from_secs(60);
 /// The name a core gets when the user typed none.
