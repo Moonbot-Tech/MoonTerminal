@@ -1,6 +1,6 @@
 //! Pure decisions shared by the by-key screens and their actions.
 
-use moon_core::{config::CoreTarget, feed::FailureClass};
+use moon_core::{config::{CoreHost, CoreTarget}, feed::FailureClass};
 
 /// Moonbot's default UDP port, also used by legacy keys without a port.
 pub(super) const FACTORY_PORT: u16 = 3000;
@@ -15,7 +15,7 @@ pub(super) enum Host {
 
 /// The instructions before a connection attempt is added.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Step {
+pub(in crate::connect_wizard) enum Step {
     Port,
     Moonbot,
     Key,
@@ -53,7 +53,9 @@ pub(super) fn pick_failure(
     key: Option<&CoreTarget>,
     host: Host,
 ) -> FailScreen {
-    if host == Host::WindowsServer && key.is_some_and(|key| key.localhost_fallback) {
+    if host == Host::WindowsServer && key.is_some_and(|key| key.localhost_fallback
+        || matches!(&key.host, CoreHost::Ip(ip) if ip.is_loopback())
+        || matches!(&key.host, CoreHost::Name(name) if name.eq_ignore_ascii_case("localhost"))) {
         return FailScreen::NoAddress;
     }
     match class {
@@ -65,8 +67,17 @@ pub(super) fn pick_failure(
     }
 }
 
+/// An override is valid only for the exact key and port the user explicitly accepted.
+pub(super) fn pending_mismatch(accepted: Option<&(String, u16)>, key: &str, chosen: u16, target: Option<&CoreTarget>) -> Option<u16> {
+    if accepted.is_some_and(|(text, port)| text == key && *port == chosen) {
+        None
+    } else {
+        target.and_then(|target| port_mismatch(chosen, target))
+    }
+}
+
 /// Keep waiting and failure on the key step, reserving the final step for Ready.
-pub(super) fn rail_index(step: Step, added: bool, ready: bool) -> usize {
+pub(in crate::connect_wizard) fn rail_index(step: Step, added: bool, ready: bool) -> usize {
     if ready {
         4
     } else if added {

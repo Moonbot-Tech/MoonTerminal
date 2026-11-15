@@ -39,16 +39,16 @@ pub(super) fn code_box(
     cx: &App,
 ) -> impl IntoElement {
     let p = MoonPalette::active(cx);
-    h_flex().id("cw-key-code").w_full().min_w(px(0.0))
+    h_flex().id("cw-key-code").debug_selector(|| "cw-key-code".into()).w_full().min_w(px(0.0))
         .items_center().gap(design::ui_px(cx, 8.0))
         .p(design::ui_px(cx, 10.0))
         .rounded(design::ui_px(cx, 4.0))
         .border(px(1.0)).border_color(rgba_from(p.border, 1.0))
         .bg(rgba_from(p.panel, 1.0))
-        .child(div().flex_1().min_w(px(0.0)).whitespace_normal()
+        .child(div().id("cw-key-command-text").debug_selector(|| "cw-key-command-text".into()).flex_1().min_w(px(0.0)).whitespace_normal()
             .font_family(design::mono()).text_size(design::t_caption(cx))
             .child(firewall_command(port)))
-        .child(div().flex_none().child(MoonButton::new("cw-key-copy")
+        .child(div().debug_selector(|| "cw-key-copy".into()).flex_none().child(MoonButton::new("cw-key-copy")
             .size(design::CONTROL_TIER)
             .label(if copied { t!("connect_wizard.by_key.copied") } else { t!("connect_wizard.by_key.copy") }.to_string())
             .on_click(on_copy).render()))
@@ -82,7 +82,7 @@ pub(super) fn numbered_item(
 /// Shared bordered instruction list; each item owns one fact and its supporting notes.
 pub(super) fn numbered_list(items: Vec<AnyElement>, cx: &App) -> impl IntoElement {
     let p = MoonPalette::active(cx);
-    v_flex().id("cw-key-steps").w_full().min_w(px(0.0))
+    v_flex().id("cw-key-steps").debug_selector(|| "cw-key-steps".into()).w_full().min_w(px(0.0))
         .border(px(1.0)).border_color(rgba_from(p.border, 1.0))
         .rounded(design::ui_px(cx, 6.0)).bg(rgba_from(p.panel, 1.0))
         .children(items)
@@ -96,7 +96,7 @@ pub(super) fn input_field(
     placeholder: String,
     cx: &App,
 ) -> impl IntoElement {
-    v_flex().w_full().min_w(px(0.0)).gap(design::ui_px(cx, 4.0))
+    v_flex().debug_selector(|| id.to_owned()).w_full().min_w(px(0.0)).gap(design::ui_px(cx, 4.0))
         .child(note(label, cx))
         .child(MoonInput::new(id).state(state).size(design::INPUT_SIZE).placeholder(placeholder))
 }
@@ -109,12 +109,12 @@ pub(super) fn key_row(
 ) -> impl IntoElement {
     v_flex().w_full().min_w(px(0.0)).gap(design::ui_px(cx, 4.0))
         .child(note(t!("connect_wizard.by_key.key"), cx))
-        .child(h_flex().id("cw-key-box").w_full().min_w(px(0.0)).flex_wrap()
+        .child(h_flex().id("cw-key-box").debug_selector(|| "cw-key-box".into()).w_full().min_w(px(0.0)).flex_wrap()
             .items_center().gap(design::ui_px(cx, 8.0))
-            .child(div().flex_1().min_w(design::ui_px(cx, 180.0))
+            .child(div().debug_selector(|| "cw-key-key".into()).flex_1().min_w(design::ui_px(cx, 180.0))
                 .child(MoonInput::new("cw-key-key").state(key).size(design::INPUT_SIZE)
                     .mask_toggle().placeholder(t!("connect_wizard.by_key.key_placeholder").to_string())))
-            .child(div().flex_none().child(MoonButton::new("cw-key-paste")
+            .child(div().debug_selector(|| "cw-key-paste".into()).flex_none().child(MoonButton::new("cw-key-paste")
                 .size(design::CONTROL_TIER).label(t!("connect_wizard.by_key.paste").to_string())
                 .on_click(on_paste).render())))
 }

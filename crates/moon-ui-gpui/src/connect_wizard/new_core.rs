@@ -635,8 +635,7 @@ impl ConnectWizardView {
             .size(design::CONTROL_TIER)
             .label(t!("connect_wizard.again").to_string())
             .on_click(cx.listener(|this, _, _, cx| {
-                this.by_key_uid = None;
-                this.by_key_since = None;
+                this.by_key.forget_attempt();
                 this.back_to_start(cx);
             }))
             .render()

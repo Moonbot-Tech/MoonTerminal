@@ -91,3 +91,23 @@ fn rail_tracks_instructions_attempt_and_ready() {
         assert_eq!(rail_index(step, false, true), 4);
     }
 }
+
+/// Explicit loopback exports are missing remote addresses too, while local cores remain valid.
+#[test]
+fn explicit_loopback_is_remote_only_missing_address() {
+    for host in [CoreHost::Ip("127.0.0.1".parse().unwrap()), CoreHost::Ip("::1".parse().unwrap()), CoreHost::Name("localhost".into())] {
+        let key = CoreTarget { host, port: 3000, localhost_fallback: false };
+        assert_eq!(pick_failure(None, Some(&key), Host::WindowsServer), FailScreen::NoAddress);
+        assert_eq!(pick_failure(None, Some(&key), Host::ThisComputer), FailScreen::Fallback);
+    }
+}
+
+/// Editing either the key or the chosen port requires a new explicit mismatch decision.
+#[test]
+fn mismatch_acceptance_is_bound_to_both_inputs() {
+    let key = target(5010, false);
+    let accepted = Some(("export A".to_owned(), 3000));
+    assert_eq!(super::pending_mismatch(accepted.as_ref(), "export A", 3000, Some(&key)), None);
+    assert_eq!(super::pending_mismatch(accepted.as_ref(), "export B", 3000, Some(&key)), Some(5010));
+    assert_eq!(super::pending_mismatch(accepted.as_ref(), "export A", 4000, Some(&key)), Some(5010));
+}

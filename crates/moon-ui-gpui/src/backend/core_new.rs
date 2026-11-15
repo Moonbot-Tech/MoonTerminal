@@ -676,6 +676,22 @@ impl Backend {
         Ok(())
     }
 
+    /// Save only the wizard's missing host; the key's port and station ownership stay intact.
+    pub(crate) fn wizard_set_address(
+        &mut self,
+        uid: u64,
+        host: &str,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        self.finish_pending_persistence();
+        save_wizard_address(&mut self.config, &mut self.preview, uid, host, moon_core::config::AppConfig::save)?;
+        self.servers_changed_outside = self.servers_changed_outside.wrapping_add(1);
+        let reports = self.reports.as_ref().map(|h| &h.tx);
+        self.session.reconcile(&self.config, reports);
+        cx.notify();
+        Ok(())
+    }
+
     /// Take a wizard's core row out of the saved settings and an open draft — the row of a
     /// removed install, or of a core the user gave up connecting to.
     pub(crate) fn wizard_drop_row(
@@ -701,6 +717,31 @@ impl Backend {
         cx.notify();
         Ok(())
     }
+}
+
+/// Commit a host-only override before publishing it to either config, preserving draft edits.
+fn save_wizard_address(
+    saved: &mut moon_core::config::AppConfig,
+    draft: &mut Option<moon_core::config::AppConfig>,
+    uid: u64,
+    host: &str,
+    save: impl FnOnce(&mut moon_core::config::AppConfig) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let endpoint = moon_core::config::parse_endpoint_override(host)
+        .map_err(|_| anyhow::anyhow!("invalid core host"))?;
+    anyhow::ensure!(endpoint.is_some_and(|e| e.host.is_some() && e.port.is_none()), "expected a host without a port");
+    let point = |config: &mut moon_core::config::AppConfig| -> anyhow::Result<()> {
+        let row = config.servers.iter_mut().find(|row| row.uid == uid)
+            .ok_or_else(|| anyhow::anyhow!("the core is no longer in the settings"))?;
+        row.endpoint_override = host.trim().to_owned();
+        Ok(())
+    };
+    let mut candidate = saved.clone();
+    point(&mut candidate)?;
+    save(&mut candidate)?;
+    *saved = candidate;
+    if let Some(draft) = draft { let _ = point(draft); }
+    Ok(())
 }
 
 /// Cancel a probe or non-busy install whose state must not leak into a login-only wizard.

@@ -30,7 +30,7 @@ pub(super) fn port_screen(
     let PortOptions { host, command_port, copied } = options;
     let on_host = Rc::new(on_host);
     // Separate fitted cells can wrap as whole controls in long translations.
-    let segments = h_flex().id("cw-key-seg").w_full().min_w(px(0.0)).flex_wrap()
+    let segments = h_flex().id("cw-key-seg").debug_selector(|| "cw-key-seg".into()).w_full().min_w(px(0.0)).flex_wrap()
         .gap(design::ui_px(cx, 4.0))
         .children([
             (Host::WindowsServer, "cw-key-server", t!("connect_wizard.by_key.where_server").to_string()),
@@ -46,13 +46,13 @@ pub(super) fn port_screen(
         .sub(t!("connect_wizard.by_key.port_sub"))
         .child(v_flex().w_full().min_w(px(0.0)).gap(design::ui_px(cx, 4.0))
             .child(note(t!("connect_wizard.by_key.where"), cx)).child(segments))
-        .child(h_flex().w_full().min_w(px(0.0)).flex_wrap().gap(design::ui_px(cx, 4.0))
+        .child(h_flex().debug_selector(|| "cw-key-linux".into()).w_full().min_w(px(0.0)).flex_wrap().gap(design::ui_px(cx, 4.0))
             .child(note(t!("connect_wizard.by_key.linux_note"), cx))
             .child(MoonLink::new("cw-key-linux", t!("connect_wizard.start.new_title").to_string()).on_click(on_linux)))
         .child(v_flex().w_full().min_w(px(0.0)).gap(design::ui_px(cx, 4.0))
             .child(note(t!("connect_wizard.server.port"), cx))
             .child(h_flex().w_full().flex_wrap().items_center().gap(design::ui_px(cx, 10.0))
-                .child(div().w(design::ui_px(cx, 90.0)).flex_none()
+                .child(div().debug_selector(|| "cw-key-port".into()).w(design::ui_px(cx, 90.0)).flex_none()
                     .child(MoonInput::new("cw-key-port").state(port).size(design::INPUT_SIZE)))
                 .child(note(t!("connect_wizard.by_key.port_hint"), cx))));
     screen = match host {

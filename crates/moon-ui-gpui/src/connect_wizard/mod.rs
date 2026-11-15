@@ -21,8 +21,6 @@ mod start;
 #[cfg(test)]
 mod tests;
 
-use std::time::Instant;
-
 use gpui::*;
 use moon_core::config::eula::EulaAcceptance;
 use moon_core::config::{Language, UiThemeMode};
@@ -90,12 +88,8 @@ pub(crate) struct ConnectWizardView {
     fixing_keys: bool,
     /// "Real trading" was clicked once and waits for its confirmation.
     real_confirm: bool,
-    /// The by-key branch: the core's name and its key.
-    by_key_name: Entity<MoonInputState>,
-    by_key_key: Entity<MoonInputState>,
-    /// The by-key branch's row, once added, and since when it is being connected to.
-    by_key_uid: Option<u64>,
-    by_key_since: Option<Instant>,
+    /// Instructions, inputs and the owned connection attempt of the by-key branch.
+    by_key: by_key::ByKeyState,
     /// The move branch: the core picked to move, and whether the user went on to its server.
     move_uid: Option<u64>,
     move_at_server: bool,
@@ -128,6 +122,8 @@ impl ConnectWizardView {
         } else {
             (None, Branch::NewCore)
         };
+        let by_key = by_key::ByKeyState::new(window, cx);
+        by_key.observe_inputs(cx);
         Self {
             server: ServerFields::new(DEFAULT_DIR, window, cx),
             eula: EulaAcceptance::load().filter(EulaAcceptance::covers_current),
@@ -139,10 +135,7 @@ impl ConnectWizardView {
             rsa: false,
             fixing_keys: false,
             real_confirm: false,
-            by_key_name: input(false, window, cx),
-            by_key_key: input(false, window, cx),
-            by_key_uid: None,
-            by_key_since: None,
+            by_key,
             move_uid: None,
             move_at_server: false,
             move_log_open: false,
@@ -249,6 +242,10 @@ impl ConnectWizardView {
     /// Go into the branch picked on the start screen.
     fn next_from_start(&mut self, cx: &mut Context<Self>) {
         self.error = None;
+        if self.choice == Branch::ByKey && self.by_key.uid.is_none() {
+            self.by_key.step = by_key::logic::Step::Port;
+            self.by_key.accepted_mismatch = None;
+        }
         self.branch = Some(self.choice);
         self.leave_login();
         cx.notify();
