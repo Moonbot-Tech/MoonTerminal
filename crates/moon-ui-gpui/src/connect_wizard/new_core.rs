@@ -587,10 +587,13 @@ impl ConnectWizardView {
                     MoonButton::new("cw-fix-keys")
                         .primary()
                         .size(design::CONTROL_TIER)
-                        .label(if demo {
-                            t!("connect_wizard.stuck.own_keys").to_string()
-                        } else {
+                        // The regular label is written first: whatever names this button by
+                        // its call site reads the first key, and the regular install is the
+                        // one a reader sees.
+                        .label(if !demo {
                             t!("connect_wizard.stuck.fix_keys").to_string()
+                        } else {
+                            t!("connect_wizard.stuck.own_keys").to_string()
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.fixing_keys = true;
