@@ -100,7 +100,22 @@ pub(crate) struct RecorderCatchup {
     /// ([`Self::take_expired`]): a listed row may still owe a deal-chart reader the rest of its
     /// hour, which the recorder's closed-trade map then serves from its own copy.
     expired_rows: Vec<CatchupTrade>,
+    /// The running pass's trades not counted as filled yet, with their missing windows, by
+    /// market: a window stored while the pass is still out counts at once ([`Self::filed`]).
+    in_flight: HashMap<(String, String), Vec<(TradeId, Coverage)>>,
+    /// Trades of the running pass [`Self::filed`] already counted, which the settlement must not
+    /// count again.
+    counted_early: HashSet<TradeId>,
+    /// Coverage reads [`Self::filed`] queued behind its market's writes, answered on a later
+    /// [`Self::tick`] so the recorder thread never waits on them.
+    filed_reads: Vec<FiledRead>,
 }
+
+/// A market's span read queued behind the writes of one filing.
+type FiledRead = (
+    (String, String),
+    mpsc::Receiver<rusqlite::Result<Vec<(i64, i64)>>>,
+);
 
 /// One serial fetch pass; continuation pages in the same UTC hour share the archive budget.
 struct Pass {
@@ -696,6 +711,65 @@ impl RecorderCatchup {
         batch
     }
 
+    /// Queue a read of this market's stored spans behind the writes just filed, so the running
+    /// pass's trades whose whole window is now stored count before the pass settles (#1258).
+    pub(crate) fn filed(&mut self, cache: &TradeCache, exchange: &str, market: &str) {
+        let key = (exchange.to_owned(), market.to_owned());
+        let Some(jobs) = self.in_flight.get(&key) else {
+            return;
+        };
+        let bounds = jobs
+            .iter()
+            .flat_map(|(_, missing)| missing.spans().iter().copied())
+            .reduce(|(from, to), (f, t)| (from.min(f), to.max(t)));
+        if let Some((from, to)) = bounds {
+            let read = cache.held_spans_start(exchange, market, from, to);
+            self.filed_reads.push((key, read));
+        }
+    }
+
+    /// Count the trades the answered [`Self::filed`] reads show complete; unanswered reads wait
+    /// for a later tick, failed ones leave the count to the settlement.
+    fn collect_filed(&mut self) {
+        let mut filled = 0_u32;
+        let mut index = 0;
+        while index < self.filed_reads.len() {
+            let spans = match self.filed_reads[index].1.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => {
+                    index += 1;
+                    continue;
+                }
+                Ok(Ok(spans)) => Some(spans),
+                Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => None,
+            };
+            let (key, _) = self.filed_reads.swap_remove(index);
+            let (Some(spans), Some(jobs)) = (spans, self.in_flight.get_mut(&key)) else {
+                continue;
+            };
+            let mut held = Coverage::none();
+            for span in spans {
+                held.add(span);
+            }
+            jobs.retain(|(id, missing)| {
+                if !missing.minus(&held).is_empty() {
+                    return true;
+                }
+                if self.complete.insert(*id) {
+                    self.tape_complete.insert(*id);
+                    self.counted_early.insert(*id);
+                    filled += 1;
+                }
+                false
+            });
+        }
+        if filled > 0 {
+            let mut status = STATUS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            status.filled = status.filled.saturating_add(filled);
+        }
+    }
+
     /// The disk reserve refused to file fetched tape: its job fails as `no_room`, not unnamed.
     pub(crate) fn filing_refused(&mut self, exchange: String, market: String) {
         self.refused.insert((exchange, market));
@@ -852,6 +926,7 @@ impl RecorderCatchup {
     pub(crate) fn tick(&mut self, cache: &TradeCache, now_ms: i64, shape: &super::Shape) {
         self.prune(now_ms);
         if self.active {
+            self.collect_filed();
             return;
         }
         let (auto, archives) = self.sync_switches();
@@ -895,6 +970,13 @@ impl RecorderCatchup {
         if self.worker.is_none() {
             self.worker = start_worker();
         }
+        let mut in_flight = HashMap::<(String, String), Vec<(TradeId, Coverage)>>::new();
+        for job in &jobs {
+            in_flight
+                .entry((job.trade.exchange.clone(), job.trade.market.clone()))
+                .or_default()
+                .push((job.trade.id, job.missing.clone()));
+        }
         let pass = Pass {
             jobs,
             archive_bytes: self.archive_bytes,
@@ -905,6 +987,8 @@ impl RecorderCatchup {
             .is_some_and(|worker| worker.send(pass).is_ok())
         {
             self.active = true;
+            self.in_flight = in_flight;
+            self.counted_early.clear();
             self.rate_started.get_or_insert(now_ms);
             let mut status = STATUS
                 .lock()
@@ -932,7 +1016,11 @@ impl RecorderCatchup {
             return;
         }
         self.archive_bytes = result.archive_bytes;
+        self.in_flight.clear();
+        self.filed_reads.clear();
+        let mut counted_early = std::mem::take(&mut self.counted_early);
         let mut filled = 0_u32;
+        let mut filled_early = 0_u32;
         let mut failed = 0_u32;
         let mut failures = Vec::new();
         for finished in result.finished {
@@ -978,8 +1066,13 @@ impl RecorderCatchup {
                 self.pending.remove(&job.trade.id);
                 self.latched.remove(&job.trade.id);
                 self.core_gap_tries.remove(&job.trade.id);
-                if self.complete.insert(job.trade.id) {
+                let early = counted_early.remove(&job.trade.id);
+                if self.complete.insert(job.trade.id) || early {
                     filled += 1;
+                }
+                if early {
+                    // Already in the status since its window was stored mid-pass.
+                    filled_early += 1;
                 }
                 self.tape_complete.insert(job.trade.id);
             } else {
@@ -1026,6 +1119,12 @@ impl RecorderCatchup {
                 }
             }
         }
+        // A trade counted mid-pass that the settlement does not find complete is uncounted.
+        let uncounted = counted_early.len().min(u32::MAX as usize) as u32;
+        for id in &counted_early {
+            self.complete.remove(id);
+            self.tape_complete.remove(id);
+        }
         self.refused.clear();
         self.active = false;
         self.rate_started.get_or_insert(now_ms);
@@ -1060,7 +1159,10 @@ impl RecorderCatchup {
         let mut status = STATUS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        status.filled = status.filled.saturating_add(filled);
+        status.filled = status
+            .filled
+            .saturating_add(filled - filled_early)
+            .saturating_sub(uncounted);
         status.failed = failed;
         status.failed_by = report.counts;
         status.running = false;

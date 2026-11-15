@@ -658,6 +658,7 @@ impl Recorder {
                     );
                 }
                 self.cache.release_after_writes(reservation);
+                self.catchup.filed(&self.cache, &exchange, &market);
             }
             Cmd::CatchupDone(result) => self.catchup.finish(&self.cache, result, now_ms),
             Cmd::Opened {
