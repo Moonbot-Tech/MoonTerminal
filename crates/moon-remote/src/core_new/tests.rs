@@ -110,6 +110,22 @@ fn keys_go_as_the_json_the_core_reads() {
     assert_eq!(json, serde_json::json!({"rsa_bundle": "B"}));
 }
 
+/// The embedded demo settings must stay an archive the install step accepts: the bot
+/// configuration at the root, strategy files under `data/`, and nothing that would replace a file
+/// of the Linux package — a repack that drops the configuration or sweeps in the Windows program
+/// would otherwise fail only on a user's server.
+#[test]
+fn the_demo_settings_are_a_settings_archive_of_binance() {
+    use moon_core::core_move::archive;
+    let composed = archive::compose(DEMO_SETTINGS, Some("Binance"), None).unwrap();
+    assert!(composed.has_strategies);
+    assert_eq!(composed.report_db, None);
+    let exchanges = archive::strategy_exchanges(DEMO_SETTINGS).unwrap();
+    assert_eq!(exchanges, ["Binance", "Binance Futures"]);
+    // The whole point of the trimmed archive: it carries settings, not the 50 MB Windows program.
+    assert!(DEMO_SETTINGS.len() < 512 * 1024);
+}
+
 /// An accepted switch is not a finished one: the status right after it still names the previous
 /// exchange, possibly ready, and a later one may be initializing on the new exchange. Only the
 /// new exchange past initialization lets MoonProto be set up for it.

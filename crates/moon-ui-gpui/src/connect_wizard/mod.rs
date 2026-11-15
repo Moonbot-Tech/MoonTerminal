@@ -18,6 +18,8 @@ mod new_core;
 mod render;
 mod server;
 mod start;
+#[cfg(test)]
+mod tests;
 
 use std::time::Instant;
 
@@ -34,8 +36,11 @@ use crate::Backend;
 use crate::backend::core_new::{NewCommand, NewForm, NewPhase};
 use server::ServerFields;
 
-/// Default and minimum window sizes in design pixels.
-const DEFAULT_SIZE: (f32, f32) = (900.0, 660.0);
+/// Default and minimum window sizes in design pixels. The default height holds the start screen —
+/// its four cards, the demo tick with its description under the new-core card, and the note
+/// shown while Settings is open — with room for a translation that wraps a line or two more.
+/// Text scales with the window (the content zoom), so the fit is the same for every user.
+const DEFAULT_SIZE: (f32, f32) = (900.0, 780.0);
 const MIN_SIZE: (f32, f32) = (460.0, 420.0);
 /// The instance folder offered for a new core.
 const DEFAULT_DIR: &str = "mbcore";
@@ -60,6 +65,10 @@ pub(crate) struct ConnectWizardView {
     branch: Option<Branch>,
     /// The branch picked on the start screen.
     choice: Branch,
+    /// The new-core card's demo tick: the core starts on MoonBot's demo settings and account, so
+    /// the wizard asks for no exchange keys. An install takes it with its first step; from then
+    /// on the install's own flag speaks ([`Self::demo_install`]).
+    demo: bool,
     /// The start screen's language and theme pickers, applied and saved at once.
     language: Entity<MoonSelectState<Language>>,
     theme: Entity<MoonSelectState<UiThemeMode>>,
@@ -146,6 +155,7 @@ impl ConnectWizardView {
             backend,
             branch,
             choice,
+            demo: false,
             look_language,
             language,
             theme,
@@ -160,6 +170,26 @@ impl ConnectWizardView {
             .core_new
             .as_ref()
             .map(|job| job.phase.clone())
+    }
+
+    /// Whether the install the backend holds runs on MoonBot's demo settings — the install's own
+    /// word, which outlives this window and ends when the user gives the core keys of their own.
+    fn job_demo(&self, cx: &App) -> bool {
+        self.backend
+            .read(cx)
+            .core_new
+            .as_ref()
+            .is_some_and(|job| job.demo)
+    }
+
+    /// Whether the new-core branch is, or is about to be, a demo install: the install's own word
+    /// while the backend holds one — it took the tick with its first step and outlives this
+    /// window — and the start screen's tick before that.
+    fn demo_install(&self, cx: &App) -> bool {
+        match self.backend.read(cx).core_new.as_ref() {
+            Some(job) => job.demo,
+            None => self.demo,
+        }
     }
 
     /// Show in the pickers what the terminal runs with: a pick that was refused or not saved, or
@@ -285,13 +315,19 @@ impl ConnectWizardView {
             cx.notify();
             return;
         }
-        if self
+        let ended = self
             .backend
             .read(cx)
             .core_new
             .as_ref()
-            .is_some_and(|job| job.phase.ended())
-        {
+            .filter(|job| job.phase.ended())
+            .map(|job| (matches!(job.phase, NewPhase::Done), job.demo));
+        if let Some((done, demo)) = ended {
+            // The tick follows what a finished install ended as: one that went on to the user's
+            // own keys is no demo to offer again by default.
+            if done {
+                self.demo = demo;
+            }
             self.backend.update(cx, |b, bcx| b.core_new_forget(bcx));
         }
         if self.backend.read(cx).core_new.is_none() {
@@ -307,8 +343,10 @@ impl ConnectWizardView {
             Ok(target) => {
                 self.error = None;
                 self.server.fingerprint_ok = false;
+                // The login-only branch shares this probe and installs nothing.
+                let demo = self.demo && self.branch == Some(Branch::NewCore);
                 self.backend
-                    .update(cx, |b, bcx| b.core_new_probe(target, bcx));
+                    .update(cx, |b, bcx| b.core_new_probe(target, demo, bcx));
             }
             Err(error) => self.error = Some(error),
         }
@@ -345,6 +383,7 @@ impl ConnectWizardView {
             public_ip: access.public_ip,
             dir: access.dir,
             proto_port: access.proto_port,
+            demo: self.demo_install(cx),
         };
         self.backend
             .update(cx, |b, bcx| b.core_new_start(form, bcx));
@@ -523,6 +562,37 @@ pub(crate) fn open_login(
     }
 }
 
+/// Where the wizard opens: [`DEFAULT_SIZE`] at the content `zoom`, centred in `work` — the
+/// display's work area, the part the taskbar or dock leaves free — and held to its size, so the
+/// footer's buttons never open under a small screen's taskbar. Never under [`MIN_SIZE`]: a work
+/// area smaller than that is overhung rather than given a window its layout is not made for.
+/// Without a known display the default size stands at the origin.
+fn opening_bounds(work: Option<Bounds<Pixels>>, zoom: f32) -> Bounds<Pixels> {
+    let fit = |want: f32, min: f32, room: Option<Pixels>| {
+        let held = room.map_or(want, |room| want.min(f32::from(room)));
+        px(held.max(min))
+    };
+    let size = size(
+        fit(
+            DEFAULT_SIZE.0 * zoom,
+            MIN_SIZE.0 * zoom,
+            work.map(|work| work.size.width),
+        ),
+        fit(
+            DEFAULT_SIZE.1 * zoom,
+            MIN_SIZE.1 * zoom,
+            work.map(|work| work.size.height),
+        ),
+    );
+    match work {
+        Some(work) => Bounds::centered_at(work.center(), size),
+        None => Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size,
+        },
+    }
+}
+
 /// Open the wizard, or bring up the one that is open.
 ///
 /// `owner_display` is the owner's display, read by the caller with `window.display(cx)`: called
@@ -545,11 +615,11 @@ pub(crate) fn open(
     // position.
     let display_id =
         owner_display.or_else(|| crate::window::windowing::owner_display_id(owner, cx));
-    let bounds = Bounds::centered(
-        display_id,
-        size(px(DEFAULT_SIZE.0 * zoom), px(DEFAULT_SIZE.1 * zoom)),
-        cx,
-    );
+    let work = display_id
+        .and_then(|id| cx.find_display(id))
+        .or_else(|| cx.primary_display())
+        .map(|display| display.visible_bounds());
+    let bounds = opening_bounds(work, zoom);
     let title = |_: &App| t!("connect_wizard.window_title").to_string();
     let mut opts = crate::window::windowing::tool_window_options(
         title(cx),

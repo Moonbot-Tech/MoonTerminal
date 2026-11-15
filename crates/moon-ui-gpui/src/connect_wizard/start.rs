@@ -4,8 +4,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBadge, MoonButton, MoonPalette, MoonSelect, MoonSelectableCard, MoonTone, h_flex,
-    rgba_from, v_flex,
+    MoonBadge, MoonButton, MoonCheckbox, MoonPalette, MoonSelect, MoonSelectableCard, MoonTone,
+    h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -25,24 +25,28 @@ impl ConnectWizardView {
             Screen::new(t!("connect_wizard.start.title"))
                 .sub(t!("connect_wizard.start.sub", n = cores))
         };
+        let demo_toggle = self.demo_toggle(cx);
         screen = screen
             .child(self.look_row(cx))
-            .child(self.option(
-                Branch::NewCore,
-                t!("connect_wizard.start.new_title").to_string(),
-                if first_run {
-                    t!("connect_wizard.start.new_first").to_string()
-                } else {
-                    t!("connect_wizard.start.new_more").to_string()
-                },
-                first_run.then(|| {
-                    (
-                        t!("connect_wizard.start.recommended").to_string(),
-                        MoonTone::Positive,
-                    )
-                }),
-                cx,
-            ))
+            .child(
+                self.option(
+                    Branch::NewCore,
+                    t!("connect_wizard.start.new_title").to_string(),
+                    if first_run {
+                        t!("connect_wizard.start.new_first").to_string()
+                    } else {
+                        t!("connect_wizard.start.new_more").to_string()
+                    },
+                    first_run.then(|| {
+                        (
+                            t!("connect_wizard.start.recommended").to_string(),
+                            MoonTone::Positive,
+                        )
+                    }),
+                    cx,
+                )
+                .child(demo_toggle),
+            )
             .child(self.move_option(first_run, cx))
             .child(self.option(
                 Branch::ByKey,
@@ -114,7 +118,38 @@ impl ConnectWizardView {
             })
     }
 
-    /// One way to connect a core, as a card the user picks.
+    /// The demo tick inside the new-core card, with what it means under it. Ticking it picks the
+    /// card as well: the tick says nothing for any other way to connect. While an install is
+    /// under way the tick shows that install's kind and cannot be changed: it would change
+    /// nothing about a core that is already on its way. An install that is over no longer holds it.
+    fn demo_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        let live = self
+            .backend
+            .read(cx)
+            .core_new
+            .as_ref()
+            .filter(|job| !job.phase.ended())
+            .map(|job| job.demo);
+        v_flex()
+            .pt(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, 2.0))
+            .child(
+                MoonCheckbox::new("cw-opt-new-demo")
+                    .checked(live.unwrap_or(self.demo))
+                    .disabled(live.is_some())
+                    .label(t!("connect_wizard.start.demo").to_string())
+                    .on_change(cx.listener(|this, on: &bool, _, cx| {
+                        this.demo = *on;
+                        this.choice = Branch::NewCore;
+                        cx.notify();
+                    })),
+            )
+            .child(note(t!("connect_wizard.start.demo_desc"), cx))
+            .into_any_element()
+    }
+
+    /// One way to connect a core, as a card the user picks. The card is returned as itself, so a
+    /// caller can put a control of its own under the title and description.
     fn option(
         &self,
         branch: Branch,
@@ -122,7 +157,7 @@ impl ConnectWizardView {
         description: String,
         badge: Option<(String, MoonTone)>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> MoonSelectableCard {
         let id = match branch {
             Branch::NewCore => "cw-opt-new",
             Branch::ByKey => "cw-opt-key",

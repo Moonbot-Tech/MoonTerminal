@@ -5,9 +5,11 @@
 #                                                 CHECK_* lines tell its OS, memory and firewall
 #   install <work dir> <instance dir> <udp port> <package url>
 #                                               — package + settings and the service, not started
-#   install-fresh <instance dir> <udp port> <package url>
+#   install-fresh <instance dir> <udp port> <package url> [settings]
 #                                               — package and the service, started on the core's
-#                                                 own default settings, ready for its commands
+#                                                 own default settings, ready for its commands;
+#                                                 with `settings`, a settings archive read from
+#                                                 stdin is unpacked first and the core starts on it
 #   start   <instance dir>                      — start the core, wait until it took its key and
 #                                                 listens for MoonProto
 #   finish  <instance dir>                      — drop the first-start INI switch the move added
@@ -301,6 +303,17 @@ resolve_dir() {
     realpath -m -- "$dir"
 }
 
+# Unpack settings archive $1 into instance directory $2, over an unpacked package. The archive
+# may not replace a file of the package and must carry the bot configuration.
+unpack_settings() {
+    unzip -Z1 "$1" | while IFS= read -r name; do
+        case "$name" in */) continue ;; esac
+        test ! -e "$2/$name" || { echo "The settings would overwrite the program file $name" >&2; exit 1; }
+    done
+    unzip -q "$1" -d "$2"
+    test -f "$2/BotConfig.bcfg" || { echo 'The settings archive has no BotConfig.bcfg' >&2; exit 1; }
+}
+
 # Print "<uid> <gid>" of the account a command of instance $1 must run under, nothing for root.
 # A core's command channel answers only the account the core runs as, so a running core decides.
 # A core running as root gets root: its service already runs these files as root, so a command
@@ -402,12 +415,7 @@ install)
         --connect-timeout 20 --max-time 600 --output "$work/package.zip" "$url"
     unzip -q "$work/package.zip" -d "$dest"
     (cd "$dest" && sha256sum --quiet --check SHA256SUMS)
-    unzip -Z1 "$work/state.zip" | while IFS= read -r name; do
-        case "$name" in */) continue ;; esac
-        test ! -e "$dest/$name" || { echo "The settings would overwrite the program file $name" >&2; exit 1; }
-    done
-    unzip -q "$work/state.zip" -d "$dest"
-    test -f "$dest/BotConfig.bcfg" || { echo 'The settings archive has no BotConfig.bcfg' >&2; exit 1; }
+    unpack_settings "$work/state.zip" "$dest"
     install -m 600 "$work/key" "$dest/MoonProtoSetup.key"
     printf '%s\n' "$port" > "$dest/$marker"
     if test -e "$work/ini-flag"; then
@@ -432,6 +440,8 @@ install-fresh)
     base=$1
     port=$2
     url=$3
+    settings=${4:-}
+    test -z "$settings" || test "$settings" = settings || { echo "Unknown install option $settings" >&2; exit 1; }
     base=$(resolve_dir "$base")
     test "$base" != / || { echo 'Choose an instance directory, not /' >&2; exit 1; }
     dest=$base
@@ -468,6 +478,10 @@ install-fresh)
     }
     trap cleanup EXIT
     work=$(mktemp -d /tmp/moonbot-move.XXXXXXXX)
+    # The settings archive is the whole of stdin: taken before any other command could read it.
+    if test -n "$settings"; then
+        cat > "$work/state.zip"
+    fi
     mkdir -p -- "$(dirname -- "$dest")"
     mkdir -- "$dest"
     made=1
@@ -476,6 +490,10 @@ install-fresh)
     unzip -q "$work/package.zip" -d "$dest"
     (cd "$dest" && sha256sum --quiet --check SHA256SUMS)
     test -f "$dest/mb" || { echo 'This MoonBot package has no command line (mb): a newer package is needed' >&2; exit 1; }
+    # With settings the core starts on that configuration instead of writing its defaults.
+    if test -n "$settings"; then
+        unpack_settings "$work/state.zip" "$dest"
+    fi
     printf '%s\n' "$port" > "$dest/$marker"
     chmod 700 "$dest/MoonBot" "$dest/mb"
     install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
@@ -489,8 +507,8 @@ install-fresh)
     systemctl daemon-reload
     started=1
     systemctl enable --now -- "$unit" >/dev/null 2>&1
-    # A fresh core writes its default settings on the first start; its command channel answers
-    # once it is up.
+    # A fresh core writes its default settings on the first start, or starts on the settings
+    # unpacked above; either way its command channel answers once it is up.
     # Bounded by the clock, not by passes: one hung probe takes its whole 10 s.
     deadline=$(($(date +%s) + 90))
     until (cd "$dest" && timeout 10 ./mb --status >/dev/null 2>&1); do

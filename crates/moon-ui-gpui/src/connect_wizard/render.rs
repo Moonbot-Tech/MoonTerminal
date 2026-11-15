@@ -217,7 +217,15 @@ impl ConnectWizardView {
     fn rail(&self, cx: &App) -> (Vec<String>, usize) {
         let first = t!("connect_wizard.rail.way").to_string();
         let branch = self.branch.unwrap_or(self.choice);
+        // A demo install asks for no keys: its login is part of the install.
+        let demo = branch == Branch::NewCore && self.demo_install(cx);
         let steps = match branch {
+            Branch::NewCore if demo => vec![
+                first,
+                t!("connect_wizard.rail.server").to_string(),
+                t!("connect_wizard.rail.install").to_string(),
+                t!("connect_wizard.rail.done").to_string(),
+            ],
             Branch::NewCore => vec![
                 first,
                 t!("connect_wizard.rail.server").to_string(),
@@ -251,6 +259,7 @@ impl ConnectWizardView {
                     | NewPhase::Failed { .. },
                 ) => 1,
                 Some(NewPhase::Installing) => 2,
+                Some(NewPhase::Keys | NewPhase::LoggingIn | NewPhase::Stuck { .. }) if demo => 2,
                 Some(NewPhase::Keys | NewPhase::LoggingIn | NewPhase::Stuck { .. }) => 3,
                 Some(
                     NewPhase::Connecting { .. }
@@ -258,7 +267,7 @@ impl ConnectWizardView {
                     | NewPhase::Done
                     | NewPhase::Removing
                     | NewPhase::Removed,
-                ) => 4,
+                ) => steps.len() - 1,
             },
             Some(Branch::ByKey) => {
                 if self.by_key_uid.is_some() {

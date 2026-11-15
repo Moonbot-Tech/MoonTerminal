@@ -4,8 +4,9 @@
 //! ```text
 //! moon-remote --data <dir> core-new --host <h> [--port 22] --login <user> --login-key <file>
 //!             [--host-key <SHA256:...>] --dir <instance dir> --proto-port <udp>
-//!             [--public-ip <ipv4>] [--package <url>] [--key-out <file>] [--exchange <id>]
-//! moon-remote --data <dir> core-new-status    --host <h> ... --dir <instance dir>
+//!             [--public-ip <ipv4>] [--package <url>] [--key-out <file>]
+//!             [--exchange <id> | --demo]
+//! moon-remote --data <dir> core-new-status   --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-new-exchanges --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-new-keys      --host <h> ... --dir <instance dir> --exchange <id>
 //!             [--public-ip <ipv4>] [--proto-port <udp>]
@@ -17,6 +18,8 @@
 //! `--key-out`). With `--exchange` the exchange is selected first and the key printed is that
 //! exchange's own: MoonBot keeps MoonProto settings per exchange. The exchange keys are asked without echo, or
 //! taken from `MOON_REMOTE_API_KEY` / `MOON_REMOTE_API_SECRET`, and reach the core on stdin only.
+//! With `--demo` the core starts on MoonBot's demo settings instead of its defaults: it logs in to
+//! MoonBot's demo exchange account by itself, in the emulator, and takes no keys.
 //! `core-move-remove --dir` takes the instance out again.
 
 use std::net::Ipv4Addr;
@@ -88,6 +91,11 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
         .unwrap_or_else(|| core_move::RELEASE_PACKAGE.to_owned());
     let key_out = args.value("--key-out")?;
     let exchange = args.value("--exchange")?;
+    let demo = args.flag("--demo");
+    anyhow::ensure!(
+        !(demo && exchange.is_some()),
+        "--demo starts the core on MoonBot's demo account: it takes no --exchange"
+    );
     let public_ip = public_ip(&target, args)?;
     let (conn, privilege) = connect(&target, args)?;
     args.done()?;
@@ -95,7 +103,14 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
     let mut say = |step: core_move::MoveStep| println!("{step:?}");
     let check = core_move::check(&conn, &privilege, proto_port, &mut say)?;
     println!("{check:?}");
-    let installed = core_new::install(&conn, &privilege, &dir, proto_port, &package)?;
+    let installed = core_new::install(
+        &conn,
+        &privilege,
+        &dir,
+        proto_port,
+        &package,
+        demo.then_some(core_new::DEMO_SETTINGS),
+    )?;
     println!(
         "MOVE_DIRECTORY={}\nMOVE_SERVICE={}",
         installed.dir, installed.unit
@@ -108,6 +123,10 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
         let Some(exchange) = &exchange else {
             let key = core_new::setup_moonproto(&conn, &privilege, dir, public_ip, proto_port)?;
             show_key(&key, key_out.as_deref())?;
+            // A demo core logs in by itself: wait for it as a login with typed keys is waited for.
+            if demo {
+                return settle(&conn, &privilege, dir);
+            }
             print_status(&core_new::status(&conn, &privilege, dir)?);
             return Ok(());
         };

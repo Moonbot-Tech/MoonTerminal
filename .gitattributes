@@ -16,3 +16,5 @@ Makefile text eol=lf
 *.png binary
 *.ttf binary
 *.webp binary
+# MoonBot's demo settings, embedded into the terminal as they are.
+/crates/moon-remote/remote/demo-settings.zip binary

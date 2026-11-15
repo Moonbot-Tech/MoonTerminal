@@ -18,6 +18,7 @@ connect_wizard.install_failed: "The core was not installed and nothing was left 
 # --- Progress lines ---
 connect_wizard.line.logged_in: "Logged in to the server as %{user}"
 connect_wizard.line.downloading: "Downloading Moonbot and installing its service…"
+connect_wizard.line.downloading_demo: "Downloading Moonbot, adding the demo settings and installing its service…"
 connect_wizard.line.installed: "The core is installed in %{dir} and running"
 connect_wizard.line.key: "The core handed out its connection key — %{address}"
 connect_wizard.line.row_added: "The core is added to Settings → Cores"
@@ -46,6 +47,8 @@ connect_wizard.start.new_title: "New core on a Linux server"
 connect_wizard.start.new_first: "First rent a VPS — a Linux server from a hosting provider (Ubuntu 24.04 or newer, or Debian 13 or newer; x86-64, 1 GB of memory or more). The provider will send you an IP, login and password to enter next. The core will run there around the clock."
 connect_wizard.start.new_more: "Rent a VPS: Ubuntu 24.04+ or Debian 13+, x86-64, at least 1 GB RAM. The core runs there with its own exchange keys."
 connect_wizard.start.recommended: "recommended"
+connect_wizard.start.demo: "Demo mode"
+connect_wizard.start.demo_desc: "The core starts on the Moonbot Demo settings: Moonbot's demo account on Binance, trading in the emulator — no trade goes to the exchange. No exchange keys of yours are needed; you can add them later."
 connect_wizard.start.move_title: "Move a core to a Linux server"
 connect_wizard.start.move_desc: "From Windows or from another Linux server: keys, strategies and trade history."
 connect_wizard.start.move_no_cores: "no cores connected"
@@ -150,6 +153,8 @@ connect_wizard.stuck.reason_ip: "The server IP %{ip} is not in the key's IP whit
 connect_wizard.stuck.reason_rights: "The key lacks a right it needs (futures, for example)."
 connect_wizard.stuck.reason_copy: "The key or secret was not copied in full, or the key was deleted on the exchange."
 connect_wizard.stuck.fix_keys: "Fix the keys"
+connect_wizard.stuck.own_keys: "Connect my own keys"
+connect_wizard.stuck.demo: "This is a demo install: its exchange keys are Moonbot's and cannot be fixed here. Check again a little later, or connect exchange keys of your own."
 
 # --- Connecting the terminal ---
 connect_wizard.connect.title: "Connecting the terminal"
@@ -182,6 +187,7 @@ connect_wizard.done.real: "Real trading"
 connect_wizard.done.real_warning: "In real trading the core places orders on the exchange with your money."
 connect_wizard.done.real_confirm: "Switch real trading on"
 connect_wizard.done.mode_failed: "The mode was not switched: %{reason}"
+connect_wizard.done.demo: "The core runs on Moonbot's demo account in the emulator: no trade goes to the exchange. To trade on your own account, give the core your exchange keys through the core commands."
 
 # --- Connect to a Moonbot core by its key ---
 connect_wizard.by_key.title: "Connect to a Moonbot core"

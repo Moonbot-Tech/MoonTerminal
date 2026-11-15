@@ -18,6 +18,7 @@ connect_wizard.install_failed: "核心未安装，服务器上未留下任何内
 # --- Progress lines ---
 connect_wizard.line.logged_in: "已登录服务器：%{user}"
 connect_wizard.line.downloading: "正在下载 Moonbot 并安装服务…"
+connect_wizard.line.downloading_demo: "正在下载 Moonbot、添加演示设置并安装服务…"
 connect_wizard.line.installed: "核心已安装到 %{dir} 并已启动"
 connect_wizard.line.key: "核心已生成连接密钥：%{address}"
 connect_wizard.line.row_added: "核心已添加到“设置 → 核心”"
@@ -46,6 +47,8 @@ connect_wizard.start.new_title: "在 Linux 服务器上安装新核心"
 connect_wizard.start.new_first: "请先租用 VPS——托管服务商提供的 Linux 服务器（Ubuntu 24.04 或更高版本，或 Debian 13 或更高版本；x86-64，内存 1 GB 起）。服务商会发来 IP、登录名和密码，下一步填入即可。核心将在那里全天候运行。"
 connect_wizard.start.new_more: "需要租用 VPS：Ubuntu 24.04+ 或 Debian 13+，x86-64，内存 1 GB 起。核心使用自己的交易所密钥。"
 connect_wizard.start.recommended: "推荐"
+connect_wizard.start.demo: "演示模式"
+connect_wizard.start.demo_desc: "核心以 Moonbot Demo 的设置启动：使用 Moonbot 在 Binance 的演示账户，以模拟模式交易——交易不会发送到交易所。无需您自己的交易所密钥，之后可以再添加。"
 connect_wizard.start.move_title: "将核心迁移到 Linux 服务器"
 connect_wizard.start.move_desc: "从 Windows 或另一台 Linux 服务器迁移：密钥、策略和交易历史。"
 connect_wizard.start.move_no_cores: "没有已连接的核心"
@@ -150,6 +153,8 @@ connect_wizard.stuck.reason_ip: "服务器 IP %{ip} 未添加到交易所的密�
 connect_wizard.stuck.reason_rights: "密钥未开启所需权限（例如合约）。"
 connect_wizard.stuck.reason_copy: "API Key 或 Secret 未完整复制，或该密钥已在交易所被删除。"
 connect_wizard.stuck.fix_keys: "修正密钥"
+connect_wizard.stuck.own_keys: "连接我的密钥"
+connect_wizard.stuck.demo: "这是演示安装：其中的交易所密钥属于 Moonbot，无法在此修正。请稍后再检查，或连接您自己的交易所密钥。"
 
 # --- Connecting the terminal ---
 connect_wizard.connect.title: "连接终端"
@@ -182,6 +187,7 @@ connect_wizard.done.real: "实盘交易"
 connect_wizard.done.real_warning: "实盘交易时，核心会用你的资金在交易所下单。"
 connect_wizard.done.real_confirm: "开启实盘交易"
 connect_wizard.done.mode_failed: "模式未切换：%{reason}"
+connect_wizard.done.demo: "核心在 Moonbot 的演示账户上以模拟模式运行：交易不会发送到交易所。要在自己的账户上交易，请通过核心命令为核心设置您的交易所密钥。"
 
 # --- Connect to a Moonbot core by its key ---
 connect_wizard.by_key.title: "连接到 Moonbot 核心"

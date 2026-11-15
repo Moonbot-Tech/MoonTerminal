@@ -5,7 +5,8 @@
 //! `--exchange`), the API keys (`--set-api-keys`, JSON on stdin only) and a new login
 //! (`--retry-login`); `--status` reports where it stands. They work before the core is logged in
 //! to its exchange and without a restart. Nothing here writes the core's settings file or reads
-//! its log.
+//! its log. A core may instead start on a ready settings archive ([`DEMO_SETTINGS`]): it then
+//! logs in by itself and only MoonProto is left to set up.
 //!
 //! The package and the service go on through the same server-side script as a moved core
 //! (`remote/moonbot-move.sh`, step `install-fresh`), so [`crate::core_move::check`] and
@@ -31,6 +32,11 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 const STATUS_FAILURES: u32 = 5;
 /// How long a login usually takes to settle: the exchange login plus MoonBot's registration.
 pub const SETTLE_TIMEOUT: Duration = Duration::from_secs(180);
+/// The settings of MoonBot's public demo (`MoonBotDemo.zip` on MoonBot's download page): its bot
+/// configuration, INI, strategy files and source tag, without the Windows program. A core started
+/// on them logs in to MoonBot's own demo exchange account and trades in the emulator, so it needs
+/// no exchange keys of the user. Give it to [`install`] as its settings.
+pub const DEMO_SETTINGS: &[u8] = include_bytes!("../remote/demo-settings.zip");
 
 /// One exchange of `mb --exchanges`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -209,21 +215,32 @@ impl ApiKeys {
 }
 
 /// Install the package and the service in `dir` (a taken name gets `-2`, `-3`…), open `proto_port`
-/// in an active ufw, and start the core on its default settings. Returns once the core answers
-/// its commands. A failure leaves nothing behind but what every instance shares: the
-/// `moonbot@.service` template and the `mb` command in `/usr/local/bin`.
+/// in an active ufw, and start the core. Returns once the core answers its commands. A failure
+/// leaves nothing behind but what every instance shares: the `moonbot@.service` template and the
+/// `mb` command in `/usr/local/bin`.
+///
+/// Without `settings` the core starts on its own defaults and waits for an exchange and keys.
+/// With a settings archive — a ZIP holding `BotConfig.bcfg` and its companions at their paths
+/// inside the bot folder, such as [`DEMO_SETTINGS`] — the core starts on that configuration and
+/// logs in with the keys it carries. The archive travels on the step's stdin and never touches
+/// the server outside the install's own work directory and the instance.
 pub fn install(
     conn: &Conn,
     privilege: &Privilege,
     dir: &str,
     proto_port: u16,
     package_url: &str,
+    settings: Option<&[u8]>,
 ) -> anyhow::Result<Installed> {
     let port = proto_port.to_string();
+    let mut args = vec![dir, port.as_str(), package_url];
+    if settings.is_some() {
+        args.push("settings");
+    }
     let out = privilege.run(
         conn,
-        &command("install-fresh", &[dir, &port, package_url]),
-        &[],
+        &command("install-fresh", &args),
+        settings.unwrap_or_default(),
         INSTALL_TIMEOUT,
     )?;
     let text = out.stdout_text();
