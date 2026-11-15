@@ -1,21 +1,20 @@
 //! Instructions and owned connection attempts for an existing Moonbot core.
 
-use std::time::{Duration, Instant};
-use gpui::*;
-use moon_core::config::{CoreTarget, parse_endpoint_override, target_from_key};
-use moon_core::feed::{ConnStatus, FailureClass};
-use moon_ui::{MoonButton, MoonInputState};
-use rust_i18n::t;
-use super::{Branch, ConnectWizardView};
 use super::render::{Screen, note};
 use super::server::text;
-use crate::design;
-use logic::{FailScreen, Host, Step};
+use super::{Branch, ConnectWizardView};
+use gpui::*;
+use logic::{Action, FailScreen, Footer, Host, Step};
+use moon_core::config::{CoreTarget, parse_endpoint_override, target_from_key};
+use moon_core::feed::{ConnStatus, FailureClass};
+use moon_ui::MoonInputState;
+use rust_i18n::t;
+use std::time::{Duration, Instant};
 
+mod failure;
 pub(super) mod logic;
 mod parts;
 mod steps;
-mod failure;
 #[cfg(test)]
 mod tests;
 
@@ -65,13 +64,22 @@ impl ByKeyState {
     /// Create independent inputs, with Moonbot's factory port selected initially.
     pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
         Self {
-            step: Step::Port, host: Host::WindowsServer,
-            port: cx.new(|cx| MoonInputState::new(window, cx).default_value(logic::FACTORY_PORT.to_string())),
+            step: Step::Port,
+            host: Host::WindowsServer,
+            port: cx.new(|cx| {
+                MoonInputState::new(window, cx).default_value(logic::FACTORY_PORT.to_string())
+            }),
             name: cx.new(|cx| MoonInputState::new(window, cx)),
             key: cx.new(|cx| MoonInputState::new(window, cx).masked(true)),
             ip: cx.new(|cx| MoonInputState::new(window, cx)),
-            uid: None, since: None, copied_at: None, accepted_mismatch: None,
-            chosen_port: logic::FACTORY_PORT, created: false, failure: None, awaiting_reconnect: false,
+            uid: None,
+            since: None,
+            copied_at: None,
+            accepted_mismatch: None,
+            chosen_port: logic::FACTORY_PORT,
+            created: false,
+            failure: None,
+            awaiting_reconnect: false,
         }
     }
 
@@ -93,70 +101,119 @@ impl ByKeyState {
 
     /// A failed deletion keeps the attempt intact; leaving a reused row never calls deletion.
     fn abandon(&mut self, drop: impl FnOnce(u64) -> anyhow::Result<()>) -> anyhow::Result<()> {
-        if self.created && let Some(uid) = self.uid { drop(uid)?; }
+        if self.created
+            && let Some(uid) = self.uid
+        {
+            drop(uid)?;
+        }
         self.forget_attempt();
         Ok(())
     }
 
     /// Observe one verdict without replacing the first failure during automatic retries.
     fn retain_failure(&mut self, ready: bool, observed: Option<Failure>) {
-        if ready { self.failure = None; }
-        else if self.failure.is_none() { self.failure = observed; }
+        if ready {
+            self.failure = None;
+        } else if self.failure.is_none() {
+            self.failure = observed;
+        }
     }
 }
 
 impl ConnectWizardView {
     /// Dispatch instructions before the row exists, then its connection progress.
     pub(super) fn by_key_screen(&mut self, cx: &mut Context<Self>) -> Screen {
-        if let Some(uid) = self.by_key.uid { return self.by_key_progress(uid, cx); }
+        if let Some(uid) = self.by_key.uid {
+            return self.by_key_progress(uid, cx);
+        }
         let screen = match self.by_key.step {
-            Step::Port => steps::port_screen(steps::PortOptions {
-                host: self.by_key.host,
-                command_port: logic::parse_port(&text(&self.by_key.port, cx)).unwrap_or(self.by_key.chosen_port),
-                copied: self.by_key.copied(),
-            }, &self.by_key.port,
+            Step::Port => steps::port_screen(
+                steps::PortOptions {
+                    host: self.by_key.host,
+                    command_port: logic::parse_port(&text(&self.by_key.port, cx))
+                        .unwrap_or(self.by_key.chosen_port),
+                    copied: self.by_key.copied(),
+                },
+                &self.by_key.port,
                 {
                     let view = cx.entity().downgrade();
-                    move |host, _, _, cx| { let _ = view.update(cx, |this, cx| { this.by_key.host = host; cx.notify(); }); }
+                    move |host, _, _, cx| {
+                        let _ = view.update(cx, |this, cx| {
+                            this.by_key.host = host;
+                            cx.notify();
+                        });
+                    }
                 },
-                cx.listener(|this, _, _, cx| { this.choice = Branch::NewCore; this.next_from_start(cx); }),
-                cx.listener(|this, _, _, cx| this.by_key_copy(cx)), cx)
-                .right(self.by_key_next_button(t!("connect_wizard.next").to_string(), cx)),
-            Step::Moonbot => steps::moonbot_screen(self.by_key.chosen_port, cx)
-                .right(self.by_key_next_button(t!("connect_wizard.by_key.key_copied").to_string(), cx)),
-            Step::Key => {
-                let key = text(&self.by_key.key, cx);
-                let target = target_from_key(&key, None);
-                let mismatch = logic::pending_mismatch(self.by_key.accepted_mismatch.as_ref(), &key, self.by_key.chosen_port, target.as_ref());
-                let mut screen = steps::key_screen(&self.by_key.name, &self.by_key.key, mismatch, self.by_key.chosen_port,
-                    cx.listener(|this, _, window, cx| this.by_key_paste(window, cx)), cx);
-                if let Some(port) = mismatch {
-                    screen = screen.right(MoonButton::new("cw-key-accept").size(design::CONTROL_TIER)
-                        .label(t!("connect_wizard.by_key.connect_with_port", port = port).to_string())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.by_key.accepted_mismatch = Some((text(&this.by_key.key, cx), this.by_key.chosen_port));
-                            this.by_key_connect(window, cx);
-                        })).render())
-                        .right(MoonButton::new("cw-key-repaste").primary().size(design::CONTROL_TIER)
-                            .label(t!("connect_wizard.by_key.paste_again").to_string())
-                            .on_click(cx.listener(|this, _, window, cx| this.by_key_paste(window, cx))).render());
-                } else {
-                    screen = screen.right(MoonButton::new("cw-key-connect").primary().size(design::CONTROL_TIER)
-                        .label(t!("connect_wizard.by_key.connect").to_string())
-                        .on_click(cx.listener(|this, _, window, cx| this.by_key_connect(window, cx))).render());
-                }
-                screen
-            }
+                cx.listener(|this, _, _, cx| {
+                    this.choice = Branch::NewCore;
+                    this.next_from_start(cx);
+                }),
+                cx.listener(|this, _, _, cx| this.by_key_copy(cx)),
+                cx,
+            ),
+            Step::Moonbot => steps::moonbot_screen(self.by_key.chosen_port, cx),
+            Step::Key => steps::key_screen(
+                &self.by_key.name,
+                &self.by_key.key,
+                self.by_key_mismatch(cx),
+                self.by_key.chosen_port,
+                cx.listener(|this, _, window, cx| this.by_key_paste(window, cx)),
+                cx,
+            ),
         };
-        screen.left(MoonButton::new("cw-key-back").size(design::CONTROL_TIER)
-            .label(t!("connect_wizard.back").to_string())
-            .on_click(cx.listener(|this, _, _, cx| this.by_key_back(cx))).render())
+        let mismatch = (self.by_key.step == Step::Key)
+            .then(|| self.by_key_mismatch(cx))
+            .flatten();
+        self.by_key_footer(screen, Footer::Instructions(self.by_key.step), mismatch, cx)
     }
 
-    /// Shared primary action for the two instruction steps.
-    fn by_key_next_button(&self, label: String, cx: &mut Context<Self>) -> impl IntoElement {
-        MoonButton::new("cw-key-next").primary().size(design::CONTROL_TIER).label(label)
-            .on_click(cx.listener(|this, _, _, cx| this.by_key_next(cx))).render()
+    /// Resolve pending mismatch acceptance the same way for initial and replacement keys.
+    fn by_key_mismatch(&self, cx: &App) -> Option<u16> {
+        let key = text(&self.by_key.key, cx);
+        let target = target_from_key(&key, None);
+        logic::pending_mismatch(
+            self.by_key.accepted_mismatch.as_ref(),
+            &key,
+            self.by_key.chosen_port,
+            target.as_ref(),
+        )
+    }
+
+    /// Bind the shared footer's intents to this wizard's live actions.
+    fn by_key_footer(
+        &self,
+        screen: Screen,
+        footer: Footer,
+        mismatch: Option<u16>,
+        cx: &mut Context<Self>,
+    ) -> Screen {
+        let view = cx.entity().downgrade();
+        parts::with_footer(screen, footer, mismatch, move |action, _, window, cx| {
+            let _ = view.update(cx, |this, cx| match action {
+                Action::Back => this.by_key_back(cx),
+                Action::Next => this.by_key_next(cx),
+                Action::Connect => this.by_key_connect(window, cx),
+                Action::AcceptPort => {
+                    this.by_key.accepted_mismatch =
+                        Some((text(&this.by_key.key, cx), this.by_key.chosen_port));
+                    if matches!(footer, Footer::Failure(FailScreen::KeyRefused)) {
+                        this.by_key_new_key(window, cx);
+                    } else {
+                        this.by_key_connect(window, cx);
+                    }
+                }
+                Action::Paste => this.by_key_paste(window, cx),
+                Action::Drop | Action::Cancel => this.by_key_drop(cx),
+                Action::Retry => this.by_key_retry(cx),
+                Action::NewKey => this.by_key_new_key(window, cx),
+                Action::SetAddress => this.by_key_set_address(cx),
+                Action::Again => {
+                    this.by_key.forget_attempt();
+                    this.back_to_start(cx);
+                }
+                Action::Finish => this.close(window, cx),
+            });
+        })
     }
 
     /// Freeze a valid port before giving instructions which depend on it.
@@ -165,7 +222,10 @@ impl ConnectWizardView {
         self.error = None;
         match self.by_key.step {
             Step::Port => match logic::parse_port(&text(&self.by_key.port, cx)) {
-                Some(port) => { self.by_key.chosen_port = port; self.by_key.step = Step::Moonbot; }
+                Some(port) => {
+                    self.by_key.chosen_port = port;
+                    self.by_key.step = Step::Moonbot;
+                }
                 None => self.error = Some(t!("connect_wizard.server.need_port").to_string()),
             },
             Step::Moonbot => self.by_key.step = Step::Key,
@@ -189,7 +249,9 @@ impl ConnectWizardView {
     /// Paste a new export and require a new decision about its port.
     fn by_key_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(key) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.by_key.key.update(cx, |state, cx| state.set_value(key, window, cx));
+            self.by_key
+                .key
+                .update(cx, |state, cx| state.set_value(key, window, cx));
         }
         self.by_key.accepted_mismatch = None;
         self.error = None;
@@ -198,14 +260,21 @@ impl ConnectWizardView {
 
     /// Copy the displayed command, repainting once after its acknowledgement expires.
     fn by_key_copy(&mut self, cx: &mut Context<Self>) {
-        let port = self.by_key.failure.as_ref().map(|failure| failure.port)
-            .unwrap_or_else(|| logic::parse_port(&text(&self.by_key.port, cx)).unwrap_or(self.by_key.chosen_port));
+        let port = self
+            .by_key
+            .failure
+            .as_ref()
+            .map(|failure| failure.port)
+            .unwrap_or_else(|| {
+                logic::parse_port(&text(&self.by_key.port, cx)).unwrap_or(self.by_key.chosen_port)
+            });
         cx.write_to_clipboard(ClipboardItem::new_string(logic::firewall_command(port)));
         self.by_key.copied_at = Some(Instant::now());
         cx.spawn(async move |view, cx| {
             cx.background_executor().timer(COPY_WAIT).await;
             let _ = view.update(cx, |_, cx| cx.notify());
-        }).detach();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -214,13 +283,24 @@ impl ConnectWizardView {
         let key = text(&self.by_key.key, cx);
         if !moon_core::config::key_is_readable(&key) {
             self.error = Some(t!("connect_wizard.by_key.bad_key").to_string());
-            cx.notify(); return;
+            cx.notify();
+            return;
         }
-        let known = self.backend.read(cx).config.servers.iter()
-            .find(|row| row.key.expose().trim() == key).map(|row| row.uid);
-        let result = if let Some(uid) = known { Ok(uid) } else {
+        let known = self
+            .backend
+            .read(cx)
+            .config
+            .servers
+            .iter()
+            .find(|row| row.key.expose().trim() == key)
+            .map(|row| row.uid);
+        let result = if let Some(uid) = known {
+            Ok(uid)
+        } else {
             let name = text(&self.by_key.name, cx);
-            self.backend.update(cx, |b, cx| b.wizard_add_row(if name.is_empty() { DEFAULT_NAME } else { &name }, &key, cx))
+            self.backend.update(cx, |b, cx| {
+                b.wizard_add_row(if name.is_empty() { DEFAULT_NAME } else { &name }, &key, cx)
+            })
         };
         match result {
             Ok(uid) => {
@@ -228,7 +308,9 @@ impl ConnectWizardView {
                 self.by_key.created = known.is_none();
                 self.error = None;
                 self.start_by_key_wait(cx);
-                self.by_key.key.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+                self.by_key
+                    .key
+                    .update(cx, |state, cx| state.set_value(String::new(), window, cx));
             }
             Err(error) => self.by_key_error(error),
         }
@@ -242,12 +324,19 @@ impl ConnectWizardView {
         cx.spawn(async move |view, cx| {
             cx.background_executor().timer(CONNECT_WAIT).await;
             let _ = view.update(cx, |_, cx| cx.notify());
-        }).detach();
+        })
+        .detach();
     }
 
     /// Resolve the saved key together with its separately persisted override.
     fn by_key_target(&self, uid: u64, cx: &App) -> Option<CoreTarget> {
-        let row = self.backend.read(cx).config.servers.iter().find(|row| row.uid == uid)?;
+        let row = self
+            .backend
+            .read(cx)
+            .config
+            .servers
+            .iter()
+            .find(|row| row.uid == uid)?;
         let endpoint = parse_endpoint_override(&row.endpoint_override).ok()?;
         target_from_key(row.key.expose(), endpoint.as_ref())
     }
@@ -257,69 +346,126 @@ impl ConnectWizardView {
         let (status, diagnosis) = {
             let backend = self.backend.read(cx);
             let core = backend.session.store().core(uid);
-            (backend.session.status_map().get(&uid).cloned(), core.and_then(|core|
-                moon_core::feed::diagnose(&core.status, core.fault.as_ref(), &core.startup)))
+            (
+                backend.session.status_map().get(&uid).cloned(),
+                core.and_then(|core| {
+                    moon_core::feed::diagnose(&core.status, core.fault.as_ref(), &core.startup)
+                }),
+            )
         };
         let target = self.by_key_target(uid, cx);
         let address = target.as_ref().map(CoreTarget::text).unwrap_or_default();
         if status == Some(ConnStatus::Ready) {
             self.by_key.retain_failure(true, None);
-            return Screen::new(t!("connect_wizard.done.title"))
-                .child(self.done_body(uid, Some(address), None, false, cx))
-                .left(self.again_button(cx)).right(self.finish_button(cx));
+            let screen = Screen::new(t!("connect_wizard.done.title")).child(self.done_body(
+                uid,
+                Some(address),
+                None,
+                false,
+                cx,
+            ));
+            return self.by_key_footer(screen, Footer::Done, None, cx);
         }
         let failed = matches!(status, Some(ConnStatus::Failed(_)));
-        if !failed { self.by_key.awaiting_reconnect = false; }
-        let timed_out = self.by_key.since.is_some_and(|since| since.elapsed() >= CONNECT_WAIT);
-        let pick = logic::pick_failure(diagnosis.as_ref().map(|d| &d.class), target.as_ref(), self.by_key.host);
-        if self.by_key.failure.is_none() && (pick == FailScreen::NoAddress || timed_out
-            || (failed && diagnosis.is_some() && !self.by_key.awaiting_reconnect)) {
+        if !failed {
+            self.by_key.awaiting_reconnect = false;
+        }
+        let timed_out = self
+            .by_key
+            .since
+            .is_some_and(|since| since.elapsed() >= CONNECT_WAIT);
+        let pick = logic::pick_failure(
+            diagnosis.as_ref().map(|d| &d.class),
+            target.as_ref(),
+            self.by_key.host,
+        );
+        if self.by_key.failure.is_none()
+            && logic::should_latch(
+                failed,
+                diagnosis.is_some(),
+                self.by_key.awaiting_reconnect,
+                timed_out,
+                pick,
+            )
+        {
             let seconds = match diagnosis.as_ref().map(|d| &d.class) {
-                Some(FailureClass::NoResponse { elapsed_ms, .. }) => elapsed_ms / 1000,
+                Some(FailureClass::NoResponse { elapsed_ms, .. }) => {
+                    logic::shown_seconds(*elapsed_ms)
+                }
                 _ => 0,
             };
-            let detail = diagnosis.as_ref().map(|d| crate::conn_diag::fault_line(d, None))
-                .unwrap_or_else(|| match status { Some(ConnStatus::Failed(reason) | ConnStatus::Stage(reason)) => reason, _ => String::new() });
-            self.by_key.retain_failure(false, Some(Failure { screen: pick, address: address.clone(), port: target.as_ref().map(|t| t.port).unwrap_or(self.by_key.chosen_port), seconds, detail }));
+            let detail = diagnosis
+                .as_ref()
+                .map(|d| crate::conn_diag::fault_line(d, None))
+                .unwrap_or_else(|| match status {
+                    Some(ConnStatus::Failed(reason) | ConnStatus::Stage(reason)) => reason,
+                    _ => String::new(),
+                });
+            self.by_key.retain_failure(
+                false,
+                Some(Failure {
+                    screen: pick,
+                    address: address.clone(),
+                    port: target
+                        .as_ref()
+                        .map(|t| t.port)
+                        .unwrap_or(self.by_key.chosen_port),
+                    seconds,
+                    detail,
+                }),
+            );
         }
-        if let Some(failure) = self.by_key.failure.clone() { return self.by_key_failure(failure, cx); }
-        steps::connecting_screen(&address, cx).right(MoonButton::new("cw-key-cancel").size(design::CONTROL_TIER)
-            .label(t!("connect_wizard.cancel").to_string())
-            .on_click(cx.listener(|this, _, _, cx| this.by_key_drop(cx))).render())
+        if let Some(failure) = self.by_key.failure.clone() {
+            return self.by_key_failure(failure, cx);
+        }
+        self.by_key_footer(
+            steps::connecting_screen(&address, cx),
+            Footer::Connecting,
+            None,
+            cx,
+        )
     }
 
     /// Recovery screens retain one primary action and an ownership-aware delete action.
     fn by_key_failure(&self, failure: Failure, cx: &mut Context<Self>) -> Screen {
+        let mismatch = (failure.screen == FailScreen::KeyRefused)
+            .then(|| self.by_key_mismatch(cx))
+            .flatten();
         let screen = match failure.screen {
-            FailScreen::NoResponse { silent } => failure::no_response_screen(failure::NoResponse {
-                port: failure.port, address: &failure.address, seconds: failure.seconds, silent,
-                fault: failure.detail, copied: self.by_key.copied(),
-            }, cx.listener(|this, _, _, cx| this.by_key_copy(cx)), cx),
-            FailScreen::KeyRefused => failure::key_refused_screen(&self.by_key.name, &self.by_key.key,
-                cx.listener(|this, _, window, cx| this.by_key_paste(window, cx)), cx),
+            FailScreen::NoResponse { silent } => failure::no_response_screen(
+                failure::NoResponse {
+                    port: failure.port,
+                    address: &failure.address,
+                    seconds: failure.seconds,
+                    silent,
+                    fault: failure.detail,
+                    copied: self.by_key.copied(),
+                },
+                cx.listener(|this, _, _, cx| this.by_key_copy(cx)),
+                cx,
+            ),
+            FailScreen::KeyRefused => failure::key_refused_screen(
+                &self.by_key.key,
+                mismatch,
+                self.by_key.chosen_port,
+                cx.listener(|this, _, window, cx| this.by_key_paste(window, cx)),
+                cx,
+            ),
             FailScreen::NoAddress => failure::no_address_screen(&self.by_key.ip, failure.port, cx),
-            FailScreen::Fallback => Screen::new(t!("connect_wizard.by_key.noresp_title")).child(note(failure.detail, cx)),
+            FailScreen::Fallback => {
+                Screen::new(t!("connect_wizard.by_key.fail_title")).child(note(failure.detail, cx))
+            }
         };
-        let label = match failure.screen {
-            FailScreen::KeyRefused => t!("connect_wizard.by_key.refused_connect"),
-            FailScreen::NoAddress => t!("connect_wizard.by_key.connect"),
-            _ => t!("connect_wizard.check_again"),
-        };
-        screen.left(MoonButton::new("cw-key-drop").size(design::CONTROL_TIER)
-            .label(t!("connect_wizard.by_key.drop").to_string())
-            .on_click(cx.listener(|this, _, _, cx| this.by_key_drop(cx))).render())
-            .right(MoonButton::new("cw-key-retry").primary().size(design::CONTROL_TIER).label(label.to_string())
-                .on_click(cx.listener(move |this, _, window, cx| match failure.screen {
-                    FailScreen::KeyRefused => this.by_key_new_key(window, cx),
-                    FailScreen::NoAddress => this.by_key_set_address(cx),
-                    _ => this.by_key_retry(cx),
-                })).render())
+        self.by_key_footer(screen, Footer::Failure(failure.screen), mismatch, cx)
     }
 
     /// Explicit retry clears the latch and starts waiting for the queued replacement.
     fn by_key_retry(&mut self, cx: &mut Context<Self>) {
         if let Some(uid) = self.by_key.uid {
-            self.backend.update(cx, |b, cx| { b.reconnect_request.push(uid); cx.notify(); });
+            self.backend.update(cx, |b, cx| {
+                b.reconnect_request.push(uid);
+                cx.notify();
+            });
             self.error = None;
             self.start_by_key_wait(cx);
             self.by_key.awaiting_reconnect = true;
@@ -332,40 +478,74 @@ impl ConnectWizardView {
         let key = text(&self.by_key.key, cx);
         if !moon_core::config::key_is_readable(&key) {
             self.error = Some(t!("connect_wizard.by_key.bad_key").to_string());
-            cx.notify(); return;
+            cx.notify();
+            return;
         }
-        let Some(uid) = self.by_key.uid else { return; };
-        match self.backend.update(cx, |b, cx| b.wizard_set_key(uid, &key, cx)) {
+        if self.by_key_mismatch(cx).is_some() {
+            cx.notify();
+            return;
+        }
+        let Some(uid) = self.by_key.uid else {
+            return;
+        };
+        match self
+            .backend
+            .update(cx, |b, cx| b.wizard_set_key(uid, &key, cx))
+        {
             Ok(()) => {
-                self.by_key.key.update(cx, |state, cx| state.set_value(String::new(), window, cx));
+                self.by_key
+                    .key
+                    .update(cx, |state, cx| state.set_value(String::new(), window, cx));
                 self.by_key.accepted_mismatch = None;
-                self.by_key_retry(cx);
+                self.error = None;
+                self.start_by_key_wait(cx);
+                self.by_key.awaiting_reconnect = true;
+                cx.notify();
             }
-            Err(error) => { self.by_key_error(error); cx.notify(); }
+            Err(error) => {
+                self.by_key_error(error);
+                cx.notify();
+            }
         }
     }
 
-    /// Save a host-only override while keeping the exported port.
+    /// Let the backend validate the host and preserve the effective port before restarting the wait.
     fn by_key_set_address(&mut self, cx: &mut Context<Self>) {
         let ip = text(&self.by_key.ip, cx);
-        let valid = parse_endpoint_override(&ip).ok().flatten()
-            .is_some_and(|value| value.host.is_some() && value.port.is_none());
-        if !valid {
-            self.error = Some(t!("connect_wizard.server.need_ipv4").to_string());
-            cx.notify(); return;
-        }
-        let Some(uid) = self.by_key.uid else { return; };
-        match self.backend.update(cx, |b, cx| b.wizard_set_address(uid, &ip, cx)) {
-            Ok(()) => self.by_key_retry(cx),
-            Err(error) => { self.by_key_error(error); cx.notify(); }
+        let Some(uid) = self.by_key.uid else {
+            return;
+        };
+        match self
+            .backend
+            .update(cx, |b, cx| b.wizard_set_address(uid, &ip, cx))
+        {
+            Ok(()) => {
+                self.error = None;
+                self.start_by_key_wait(cx);
+                self.by_key.awaiting_reconnect = true;
+                cx.notify();
+            }
+            Err(error) => {
+                if error.is::<crate::backend::core_new::InvalidWizardAddress>() {
+                    self.error = Some(t!("connect_wizard.by_key.need_host").to_string());
+                } else {
+                    self.by_key_error(error);
+                }
+                cx.notify();
+            }
         }
     }
 
     /// Delete only a row created here; reused cores are simply left configured.
     fn by_key_drop(&mut self, cx: &mut Context<Self>) {
         let backend = self.backend.clone();
-        if let Err(error) = self.by_key.abandon(|uid| backend.update(cx, |b, cx| b.wizard_drop_row(uid, cx))) {
-            self.by_key_error(error); cx.notify(); return;
+        if let Err(error) = self
+            .by_key
+            .abandon(|uid| backend.update(cx, |b, cx| b.wizard_drop_row(uid, cx)))
+        {
+            self.by_key_error(error);
+            cx.notify();
+            return;
         }
         self.error = None;
         cx.notify();
@@ -373,6 +553,7 @@ impl ConnectWizardView {
 
     /// Report persistence errors without discarding the recovery state.
     fn by_key_error(&mut self, error: anyhow::Error) {
-        self.error = Some(t!("connect_wizard.row_failed", reason = format!("{error:#}")).to_string());
+        self.error =
+            Some(t!("connect_wizard.row_failed", reason = format!("{error:#}")).to_string());
     }
 }

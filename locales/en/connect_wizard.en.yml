@@ -264,6 +264,8 @@ connect_wizard.by_key.noaddr_sub: "Moonbot did not yet know its external IP when
 connect_wizard.by_key.noaddr_ip: "Server's public IP — from the hosting control panel"
 connect_wizard.by_key.noaddr_placeholder: "for example, 203.0.113.24"
 connect_wizard.by_key.noaddr_port: "port %{port}"
+connect_wizard.by_key.fail_title: "Could not connect"
+connect_wizard.by_key.need_host: "Enter the server's IP address or host name without a port."
 connect_wizard.rail.core: "Core"
 connect_wizard.rail.move: "Move"
 

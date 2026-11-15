@@ -1,18 +1,33 @@
 //! Regression coverage for port selection and evidence-based failure routing.
 
-use super::{FailScreen, Host, Step, firewall_command, parse_port, pick_failure, port_mismatch, rail_index};
-use moon_core::{config::{CoreHost, CoreTarget}, feed::FailureClass};
+use super::{
+    FailScreen, Host, Step, firewall_command, parse_port, pick_failure, port_mismatch, rail_index,
+};
+use moon_core::{
+    config::{CoreHost, CoreTarget},
+    feed::FailureClass,
+};
 
 /// A documentation-only target, never dialled by these tests.
 fn target(port: u16, localhost_fallback: bool) -> CoreTarget {
-    CoreTarget { host: CoreHost::Ip("203.0.113.24".parse().expect("test IP")), port, localhost_fallback }
+    CoreTarget {
+        host: CoreHost::Ip("203.0.113.24".parse().expect("test IP")),
+        port,
+        localhost_fallback,
+    }
 }
 
 /// The rule name and UDP port must follow both factory and custom selections.
 #[test]
 fn firewall_rules_use_selected_port() {
-    assert_eq!(firewall_command(3000), "netsh advfirewall firewall add rule name=\"MoonBot-UDP-3000\" dir=in action=allow protocol=UDP localport=3000");
-    assert_eq!(firewall_command(5010), "netsh advfirewall firewall add rule name=\"MoonBot-UDP-5010\" dir=in action=allow protocol=UDP localport=5010");
+    assert_eq!(
+        firewall_command(3000),
+        "netsh advfirewall firewall add rule name=\"MoonBot-UDP-3000\" dir=in action=allow protocol=UDP localport=3000"
+    );
+    assert_eq!(
+        firewall_command(5010),
+        "netsh advfirewall firewall add rule name=\"MoonBot-UDP-5010\" dir=in action=allow protocol=UDP localport=5010"
+    );
 }
 
 /// Reject malformed and out-of-range ports while preserving whitespace tolerance.
@@ -36,9 +51,19 @@ fn mismatch_returns_key_port() {
 /// Packet-level and payload-level evidence both prevent the claim of total silence.
 #[test]
 fn silence_needs_zero_packets_and_bytes() {
-    for (packets_received, bytes, silent) in [(0, 0, true), (1, 0, false), (0, 1, false), (1, 1, false)] {
-        let class = FailureClass::NoResponse { packets_sent: 2, packets_received, bytes, elapsed_ms: 60000 };
-        assert_eq!(pick_failure(Some(&class), None, Host::WindowsServer), FailScreen::NoResponse { silent });
+    for (packets_received, bytes, silent) in
+        [(0, 0, true), (1, 0, false), (0, 1, false), (1, 1, false)]
+    {
+        let class = FailureClass::NoResponse {
+            packets_sent: 2,
+            packets_received,
+            bytes,
+            elapsed_ms: 60000,
+        };
+        assert_eq!(
+            pick_failure(Some(&class), None, Host::WindowsServer),
+            FailScreen::NoResponse { silent }
+        );
     }
 }
 
@@ -50,35 +75,74 @@ fn all_diagnosis_classes_route_honestly() {
         FailureClass::Endpoint { unresolved: false },
         FailureClass::LocalPort { attempts: 2 },
         FailureClass::CoreUnidentified { message: None },
-        FailureClass::Syncing { step: None, done: 0, total: 1, elapsed_ms: 1, stalled: true },
+        FailureClass::Syncing {
+            step: None,
+            done: 0,
+            total: 1,
+            elapsed_ms: 1,
+            stalled: true,
+        },
         FailureClass::Aborted,
-        FailureClass::Undetermined { raw_stage: "stage".into() },
+        FailureClass::Undetermined {
+            raw_stage: "stage".into(),
+        },
     ];
     for class in fallback {
-        assert_eq!(pick_failure(Some(&class), None, Host::WindowsServer), FailScreen::Fallback, "{class:?}");
+        assert_eq!(
+            pick_failure(Some(&class), None, Host::WindowsServer),
+            FailScreen::Fallback,
+            "{class:?}"
+        );
     }
     for refused in [false, true] {
-        let class = FailureClass::Access { refused, message: None };
-        assert_eq!(pick_failure(Some(&class), None, Host::WindowsServer), FailScreen::KeyRefused);
+        let class = FailureClass::Access {
+            refused,
+            message: None,
+        };
+        assert_eq!(
+            pick_failure(Some(&class), None, Host::WindowsServer),
+            FailScreen::KeyRefused
+        );
     }
-    assert_eq!(pick_failure(None, None, Host::WindowsServer), FailScreen::Fallback);
+    assert_eq!(
+        pick_failure(None, None, Host::WindowsServer),
+        FailScreen::Fallback
+    );
 }
 
 /// Missing-address evidence wins even over access failure, but only for a remote host.
 #[test]
 fn missing_address_depends_on_host_and_precedes_diagnosis() {
     let key = target(3000, true);
-    let access = FailureClass::Access { refused: true, message: None };
-    assert_eq!(pick_failure(Some(&access), Some(&key), Host::WindowsServer), FailScreen::NoAddress);
-    assert_eq!(pick_failure(None, Some(&key), Host::WindowsServer), FailScreen::NoAddress);
-    assert_eq!(pick_failure(None, Some(&key), Host::ThisComputer), FailScreen::Fallback);
-    assert_eq!(pick_failure(None, Some(&target(3000, false)), Host::WindowsServer), FailScreen::Fallback);
+    let access = FailureClass::Access {
+        refused: true,
+        message: None,
+    };
+    assert_eq!(
+        pick_failure(Some(&access), Some(&key), Host::WindowsServer),
+        FailScreen::NoAddress
+    );
+    assert_eq!(
+        pick_failure(None, Some(&key), Host::WindowsServer),
+        FailScreen::NoAddress
+    );
+    assert_eq!(
+        pick_failure(None, Some(&key), Host::ThisComputer),
+        FailScreen::Fallback
+    );
+    assert_eq!(
+        pick_failure(None, Some(&target(3000, false)), Host::WindowsServer),
+        FailScreen::Fallback
+    );
     let local = CoreTarget {
         host: CoreHost::Ip(std::net::Ipv4Addr::LOCALHOST.into()),
         port: 3000,
         localhost_fallback: true,
     };
-    assert_eq!(pick_failure(None, Some(&local), Host::ThisComputer), FailScreen::Fallback);
+    assert_eq!(
+        pick_failure(None, Some(&local), Host::ThisComputer),
+        FailScreen::Fallback
+    );
 }
 
 /// Readiness and added rows override stale instruction steps.
@@ -95,10 +159,24 @@ fn rail_tracks_instructions_attempt_and_ready() {
 /// Explicit loopback exports are missing remote addresses too, while local cores remain valid.
 #[test]
 fn explicit_loopback_is_remote_only_missing_address() {
-    for host in [CoreHost::Ip("127.0.0.1".parse().unwrap()), CoreHost::Ip("::1".parse().unwrap()), CoreHost::Name("localhost".into())] {
-        let key = CoreTarget { host, port: 3000, localhost_fallback: false };
-        assert_eq!(pick_failure(None, Some(&key), Host::WindowsServer), FailScreen::NoAddress);
-        assert_eq!(pick_failure(None, Some(&key), Host::ThisComputer), FailScreen::Fallback);
+    for host in [
+        CoreHost::Ip("127.0.0.1".parse().unwrap()),
+        CoreHost::Ip("::1".parse().unwrap()),
+        CoreHost::Name("localhost".into()),
+    ] {
+        let key = CoreTarget {
+            host,
+            port: 3000,
+            localhost_fallback: false,
+        };
+        assert_eq!(
+            pick_failure(None, Some(&key), Host::WindowsServer),
+            FailScreen::NoAddress
+        );
+        assert_eq!(
+            pick_failure(None, Some(&key), Host::ThisComputer),
+            FailScreen::Fallback
+        );
     }
 }
 
@@ -107,7 +185,68 @@ fn explicit_loopback_is_remote_only_missing_address() {
 fn mismatch_acceptance_is_bound_to_both_inputs() {
     let key = target(5010, false);
     let accepted = Some(("export A".to_owned(), 3000));
-    assert_eq!(super::pending_mismatch(accepted.as_ref(), "export A", 3000, Some(&key)), None);
-    assert_eq!(super::pending_mismatch(accepted.as_ref(), "export B", 3000, Some(&key)), Some(5010));
-    assert_eq!(super::pending_mismatch(accepted.as_ref(), "export A", 4000, Some(&key)), Some(5010));
+    assert_eq!(
+        super::pending_mismatch(accepted.as_ref(), "export A", 3000, Some(&key)),
+        None
+    );
+    assert_eq!(
+        super::pending_mismatch(accepted.as_ref(), "export B", 3000, Some(&key)),
+        Some(5010)
+    );
+    assert_eq!(
+        super::pending_mismatch(accepted.as_ref(), "export A", 4000, Some(&key)),
+        Some(5010)
+    );
+}
+
+/// A subsecond timeout must read as one second, and partial seconds must never be truncated.
+#[test]
+fn displayed_wait_rounds_up_and_never_shows_zero() {
+    for (elapsed, expected) in [
+        (0, 1),
+        (1, 1),
+        (999, 1),
+        (1000, 1),
+        (1001, 2),
+        (59999, 60),
+        (60000, 60),
+        (u64::MAX, 18446744073709552),
+    ] {
+        assert_eq!(super::shown_seconds(elapsed), expected);
+    }
+}
+
+/// A queued retry's old failure is ignored, while missing addresses and deadlines still surface.
+#[test]
+fn latch_waits_for_reconnect_but_not_for_missing_addresses_or_deadlines() {
+    let fallback = FailScreen::Fallback;
+    for (failed, has_diag, awaiting, timed_out, pick, expected) in [
+        (false, false, false, false, fallback, false),
+        (true, false, false, false, fallback, false),
+        (false, true, false, false, fallback, false),
+        (true, true, false, false, FailScreen::KeyRefused, true),
+        (true, true, true, false, FailScreen::KeyRefused, false),
+        (false, false, true, true, fallback, true),
+        (true, true, true, true, fallback, true),
+        (false, false, true, false, FailScreen::NoAddress, true),
+    ] {
+        assert_eq!(
+            super::should_latch(failed, has_diag, awaiting, timed_out, pick),
+            expected
+        );
+    }
+}
+
+/// Replacement-key mismatch must offer explicit port acceptance instead of submitting unnoticed.
+#[test]
+fn replacement_key_uses_the_initial_keys_port_decision() {
+    use super::{Action, Footer, footer_actions};
+    assert_eq!(
+        footer_actions(Footer::Failure(FailScreen::KeyRefused), Some(5010)),
+        vec![Action::Drop, Action::AcceptPort, Action::Paste]
+    );
+    assert_eq!(
+        footer_actions(Footer::Failure(FailScreen::KeyRefused), None),
+        vec![Action::Drop, Action::NewKey]
+    );
 }

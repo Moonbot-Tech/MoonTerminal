@@ -676,7 +676,7 @@ impl Backend {
         Ok(())
     }
 
-    /// Save only the wizard's missing host; the key's port and station ownership stay intact.
+    /// Save only the wizard's missing host; the effective port and station ownership stay intact.
     pub(crate) fn wizard_set_address(
         &mut self,
         uid: u64,
@@ -684,7 +684,13 @@ impl Backend {
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         self.finish_pending_persistence();
-        save_wizard_address(&mut self.config, &mut self.preview, uid, host, moon_core::config::AppConfig::save)?;
+        save_wizard_address(
+            &mut self.config,
+            &mut self.preview,
+            uid,
+            host,
+            moon_core::config::AppConfig::save,
+        )?;
         self.servers_changed_outside = self.servers_changed_outside.wrapping_add(1);
         let reports = self.reports.as_ref().map(|h| &h.tx);
         self.session.reconcile(&self.config, reports);
@@ -719,7 +725,20 @@ impl Backend {
     }
 }
 
-/// Commit a host-only override before publishing it to either config, preserving draft edits.
+/// A by-key host correction must contain an IP address or DNS name without a port.
+#[derive(Debug)]
+pub(crate) struct InvalidWizardAddress;
+
+impl std::fmt::Display for InvalidWizardAddress {
+    /// Describe the accepted input without interpreting persistence failures as validation errors.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("expected an IP address or host name without a port")
+    }
+}
+
+impl std::error::Error for InvalidWizardAddress {}
+
+/// Commit a host correction before publishing it to either config, preserving the effective port.
 fn save_wizard_address(
     saved: &mut moon_core::config::AppConfig,
     draft: &mut Option<moon_core::config::AppConfig>,
@@ -728,19 +747,36 @@ fn save_wizard_address(
     save: impl FnOnce(&mut moon_core::config::AppConfig) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     let endpoint = moon_core::config::parse_endpoint_override(host)
-        .map_err(|_| anyhow::anyhow!("invalid core host"))?;
-    anyhow::ensure!(endpoint.is_some_and(|e| e.host.is_some() && e.port.is_none()), "expected a host without a port");
-    let point = |config: &mut moon_core::config::AppConfig| -> anyhow::Result<()> {
-        let row = config.servers.iter_mut().find(|row| row.uid == uid)
-            .ok_or_else(|| anyhow::anyhow!("the core is no longer in the settings"))?;
-        row.endpoint_override = host.trim().to_owned();
-        Ok(())
-    };
+        .map_err(|_| InvalidWizardAddress)?
+        .filter(|endpoint| endpoint.host.is_some() && endpoint.port.is_none())
+        .ok_or(InvalidWizardAddress)?;
     let mut candidate = saved.clone();
-    point(&mut candidate)?;
+    let row = candidate
+        .servers
+        .iter_mut()
+        .find(|row| row.uid == uid)
+        .ok_or_else(|| anyhow::anyhow!("the core is no longer in the settings"))?;
+    let port = moon_core::config::parse_endpoint_override(&row.endpoint_override)
+        .map_err(|_| anyhow::anyhow!("invalid saved core endpoint"))?
+        .and_then(|endpoint| endpoint.port);
+    let host = endpoint.host.expect("validated host");
+    let address = match port {
+        Some(port) => moon_core::config::CoreTarget {
+            host,
+            port,
+            localhost_fallback: false,
+        }
+        .text(),
+        None => host.to_string(),
+    };
+    row.endpoint_override = address.clone();
     save(&mut candidate)?;
     *saved = candidate;
-    if let Some(draft) = draft { let _ = point(draft); }
+    if let Some(draft) = draft
+        && let Some(row) = draft.servers.iter_mut().find(|row| row.uid == uid)
+    {
+        row.endpoint_override = address;
+    }
     Ok(())
 }
 

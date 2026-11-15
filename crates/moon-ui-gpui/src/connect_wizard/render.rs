@@ -101,7 +101,13 @@ impl Render for ConnectWizardView {
                 .map(|job| job.lines.clone())
                 .unwrap_or_default(),
         };
-        let mut main = screen_body(screen.title, screen.sub, screen.body, self.branch == Some(Branch::ByKey), cx);
+        let mut main = screen_body(
+            screen.title,
+            screen.sub,
+            screen.body,
+            self.branch == Some(Branch::ByKey),
+            cx,
+        );
         if let Some(error) = &self.error {
             main = main.child(
                 div()
@@ -140,47 +146,103 @@ impl Render for ConnectWizardView {
                 scroll: self.log_scroll.clone(),
             });
         }
-        frame(main, screen.left, screen.right, steps, current, chrome_width, cx)
+        frame(
+            main,
+            screen.left,
+            screen.right,
+            steps,
+            current,
+            chrome_width,
+            cx,
+        )
     }
 }
 
 /// Production scroll column, shared with fixture layout tests; vertical overflow is intentional.
-pub(super) fn screen_body(title: String, sub: Option<String>, body: Vec<AnyElement>, by_key: bool, cx: &App) -> Stateful<Div> {
-    let main = v_flex().id("cw-main").flex_1().min_w(px(0.0)).h_full().overflow_y_scroll()
-        .p(design::ui_px(cx, 22.0)).gap(design::ui_px(cx, 12.0))
-        .child(div().id("cw-screen-title").debug_selector(|| "cw-screen-title".into()).when(by_key, |title| title.flex_none()).font_weight(FontWeight::SEMIBOLD)
-            .text_size(design::t_title(cx)).child(title))
-        .when_some(sub, |main, sub| if by_key {
-            main.child(div().id("cw-screen-sub").debug_selector(|| "cw-screen-sub".into()).flex_none().child(note(sub, cx)))
-        } else { main.child(note(sub, cx)) });
+pub(super) fn screen_body(
+    title: String,
+    sub: Option<String>,
+    body: Vec<AnyElement>,
+    by_key: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let main = v_flex()
+        .id("cw-main")
+        .flex_1()
+        .min_w(px(0.0))
+        .h_full()
+        .overflow_y_scroll()
+        .p(design::ui_px(cx, 22.0))
+        .gap(design::ui_px(cx, 12.0))
+        .child(
+            div()
+                .id("cw-screen-title")
+                .debug_selector(|| "cw-screen-title".into())
+                .when(by_key, |title| title.flex_none())
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(design::t_title(cx))
+                .child(title),
+        )
+        .when_some(sub, |main, sub| {
+            if by_key {
+                main.child(
+                    div()
+                        .id("cw-screen-sub")
+                        .debug_selector(|| "cw-screen-sub".into())
+                        .flex_none()
+                        .child(note(sub, cx)),
+                )
+            } else {
+                main.child(note(sub, cx))
+            }
+        });
     if by_key {
-        main.children(body.into_iter().enumerate().map(|(index, child)|
-            div().id(SharedString::from(format!("cw-key-body-{index}"))).debug_selector(|| format!("cw-key-body-{index}")).flex_none().w_full().min_w(px(0.0)).child(child)))
-    } else { main.children(body) }
+        main.children(body.into_iter().enumerate().map(|(index, child)| {
+            div()
+                .id(SharedString::from(format!("cw-key-body-{index}")))
+                .debug_selector(|| format!("cw-key-body-{index}"))
+                .flex_none()
+                .w_full()
+                .min_w(px(0.0))
+                .child(child)
+        }))
+    } else {
+        main.children(body)
+    }
 }
 
 /// Draw the actual header, rail and wrapping footer around an already built scroll column.
-pub(super) fn frame(main: Stateful<Div>, left: Vec<AnyElement>, right: Vec<AnyElement>, steps: Vec<String>, current: usize, chrome_width: f32, cx: &App) -> impl IntoElement {
+pub(super) fn frame(
+    main: Stateful<Div>,
+    left: Vec<AnyElement>,
+    right: Vec<AnyElement>,
+    steps: Vec<String>,
+    current: usize,
+    chrome_width: f32,
+    cx: &App,
+) -> impl IntoElement {
     let p = MoonPalette::active(cx);
     // Under the Facet skin `MoonRoot` paints the window backdrop behind this view: the root
-        // and the step rail paint no fill over it, and the rail's edge is a rule that fades
-        // toward the top and the bottom of the window.
-        let facet = design::is_facet(cx);
-        v_flex()
-            .size_full()
-            .relative()
-            .when(!facet, |this| this.bg(rgba_from(p.shell, 1.0)))
-            .font_family(design::ui_font())
-            .text_size(design::t_body(cx))
-            .line_height(design::line_px(cx, 14.0))
-            .text_color(rgba_from(p.text, 1.0))
-            .child(header(p, cx))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .w_full()
-                    .when(chrome_width >= design::ui_value(cx, RAIL_MIN_WINDOW_W), |row| {
+    // and the step rail paint no fill over it, and the rail's edge is a rule that fades
+    // toward the top and the bottom of the window.
+    let facet = design::is_facet(cx);
+    v_flex()
+        .size_full()
+        .relative()
+        .when(!facet, |this| this.bg(rgba_from(p.shell, 1.0)))
+        .font_family(design::ui_font())
+        .text_size(design::t_body(cx))
+        .line_height(design::line_px(cx, 14.0))
+        .text_color(rgba_from(p.text, 1.0))
+        .child(header(p, cx))
+        .child(
+            h_flex()
+                .flex_1()
+                .min_h(px(0.0))
+                .w_full()
+                .when(
+                    chrome_width >= design::ui_value(cx, RAIL_MIN_WINDOW_W),
+                    |row| {
                         row.child(
                             div()
                                 .flex_none()
@@ -203,18 +265,19 @@ pub(super) fn frame(main: Stateful<Div>, left: Vec<AnyElement>, right: Vec<AnyEl
                                         .vertical(true),
                                 ),
                         )
-                    })
-                    .child(main),
-            )
-            .child(footer(left, right, p, cx))
-            .child(
-                MoonWindowFrame::tool("cw-window-frame-hit", chrome_width)
-                    .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
-                    .header_height(HEADER_H)
-                    .leading_inset(design::titlebar_leading_inset())
-                    .show_controls(design::show_custom_window_controls())
-                    .hit_overlay(),
-            )
+                    },
+                )
+                .child(main),
+        )
+        .child(footer(left, right, p, cx))
+        .child(
+            MoonWindowFrame::tool("cw-window-frame-hit", chrome_width)
+                .controls(moon_ui::MoonWindowFrameControls::MinimizeMaximizeClose)
+                .header_height(HEADER_H)
+                .leading_inset(design::titlebar_leading_inset())
+                .show_controls(design::show_custom_window_controls())
+                .hit_overlay(),
+        )
 }
 
 impl ConnectWizardView {
@@ -276,16 +339,16 @@ impl ConnectWizardView {
                     | NewPhase::Removed,
                 ) => steps.len() - 1,
             },
-            Some(Branch::ByKey) => {
-                super::by_key::logic::rail_index(
-                    self.by_key.step,
-                    self.by_key.uid.is_some(),
-                    self.by_key.uid.is_some_and(|uid| matches!(
+            Some(Branch::ByKey) => super::by_key::logic::rail_index(
+                self.by_key.step,
+                self.by_key.uid.is_some(),
+                self.by_key.uid.is_some_and(|uid| {
+                    matches!(
                         self.backend.read(cx).session.status_map().get(&uid),
                         Some(moon_core::feed::ConnStatus::Ready)
-                    )),
-                )
-            }
+                    )
+                }),
+            ),
             Some(Branch::Move) => {
                 let phase = self
                     .move_uid
