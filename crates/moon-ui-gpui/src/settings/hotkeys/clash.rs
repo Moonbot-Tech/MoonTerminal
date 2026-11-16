@@ -21,8 +21,11 @@
 //!   and the guess said the right button placed nothing at all — a red "will not fire" on a gesture
 //!   that opens a live position.
 //! - **Within one layer** the order is a third thing again, and [`same_layer_rank`] is it: placement
-//!   asks in `GestureSlot::OWN` order, the key halves in `GestureSlot::all` order, the move rows in `MoveKindSlot::ALL` order — both read off
-//!   the lists the dispatchers walk, not copied.
+//!   asks in `GestureSlot::OWN` order, the key halves in `GestureSlot::all` order, the move rows in
+//!   `MoveKindSlot::DISPATCH` order — all read off the lists the dispatchers walk, not copied. The
+//!   move layer alone does not stop at its first match: a claiming row keeps the press only when
+//!   its leg holds an order, so two move rows on different orders pass the press between them
+//!   ([`move_rows_take_turns`]) and neither is dead.
 //!
 //! A layer that answers only in a mode or over an object — drawing while a tool is armed, a context
 //! menu over its object — does not kill what sits below it: the press falls through everywhere the
@@ -328,6 +331,9 @@ impl Clashes {
         };
         let mut wins: Vec<String> = Vec::new();
         let mut beside: Vec<String> = Vec::new();
+        // Move rows this one passes the press to or takes it from, depending on which leg holds
+        // an order: see `move_rows_take_turns`.
+        let mut turns: Vec<String> = Vec::new();
         for layer in layers {
             // The ruler and the trading layers never meet: it starts on the plot only, and placement
             // and moves act in the order book only. Captioning Move Open "shares Shift with the
@@ -341,10 +347,15 @@ impl Clashes {
                 // answers, and the others never do. Direction is the whole point here, exactly as
                 // `Self::key` states beside it — handing both rows "will not fire" reports the one
                 // that DOES fire as broken.
+                //
+                // Two move rows on different orders are the exception: the press goes to whichever
+                // of them has something to move, so neither takes it from the other.
                 let rank = same_layer_rank(&self.order, slot);
                 for other in layer_rows(*layer, rows, slot) {
                     let label = target_label(GestureTarget::Gesture(other));
-                    if same_layer_rank(&self.order, other) < rank {
+                    if move_rows_take_turns(hotkeys, slot, other) {
+                        turns.push(label);
+                    } else if same_layer_rank(&self.order, other) < rank {
                         kills.push(label);
                     } else {
                         wins.push(label);
@@ -389,6 +400,12 @@ impl Clashes {
             notes.push(Clash {
                 severity: Severity::Shares,
                 text: t!("hotkeys.clash.wins_gesture", rows = wins.join(", ")).to_string(),
+            });
+        }
+        if !turns.is_empty() {
+            notes.push(Clash {
+                severity: Severity::Shares,
+                text: t!("hotkeys.clash.move_chain", rows = turns.join(", ")).to_string(),
             });
         }
         if !beside.is_empty() {
@@ -545,21 +562,45 @@ fn dead_fig_delete_gesture(gesture: MouseGestureBinding) -> Option<Layer> {
 ///   `GestureSlot::OWN` order and returns the FIRST match;
 /// - action — the chart's action layer tries the key halves in `GestureSlot::all` order, which
 ///   is `KeySlot::all` order, and the first match fires;
-/// - move — `HotkeysConfig::resolve_move_gesture` walks `MoveKindSlot::ALL`, testing each row's long
-///   and short halves together, so `ShortBuyMove` answers before `SellMove2` although this page
-///   lists it four rows later.
+/// - move — `HotkeysConfig::resolve_move_gesture` walks `MoveKindSlot::DISPATCH`, testing each
+///   row's long and short halves together, so `ShortBuyMove` answers before `BuyMove2` although
+///   this page lists it several rows later. The rank only decides between rows on the SAME
+///   orders; rows on different orders take turns and are never ranked
+///   ([`move_rows_take_turns`]).
 ///
-/// Both are read off the lists those dispatchers walk rather than transcribed, so this cannot
-/// drift from them. Ranks are only ever compared within one layer, so the two families may reuse
+/// All are read off the lists those dispatchers walk rather than transcribed, so this cannot
+/// drift from them. Ranks are only ever compared within one layer, so the families may reuse
 /// the same numbers. The halves of one move row share a rank and are never compared:
 /// `same_move_row` exempts them. `FigDelete` is alone on its layer, so its number is never compared
 /// with anything.
 fn same_layer_rank(order: &[GestureSlot], slot: GestureSlot) -> usize {
     let position = match slot.move_half() {
-        Some(half) => MoveKindSlot::ALL.iter().position(|row| *row == half.row),
+        Some(half) => MoveKindSlot::DISPATCH
+            .iter()
+            .position(|row| *row == half.row),
         None => order.iter().position(|other| *other == slot),
     };
     position.unwrap_or(0)
+}
+
+/// Whether two move rows on one gesture pass the press between them rather than one silencing the
+/// other.
+///
+/// The move layer does not answer on its first match: `feed::trade::move_orders_to_price` gives
+/// the press to the first claiming row whose leg HOLDS an order to move, as Moonbot does. Two rows
+/// that address different orders therefore both work — Move TP while a take profit stands, Move
+/// Open while none does — which is Moonbot's own "additional commands" set-up, both rows on the
+/// middle button. Different orders means a different leg (entry against exit), or the same leg on
+/// different position sides while the mirror is off.
+///
+/// Two rows on the SAME orders stay a real shadow: when the first has nothing to move, neither
+/// has the second. That holds for a row sending "both sides" as well — the feed narrows it to
+/// whichever side holds its leg, so it passes the press on only when neither side does.
+fn move_rows_take_turns(hotkeys: &HotkeysConfig, a: GestureSlot, b: GestureSlot) -> bool {
+    let (Some(x), Some(y)) = (a.move_half(), b.move_half()) else {
+        return false;
+    };
+    x.row.entry() != y.row.entry() || (!hotkeys.same_hotkeys_for_move && x.short != y.short)
 }
 
 /// The ROWS that answer this gesture at one layer, other than the row asking.

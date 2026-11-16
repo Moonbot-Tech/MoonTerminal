@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "Mismo gesto que %{rows}. Ambos funcionan, cada un
 hotkeys.clash.bare_key: "Tecla suelta: se dispara con cualquier pulsación fuera de un campo de texto — bajo tu responsabilidad."
 hotkeys.clash.wins_key: "La tecla le quita el atajo a %{rows}, donde no se activará."
 hotkeys.clash.wins_gesture: "El gesto le quita el atajo a %{rows}, donde no se activará."
+hotkeys.clash.move_chain: "Mismo gesto que %{rows}. Se activa el movimiento que tiene órdenes en el mercado. Orden: take, entrada y luego los segundos gestos."
 hotkeys.clash.builtin.esc_close: "el cierre de gráfico integrado (Esc)"
 hotkeys.clash.builtin.close_all: "el cierre de todos los gráficos integrado (Shift+Esc)"
 hotkeys.clash.builtin.reset_windows: "el restablecimiento de ventanas integrado (Ctrl+Shift+F10)"

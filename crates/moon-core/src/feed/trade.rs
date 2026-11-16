@@ -16,6 +16,7 @@ use moonproto::{
     SellOrderParams, SplitOrderParams, VStopParams,
 };
 
+use crate::config::{MoveGestureCommand, MoveKind, MoveSide};
 use crate::feed::{OrderLinePriceKind, OrderStopKind};
 
 /// Logs a trading call outcome consistently: `Ok` → `info` with `ctx`; `Err` → the same
@@ -434,7 +435,94 @@ pub(super) fn shift_orders_percent(
     }
 }
 
-/// Move a market's orders of one side onto a clicked price — Moonbot's Move Open / Move TP.
+/// Which legs of one market hold an order a bulk move may take.
+///
+/// The answers moonproto's own candidate check gives before it sends a replace-kind move
+/// (`Orders::has_move_all_buys_candidate` / `has_move_all_sells_candidate`): an order counts for a
+/// leg when it is in that leg's phase — `BuySet` or `SellSet` — on this market and is not
+/// click-immune. Transcribed rather than called because the buy half of that check takes types
+/// moonproto does not export. Kept per position side because a move addresses one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MovableLegs {
+    buys_long: bool,
+    buys_short: bool,
+    sells_long: bool,
+    sells_short: bool,
+}
+
+impl MovableLegs {
+    /// Collect the legs of `market` from `(market, status, is_short, immune_for_clicks)` rows.
+    fn of<'a>(
+        orders: impl Iterator<Item = (&'a str, OrderWorkerStatus, bool, bool)>,
+        market: &str,
+    ) -> Self {
+        let mut legs = Self::default();
+        for (name, status, short, immune) in orders {
+            if name != market || immune {
+                continue;
+            }
+            let buy = status == OrderWorkerStatus::BuySet;
+            let sell = status == OrderWorkerStatus::SellSet;
+            legs.buys_long |= buy && !short;
+            legs.buys_short |= buy && short;
+            legs.sells_long |= sell && !short;
+            legs.sells_short |= sell && short;
+        }
+        legs
+    }
+
+    /// The position side `command` moves, or `None` when its leg holds no order there.
+    ///
+    /// A row bound to one side answers for that side only. A row bound to BOTH — the shipped
+    /// mirror puts one gesture on both — takes whichever side actually holds its leg. Only when
+    /// both sides do is the question open, and then `hedge_short`, the side the chart reads the
+    /// market's position as, decides: a click on a hedged market never reprices both positions.
+    fn side_for(self, command: MoveGestureCommand, hedge_short: bool) -> Option<MoveSide> {
+        let (long, short) = if command.sell {
+            (self.sells_long, self.sells_short)
+        } else {
+            (self.buys_long, self.buys_short)
+        };
+        match (command.side, long, short) {
+            (MoveSide::Long, true, _) | (MoveSide::Both, true, false) => Some(MoveSide::Long),
+            (MoveSide::Short, _, true) | (MoveSide::Both, false, true) => Some(MoveSide::Short),
+            (MoveSide::Both, true, true) if hedge_short => Some(MoveSide::Short),
+            (MoveSide::Both, true, true) => Some(MoveSide::Long),
+            _ => None,
+        }
+    }
+}
+
+/// The row of a shared move gesture that gets the press, narrowed to the side it moves: the first,
+/// in the order given, whose leg holds an order, or `None` when no claimed leg does.
+///
+/// The side comes back settled — never `Both` — by [`MovableLegs::side_for`].
+fn first_move_with_orders(
+    moves: &[MoveGestureCommand],
+    legs: MovableLegs,
+    hedge_short: bool,
+) -> Option<MoveGestureCommand> {
+    moves.iter().find_map(|command| {
+        legs.side_for(*command, hedge_short)
+            .map(|side| MoveGestureCommand { side, ..*command })
+    })
+}
+
+/// Move a market's orders onto a clicked price — Moonbot's Move Open / Move TP.
+///
+/// `moves` is every row the press claimed, in the order the rows answer
+/// (`HotkeysConfig::resolve_move_gesture`). The press goes to the FIRST of them whose leg holds an
+/// order to move and to none when no leg does — Moonbot's rule, and the reason one gesture may sit
+/// on Move TP and Move Open at once: it moves the take profit while one stands and the entry orders
+/// while none does. The choice is made here, beside moonproto's order state, and not in the UI:
+/// moonproto drops a bulk move with no candidate silently AFTER the send is accepted, so a row sent
+/// blind would swallow the press its neighbour was bound for. The same place settles the side of a
+/// row bound to both ([`MovableLegs::side_for`]), with `hedge_short` breaking the one tie.
+///
+/// The state read is the published snapshot, which can trail moonproto's own send-time check by a
+/// runtime turn: if the chosen row's last order goes in between, or the domain is not ready, the
+/// send is dropped there and the press is spent — the next row is not offered it. Nothing closer
+/// to the send is exposed, and the next click reads a fresh snapshot.
 ///
 /// Everything about WHICH orders move and where each one lands is the core's: the wire carries the
 /// arrangement (`ReplaceMultiKind`), one destination price and the position side. That is the whole
@@ -448,12 +536,37 @@ pub(super) fn move_orders_to_price(
     client: &MoonClient,
     server_id: u64,
     market: String,
-    sell: bool,
-    kind: crate::config::MoveKind,
     price: f64,
-    side: crate::config::MoveSide,
+    moves: &[MoveGestureCommand],
+    hedge_short: bool,
 ) {
-    use crate::config::{MoveKind, MoveSide};
+    let Some(snap) = client.snapshot() else {
+        log::warn!(
+            "core {} move orders {market}: no snapshot yet",
+            crate::feed::core_label(server_id)
+        );
+        return;
+    };
+    let legs = MovableLegs::of(
+        snap.orders().iter().map(|o| {
+            (
+                o.market_name.as_str(),
+                o.status,
+                o.is_short,
+                o.immune_for_clicks,
+            )
+        }),
+        &market,
+    );
+    let Some(MoveGestureCommand { sell, kind, side }) =
+        first_move_with_orders(moves, legs, hedge_short)
+    else {
+        log::info!(
+            "core {} move orders {market} to {price:.8}: no order to move for {moves:?} — sending nothing",
+            crate::feed::core_label(server_id)
+        );
+        return;
+    };
     let move_kind = match kind {
         // The caller drops a `None` kind before it gets here: Moonbot leaves such a gesture inert
         // rather than sending a command with no arrangement.

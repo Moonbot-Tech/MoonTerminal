@@ -786,18 +786,20 @@ pub enum CoreCmd {
         sell: bool,
         percent: f64,
     },
-    /// Move a market's orders of one side onto a clicked price — Moonbot's Move Open / Move TP
-    /// mouse gestures.
+    /// Move a market's orders onto a clicked price — Moonbot's Move Open / Move TP mouse gestures.
     ///
-    /// The core selects the orders and lays them out; this live action carries the market, which
-    /// half of the book to take, the arrangement (Moonbot's "Move kind"), the destination price and
-    /// the position side. Nothing about the layout is computed here.
+    /// `moves` is every row the press claimed, in the order the rows answer: each names which half
+    /// of the book to take, the arrangement (Moonbot's "Move kind") and the position side. The feed
+    /// sends the FIRST of them whose leg holds an order and nothing when none does, which is how
+    /// Moonbot treats one gesture bound to several rows. A row bound to both position sides is
+    /// narrowed there too, to the side that holds its leg; `hedge_short` — whether the chart reads
+    /// the market's position as short — decides only when both sides do. The core then selects the
+    /// orders and lays them out; nothing about the layout is computed here.
     MoveOrdersToPrice {
         market: String,
-        sell: bool,
-        kind: crate::config::MoveKind,
         price: f64,
-        side: crate::config::MoveSide,
+        moves: Vec<crate::config::MoveGestureCommand>,
+        hedge_short: bool,
     },
     /// Spread a market's sell orders across a price zone — Moonbot's "sells to rectangle".
     /// The core performs the spreading; this live action carries only the market, the two prices

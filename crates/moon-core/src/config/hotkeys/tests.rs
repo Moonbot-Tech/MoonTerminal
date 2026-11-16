@@ -294,37 +294,74 @@ fn a_move_gesture_resolves_to_its_own_side_and_kind() {
 
     assert_eq!(
         resolve(MouseGestureBinding::LeftShift),
-        Some(MoveGestureCommand {
+        vec![MoveGestureCommand {
             sell: false,
             kind: MoveKind::AllToOnePrice,
             side: MoveSide::Long,
-        })
+        }]
     );
     assert_eq!(
         resolve(MouseGestureBinding::LeftCtrl),
-        Some(MoveGestureCommand {
+        vec![MoveGestureCommand {
             sell: true,
             kind: MoveKind::ParallelShift,
             side: MoveSide::Long,
-        })
+        }]
     );
     assert_eq!(
         resolve(MouseGestureBinding::MiddleShift),
-        Some(MoveGestureCommand {
+        vec![MoveGestureCommand {
             sell: false,
             kind: MoveKind::TopVolume,
             side: MoveSide::Long,
-        })
+        }]
     );
     assert_eq!(
         resolve(MouseGestureBinding::MiddleCtrl),
-        Some(MoveGestureCommand {
+        vec![MoveGestureCommand {
             sell: true,
             kind: MoveKind::LastMoved,
             side: MoveSide::Long,
-        })
+        }]
     );
-    assert_eq!(resolve(MouseGestureBinding::LeftAlt), None);
+    assert!(resolve(MouseGestureBinding::LeftAlt).is_empty());
+}
+
+/// Pins the order a press is offered to the rows it is bound to more than once.
+///
+/// Moonbot asks Move TP before Move Open and the primary pair before the secondary, and the feed
+/// gives the press to the first row on this list that holds an order. Plausible breakage: walking
+/// the rows in the settings page's order (`MoveKindSlot::ALL`, entry first) — one middle click on
+/// both "additional" rows would then ask the entry orders first, and with a pending entry beside a
+/// standing take profit it would move the wrong leg.
+#[test]
+fn a_gesture_on_several_rows_lists_them_take_profit_first() {
+    let hk = HotkeysConfig {
+        buy_move_click: MouseGestureBinding::Middle,
+        sell_move_click: MouseGestureBinding::Middle,
+        buy_move_click2: MouseGestureBinding::Middle,
+        sell_move_click2: MouseGestureBinding::Middle,
+        buy_move_kind: MoveKind::AllToOnePrice,
+        sell_move_kind: MoveKind::ParallelShift,
+        buy_move_kind2: MoveKind::TopVolume,
+        sell_move_kind2: MoveKind::LastMoved,
+        same_hotkeys_for_move: true,
+        ..HotkeysConfig::default()
+    };
+    let rows: Vec<(bool, MoveKind)> = hk
+        .resolve_move_gesture(|b| b == MouseGestureBinding::Middle)
+        .iter()
+        .map(|c| (c.sell, c.kind))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (true, MoveKind::ParallelShift),
+            (false, MoveKind::AllToOnePrice),
+            (true, MoveKind::LastMoved),
+            (false, MoveKind::TopVolume),
+        ]
+    );
 }
 
 /// Pins the side a press addresses, which is what the mirror flag decides.
@@ -342,6 +379,7 @@ fn a_shared_gesture_addresses_both_sides() {
     assert_eq!(
         mirrored
             .resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl)
+            .first()
             .map(|c| c.side),
         Some(MoveSide::Both),
         "the mirror makes one press mean both sides"
@@ -356,12 +394,14 @@ fn a_shared_gesture_addresses_both_sides() {
     assert_eq!(
         split
             .resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl)
+            .first()
             .map(|c| c.side),
         Some(MoveSide::Long)
     );
     assert_eq!(
         split
             .resolve_move_gesture(|b| b == MouseGestureBinding::LeftAlt)
+            .first()
             .map(|c| c.side),
         Some(MoveSide::Short)
     );
@@ -380,9 +420,9 @@ fn a_gesture_without_a_kind_is_inert() {
         same_hotkeys_for_move: true,
         ..HotkeysConfig::default()
     };
-    assert_eq!(
-        hk.resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl),
-        None
+    assert!(
+        hk.resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl)
+            .is_empty()
     );
 
     // And an inert slot must not shadow a later one holding the same binding: the row the user
@@ -398,8 +438,10 @@ fn a_gesture_without_a_kind_is_inert() {
     assert_eq!(
         shared
             .resolve_move_gesture(|b| b == MouseGestureBinding::LeftCtrl)
-            .map(|c| c.kind),
-        Some(MoveKind::AllToOnePrice)
+            .iter()
+            .map(|c| c.kind)
+            .collect::<Vec<_>>(),
+        vec![MoveKind::AllToOnePrice]
     );
 }
 

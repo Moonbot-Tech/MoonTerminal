@@ -209,35 +209,116 @@ fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
     );
 }
 
-/// The move rows are asked in PAIRS — buy, sell, buy2, sell2 — not in this page's row order, so a
-/// short row answers before a long row listed above it.
+/// The move rows are asked in PAIRS — a row's long and short halves together — not in this page's
+/// row order, so the short half of a primary row answers before the secondary row listed above it.
+///
+/// Both rows here move the SAME orders (entry, both sides through the mirror), which is the one
+/// case where the first row asked really does silence the second: when it has nothing to move,
+/// neither has the other.
 ///
 /// Plausible breakage: ranking move rows by their position in `GestureSlot::all()` would name
-/// `SellMove2` the winner over `ShortBuyMove`, which is the reverse of what the dispatcher does.
+/// `BuyMove2` the winner over `ShortBuyMove`, which is the reverse of what the dispatcher does.
 #[test]
 fn move_rows_rank_by_the_dispatchers_pairs_not_by_row_order() {
     let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
-    hotkeys.set_gesture(GestureSlot::SellMove2, MouseGestureBinding::MiddleAlt);
-    hotkeys.set_gesture(GestureSlot::ShortBuyMove, MouseGestureBinding::MiddleAlt);
+    hotkeys.same_hotkeys_for_move = true;
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::MiddleAlt);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove, MoveKind::ParallelShift);
+    hotkeys.set_gesture(GestureSlot::BuyMove2, MouseGestureBinding::MiddleAlt);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove2, MoveKind::AllToOnePrice);
     let clashes = Clashes::build(&hotkeys);
 
     assert_eq!(
         clashes
             .mouse(&hotkeys, GestureSlot::ShortBuyMove)
             .first()
-            .expect("the buy pair is asked first")
+            .expect("the primary pair is asked first")
             .severity,
         Severity::Shares
     );
     assert_eq!(
         clashes
-            .mouse(&hotkeys, GestureSlot::SellMove2)
+            .mouse(&hotkeys, GestureSlot::BuyMove2)
             .first()
-            .expect("the sell2 pair is asked last")
+            .expect("the secondary pair is asked last")
             .severity,
         Severity::Shadowed
     );
+}
+
+/// Move TP and Move Open on one gesture is Moonbot's own "additional commands" set-up, and it
+/// works: the press goes to the take profit while one stands and to the entry orders while none
+/// does. Neither row is dead and neither takes the binding from the other.
+///
+/// Plausible breakage: ranking the two as ordinary same-layer rivals again, which puts a red "will
+/// not fire" on one of them and counts a conflict in the Settings navigation — on a layout copied
+/// straight from Moonbot.
+#[test]
+fn a_take_profit_row_and_an_entry_row_on_one_gesture_take_turns() {
+    let _locale = crate::test_locale::force("en");
+    let mut hotkeys = quiet();
+    hotkeys.same_hotkeys_for_move = true;
+    hotkeys.set_gesture(GestureSlot::BuyMove2, MouseGestureBinding::MiddleCtrl);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove2, MoveKind::LastMoved);
+    hotkeys.set_gesture(GestureSlot::SellMove2, MouseGestureBinding::MiddleCtrl);
+    hotkeys.set_move_kind(MoveKindSlot::SellMove2, MoveKind::LastMoved);
+    let clashes = Clashes::build(&hotkeys);
+    let label = |slot| {
+        super::super::pull_gestures::target_label(
+            super::super::pull_gestures::GestureTarget::Gesture(slot),
+        )
+    };
+
+    for (row, rival) in [
+        (GestureSlot::SellMove2, GestureSlot::BuyMove2),
+        (GestureSlot::BuyMove2, GestureSlot::SellMove2),
+    ] {
+        let notes = clashes.mouse(&hotkeys, row);
+        assert_eq!(notes.len(), 1, "{row:?}: {notes:?}");
+        assert_eq!(notes[0].severity, Severity::Shares, "{row:?}");
+        assert!(
+            notes[0].text.contains("has orders on the market"),
+            "{row:?} must say the rows take turns: {}",
+            notes[0].text
+        );
+        assert!(
+            notes[0].text.contains(&label(rival)),
+            "{row:?} must name its rival: {}",
+            notes[0].text
+        );
+    }
+    assert_eq!(super::conflict_count(&hotkeys), 0);
+}
+
+/// The same leg on different position sides is two different sets of orders once the mirror is
+/// off, so those rows take turns as well.
+///
+/// Plausible breakage: deciding by the leg alone, which calls a short-only row dead behind a
+/// long-only one that can never move its orders.
+#[test]
+fn the_same_leg_on_different_sides_takes_turns_without_the_mirror() {
+    let _locale = crate::test_locale::force("en");
+    let mut hotkeys = quiet();
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::MiddleCtrl);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove, MoveKind::ParallelShift);
+    hotkeys.set_gesture(GestureSlot::ShortBuyMove2, MouseGestureBinding::MiddleCtrl);
+    hotkeys.set_move_kind(MoveKindSlot::BuyMove2, MoveKind::AllToOnePrice);
+    let clashes = Clashes::build(&hotkeys);
+
+    for row in [GestureSlot::BuyMove, GestureSlot::ShortBuyMove2] {
+        let notes = clashes.mouse(&hotkeys, row);
+        assert!(
+            notes.iter().all(|c| c.severity == Severity::Shares),
+            "{row:?}: {notes:?}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|c| c.text.contains("has orders on the market")),
+            "{row:?}: {notes:?}"
+        );
+    }
 }
 
 /// A move row whose kind is `None` sends nothing and does not silence the row below it.
@@ -338,7 +419,7 @@ fn an_inert_move_row_carries_no_caption_of_its_own() {
     let mut hotkeys = quiet();
     hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::MiddleAlt);
     hotkeys.set_move_kind(MoveKindSlot::BuyMove, MoveKind::None);
-    // A live rival on the same gesture, one that the dispatcher reaches later.
+    // A live rival on the same gesture.
     hotkeys.set_gesture(GestureSlot::SellMove, MouseGestureBinding::MiddleAlt);
     hotkeys.set_move_kind(MoveKindSlot::SellMove, MoveKind::ParallelShift);
     let clashes = Clashes::build(&hotkeys);

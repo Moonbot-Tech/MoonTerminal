@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "Cùng cử chỉ với %{rows}. Cả hai đều c
 hotkeys.clash.bare_key: "Phím trần: chạy mỗi khi bấm ngoài ô chữ — tự chịu rủi ro."
 hotkeys.clash.wins_key: "Phím này lấy gán từ %{rows}, ở đó nó sẽ không chạy."
 hotkeys.clash.wins_gesture: "Cử chỉ này lấy gán từ %{rows}, ở đó nó sẽ không chạy."
+hotkeys.clash.move_chain: "Cùng cử chỉ với %{rows}. Lệnh dời nào có lệnh trên thị trường thì chạy. Thứ tự: chốt lời, điểm vào, rồi các cử chỉ thứ hai."
 hotkeys.clash.builtin.esc_close: "lệnh đóng biểu đồ có sẵn (Esc)"
 hotkeys.clash.builtin.close_all: "lệnh đóng mọi biểu đồ có sẵn (Shift+Esc)"
 hotkeys.clash.builtin.reset_windows: "lệnh đặt lại cửa sổ có sẵn (Ctrl+Shift+F10)"

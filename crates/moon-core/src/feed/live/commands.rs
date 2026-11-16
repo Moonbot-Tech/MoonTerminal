@@ -1191,12 +1191,11 @@ pub(super) fn drain_commands(
             }
             Ok(CoreCmd::MoveOrdersToPrice {
                 market,
-                sell,
-                kind,
                 price,
-                side,
+                moves,
+                hedge_short,
             }) => {
-                trade::move_orders_to_price(client, server.id, market, sell, kind, price, side);
+                trade::move_orders_to_price(client, server.id, market, price, &moves, hedge_short);
             }
             Ok(CoreCmd::SellsToZone {
                 market,

@@ -6,7 +6,7 @@
 use gpui::*;
 use std::time::{Duration, Instant};
 
-use moon_core::config::{GestureSlot, MouseGestureBinding, MoveSide, Placement};
+use moon_core::config::{GestureSlot, MouseGestureBinding, Placement};
 use moon_core::feed::OrderLinePriceKind;
 use moon_core::session::CoreId;
 use moon_core::session::order_lines::LineKind;
@@ -290,10 +290,16 @@ impl ChartPanel {
     ///     pos: Chart-local pointer position.
     ///     cx: Panel context, used to read the bindings and to send the command.
     ///
+    /// One gesture may sit on several move rows — Moonbot's own "additional commands" put Move
+    /// Order and Move TP both on the middle button. Every claiming row goes to the feed in
+    /// dispatch order and the first whose leg holds an order answers, so such a click moves the
+    /// take profit while one stands and the entry orders while none does.
+    ///
     /// Returns:
     ///     Whether a gesture claimed the press. A claimed press sends nothing further, including
-    ///     when the market or the price could not be resolved: the user asked for a bulk move, and
-    ///     falling through to pan or zoom would answer a trading gesture with a chart movement.
+    ///     when the market or the price could not be resolved or no claimed leg holds an order:
+    ///     the user asked for a bulk move, and falling through to pan or zoom would answer a
+    ///     trading gesture with a chart movement.
     pub(super) fn try_move_orders_click(
         &mut self,
         button: TradeMouseButton,
@@ -306,16 +312,16 @@ impl ChartPanel {
         if self.historical {
             return false;
         }
-        let command = {
+        let claimed = {
             let b = self.backend.read(cx);
             let cfg = b.preview.as_ref().unwrap_or(&b.config);
             cfg.hotkeys.resolve_move_gesture(|binding| {
                 Self::gesture_matches(binding, button, modifiers, click_count)
             })
         };
-        let Some(command) = command else {
+        if claimed.is_empty() {
             return false;
-        };
+        }
         // The book is the trading surface, as it is for placement.
         let pane = self.glass_pane_at(pos);
         let Some(pane) = pane else {
@@ -343,27 +349,24 @@ impl ChartPanel {
                 return;
             }
             // A press that claimed both sides says nothing about which one was meant — the shipped
-            // `same_hotkeys_for_move` puts one gesture on both. Narrow it to the side actually open
-            // on this market, exactly as the sells-to-zone command does, or a hedged market would
-            // have the other position's orders repriced by a click aimed at this one.
-            let side = match command.side {
-                MoveSide::Both if b.market_position_short(core, &market) => MoveSide::Short,
-                MoveSide::Both => MoveSide::Long,
-                side => side,
-            };
+            // `same_hotkeys_for_move` puts one gesture on both. The feed settles it per row against
+            // the live orders: the side that holds the row's leg, and this reading of the market's
+            // position only when both sides do, so a hedged market never has the other position's
+            // orders repriced by a click aimed at this one.
+            let hedge_short = b.market_position_short(core, &market);
+            // Which of the rows answers is the feed's line to log: it is chosen there, against the
+            // live orders. This one records what the press asked for.
             match b.session.move_orders_to_price(
                 core,
                 market.clone(),
-                command.sell,
-                command.kind,
                 price,
-                side,
+                claimed.clone(),
+                hedge_short,
             ) {
                 Ok(()) => log::info!(
-                    "move orders to price: core={} market={market} {} -> {price:.8} kind={:?} side={side:?}",
+                    "move orders to price: core={} market={market} -> {price:.8} \
+                     rows={claimed:?} hedge_short={hedge_short}",
                     moon_core::feed::core_label(core),
-                    if command.sell { "sells" } else { "buys" },
-                    command.kind,
                 ),
                 Err(error) => log::warn!(
                     "move orders to price failed: core={} market={market} {error}",

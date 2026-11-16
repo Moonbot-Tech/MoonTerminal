@@ -15,7 +15,7 @@ impl HotkeysConfig {
         [false, true].map(|second| self.gesture(MoveKindSlot::row(entry, second).half(short)))
     }
 
-    /// What one recognised move gesture has to send.
+    /// Every move row one press claims, in the order the rows get to answer it.
     ///
     /// Args:
     ///     matches: Whether a press being examined satisfies one binding. The caller owns the
@@ -23,17 +23,21 @@ impl HotkeysConfig {
     ///         comes back here.
     ///
     /// Returns:
-    ///     The side of the book to move, the layout to move it into and the position side it
-    ///     addresses, or `None` when no slot claims the press — including a slot whose kind is
-    ///     `None`, which is Moonbot's way of leaving a bound gesture inert. Rows are examined in
-    ///     [`MoveKindSlot::ALL`]'s order — the order the settings page lists them — so a gesture
-    ///     the user put on two of them resolves the same way twice rather than by whichever
-    ///     branch happened to run first.
+    ///     One command per claiming row — the side of the book to move, the layout to move it
+    ///     into and the position side it addresses — in [`MoveKindSlot::DISPATCH`] order, and
+    ///     empty when no row claims the press. A row whose kind is `None` is left out: that is
+    ///     Moonbot's way of leaving a bound gesture inert.
+    ///
+    /// A list rather than the first match, because in Moonbot a claiming row keeps the press only
+    /// when its leg holds an order to move; otherwise the next claiming row is asked. Whether an
+    /// order stands is the feed's to know (`feed::trade::move_orders_to_price`), so the whole list
+    /// travels there and the choice is made beside the live order state.
     pub fn resolve_move_gesture(
         &self,
         matches: impl Fn(MouseGestureBinding) -> bool,
-    ) -> Option<MoveGestureCommand> {
-        for row in MoveKindSlot::ALL {
+    ) -> Vec<MoveGestureCommand> {
+        let mut claimed = Vec::new();
+        for row in MoveKindSlot::DISPATCH {
             let entry = row.entry();
             let kind = self.move_kind(row);
             // Both sides come from `move_gestures`, which is the one place that reads
@@ -50,19 +54,19 @@ impl HotkeysConfig {
                 (false, true) => MoveSide::Short,
                 (false, false) => continue,
             };
-            // Moonbot's way of switching one gesture off without clearing its binding. `continue`
-            // rather than `return`: another slot may hold the same binding WITH a kind, and giving
-            // up here would let a disabled row silence a working one.
+            // Moonbot's way of switching one gesture off without clearing its binding. Left out
+            // rather than ending the walk: another slot may hold the same binding WITH a kind, and
+            // giving up here would let a disabled row silence a working one.
             if kind == MoveKind::None {
                 continue;
             }
-            return Some(MoveGestureCommand {
+            claimed.push(MoveGestureCommand {
                 sell: !entry,
                 kind,
                 side,
             });
         }
-        None
+        claimed
     }
 
     /// Part count for the `Split N` action, clamped to [`SPLIT_PARTS_MIN`]..=[`SPLIT_PARTS_MAX`].

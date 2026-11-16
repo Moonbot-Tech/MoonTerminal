@@ -277,3 +277,163 @@ fn unpriced_or_empty_holdings_yield_no_sell_terms() {
     // finite pair is not a refusal — the venue's own filters are what reject it.
     assert!(market_sell_terms(f64::MAX, f64::MAX).is_some());
 }
+
+/// A `(market, status, is_short, immune_for_clicks)` order row for the move cascade.
+fn leg_order(
+    market: &'static str,
+    status: OrderWorkerStatus,
+    short: bool,
+    immune: bool,
+) -> (&'static str, OrderWorkerStatus, bool, bool) {
+    (market, status, short, immune)
+}
+
+/// One gesture on Move TP and Move Open, as the resolver hands it over: take profit first.
+fn take_then_entry(side: MoveSide) -> [MoveGestureCommand; 2] {
+    [
+        MoveGestureCommand {
+            sell: true,
+            kind: MoveKind::LastMoved,
+            side,
+        },
+        MoveGestureCommand {
+            sell: false,
+            kind: MoveKind::LastSet,
+            side,
+        },
+    ]
+}
+
+/// A gesture bound to both rows moves the take profit while one stands and the entry orders while
+/// none does — and nothing when the market holds neither.
+///
+/// Plausible breakage: sending the first claimed row without looking. moonproto accepts the send
+/// and drops it later when the leg is empty, so the press is gone and the row behind it, the one
+/// with orders, never hears of it — a middle click that moves nothing.
+#[test]
+fn a_shared_move_gesture_goes_to_the_first_row_holding_an_order() {
+    let moves = take_then_entry(MoveSide::Long);
+    let pick = |orders: &[(&'static str, OrderWorkerStatus, bool, bool)]| {
+        first_move_with_orders(
+            &moves,
+            MovableLegs::of(orders.iter().copied(), "BTCUSDT"),
+            false,
+        )
+        .map(|command| command.sell)
+    };
+
+    let both = [
+        leg_order("BTCUSDT", OrderWorkerStatus::BuySet, false, false),
+        leg_order("BTCUSDT", OrderWorkerStatus::SellSet, false, false),
+    ];
+    assert_eq!(
+        pick(&both),
+        Some(true),
+        "a standing take profit is asked first"
+    );
+
+    let entry_only = [leg_order(
+        "BTCUSDT",
+        OrderWorkerStatus::BuySet,
+        false,
+        false,
+    )];
+    assert_eq!(
+        pick(&entry_only),
+        Some(false),
+        "with no take profit the press falls through to the entry orders"
+    );
+
+    let elsewhere = [leg_order(
+        "ETHUSDT",
+        OrderWorkerStatus::SellSet,
+        false,
+        false,
+    )];
+    assert_eq!(
+        pick(&elsewhere),
+        None,
+        "another market's orders hold nothing here"
+    );
+}
+
+/// What does NOT count as an order to move: a click-immune one, and one on the other position side.
+///
+/// Both are moonproto's own conditions for dropping the send, so counting either hands the press to
+/// a row whose command then goes nowhere. Plausible breakage: reading only the phase.
+#[test]
+fn immune_and_other_side_orders_do_not_hold_a_move() {
+    let immune_take = [
+        leg_order("BTCUSDT", OrderWorkerStatus::SellSet, false, true),
+        leg_order("BTCUSDT", OrderWorkerStatus::BuySet, false, false),
+    ];
+    let legs = MovableLegs::of(immune_take.iter().copied(), "BTCUSDT");
+    assert_eq!(
+        first_move_with_orders(&take_then_entry(MoveSide::Long), legs, false).map(|c| c.sell),
+        Some(false),
+        "an immune take profit is skipped, the entry row answers"
+    );
+
+    let short_take = [leg_order(
+        "BTCUSDT",
+        OrderWorkerStatus::SellSet,
+        true,
+        false,
+    )];
+    let legs = MovableLegs::of(short_take.iter().copied(), "BTCUSDT");
+    assert_eq!(
+        first_move_with_orders(&take_then_entry(MoveSide::Long), legs, false),
+        None,
+        "a short's take profit is not a long row's order"
+    );
+    assert_eq!(
+        first_move_with_orders(&take_then_entry(MoveSide::Short), legs, false).map(|c| c.sell),
+        Some(true)
+    );
+    assert_eq!(
+        first_move_with_orders(&take_then_entry(MoveSide::Both), legs, false)
+            .map(|c| (c.sell, c.side)),
+        Some((true, MoveSide::Short)),
+        "a row addressing both sides is held by either, and leaves narrowed to the one that holds"
+    );
+}
+
+/// A row bound to both position sides — the shipped mirror — moves the side that actually holds
+/// its leg, and asks the chart's reading of the position only when both sides do.
+///
+/// Regression target, found in review: the side used to be fixed for every row from the first
+/// order the UI holds for the market, whatever its phase. On a hedged market with a long take
+/// profit and a short entry that reading can be "short"; the take-profit row then found no short
+/// exit and the press fell through to the SHORT's entry orders — live orders of the wrong leg
+/// moved by a click aimed at the take profit.
+#[test]
+fn a_both_sides_row_takes_the_side_that_holds_its_leg() {
+    let moves = take_then_entry(MoveSide::Both);
+    let hedged = [
+        leg_order("BTCUSDT", OrderWorkerStatus::SellSet, false, false),
+        leg_order("BTCUSDT", OrderWorkerStatus::BuySet, true, false),
+    ];
+    let legs = MovableLegs::of(hedged.iter().copied(), "BTCUSDT");
+    for hedge_short in [false, true] {
+        assert_eq!(
+            first_move_with_orders(&moves, legs, hedge_short).map(|c| (c.sell, c.side)),
+            Some((true, MoveSide::Long)),
+            "the long take profit answers whatever the position reads as (hedge_short={hedge_short})"
+        );
+    }
+
+    let take_on_both = [
+        leg_order("BTCUSDT", OrderWorkerStatus::SellSet, false, false),
+        leg_order("BTCUSDT", OrderWorkerStatus::SellSet, true, false),
+    ];
+    let legs = MovableLegs::of(take_on_both.iter().copied(), "BTCUSDT");
+    assert_eq!(
+        first_move_with_orders(&moves, legs, false).map(|c| c.side),
+        Some(MoveSide::Long)
+    );
+    assert_eq!(
+        first_move_with_orders(&moves, legs, true).map(|c| c.side),
+        Some(MoveSide::Short),
+        "with the leg on both sides the position's reading picks one — never both"
+    );
+}
