@@ -5,6 +5,12 @@ use moon_core::market::MarketLabel;
 
 use super::{CoreName, pick_core_name};
 
+// The two quotes the cases choose between, named once. Spelled inline, a call that passes both
+// reads as a quote-currency table to `theme_contract::naming`, which keeps such tables in
+// `moon_core::symbol`; these are a core's catalog rows, not a rule about what a quote is.
+const USDT: &str = "USDT";
+const USDC: &str = "USDC";
+
 /// A catalog row as the core labels it.
 fn row(market: &str, coin: &str, canonic: &str, quote: &str) -> (String, MarketLabel) {
     (
@@ -32,11 +38,11 @@ fn name(market: &str, coin: &str) -> Option<CoreName> {
 #[test]
 fn a_multiplier_coin_takes_the_target_cores_own_spelling() {
     let binance = [
-        row("1000BONKUSDT", "1000BONK", "BONK", "USDT"),
-        row("BONKUSDC", "BONK", "BONK", "USDC"),
+        row("1000BONKUSDT", "1000BONK", "BONK", USDT),
+        row("BONKUSDC", "BONK", "BONK", USDC),
     ];
     assert_eq!(
-        pick_core_name(&binance, "BONK", "1000BONKPERP", "USDT", "USDC", None),
+        pick_core_name(&binance, "BONK", "1000BONKPERP", USDT, USDC, None),
         name("1000BONKUSDT", "1000BONK")
     );
 }
@@ -46,9 +52,9 @@ fn a_multiplier_coin_takes_the_target_cores_own_spelling() {
 /// Mutation: accept the best search hit when no identity matches. `PEPE` would ban `PEPECOIN`.
 #[test]
 fn a_lookalike_coin_is_not_taken() {
-    let catalog = [row("PEPECOINUSDT", "PEPECOIN", "PEPECOIN", "USDT")];
+    let catalog = [row("PEPECOINUSDT", "PEPECOIN", "PEPECOIN", USDT)];
     assert_eq!(
-        pick_core_name(&catalog, "PEPE", "PEPEUSDT", "USDT", "USDT", None),
+        pick_core_name(&catalog, "PEPE", "PEPEUSDT", USDT, USDT, None),
         None
     );
 }
@@ -62,14 +68,14 @@ fn a_lookalike_coin_is_not_taken() {
 /// `1kBONK` would be written into a core that only lists `1000BONK`.
 #[test]
 fn a_token_without_a_catalog_identity_reaches_only_cores_that_spell_it_alike() {
-    let bybit = [row("1000BONKPERP", "1kBONK", "BONK", "USDC")];
+    let bybit = [row("1000BONKPERP", "1kBONK", "BONK", USDC)];
     assert_eq!(
-        pick_core_name(&bybit, "1KBONK", "", "USDC", "", Some("1kBONK")),
+        pick_core_name(&bybit, "1KBONK", "", USDC, "", Some("1kBONK")),
         name("1000BONKPERP", "1kBONK")
     );
-    let binance = [row("1000BONKUSDT", "1000BONK", "BONK", "USDT")];
+    let binance = [row("1000BONKUSDT", "1000BONK", "BONK", USDT)];
     assert_eq!(
-        pick_core_name(&binance, "1KBONK", "", "USDT", "", Some("1kBONK")),
+        pick_core_name(&binance, "1KBONK", "", USDT, "", Some("1kBONK")),
         None
     );
 }
@@ -85,7 +91,7 @@ fn a_perpetual_is_chosen_over_an_expiry() {
         row("AAVEUSD_PERP", "AAVE_RP", "AAVE", "USD"),
     ];
     assert_eq!(
-        pick_core_name(&coin_m, "AAVE", "AAVEUSDT", "USD", "USDT", None),
+        pick_core_name(&coin_m, "AAVE", "AAVEUSDT", "USD", USDT, None),
         name("AAVEUSD_PERP", "AAVE_RP")
     );
 }
@@ -97,11 +103,11 @@ fn a_perpetual_is_chosen_over_an_expiry() {
 #[test]
 fn the_clicked_market_wins_where_the_core_lists_it() {
     let binance = [
-        row("BTCUSDT", "BTC", "BTC", "USDT"),
-        row("BTCUSDC", "BTC", "BTC", "USDC"),
+        row("BTCUSDT", "BTC", "BTC", USDT),
+        row("BTCUSDC", "BTC", "BTC", USDC),
     ];
     assert_eq!(
-        pick_core_name(&binance, "BTC", "BTCUSDC", "USDT", "USDC", None),
+        pick_core_name(&binance, "BTC", "BTCUSDC", USDT, USDC, None),
         name("BTCUSDC", "BTC")
     );
 }
@@ -113,16 +119,16 @@ fn the_clicked_market_wins_where_the_core_lists_it() {
 #[test]
 fn the_cores_own_quote_decides_between_its_markets() {
     let bybit = [
-        row("SOLUSDT", "SOL", "SOL", "USDT"),
-        row("SOLUSDC", "SOL", "SOL", "USDC"),
+        row("SOLUSDT", "SOL", "SOL", USDT),
+        row("SOLUSDC", "SOL", "SOL", USDC),
     ];
     assert_eq!(
-        pick_core_name(&bybit, "SOL", "SOL-USDT-SWAP", "USDC", "USDT", None),
+        pick_core_name(&bybit, "SOL", "SOL-USDT-SWAP", USDC, USDT, None),
         name("SOLUSDC", "SOL")
     );
     // A core that states no quote falls back to the clicked market's.
     assert_eq!(
-        pick_core_name(&bybit, "SOL", "SOL-USDT-SWAP", "", "USDT", None),
+        pick_core_name(&bybit, "SOL", "SOL-USDT-SWAP", "", USDT, None),
         name("SOLUSDT", "SOL")
     );
 }
