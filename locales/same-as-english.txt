@@ -578,6 +578,9 @@ report.col.vd1m: ru es uk tr pt vi zh
 report.export.csv: ru es uk tr pt vi zh
 report.export.xlsx: ru es uk tr pt vi zh
 report.valuation_total: ru es uk tr pt vi zh
+screener.listed_both: ru es uk tr pt vi zh
+screener.listed_futures_only: ru es uk tr pt vi zh
+screener.listed_spot_only: ru es uk tr pt vi zh
 settings.nav.group.telegram: ru es uk tr pt vi zh
 strat.copy_chord: ru es uk tr pt vi zh
 strat.cut_chord: ru es uk tr pt vi zh

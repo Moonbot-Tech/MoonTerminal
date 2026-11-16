@@ -176,6 +176,10 @@ pub fn screener_rows(provider: CoreId) -> Vec<ScreenerRow> {
                 session: None,
                 pos_size: 0.0,
                 orders: 0,
+                // The sample exchange has no other market kind and no arbitrage stream behind
+                // it, so nothing could answer where its coins are listed.
+                futures_flag: false,
+                listing: crate::market::listing::Listing::Unknown,
             }
         })
         .collect()

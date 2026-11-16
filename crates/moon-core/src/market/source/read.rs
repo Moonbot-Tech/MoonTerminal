@@ -1271,6 +1271,13 @@ impl MarketDataSource {
         else {
             return;
         };
+        // Nor is an EMPTY catalog: a snapshot is published before its market list arrives, and a
+        // search over nothing finds nothing — which the writer below takes for "this core does not
+        // list the coin" and marks the core finished for good. With the channel on from the first
+        // frame that silently dropped every core whose snapshot beat its catalog.
+        if snapshot.markets().market_count() == 0 {
+            return;
+        }
         // Copied out of the market lock before anything is written: the channel appends to a file,
         // and doing that with a market held would put disk I/O inside a lock the feed threads take.
         let mut rows: Vec<crate::coin_naming::CatalogNaming> = Vec::new();

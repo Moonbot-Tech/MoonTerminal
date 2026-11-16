@@ -259,6 +259,32 @@ ENV: MOON_COIN_NAMING=BONK,PEPE",
     },
     KeyDoc {
         section: "channels",
+        key: "arb_coverage",
+        default: "false",
+        doc: "\
+Arbitrage coverage -> `logs/arb_coverage.log`: for every connected core, how many of its markets
+hold a price from another venue, how many of those prices are fresh, a count per venue, and the
+catalog's `futures_type` histogram — the core's own \"does this coin have futures\" flag.
+Answers \"does the arbitrage stream quote every market a core lists, or only the charted ones\" and
+\"how long after a connection does it fill\" — the chart reads one market at a time, so nothing else
+ever sees the stream across a whole catalog.
+
+One summary line per core every 30 seconds; a core's lines read top to bottom are its fill curve,
+provided the terminal was STARTED with this on — `seen_s` counts from the channel's first read of
+a core, not from its connection. A second line with sample market names follows only when the
+sample changes. The coverage figures count trading markets only. `mask=0` is a core with no
+arbitrage venues ticked, which stores nothing whatever the server sends; `mask=pending` is one
+whose settings have not arrived yet; `licence=false` is one whose arbitrage licence is not in force.
+
+Written by the graphical terminal only: the sweep rides its market reconciliation tick, which the
+server station does not run, so the key does nothing there.
+COST: moderate while on — every market of every core is read once per watched venue each sweep, on
+a thread of its own. On disk, about half a kilobyte per core per sweep: some 40 MB a day for thirty
+cores, in a file nothing rotates. Nothing while off.
+ENV: MOON_ARB_COVERAGE_DIAG=1",
+    },
+    KeyDoc {
+        section: "channels",
         key: "assets",
         default: "false",
         doc: "\

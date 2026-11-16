@@ -180,7 +180,11 @@ core's card shows a banner with Retry.
 
 **Other**: Screener (deltas in Moonbot ranges, the coin menu on a row's market, a multi-core
 selector with exchange rows and saved core groups, a Coin column that names one coin the same way
-on every exchange and is searched by the Market box), the news panel
+on every exchange and is searched by the Market box, Exchange and Type columns, and a Listed
+column — `Both`, `Spot Only`, `Futures Only` or `?` — saying whether the coin trades on both
+market kinds of that exchange, read from the arbitrage stream and the catalogs of connected
+cores; the footer holds a multi-select list for Type and one for Listed, both for the session
+only), the news panel
 (per-core feed, tag filters, jump to a coin), Log (core lines, addresses
 redacted; for a core on a Linux server the terminal can enter, its whole trading log for a
 chosen day pulled into the file list beside the live copy, which holds only the hours the terminal

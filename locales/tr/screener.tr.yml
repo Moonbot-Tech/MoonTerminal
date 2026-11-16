@@ -10,7 +10,15 @@ screener.window_title: "MoonTerminal — Tarayıcı"
 # `workspace.scope.all_hidden` instead of either.
 screener.empty: "Piyasa verisi yok — bir çekirdek bağlayın"
 screener.empty_no_data: "Henüz piyasa verisi gelmedi"
+# A fourth: rows WERE published and the bottom bar's controls — the Type and Listed lists, a text
+# or volume filter — left none of them.
+screener.empty_filtered: "Geçerli filtrelere uyan satır yok"
 screener.coins: "coin"
 screener.all_cores: "Tüm çekirdekler"
 screener.cores_n: "Çekirdek: %{n}"
 screener.columns: "Sütunlar"
+# The cross-listing column and the list that filters it. The three values are Moonbot's own words for its
+# `ListedType` strategy filter and stay English in every language, like the market kinds.
+screener.listed_both: "Both"
+screener.listed_spot_only: "Spot Only"
+screener.listed_futures_only: "Futures Only"

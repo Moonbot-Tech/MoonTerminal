@@ -10,7 +10,15 @@ screener.window_title: "MoonTerminal — Screener"
 # `workspace.scope.all_hidden` instead of either.
 screener.empty: "Sem dados de mercado — conecte um núcleo"
 screener.empty_no_data: "Ainda não há dados de mercado"
+# A fourth: rows WERE published and the bottom bar's controls — the Type and Listed lists, a text
+# or volume filter — left none of them.
+screener.empty_filtered: "Nenhuma linha corresponde aos filtros atuais"
 screener.coins: "moedas"
 screener.all_cores: "Todos os núcleos"
 screener.cores_n: "Núcleos: %{n}"
 screener.columns: "Colunas"
+# The cross-listing column and the list that filters it. The three values are Moonbot's own words for its
+# `ListedType` strategy filter and stay English in every language, like the market kinds.
+screener.listed_both: "Both"
+screener.listed_spot_only: "Spot Only"
+screener.listed_futures_only: "Futures Only"

@@ -9,26 +9,48 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonBackgroundPolicy, MoonButtonVariant, MoonDataTable, MoonDataTableColumn,
+    MoonBackgroundPolicy, MoonButtonSize, MoonButtonVariant, MoonDataTable, MoonDataTableColumn,
     MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
     MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
 };
 use rust_i18n::t;
 
+use moon_core::market::listing::Listing;
 use moon_core::session::CoreId;
+use moon_core::venue::{CoreVenue, MarketKind};
 
 use crate::controls::CoreComboHost;
 use crate::panels::data_table_host;
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
-use super::table::{COLS, ColDef, Entry, column_title, moon, moon_alpha, parse_vol, screener_row};
+use super::table::{
+    COLS, ColDef, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE, column_title, moon, moon_alpha,
+    parse_vol, screener_row,
+};
+
+/// What the Type list offers, in menu order. `None` is an exchange this build cannot name.
+const TYPE_CHOICES: [Option<MarketKind>; 4] = [
+    Some(MarketKind::Spot),
+    Some(MarketKind::Futures),
+    Some(MarketKind::Quarterly),
+    None,
+];
+
+/// What the Listed list offers, in menu order: the answers first, unknown last.
+const LISTED_CHOICES: [Listing; 4] = [
+    Listing::Both,
+    Listing::SpotOnly,
+    Listing::FuturesOnly,
+    Listing::Unknown,
+];
 
 const SCREENER_HEADER_H: f32 = 32.0;
 
 /// Version of the one-shot migration that adds late columns to stored visible sets; see
-/// [`super::table::add_new_columns`] and `WindowLayout::screener_columns_migration`.
-const SCREENER_COLUMNS_MIGRATION: u32 = 1;
+/// [`super::table::add_new_columns`] and `WindowLayout::screener_columns_migration`. The number
+/// itself lives beside the columns it counts.
+const SCREENER_COLUMNS_MIGRATION: u32 = super::table::COLUMNS_MIGRATION;
 
 impl crate::controls::CoreComboHost for ScreenerView {
     /// The Screener is a group-less singleton: no Auto workspace owns its selector.
@@ -77,6 +99,12 @@ pub struct ScreenerView {
     /// at all" (the original connect-a-core advice still applies) from "sessions exist but no
     /// rows survived filtering" (a different, non-actionable empty sentence).
     sessions_total: usize,
+    /// Whether the current publication holds rows of at least one core the preset SHOWS.
+    ///
+    /// What tells "the bottom bar's controls left no row" from "nothing has arrived for what is
+    /// on screen": rows of a core the preset hides are in the publication too, and counting them
+    /// would blame the filters for a visible core that simply has no data yet.
+    has_displayed_rows: bool,
     /// Case-insensitive market or coin filter; a trailing space selects an exact ticker.
     coin_input: Entity<MoonInputState>,
     /// Minimum 24-hour volume filter, accepting `k` and `m` suffixes.
@@ -86,6 +114,14 @@ pub struct ScreenerView {
     sort_desc: bool,
     /// Session-only core filter, not persisted, as in Orders. Empty means every core.
     sel_cores: HashSet<CoreId>,
+    /// Session-only: the market kinds ticked in the Type list. Empty means every kind; `None`
+    /// among them is an exchange this build cannot name.
+    type_sel: HashSet<Option<MarketKind>>,
+    /// Session-only: the answers ticked in the Listed list. Empty means every answer.
+    listed_sel: HashSet<Listing>,
+    /// Whether the exchange logos have been rasterized off the render path; the Exchange column
+    /// draws captions alone until then.
+    exchange_logos_ready: bool,
     /// Visible `COLS` keys persisted in per-context table storage.
     ///
     /// Legacy `layout.screener_columns` is read only as a migration fallback.
@@ -126,14 +162,17 @@ impl ScreenerView {
         // would stay hidden for everyone who ever arranged their columns. Add it once, and record
         // that in the same document as the sets, so a column the user then hides stays hidden.
         backend.update(cx, |b, _| {
-            if b.layout.screener_columns_migration.unwrap_or(0) >= SCREENER_COLUMNS_MIGRATION {
+            // Each stored set gains only the columns introduced AFTER the version it records, so
+            // a column offered by an earlier migration and hidden since stays hidden.
+            let applied = b.layout.screener_columns_migration.unwrap_or(0);
+            if applied >= SCREENER_COLUMNS_MIGRATION {
                 return;
             }
             if let Some(keys) = b.layout.table_visible_columns.get_mut(&widths_id) {
-                super::table::add_new_columns(keys);
+                super::table::add_new_columns(keys, applied);
             }
             if let Some(keys) = b.layout.screener_columns.as_mut() {
-                super::table::add_new_columns(keys);
+                super::table::add_new_columns(keys, applied);
             }
             b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);
             // Unconditionally: the marker must reach disk even when no set needed rewriting.
@@ -243,6 +282,18 @@ impl ScreenerView {
         })
         .detach();
 
+        // Rasterize the exchange logos off the render path, as every other logo-drawing surface
+        // does; the Exchange column shows its captions alone until this lands.
+        cx.spawn(async move |view, cx| {
+            cx.background_spawn(async { crate::media::exchange_logos::prewarm() })
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                this.exchange_logos_ready = true;
+                cx.notify();
+            });
+        })
+        .detach();
+
         let mut this = Self {
             backend,
             rows: Rc::new(Vec::new()),
@@ -253,11 +304,15 @@ impl ScreenerView {
             shown: 0,
             scope_marker: None,
             sessions_total: 0,
+            has_displayed_rows: false,
             coin_input,
             dvol_input,
             sort_key: restored_sort.0,
             sort_desc: restored_sort.1,
             sel_cores: HashSet::new(),
+            type_sel: HashSet::new(),
+            listed_sel: HashSet::new(),
+            exchange_logos_ready: false,
             visible_cols,
             table_state,
             col_order_cache,
@@ -296,9 +351,16 @@ impl ScreenerView {
         let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
         let mut names = HashMap::new();
         let mut orders = HashMap::new();
+        // Captions are resolved here, on the UI thread, where the session's venue map and the
+        // translator are; the publication below runs in the background and only copies them.
+        let mut venues: HashMap<CoreId, EntryVenue> = HashMap::new();
+        let core_venues = b.session.core_venues();
         let store = b.session.store();
         for session in b.session.sessions() {
             names.insert(session.id, SharedString::from(session.name.clone()));
+            if let Some(venue) = core_venues.get(&session.id).filter(|v| v.is_nameable()) {
+                venues.insert(session.id, entry_venue(venue));
+            }
             if let Some(data) = store.core(session.id) {
                 let mut counts: HashMap<&str, u32> = HashMap::new();
                 for order in &data.orders {
@@ -339,6 +401,11 @@ impl ScreenerView {
                         }
                         entries.extend(entries_for(rows, &names));
                     }
+                    for entry in &mut entries {
+                        if let Some(venue) = venues.get(&entry.row.core) {
+                            entry.venue = venue.clone();
+                        }
+                    }
                     std::sync::Arc::new(super::prepared::Prepared::new(
                         entries, &sort_key, sort_desc,
                     ))
@@ -359,9 +426,10 @@ impl ScreenerView {
 
     /// Filter a prepared publication using the live preset and controls without cloning rows.
     fn filter_cached(&mut self, cx: &mut Context<Self>) {
-        let coin = CoinQuery::new(&self.coin_input.read(cx).value());
+        let coin = CoinQuery::new(&self.coin_input.read(cx).value()).listed_in(&self.listed_sel);
         let min_vol = parse_vol(self.dvol_input.read(cx).value().trim());
         let b = self.backend.read(cx);
+        let venues = b.session.core_venues();
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
         let sessions = b.session.sessions();
         self.sessions_total = sessions.len();
@@ -381,11 +449,22 @@ impl ScreenerView {
                 .iter()
                 .map(|session| displayed[&session.id].is_some()),
         );
-        // A selected core the preset has since hidden, or whose session is gone, can be neither
-        // shown nor unticked: drop it. A selection emptied this way is every core again, which is
-        // what the single-choice selector did when its one core went away.
-        self.sel_cores
-            .retain(|core| displayed.get(core).copied().flatten().is_some());
+        // Every core in the publication has rows, so one displayed core among them is enough.
+        self.has_displayed_rows = self
+            .prepared
+            .cores
+            .iter()
+            .any(|core| displayed.get(core).copied().flatten().is_some());
+        // A selected core the preset has since hidden, whose session is gone, or which the Type
+        // list no longer keeps in the table can be neither shown nor unticked: drop it. A
+        // selection emptied this way is every core again, which is what the single-choice
+        // selector did when its one core went away. The drop is not undone when the Type tick
+        // is removed, exactly as it is not when the preset shows the core again.
+        let type_sel = &self.type_sel;
+        self.sel_cores.retain(|core| {
+            displayed.get(core).copied().flatten().is_some()
+                && type_admits(type_sel, kind_of(venues.get(core)))
+        });
         let allowed: Vec<_> = self
             .prepared
             .cores
@@ -395,7 +474,7 @@ impl ScreenerView {
                     .get(core)
                     .copied()
                     .flatten()
-                    .filter(|_| self.source_admits(*core))
+                    .filter(|_| self.source_admits(*core, venues))
             })
             .collect();
         let (rows, total, shown) =
@@ -443,17 +522,19 @@ impl ScreenerView {
 
     /// Toggle every displayed core of one exchange section in the session-only filter.
     ///
-    /// Ids the menu was rendered with are checked against the cores the preset shows NOW, so a
-    /// section captured before a preset change cannot select a core the table no longer lists.
+    /// Ids the menu was rendered with are checked against the cores the selector lists NOW, so a
+    /// section captured before a preset or kind change cannot select a core the table no longer
+    /// lists.
     fn toggle_exchange_cores(&mut self, exchange_cores: Vec<CoreId>, cx: &mut Context<Self>) {
         let available: HashSet<CoreId> = {
             let b = self.backend.read(cx);
             let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
+            let venues = b.session.core_venues();
             b.session
                 .sessions()
                 .iter()
                 .map(|session| session.id)
-                .filter(|&core| b.core_displayed(preset, core))
+                .filter(|&core| b.core_displayed(preset, core) && self.kind_lists(core, venues))
                 .collect()
         };
         if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
@@ -461,13 +542,48 @@ impl ScreenerView {
         }
     }
 
-    /// Whether the source selector lets `core`'s rows through; the display preset is a separate test.
+    /// Whether the source selector and the Type list let `core`'s rows through; the display
+    /// preset is a separate test.
     ///
-    /// The one reading of the selector: the row filter and the row's coin menu, whose "N cores"
+    /// The one reading of both controls: the row filter and the row's coin menu, whose "N cores"
     /// targets cover the cores the table shows, both ask here so the two cannot drift apart. An
-    /// empty selection is every core.
-    pub(super) fn source_admits(&self, core: CoreId) -> bool {
-        self.sel_cores.is_empty() || self.sel_cores.contains(&core)
+    /// empty selection is every core. The kind is the core's, not the market's — a core is
+    /// connected to one market kind of one exchange — which is why the Type list is decided here,
+    /// per core, rather than per row.
+    ///
+    /// Args:
+    ///     core: The core whose rows are asked about.
+    ///     venues: The session's venue map, for the core's market kind.
+    pub(super) fn source_admits(&self, core: CoreId, venues: &HashMap<CoreId, CoreVenue>) -> bool {
+        (self.sel_cores.is_empty() || self.sel_cores.contains(&core))
+            && self.kind_lists(core, venues)
+    }
+
+    /// Whether the Type list keeps `core` in the table at all.
+    ///
+    /// Asked by the core selector too: a core the list has taken out of the table must not stay
+    /// tickable there, or ticking it alone would empty the table with nothing on screen to say why.
+    fn kind_lists(&self, core: CoreId, venues: &HashMap<CoreId, CoreVenue>) -> bool {
+        type_admits(&self.type_sel, kind_of(venues.get(&core)))
+    }
+
+    /// Tick or untick one market kind in the Type list; `None` is the All row and clears it.
+    ///
+    /// Applied to the rows already published and nothing more: the list chooses among them and
+    /// changes nothing a publication reads, so starting one — as the sort and the text boxes do,
+    /// to resample the feed — would only re-read every core for the same rows.
+    fn toggle_type(&mut self, choice: Option<Option<MarketKind>>, cx: &mut Context<Self>) {
+        toggle_choice(&mut self.type_sel, choice, TYPE_CHOICES.len());
+        self.filter_cached(cx);
+        cx.notify();
+    }
+
+    /// Tick or untick one answer in the Listed list; `None` is the All row and clears it. Applied
+    /// to the published rows, as the Type list is.
+    fn toggle_listed(&mut self, choice: Option<Listing>, cx: &mut Context<Self>) {
+        toggle_choice(&mut self.listed_sel, choice, LISTED_CHOICES.len());
+        self.filter_cached(cx);
+        cx.notify();
     }
 
     /// Toggle a column and persist the visible keys in canonical `COLS` order.
@@ -558,19 +674,39 @@ impl ScreenerView {
                 .collect(),
         );
         let row_cols = visible.clone();
+        // Captions and logo geometry are the same for every row of this build, so they are
+        // resolved once here rather than per visible row per frame.
+        let kind_caption = |kind: MarketKind| SharedString::from(t!(kind.label_key()).to_string());
+        let row_style = Rc::new(RowStyle {
+            logos_ready: self.exchange_logos_ready,
+            logo_px: design::ui_px(cx, 13.0),
+            logo_gap: design::ui_px(cx, 5.0),
+            kinds: [
+                kind_caption(MarketKind::Spot),
+                kind_caption(MarketKind::Futures),
+                kind_caption(MarketKind::Quarterly),
+            ],
+            both: t!("screener.listed_both").to_string().into(),
+            spot_only: t!("screener.listed_spot_only").to_string().into(),
+            futures_only: t!("screener.listed_futures_only").to_string().into(),
+        });
 
         data_table_host(
             "screener-table-host",
             row_count == 0,
-            // Three-way choice, and the order matters: `scope_empty_text` takes precedence over
-            // both fallbacks, so a hidden-by-preset Screener never reaches either sentence below
-            // it. Of the two genuine reasons, only "no session at all" asks for an action — a
-            // core hidden by the preset, or connected with no book yet, must not tell the user to
-            // go connect something that is already connected.
+            // Four-way choice, and the order matters: `scope_empty_text` takes precedence over
+            // every fallback, so a hidden-by-preset Screener never reaches a sentence below it. Of
+            // the genuine reasons, only "no session at all" asks for an action — a core hidden by
+            // the preset, or connected with no book yet, must not tell the user to go connect
+            // something that is already connected. And when rows WERE published and the controls
+            // of the bottom bar left none of them — the Type and Listed lists, a text or volume
+            // filter — the table says exactly that instead of claiming no data arrived.
             scope_marker::scope_empty_text(
                 self.scope_marker.as_ref(),
                 if self.sessions_total == 0 {
                     t!("screener.empty").to_string()
+                } else if self.has_displayed_rows {
+                    t!("screener.empty_filtered").to_string()
                 } else {
                     t!("screener.empty_no_data").to_string()
                 },
@@ -578,7 +714,13 @@ impl ScreenerView {
             p,
             cx,
             MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
-                screener_row(&prepared.entries[table_rows[ix]], &view, p, &row_cols)
+                screener_row(
+                    &prepared.entries[table_rows[ix]],
+                    &view,
+                    p,
+                    &row_cols,
+                    &row_style,
+                )
             })
             .columns(
                 visible
@@ -631,10 +773,15 @@ impl ScreenerView {
         let (cores, venues) = {
             let b = self.backend.read(cx);
             let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
+            let venues = b.session.core_venues();
             (
+                // Only the cores the Type list keeps in the table: one it has taken out must
+                // not stay tickable here.
                 moon_core::session::core_order::CoreOrder::new(&b.config)
-                    .from_sessions(b.session.sessions(), |s| b.core_displayed(preset, s.id)),
-                b.session.core_venues(),
+                    .from_sessions(b.session.sessions(), |s| {
+                        b.core_displayed(preset, s.id) && self.kind_lists(s.id, venues)
+                    }),
+                venues,
             )
         };
         let view = cx.entity();
@@ -659,6 +806,57 @@ impl ScreenerView {
                     this.toggle_exchange_cores(exchange_cores, cx);
                 });
             },
+        )
+    }
+
+    /// Build the Type list: a tick per market kind, narrowing the table to the ticked ones.
+    ///
+    /// The same shape as the core selector beside it — an All row, a tick per choice, the menu
+    /// staying open — because it is the same gesture on the same bar. Coin-margined contracts are
+    /// a choice of their own, as they are a value of their own in the Type column, and so is an
+    /// exchange this build cannot name: with only named kinds on offer, ticking one would drop
+    /// those rows with no way to ask for them back short of "all".
+    fn type_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let choices = TYPE_CHOICES.map(|kind| {
+            let label = match kind {
+                Some(kind) => t!(kind.label_key()).to_string(),
+                None => UNKNOWN_CHOICE.to_string(),
+            };
+            (kind, label)
+        });
+        let view = cx.entity();
+        choice_menu(
+            "screener-type",
+            column_title("type"),
+            &choices,
+            &self.type_sel,
+            cx,
+            move |choice, app| view.update(app, |this, cx| this.toggle_type(choice, cx)),
+        )
+    }
+
+    /// Build the Listed list: a tick per answer of the Listed column.
+    ///
+    /// "Only the one-sided coins" is two ticks here, `Spot Only` and `Futures Only`; unknown is a
+    /// choice like the others, so the rows nothing could answer for can be looked at on their own.
+    fn listed_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let choices = LISTED_CHOICES.map(|listing| {
+            let label = match listing {
+                Listing::Both => t!("screener.listed_both").to_string(),
+                Listing::SpotOnly => t!("screener.listed_spot_only").to_string(),
+                Listing::FuturesOnly => t!("screener.listed_futures_only").to_string(),
+                Listing::Unknown => UNKNOWN_CHOICE.to_string(),
+            };
+            (listing, label)
+        });
+        let view = cx.entity();
+        choice_menu(
+            "screener-listed",
+            column_title("listed"),
+            &choices,
+            &self.listed_sel,
+            cx,
+            move |choice, app| view.update(app, |this, cx| this.toggle_listed(choice, cx)),
         )
     }
 
@@ -752,6 +950,8 @@ impl ScreenerView {
                 design::facet_top_rule(this, design::facet_ink(p, design::FACET_CHROME_RULE))
             })
             .child(self.source_combo(cx))
+            .child(self.type_menu(cx))
+            .child(self.listed_menu(cx))
             .child(label(column_title("market")))
             .child(
                 div().w(px(90.0)).child(
@@ -839,6 +1039,185 @@ impl Render for ScreenerView {
     }
 }
 
+/// Whether the Type list lets a market kind through: every kind while nothing is ticked.
+fn type_admits(selected: &HashSet<Option<MarketKind>>, kind: Option<MarketKind>) -> bool {
+    selected.is_empty() || selected.contains(&kind)
+}
+
+/// Tick or untick one choice of a list whose empty selection means "all".
+///
+/// Ticking the last unticked choice collapses back to the empty selection: every choice ticked
+/// IS "all", and keeping it as an explicit full set would leave the All row unticked over a table
+/// that shows everything.
+///
+/// Args:
+///     selected: The ticked choices; empty for all.
+///     choice: The choice clicked, or `None` for the All row, which clears the selection.
+///     universe: How many choices the list offers.
+pub(super) fn toggle_choice<T: Copy + Eq + std::hash::Hash>(
+    selected: &mut HashSet<T>,
+    choice: Option<T>,
+    universe: usize,
+) {
+    let Some(choice) = choice else {
+        selected.clear();
+        return;
+    };
+    if !selected.remove(&choice) {
+        selected.insert(choice);
+    }
+    if selected.len() >= universe {
+        selected.clear();
+    }
+}
+
+/// What a list's button reads: its column title, then "all", the one ticked choice, or how many.
+///
+/// Args:
+///     title: The column the list filters, as its header spells it.
+///     all: The word for an empty selection.
+///     choices: Every choice with its caption, in menu order.
+///     selected: The ticked choices.
+pub(super) fn choice_summary<T: Copy + Eq + std::hash::Hash>(
+    title: &str,
+    all: &str,
+    choices: &[(T, String)],
+    selected: &HashSet<T>,
+) -> String {
+    let mut ticked = choices
+        .iter()
+        .filter(|(choice, _)| selected.contains(choice));
+    match (ticked.next(), selected.len()) {
+        (None, _) => choice_caption(title, all),
+        (Some((_, label)), 1) => choice_caption(title, label),
+        (Some(_), count) => choice_caption(title, &count.to_string()),
+    }
+}
+
+/// One caption of a list's button: the column title, then what the list is narrowed to.
+///
+/// The title stays on the button because two of these lists stand side by side: a bare "All"
+/// on each would not say which column it speaks for.
+fn choice_caption(title: &str, value: &str) -> String {
+    format!("{title}: {value}")
+}
+
+/// Every caption a list's button can show, so the button is sized once for the longest of them.
+///
+/// The counts run from two to one short of every choice: one tick prints its caption, and every
+/// choice ticked collapses to "all" (see [`toggle_choice`]).
+///
+/// Args:
+///     title: The column the list filters, as its header spells it.
+///     all: The word for an empty selection.
+///     choices: Every choice with its caption, in menu order.
+pub(super) fn choice_captions<T>(title: &str, all: &str, choices: &[(T, String)]) -> Vec<String> {
+    let counts = (2..choices.len()).map(|count| count.to_string());
+    std::iter::once(all.to_string())
+        .chain(choices.iter().map(|(_, label)| label.clone()))
+        .chain(counts)
+        .map(|value| choice_caption(title, &value))
+        .collect()
+}
+
+/// Design-unit width a list's button never goes below, however short its captions are.
+const CHOICE_TRIGGER_MIN_W: f32 = 64.0;
+/// Design-unit bounds of a list's open menu: room for the longest answer, never a banner.
+const CHOICE_MENU_W: (f32, f32) = (130.0, 320.0);
+
+/// One multi-select list of the bottom bar: an All row and a tick per choice, staying open.
+///
+/// Built on the same dropdown and the same row idiom as the core selector and the column menu,
+/// so the three read as one family. Like the core selector's, the button keeps ONE width whatever
+/// is ticked — here the width of its longest caption: the menu stays open across clicks, and a
+/// button that resized with each tick would move the open menu and every control after it.
+///
+/// Args:
+///     id: Element id of the dropdown; rows are keyed under it.
+///     title: The column the list filters, shown on its button.
+///     choices: Every choice with its caption, in menu order.
+///     selected: The ticked choices; empty for all.
+///     cx: Application context, for the button's density.
+///     on_toggle: Called with the clicked choice, or `None` for the All row.
+fn choice_menu<T, F>(
+    id: &'static str,
+    title: &str,
+    choices: &[(T, String)],
+    selected: &HashSet<T>,
+    cx: &App,
+    on_toggle: F,
+) -> MoonDropdown
+where
+    T: Copy + Eq + std::hash::Hash + 'static,
+    F: Fn(Option<T>, &mut App) + Clone + 'static,
+{
+    let all_label = t!("report.filter.all").to_string();
+    let all_on = selected.is_empty();
+    let toggle_all = on_toggle.clone();
+    let size = MoonButtonSize::density(cx);
+    let captions = choice_captions(title, &all_label, choices);
+    // Both bounds are the one width, measured by the component's own fitting function.
+    let trigger_w = crate::controls::trigger_fit::widest_design(
+        cx,
+        captions.iter().map(String::as_str),
+        size,
+        CHOICE_TRIGGER_MIN_W,
+    );
+    let mut menu = MoonDropdown::new(id)
+        .label(choice_summary(title, &all_label, choices, selected))
+        .trigger_caret(true)
+        .trigger_variant(MoonButtonVariant::Soft)
+        .trigger_size(size)
+        .fit_trigger_width(trigger_w, trigger_w)
+        .fit_menu_width(CHOICE_MENU_W.0, CHOICE_MENU_W.1)
+        .close_on_select(false)
+        .item(
+            MoonMenuItem::with_key(format!("{id}-all"), all_label)
+                .checked(all_on)
+                .selected(all_on)
+                .on_click(move |_, _, app| toggle_all(None, app)),
+        );
+    for (index, (choice, label)) in choices.iter().enumerate() {
+        let on = selected.contains(choice);
+        let toggle = on_toggle.clone();
+        let choice = *choice;
+        menu = menu.item(
+            MoonMenuItem::with_key(format!("{id}-{index}"), label.clone())
+                .checked(on)
+                .selected(on)
+                .on_click(move |_, _, app| toggle(Some(choice), app)),
+        );
+    }
+    menu
+}
+
+/// The bit one Listed answer occupies in [`CoinQuery`]'s mask.
+fn listing_bit(listing: Listing) -> u8 {
+    match listing {
+        Listing::Both => 1,
+        Listing::SpotOnly => 2,
+        Listing::FuturesOnly => 4,
+        Listing::Unknown => 8,
+    }
+}
+
+/// The market kind of the venue a core is connected to, or `None` for one this build cannot name.
+fn kind_of(venue: Option<&CoreVenue>) -> Option<MarketKind> {
+    venue
+        .and_then(CoreVenue::resolved)
+        .map(|resolved| resolved.kind)
+}
+
+/// What the table shows about one core's venue: the caption every core list prints, its brand's
+/// logo, and its market kind.
+fn entry_venue(venue: &CoreVenue) -> EntryVenue {
+    EntryVenue {
+        label: crate::controls::venue_label(venue).into(),
+        brand: venue.brand(),
+        kind: kind_of(Some(venue)),
+    }
+}
+
 /// Normalize a provider's markets once while preserving member order and account identity.
 fn entries_for(
     rows: Vec<moon_core::market::SharedScreenerRow>,
@@ -866,6 +1245,9 @@ fn entries_for(
                 core_name,
                 market_uc,
                 coin_uc,
+                // Attached by the caller, which holds the session's venue map; a row built here
+                // alone belongs to a core nobody has identified.
+                venue: EntryVenue::default(),
             }
         })
         .collect()
@@ -877,23 +1259,48 @@ fn entries_for(
 /// Why two: a Latin ticker typed on the Russian layout (`ыиук`) means `SBER`, while a coin whose
 /// real name is Cyrillic (`ОФЗ 26254` on a T-Invest core) is only reachable by the text as typed.
 /// Folding alone made every Cyrillic name unfindable (#1303).
+///
+/// It also carries the one other per-ROW test of the bottom bar, the Listed list, so the
+/// selection pass takes the row-level controls as one value. The Type list is not here: it is
+/// decided per core, with the source selector.
 pub(super) struct CoinQuery {
     /// The query as typed, uppercased.
     typed: String,
     /// The Russian-layout keys mapped to Latin, uppercased; `None` when that changes nothing.
     folded: Option<String>,
+    /// The Listed answers a row may carry, one bit each; zero for every answer.
+    listed: u8,
 }
 
 impl CoinQuery {
-    /// Builds both spellings from the raw box text.
+    /// Builds both spellings from the raw box text, with every Listed answer admitted.
     pub(super) fn new(raw: &str) -> Self {
         let typed = raw.to_uppercase();
         let folded = crate::controls::coin_search::normalize_layout(raw).to_uppercase();
         let folded = (folded != typed).then_some(folded);
-        Self { typed, folded }
+        Self {
+            typed,
+            folded,
+            listed: 0,
+        }
     }
 
-    /// True when the box is empty, so no row is filtered out.
+    /// Narrows the rows to the ticked Listed answers; an empty selection is every answer.
+    pub(super) fn listed_in(mut self, selected: &HashSet<Listing>) -> Self {
+        self.listed = selected
+            .iter()
+            .fold(0, |mask, listing| mask | listing_bit(*listing));
+        self
+    }
+
+    /// Whether a row passes the Listed list: every row while nothing is ticked, and otherwise
+    /// only a row carrying one of the ticked answers.
+    pub(super) fn admits_listing(&self, listing: Listing) -> bool {
+        self.listed == 0 || self.listed & listing_bit(listing) != 0
+    }
+
+    /// True when the box is empty, so no row is filtered out BY ITS TEXT; the Listed list is
+    /// asked separately, through [`Self::admits_listing`].
     pub(super) fn is_empty(&self) -> bool {
         self.typed.is_empty()
     }

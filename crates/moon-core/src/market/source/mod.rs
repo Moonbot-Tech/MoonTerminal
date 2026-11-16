@@ -51,6 +51,7 @@ mod dto;
 mod history_state;
 mod identity;
 mod limits;
+mod listing;
 mod ring_helpers;
 
 pub use diagnostics::MarketRevisions;
@@ -143,6 +144,11 @@ pub(super) struct MarketDataSourceInner {
     /// does not hold the source's write side. Never lock it while holding the source lock for
     /// anything but a copy.
     arb_book: Arc<Mutex<arb::ArbBook>>,
+    /// Where each coin is listed, for the Screener; see [`listing`] for what it costs to build.
+    ///
+    /// Held like the arbitrage book above: a handle taken out of this lock, then locked on its own
+    /// for a copy in or out and never across the build.
+    listing_cache: Arc<Mutex<listing::ListingCache>>,
     /// Traded amounts by `(provider, span, market)`; see [`volume`] for what it costs to fill.
     ///
     /// Beside the arbitrage book and held the same way — behind its own `Arc<Mutex<_>>` so a read

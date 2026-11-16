@@ -76,7 +76,7 @@ fn the_column_migration_records_its_completion() {
         .find("return;")
         .expect("an applied migration must not run again");
     let rewrite = block
-        .find("add_new_columns(keys)")
+        .find("add_new_columns(keys, applied)")
         .expect("the stored sets must gain the late columns");
     let marker = block
         .find("b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);")
@@ -87,7 +87,9 @@ fn the_column_migration_records_its_completion() {
     assert!(guard < rewrite && rewrite < marker && marker < dirty);
     // Past the last stored set, nothing may open a new block: the marker and the dirty mark sit at
     // the closure's own level, so neither can end up under a condition on whether a set changed.
-    let last_rewrite = block.rfind("add_new_columns(keys)").expect("checked above");
+    let last_rewrite = block
+        .rfind("add_new_columns(keys, applied)")
+        .expect("checked above");
     assert!(
         !block[last_rewrite..dirty].contains('{'),
         "the marker and the dirty mark must not depend on whether a set was rewritten"
@@ -108,6 +110,7 @@ fn filter_matches_uppercased_market_or_coin() {
         core_name: "synthetic".into(),
         market_uc: "ALPHAUSDT".into(),
         coin_uc: "BETA".into(),
+        venue: Default::default(),
     };
     assert!(matches_coin_filter(&entry, &CoinQuery::new("ALPHA")));
     assert!(matches_coin_filter(&entry, &CoinQuery::new("BETA")));
@@ -122,6 +125,7 @@ fn empty_filter_keeps_all() {
         core_name: "synthetic".into(),
         market_uc: "".into(),
         coin_uc: "BETA".into(),
+        venue: Default::default(),
     };
     assert!(matches_coin_filter(&entry, &CoinQuery::new("")));
 }
@@ -262,6 +266,7 @@ fn scale_probe_market_rebuild() {
             .map(|row| Entry {
                 market_uc: row.market.to_uppercase().into(),
                 coin_uc: row.coin.to_uppercase().into(),
+                venue: Default::default(),
                 row: row.into(),
                 core_name: "CORE_A".into(),
             })
@@ -295,6 +300,7 @@ fn footer_counts_keep_provider_identity_and_filter_semantics() {
                 core_name: "CORE_A".into(),
                 market_uc: "XALPHA".into(),
                 coin_uc: "XALPHA".into(),
+                venue: Default::default(),
             })
             .collect()
     };
@@ -438,4 +444,111 @@ pub(in crate::screener) fn filter_and_sort(
     };
     sort_entries(&mut entries, key, desc);
     (entries, total, shown)
+}
+
+/// A list's selection: a tick toggles, the All row clears, and every choice ticked IS "all".
+///
+/// Mutation: keep a complete selection as an explicit full set. The All row then stands unticked
+/// over a table that shows everything, and the button reads a count instead of "all".
+#[test]
+fn a_choice_list_toggles_and_collapses_a_full_selection_to_all() {
+    let mut selected: HashSet<u8> = HashSet::new();
+    super::toggle_choice(&mut selected, Some(1), 3);
+    assert_eq!(selected, HashSet::from([1]));
+    super::toggle_choice(&mut selected, Some(2), 3);
+    assert_eq!(selected, HashSet::from([1, 2]));
+    super::toggle_choice(&mut selected, Some(1), 3);
+    assert_eq!(selected, HashSet::from([2]), "a second click unticks");
+    super::toggle_choice(&mut selected, Some(1), 3);
+    super::toggle_choice(&mut selected, Some(3), 3);
+    assert!(selected.is_empty(), "every choice ticked is all");
+    super::toggle_choice(&mut selected, Some(2), 3);
+    super::toggle_choice(&mut selected, None, 3);
+    assert!(selected.is_empty(), "the All row clears");
+}
+
+/// The button names what the list is narrowed to: "all", the one choice, or how many.
+///
+/// Mutation: print the count for a single tick, or the first caption for several. A list
+/// narrowed to `Spot` would read `Type: 1`, and one narrowed to two answers would name only one
+/// of them — a table missing half its rows under a button that does not say so.
+#[test]
+fn a_choice_list_button_reads_all_one_caption_or_a_count() {
+    let choices = [(1u8, "Spot".to_string()), (2, "Futures".to_string())];
+    let summary = |ticked: &[u8]| {
+        let selected: HashSet<u8> = ticked.iter().copied().collect();
+        super::choice_summary("Type", "All", &choices, &selected)
+    };
+    assert_eq!(summary(&[]), "Type: All");
+    assert_eq!(summary(&[2]), "Type: Futures");
+    assert_eq!(summary(&[1, 2]), "Type: 2");
+}
+
+/// The button is sized for every caption it can show, and for none it cannot.
+///
+/// Mutation: size it for the choice captions alone. The button then clips "all" or a count
+/// whenever that is the longest thing it prints — in a language whose word for "all" outruns
+/// its market kinds — and, being fixed, never grows to show it.
+#[test]
+fn a_choice_list_button_is_sized_for_every_caption_it_can_show() {
+    let choices = [
+        (1u8, "Spot".to_string()),
+        (2, "Futures".to_string()),
+        (3, "Quarterly".to_string()),
+        (4, "?".to_string()),
+    ];
+    let mut captions = super::choice_captions("Type", "All", &choices);
+    captions.sort();
+    // Four ticks collapse to "all" and one tick prints its caption, so the counts are 2 and 3.
+    assert_eq!(
+        captions,
+        [
+            "Type: 2",
+            "Type: 3",
+            "Type: ?",
+            "Type: All",
+            "Type: Futures",
+            "Type: Quarterly",
+            "Type: Spot",
+        ]
+    );
+}
+
+/// The Type list decides by market kind, and an exchange this build cannot name is a kind of
+/// its own rather than a wildcard.
+///
+/// Mutation: let an unnamed exchange through every selection, or fold coin-margined contracts
+/// into `Futures`. Ticking `Spot` would then still list every core of an unnamed exchange, and
+/// the `Quarterly` tick would select nothing the `Futures` tick does not.
+#[test]
+fn the_type_list_admits_a_kind_only_by_its_own_tick() {
+    use moon_core::venue::MarketKind;
+    let ticked = |kinds: &[Option<MarketKind>]| -> HashSet<Option<MarketKind>> {
+        kinds.iter().copied().collect()
+    };
+    let every_kind = [
+        Some(MarketKind::Spot),
+        Some(MarketKind::Futures),
+        Some(MarketKind::Quarterly),
+        None,
+    ];
+    for kind in every_kind {
+        assert!(
+            super::type_admits(&ticked(&[]), kind),
+            "nothing ticked is all"
+        );
+        for other in every_kind {
+            assert_eq!(
+                super::type_admits(&ticked(&[other]), kind),
+                kind == other,
+                "{kind:?} under a list narrowed to {other:?}"
+            );
+        }
+    }
+    let derivatives = ticked(&[Some(MarketKind::Futures), Some(MarketKind::Quarterly)]);
+    assert!(super::type_admits(
+        &derivatives,
+        Some(MarketKind::Quarterly)
+    ));
+    assert!(!super::type_admits(&derivatives, None));
 }

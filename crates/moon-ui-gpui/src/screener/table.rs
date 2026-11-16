@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
 
@@ -27,6 +28,13 @@ pub(super) const COLS: &[ColDef] = &[
     // up across every exchange. Not a Moonbot column — Moonbot shows one exchange at a time.
     (COIN_KEY, "Coin", 70.0, false),
     ("core", "Core", 76.0, false),
+    // Three columns about WHERE the row is, none of them Moonbot's — Moonbot shows one exchange,
+    // so it has nothing to say here. `exchange` is the venue caption every core list uses, `type`
+    // the market kind of that venue, and `listed` whether the coin trades on both kinds of this
+    // exchange or on this one alone, in the words of Moonbot's `ListedType` strategy filter.
+    (EXCHANGE_KEY, "Exchange", 124.0, false),
+    (TYPE_KEY, "Type", 64.0, false),
+    (LISTED_KEY, "Listed", 92.0, false),
     ("vol24", "Vol.", 66.0, true),
     ("hvol", "H.vol", 66.0, true),
     ("vol1m", "1m vol", 62.0, true),
@@ -143,30 +151,56 @@ pub(super) fn migrate_legacy_widths(
 
 /// Key of the cross-exchange coin column.
 const COIN_KEY: &str = "coin";
+/// Key of the exchange column: the venue caption with its logo.
+const EXCHANGE_KEY: &str = "exchange";
+/// Key of the market-kind column.
+const TYPE_KEY: &str = "type";
+/// Key of the cross-listing column.
+const LISTED_KEY: &str = "listed";
 
-/// Columns added after users could already hold a stored visible set, oldest first.
-const COLS_ADDED_LATE: &[&str] = &[COIN_KEY];
+/// How "nothing answers" is written, in the Type and Listed cells and in the lists that filter
+/// them: a question mark rather than the dash, which elsewhere in this table means "nothing to
+/// show". One constant, so a cell and the choice that selects it cannot be spelled differently.
+pub(super) const UNKNOWN_CHOICE: &str = "?";
+
+/// Columns added after users could already hold a stored visible set, each with the migration
+/// version that introduced it, oldest first.
+///
+/// The version is what lets a later migration add ITS columns without re-adding an earlier one:
+/// a layout already at version 1 has had its chance at `coin`, and a user who hid it since must
+/// not get it back because three more columns arrived.
+const COLS_ADDED_LATE: &[(u32, &str)] = &[
+    (1, COIN_KEY),
+    (2, EXCHANGE_KEY),
+    (2, TYPE_KEY),
+    (2, LISTED_KEY),
+];
+
+/// The migration version a layout is at once every late column has been offered to it.
+pub(super) const COLUMNS_MIGRATION: u32 = 2;
 
 /// Add the columns a stored visible set predates.
 ///
 /// A stored set is an explicit list, so a column introduced later is simply missing from it and
 /// would stay hidden for everyone who ever arranged their columns — the users most likely to want
-/// it. The caller runs this once per layout and records that it did
+/// it. The caller runs this once per layout version and records that it did
 /// (`WindowLayout::screener_columns_migration`): run on every open, it would put back a column the
 /// user has since hidden.
 ///
 /// Args:
 ///     keys: One stored visible set, in any order.
+///     applied: The migration version the layout already records; zero for never migrated.
 ///
 /// Returns:
-///     Nothing; `keys` gains the missing columns. An empty set is left alone: it is not a choice a
-///     user can make, and filling it would turn "all columns" into "only the new ones".
-pub(super) fn add_new_columns(keys: &mut Vec<String>) {
+///     Nothing; `keys` gains the columns introduced after `applied`. An empty set is left alone:
+///     it is not a choice a user can make, and filling it would turn "all columns" into "only the
+///     new ones".
+pub(super) fn add_new_columns(keys: &mut Vec<String>, applied: u32) {
     if keys.is_empty() {
         return;
     }
-    for column in COLS_ADDED_LATE {
-        if !keys.iter().any(|key| key == column) {
+    for (version, column) in COLS_ADDED_LATE {
+        if *version > applied && !keys.iter().any(|key| key == column) {
             keys.push((*column).to_string());
         }
     }
@@ -208,6 +242,37 @@ pub(super) struct Entry {
     pub(super) market_uc: std::sync::Arc<str>,
     /// Normalized coin text shared by all filter comparisons for this entry.
     pub(super) coin_uc: std::sync::Arc<str>,
+    /// Where the row's core is connected, for the Exchange and Type columns and the Type list.
+    pub(super) venue: EntryVenue,
+}
+
+/// What the table shows about the exchange a row's core is connected to.
+///
+/// Resolved once per core on the UI thread, where the session's venue map and the translator
+/// live, and copied onto that core's rows: the caption is the same text every core list in the
+/// terminal prints for it. The default — no caption, no brand, no kind — is a core the session has
+/// not identified yet.
+#[derive(Clone, Default)]
+pub(super) struct EntryVenue {
+    /// The venue caption, such as `Binance Futures`; empty until the core is identified.
+    pub(super) label: SharedString,
+    /// The brand whose logo stands beside the caption; `None` for a platform this build cannot
+    /// name, which then shows its own caption and no logo.
+    pub(super) brand: Option<moon_core::venue::Brand>,
+    /// The venue's market kind; `None` wherever the brand is.
+    pub(super) kind: Option<moon_core::venue::MarketKind>,
+}
+
+/// Where a market kind sorts in the Type column: spot, then perpetuals, then coin-margined, with
+/// an unidentified exchange last in ascending order.
+fn kind_rank(kind: Option<moon_core::venue::MarketKind>) -> u8 {
+    use moon_core::venue::MarketKind;
+    match kind {
+        Some(MarketKind::Spot) => 0,
+        Some(MarketKind::Futures) => 1,
+        Some(MarketKind::Quarterly) => 2,
+        None => 3,
+    }
 }
 
 /// Parse the minimum volume from the DVol filter, such as `500`, `500k`, or `2m`.
@@ -259,6 +324,15 @@ pub(super) fn sort_indices(entries: &[Entry], order: &mut [usize], key: &str, de
         }
         COIN_KEY => {
             order.sort_by(|&a, &b| direction(entries[a].row.identity.cmp(&entries[b].row.identity)))
+        }
+        EXCHANGE_KEY => {
+            order.sort_by(|&a, &b| direction(entries[a].venue.label.cmp(&entries[b].venue.label)))
+        }
+        TYPE_KEY => order.sort_by(|&a, &b| {
+            direction(kind_rank(entries[a].venue.kind).cmp(&kind_rank(entries[b].venue.kind)))
+        }),
+        LISTED_KEY => {
+            order.sort_by(|&a, &b| direction(entries[a].row.listing.cmp(&entries[b].row.listing)))
         }
         _ => {
             let values: Vec<_> = entries
@@ -356,12 +430,53 @@ fn money_cell(v: f64) -> MoonDataCell {
     }
 }
 
+/// What every row of one frame shares: the translated captions and the logo geometry.
+///
+/// Resolved once per table build on the UI thread — the row closure runs per visible row per
+/// frame, and a dictionary lookup and a theme read in each of them would be paid forty times for
+/// values that cannot differ between rows.
+pub(super) struct RowStyle {
+    /// Whether the exchange logos have been rasterized; until then the cell draws its caption
+    /// alone rather than decoding an image inside a frame.
+    pub(super) logos_ready: bool,
+    /// Edge of a logo and the gap after it, already in theme pixels.
+    pub(super) logo_px: Pixels,
+    pub(super) logo_gap: Pixels,
+    /// Captions of the three market kinds, in [`kind_rank`] order.
+    pub(super) kinds: [SharedString; 3],
+    pub(super) both: SharedString,
+    pub(super) spot_only: SharedString,
+    pub(super) futures_only: SharedString,
+}
+
+/// The venue caption with its brand logo, clipped rather than wrapped in a narrow column.
+fn exchange_cell(venue: &EntryVenue, style: &RowStyle) -> impl IntoElement + 'static {
+    let logo = style
+        .logos_ready
+        .then_some(venue.brand)
+        .flatten()
+        .and_then(crate::media::exchange_logos::exchange_logo);
+    let (logo_px, logo_gap) = (style.logo_px, style.logo_gap);
+    div()
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .gap(logo_gap)
+        .when_some(logo, |cell, logo| {
+            cell.child(img(logo).flex_none().w(logo_px).h(logo_px))
+        })
+        .child(div().min_w_0().truncate().child(venue.label.clone()))
+}
+
 pub(super) fn screener_row(
     e: &Entry,
     view: &Entity<ScreenerView>,
     p: MoonPalette,
     cols: &[&ColDef],
+    style: &RowStyle,
 ) -> MoonDataRow {
+    use moon_core::market::listing::Listing;
     let r = &e.row;
     // Every Screener delta is an unsigned retained-range magnitude. One formatter keeps all six
     // periods free of a misleading forced sign while preserving the shared zero rounding.
@@ -382,6 +497,28 @@ pub(super) fn screener_row(
                 false => MoonDataCell::text(r.identity.clone()),
             },
             "core" => MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
+            EXCHANGE_KEY => match e.venue.label.is_empty() {
+                true => MoonDataCell::text("—").tone(MoonTone::Muted),
+                false => MoonDataCell::element(exchange_cell(&e.venue, style)),
+            },
+            TYPE_KEY => match e.venue.kind {
+                Some(kind) => {
+                    MoonDataCell::text(style.kinds[usize::from(kind_rank(Some(kind)))].clone())
+                }
+                None => MoonDataCell::text(UNKNOWN_CHOICE).tone(MoonTone::Muted),
+            },
+            // The one-sided answers are the reason the column exists, so they carry the accent;
+            // `Both` is the unremarkable case and unknown is the muted question mark.
+            LISTED_KEY => match r.listing {
+                Listing::Both => MoonDataCell::text(style.both.clone()).tone(MoonTone::Muted),
+                Listing::SpotOnly => {
+                    MoonDataCell::text(style.spot_only.clone()).tone(MoonTone::Accent)
+                }
+                Listing::FuturesOnly => {
+                    MoonDataCell::text(style.futures_only.clone()).tone(MoonTone::Accent)
+                }
+                Listing::Unknown => MoonDataCell::text(UNKNOWN_CHOICE).tone(MoonTone::Muted),
+            },
             "vol24" => vol_cell(r.vol_24h),
             "hvol" => vol_cell(r.vol_1h),
             "vol1m" => vol_cell(r.vol_1m),
@@ -512,10 +649,11 @@ fn open_screener_coin_menu(
         let b = backend.read(app);
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
         let sessions = b.session.sessions();
+        let venues = b.session.core_venues();
         let selected: Vec<CoreId> = sessions
             .iter()
             .map(|session| session.id)
-            .filter(|&id| b.core_displayed(preset, id) && panel.source_admits(id))
+            .filter(|&id| b.core_displayed(preset, id) && panel.source_admits(id, venues))
             .collect();
         let name = sessions
             .iter()

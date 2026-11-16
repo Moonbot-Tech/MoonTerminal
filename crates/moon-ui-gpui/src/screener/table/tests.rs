@@ -9,7 +9,7 @@ use super::{
     migrate_legacy_widths, restore_sort,
 };
 
-/// A stored visible set gains the column it predates, once, and nothing else changes.
+/// A stored visible set gains the columns it predates, once, and nothing else changes.
 ///
 /// Mutation: skip the migration. Everyone who ever arranged their Screener columns holds an
 /// explicit list without `coin`, and the new column never appears for them. Mutation the other
@@ -17,19 +17,115 @@ use super::{
 #[test]
 fn a_stored_column_set_gains_the_late_column() {
     let mut arranged = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut arranged);
-    assert_eq!(arranged, ["market", "vol24", "coin"]);
+    add_new_columns(&mut arranged, 0);
+    assert_eq!(
+        arranged,
+        ["market", "vol24", "coin", "exchange", "type", "listed"]
+    );
 
-    // Already carrying it — a set written after the column existed — stays as it is.
-    add_new_columns(&mut arranged);
-    assert_eq!(arranged, ["market", "vol24", "coin"]);
+    // Already carrying them — a set written after the columns existed — stays as it is.
+    add_new_columns(&mut arranged, 0);
+    assert_eq!(
+        arranged,
+        ["market", "vol24", "coin", "exchange", "type", "listed"]
+    );
 
     let mut empty: Vec<String> = Vec::new();
-    add_new_columns(&mut empty);
+    add_new_columns(&mut empty, 0);
     assert!(empty.is_empty());
+}
 
-    // The key the migration writes is a real column, or it would restore nothing.
-    assert!(COLS.iter().any(|column| column.0 == "coin"));
+/// A later migration adds ITS columns and leaves an earlier one's alone.
+///
+/// Mutation: add every late column whenever the version moves. A user whose layout had already
+/// been offered `coin` and who hid it gets it back the day three unrelated columns arrive — the
+/// defect the per-column version exists for, found before it shipped (2026-11-16).
+#[test]
+fn a_later_migration_does_not_put_back_an_earlier_column_the_user_hid() {
+    let mut coin_hidden = vec!["market".to_string(), "vol24".to_string()];
+    add_new_columns(&mut coin_hidden, 1);
+    assert_eq!(
+        coin_hidden,
+        ["market", "vol24", "exchange", "type", "listed"]
+    );
+
+    let mut up_to_date = vec!["market".to_string()];
+    add_new_columns(&mut up_to_date, super::COLUMNS_MIGRATION);
+    assert_eq!(up_to_date, ["market"]);
+}
+
+/// Every late column is a real column, and the newest of them is what the layout is migrated to.
+///
+/// Mutation: add a column under a version above `COLUMNS_MIGRATION`, or bump the constant with no
+/// column behind it. In the first case the guard in the view returns before the column is ever
+/// offered; in the second every layout is rewritten for nothing.
+#[test]
+fn the_late_columns_exist_and_end_at_the_current_migration() {
+    for (_, key) in super::COLS_ADDED_LATE {
+        assert!(COLS.iter().any(|column| column.0 == *key), "{key}");
+    }
+    let newest = super::COLS_ADDED_LATE.iter().map(|(version, _)| *version);
+    assert_eq!(newest.max(), Some(super::COLUMNS_MIGRATION));
+    // Oldest first, so a set gains them in the order they were introduced.
+    assert!(
+        super::COLS_ADDED_LATE
+            .windows(2)
+            .all(|pair| pair[0].0 <= pair[1].0)
+    );
+}
+
+/// The three venue columns order rows by what they print, not by the float fallback.
+///
+/// Mutation: drop one of the arms in `sort_indices`. That column then sorts every row as equal,
+/// the header arrow turns and nothing moves.
+#[test]
+fn venue_columns_sort_by_exchange_kind_and_listing() {
+    use super::{Entry, EntryVenue};
+    use moon_core::market::ScreenerRow;
+    use moon_core::market::listing::Listing;
+    use moon_core::venue::MarketKind;
+    let entry = |core: u64, label: &str, kind: Option<MarketKind>, listing: Listing| Entry {
+        row: ScreenerRow {
+            core,
+            listing,
+            ..Default::default()
+        }
+        .into(),
+        core_name: "".into(),
+        market_uc: "".into(),
+        coin_uc: "".into(),
+        venue: EntryVenue {
+            label: label.to_string().into(),
+            brand: None,
+            kind,
+        },
+    };
+    let rows = || {
+        vec![
+            entry(0, "Gate Spot", Some(MarketKind::Spot), Listing::FuturesOnly),
+            entry(
+                1,
+                "Binance Futures",
+                Some(MarketKind::Futures),
+                Listing::Both,
+            ),
+            entry(2, "", None, Listing::Unknown),
+            entry(
+                3,
+                "Binance Quarterly",
+                Some(MarketKind::Quarterly),
+                Listing::SpotOnly,
+            ),
+        ]
+    };
+    let order = |key: &str| {
+        let mut sorted = rows();
+        sort_entries(&mut sorted, key, false);
+        sorted.iter().map(|e| e.row.core).collect::<Vec<_>>()
+    };
+    assert_eq!(order("exchange"), [2, 1, 3, 0]);
+    assert_eq!(order("type"), [0, 1, 3, 2]);
+    assert_eq!(order("listed"), [2, 1, 3, 0]);
 }
 
 /// Integer keys must reproduce the standard total float order for arbitrary NaN payloads too.
@@ -108,6 +204,7 @@ fn index_sort_matches_direct_rows_for_every_column_and_direction() {
             core_name: if i % 2 == 0 { "CORE_A" } else { "CORE_B" }.into(),
             market_uc: "".into(),
             coin_uc: "".into(),
+            venue: Default::default(),
         })
         .collect::<Vec<_>>()
     };

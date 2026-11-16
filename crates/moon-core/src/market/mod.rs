@@ -9,6 +9,7 @@
 
 pub mod candles;
 pub mod kline_cache;
+pub mod listing;
 pub mod price_recorder;
 mod screener;
 mod source;

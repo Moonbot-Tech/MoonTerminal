@@ -42,6 +42,7 @@ impl SessionManager {
         let now = Instant::now();
         let providers_changed = self.reconcile_providers();
         self.sweep_coin_naming();
+        self.sweep_arb_coverage();
 
         // 1. A provider's desired markets are the union of open charts routed to that quote group.
         //    The input is a list of pairs because one core may have several open markets
@@ -151,18 +152,78 @@ impl SessionManager {
             return;
         }
         for sess in &self.sessions {
-            // The directory's caption where it knows the platform, the core's own where it does
-            // not: an unnamed venue must still identify its row.
-            let venue = self
-                .core_venue
-                .get(&sess.id)
-                .map(|venue| match venue.resolved() {
-                    Some(v) => v.brand.display().to_string(),
-                    None => venue.reported.clone(),
-                })
-                .unwrap_or_default();
+            let venue = self.venue_caption(sess.id);
             self.market_source
                 .dump_coin_naming(sess.id, &sess.name, &venue);
+        }
+    }
+
+    /// The caption a diagnostic line names a core's venue by.
+    ///
+    /// The directory's brand where it knows the platform, the core's own caption where it does
+    /// not: an unnamed venue must still identify its row.
+    fn venue_caption(&self, core: CoreId) -> String {
+        self.core_venue
+            .get(&core)
+            .map(|venue| match venue.resolved() {
+                Some(v) => v.brand.display().to_string(),
+                None => venue.reported.clone(),
+            })
+            .unwrap_or_default()
+    }
+
+    /// Start a sweep of every core's arbitrage coverage when the channel is on and one is due.
+    ///
+    /// On this tick for the reason the naming sweep is: the line needs the server's name and its
+    /// venue, and the off case costs one atomic load. The scan itself does NOT run here — it reads
+    /// every market of every core once per watched venue, and this tick is the UI thread's — so it
+    /// is handed to a thread of its own with a clone of the market source, which is an `Arc`.
+    ///
+    /// The venue is written with its platform code and DEX name beside the brand: the question the
+    /// channel answers is per venue KIND, and `Binance` alone does not say spot from futures.
+    fn sweep_arb_coverage(&self) {
+        let Some(guard) = crate::arb_coverage::begin_sweep(crate::util::time::now_unix_ms_i64())
+        else {
+            return;
+        };
+        let cores: Vec<(CoreId, String, String)> = self
+            .sessions
+            .iter()
+            .map(|sess| {
+                let venue = match self.core_venue.get(&sess.id) {
+                    Some(venue) => format!(
+                        "{} code={} dex={:?}",
+                        self.venue_caption(sess.id),
+                        venue.id.code,
+                        venue.dex
+                    ),
+                    None => "unidentified".to_string(),
+                };
+                (sess.id, sess.name.clone(), venue)
+            })
+            .collect();
+        let source = self.market_source.clone();
+        let spawned = std::thread::Builder::new()
+            .name("arb-coverage".to_string())
+            .spawn(move || {
+                // Held for the whole sweep and dropped on every exit, a panic included, so a
+                // failed sweep cannot leave the gate closed.
+                let _guard = guard;
+                for (core, name, venue) in cores {
+                    // Switched off mid-sweep: the writer would discard the rest anyway, so do not
+                    // read thirty catalogs to produce nothing.
+                    if !crate::arb_coverage::enabled() {
+                        break;
+                    }
+                    let now = crate::util::time::now_unix_ms_i64();
+                    if let Some(coverage) = source.arb_coverage(core, now) {
+                        crate::arb_coverage::record(core, &name, &venue, &coverage, now);
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            // The guard went down with the closure, so the next period tries again.
+            log::warn!("arb coverage sweep could not start: {error}");
         }
     }
 

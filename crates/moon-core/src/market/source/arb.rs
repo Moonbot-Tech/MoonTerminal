@@ -70,6 +70,11 @@ const DONORS_TTL_MS: i64 = 5_000;
 /// exists for: a donor whose stream stopped while its snapshot stayed in memory.
 const QUOTE_STALE_MS: i64 = 60_000;
 
+// The coverage channel calls a quote "fresh" by this same bound, so its figure means "the column
+// would print it". Held equal here rather than shared: the channel must not become something the
+// column's behaviour depends on.
+const _: () = assert!(QUOTE_STALE_MS == crate::arb_coverage::FRESH_MS);
+
 /// Markets a coin's name is searched against on one donor.
 ///
 /// The search ranks exact before prefix before contains, and the pick below wants the perpetual
@@ -584,6 +589,93 @@ impl MarketDataSource {
             );
         }
         out
+    }
+
+    /// One core's arbitrage coverage across its WHOLE catalog, for `channels.arb_coverage`.
+    ///
+    /// The core's OWN client, not its market-data provider's: a slot is filed by the core that
+    /// received the stream, gated on that core's own mask, so two cores of one exchange can hold
+    /// different coverage of the same markets — which is one of the things the channel is for.
+    ///
+    /// The venue walk is the one [`Self::scan_donor`] does, for the reason given there: the mask is
+    /// exact when the core has one, and an all-false mask is read as none at all.
+    ///
+    /// Costs one lock round trip per market plus one per market per watched venue. Never call it on
+    /// the UI thread; `SessionManager::sweep_arb_coverage` hands it to a thread of its own.
+    ///
+    /// Args:
+    ///     core: Core whose own snapshot is read.
+    ///     now_ms: Current unix time in milliseconds, the instant every quote's age is measured at.
+    ///
+    /// Returns:
+    ///     The coverage, or `None` while the core has no client or snapshot yet.
+    pub fn arb_coverage(
+        &self,
+        core: CoreId,
+        now_ms: i64,
+    ) -> Option<crate::arb_coverage::CoreCoverage> {
+        let snapshot = self
+            .core_client(core)
+            .and_then(|client| client.snapshot_versioned())?;
+        let settings = snapshot.settings();
+        // Kept apart from `wanted` below: settings that have not arrived and settings with nothing
+        // ticked both leave no mask to walk by, and the line has to say which of the two it was.
+        let arb_config = settings.client_settings.as_ref().map(|s| &s.arb_config);
+        let wanted = arb_config.filter(|cfg| cfg.wanted_platforms().next().is_some());
+        let venues: Vec<(u8, moonproto::ArbPlatformCode)> = (0u8..=255)
+            .filter_map(|byte| {
+                let code = platform_code(byte);
+                let asked = match wanted {
+                    Some(cfg) => cfg.is_wanted(code),
+                    None => ArbVenue::from_code(byte).is_known_or_scanned_deployer(),
+                };
+                asked.then_some((byte, code))
+            })
+            .collect();
+        // The venues listed even at zero are the mask's own; the fallback roster walked without a
+        // mask is a guess at what might be there, and printing it would read as the core's choice.
+        let asked: Vec<u8> = match wanted {
+            Some(_) => venues.iter().map(|(byte, _)| *byte).collect(),
+            None => Vec::new(),
+        };
+        let mut coverage = crate::arb_coverage::CoreCoverage::new(
+            arb_config.map(|cfg| cfg.wanted_platforms().count()),
+            &asked,
+            settings.arb_is_active_now(),
+        );
+        let mut quotes: Vec<(u8, i64)> = Vec::with_capacity(venues.len());
+        for handle in snapshot.markets().iter() {
+            let (trading, futures_type, futures_flag) = handle.with(|m| {
+                (
+                    m.status_trading,
+                    m.futures_type.name(),
+                    m.futures_type != moonproto::BaseCurrency::EMPTY,
+                )
+            });
+            quotes.clear();
+            for (byte, code) in &venues {
+                // The "now" entry rather than the ring: it is written with every price, and the
+                // question here is whether a price exists and how old it is, not its history. A
+                // slot the isolation pass created with no price yet has a zero here and is skipped
+                // — which is also the `enabled` test `scan_donor` applies, since the protocol
+                // raises that flag only in the call that writes this price and never lowers it.
+                let Some(now) = handle.arb_now(*code) else {
+                    continue;
+                };
+                if positive(f64::from(now.price)).is_none() {
+                    continue;
+                }
+                quotes.push((*byte, now_ms.saturating_sub(now.time().unix_millis())));
+            }
+            coverage.add_market(&crate::arb_coverage::MarketFacts {
+                name: handle.name(),
+                trading,
+                futures_type,
+                futures_flag,
+                quotes: &quotes,
+            });
+        }
+        Some(coverage)
     }
 
     /// The shared book handle, taken without holding the source lock across the work behind it.

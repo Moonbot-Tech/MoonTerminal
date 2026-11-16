@@ -199,6 +199,39 @@ struct MoonClientSlot {
     /// disappear or change its trading status. Paired with `epoch`, it versions the catalog alone,
     /// where the client's snapshot revision moves on every price tick.
     catalog: u64,
+    /// When the installed client FIRST applied a market list; `None` until it has.
+    ///
+    /// The moment this client began holding a catalog, and so the earliest moment anything the
+    /// core streams per market — arbitrage prices — could start arriving. A consumer that must
+    /// know how long a client has been receiving, without having watched it all that time, reads
+    /// this instead of starting a clock of its own on first sight.
+    ///
+    /// On the monotonic clock, because the only question asked of it is "how long ago": a step
+    /// of the system clock, or the application clock a capture build pins in the past
+    /// (`util::time::pin_clock`), must not make a connection look older or younger than it is.
+    catalog_since: Option<std::time::Instant>,
+}
+
+impl MoonClientSlot {
+    /// Swap the client, starting the next one's epoch and forgetting the previous one's catalog
+    /// clock: a fresh client has applied no market list yet.
+    fn install(&mut self, client: Option<Arc<MoonClient>>) -> u64 {
+        if client.is_some() {
+            self.epoch = self.epoch.wrapping_add(1);
+        }
+        self.client = client;
+        self.catalog_since = None;
+        self.epoch
+    }
+
+    /// Count one market-list application; the first one under a client also stamps its clock.
+    ///
+    /// Later lists leave the stamp alone: markets added an hour into a connection do not make
+    /// the connection an hour younger.
+    fn note_catalog_change(&mut self, now: std::time::Instant) {
+        self.catalog = self.catalog.wrapping_add(1);
+        self.catalog_since.get_or_insert(now);
+    }
 }
 
 #[derive(Clone, Default)]
@@ -210,12 +243,10 @@ impl SharedMoonClient {
     /// Install `client` (or clear the slot) and return the slot's epoch after it — the epoch a
     /// just-installed client lives under, which the feed stamps on what it reports about it.
     pub(crate) fn set(&self, client: Option<Arc<MoonClient>>) -> u64 {
-        let mut slot = self.inner.write().expect("moon client slot poisoned");
-        if client.is_some() {
-            slot.epoch = slot.epoch.wrapping_add(1);
-        }
-        slot.client = client;
-        slot.epoch
+        self.inner
+            .write()
+            .expect("moon client slot poisoned")
+            .install(client)
     }
 
     pub fn get(&self) -> Option<Arc<MoonClient>> {
@@ -224,8 +255,10 @@ impl SharedMoonClient {
 
     /// Record that the installed client applied a market list.
     pub(crate) fn note_catalog_change(&self) {
-        let mut slot = self.inner.write().expect("moon client slot poisoned");
-        slot.catalog = slot.catalog.wrapping_add(1);
+        self.inner
+            .write()
+            .expect("moon client slot poisoned")
+            .note_catalog_change(std::time::Instant::now());
     }
 
     /// Version of the installed client's market catalog: `(epoch, catalog)`, which moves when the
@@ -246,6 +279,24 @@ impl SharedMoonClient {
     pub fn get_with_epoch(&self) -> Option<(Arc<MoonClient>, u64)> {
         let slot = self.inner.read().expect("moon client slot poisoned");
         slot.client.clone().map(|client| (client, slot.epoch))
+    }
+
+    /// The live client, its epoch, and how long ago it first applied a market list.
+    ///
+    /// One guard for all three, for the reason [`Self::get_with_epoch`] gives: an age read apart
+    /// from its client could be the previous connection's, and would make a client that has just
+    /// reconnected look as old as the one it replaced.
+    ///
+    /// Returns:
+    ///     The client, its epoch, and the time since its first market list on the monotonic
+    ///     clock — `None` for the age while it has applied none; `None` altogether for an empty
+    ///     slot.
+    pub fn get_with_epoch_and_catalog_age(
+        &self,
+    ) -> Option<(Arc<MoonClient>, u64, Option<std::time::Duration>)> {
+        let slot = self.inner.read().expect("moon client slot poisoned");
+        let age = slot.catalog_since.map(|since| since.elapsed());
+        slot.client.clone().map(|client| (client, slot.epoch, age))
     }
 }
 
