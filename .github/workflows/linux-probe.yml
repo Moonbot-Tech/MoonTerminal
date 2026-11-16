@@ -77,10 +77,16 @@ jobs:
   linux-probe:
     name: Linux probe (x86_64 GUI build) — diagnostic
     runs-on: ubuntu-latest
-    container: ubuntu:22.04
+    # The capability and the unconfined seccomp profile exist for `swapon` alone — see the swap
+    # step below. release.yml's linux job starts its container with the same options; a contract
+    # test holds the two equal.
+    container:
+      image: ubuntu:22.04
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
     # Probe: the Linux GUI has never been a gate. Do not fail the pipeline — read the job log.
     continue-on-error: true
-    # A cold release build with fat LTO on a hosted runner; the limit only stops a hung step.
+    # A cold release build with fat LTO on a hosted runner, 29-37 min of it on the link alone
+    # with the swap below; the limit only stops a hung step.
     timeout-minutes: 120
     steps:
       # The complete build-time list, quoted by docs/MAC_LINUX_BUILD.md. What each line is for:
@@ -112,6 +118,11 @@ jobs:
         run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui
       - name: Assert the refresh moved MoonUI and nothing else
         run: bash .github/scripts/assert-only-moonui-moved.sh
+      # The fat-LTO link needs about 17.3 GB on a runner with 16 GB of RAM and, on some runners,
+      # no swap at all: without this step the OOM killer ends it about every other run. Same
+      # step, same size as release.yml — the measurements are in the script's header.
+      - name: Add swap for the LTO link
+        run: bash .github/scripts/add-build-swap.sh 8
       # The release profile and the default features: the same set the Windows .exe ships.
       - name: Build the terminal
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-unknown-linux-gnu

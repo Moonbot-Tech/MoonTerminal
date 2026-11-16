@@ -187,6 +187,13 @@ virtual display in bare `ubuntu:22.04`, `ubuntu:24.04` and `debian:13` container
 lists below are the ones those containers install — a contract test
 (`the_build_guide_and_the_linux_probe_install_the_same_packages`) fails when the two differ.
 
+Both builds add 8 GB of swap first (`.github/scripts/add-build-swap.sh`), which is why their
+containers start with `--cap-add=SYS_ADMIN --security-opt seccomp=unconfined`: the release
+profile's fat-LTO link needs about 17.3 GB, a hosted runner has 16 GB of RAM and, on some
+machines, no swap, and without the extra swap the OOM killer ended the link in 3 runs of 5
+(measured 2026-11-16). A local build on a machine with less than about 18 GB of RAM plus swap
+hits the same wall.
+
 What neither of them covers: any distribution outside the Debian/Ubuntu family, a Wayland
 session (the virtual display is X11), a real GPU (the container renders through Mesa's
 software Vulkan driver), and the terminal's own use of the Secret Service (the run uses

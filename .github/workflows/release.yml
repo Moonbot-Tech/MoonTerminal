@@ -227,8 +227,11 @@ jobs:
     # Built exactly as linux-probe.yml builds it on every pull request: in a bare ubuntu:22.04
     # container, so the binary asks for glibc 2.35 and nothing newer, with the package list
     # docs/MAC_LINUX_BUILD.md gives. The asset is the single executable a Linux build's updater
-    # looks for (`moon_core::update`); a contract test holds the two names together.
-    container: ubuntu:22.04
+    # looks for (`moon_core::update`); a contract test holds the two names together. The options
+    # exist for `swapon` alone, the same as the probe's — a contract test holds the two equal.
+    container:
+      image: ubuntu:22.04
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
     env:
       DEBIAN_FRONTEND: noninteractive
     # A job container runs steps with `sh` unless told otherwise.
@@ -265,6 +268,11 @@ jobs:
         run: cargo update -p moon-gpui -p moon-gpui-platform -p moon-ui --precise ${{ needs.validate.outputs.moonui }}
       - name: Assert the refresh moved MoonUI and nothing else
         run: bash .github/scripts/assert-only-moonui-moved.sh
+      # The fat-LTO link needs about 17.3 GB on a runner with 16 GB of RAM and, on some runners,
+      # no swap at all; without this step the OOM killer ends it about every other run, and here
+      # that stops the release. Same step, same size as the probe.
+      - name: Add swap for the LTO link
+        run: bash .github/scripts/add-build-swap.sh 8
       - name: Build release binary
         run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-unknown-linux-gnu
       - name: Stage artifact
