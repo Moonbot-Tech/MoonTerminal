@@ -353,3 +353,25 @@ fn turnover_between_prorates_the_edges_and_reports_reach() {
         Some((40.0, true))
     );
 }
+
+/// `quote_turnover_between` — a coarse filler `compose_with_coarse` lays over a hole overlaps the
+/// finer series at its seam; where both cover an instant the finer candle states it, as
+/// `sample_at` already decides, so the stretch is counted once.
+///
+/// Hand computation: the filler `[0,100)` states 100 for its whole span, the finer candles
+/// `[50,60)` … `[90,100)` state 10 each for its second half. Over `[0,100)` that is the filler's
+/// first half (100 × 50 / 100 = 50) plus the finer 50 = 100, the filler's own total; over
+/// `[50,100)` only the finer 50. Summing both counted the second half twice (150 and 100).
+#[test]
+fn turnover_between_counts_a_seam_filler_once() {
+    let mut samples = vec![sample(0.0, 100.0, 100.0)];
+    samples.extend((5..10).map(|i| sample(f64::from(i) * 10.0, 10.0, 10.0)));
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 0.0, 100.0, f64::INFINITY),
+        Some((100.0, true))
+    );
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 50.0, 100.0, f64::INFINITY),
+        Some((50.0, true))
+    );
+}

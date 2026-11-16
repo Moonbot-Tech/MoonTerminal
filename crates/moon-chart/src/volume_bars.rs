@@ -423,18 +423,49 @@ pub fn quote_turnover_between(
     let end = samples.partition_point(|s| s.t_open_ms < to_ms).max(start);
     let mut total = 0.0f64;
     let mut first_open: Option<f64> = None;
-    for s in &samples[start..end] {
-        // A candle opening AFTER the local clock means the clock runs behind the venue; its own
-        // timeframe is then the only span there is, rather than dropping the live candle whole.
-        let span = if now_ms > s.t_open_ms {
+    // A candle opening AFTER the local clock means the clock runs behind the venue; its own
+    // timeframe is then the only span there is, rather than dropping the live candle whole.
+    let span_of = |s: &VolumeSample| {
+        if now_ms > s.t_open_ms {
             s.tf_ms.min(now_ms - s.t_open_ms)
         } else {
             s.tf_ms
-        };
+        }
+    };
+    let window = &samples[start..end];
+    // Only a sample wider than the narrowest can sit over a finer one; the series' own candles,
+    // nearly every sample, skip the seam scan below.
+    let narrowest = window.iter().map(|s| s.tf_ms).fold(f64::INFINITY, f64::min);
+    for s in window {
+        let span = span_of(s);
         if !(span > 0.0) {
             continue;
         }
-        let overlap = (s.t_open_ms + span).min(to_ms) - s.t_open_ms.max(from_ms);
+        let (lo, hi) = (s.t_open_ms.max(from_ms), (s.t_open_ms + span).min(to_ms));
+        let mut overlap = hi - lo;
+        if !(overlap > 0.0) {
+            continue;
+        }
+        // A coarse filler overlaps the finer candles at its seams; where both cover an instant the
+        // NARROWEST states it, as in `sample_at`, so that stretch is not counted twice.
+        let mut cursor = lo;
+        let first = match s.tf_ms > narrowest {
+            // A narrower sample ends within `s.tf_ms` of its open, which bounds how far back one
+            // can still reach `lo`; the window-wide `max_tf_ms` would rescan every row of a long
+            // run of fillers.
+            true => window.partition_point(|n| n.t_open_ms + s.tf_ms <= lo),
+            false => window.len(),
+        };
+        for n in window[first..].iter().take_while(|n| n.t_open_ms < hi) {
+            if !(n.tf_ms < s.tf_ms) {
+                continue;
+            }
+            let (n_lo, n_hi) = (n.t_open_ms.max(cursor), (n.t_open_ms + span_of(n)).min(hi));
+            if n_hi > n_lo {
+                overlap -= n_hi - n_lo;
+                cursor = n_hi;
+            }
+        }
         if !(overlap > 0.0) {
             continue;
         }
