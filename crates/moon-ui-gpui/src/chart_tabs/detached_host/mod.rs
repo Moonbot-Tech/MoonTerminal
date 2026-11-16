@@ -941,6 +941,8 @@ impl LayoutPopupHost for DetachedChartHost {
             arrival_core_color: p.arrival_frame().0.unwrap_or(false),
             arrival_hold: p.arrival_frame().1.unwrap_or(false),
             max_charts_evict: resolved_max_charts_evict(p.max_charts_evict()),
+            // A detached window is never Main.
+            main_detects: false,
         }
     }
     fn popup_is_custom(&self, cx: &App) -> bool {

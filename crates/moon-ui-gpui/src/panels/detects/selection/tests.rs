@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use super::{Incoming, Selected, select};
+use super::{Incoming, Selected, feed_admits, newest_per_market, select};
 use crate::panels::detects::tests::{detect_item, detect_row};
 use crate::panels::detects::{DetectItem, MAX_DETECT_BTNS};
 
@@ -154,4 +154,62 @@ fn detects_survivor_scale_probe() {
         assert_eq!(selected.len(), 48);
         std::hint::black_box(selected);
     }
+}
+
+/// The feed takes a row in only through all three of its gates, and Main's detect switch opens a
+/// chart on the same answer.
+///
+/// Mutation: drop any one gate. Without the sound gate every silent strategy detect earns a card
+/// and a Main chart; without the routing gate the "show AddToChart detects" setting stops meaning
+/// anything; without the expiry gate a replayed ring opens charts for detects long gone.
+#[test]
+fn a_row_enters_the_feed_only_through_all_three_gates() {
+    let now = 1_000_000.0;
+    // `detect_row` is a sounding, unrouted row with `KeepAlert = 60`.
+    assert_eq!(
+        feed_admits(&detect_row(1, now), false, 30, now),
+        Some(60_000.0)
+    );
+
+    let mut silent = detect_row(1, now);
+    silent.sound_alert = false;
+    assert_eq!(feed_admits(&silent, true, 30, now), None);
+    // An alert firing earns its place without `SoundAlert`.
+    silent.is_alert = true;
+    assert_eq!(feed_admits(&silent, true, 30, now), Some(60_000.0));
+
+    let mut routed = detect_row(1, now);
+    routed.add_to_chart = 3;
+    assert_eq!(feed_admits(&routed, false, 30, now), None);
+    assert_eq!(feed_admits(&routed, true, 30, now), Some(60_000.0));
+
+    // Born a full `KeepAlert` ago: its card would be pruned on the pass that built it.
+    assert_eq!(
+        feed_admits(&detect_row(1, now - 60_000.0), true, 30, now),
+        None
+    );
+}
+
+/// Only the newest row of a market survives the cut, and rows an earlier pass took are not reread.
+///
+/// Mutation: judge every fresh row instead. An older row of a market would then open a Main chart
+/// — and pay for a feed snapshot — when the market's newest row is the one that decides.
+#[test]
+fn the_cut_keeps_the_newest_row_of_each_market() {
+    let mut rows: Vec<_> = (1..=4).map(|index| detect_row(index, 0.0)).collect();
+    // Sequence 3 fires on the market sequence 1 already fired on.
+    rows[2].market = rows[0].market.clone();
+    let taken = |last: u64| -> Vec<u64> {
+        newest_per_market(rows.iter(), last)
+            .iter()
+            .map(|row| row.seq)
+            .collect()
+    };
+    assert_eq!(
+        taken(0),
+        vec![4, 3, 2],
+        "newest first, the repeated market once"
+    );
+    assert_eq!(taken(3), vec![4], "the cursor ends the walk");
+    assert!(taken(4).is_empty());
 }

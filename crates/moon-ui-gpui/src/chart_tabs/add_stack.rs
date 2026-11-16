@@ -360,6 +360,11 @@ impl AddChartStack {
         self.max_charts
     }
 
+    /// Main's detect switch, which a numbered tab does not have: it receives its detects by
+    /// number. Exists only for the macro that dispatches every setting to either stack type;
+    /// `StackSetting::applies_to` keeps the value away from here.
+    pub(crate) fn set_main_detects(&mut self, _on: Option<bool>, _cx: &mut Context<Self>) {}
+
     pub(crate) fn max_charts_evict(&self) -> Option<bool> {
         self.max_charts_evict
     }

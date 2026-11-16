@@ -60,6 +60,9 @@ impl MainChartStack {
             layout_columns: None,
             layout_columns_exact: None,
             layout_min_slot: None,
+            main_detects: None,
+            max_charts: None,
+            max_charts_evict: None,
             measured: Rc::new(Cell::new(Size::default())),
             host_visible: true,
             scroll: MoonVirtualListScrollHandle::new(),
@@ -251,6 +254,30 @@ impl MainChartStack {
         cx.notify();
     }
 
+    /// Hand a detect chart to the reader who just asked for its market by name.
+    ///
+    /// An explicit open of a market that is already up — a table click, a Detects card — comes
+    /// through here. Asking for it is the reader wanting it, so the chart stops being the feed's:
+    /// no `KeepInChart` lifetime, no eviction at the cap. Two things are NOT this: selecting a chart
+    /// from Main's own tab row, which is looking rather than asking, and `replace_or_focus`, which
+    /// the Auto rail's retarget also fires by itself when Main's target lands on another core — an
+    /// adoption there would take a chart from the feed with nobody having asked for it.
+    ///
+    /// Args:
+    ///     index: Index of the chart the request resolved to.
+    ///     cx: Stack context used to update the chart's panel.
+    fn adopt_detect_chart(&mut self, index: usize, cx: &mut Context<Self>) {
+        let entry = &mut self.charts[index];
+        if entry.owner != SlotOwner::DetectFeed {
+            return;
+        }
+        entry.owner = SlotOwner::Reader;
+        let (core, market) = (entry.core, entry.market.clone());
+        entry.panel.update(cx, |panel, panel_cx| {
+            panel.adopt_market(core, &market, panel_cx)
+        });
+    }
+
     /// Focus an existing Main chart or create it when the core-market pair is not open.
     ///
     /// Args:
@@ -270,6 +297,7 @@ impl MainChartStack {
     ) {
         let key = (core, market.clone());
         if let Some(index) = self.index_of(&key) {
+            self.adopt_detect_chart(index, cx);
             self.charts[index].panel.update(cx, |panel, panel_cx| {
                 panel.apply_history_scope(core, market.clone(), history.clone(), panel_cx);
             });

@@ -46,6 +46,7 @@ fn loud_snapshot() -> LayoutPopupSnapshot {
         arrival_core_color: true,
         arrival_hold: true,
         max_charts_evict: true,
+        main_detects: true,
     }
 }
 
@@ -204,18 +205,23 @@ fn the_layout_press_carries_every_layout_value() {
 /// A press from a popup that HID the detect-flow controls must not carry them.
 ///
 /// Breakage this pins: passing the snapshot's resolved values unconditionally. Main's popup shows
-/// neither control and a custom tab's shows no cap, so their resolved values are the permissive
-/// defaults — and a press sent from there to copy an unrelated layout value would clear every
-/// addressed AddToChart tab's cap and switch its flash back on, with nothing on screen saying so.
+/// no flash and a custom tab's shows no cap, so their resolved values are the permissive defaults —
+/// and a press sent from there to copy an unrelated layout value would clear every addressed
+/// AddToChart tab's cap and switch its flash back on, with nothing on screen saying so.
 #[test]
 fn a_press_that_never_showed_the_detect_controls_leaves_them_alone() {
     let flash = StackSetting::ArrivalFlash(true);
     let frame = StackSetting::ArrivalFrame(true, true);
     let cap = StackSetting::MaxCharts(Some(6), true);
-    // Main: none of the controls is drawn there, and none may travel from or into it.
+    let main_detects = StackSetting::MainDetects(true);
+    // Main draws no arrival border, but it caps the detects its own switch lets in.
     assert!(!flash.applies_to(true, false));
     assert!(!frame.applies_to(true, false));
-    assert!(!cap.applies_to(true, false));
+    assert!(cap.applies_to(true, false));
+    // The switch is Main's alone: a numbered tab gets its detects by number, a custom tab none.
+    assert!(main_detects.applies_to(true, false));
+    assert!(!main_detects.applies_to(false, false));
+    assert!(!main_detects.applies_to(false, true));
     // A custom tab flashes arrivals but receives no detects, so the cap alone stays away.
     assert!(flash.applies_to(false, true));
     assert!(frame.applies_to(false, true));
@@ -239,6 +245,7 @@ fn a_press_that_never_showed_the_detect_controls_leaves_them_alone() {
             StackSetting::ArrivalFlash(_)
                 | StackSetting::ArrivalFrame(..)
                 | StackSetting::MaxCharts(..)
+                | StackSetting::MainDetects(_)
         ) {
             continue;
         }

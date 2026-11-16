@@ -70,6 +70,9 @@ pub(crate) use core_status::{
     connection_status_text, problem_diagnostic_text, startup_diagnostic_text,
 };
 pub use detects::DetectsPanel;
+pub(crate) use detects::{
+    feed_admits as detect_feed_admits, newest_per_market as detect_newest_per_market,
+};
 pub use log::LogPanel;
 pub use news::NewsView;
 pub use orders::OrdersPanel;

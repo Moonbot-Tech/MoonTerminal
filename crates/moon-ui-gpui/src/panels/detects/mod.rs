@@ -27,6 +27,8 @@ mod rules;
 mod selection;
 mod snapshots;
 
+pub(crate) use selection::{feed_admits, newest_per_market};
+
 #[cfg(test)]
 mod tests;
 
@@ -48,8 +50,8 @@ use crate::workspace::scope_marker::ScopeMarker;
 
 use crowd::DetectOrigin;
 use rules::{
-    crowd_card_yields, detect_card_ttl_ms, detect_expired, detection_core_visible,
-    detection_route_visible, detects_sig, empty_feed_text,
+    crowd_card_yields, detect_expired, detection_core_visible, detection_route_visible,
+    detects_sig, empty_feed_text,
 };
 
 /// Number of latest five-minute OHLC buckets retained for a card's candle chart, approximately two
@@ -371,33 +373,17 @@ impl DetectsPanel {
             let color = crate::core_color::core_color(&b.config.servers, id)
                 .unwrap_or(DEFAULT_SERVER_COLOR);
             let last = self.last_seq.get(&id).copied().unwrap_or(0);
-            let mut fresh: Vec<&moon_core::feed::DetectRow> = Vec::new();
-            let mut newest_of_market: HashSet<&str> = HashSet::new();
-            for det in d.detects.iter().rev() {
-                if det.seq <= last {
-                    break;
-                }
-                // Deduplicate before eligibility, exactly as the old ingest did.
-                if newest_of_market.insert(det.market.as_str()) {
-                    fresh.push(&**det);
-                }
-            }
+            let fresh = selection::newest_per_market(d.detects.iter().map(|det| &**det), last);
             if fresh.is_empty() {
                 continue;
             }
             self.last_seq.insert(id, fresh[0].seq);
             for det in fresh.into_iter().rev() {
-                if !det.sound_alert && !det.is_alert {
+                let Some(ttl) =
+                    selection::feed_admits(det, show_add_to_chart, b.alert_duration_s(), now_ms)
+                else {
                     continue;
-                }
-                if det.add_to_chart > 0 && !show_add_to_chart {
-                    continue;
-                }
-                let ttl =
-                    detect_card_ttl_ms(det.keep_alert_secs, det.is_alert, b.alert_duration_s());
-                if detect_expired(now_ms, det.time_ms, ttl) {
-                    continue;
-                }
+                };
                 incoming.push(selection::Incoming {
                     core: id,
                     name: &session.name,

@@ -41,6 +41,10 @@ pub(super) struct ChartStackEntry {
     /// asked for, and it never ages out on its own — letting the cap close it would take that back.
     /// The LAST arrival decides, so a manual open of a detected market claims the slot, and a
     /// detect on a hand-opened one hands it back.
+    ///
+    /// Main reads the same field with one difference: there a hand-opened chart is workspace, so a
+    /// later detect does NOT hand it back, and it is not counted toward Main's cap at all (see
+    /// `main_stack::detects`).
     pub owner: SlotOwner,
 }
 

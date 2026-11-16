@@ -1,5 +1,14 @@
 //! `ChartTabs` ingestion of AddToChart detects, including creating and populating core tabs, plus
 //! active-stack lookup by `(num, bucket)`. Extracted from `mod.rs`.
+//!
+//! The same pass feeds Main's own detect switch: with it on, every row the group's Detects feed
+//! takes in — its own cut and its own gates, `panels::detect_newest_per_market` and
+//! `panels::detect_feed_admits` — also opens its chart in Main's stack. One pass and one cursor for
+//! both routes, so a row is never judged by two different "is it new" rules.
+//!
+//! What Main does NOT mirror is the feed's replay: ticking "show AddToChart detects" makes the feed
+//! re-read its ring, while Main opens only what arrives from then on. A settings tick that opened a
+//! screenful of charts for detects that fired minutes ago would be the switch misbehaving.
 
 use gpui::*;
 
@@ -7,12 +16,35 @@ use super::{AddChartStack, ChartTabs};
 use moon_core::config::ChartBucket;
 use moon_core::session::CoreId;
 
+/// How long a detect's chart lives on Main.
+///
+/// A strategy's `KeepInChart`, where a strategy produced the row — `0` is its way of saying
+/// "forever". A row NO strategy produced (a drawn figure's alert firing; `strat_name` is empty for
+/// those alone) carries a zero that nobody chose, and reading it as "forever" would leave a chart
+/// up for good on the strength of a missing value: it takes its feed card's lifetime instead.
+///
+/// Args:
+///     det: The detect row.
+///     card_ttl_ms: Lifetime of the row's card in the Detects feed.
+///
+/// Returns:
+///     The chart's lifetime in milliseconds, infinite for a strategy's `KeepInChart = 0`.
+fn main_detect_ttl_ms(det: &moon_core::feed::DetectRow, card_ttl_ms: f64) -> f64 {
+    if det.strat_name.is_empty() {
+        card_ttl_ms
+    } else {
+        det.keep_in_chart_ttl_ms()
+    }
+}
+
 impl ChartTabs {
-    /// Ingest AddToChart detects with `add_to_chart > 0` by creating or populating a tab.
+    /// Ingest AddToChart detects with `add_to_chart > 0` by creating or populating a tab, and hand
+    /// Main the rows its detect switch asks for.
     ///
     /// The tab key is the core's `ChartBucket` (per-core, shared, or named bundle), resolved from
     /// core config and global `charts_split_by_core`. This does not switch `active`, preserving the
-    /// behavior that a detect must not pull the user to a chart.
+    /// behavior that a detect must not pull the user to a chart — and Main keeps to the same rule
+    /// inside its own stack (`MainChartStack::add_detect_coin`).
     ///
     /// Args:
     ///     cx: Parent context used to read Backend detects and create or update stacks.
@@ -20,15 +52,30 @@ impl ChartTabs {
     /// Returns:
     ///     Nothing; new detects and stack observers are incorporated in place.
     pub(super) fn ingest(&mut self, cx: &mut Context<Self>) {
-        let (split, fresh, cursors): (
+        // Read before the backend borrow below: Main is a sibling entity, not part of it.
+        let main_on = self.main.read(cx).main_detects_on();
+        #[allow(clippy::type_complexity)]
+        let (split, fresh, main_fresh, cursors): (
             bool,
             Vec<(u32, CoreId, ChartBucket, String, f64)>,
+            Vec<(CoreId, String, f64)>,
             Vec<(CoreId, u64)>,
         ) = {
             let b = self.backend.read(cx);
             let split = b.config.charts_split_by_core;
             let mut fresh = Vec::new();
+            let mut main_fresh = Vec::new();
             let mut cursors = Vec::new();
+            // Main's route asks the FEED's question, with the feed's own inputs, so the switch
+            // opens what the Detects panel shows and nothing else. Resolved once per pass, and only
+            // when the switch is on: an off switch must cost this path nothing.
+            let feed = main_on.then(|| {
+                (
+                    b.detects_view.shows_add_to_chart(&self.group),
+                    b.alert_duration_s(),
+                    moon_chart::paint::now_unix_ms(),
+                )
+            });
             for s in b
                 .session
                 .sessions()
@@ -51,6 +98,28 @@ impl ChartTabs {
                     .unwrap_or(ChartBucket::Core(id));
                 let last = self.add_seq.get(&id).copied().unwrap_or(0);
                 let mut mx = last;
+                if let Some((show_add_to_chart, figure_duration_s, now_ms)) = feed {
+                    // The feed's own cut first, then its gates: only the newest row of a market
+                    // is judged. Walked back to arrival order, so the stalest lands first.
+                    let newest = crate::panels::detect_newest_per_market(
+                        d.detects.iter().map(|det| &**det),
+                        last,
+                    );
+                    for det in newest.into_iter().rev() {
+                        if let Some(card_ttl) = crate::panels::detect_feed_admits(
+                            det,
+                            show_add_to_chart,
+                            figure_duration_s,
+                            now_ms,
+                        ) {
+                            main_fresh.push((
+                                id,
+                                det.market.clone(),
+                                main_detect_ttl_ms(det, card_ttl),
+                            ));
+                        }
+                    }
+                }
                 for det in &d.detects {
                     if det.seq <= last {
                         continue;
@@ -74,10 +143,22 @@ impl ChartTabs {
                     cursors.push((id, mx));
                 }
             }
-            (split, fresh, cursors)
+            (split, fresh, main_fresh, cursors)
         };
         for (id, mx) in cursors {
             self.add_seq.insert(id, mx);
+        }
+        if !main_fresh.is_empty() {
+            moon_core::detect_diag::line(&format!(
+                "[ingest] group={} main_fresh={}",
+                self.group,
+                main_fresh.len()
+            ));
+            self.main.update(cx, |main, mcx| {
+                for (core, market, ttl) in main_fresh {
+                    main.add_detect_coin(core, &market, ttl, mcx);
+                }
+            });
         }
         if fresh.is_empty() {
             return;

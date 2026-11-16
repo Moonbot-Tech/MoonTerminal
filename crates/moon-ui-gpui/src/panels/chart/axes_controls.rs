@@ -152,6 +152,30 @@ impl ChartPanel {
         cx.notify();
     }
 
+    /// Take a detect chart over for the reader: its pane stops being an AddToChart one with a
+    /// lifetime and becomes a manual one that stays until closed.
+    ///
+    /// For Main's detect feed, where a detect chart and a hand-opened one share the stack: opening
+    /// the detected market by hand is the reader saying they want it, and the strategy's
+    /// `KeepInChart` must not then close it under them. A different market is left alone.
+    ///
+    /// The pin goes with the lifetime it was guarding: a manual pane shows no pin control, so a pin
+    /// left set would be one the reader can no longer see or take off — and it would go on exempting
+    /// the chart from Main's idle auto-close for good.
+    pub fn adopt_market(&mut self, core: CoreId, market: &str, cx: &mut Context<Self>) {
+        if !self.chart.uses_market(core, market) {
+            return;
+        }
+        for i in 0..self.chart.pane_count() {
+            if self.chart.pane_pinned(i) {
+                self.chart.toggle_pane_pin(i);
+            }
+        }
+        self.chart.open(core, market);
+        self.view_dirty = true;
+        cx.notify();
+    }
+
     /// Point this panel at another kind's defaults.
     ///
     /// Called by the stack when it is detached, repinned, or when the anchor lock goes on or off.

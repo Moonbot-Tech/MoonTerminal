@@ -433,6 +433,7 @@ impl LayoutPopupHost for ChartTabs {
             arrival_core_color: self.active_arrival_frame(cx).0,
             arrival_hold: self.active_arrival_frame(cx).1,
             max_charts_evict: resolved_max_charts_evict(self.active_max_charts(cx).1),
+            main_detects: matches!(self.active, Tab::Main) && self.main.read(cx).main_detects_on(),
         }
     }
     fn popup_is_custom(&self, _cx: &App) -> bool {

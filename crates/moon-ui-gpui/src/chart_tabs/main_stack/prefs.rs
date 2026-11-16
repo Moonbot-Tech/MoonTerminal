@@ -283,13 +283,12 @@ impl MainChartStack {
         )
     }
 
-    // --- The three settings Main does not have ---
+    // --- The two settings Main does not have ---
     //
-    // Main draws no arrival flash — it has no `flash_arrival` — and detects never reach it: ingest
-    // routes them to numbered AddToChart stacks only. `StackSetting::applies_to` keeps both values
-    // away from Main, so these six exist purely to satisfy the one macro that dispatches every
-    // setting to either stack type. They report "not set" and store nothing: holding a value that
-    // nothing can read would be worse than not holding it.
+    // Main draws no arrival flash — it has no `flash_arrival`. `StackSetting::applies_to` keeps
+    // both values away from Main, so these four exist purely to satisfy the one macro that
+    // dispatches every setting to either stack type. They report "not set" and store nothing:
+    // holding a value that nothing can read would be worse than not holding it.
 
     pub(crate) fn arrival_flash(&self) -> Option<bool> {
         None
@@ -309,20 +308,44 @@ impl MainChartStack {
     ) {
     }
 
+    // --- Main's own detect feed (see `detects`) ---
+
+    /// Switch Main's detect feed on or off.
+    ///
+    /// Turning it off closes nothing: the detect charts already here run out their `KeepInChart`
+    /// like any other, and only new detects stop arriving.
+    pub(crate) fn set_main_detects(&mut self, on: Option<bool>, cx: &mut Context<Self>) {
+        if self.main_detects == on {
+            return;
+        }
+        self.main_detects = on;
+        // The ⚙ popup shows the cap only while this is on; it repaints from this notification.
+        cx.notify();
+    }
+
     pub(crate) fn max_charts(&self) -> Option<u16> {
-        None
+        self.max_charts
     }
 
     pub(crate) fn max_charts_evict(&self) -> Option<bool> {
-        None
+        self.max_charts_evict
     }
 
+    /// Set Main's detect cap and what happens at it. Like the AddToChart twin, lowering it closes
+    /// nothing; clamped here because a value can also arrive from a hand-edited `charts.json`.
     pub(crate) fn set_max_charts(
         &mut self,
-        _max: Option<u16>,
-        _evict: Option<bool>,
-        _cx: &mut Context<Self>,
+        max: Option<u16>,
+        evict: Option<bool>,
+        cx: &mut Context<Self>,
     ) {
+        let max = max.map(|m| m.min(layout_popup::MAX_CHARTS_MAX));
+        if self.max_charts == max && self.max_charts_evict == evict {
+            return;
+        }
+        self.max_charts = max;
+        self.max_charts_evict = evict;
+        cx.notify();
     }
 
     pub(crate) fn layout_orientation(&self) -> Option<StackOrientation> {
