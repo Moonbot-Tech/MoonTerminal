@@ -178,7 +178,7 @@ change exchange, API keys, show the connection key, MoonProto address, update; w
 login the menu offers to add one; when the server's status reports a failed exchange login, the
 core's card shows a banner with Retry.
 
-**Other**: Screener (deltas in Moonbot ranges), the news panel
+**Other**: Screener (deltas in Moonbot ranges, the coin menu on a row's market), the news panel
 (per-core feed, tag filters, jump to a coin), Log (core lines, addresses
 redacted; for a core on a Linux server the terminal can enter, its whole trading log for a
 chosen day pulled into the file list beside the live copy, which holds only the hours the terminal

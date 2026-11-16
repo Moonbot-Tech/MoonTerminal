@@ -1,6 +1,6 @@
 //! Shared right-click context menu for a market token. It is used wherever a token is shown,
-//! including chart order lines, token or strategy cells in Orders, and token cells in Assets and
-//! Report. The menu selects applicable entries from the context available in [`CoinMenuCtx`]: a
+//! including chart order lines, token or strategy cells in Orders, and token cells in Assets,
+//! Report and the Screener. The menu selects applicable entries from the context available in [`CoinMenuCtx`]: a
 //! strategy (`strat_id`), an order (`order_uid` and `side`), and the source panel filter's selected
 //! cores.
 //!
