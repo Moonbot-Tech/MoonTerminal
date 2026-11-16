@@ -1,4 +1,122 @@
-use super::{log_dates, trade_log_request};
+use moon_core::applog::LogLine;
+
+use super::{log_dates, only_in_live, trade_log_request, without_core_clock};
+
+/// A stored core line with the given timestamp and text.
+fn line(ts: &str, msg: &str) -> LogLine {
+    LogLine {
+        ts: ts.to_string(),
+        level: log::Level::Info,
+        target: String::new(),
+        msg: msg.to_string(),
+    }
+}
+
+/// The texts of the lines that survived, in order.
+fn texts(lines: &[LogLine]) -> Vec<&str> {
+    lines.iter().map(|line| line.msg.as_str()).collect()
+}
+
+/// The hours both copies hold must read once, and the hours only the live copy holds — after the
+/// day was pulled — must not be lost.
+#[test]
+fn a_line_both_copies_hold_is_dropped_from_the_live_one() {
+    let pulled = [
+        line("2026-08-03 10:00:00.000", "ACE (4411) buy placed"),
+        line("2026-08-03 10:00:05.000", "ACE (4411) buy filled"),
+    ];
+    // The live copy as the stream delivers it: the core's own clock is part of the message, and
+    // the line's time is when the stream sent it.
+    let live = vec![
+        line(
+            "2026-08-03 10:00:00.412",
+            "10:00:00.000  ACE (4411) buy placed",
+        ),
+        line("2026-08-03 10:00:05.090", " ACE (4411) buy filled "),
+        line(
+            "2026-08-03 18:30:00.700",
+            "18:30:00.250  ACE (4411) sell filled",
+        ),
+    ];
+
+    assert_eq!(
+        texts(&only_in_live(live, &pulled)),
+        ["18:30:00.250  ACE (4411) sell filled"]
+    );
+}
+
+/// The stream runs behind the core by up to ten seconds on a busy day, and no copy is a minute
+/// late: equal text a minute apart is a second event, and equal text a day apart is another day's.
+#[test]
+fn copies_match_within_the_stream_lag_and_no_further() {
+    let pulled = [line("2026-08-03 10:00:00.000", "ACE (4411) order moved")];
+    for near in ["2026-08-03 10:00:10.900", "2026-08-03 09:59:59.998"] {
+        let live = vec![line(near, "ACE (4411) order moved")];
+        assert!(only_in_live(live, &pulled).is_empty(), "{near}");
+    }
+
+    let later = vec![
+        line("2026-08-03 10:01:00.000", "ACE (4411) order moved"),
+        line("2026-08-04 10:00:00.000", "ACE (4411) order moved"),
+    ];
+    assert_eq!(only_in_live(later, &pulled).len(), 2);
+}
+
+/// Pairing a live line with the FIRST pulled copy in range, instead of the nearest, would leave a
+/// later live line without its own twin and show it twice.
+#[test]
+fn a_live_line_pairs_with_its_nearest_copy() {
+    let pulled = [
+        line("2026-08-03 10:00:00.000", "ACE (4411) order moved"),
+        line("2026-08-03 10:00:12.000", "ACE (4411) order moved"),
+        line("2026-08-03 10:00:30.000", "ACE (4411) order moved"),
+    ];
+    let live = vec![
+        line("2026-08-03 10:00:12.300", "ACE (4411) order moved"),
+        line("2026-08-03 10:00:30.300", "ACE (4411) order moved"),
+        line("2026-08-03 10:00:00.300", "ACE (4411) order moved"),
+    ];
+    assert!(only_in_live(live, &pulled).is_empty());
+}
+
+/// Only a clock is cut from the front of a message: a number that is not a time is the message.
+#[test]
+fn only_a_leading_clock_is_ignored_in_the_comparison() {
+    assert_eq!(without_core_clock("10:00:00.250  ACE buy"), "ACE buy");
+    assert_eq!(without_core_clock(" 10:00:00   ACE buy "), "ACE buy");
+    assert_eq!(without_core_clock("10:00:00"), "");
+    assert_eq!(without_core_clock("10:00:00x ACE"), "10:00:00x ACE");
+    assert_eq!(without_core_clock("10:00:00.25 ACE"), "10:00:00.25 ACE");
+    assert_eq!(without_core_clock("100 lots ACE"), "100 lots ACE");
+    assert_eq!(without_core_clock("привет"), "привет");
+}
+
+/// One pulled line accounts for one live line: a message really written twice must stay twice.
+#[test]
+fn a_repeated_message_is_matched_one_for_one() {
+    let pulled = [line("2026-08-03 10:00:00.000", "ACE (4411) order moved")];
+    let live = vec![
+        line("2026-08-03 10:00:00.100", "ACE (4411) order moved"),
+        line("2026-08-03 10:00:00.900", "ACE (4411) order moved"),
+    ];
+    assert_eq!(only_in_live(live, &pulled).len(), 1);
+}
+
+/// Without a pulled day nothing is compared and nothing is dropped; a line without a full
+/// timestamp cannot be matched and is kept.
+#[test]
+fn nothing_is_dropped_without_a_counterpart() {
+    let live = vec![
+        line("2026-08-03 10:00:00.100", "ACE (4411) buy placed"),
+        line("2026-08-03", "ACE (4411) a malformed stored line"),
+    ];
+    assert_eq!(only_in_live(live.clone(), &[]).len(), 2);
+    let pulled = [line(
+        "2026-08-03 10:00:00.000",
+        "ACE (4411) a malformed stored line",
+    )];
+    assert_eq!(only_in_live(live, &pulled).len(), 2);
+}
 
 /// `2026-08-03 00:00:00` UTC in unix milliseconds, from `date -u -d 2026-08-03 +%s` = 1785715200.
 const AUG_3: i64 = 1_785_715_200_000;

@@ -48,6 +48,7 @@ impl Backend {
     pub(crate) fn core_cmds_add_login(&mut self, ip: String, login: SessionLogin) {
         self.core_cmds.refresh_hosts();
         self.core_cmds.logins.insert(ip.clone(), login);
+        self.core_cmds.touch_day();
         let uids: Vec<_> = self
             .config
             .servers
@@ -67,6 +68,45 @@ impl Backend {
     /// Return the cached server facts for core `uid`, if a request has created them.
     pub(crate) fn core_cmds_facts(&self, uid: u64) -> Option<&CoreFacts> {
         self.core_cmds.facts.get(&uid)
+    }
+
+    /// The day-pull revision; see [`CoreCmdsState::day_rev`].
+    pub(crate) fn core_cmds_day_rev(&self) -> u64 {
+        self.core_cmds.day_rev
+    }
+
+    /// Whether a day command for core `uid` is queued or under way: any of them, or with `pull`
+    /// only the pull of a day.
+    ///
+    /// The queue is part of the answer because a request sits in it for up to one tick before the
+    /// command's phase says anything — long enough for a second click to queue the same pull.
+    pub(crate) fn core_cmds_day_busy(&self, uid: u64, pull: bool) -> bool {
+        let queued = self
+            .core_cmds
+            .pending
+            .iter()
+            .any(|(queued, request)| match request {
+                CmdRequest::Run {
+                    cmd: Cmd::LogDay,
+                    args,
+                } if *queued == uid => !pull || matches!(args, CmdArgs::LogDay { .. }),
+                _ => false,
+            });
+        let under_way = self.core_cmds.facts.get(&uid).is_some_and(|facts| {
+            if pull {
+                facts
+                    .day_log
+                    .pull
+                    .as_ref()
+                    .is_some_and(|pull| pull.outcome == LogPullOutcome::Running)
+            } else {
+                matches!(
+                    facts.phases.get(&Cmd::LogDay),
+                    Some(CmdPhase::Running { .. })
+                )
+            }
+        });
+        queued || under_way
     }
 
     /// Queue a status request unless a successful answer is less than 60 seconds old.
@@ -142,6 +182,11 @@ impl Backend {
                     continue;
                 }
             };
+            if cmd == Cmd::LogDay {
+                // Whichever way this request goes — refused, running, unsendable — the day menu
+                // reads differently after it.
+                self.core_cmds.touch_day();
+            }
             let config = self.core_cmds_worker_config(uid);
             let Some((target, display, port, login)) = config else {
                 self.core_cmds.invalidate_worker(uid);
@@ -208,6 +253,16 @@ impl Backend {
                 }
             ) {
                 facts.begin_exchange_attempt();
+            }
+            if let CmdRequest::Run {
+                cmd: Cmd::LogDay,
+                args: CmdArgs::LogDay { date, .. },
+            } = &request
+            {
+                facts.day_log.pull = Some(LogPull {
+                    date: date.clone(),
+                    outcome: LogPullOutcome::Running,
+                });
             }
             facts.phases.insert(
                 cmd,
@@ -397,14 +452,33 @@ impl CoreCmdsState {
                     ..EventEffects::default()
                 }
             }
-            event => EventEffects {
-                changed: self
+            event => {
+                let day = matches!(
+                    event,
+                    worker::Event::Phase(Cmd::LogDay, _)
+                        | worker::Event::LogDays(_)
+                        | worker::Event::LogDaySaved { .. }
+                        | worker::Event::LogDayAbsent { .. }
+                        | worker::Event::LogDayFailed { .. }
+                );
+                let changed = self
                     .facts
                     .get_mut(&uid)
-                    .is_some_and(|facts| facts.apply(event)),
-                ..EventEffects::default()
-            },
+                    .is_some_and(|facts| facts.apply(event));
+                if day && changed {
+                    self.touch_day();
+                }
+                EventEffects {
+                    changed,
+                    ..EventEffects::default()
+                }
+            }
         }
+    }
+
+    /// Tell the Log tabs that something their day pull shows may have changed.
+    fn touch_day(&mut self) {
+        self.day_rev = self.day_rev.wrapping_add(1);
     }
 
     /// Drop a replaced worker and every cached fact that belongs to its previous endpoint.
@@ -413,6 +487,10 @@ impl CoreCmdsState {
         if let Some(facts) = self.facts.get_mut(&uid) {
             facts.invalidate_endpoint();
             changed = true;
+        }
+        if changed {
+            // The replaced endpoint's days and any pull in flight went with it.
+            self.touch_day();
         }
         changed
     }
@@ -528,6 +606,32 @@ impl CoreFacts {
                 }
                 self.phases.insert(cmd, phase);
             }
+            // The failed pull is no longer under way; its reason is the command's phase. Keyed by
+            // the day, so a failure that is not this pull's — a listing queued ahead of it — leaves
+            // it running.
+            worker::Event::LogDayFailed { date } => {
+                let under_way = self.day_log.pull.as_ref().is_some_and(|pull| {
+                    pull.date == date && pull.outcome == LogPullOutcome::Running
+                });
+                if !under_way {
+                    return false;
+                }
+                self.day_log.pull = None;
+            }
+            worker::Event::LogDays(days) => self.day_log.days = Some(days),
+            worker::Event::LogDaySaved { date, file } => {
+                self.day_log.saves = self.day_log.saves.wrapping_add(1);
+                self.day_log.pull = Some(LogPull {
+                    date,
+                    outcome: LogPullOutcome::Saved { file },
+                });
+            }
+            worker::Event::LogDayAbsent { date } => {
+                self.day_log.pull = Some(LogPull {
+                    date,
+                    outcome: LogPullOutcome::Absent,
+                });
+            }
             worker::Event::Located(located) => {
                 self.located = Some(located);
                 self.retarget_recovery = false;
@@ -616,6 +720,7 @@ impl CoreFacts {
         self.retry_elapsed = None;
         self.retarget_recovery = false;
         self.exchange_switched = None;
+        self.day_log = DayLog::default();
         for phase in self.phases.values_mut() {
             *phase = CmdPhase::Idle;
         }
@@ -676,6 +781,7 @@ fn core_facts(target: String, port: u16) -> CoreFacts {
         retarget_recovery: false,
         exchange_attempt: 0,
         exchange_switched: None,
+        day_log: DayLog::default(),
     }
 }
 

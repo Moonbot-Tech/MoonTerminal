@@ -5,7 +5,9 @@
 //! application's `applog` ring, and each configured core's `CoreData.log` ring. Local and
 //! single-core sources can show either Live or a rotated `logs/<date>_<source>.log` file; aggregate
 //! sources are Live-only. `MoonVirtualList` virtualizes rows, and effective follow mode keeps
-//! filtered output at the tail.
+//! filtered output at the tail. A file larger than the view is walked a screen at a time
+//! ([`paging`]), and a core on a server the terminal can enter offers its whole trading log for a
+//! day, pulled into the same file list ([`server_day`]).
 //!
 //! A live source is read INCREMENTALLY: each line is parsed once, when it arrives, and appended to
 //! a buffer that outlives the revision that brought it. Only a change the buffer cannot absorb — a
@@ -22,8 +24,10 @@
 mod buffer;
 mod controls;
 mod feed;
+mod paging;
 mod render;
 mod row;
+mod server_day;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -150,7 +154,12 @@ pub struct LogPanel {
     query: Entity<MoonInputState>,
     /// Named-file cache, avoiding disk reads during rendering and repeated backend observations.
     loaded_name: Option<String>,
-    loaded_lines: Vec<LogLine>,
+    /// The window of the named file on screen; see [`paging`].
+    file_page: paging::FilePage,
+    /// Time of day to move a named file's window to.
+    page_time: Entity<MoonInputState>,
+    /// This panel's side of pulling a day of a core's log from its server; see [`server_day`].
+    day_sync: server_day::DaySync,
     /// Cached file list for the selected source; rendering never scans the filesystem for the menu.
     available_files_label: Option<String>,
     available_files: Vec<String>,
@@ -225,6 +234,20 @@ impl LogPanel {
             }
         })
         .detach();
+        let page_time = cx.new(|cx| MoonInputState::new(window, cx));
+        cx.subscribe(&page_time, |t, _e, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::PressEnter { .. }) {
+                t.jump_to_typed_time(cx);
+            }
+        })
+        .detach();
+        // The day pull's answers arrive on the backend's command tick, whichever file is on screen.
+        cx.observe(&backend, |this, _backend, cx| {
+            if this.sync_server_day(cx) {
+                cx.notify();
+            }
+        })
+        .detach();
         // Reload only while visible and only when the effective live source's revision changes.
         cx.observe(&backend, |this, backend, cx| {
             let (source, file, _) = this.effective_selection(backend.read(cx));
@@ -276,7 +299,9 @@ impl LogPanel {
             coin_filter: None,
             query,
             loaded_name: None,
-            loaded_lines: Vec::new(),
+            file_page: paging::FilePage::default(),
+            page_time,
+            day_sync: server_day::DaySync::default(),
             available_files_label: None,
             available_files: Vec::new(),
             buf: buffer::RowBuffer::new(display_zone),
@@ -458,10 +483,10 @@ impl LogPanel {
             }
             LogFile::Named(name) => {
                 if self.loaded_name.as_deref() != Some(name.as_str()) {
-                    self.loaded_lines = applog::read_file(name, VIEW_LIMIT);
+                    self.file_page.open(name);
                     self.loaded_name = Some(name.clone());
                 }
-                self.loaded_lines.clone()
+                self.file_page.lines().to_vec()
             }
         }
     }
@@ -1010,6 +1035,7 @@ impl LogPanel {
             // A source change returns to Live and invalidates both named-file caches.
             self.file = LogFile::Live;
             self.loaded_name = None;
+            self.file_page.close();
             self.available_files_label = None;
             self.available_files.clear();
             self.reset_to_live();

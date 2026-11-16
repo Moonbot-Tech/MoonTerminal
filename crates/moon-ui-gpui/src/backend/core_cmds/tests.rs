@@ -5,8 +5,8 @@ use moon_remote::core_new::{CoreState, CoreStatus};
 use zeroize::Zeroizing;
 
 use super::{
-    CmdArgs, CmdError, CmdPhase, CoreCmdsState, CoreWorker, MenuForm, core_facts, menu_form,
-    ssh_display_host, ssh_target_port, worker, worker_endpoint_matches,
+    CmdArgs, CmdError, CmdPhase, CoreCmdsState, CoreWorker, LogPull, LogPullOutcome, MenuForm,
+    core_facts, menu_form, ssh_display_host, ssh_target_port, worker, worker_endpoint_matches,
 };
 
 /// Build a located core with only its installation ownership varied.
@@ -272,6 +272,115 @@ fn stale_worker_event_is_rejected_by_dispatch() {
     let current = state.apply_event(7, 1, event(), endpoint, &mut reconnect);
     assert_eq!(current.address, Some(("0.0.0.0".into(), 4402)));
     assert!(reconnect.is_empty());
+}
+
+/// A state with one core, its worker, and the day revision it starts from.
+fn day_state() -> (CoreCmdsState, u64) {
+    let mut state = CoreCmdsState::default();
+    state.workers.insert(7, command_worker("203.0.113.7", 3302));
+    state
+        .facts
+        .insert(7, core_facts("203.0.113.7:22".into(), 3302));
+    let rev = state.day_rev;
+    (state, rev)
+}
+
+/// Pulling the same day twice leaves the pull reading the same; without a count that moves, a
+/// panel showing that file would never learn it was replaced under its index.
+#[test]
+fn every_stored_day_moves_the_save_count_and_the_day_revision() {
+    let (mut state, start) = day_state();
+    let saved = || worker::Event::LogDaySaved {
+        date: "2026-01-02".into(),
+        file: "2026-01-02_CORE_A.server.log".into(),
+    };
+    let mut reconnect = Vec::new();
+
+    state.apply_event(7, 1, saved(), None, &mut reconnect);
+    let first = (state.facts.get(&7).unwrap().day_log.clone(), state.day_rev);
+    state.apply_event(7, 1, saved(), None, &mut reconnect);
+    let second = (state.facts.get(&7).unwrap().day_log.clone(), state.day_rev);
+
+    assert_eq!(first.0.pull, second.0.pull);
+    assert_eq!((first.0.saves, second.0.saves), (1, 2));
+    assert_ne!(first.1, start);
+    assert_ne!(second.1, first.1);
+}
+
+/// A status answer for the same core must not look like day-pull news: every Log tab would
+/// re-resolve its core and re-list its files on each status poll.
+#[test]
+fn only_day_events_move_the_day_revision() {
+    let (mut state, start) = day_state();
+    let mut reconnect = Vec::new();
+
+    state.apply_event(
+        7,
+        1,
+        worker::Event::Status(login_error()),
+        None,
+        &mut reconnect,
+    );
+    state.apply_event(
+        7,
+        1,
+        worker::Event::Phase(Cmd::Status, CmdPhase::Done),
+        None,
+        &mut reconnect,
+    );
+    assert_eq!(state.day_rev, start);
+
+    state.apply_event(
+        7,
+        1,
+        worker::Event::LogDays(Vec::new()),
+        None,
+        &mut reconnect,
+    );
+    assert_ne!(state.day_rev, start);
+}
+
+/// A pull that failed, or whose worker was replaced, must stop reading as under way — the menu
+/// would keep every day disabled behind a "downloading" row that never ends.
+#[test]
+fn a_failed_or_orphaned_pull_stops_reading_as_running() {
+    let running = || {
+        Some(LogPull {
+            date: "2026-01-02".into(),
+            outcome: LogPullOutcome::Running,
+        })
+    };
+    let (mut state, _) = day_state();
+    let mut reconnect = Vec::new();
+
+    // A listing that fails ahead of the queued pull, and the failure of some other day, are not
+    // this pull's end: clearing it there would let a second pull of the same day through.
+    state.facts.get_mut(&7).unwrap().day_log.pull = running();
+    for not_this_pull in [
+        worker::Event::Phase(Cmd::LogDay, CmdPhase::Failed(CmdError::Timeout)),
+        worker::Event::LogDayFailed {
+            date: "2026-01-09".into(),
+        },
+    ] {
+        state.apply_event(7, 1, not_this_pull, None, &mut reconnect);
+        assert_eq!(state.facts.get(&7).unwrap().day_log.pull, running());
+    }
+    state.apply_event(
+        7,
+        1,
+        worker::Event::LogDayFailed {
+            date: "2026-01-02".into(),
+        },
+        None,
+        &mut reconnect,
+    );
+    assert_eq!(state.facts.get(&7).unwrap().day_log.pull, None);
+
+    state.facts.get_mut(&7).unwrap().day_log.pull = running();
+    let before = state.day_rev;
+    assert!(state.invalidate_worker(7));
+    assert_eq!(state.facts.get(&7).unwrap().day_log.pull, None);
+    assert_ne!(state.day_rev, before);
 }
 
 /// A successful address change must let the same worker accept a later change on the new port.

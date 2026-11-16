@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use moon_remote::core_cmds::{Cmd, Located, LogLines, LogTail, ServiceInfo};
+use moon_remote::core_cmds::{Cmd, Located, LogDay, LogLines, LogTail, ServiceInfo};
 use moon_remote::core_new::{CoreState, CoreStatus, Exchange};
 use moon_remote::hosts::Hosts;
 use moon_remote::setup::FirstAccess;
@@ -60,6 +60,40 @@ pub(crate) struct CoreFacts {
     pub(crate) retarget_recovery: bool,
     pub(crate) exchange_attempt: u64,
     pub(crate) exchange_switched: Option<u64>,
+    /// The core's daily trading logs on its server, for the Log tab's day pull.
+    pub(crate) day_log: DayLog,
+}
+
+/// What the terminal knows about a core's daily trading logs on its server.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DayLog {
+    /// Days the core still had when last asked, newest first; `None` until the first answer.
+    pub(crate) days: Option<Vec<LogDay>>,
+    /// The most recent pull of one day, kept after it ends so a panel can pick its result up.
+    pub(crate) pull: Option<LogPull>,
+    /// How many days were stored for this core. A panel compares it with the count it last saw:
+    /// pulling the same day again leaves `pull` reading the same, and the file under it replaced.
+    pub(crate) saves: u64,
+}
+
+/// One pull of a day of a core's log onto this computer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LogPull {
+    /// The server's calendar day that was asked for.
+    pub(crate) date: String,
+    pub(crate) outcome: LogPullOutcome,
+}
+
+/// How a day pull stands. A failure is not one of these: it is the command's `CmdPhase::Failed`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LogPullOutcome {
+    Running,
+    /// Stored under this file name in the terminal's log folder.
+    Saved {
+        file: String,
+    },
+    /// The core has no file for that day.
+    Absent,
 }
 
 impl std::fmt::Debug for CoreFacts {
@@ -101,6 +135,12 @@ pub(crate) enum CmdArgs {
         host: String,
         port: u16,
     },
+    /// Pull one server day of the core's log and store it under this source label. Without it,
+    /// `Cmd::LogDay` lists the days the core has.
+    LogDay {
+        date: String,
+        label: String,
+    },
 }
 
 impl std::fmt::Debug for CmdArgs {
@@ -119,6 +159,11 @@ impl std::fmt::Debug for CmdArgs {
                 .debug_struct("Address")
                 .field("host", host)
                 .field("port", port)
+                .finish(),
+            Self::LogDay { date, label } => f
+                .debug_struct("LogDay")
+                .field("date", date)
+                .field("label", label)
                 .finish(),
         }
     }
@@ -166,6 +211,10 @@ pub(crate) struct CoreCmdsState {
     pub hosts: Hosts,
     pub workers: HashMap<u64, CoreWorker>,
     pub next_generation: u64,
+    /// Moves whenever anything a Log tab's day pull shows may have changed, for any core: its
+    /// days, a pull, the command's phase, a login. Panels compare this one number on a backend
+    /// notification instead of resolving their core each time.
+    pub day_rev: u64,
 }
 
 /// Choose the menu form from login presence and the cached installation identity.

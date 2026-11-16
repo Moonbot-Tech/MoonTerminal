@@ -14,7 +14,9 @@
 //! a file, the sink whose contents outlive the process and get shared. [`panic_log`] owns the crash
 //! file on the same terms.
 
+pub mod pager;
 pub mod redact;
+pub mod server_day;
 
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -389,8 +391,11 @@ pub fn purge_old() {
 
 /// Lists log files for a source label, newest first. The label is "app" for the local
 /// log and the core name for a core log.
+///
+/// A core's list holds both kinds of file it can have: the live copy of a day and that day pulled
+/// whole from the core's server ([`server_day`]). For one day the pulled file sorts first.
 pub fn list_files(label: &str) -> Vec<String> {
-    let suffix = format!("_{}.log", sanitize_label(label));
+    let label = sanitize_label(label);
     let dir = paths::logs_dir();
     let Ok(rd) = std::fs::read_dir(&dir) else {
         return Vec::new();
@@ -399,7 +404,7 @@ pub fn list_files(label: &str) -> Vec<String> {
         .flatten()
         .filter_map(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
-            n.ends_with(&suffix).then_some(n)
+            belongs_to_label(&n, &label).then_some(n)
         })
         .collect();
     v.sort(); // A leading date makes lexicographic order equivalent to ascending date order.
@@ -407,21 +412,15 @@ pub fn list_files(label: &str) -> Vec<String> {
     v
 }
 
-/// Reads the latest `max` lines of history from a log file. Parses TSV; foreign or malformed
-/// lines are stored whole in msg.
-pub fn read_file(filename: &str, max: usize) -> Vec<LogLine> {
-    let path = paths::logs_dir().join(filename);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    let date = filename.get(0..10).unwrap_or("");
-    // Skip to the last `max` lines BEFORE parsing: a day-sized core log holds far more lines than
-    // the view keeps, and parsing (with its redaction scan) the discarded ones runs on the UI thread.
-    let total = text.lines().count();
-    text.lines()
-        .skip(total.saturating_sub(max))
-        .map(|l| parse_file_line(date, l))
-        .collect()
+/// Whether a file in `logs/` is a live or a pulled log of the source with this sanitized label.
+fn belongs_to_label(name: &str, label: &str) -> bool {
+    let name = name
+        .strip_suffix(server_day::SERVER_SUFFIX)
+        .or_else(|| name.strip_suffix(".log"));
+    name.is_some_and(|stem| {
+        stem.strip_suffix(label)
+            .is_some_and(|day| day.ends_with('_'))
+    })
 }
 
 /// Name of the rotated log file a source writes on one UTC date, as [`DatedWriter::open`] spells it.
@@ -454,7 +453,7 @@ pub struct ScanResult {
 
 /// Collects lines of one rotated log file whose raw text contains `needle`, oldest first.
 ///
-/// Reads incrementally rather than through [`read_file`]: a day of one core's log reaches tens of
+/// Reads incrementally rather than taking the file whole: a day of one core's log reaches tens of
 /// megabytes, and a caller looking for one trade wants a handful of lines out of it. Parsing (with
 /// its redaction scan) runs only for the lines that matched. A missing or unreadable file yields no
 /// lines, which is the ordinary case for a day the core was not running or whose file retention

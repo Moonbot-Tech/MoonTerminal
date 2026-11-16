@@ -16,9 +16,14 @@ pub use crate::core_new::{
 };
 pub use access::{Login, open};
 pub use wire::{
-    Cmd, LocateResult, Located, LogLines, LogTail, Refusal, ServiceAction, ServiceFailed,
-    ServiceInfo, gate, parse_info, parse_locate, parse_log, parse_service,
+    Cmd, LOG_DAY_MAX_BYTES, LocateResult, Located, LogDay, LogDayReply, LogDayUnusable, LogLines,
+    LogTail, Refusal, ServiceAction, ServiceFailed, ServiceInfo, gate, gunzip_log_day, is_log_date,
+    parse_info, parse_locate, parse_log, parse_log_days, parse_service, split_log_day,
 };
+
+/// How long one day's log may take to arrive. A step's two minutes are not enough for tens of
+/// megabytes over a slow link, and a cut transfer is refused rather than saved.
+const LOG_DAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Resolve the instance directory and service unit that own `port` on the server.
 pub fn locate(conn: &Conn, privilege: &Privilege, port: u16) -> anyhow::Result<LocateResult> {
@@ -96,6 +101,58 @@ pub fn log_tail(
     let out = privilege.run_raw(conn, &command("log", &args), &[], STEP_TIMEOUT)?;
     anyhow::ensure!(out.ok(), "the core log could not be read");
     Ok(parse_log(&out.stdout_text()))
+}
+
+/// List the daily trading logs a core still has, newest first, using `dir_hint` only if location
+/// finds no core.
+pub fn log_days(
+    conn: &Conn,
+    privilege: &Privilege,
+    port: u16,
+    dir_hint: Option<&str>,
+) -> anyhow::Result<Vec<LogDay>> {
+    let port = port.to_string();
+    let mut args = vec![port.as_str()];
+    if let Some(dir) = dir_hint {
+        args.push(dir);
+    }
+    let out = privilege.run_raw(conn, &command("logdays", &args), &[], STEP_TIMEOUT)?;
+    anyhow::ensure!(out.ok(), "the core logs could not be listed");
+    Ok(parse_log_days(&out.stdout_text()))
+}
+
+/// Pull one whole day of a core's trading log, or `None` when the core has no file for that day.
+///
+/// The service journal is never returned in its place: it is a different log, and a caller that
+/// saves the result under the day's name would be saving the wrong thing.
+pub fn log_day(
+    conn: &Conn,
+    privilege: &Privilege,
+    port: u16,
+    date: &str,
+    dir_hint: Option<&str>,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    anyhow::ensure!(is_log_date(date), "{date} is not a calendar day");
+    let port = port.to_string();
+    // The server refuses a larger file before sending it: the reply is held in memory whole.
+    let limit = LOG_DAY_MAX_BYTES.to_string();
+    let mut args = vec![port.as_str(), date, limit.as_str()];
+    if let Some(dir) = dir_hint {
+        args.push(dir);
+    }
+    let out = privilege.run_raw(conn, &command("logday", &args), &[], LOG_DAY_TIMEOUT)?;
+    anyhow::ensure!(out.ok(), "the core log could not be read");
+    match split_log_day(&out.stdout) {
+        Some(LogDayReply::Absent) => Ok(None),
+        Some(LogDayReply::TooBig(bytes)) => Err(LogDayUnusable(format!(
+            "the log is {} MB, over the {} MB limit",
+            bytes / (1024 * 1024),
+            LOG_DAY_MAX_BYTES / (1024 * 1024)
+        ))
+        .into()),
+        Some(LogDayReply::Gzip(gzip)) => Ok(Some(gunzip_log_day(gzip)?)),
+        None => Err(LogDayUnusable("the server did not answer with a log".into()).into()),
+    }
 }
 
 /// Move a marked instance's MoonProto port and its recorded firewall rule.

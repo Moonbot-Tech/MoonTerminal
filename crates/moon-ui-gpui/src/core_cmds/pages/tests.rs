@@ -41,6 +41,7 @@ pub(in crate::core_cmds) fn facts() -> CoreFacts {
         retarget_recovery: false,
         exchange_attempt: 0,
         exchange_switched: None,
+        day_log: Default::default(),
     }
 }
 

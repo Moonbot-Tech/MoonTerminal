@@ -180,7 +180,10 @@ core's card shows a banner with Retry.
 
 **Other**: Screener (deltas in Moonbot ranges), the news panel
 (per-core feed, tag filters, jump to a coin), Log (core lines, addresses
-redacted), Assets (wallets by exchange, PnL, spot Market Sell, a Binance spot core's dust
+redacted; for a core on a Linux server the terminal can enter, its whole trading log for a
+chosen day pulled into the file list beside the live copy, which holds only the hours the terminal
+was connected; a file larger than the view walked a screen at a time or straight to a time of day;
+the Report's trade log reads a pulled day too), Assets (wallets by exchange, PnL, spot Market Sell, a Binance spot core's dust
 to BNB), Crowd
 (crowd stats on empty Main, a “loud coin” as a detect), its own
 Telegram bot (reports to chat by exchanges, cores or core groups, navigation, per-core rights,
