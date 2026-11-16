@@ -36,7 +36,7 @@ conn.endpoint_no_address: "У ключі немає адреси — термі�
 
 
 # Tooltips.
-conn.tip.key: "Ключ створюється в Moonbot, не на сайті, і копіюється ПІСЛЯ налаштування ядра — він несе адресу, порт і режим із собою; адресу й порт за потреби змінюють у колонці «Адреса:порт». Порядок: 1) на сервері з Moonbot відкрити UDP-порт ядра для вхідних; 2) у Moonbot: зелений кружок ліворуч унизу (вікно Info) → Moon Kernel → Settings → вікно Moon Proto, вкладка Settings: увімкнути Kernel (VPS), задати Port, вибрати версію V0/V1/V2 (за замовчуванням V0), натиснути Apply; 3) там само Key: → Copy Key (ключа ще немає — New Key); 4) вставити сюди кнопкою Вставити і натиснути Зберегти. Око показує або ховає його."
+conn.tip.key: "Ключ створюється в Moonbot, не на сайті, і копіюється ПІСЛЯ налаштування ядра — він несе адресу, порт і режим із собою; адресу й порт за потреби змінюють у колонці «Адреса:порт». Порядок: 1) на сервері з Moonbot відкрити UDP-порт ядра для вхідних; 2) у Moonbot: зелений кружок ліворуч унизу (вікно Info) → Moon Kernel → Settings → вікно Moon Proto, вкладка Settings: якщо ключа ще немає — спершу New Key; далі увімкнути Kernel (VPS), задати Port, вибрати версію V0/V1/V2 (за замовчуванням V0), натиснути Apply; 3) там само Key: → Copy Key; 4) вставити сюди кнопкою Вставити і натиснути Зберегти. Око показує або ховає його."
 conn.key_ph: "Copy Key у Moonbot"
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".

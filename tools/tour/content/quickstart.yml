@@ -125,8 +125,8 @@ steps:
       ru: Ручная настройка Moonbot для Windows
       en: Manual Windows Moonbot setup
   - warn:
-      ru: 'Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Port</code>, режим и версию
-        <b>до</b> <code>Copy Key</code> — ключ, скопированный раньше, уже устарел.'
+      ru: 'Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Порт</code>, режим и версию
+        <b>до</b> <code>Копир. ключ</code> — ключ, скопированный раньше, уже устарел.'
       en: 'The order matters: the key carries the port and mode inside it. Set <code>Port</code>, the mode
         and the version <b>before</b> <code>Copy Key</code> — a key copied earlier is stale.'
       html: true
@@ -144,21 +144,27 @@ steps:
   - path:
     - ru: зелёный кружок слева внизу
       en: green dot, bottom left
-    - ru: <code>Info</code>
+    - ru: <code>Инфо</code>
       en: <code>Info</code>
       html: true
-    - ru: строка <code>Moon Kernel</code> → <code>Settings</code>
+    - ru: строка <code>Moon Kernel</code> → <code>Настройки</code>
       en: <code>Moon Kernel</code> row → <code>Settings</code>
       html: true
-    - ru: <code>Moon Proto</code>, вкладка <code>Settings</code>
+    - ru: <code>Moon Proto</code>, вкладка <code>Настройки</code>
       en: <code>Moon Proto</code>, <code>Settings</code> tab
       html: true
   - sub:
-      ru: Включите <code>Kernel (VPS)</code>.
+      ru: Если на строке <code>Ключ:</code> стоит прочерк, сначала нажмите <code>Новый ключ</code> —
+        эта кнопка сбрасывает галку и порт, которые ещё не применены.
+      en: If the <code>Key:</code> row shows a dash, press <code>New Key</code> first — that button
+        resets a tick and a port that are not applied yet.
+      html: true
+  - sub:
+      ru: Включите <code>Ядро (VPS)</code>.
       en: Tick <code>Kernel (VPS)</code>.
       html: true
   - sub:
-      ru: Задайте <code>Port</code> (по умолчанию <code>3000</code>).
+      ru: Задайте <code>Порт</code> (по умолчанию <code>3000</code>).
       en: Set <code>Port</code> (default <code>3000</code>).
       html: true
   - sub:
@@ -166,19 +172,18 @@ steps:
       en: Choose the version with the <code>V0</code> / <code>V1</code> / <code>V2</code> radio buttons.
       html: true
   - note:
-      ru: Moonbot по умолчанию создаёт ключ <code>V0</code>. Если не сменить версию до <code>Copy Key</code>,
+      ru: Moonbot по умолчанию создаёт ключ <code>V0</code>. Если не сменить версию до <code>Копир. ключ</code>,
         терминал прочитает из ключа <code>V0</code>.
       en: Moonbot creates a <code>V0</code> key by default. Unless you change the version before <code>Copy
         Key</code>, the terminal reads <code>V0</code> from the key.
       html: true
   - sub:
-      ru: Нажмите <code>Apply</code> — появится зелёное «Server activated on port …».
-      en: Press <code>Apply</code> — a green "Server activated on port …" appears.
+      ru: Нажмите <code>Применить</code> — появится зелёное «Ядро запущено на порту …».
+      en: Press <code>Apply</code> — a green "Kernel activated on port …" appears.
       html: true
   - sub:
-      ru: На строке <code>Key:</code> нажмите <code>Copy Key</code> (ключа нет — <code>New Key</code>).
-      en: On the <code>Key:</code> row press <code>Copy Key</code> (<code>New Key</code> if there is no key
-        yet).
+      ru: На строке <code>Ключ:</code> нажмите <code>Копир. ключ</code>.
+      en: On the <code>Key:</code> row press <code>Copy Key</code>.
       html: true
   - group:
       ru: Ручное добавление ключа в терминале

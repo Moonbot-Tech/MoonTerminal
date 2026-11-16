@@ -1926,7 +1926,7 @@ const STEPS = [
         ],
         [
           "warn",
-          "Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Port<\/code>, режим и версию <b>до<\/b> <code>Copy Key<\/code> — ключ, скопированный раньше, уже устарел."
+          "Порядок важен: ключ несёт порт и режим внутри себя. Задайте <code>Порт<\/code>, режим и версию <b>до<\/b> <code>Копир. ключ<\/code> — ключ, скопированный раньше, уже устарел."
         ],
         [
           "sub",
@@ -1948,18 +1948,22 @@ const STEPS = [
           "path",
           [
             "зелёный кружок слева внизу",
-            "<code>Info<\/code>",
-            "строка <code>Moon Kernel<\/code> → <code>Settings<\/code>",
-            "<code>Moon Proto<\/code>, вкладка <code>Settings<\/code>"
+            "<code>Инфо<\/code>",
+            "строка <code>Moon Kernel<\/code> → <code>Настройки<\/code>",
+            "<code>Moon Proto<\/code>, вкладка <code>Настройки<\/code>"
           ]
         ],
         [
           "sub",
-          "Включите <code>Kernel (VPS)<\/code>."
+          "Если на строке <code>Ключ:<\/code> стоит прочерк, сначала нажмите <code>Новый ключ<\/code> — эта кнопка сбрасывает галку и порт, которые ещё не применены."
         ],
         [
           "sub",
-          "Задайте <code>Port<\/code> (по умолчанию <code>3000<\/code>)."
+          "Включите <code>Ядро (VPS)<\/code>."
+        ],
+        [
+          "sub",
+          "Задайте <code>Порт<\/code> (по умолчанию <code>3000<\/code>)."
         ],
         [
           "sub",
@@ -1967,15 +1971,15 @@ const STEPS = [
         ],
         [
           "note",
-          "Moonbot по умолчанию создаёт ключ <code>V0<\/code>. Если не сменить версию до <code>Copy Key<\/code>, терминал прочитает из ключа <code>V0<\/code>."
+          "Moonbot по умолчанию создаёт ключ <code>V0<\/code>. Если не сменить версию до <code>Копир. ключ<\/code>, терминал прочитает из ключа <code>V0<\/code>."
         ],
         [
           "sub",
-          "Нажмите <code>Apply<\/code> — появится зелёное «Server activated on port …»."
+          "Нажмите <code>Применить<\/code> — появится зелёное «Ядро запущено на порту …»."
         ],
         [
           "sub",
-          "На строке <code>Key:<\/code> нажмите <code>Copy Key<\/code> (ключа нет — <code>New Key<\/code>)."
+          "На строке <code>Ключ:<\/code> нажмите <code>Копир. ключ<\/code>."
         ],
         [
           "group",
@@ -2106,6 +2110,10 @@ const STEPS = [
         ],
         [
           "sub",
+          "If the <code>Key:<\/code> row shows a dash, press <code>New Key<\/code> first — that button resets a tick and a port that are not applied yet."
+        ],
+        [
+          "sub",
           "Tick <code>Kernel (VPS)<\/code>."
         ],
         [
@@ -2122,11 +2130,11 @@ const STEPS = [
         ],
         [
           "sub",
-          "Press <code>Apply<\/code> — a green \"Server activated on port …\" appears."
+          "Press <code>Apply<\/code> — a green \"Kernel activated on port …\" appears."
         ],
         [
           "sub",
-          "On the <code>Key:<\/code> row press <code>Copy Key<\/code> (<code>New Key<\/code> if there is no key yet)."
+          "On the <code>Key:<\/code> row press <code>Copy Key<\/code>."
         ],
         [
           "group",

@@ -318,7 +318,7 @@ core_status.fault.next.syncing: "Espere. Se o número parar de se mover, passe o
 core_status.fault.next.stalled: "A tentativa se repete sozinha. Se o mesmo passo continuar falhando, passe o ponteiro na coluna de inicialização e envie o log"
 core_status.fault.next.aborted: "Nada a fazer"
 core_status.fault.next.unknown: "Envie esta linha e o log ao suporte"
-core_status.fault.next.key: "A chave é feita no Moonbot, não no site. No Moonbot: o ponto verde embaixo à esquerda (janela Info) → a linha Moon Kernel → Settings → a janela Moon Proto, aba Settings → Key: → Copy Key (ainda sem chave — New Key). Cole-a inteira no campo Chave com o botão Colar e pressione Salvar — o núcleo conecta sozinho"
+core_status.fault.next.key: "A chave é feita no Moonbot, não no site. No Moonbot: o ponto verde embaixo à esquerda (janela Info) → a linha Moon Kernel → Settings → a janela Moon Proto, aba Settings → Key: → Copy Key (ainda sem chave — New Key e depois Apply). Cole-a inteira no campo Chave com o botão Colar e pressione Salvar — o núcleo conecta sozinho"
 core_status.fault.next.endpoint_invalid: "Corrija a coluna Endereço:porta em Configurações → Conexões (endereço, endereço:porta ou :porta), ou esvazie-a para usar o endereço da chave, e pressione Salvar"
 core_status.fault.next.endpoint_unresolved: "Verifique se o nome não tem erro de digitação e se este computador tem internet e DNS funcionando — o terminal tenta de novo sozinho. Ou digite o IP no lugar do nome"
 core_status.fault.core.legacy_named: "O núcleo informa Moonbot %{server} e nenhuma versão de protocolo: é anterior a este terminal"

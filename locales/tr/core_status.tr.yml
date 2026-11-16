@@ -319,7 +319,7 @@ core_status.fault.next.syncing: "Bekleyin. Rakam ilerlemiyorsa başlangıç süt
 core_status.fault.next.stalled: "Deneme kendiliğinden yinelenir. Aynı adım başarısız kalırsa başlangıç sütununun üzerine gelin ve günlüğü gönderin"
 core_status.fault.next.aborted: "Yapılacak bir şey yok"
 core_status.fault.next.unknown: "Bu satırı ve günlüğü desteğe gönderin"
-core_status.fault.next.key: "Anahtar sitede değil Moonbot'ta üretilir. Moonbot'ta: sol alttaki yeşil nokta (Info penceresi) → Moon Kernel satırı → Settings → Moon Proto penceresi, Settings sekmesi → Key: → Copy Key (anahtar yoksa New Key). Tamamını Anahtar alanına Yapıştır düğmesiyle yapıştırın ve Kaydet'e basın — çekirdek kendiliğinden bağlanır"
+core_status.fault.next.key: "Anahtar sitede değil Moonbot'ta üretilir. Moonbot'ta: sol alttaki yeşil nokta (Info penceresi) → Moon Kernel satırı → Settings → Moon Proto penceresi, Settings sekmesi → Key: → Copy Key (anahtar yoksa New Key, ardından Apply). Tamamını Anahtar alanına Yapıştır düğmesiyle yapıştırın ve Kaydet'e basın — çekirdek kendiliğinden bağlanır"
 core_status.fault.next.endpoint_invalid: "Ayarlar → Bağlantılar'da Adres:port sütununu düzeltin (adres, adres:port ya da :port) ya da anahtarın adresini kullanmak için boşaltın ve Kaydet'e basın"
 core_status.fault.next.endpoint_unresolved: "Adda yazım hatası olmadığını ve bu bilgisayarda internetin ve DNS'in çalıştığını kontrol edin — terminal kendisi yeniden dener. Ya da ad yerine IP yazın"
 core_status.fault.core.legacy_named: "Çekirdek Moonbot %{server} bildiriyor ve protokol sürümü yok: bu terminalden eski"

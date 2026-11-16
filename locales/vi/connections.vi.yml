@@ -36,7 +36,7 @@ conn.endpoint_no_address: "Khóa không có địa chỉ — terminal kết nố
 
 
 # Tooltips.
-conn.tip.key: "Khóa được tạo trong Moonbot, không phải trên trang web, và được sao chép SAU khi core đã cài — khóa mang host, cổng và chế độ theo; địa chỉ và cổng có thể đổi ở cột Địa chỉ:cổng khi cần. Thứ tự: 1) trên máy chủ Moonbot, mở cổng UDP của core cho lưu lượng vào; 2) trong Moonbot: chấm xanh góc dưới trái (cửa sổ Info) → Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings: chọn Kernel (VPS), đặt Port, chọn V0/V1/V2 (mặc định V0), nhấn Apply; 3) ở đó, Key: → Copy Key (chưa có khóa — New Key); 4) dán vào đây bằng nút Dán và nhấn Lưu. Con mắt hiện hoặc ẩn khóa."
+conn.tip.key: "Khóa được tạo trong Moonbot, không phải trên trang web, và được sao chép SAU khi core đã cài — khóa mang host, cổng và chế độ theo; địa chỉ và cổng có thể đổi ở cột Địa chỉ:cổng khi cần. Thứ tự: 1) trên máy chủ Moonbot, mở cổng UDP của core cho lưu lượng vào; 2) trong Moonbot: chấm xanh góc dưới trái (cửa sổ Info) → Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings: nếu chưa có khóa, nhấn New Key trước; sau đó chọn Kernel (VPS), đặt Port, chọn V0/V1/V2 (mặc định V0), nhấn Apply; 3) ở đó, Key: → Copy Key; 4) dán vào đây bằng nút Dán và nhấn Lưu. Con mắt hiện hoặc ẩn khóa."
 conn.key_ph: "Copy Key trong Moonbot"
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".

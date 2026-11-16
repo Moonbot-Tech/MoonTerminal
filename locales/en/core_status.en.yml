@@ -318,7 +318,7 @@ core_status.fault.next.syncing: "Wait. If the figure stops moving, hover the sta
 core_status.fault.next.stalled: "The attempt repeats by itself. If the same step keeps failing, hover the startup column and send the log"
 core_status.fault.next.aborted: "Nothing to do"
 core_status.fault.next.unknown: "Send this line and the log to support"
-core_status.fault.next.key: "The key is made in Moonbot, not on the website. In Moonbot: the green dot at the bottom left (the Info window) → the Moon Kernel row → Settings → the Moon Proto window, Settings tab → Key: → Copy Key (no key yet — New Key). Paste the whole of it into the Key field with the Paste button and press Save — the core connects by itself"
+core_status.fault.next.key: "The key is made in Moonbot, not on the website. In Moonbot: the green dot at the bottom left (the Info window) → the Moon Kernel row → Settings → the Moon Proto window, Settings tab → Key: → Copy Key (no key yet — New Key, then Apply). Paste the whole of it into the Key field with the Paste button and press Save — the core connects by itself"
 core_status.fault.next.endpoint_invalid: "Fix the Address:port column in Settings → Connections (address, address:port or :port), or clear it to use the key's address, and press Save"
 core_status.fault.next.endpoint_unresolved: "Check the name for a typo and that this computer has working internet and DNS — the terminal retries by itself. Or type the IP instead of the name"
 core_status.fault.core.legacy_named: "The core reports Moonbot %{server} and no protocol version: it predates this terminal"
