@@ -8,7 +8,11 @@
 //! The permanent list is a comma-separated text this terminal rewrites in full; the temporary one
 //! is a delta the feed merges at send time, because the core writes that list too. See
 //! [`moon_core::feed::CoreCmd::SetTempBlacklist`].
+//!
+//! A multi-core row sends every core ITS OWN spelling of the coin, resolved once per menu by
+//! [`CoinNames`]; a core that does not carry the coin is not a target and is not counted.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::*;
@@ -16,9 +20,9 @@ use moon_ui::{MoonMenuItem, MoonWindowExt as _};
 use rust_i18n::t;
 
 use moon_core::config::TempBanSpan;
-use moon_core::market::{MarketLabel, pick_market_for_coin};
 use moon_core::session::CoreId;
 
+use super::names::CoinNames;
 use super::{
     CoinMenuCtx, blacklist_contains, core_blacklist, strategy_blacklist,
     workspace_action_allows_cores, write_core_blacklist, write_strategy_blacklist,
@@ -32,6 +36,7 @@ pub(super) fn permanent_blacklist_item(
     b: &Backend,
     backend: &Entity<Backend>,
     coin: &str,
+    names: &CoinNames,
 ) -> MoonMenuItem {
     let core = ctx.core;
     let mut rows: Vec<MoonMenuItem> = Vec::new();
@@ -44,22 +49,28 @@ pub(super) fn permanent_blacklist_item(
         backend.clone(),
         ctx.workspace_group.clone(),
         vec![core],
-        core_blacklist_writer(coin),
+        core_blacklist_writer(vec![(core, coin.to_string())]),
     ));
 
-    if ctx.selected_cores.len() > 1 {
-        let cores = ctx.selected_cores.clone();
-        let all_in = cores
+    // The selected cores that carry the coin, each with the token ITS lists match. Fewer than two
+    // is not a group: the row above already covers the clicked core.
+    let targets: Vec<(CoreId, String)> = ctx
+        .selected_cores
+        .iter()
+        .filter_map(|&core| names.on(core).map(|name| (core, name.coin.clone())))
+        .collect();
+    if targets.len() > 1 {
+        let all_in = targets
             .iter()
-            .all(|&core| blacklist_contains(&core_blacklist(b, core).1, coin));
+            .all(|(core, token)| blacklist_contains(&core_blacklist(b, *core).1, token));
         rows.push(target_row(
             "coin-bl-cores",
-            t!("coin_menu.target_cores", n = cores.len()).to_string(),
+            t!("coin_menu.target_cores", n = targets.len()).to_string(),
             all_in,
             backend.clone(),
             ctx.workspace_group.clone(),
-            cores,
-            core_blacklist_writer(coin),
+            targets.iter().map(|(core, _)| *core).collect(),
+            core_blacklist_writer(targets),
         ));
     }
 
@@ -104,26 +115,43 @@ pub(super) fn temp_blacklist_item(
     ctx: &CoinMenuCtx,
     b: &Backend,
     backend: &Entity<Backend>,
+    names: &Rc<CoinNames>,
 ) -> Option<MoonMenuItem> {
     let core = ctx.core;
-    let symbol = temp_ban_symbol(b, core, ctx)?;
+    let symbol = temp_ban_symbol(names, core)?;
     let mut rows: Vec<MoonMenuItem> = Vec::new();
 
     rows.push(MoonMenuItem::label(
         t!("coin_menu.target_core", core = ctx.core_name.clone()).to_string(),
     ));
-    rows.extend(hour_rows("tbl-core", backend, ctx, vec![core]));
+    rows.extend(hour_rows(
+        "tbl-core",
+        backend,
+        ctx.workspace_group.clone(),
+        names,
+        vec![core],
+    ));
 
-    if ctx.selected_cores.len() > 1 {
+    // The selected cores that list the coin under a market of their own. As with the permanent
+    // list, fewer than two is not a group.
+    let group: Vec<CoreId> = ctx
+        .selected_cores
+        .iter()
+        .copied()
+        .filter(|&target| temp_ban_symbol(names, target).is_some())
+        .collect();
+    let group = (group.len() > 1).then_some(group);
+    if let Some(cores) = &group {
         rows.push(MoonMenuItem::separator());
         rows.push(MoonMenuItem::label(
-            t!("coin_menu.target_cores", n = ctx.selected_cores.len()).to_string(),
+            t!("coin_menu.target_cores", n = cores.len()).to_string(),
         ));
         rows.extend(hour_rows(
             "tbl-cores",
             backend,
-            ctx,
-            ctx.selected_cores.clone(),
+            ctx.workspace_group.clone(),
+            names,
+            cores.clone(),
         ));
     }
 
@@ -135,11 +163,11 @@ pub(super) fn temp_blacklist_item(
     let mut held_cores: Vec<CoreId> = Vec::new();
     let mut left_here: Option<Duration> = None;
     // The same targets the preset rows above are offered for: the group is only listed when more
-    // than one core is selected, and a lift that reached a core the menu never offered to ban would
-    // act outside what the reader was shown.
-    let group = (ctx.selected_cores.len() > 1).then_some(ctx.selected_cores.as_slice());
-    for target in std::iter::once(core).chain(group.unwrap_or_default().iter().copied()) {
-        let Some(target_symbol) = temp_ban_symbol(b, target, ctx) else {
+    // than one core carries the coin, and a lift that reached a core the menu never offered to ban
+    // would act outside what the reader was shown.
+    let group = group.unwrap_or_default();
+    for target in std::iter::once(core).chain(group.iter().copied()) {
+        let Some(target_symbol) = temp_ban_symbol(names, target) else {
             continue;
         };
         let Some(left) = b
@@ -186,7 +214,7 @@ pub(super) fn temp_blacklist_item(
         }
         let backend = backend.clone();
         let workspace_group = ctx.workspace_group.clone();
-        let ctx = ctx.clone();
+        let names = names.clone();
         rows.push(
             MoonMenuItem::with_key("tbl-clear", t!("coin_menu.tbl_clear").to_string()).on_click(
                 move |_, window, app| {
@@ -199,7 +227,7 @@ pub(super) fn temp_blacklist_item(
                         ) {
                             return;
                         }
-                        send_temp_ban(b, &held_cores, &ctx, None);
+                        send_temp_ban(b, &held_cores, &names, None);
                     });
                 },
             ),
@@ -209,19 +237,24 @@ pub(super) fn temp_blacklist_item(
     Some(MoonMenuItem::with_key("coin-tbl", t!("coin_menu.tbl_group").to_string()).submenu(rows))
 }
 
-/// The write both core-blacklist rows perform, differing only in the cores they are handed.
+/// The write both core-blacklist rows perform, differing only in the targets they are built with.
 ///
+/// Each target carries the token ITS core matches: one row's cores can spell the coin three ways.
 /// Direction is decided once for the whole target set: a fully listed set lifts the coin from
 /// every core; otherwise every core takes the add path. A per-core toggle would mix add and lift
 /// on a mixed selected-cores row.
-fn core_blacklist_writer(coin: &str) -> impl Fn(&mut Backend, &[CoreId]) + 'static {
-    let coin = coin.to_string();
-    move |b, cores| {
-        let lift = cores
+///
+/// The cores the click hands over are the same set, already checked against the workspace; the
+/// tokens travel with the closure because the click has no other way to learn them.
+fn core_blacklist_writer(
+    targets: Vec<(CoreId, String)>,
+) -> impl Fn(&mut Backend, &[CoreId]) + 'static {
+    move |b, _cores| {
+        let lift = targets
             .iter()
-            .all(|&core| blacklist_contains(&core_blacklist(b, core).1, &coin));
-        for &core in cores {
-            let _ = write_core_blacklist(b, core, &coin, lift);
+            .all(|(core, token)| blacklist_contains(&core_blacklist(b, *core).1, token));
+        for (core, token) in &targets {
+            let _ = write_core_blacklist(b, *core, token, lift);
         }
     }
 }
@@ -234,17 +267,17 @@ fn core_blacklist_writer(coin: &str) -> impl Fn(&mut Backend, &[CoreId]) + 'stat
 fn hour_rows(
     key_prefix: &str,
     backend: &Entity<Backend>,
-    ctx: &CoinMenuCtx,
+    workspace_group: Option<String>,
+    names: &Rc<CoinNames>,
     cores: Vec<CoreId>,
 ) -> Vec<MoonMenuItem> {
-    let workspace_group = ctx.workspace_group.clone();
     TempBanSpan::ALL
         .iter()
         .map(|&span| {
             let backend = backend.clone();
             let workspace_group = workspace_group.clone();
             let cores = cores.clone();
-            let ctx = ctx.clone();
+            let names = names.clone();
             let hours = span.hours();
             MoonMenuItem::with_key(
                 SharedString::from(format!("{key_prefix}-{hours}h")),
@@ -263,7 +296,7 @@ fn hour_rows(
                     if !workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
                         return;
                     }
-                    send_temp_ban(b, &cores, &ctx, Some(span.duration()));
+                    send_temp_ban(b, &cores, &names, Some(span.duration()));
                 });
             })
         })
@@ -297,13 +330,13 @@ fn target_row(
 ///
 /// Each core is sent ITS OWN market spelling — see [`temp_ban_symbol`]; a core whose catalogue
 /// cannot name the coin is skipped rather than sent a market it does not have.
-fn send_temp_ban(b: &Backend, cores: &[CoreId], ctx: &CoinMenuCtx, ban: Option<Duration>) {
+fn send_temp_ban(b: &Backend, cores: &[CoreId], names: &CoinNames, ban: Option<Duration>) {
     for &core in cores {
-        let Some(symbol) = temp_ban_symbol(b, core, ctx) else {
+        let Some(symbol) = temp_ban_symbol(names, core) else {
             log::warn!(
                 "coin_menu: core {} has no market for {}, temp blacklist skipped",
                 moon_core::feed::core_label(core),
-                ctx.coin
+                names.clicked()
             );
             continue;
         };
@@ -326,83 +359,21 @@ fn send_temp_ban(b: &Backend, cores: &[CoreId], ctx: &CoinMenuCtx, ban: Option<D
 /// `market_currency` — so the two rows of this menu deliberately write different spellings.
 ///
 /// Resolved per CORE rather than reused across them: the row was clicked on one core's market, and
-/// the other selected cores may be on venues that spell it differently. The clicked core keeps its
-/// own exact market; the rest are looked up in their own catalogue, preferring the same spelling,
-/// then the coin in the quote that core trades in, then in the clicked market's quote, and finally
-/// the best search hit.
+/// the other targets may be on venues that spell it differently. The clicked core keeps its own
+/// exact market; every other core's is the one [`CoinNames`] found in its catalogue by the coin's
+/// identity — the clicked market itself where that core lists it, otherwise the undated contract in
+/// the quote that core trades in.
 ///
 /// Args:
-///     b: Terminal state holding the market catalogue.
+///     names: The clicked coin as every connected core spells it.
 ///     core: Core the ban will be sent to.
-///     ctx: Menu context, carrying the clicked core and its market.
 ///
 /// Returns:
-///     The market to write, or `None` when this core has no market for that coin.
-fn temp_ban_symbol(b: &Backend, core: CoreId, ctx: &CoinMenuCtx) -> Option<String> {
-    if ctx.market.is_empty() {
-        return None;
-    }
-    if core == ctx.core {
-        return Some(ctx.market.clone());
-    }
-    if ctx.coin.is_empty() {
-        return None;
-    }
-    let candidates = b
-        .session
-        .market_source()
-        .search_markets(core, &ctx.coin, MARKET_LOOKUP_LIMIT);
-    if let Some(exact) = candidates
-        .iter()
-        .find(|name| name.eq_ignore_ascii_case(&ctx.market))
-    {
-        return Some(exact.clone());
-    }
-    // The coin by the catalogue's labels in one quote: first the quote this core trades in, then
-    // the clicked market's own. Labels, not names, because a Hyperliquid spot market is an index
-    // (`@334`) that spells neither coin nor quote, and its catalogue lists KNTQ against USDH and
-    // USDC alike.
-    let source = b.session.market_source();
-    let refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
-    let labelled: Vec<(String, MarketLabel)> = candidates
-        .iter()
-        .cloned()
-        .zip(source.market_labels(core, &refs))
-        .collect();
-    let in_quote = |quote: &str| -> Option<String> {
-        let only: Vec<(String, MarketLabel)> = labelled
-            .iter()
-            .filter(|(_, label)| !quote.is_empty() && label.quote.eq_ignore_ascii_case(quote))
-            .cloned()
-            .collect();
-        pick_market_for_coin(&only, &ctx.coin, quote).map(str::to_string)
-    };
-    let clicked_quote = source.market_label(ctx.core, &ctx.market).quote;
-    if let Some(market) = source
-        .traded_quote(core)
-        .and_then(|quote| in_quote(&quote))
-        .or_else(|| in_quote(&clicked_quote))
-    {
-        return Some(market);
-    }
-    // Same coin on another venue: keep the QUOTE the click was made against, so a USDT ban does not
-    // land on a BTC-quoted market that happens to sort first.
-    let quote = ctx
-        .market
-        .to_uppercase()
-        .strip_prefix(&ctx.coin.to_uppercase())
-        .map(str::to_string)
-        .filter(|quote| !quote.is_empty());
-    if let Some(quote) = quote
-        && let Some(same_quote) = candidates
-            .iter()
-            .find(|name| name.to_uppercase().ends_with(&quote))
-    {
-        return Some(same_quote.clone());
-    }
-    candidates.into_iter().next()
+///     The market to write, or `None` when this core has no market for that coin, or the click
+///     named none.
+fn temp_ban_symbol(names: &CoinNames, core: CoreId) -> Option<String> {
+    names
+        .on(core)
+        .map(|name| name.market.clone())
+        .filter(|market| !market.is_empty())
 }
-
-/// How deep to look in one core's catalogue for the coin's market. The search is ranked
-/// exact → prefix → contains, so the answer is at the top when it exists at all.
-const MARKET_LOOKUP_LIMIT: usize = 8;

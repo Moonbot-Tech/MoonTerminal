@@ -89,7 +89,53 @@ fn base_of(_core: CoreId, market: &str) -> Option<String> {
 }
 
 fn find(cores: &[(CoreId, &CoreData)], coin: &str) -> Vec<CoinPlace> {
-    find_coin_places(cores.iter().map(|(id, data)| (*id, *data)), coin, base_of)
+    find_coin_places(
+        cores.iter().map(|(id, data)| (*id, *data)),
+        |_| coin.to_string(),
+        base_of,
+    )
+}
+
+/// Each core's lists hold that core's own spelling, so each core is searched for its own.
+///
+/// Mutation: look for one token on every core, as this did. The Binance-style core lists
+/// `1000xalpha`, the search for `1kxalpha` walks past it, and the menu reports the coin as banned
+/// on one core while it is banned on two.
+#[test]
+fn each_core_is_searched_for_its_own_spelling() {
+    let bybit = core_with(Some((true, "1kxalpha")), Vec::new(), &[]);
+    let binance = core_with(
+        Some((true, "1000xalpha")),
+        vec![strategy(7, "UNIT_07", "", Some("1000xalpha"))],
+        &[],
+    );
+    let places = find_coin_places(
+        [(CORE_A, &bybit), (CORE_B, &binance)],
+        |core| match core {
+            CORE_A => "1kxalpha".to_string(),
+            _ => "1000xalpha".to_string(),
+        },
+        base_of,
+    );
+    assert_eq!(
+        places,
+        vec![
+            CoinPlace::Core {
+                core: CORE_A,
+                list_enabled: true,
+            },
+            CoinPlace::Core {
+                core: CORE_B,
+                list_enabled: true,
+            },
+            CoinPlace::Strategy {
+                core: CORE_B,
+                sid: 7,
+                folder: String::new(),
+                strategy: "UNIT_07".to_string(),
+            },
+        ]
+    );
 }
 
 /// Folding only one side, or comparing bytes, would miss a coin the core spelled in the other case.

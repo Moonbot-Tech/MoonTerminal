@@ -11,6 +11,11 @@
 //! core-wide flag; lifting one leaves that flag alone. The TEMPORARY list cannot be written that
 //! way — the core adds rows to it itself — so it travels as a delta the feed merges at send time;
 //! see [`blacklist`] and `moon_core::feed::CoreCmd::SetTempBlacklist`.
+//!
+//! Exchanges spell one coin differently (`1kBONK`, `1000BONK`, `BONK`) and a core matches its lists
+//! by exact text, so an action over several cores sends each one its own spelling: see [`names`].
+
+use std::rc::Rc;
 
 use gpui::*;
 use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowExt as _};
@@ -56,7 +61,8 @@ pub struct CoinMenuCtx {
     /// Base token, such as `ADA`, written to blacklist values.
     pub coin: String,
     /// Cores selected by the source panel's filter for the selected-cores blacklist action. That
-    /// entry appears only for more than one core. Chart lines supply `[core]`, so it remains hidden.
+    /// entry covers the selected cores that CARRY the coin, each in its own spelling, and appears
+    /// only when more than one does. Chart lines supply `[core]`, so it remains hidden.
     pub selected_cores: Vec<CoreId>,
     /// Order strategy when `strat_id != 0`, enabling the strategy section. None means manual or join.
     pub strat_id: Option<u64>,
@@ -202,12 +208,15 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
             items.push(MoonMenuItem::separator());
         }
 
-        items.push(permanent_blacklist_item(&ctx, b, backend, &coin));
-        if let Some(item) = temp_blacklist_item(&ctx, b, backend) {
+        // Resolved once and shared: the three entries below must agree on what each core calls
+        // this coin, and each of them would otherwise search every catalog again.
+        let names = Rc::new(names::CoinNames::resolve(b, &ctx));
+        items.push(permanent_blacklist_item(&ctx, b, backend, &coin, &names));
+        if let Some(item) = temp_blacklist_item(&ctx, b, backend, &names) {
             items.push(item);
         }
-        let count = places::places_summary(&places::listed_places(b, &coin)).0;
-        items.push(where_listed_item(backend, &coin, count));
+        let count = places::places_summary(&places::listed_places(b, &names)).0;
+        items.push(where_listed_item(backend, &names, count));
     } // end of the token-dependent blacklist actions
 
     // Strategy actions.
@@ -499,21 +508,27 @@ pub(crate) fn write_strategy_blacklist(
 
 mod blacklist;
 pub(crate) mod core_ref;
+mod names;
 mod places;
 mod places_dialog;
 
 /// The "where is this coin blacklisted" row.
 ///
 /// The count is the menu's trailing slot. That slot follows the menu font; it is not a
-/// per-item monospace run.
-fn where_listed_item(backend: &Entity<Backend>, coin: &str, count: usize) -> MoonMenuItem {
+/// per-item monospace run. The dialog is handed the same per-core spellings the count was made
+/// with, so the number in the menu and the rows it opens cannot disagree.
+fn where_listed_item(
+    backend: &Entity<Backend>,
+    names: &Rc<names::CoinNames>,
+    count: usize,
+) -> MoonMenuItem {
     let backend = backend.clone();
-    let coin = coin.to_string();
+    let names = names.clone();
     MoonMenuItem::with_key("coin-bl-where", t!("coin_menu.where_listed").to_string())
         .right_label(count.to_string())
         .on_click(move |_, window, cx| {
             window.close_context_menu(cx);
-            places_dialog::open(backend.clone(), coin.clone(), window, cx);
+            places_dialog::open(backend.clone(), (*names).clone(), window, cx);
         })
 }
 
