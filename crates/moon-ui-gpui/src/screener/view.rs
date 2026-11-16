@@ -357,10 +357,7 @@ impl ScreenerView {
                     .get(core)
                     .copied()
                     .flatten()
-                    .filter(|_| match self.source {
-                        ScrSource::All => true,
-                        ScrSource::Core(only) => only == *core,
-                    })
+                    .filter(|_| self.source_admits(*core))
             })
             .collect();
         let (rows, total, shown) =
@@ -405,6 +402,17 @@ impl ScreenerView {
             self.source = source;
             self.rebuild(cx);
             cx.notify();
+        }
+    }
+
+    /// Whether the source selector lets `core`'s rows through; the display preset is a separate test.
+    ///
+    /// The one reading of the selector: the row filter and the row's coin menu, whose "N cores"
+    /// targets cover the cores the table shows, both ask here so the two cannot drift apart.
+    pub(super) fn source_admits(&self, core: CoreId) -> bool {
+        match self.source {
+            ScrSource::All => true,
+            ScrSource::Core(only) => only == core,
         }
     }
 

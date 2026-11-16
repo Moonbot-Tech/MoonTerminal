@@ -6,8 +6,10 @@ use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
 
 use moon_core::market::SharedScreenerRow;
+use moon_core::session::CoreId;
 use moon_core::util::fmt::{self, DeltaSign};
 
+use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use crate::panels::num;
 
 use super::view::ScreenerView;
@@ -433,10 +435,77 @@ pub(super) fn screener_row(
     MoonDataRow::new(cells)
 }
 
+/// Open the shared coin context menu from a Screener row's market right-click.
+///
+/// A Screener row carries no strategy and no order, so the menu holds navigation and the blacklist
+/// entries. Its "N cores" targets are the cores the table can currently show — the Singleton display
+/// preset narrowed by the source selector, the filter the rows themselves went through — as the
+/// Assets and Orders menus use their own panel filter. The window belongs to no group, so the
+/// actions keep the unscoped authority the row's left click already has.
+///
+/// Args:
+///     core: Core that owns the clicked row; its chart and its blacklists are the menu's targets.
+///     market: Canonical market name used by the navigation entries.
+///     coin: Core-native coin spelling written to blacklist values.
+///     view: The Screener view, read for its backend and source selector.
+///     pos: Window-coordinate popup position.
+///     window: Window that owns the context menu.
+///     app: Application context used to read the live scope and open the menu.
+///
+/// Returns:
+///     Nothing; an applicable menu is opened at `pos`.
+fn open_screener_coin_menu(
+    core: CoreId,
+    market: String,
+    coin: String,
+    view: &Entity<ScreenerView>,
+    pos: Point<Pixels>,
+    window: &mut Window,
+    app: &mut App,
+) {
+    app.stop_propagation();
+    let panel = view.read(app);
+    let backend = panel.backend.clone();
+    let (selected_cores, core_name) = {
+        let b = backend.read(app);
+        let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
+        let sessions = b.session.sessions();
+        let selected: Vec<CoreId> = sessions
+            .iter()
+            .map(|session| session.id)
+            .filter(|&id| b.core_displayed(preset, id) && panel.source_admits(id))
+            .collect();
+        let name = sessions
+            .iter()
+            .find(|session| session.id == core)
+            .map(|session| session.name.clone())
+            .unwrap_or_default();
+        (selected, name)
+    };
+    let ctx = CoinMenuCtx {
+        core,
+        core_name,
+        market,
+        coin,
+        selected_cores,
+        strat_id: None,
+        strat_name: None,
+        order_uid: None,
+        workspace_group: None,
+        side: None,
+        short: false,
+        origin: CoinMenuOrigin::OrderTable,
+        history: None,
+        trailing: Vec::new(),
+    };
+    crate::controls::open_coin_menu(ctx, backend, pos, window, app);
+}
+
 /// Build a full-cell clickable market cell.
 ///
 /// Clicking asks the ChartTabs group owning `row.core` to open or focus the market in Main and
-/// select `Tab::Main`, without raising or focusing that group's OS window.
+/// select `Tab::Main`, without raising or focusing that group's OS window. A right click opens the
+/// shared coin menu for the row's core and market.
 fn market_cell(
     e: &Entry,
     view: &Entity<ScreenerView>,
@@ -445,6 +514,9 @@ fn market_cell(
     let market = e.row.market.clone();
     let core = e.row.core;
     let view = view.clone();
+    let view_menu = view.clone();
+    let market_menu = market.clone();
+    let coin_menu = e.row.coin.clone();
     div()
         .id(SharedString::from(format!("scr-mkt-{core}-{market}")))
         .w_full()
@@ -465,6 +537,20 @@ fn market_cell(
                 });
             });
         })
+        .on_mouse_down(
+            MouseButton::Right,
+            move |event: &MouseDownEvent, window, app| {
+                open_screener_coin_menu(
+                    core,
+                    market_menu.clone(),
+                    coin_menu.clone(),
+                    &view_menu,
+                    event.position,
+                    window,
+                    app,
+                );
+            },
+        )
 }
 
 #[cfg(test)]
