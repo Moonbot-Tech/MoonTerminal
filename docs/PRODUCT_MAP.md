@@ -166,7 +166,12 @@ core updates from the terminal (multi-select, a named build).
 
 **Connections**: a core = key + address, core colour, MoonProto transport mode
 per-core (a hint for “the one that works” from the user's bots' experience),
-servers.enc bound to the machine, moved with a password. A core on a Linux server (a
+servers.enc bound to the machine, moved with a password. The connect wizard installs a new core
+on a rented Linux server — optionally in Demo mode: Moonbot's demo account in the emulator, no
+exchange keys of the user's needed, keys can be added later — moves a core onto one, or connects
+an existing Moonbot core by its key, step by step (port, Moon Proto window, key); when it logs in
+to the server with an SSH key, a new core's install or a move offers to turn off the server's
+password login (ticked by default). A core on a Linux server (a
 non-loopback literal IPv4 address) has server commands on its right-click menu: status, retry the
 exchange login, log, restart/stop/start its service, and — only for a core MoonTerminal installed —
 change exchange, API keys, show the connection key, MoonProto address, update; without a server
