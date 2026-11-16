@@ -23,7 +23,7 @@
 //!   fork of it;
 //! - [`core_groups`] holds the pure decisions behind its saved core groups;
 //! - [`core_group_dialogs`] owns the two modals that create and manage those groups;
-//! - [`core_host`] is the adapter each of its six consumers implements, plus the extras assembly
+//! - [`core_host`] is the adapter each of its consumers implements, plus the extras assembly
 //!   they all share;
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
 //! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
@@ -101,8 +101,8 @@ pub(crate) const STRATEGIES_ICON: &str = "icons/bot.svg";
 /// layout cannot drift from the MoonUI dropdown it contains.
 ///
 /// Narrowed by 10% from 118 px: the trigger only ever shows "All cores" or "Cores: N", and the
-/// bars that carry it (Orders, Report, Assets, Core Status, Analytics, and the Screener's own
-/// core source selector, which uses it as its lower bound) win that space for their controls. The
+/// bars that carry it (Orders, Report, Assets, Core Status, Analytics and the Screener) win that
+/// space for their controls. A single selected core reads "Cores: 1" on it, not the core's name. The
 /// longest label is the Spanish "Todos los núcleos", which truncates here as it already did at 118.
 pub(crate) const CORE_COMBO_TRIGGER_W: f32 = 106.0;
 

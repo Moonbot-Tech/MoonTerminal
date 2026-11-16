@@ -12,4 +12,5 @@ screener.empty: "Нет рыночных данных — подключите �
 screener.empty_no_data: "Рыночные данные ещё не получены"
 screener.coins: "монет"
 screener.all_cores: "Все ядра"
+screener.cores_n: "Ядер: %{n}"
 screener.columns: "Колонки"

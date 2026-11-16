@@ -17,6 +17,7 @@ use rust_i18n::t;
 
 use moon_core::session::CoreId;
 
+use crate::controls::CoreComboHost;
 use crate::panels::data_table_host;
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
@@ -25,11 +26,30 @@ use super::table::{COLS, ColDef, Entry, column_title, moon, moon_alpha, parse_vo
 
 const SCREENER_HEADER_H: f32 = 32.0;
 
-/// Core source filter: every core or one specific core, matching the Orders source selector.
-#[derive(Clone, Copy, PartialEq)]
-enum ScrSource {
-    All,
-    Core(CoreId),
+/// Version of the one-shot migration that adds late columns to stored visible sets; see
+/// [`super::table::add_new_columns`] and `WindowLayout::screener_columns_migration`.
+const SCREENER_COLUMNS_MIGRATION: u32 = 1;
+
+impl crate::controls::CoreComboHost for ScreenerView {
+    /// The Screener is a group-less singleton: no Auto workspace owns its selector.
+    fn core_selection_pinned(&self, _cx: &App) -> bool {
+        false
+    }
+
+    fn core_selection_mut(&mut self) -> &mut HashSet<u64> {
+        &mut self.sel_cores
+    }
+
+    /// Apply the new selection and repaint.
+    ///
+    /// [`Self::rebuild`] does both halves this needs, as it does for the sort and the text boxes:
+    /// it applies the controls to the rows already published at once, since those cover every
+    /// core, and it starts a fresh publication with them rather than leaving the table on the old
+    /// one until the trailing one-second refresh.
+    fn after_core_selection_change(&mut self, cx: &mut Context<Self>) {
+        self.rebuild(cx);
+        cx.notify();
+    }
 }
 
 /// State for the singleton Screener window.
@@ -64,8 +84,8 @@ pub struct ScreenerView {
     /// Sort key from `COLS` and descending/ascending direction.
     sort_key: String,
     sort_desc: bool,
-    /// Session-only core filter, not persisted, as in Orders.
-    source: ScrSource,
+    /// Session-only core filter, not persisted, as in Orders. Empty means every core.
+    sel_cores: HashSet<CoreId>,
     /// Visible `COLS` keys persisted in per-context table storage.
     ///
     /// Legacy `layout.screener_columns` is read only as a migration fallback.
@@ -101,6 +121,24 @@ impl ScreenerView {
 
         // Screener always runs in a separate window, so its width context is fixed to `:win`.
         let widths_id = crate::persistence::table_persist::ctx_id("screener-table", true);
+
+        // A stored visible set is an explicit list, so a column added later is absent from it and
+        // would stay hidden for everyone who ever arranged their columns. Add it once, and record
+        // that in the same document as the sets, so a column the user then hides stays hidden.
+        backend.update(cx, |b, _| {
+            if b.layout.screener_columns_migration.unwrap_or(0) >= SCREENER_COLUMNS_MIGRATION {
+                return;
+            }
+            if let Some(keys) = b.layout.table_visible_columns.get_mut(&widths_id) {
+                super::table::add_new_columns(keys);
+            }
+            if let Some(keys) = b.layout.screener_columns.as_mut() {
+                super::table::add_new_columns(keys);
+            }
+            b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);
+            // Unconditionally: the marker must reach disk even when no set needed rewriting.
+            b.layout_dirty = true;
+        });
 
         // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
         // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
@@ -219,7 +257,7 @@ impl ScreenerView {
             dvol_input,
             sort_key: restored_sort.0,
             sort_desc: restored_sort.1,
-            source: ScrSource::All,
+            sel_cores: HashSet::new(),
             visible_cols,
             table_state,
             col_order_cache,
@@ -343,11 +381,11 @@ impl ScreenerView {
                 .iter()
                 .map(|session| displayed[&session.id].is_some()),
         );
-        if let ScrSource::Core(only) = self.source
-            && !b.core_displayed(preset, only)
-        {
-            self.source = ScrSource::All;
-        }
+        // A selected core the preset has since hidden, or whose session is gone, can be neither
+        // shown nor unticked: drop it. A selection emptied this way is every core again, which is
+        // what the single-choice selector did when its one core went away.
+        self.sel_cores
+            .retain(|core| displayed.get(core).copied().flatten().is_some());
         let allowed: Vec<_> = self
             .prepared
             .cores
@@ -396,24 +434,40 @@ impl ScreenerView {
         cx.notify();
     }
 
-    /// Change the session-only core filter while preserving control-triggered source sampling.
-    fn set_source(&mut self, source: ScrSource, cx: &mut Context<Self>) {
-        if self.source != source {
-            self.source = source;
-            self.rebuild(cx);
-            cx.notify();
+    /// Toggle one core in the session-only filter; `None` is the All row and clears it.
+    fn toggle_core(&mut self, id: Option<CoreId>, cx: &mut Context<Self>) {
+        if crate::controls::toggle_core_selection(&mut self.sel_cores, id) {
+            self.after_core_selection_change(cx);
+        }
+    }
+
+    /// Toggle every displayed core of one exchange section in the session-only filter.
+    ///
+    /// Ids the menu was rendered with are checked against the cores the preset shows NOW, so a
+    /// section captured before a preset change cannot select a core the table no longer lists.
+    fn toggle_exchange_cores(&mut self, exchange_cores: Vec<CoreId>, cx: &mut Context<Self>) {
+        let available: HashSet<CoreId> = {
+            let b = self.backend.read(cx);
+            let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
+            b.session
+                .sessions()
+                .iter()
+                .map(|session| session.id)
+                .filter(|&core| b.core_displayed(preset, core))
+                .collect()
+        };
+        if crate::controls::toggle_exchange_cores(&mut self.sel_cores, &available, exchange_cores) {
+            self.after_core_selection_change(cx);
         }
     }
 
     /// Whether the source selector lets `core`'s rows through; the display preset is a separate test.
     ///
     /// The one reading of the selector: the row filter and the row's coin menu, whose "N cores"
-    /// targets cover the cores the table shows, both ask here so the two cannot drift apart.
+    /// targets cover the cores the table shows, both ask here so the two cannot drift apart. An
+    /// empty selection is every core.
     pub(super) fn source_admits(&self, core: CoreId) -> bool {
-        match self.source {
-            ScrSource::All => true,
-            ScrSource::Core(only) => only == core,
-        }
+        self.sel_cores.is_empty() || self.sel_cores.contains(&core)
     }
 
     /// Toggle a column and persist the visible keys in canonical `COLS` order.
@@ -561,16 +615,18 @@ impl ScreenerView {
         )
     }
 
-    /// Build the All-cores plus exchange-grouped session-core source selector.
+    /// Build the core multi-selector over the cores the display preset shows.
     ///
-    /// A disconnected selected core remains visible as its numeric id until the user chooses a
-    /// current source, rather than being mislabeled as All cores.
+    /// The shared picker Orders, Assets and Report host: an All row, a checkbox per core under its
+    /// exchange, exchange rows that toggle their whole section, and the saved core groups. The
+    /// Screener used to carry a single-choice list of its own, which could show every core or one
+    /// and nothing in between.
     ///
     /// Args:
     ///     cx: Screener context used to read sessions, exchanges, and selection state.
     ///
     /// Returns:
-    ///     The configured source dropdown.
+    ///     The configured multi-select dropdown.
     fn source_combo(&self, cx: &Context<Self>) -> impl IntoElement {
         let (cores, venues) = {
             let b = self.backend.read(cx);
@@ -581,54 +637,29 @@ impl ScreenerView {
                 b.session.core_venues(),
             )
         };
-        // Resolve the localized All-cores label once for every use in this selector.
-        let all_label = t!("screener.all_cores").to_string();
-        let cur = match self.source {
-            ScrSource::All => all_label.clone(),
-            ScrSource::Core(id) => cores
-                .iter()
-                .find(|(c, _)| *c == id)
-                .map(|(_, n)| n.clone())
-                .unwrap_or_else(|| format!("#{id}")),
-        };
-        let sections = crate::controls::core_menu_sections(&cores, venues);
         let view = cx.entity();
-        let all_view = view.clone();
-        let mut items = vec![
-            MoonMenuItem::with_key("all", all_label.clone())
-                .checked(self.source == ScrSource::All)
-                .on_click(move |_, _, app| {
-                    all_view.update(app, |this, cx| this.set_source(ScrSource::All, cx));
-                }),
-        ];
-        if !sections.is_empty() {
-            items.push(MoonMenuItem::separator());
-        }
-        for (venue, members) in &sections {
-            let exchange_label = crate::controls::venue_section_label(*venue);
-            items.push(MoonMenuItem::label(exchange_label));
-            for (id, name) in members {
-                let id = *id;
-                let item_view = view.clone();
-                items.push(
-                    MoonMenuItem::with_key(format!("core-{id}"), *name)
-                        .checked(self.source == ScrSource::Core(id))
-                        .on_click(move |_, _, app| {
-                            item_view
-                                .update(app, |this, cx| this.set_source(ScrSource::Core(id), cx));
-                        }),
-                );
-            }
-        }
-        MoonDropdown::new("screener-source")
-            .label(cur)
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            // Same lower bound as every other core selector; it grows past it for a long core name.
-            .fit_trigger_width(crate::controls::CORE_COMBO_TRIGGER_W, 260.0)
-            .fit_menu_width(160.0, 560.0)
-            .menu_max_height_ui(360.0)
-            .items(items)
+        let exchange_view = view.clone();
+        let extras = crate::controls::core_combo_extras(true, &view, &self.backend, cx);
+        crate::controls::core_combo(
+            "screener-source",
+            &cores,
+            venues,
+            &self.sel_cores,
+            crate::controls::CoreAllRowMode::ImplicitOrComplete,
+            t!("screener.all_cores").to_string(),
+            |n| t!("screener.cores_n", n = n).to_string(),
+            160.0,
+            extras,
+            cx,
+            move |id, app| {
+                view.update(app, |this, cx| this.toggle_core(id, cx));
+            },
+            move |exchange_cores, app| {
+                exchange_view.update(app, |this, cx| {
+                    this.toggle_exchange_cores(exchange_cores, cx);
+                });
+            },
+        )
     }
 
     /// Build the persistent visible-column menu with checkbox-style toggles.
@@ -877,7 +908,10 @@ pub(super) fn matches_coin_filter(entry: &Entry, query: &CoinQuery) -> bool {
             .is_some_and(|folded| matches_one_spelling(entry, folded))
 }
 
-/// Match one uppercased spelling against the market and coin search text.
+/// Match one uppercased spelling against the market, the coin and the coin's identity.
+///
+/// The identity is what makes the exact form useful across exchanges: `BONK ` finds Bybit's
+/// `1kBONK` and Binance's `1000BONK`, which neither the market nor the token spells exactly.
 fn matches_one_spelling(entry: &Entry, filter_uc: &str) -> bool {
     let exact = moon_core::db::report_coin_is_exact(filter_uc);
     let query = filter_uc.trim();
@@ -891,7 +925,7 @@ fn matches_one_spelling(entry: &Entry, filter_uc: &str) -> bool {
             text.contains(query)
         }
     };
-    matches(&entry.market_uc) || matches(&entry.coin_uc)
+    matches(&entry.market_uc) || matches(&entry.coin_uc) || matches(&entry.row.identity)
 }
 
 #[cfg(test)]

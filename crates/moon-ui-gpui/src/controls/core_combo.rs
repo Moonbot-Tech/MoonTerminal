@@ -1,5 +1,5 @@
 //! Shared checkbox-based core multi-selector used by the Orders, Report, Assets, Alerts, Core
-//! Status, and Analytics views.
+//! Status, Analytics and Screener views.
 //!
 //! The trigger has fixed compact geometry so an open menu stays anchored while selections change.
 //! MoonUI fits the exchange-grouped menu and ellipsizes anomalously long labels inside its cap.
@@ -22,7 +22,7 @@
 //! menu must survive them. The two rows that open a dialog are the exception and say so themselves
 //! with `MoonMenuItem::closes_menu(true)`: a menu left standing paints OVER the dialog it just
 //! opened, since MoonUI defers popovers above the dialog layer. That per-row override is a MoonUI
-//! affordance that avoids making all six hosts mirror the dropdown's open state and retain another
+//! affordance that avoids making every host mirror the dropdown's open state and retain another
 //! callback.
 
 use std::collections::{HashMap, HashSet};
@@ -180,8 +180,8 @@ pub(crate) fn toggle_exchange_cores(
 
 /// Whether a selection reads as "all cores": empty (implicit) or holding every available one.
 ///
-/// This is the `ImplicitOrComplete` display rule shared by Orders, Report, Assets, Alerts, and Core
-/// Status. Analytics uses `ImplicitOnly`, where a complete explicit selection remains visible as
+/// This is the `ImplicitOrComplete` display rule shared by Orders, Report, Assets, Alerts, Core
+/// Status and the Screener. Analytics uses `ImplicitOnly`, where a complete explicit selection remains visible as
 /// selected cores rather than being relabeled All.
 ///
 /// Args:

@@ -1,6 +1,6 @@
 //! The adapter every consumer of [`super::core_combo`] implements, and the wiring it gets for free.
 //!
-//! Six views host the shared core picker. Its saved-group actions need three mandatory answers
+//! Seven views host the shared core picker. Its saved-group actions need three mandatory answers
 //! from each host: where the retained selection lives, whether an Auto workspace has pinned it,
 //! and the work the view owes after it changes. One optional hook lets a host retain presentation
 //! provenance for an applied group. This adapter applies group actions against those answers; the

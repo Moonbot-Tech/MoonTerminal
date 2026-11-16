@@ -1,7 +1,7 @@
 //! Pure decisions behind the core picker: its rows and its per-exchange state.
 //!
-//! Every function here is GPUI-free so the six consumers of [`super::core_combo`] share one
-//! definition instead of six near-copies, and so the rules can be tested without a window.
+//! Every function here is GPUI-free so the consumers of [`super::core_combo`] share one
+//! definition instead of a near-copy each, and so the rules can be tested without a window.
 //!
 //! An EMPTY selection means ALL cores (see [`super::core_broadcast`]). That single convention is
 //! why this module exists. With no filter set the selection is empty, so the first click on a core

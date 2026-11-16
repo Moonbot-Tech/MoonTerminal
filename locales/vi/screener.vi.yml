@@ -12,4 +12,5 @@ screener.empty: "Chưa có dữ liệu thị trường — hãy kết nối core
 screener.empty_no_data: "Chưa nhận được dữ liệu thị trường"
 screener.coins: "coin"
 screener.all_cores: "Mọi core"
+screener.cores_n: "%{n} core"
 screener.columns: "Cột"

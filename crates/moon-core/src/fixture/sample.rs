@@ -150,6 +150,8 @@ pub fn screener_rows(provider: CoreId) -> Vec<ScreenerRow> {
                 core: provider,
                 market: format!("{}{QUOTE}", sample.coin),
                 coin: sample.coin.to_string(),
+                // The sample markets are plain coins, which are their own identity.
+                identity: sample.coin.to_ascii_uppercase(),
                 vol_24h: sample.vol_24h,
                 vol_1h: sample.vol_24h / 18.0,
                 vol_1m: sample.vol_24h / 1_100.0,

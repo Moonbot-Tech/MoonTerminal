@@ -22,6 +22,10 @@ pub(super) type ColDef = (&'static str, &'static str, f32, bool);
 /// Table columns using untranslated Moonbot field labels, consistent with Orders and Report.
 pub(super) const COLS: &[ColDef] = &[
     ("market", "Market", 92.0, false),
+    // The coin's cross-exchange identity (`ScreenerRow::identity`): `BONK` beside a Market cell
+    // that reads `1kBONK` on one exchange and `1000BONK` on another. Sorting by it lines one coin
+    // up across every exchange. Not a Moonbot column — Moonbot shows one exchange at a time.
+    (COIN_KEY, "Coin", 70.0, false),
     ("core", "Core", 76.0, false),
     ("vol24", "Vol.", 66.0, true),
     ("hvol", "H.vol", 66.0, true),
@@ -137,6 +141,37 @@ pub(super) fn migrate_legacy_widths(
     widths
 }
 
+/// Key of the cross-exchange coin column.
+const COIN_KEY: &str = "coin";
+
+/// Columns added after users could already hold a stored visible set, oldest first.
+const COLS_ADDED_LATE: &[&str] = &[COIN_KEY];
+
+/// Add the columns a stored visible set predates.
+///
+/// A stored set is an explicit list, so a column introduced later is simply missing from it and
+/// would stay hidden for everyone who ever arranged their columns — the users most likely to want
+/// it. The caller runs this once per layout and records that it did
+/// (`WindowLayout::screener_columns_migration`): run on every open, it would put back a column the
+/// user has since hidden.
+///
+/// Args:
+///     keys: One stored visible set, in any order.
+///
+/// Returns:
+///     Nothing; `keys` gains the missing columns. An empty set is left alone: it is not a choice a
+///     user can make, and filling it would turn "all columns" into "only the new ones".
+pub(super) fn add_new_columns(keys: &mut Vec<String>) {
+    if keys.is_empty() {
+        return;
+    }
+    for column in COLS_ADDED_LATE {
+        if !keys.iter().any(|key| key == column) {
+            keys.push((*column).to_string());
+        }
+    }
+}
+
 /// Restore a visible Screener sort as `(key, descending)`.
 ///
 /// The historical Vol.-descending default remains preferred while that column is visible. If it is
@@ -221,6 +256,9 @@ pub(super) fn sort_indices(entries: &[Entry], order: &mut [usize], key: &str, de
         }
         "core" => {
             order.sort_by(|&a, &b| direction(entries[a].core_name.cmp(&entries[b].core_name)))
+        }
+        COIN_KEY => {
+            order.sort_by(|&a, &b| direction(entries[a].row.identity.cmp(&entries[b].row.identity)))
         }
         _ => {
             let values: Vec<_> = entries
@@ -339,6 +377,10 @@ pub(super) fn screener_row(
         .iter()
         .map(|&&(key, ..)| match key {
             "market" => MoonDataCell::element(market_cell(e, view, p)),
+            COIN_KEY => match r.identity.is_empty() {
+                true => MoonDataCell::text("—").tone(MoonTone::Muted),
+                false => MoonDataCell::text(r.identity.clone()),
+            },
             "core" => MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
             "vol24" => vol_cell(r.vol_24h),
             "hvol" => vol_cell(r.vol_1h),

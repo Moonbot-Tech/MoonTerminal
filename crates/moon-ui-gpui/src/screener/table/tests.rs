@@ -5,9 +5,32 @@ use std::collections::{HashMap, HashSet};
 use moon_core::config::TableSortPreference;
 
 use super::{
-    COLS, column_title, migrate_legacy_keys, migrate_legacy_sort, migrate_legacy_widths,
-    restore_sort,
+    COLS, add_new_columns, column_title, migrate_legacy_keys, migrate_legacy_sort,
+    migrate_legacy_widths, restore_sort,
 };
+
+/// A stored visible set gains the column it predates, once, and nothing else changes.
+///
+/// Mutation: skip the migration. Everyone who ever arranged their Screener columns holds an
+/// explicit list without `coin`, and the new column never appears for them. Mutation the other
+/// way: fill an empty set, and "no stored choice" becomes a one-column table.
+#[test]
+fn a_stored_column_set_gains_the_late_column() {
+    let mut arranged = vec!["market".to_string(), "vol24".to_string()];
+    add_new_columns(&mut arranged);
+    assert_eq!(arranged, ["market", "vol24", "coin"]);
+
+    // Already carrying it — a set written after the column existed — stays as it is.
+    add_new_columns(&mut arranged);
+    assert_eq!(arranged, ["market", "vol24", "coin"]);
+
+    let mut empty: Vec<String> = Vec::new();
+    add_new_columns(&mut empty);
+    assert!(empty.is_empty());
+
+    // The key the migration writes is a real column, or it would restore nothing.
+    assert!(COLS.iter().any(|column| column.0 == "coin"));
+}
 
 /// Integer keys must reproduce the standard total float order for arbitrary NaN payloads too.
 #[test]
