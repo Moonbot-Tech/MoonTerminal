@@ -26,6 +26,7 @@ fn entries(cores: u64, markets: usize) -> Vec<Entry> {
                 core_name: format!("CORE_{core}").into(),
                 market_uc: format!("XALPHA{market}USDT").into(),
                 coin_uc: format!("XALPHA{market}").into(),
+                venue: Default::default(),
             })
         })
         .collect()
@@ -139,6 +140,50 @@ fn hidden_first_member_does_not_reorder_visible_group_ties() {
             .collect::<Vec<_>>(),
         [1, 2]
     );
+}
+
+/// The Listed list keeps exactly the rows carrying a ticked answer, unknown being one of them.
+///
+/// Mutation: treat unknown as passing any selection, or as passing none. Ticking the two
+/// one-sided answers would then fill with the rows nothing could answer for — which on an
+/// exchange with no arbitrage donor is every row — or the unknown rows could never be looked
+/// at on their own.
+#[test]
+fn the_listed_list_keeps_only_the_ticked_answers() {
+    use moon_core::market::listing::Listing;
+    use std::collections::HashSet;
+    let mut rows = entries(1, 4);
+    for (entry, listing) in rows.iter_mut().zip([
+        Listing::Both,
+        Listing::SpotOnly,
+        Listing::Unknown,
+        Listing::FuturesOnly,
+    ]) {
+        std::sync::Arc::make_mut(&mut entry.row.market_data).listing = listing;
+    }
+    let prepared = Prepared::new(rows, "market", false);
+    let markets = |query: crate::screener::view::CoinQuery| {
+        let (indices, total, shown) = prepared.select(&[Some(0)], &query, 0.0, "market", false);
+        let names: Vec<_> = indices
+            .iter()
+            .map(|&index| prepared.entries[index].row.market.clone())
+            .collect();
+        (names, total, shown)
+    };
+    let all = markets(crate::screener::view::CoinQuery::new(""));
+    assert_eq!((all.0.len(), all.1, all.2), (4, 4, 4));
+    let ticked = |answers: &[Listing]| {
+        let selected: HashSet<Listing> = answers.iter().copied().collect();
+        markets(crate::screener::view::CoinQuery::new("").listed_in(&selected))
+    };
+    let one_sided = ticked(&[Listing::SpotOnly, Listing::FuturesOnly]);
+    assert_eq!(one_sided.0, ["Xalpha1Usdt", "Xalpha3Usdt"]);
+    // The footer's total stays the universe; only "shown" follows the list.
+    assert_eq!((one_sided.1, one_sided.2), (4, 2));
+    assert_eq!(ticked(&[Listing::Unknown]).0, ["Xalpha2Usdt"]);
+    assert_eq!(ticked(&[Listing::Both]).0, ["Xalpha0Usdt"]);
+    // Nothing ticked is every answer, the same as the query with no selection at all.
+    assert_eq!(ticked(&[]).0.len(), 4);
 }
 
 /// The UI pass excludes background market preparation and includes footer counts and sorting.

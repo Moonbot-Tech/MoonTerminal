@@ -106,6 +106,17 @@ pub struct ScreenerRow {
     /// Open orders for this market on [`Self::core`]. The UI overlay fills this from
     /// `CoreData.orders` because the market layer does not see orders.
     pub orders: u32,
+    /// Whether the catalog's `futures_type` is set on this market — the core's own cross-listing
+    /// flag, which means something only on some venues; see
+    /// [`super::listing::futures_flag_means_listing`]. Evidence for [`Self::listing`], not a
+    /// column of its own.
+    pub futures_flag: bool,
+    /// Whether the coin trades on both market kinds of this exchange or on this one alone.
+    ///
+    /// Filled by [`MarketDataSource::screener_rows`] and left unknown by
+    /// [`MarketDataSource::screener_market_rows`]: the answer costs a read of every connected
+    /// core, which the coin search — on the UI thread — must not pay for.
+    pub listing: super::listing::Listing,
 }
 
 /// One member's account values over an immutable market half shared across the exchange group.
@@ -206,14 +217,19 @@ impl MarketDataSource {
     /// Returns:
     ///     Rows grouped by member, each member's in the provider's market order.
     pub fn screener_rows(&self, provider: CoreId, members: &[CoreId]) -> Vec<SharedScreenerRow> {
-        let market_rows: Vec<Arc<ScreenerRow>> = self
-            .screener_market_rows(provider)
-            .into_iter()
-            .map(Arc::new)
-            .collect();
+        let mut market_rows = self.screener_market_rows(provider);
         if market_rows.is_empty() {
             return Vec::new();
         }
+        // Signed here and not in the market half above, which the coin search also reads: the
+        // book behind it is rebuilt from every connected core when it ages out, and this method's
+        // one caller is the Screener's background publication.
+        self.sign_listings(
+            provider,
+            &mut market_rows,
+            crate::util::time::now_unix_ms_i64(),
+        );
+        let market_rows: Vec<Arc<ScreenerRow>> = market_rows.into_iter().map(Arc::new).collect();
         // Account snapshots come from exactly the supplied members; the provider is not implicit.
         // Each carries its Session base rate, resolved ONCE per member: the rate is a property of
         // the account, and the loop below asks for it on every market of the exchange.
@@ -318,7 +334,7 @@ impl MarketDataSource {
             // folded token otherwise, already uppercase. A second copy here would be a second
             // opinion about what one coin is. One pass under the market lock, and the token is
             // moved back out of the label rather than cloned twice.
-            let (coin, identity) = handle.with(|m| {
+            let (coin, identity, futures_flag) = handle.with(|m| {
                 let label = super::source::MarketLabel {
                     coin: m.market_currency.clone(),
                     canonic: m.market_currency_canonic.clone(),
@@ -326,7 +342,11 @@ impl MarketDataSource {
                     contract: None,
                 };
                 let identity = label.identity();
-                (label.coin, identity)
+                (
+                    label.coin,
+                    identity,
+                    m.futures_type != moonproto::BaseCurrency::EMPTY,
+                )
             });
             let mut row = ScreenerRow {
                 provider,
@@ -334,6 +354,7 @@ impl MarketDataSource {
                 market: name.to_string(),
                 coin,
                 identity,
+                futures_flag,
                 ..ScreenerRow::default()
             };
             let Some(data) = data.as_ref() else {

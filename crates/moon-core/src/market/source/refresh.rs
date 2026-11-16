@@ -57,6 +57,7 @@ impl MarketDataSource {
                 provider_exchange: HashMap::new(),
                 core_venue: HashMap::new(),
                 arb_book: Default::default(),
+                listing_cache: Default::default(),
                 volume_book: Default::default(),
                 native_backfill: Default::default(),
                 archive: Default::default(),
@@ -298,6 +299,13 @@ impl MarketDataSource {
             .lock()
             .expect("arb book poisoned")
             .forget_core(core);
+        // The listing book was read from those same slots, and the new client starts with none:
+        // its warm-up has to start over, and the kept book has to be rebuilt.
+        inner
+            .listing_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .forget_core(core);
         // The traded amounts are about that same retained history, and it went away with the slot.
         inner
             .volume_book
@@ -345,6 +353,11 @@ impl MarketDataSource {
             .arb_book
             .lock()
             .expect("arb book poisoned")
+            .forget_core(core);
+        inner
+            .listing_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .forget_core(core);
         // The traded amounts are about that same retained history, and it went away with the slot.
         inner

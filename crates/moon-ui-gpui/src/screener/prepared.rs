@@ -113,6 +113,7 @@ impl Prepared {
                     let market = self.slots[index].1;
                     total[market] = true;
                     if (!coin.is_empty() && !super::view::matches_coin_filter(entry, coin))
+                        || !coin.admits_listing(entry.row.listing)
                         || (min_vol > 0.0 && entry.row.vol_24h < min_vol)
                         || (min_vol > 0.0 && entry.row.vol_24h.is_nan())
                     {

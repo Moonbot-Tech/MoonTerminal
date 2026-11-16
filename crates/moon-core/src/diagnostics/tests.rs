@@ -57,6 +57,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     cfg.channels.markets = true;
     cfg.channels.hl_limit = true;
     cfg.channels.settings = true;
+    cfg.channels.arb_coverage = true;
     cfg.channels.orders = "GateF/BTC".to_string();
     cfg.limits.log_ring_lines = 12_345;
     cfg.limits.balance_repeat_window_sec = 9;
@@ -64,6 +65,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     apply(&cfg);
 
     assert!(render() && detect() && assets() && markets() && hl_limit() && settings() && orders());
+    assert!(arb_coverage());
     assert_eq!(
         with_orders_selector(|s| s.to_string()).as_deref(),
         Some("GateF/BTC")
@@ -82,6 +84,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
             && !markets()
             && !hl_limit()
             && !settings()
+            && !arb_coverage()
             && !orders()
     );
     assert!(

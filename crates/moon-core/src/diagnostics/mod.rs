@@ -47,6 +47,7 @@ static ASSETS: AtomicBool = AtomicBool::new(false);
 static MARKETS: AtomicBool = AtomicBool::new(false);
 static HL_LIMIT: AtomicBool = AtomicBool::new(false);
 static SETTINGS: AtomicBool = AtomicBool::new(false);
+static ARB_COVERAGE: AtomicBool = AtomicBool::new(false);
 static TAPE_RECORDER: AtomicBool = AtomicBool::new(false);
 /// Fast path for the order channel: the selector itself sits behind a lock, and reading that lock
 /// on every order of every core would be the one diagnostic that costs something while OFF.
@@ -102,6 +103,12 @@ pub fn markets() -> bool {
 #[inline]
 pub fn hl_limit() -> bool {
     HL_LIMIT.load(Ordering::Relaxed)
+}
+
+/// Arbitrage-coverage channel (`logs/arb_coverage.log`).
+#[inline]
+pub fn arb_coverage() -> bool {
+    ARB_COVERAGE.load(Ordering::Relaxed)
 }
 
 /// Append one wall-clock-stamped line to a channel's own file.
@@ -377,6 +384,7 @@ fn apply(cfg: &DiagCfg) {
     MARKETS.store(cfg.channels.markets, Ordering::Relaxed);
     HL_LIMIT.store(cfg.channels.hl_limit, Ordering::Relaxed);
     SETTINGS.store(cfg.channels.settings, Ordering::Relaxed);
+    ARB_COVERAGE.store(cfg.channels.arb_coverage, Ordering::Relaxed);
     TAPE_RECORDER.store(cfg.channels.tape_recorder, Ordering::Relaxed);
     RING_LINES.store(cfg.limits.log_ring_lines, Ordering::Relaxed);
     BALANCE_WINDOW_SEC.store(cfg.limits.balance_repeat_window_sec, Ordering::Relaxed);

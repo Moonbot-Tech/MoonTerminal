@@ -51,6 +51,33 @@ pub(crate) fn backoff_feed(
     )
 }
 
+/// A client's catalog clock is stamped by its first market list and belongs to that client alone.
+///
+/// Breakage, either way: restamping on every list makes a connection hours old look seconds old
+/// each time the exchange adds a market; keeping the stamp across an install makes a client that
+/// has just reconnected, with nothing received yet, look as old as the one it replaced — and the
+/// Screener's Listed column would then believe its silence about every coin.
+#[test]
+fn the_catalog_clock_starts_at_the_first_list_and_restarts_with_the_client() {
+    let first = Instant::now();
+    let later = first + Duration::from_secs(8);
+    let mut slot = super::MoonClientSlot::default();
+    assert_eq!(slot.catalog_since, None);
+    slot.note_catalog_change(first);
+    slot.note_catalog_change(later);
+    assert_eq!(slot.catalog_since, Some(first));
+    assert_eq!(
+        slot.catalog, 2,
+        "every list still moves the catalog version"
+    );
+    // Clearing the slot is the half of a reconnect a test can perform: installing the next
+    // client goes through the same line, and needs a live connection to build one.
+    slot.install(None);
+    assert_eq!(slot.catalog_since, None);
+    slot.note_catalog_change(later);
+    assert_eq!(slot.catalog_since, Some(later));
+}
+
 /// Waiting on command doorbells again would retry early and consume fleet jitter.
 /// Commands sent during the pause must remain queued until the full delay expires.
 #[test]
