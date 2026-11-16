@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "与 %{rows} 手势相同。两者都有效，各�
 hotkeys.clash.bare_key: "单键：在文本框之外每次按下都会触发，风险自负。"
 hotkeys.clash.wins_key: "该按键抢占了 %{rows} 的绑定，在那里它不会触发。"
 hotkeys.clash.wins_gesture: "该手势抢占了 %{rows} 的绑定，在那里它不会触发。"
+hotkeys.clash.move_chain: "与 %{rows} 手势相同。市场上有对应订单的那个移动会触发。顺序：止盈、入场，然后是第二手势。"
 hotkeys.clash.builtin.esc_close: "内置的关闭图表（Esc）"
 hotkeys.clash.builtin.close_all: "内置的关闭全部图表（Shift+Esc）"
 hotkeys.clash.builtin.reset_windows: "内置的窗口重置（Ctrl+Shift+F10）"

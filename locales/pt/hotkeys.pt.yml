@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "O mesmo gesto de %{rows}. Os dois funcionam, cada
 hotkeys.clash.bare_key: "Tecla solta: dispara em qualquer toque fora de um campo de texto — por sua conta e risco."
 hotkeys.clash.wins_key: "A tecla tira este atalho de %{rows}, onde ela não dispara."
 hotkeys.clash.wins_gesture: "O gesto tira este atalho de %{rows}, onde ele não dispara."
+hotkeys.clash.move_chain: "O mesmo gesto de %{rows}. Dispara o movimento que tem ordens no mercado. Ordem: take, entrada e depois os segundos gestos."
 hotkeys.clash.builtin.esc_close: "o fechamento de gráfico embutido (Esc)"
 hotkeys.clash.builtin.close_all: "o fechamento embutido de todos os gráficos (Shift+Esc)"
 hotkeys.clash.builtin.reset_windows: "a restauração de janelas embutida (Ctrl+Shift+F10)"

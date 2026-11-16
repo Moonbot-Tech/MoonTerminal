@@ -20,7 +20,7 @@ pub(super) struct SentBlacklist {
 use anyhow::{Result, anyhow};
 
 use crate::account::AccountIdentity;
-use crate::config::{MoveKind, MoveSide};
+use crate::config::{MoveGestureCommand, MoveKind};
 use crate::data::OrderBookModel;
 use crate::feed::{
     ClientSettingsEdit, CoreCmd, CoreConfig, FeedWakeTx, FieldMask, NewStrategySpec,
@@ -718,41 +718,47 @@ impl SessionManager {
         )
     }
 
-    /// Move a market's orders of one side onto a clicked price — Moonbot's Move Open / Move TP.
+    /// Move a market's orders onto a clicked price — Moonbot's Move Open / Move TP.
     ///
-    /// The core picks the orders and lays them out according to `kind`; nothing here computes a
-    /// destination for an individual order. A market with no name, a price that is not a finite
-    /// positive number, or an inert `MoveKind::None` sends nothing — a bulk move is the one command
-    /// on this list that can rewrite every order of a side at once, so a malformed one is dropped
-    /// here rather than handed to the core to interpret.
+    /// One press can be bound to several move rows; `moves` is all of them, in the order they
+    /// answer, and the feed sends the first whose leg holds an order to move (see
+    /// `CoreCmd::MoveOrdersToPrice`). The core picks the orders and lays them out according to the
+    /// chosen row's kind; nothing here computes a destination for an individual order. A market
+    /// with no name, a price that is not a finite positive number, or a list left empty once its
+    /// inert `MoveKind::None` rows are dropped sends nothing — a bulk move is the one command on
+    /// this list that can rewrite every order of a side at once, so a malformed one is dropped here
+    /// rather than handed to the core to interpret.
     ///
     /// Args:
     ///     core: Core the market belongs to.
     ///     market: Market whose orders are addressed.
-    ///     sell: Whether the sell half of the book moves, rather than the buy half.
-    ///     kind: Moonbot's "Move kind" — which orders and in what arrangement.
     ///     price: Destination price, taken from where the pointer was.
-    ///     side: Position side the orders belong to.
+    ///     moves: The rows the press claimed, each with its half of the book, Moonbot's
+    ///         "Move kind" and the position side, in dispatch order.
+    ///     hedge_short: Whether the caller reads the market's position as short. Used only for a
+    ///         row bound to both sides on a market that holds its leg on both.
     pub fn move_orders_to_price(
         &self,
         core: CoreId,
         market: String,
-        sell: bool,
-        kind: MoveKind,
         price: f64,
-        side: MoveSide,
+        moves: Vec<MoveGestureCommand>,
+        hedge_short: bool,
     ) -> Result<()> {
-        if market.is_empty() || !price.is_finite() || price <= 0.0 || kind == MoveKind::None {
+        let moves: Vec<MoveGestureCommand> = moves
+            .into_iter()
+            .filter(|command| command.kind != MoveKind::None)
+            .collect();
+        if market.is_empty() || !price.is_finite() || price <= 0.0 || moves.is_empty() {
             return Ok(());
         }
         self.send_core_cmd(
             core,
             CoreCmd::MoveOrdersToPrice {
                 market,
-                sell,
-                kind,
                 price,
-                side,
+                moves,
+                hedge_short,
             },
             "move orders to price",
         )

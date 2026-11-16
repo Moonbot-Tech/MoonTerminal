@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "Тот же жест у: %{rows}. Работаю�
 hotkeys.clash.bare_key: "Одиночная клавиша: сработает при любом её нажатии вне текстового поля — на свой страх и риск."
 hotkeys.clash.wins_key: "Клавиша забирает бинд у: %{rows} — там она не сработает."
 hotkeys.clash.wins_gesture: "Жест забирает бинд у: %{rows} — там он не сработает."
+hotkeys.clash.move_chain: "Тот же жест у: %{rows}. Сработает тот перенос, для которого на рынке есть ордера. Порядок: тейк, вход, затем вторые жесты."
 hotkeys.clash.builtin.esc_close: "встроенное закрытие чарта (Esc)"
 hotkeys.clash.builtin.close_all: "встроенное закрытие всех чартов (Shift+Esc)"
 hotkeys.clash.builtin.reset_windows: "встроенный сброс окон (Ctrl+Shift+F10)"

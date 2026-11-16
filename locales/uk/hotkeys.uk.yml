@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "Той самий жест, що й у %{rows}. �
 hotkeys.clash.bare_key: "Окрема клавіша: спрацьовує на будь-яке її натискання поза текстовим полем — на ваш страх і ризик."
 hotkeys.clash.wins_key: "Клавіша забирає це призначення в %{rows}, і там воно не спрацює."
 hotkeys.clash.wins_gesture: "Жест забирає це призначення в %{rows}, і там воно не спрацює."
+hotkeys.clash.move_chain: "Той самий жест, що й у %{rows}. Спрацює те перенесення, для якого на ринку є ордери. Порядок: тейк, вхід, потім другі жести."
 hotkeys.clash.builtin.esc_close: "вбудоване закриття графіка (Esc)"
 hotkeys.clash.builtin.close_all: "вбудоване закриття всіх графіків (Shift+Esc)"
 hotkeys.clash.builtin.reset_windows: "вбудоване скидання вікон (Ctrl+Shift+F10)"

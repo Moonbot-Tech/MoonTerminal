@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "Same gesture as %{rows}. Both work, each on its o
 hotkeys.clash.bare_key: "A bare key: fires on any press of it outside a text field — at your own risk."
 hotkeys.clash.wins_key: "The key takes this binding from %{rows}, where it will not fire."
 hotkeys.clash.wins_gesture: "The gesture takes this binding from %{rows}, where it will not fire."
+hotkeys.clash.move_chain: "Same gesture as %{rows}. The move that has orders on the market fires. Order: take, entry, then the second gestures."
 hotkeys.clash.builtin.esc_close: "the built-in close chart (Esc)"
 hotkeys.clash.builtin.close_all: "the built-in close all charts (Shift+Esc)"
 hotkeys.clash.builtin.reset_windows: "the built-in window reset (Ctrl+Shift+F10)"

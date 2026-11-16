@@ -386,14 +386,28 @@ pub enum MoveKindSlot {
 }
 
 impl MoveKindSlot {
-    /// The four rows in the order [`HotkeysConfig::resolve_move_gesture`] tries them: the first row
-    /// whose gesture matches a press answers, so a gesture put on two rows resolves the same way
-    /// on every press.
+    /// The four rows in the order the settings page lists them, which is the order of Moonbot's own
+    /// dialog: entry before exit, primary before secondary. NOT the order a press is offered to
+    /// them — that is [`Self::DISPATCH`].
     pub const ALL: [Self; 4] = [
         Self::BuyMove,
         Self::SellMove,
         Self::BuyMove2,
         Self::SellMove2,
+    ];
+
+    /// The four rows in the order a press is offered to them, which is Moonbot's: Move TP, Move
+    /// Open, Move TP #2, Move Open #2.
+    ///
+    /// Exit before entry is what makes one gesture on both rows of a pair useful rather than a
+    /// clash: [`HotkeysConfig::resolve_move_gesture`] lists every claiming row in this order and
+    /// the feed gives the press to the first whose leg holds an order, so the gesture moves the
+    /// take profit while one stands and the entry orders while none does.
+    pub const DISPATCH: [Self; 4] = [
+        Self::SellMove,
+        Self::BuyMove,
+        Self::SellMove2,
+        Self::BuyMove2,
     ];
 
     /// The row for one of Moonbot's four buckets: entry or exit legs, primary or secondary.

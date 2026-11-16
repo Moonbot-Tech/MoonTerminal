@@ -16,6 +16,7 @@ hotkeys.clash.shares_gesture: "%{rows} ile aynı hareket. İkisi de çalışır,
 hotkeys.clash.bare_key: "Çıplak tuş: metin alanı dışında her basışta çalışır — risk size ait."
 hotkeys.clash.wins_key: "Tuş bu atamayı şundan alır: %{rows} — orada çalışmaz."
 hotkeys.clash.wins_gesture: "Hareket bu atamayı şundan alır: %{rows} — orada çalışmaz."
+hotkeys.clash.move_chain: "%{rows} ile aynı hareket. Piyasada emri olan taşıma çalışır. Sıra: kâr al, giriş, sonra ikinci hareketler."
 hotkeys.clash.builtin.esc_close: "yerleşik grafik kapatma (Esc)"
 hotkeys.clash.builtin.close_all: "yerleşik tüm grafikleri kapatma (Shift+Esc)"
 hotkeys.clash.builtin.reset_windows: "yerleşik pencere sıfırlama (Ctrl+Shift+F10)"

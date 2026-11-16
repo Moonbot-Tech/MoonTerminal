@@ -195,7 +195,7 @@ impl HotkeysConfig {
     ///         platform's modifier type, exactly as in [`Self::resolve_move_gesture`].
     ///
     /// The ordered walk the sibling dispatchers make — `resolve_move_gesture` over
-    /// `MoveKindSlot::ALL`, `placement_intent` over `GestureSlot::OWN` — so two halves bound to one
+    /// `MoveKindSlot::DISPATCH`, `placement_intent` over `GestureSlot::OWN` — so two halves bound to one
     /// press resolve in `KeySlot::all` order, the order the settings page lists them and captions
     /// the loser by, rather than by the table's own alphabetical order. A press on a terminal with
     /// nothing bound costs one emptiness check. Only halves `KeySlot::mouse_half` makes are read,

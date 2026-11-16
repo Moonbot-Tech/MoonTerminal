@@ -84,9 +84,10 @@ pub struct MoveGestureCommand {
 /// Which side's orders a bulk move addresses — Moonbot's Long and Short gesture columns.
 ///
 /// `Both` means the press claimed both slots and says nothing about the side by itself, which is
-/// the shipped case: `same_hotkeys_for_move` copies the long gestures onto the short ones. A caller
-/// that can see the market narrows it to the side actually open there before sending — on a hedged
-/// market `Both` would reprice the other position's orders too.
+/// the shipped case: `same_hotkeys_for_move` copies the long gestures onto the short ones. The feed
+/// narrows it before sending, to the side that holds the row's orders (`feed::trade`,
+/// `MovableLegs::side_for`) — on a hedged market `Both` would reprice the other position's orders
+/// too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MoveSide {
     Long,
