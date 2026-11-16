@@ -104,11 +104,11 @@ fn selected_cores_share_one_lift_decision() {
         .1;
     let compact: String = writer.chars().filter(|ch| !ch.is_whitespace()).collect();
     assert!(
-        compact.contains(".all(|&core|blacklist_contains("),
+        compact.contains(".all(|(core,token)|blacklist_contains("),
         "the group writer must decide lift from every target before writing any"
     );
     assert!(
-        compact.contains("write_core_blacklist(b,core,&coin,lift)"),
+        compact.contains("write_core_blacklist(b,*core,token,lift)"),
         "every core must receive the same lift flag"
     );
 }

@@ -27,6 +27,7 @@ use crate::design;
 use crate::display_text::plural_key;
 use crate::strategies::{RevealField, open_goto_field};
 
+use super::names::CoinNames;
 use super::places::{self, CoinPlace};
 use super::{write_core_blacklist, write_strategy_blacklist};
 
@@ -654,7 +655,12 @@ struct ConfirmState {
 
 pub(crate) struct PlacesDialog {
     backend: Entity<Backend>,
+    /// The clicked row's token, which the header and the confirmations print.
     coin: String,
+    /// The coin as each core spells it, resolved when the menu opened. Rows are found, and
+    /// removals written, with the row's own core's token: a core connected later than that falls
+    /// back to the clicked spelling until the dialog is reopened.
+    names: CoinNames,
     hidden: Vec<HiddenPlace>,
     confirm: Option<ConfirmState>,
     /// Temp-ban market resolved to its coin. An empty label, or one equal to the raw market, is absent.
@@ -669,14 +675,15 @@ pub(crate) struct PlacesDialog {
 }
 
 impl PlacesDialog {
-    fn new(backend: Entity<Backend>, coin: String, cx: &mut Context<Self>) -> Self {
+    fn new(backend: Entity<Backend>, names: CoinNames, cx: &mut Context<Self>) -> Self {
         let _store_echo = cx.observe(&backend, |this, _, cx| {
             this.refresh_base_cache(cx);
             cx.notify();
         });
         let mut dialog = Self {
             backend,
-            coin,
+            coin: names.clicked().to_string(),
+            names,
             hidden: Vec::new(),
             confirm: None,
             base_cache: HashMap::new(),
@@ -775,7 +782,7 @@ impl PlacesDialog {
     /// Returns:
     ///     Rows from [`places::find_coin_places`].
     fn places_from_cache(&self, cx: &App) -> Vec<CoinPlace> {
-        let coin = self.coin.clone();
+        let names = &self.names;
         let cache = self.base_cache.clone();
         let backend = self.backend.read(cx);
         let ids: Vec<CoreId> = backend
@@ -788,7 +795,8 @@ impl PlacesDialog {
         let cores = ids
             .iter()
             .filter_map(|id| store.core(*id).map(|data| (*id, data)));
-        places::find_coin_places(cores, &coin, |core, market| {
+        let coin_of = |core| names.coin_or_clicked(core).to_string();
+        places::find_coin_places(cores, coin_of, |core, market| {
             cache.get(&(core, market.to_string())).cloned()
         })
     }
@@ -946,7 +954,7 @@ impl PlacesDialog {
                 if !self.allows(core, cx) {
                     return None;
                 }
-                let coin = self.coin.clone();
+                let coin = self.names.coin_or_clicked(core).to_string();
                 self.backend.update(cx, |backend, bcx| {
                     backend.core_settings_goto =
                         Some(crate::shell::CoreSettingsReveal { core, coin });
@@ -962,12 +970,13 @@ impl PlacesDialog {
                     core,
                     sid,
                     group: group?,
-                    coin: self.coin.clone(),
+                    coin: self.names.coin_or_clicked(core).to_string(),
                 })
             }
             RowAction::RemoveCore { core, name } => {
                 if self.allows(core, cx) {
-                    let coin = self.coin.clone();
+                    // The row was found under this core's own spelling; it is lifted under it too.
+                    let coin = self.names.coin_or_clicked(core).to_string();
                     let outcome = self.backend.update(cx, |backend, _| {
                         write_core_blacklist(backend, core, &coin, true)
                     });
@@ -983,7 +992,7 @@ impl PlacesDialog {
             }
             RowAction::RemoveStrategy { core, sid, name } => {
                 if self.allows(core, cx) {
-                    let coin = self.coin.clone();
+                    let coin = self.names.coin_or_clicked(core).to_string();
                     let outcome = self.backend.update(cx, |backend, _| {
                         write_strategy_blacklist(backend, core, sid, &coin, true)
                     });
@@ -1123,15 +1132,15 @@ impl Render for PlacesDialog {
     }
 }
 
-/// Open the places dialog for `coin`.
+/// Open the places dialog for one coin.
 ///
 /// Args:
 ///     backend: Live session the rows and the removals use.
-///     coin: Coin token, as the caller already resolved it.
+///     names: The coin as every connected core spells it, as the menu resolved it.
 ///     window: Window whose dialog layer hosts the modal.
 ///     cx: Application context.
-pub(crate) fn open(backend: Entity<Backend>, coin: String, window: &mut Window, cx: &mut App) {
-    let state = cx.new(|cx| PlacesDialog::new(backend, coin, cx));
+pub(crate) fn open(backend: Entity<Backend>, names: CoinNames, window: &mut Window, cx: &mut App) {
+    let state = cx.new(|cx| PlacesDialog::new(backend, names, cx));
     window.open_unique_moon_dialog(DIALOG_ID, cx, move |dialog, window, cx| {
         let width = state.read(cx).outer_width(window.viewport_size(), cx);
         places_chrome(dialog, width, cx).content({

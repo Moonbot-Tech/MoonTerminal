@@ -10,6 +10,7 @@ use moon_core::session::CoreId;
 use moon_core::session::store::CoreData;
 use moon_core::symbol::coin_list;
 
+use super::names::CoinNames;
 use crate::Backend;
 
 /// One place a coin is listed on one core.
@@ -47,30 +48,35 @@ impl CoinPlace {
     }
 }
 
-/// Every blacklist place for `coin` across `cores`.
+/// Every blacklist place for one coin across `cores`.
 ///
 /// Cores are emitted in `CoreId` order, whatever order they were passed in. Inside one core the
 /// order is the core list, then temporary bans in the order the core listed them, then strategies
 /// in stored order. A missing core-settings snapshot, a missing strategy field, an unresolvable
-/// temporary market, and a token that only shares a prefix with `coin` produce no row.
+/// temporary market, and a token that only shares a prefix with the coin produce no row.
+///
+/// The coin is asked for PER CORE: exchanges spell one coin differently, and each core's lists hold
+/// its own spelling. Looking for one token everywhere misses the coin on every other exchange.
 ///
 /// Args:
 ///     cores: Connected cores. Each id is paired with that core's account snapshot.
-///     coin: Coin token, never a pair.
+///     coin_of: The token one core's lists hold for the coin, never a pair.
 ///     base_of: Resolves a temporary-ban market to its coin, or `None` when the catalogue cannot
 ///         name that market.
 ///
 /// Returns:
-///     One entry per matching place. Empty when nothing lists `coin`.
+///     One entry per matching place. Empty when nothing lists the coin.
 pub(crate) fn find_coin_places<'a>(
     cores: impl IntoIterator<Item = (CoreId, &'a CoreData)>,
-    coin: &str,
+    coin_of: impl Fn(CoreId) -> String,
     base_of: impl Fn(CoreId, &str) -> Option<String>,
 ) -> Vec<CoinPlace> {
     let mut cores: Vec<(CoreId, &CoreData)> = cores.into_iter().collect();
     cores.sort_by_key(|(id, _)| *id);
     let mut out = Vec::new();
     for (core, data) in cores {
+        let coin = coin_of(core);
+        let coin = coin.as_str();
         if let Some(settings) = data.client_settings.as_ref()
             && coin_list::contains(&settings.blacklist_text, coin)
         {
@@ -126,18 +132,18 @@ fn strategy_lists(row: &StrategyRow, coin: &str) -> bool {
     coin_list::contains(coins_black_list(row), coin)
 }
 
-/// Blacklist places for `coin` on cores that currently have a session.
+/// Blacklist places for one coin on cores that currently have a session.
 ///
 /// The market catalogue is cloned before the store is borrowed. Resolving a temporary-ban market
 /// takes that catalogue's lock, and the place scan holds the store at the same time.
 ///
 /// Args:
 ///     backend: Live session, store, and market catalogue.
-///     coin: Coin token, never a pair.
+///     names: The coin as every connected core spells it.
 ///
 /// Returns:
 ///     Places from [`find_coin_places`], core id order.
-pub(super) fn listed_places(backend: &Backend, coin: &str) -> Vec<CoinPlace> {
+pub(super) fn listed_places(backend: &Backend, names: &CoinNames) -> Vec<CoinPlace> {
     let source = backend.session.market_source();
     let ids: Vec<CoreId> = backend
         .session
@@ -149,7 +155,8 @@ pub(super) fn listed_places(backend: &Backend, coin: &str) -> Vec<CoinPlace> {
     let cores = ids
         .iter()
         .filter_map(|id| store.core(*id).map(|data| (*id, data)));
-    find_coin_places(cores, coin, |core, market| {
+    let coin_of = |core| names.coin_or_clicked(core).to_string();
+    find_coin_places(cores, coin_of, |core, market| {
         let label = source.market_label(core, market).coin;
         if label.is_empty() { None } else { Some(label) }
     })
