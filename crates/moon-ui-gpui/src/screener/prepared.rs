@@ -16,6 +16,11 @@ pub(super) struct Prepared {
     sort_key: String,
     sort_desc: bool,
     sorted: Vec<usize>,
+    /// Whether some row's Listed answer is still on its way (`Listing::Pending`).
+    pub listing_pending: bool,
+    /// When the last of those answers is expected, in Unix milliseconds; set by the publication
+    /// that built this, from the listing book it signed the rows with.
+    pub listing_settles_ms: Option<i64>,
 }
 
 impl Prepared {
@@ -57,6 +62,9 @@ impl Prepared {
         }
         let mut sorted: Vec<_> = (0..entries.len()).collect();
         sort_indices(&entries, &mut sorted, sort_key, sort_desc);
+        let listing_pending = entries
+            .iter()
+            .any(|entry| entry.row.listing == moon_core::market::listing::Listing::Pending);
         Self {
             entries,
             cores,
@@ -67,7 +75,40 @@ impl Prepared {
             sort_key: sort_key.to_string(),
             sort_desc,
             sorted,
+            listing_pending,
+            listing_settles_ms: None,
         }
+    }
+
+    /// Whether the Listed list ALONE hides a row whose answer is still on its way.
+    ///
+    /// What lets an empty table say "Listed is still being collected" and mean it: the row is on
+    /// a core the table shows, passes the Market box and the Vol. minimum, is waiting, and is
+    /// kept out by nothing but the ticks. A table emptied by a text that matches nothing, or by a
+    /// selection that admits waiting rows and found none, is simply empty.
+    ///
+    /// Args:
+    ///     ranks: Per core of the publication, its display rank, or `None` when it is not shown.
+    ///     coin: The Market box's query, carrying the Listed list's ticks.
+    ///     min_vol: The Vol. minimum; zero or less for none.
+    pub fn hides_waiting_rows(
+        &self,
+        ranks: &[Option<usize>],
+        coin: &super::view::CoinQuery,
+        min_vol: f64,
+    ) -> bool {
+        use moon_core::market::listing::Listing;
+        self.listing_pending
+            && self
+                .entries
+                .iter()
+                .zip(&self.slots)
+                .any(|(entry, &(core, _))| {
+                    ranks[core].is_some()
+                        && entry.row.listing == Listing::Pending
+                        && !coin.admits_listing(entry.row.listing)
+                        && passes_text_and_volume(entry, coin, min_vol)
+                })
     }
 
     /// Apply the latest controls immediately, sorting indices rather than moving market rows.
@@ -112,10 +153,8 @@ impl Prepared {
                     let entry = &self.entries[index];
                     let market = self.slots[index].1;
                     total[market] = true;
-                    if (!coin.is_empty() && !super::view::matches_coin_filter(entry, coin))
+                    if !passes_text_and_volume(entry, coin, min_vol)
                         || !coin.admits_listing(entry.row.listing)
-                        || (min_vol > 0.0 && entry.row.vol_24h < min_vol)
-                        || (min_vol > 0.0 && entry.row.vol_24h.is_nan())
                     {
                         continue;
                     }
@@ -144,6 +183,14 @@ impl Prepared {
             shown.into_iter().filter(|&v| v).count(),
         )
     }
+}
+
+/// Whether a row passes the Market box and the Vol. minimum: every row filter but the Listed
+/// list, which its two callers ask about separately.
+fn passes_text_and_volume(entry: &Entry, coin: &super::view::CoinQuery, min_vol: f64) -> bool {
+    (coin.is_empty() || super::view::matches_coin_filter(entry, coin))
+        && !(min_vol > 0.0 && entry.row.vol_24h < min_vol)
+        && !(min_vol > 0.0 && entry.row.vol_24h.is_nan())
 }
 
 #[cfg(test)]

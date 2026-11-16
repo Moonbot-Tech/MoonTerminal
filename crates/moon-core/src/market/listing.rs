@@ -1,6 +1,8 @@
 //! Whether a coin trades on BOTH market kinds of one exchange, or only on the kind a row is on.
 //!
-//! The Screener prints it per market: `Both`, `Spot Only`, `Futures Only`, or unknown. The words
+//! The Screener prints it per market: `Both`, `Spot Only`, `Futures Only`, or unknown — and, for
+//! the first minute after a donor connects, a wait in place of the answers it cannot give yet
+//! ([`Listing::Pending`]). The words
 //! are Moonbot's — its `ListedType` strategy filter uses the same four — but the answer here is
 //! assembled in the terminal, because a core only knows the exchange it is connected to.
 //!
@@ -62,6 +64,12 @@ pub enum Listing {
     /// or no source for the other kind at all.
     #[default]
     Unknown,
+    /// Not decided YET: a donor that will answer for the other kind has not been receiving long
+    /// enough for its silence to mean anything. It turns into one of the other answers when that
+    /// warm-up ends — for a donor that has just connected, [`DONOR_WARMUP_MS`] after its
+    /// connection; for a venue an old donor only now starts to carry, that long after it began.
+    /// The Screener draws it as a wait, not as the question mark of a row nothing can answer for.
+    Pending,
     /// On both the spot and the derivatives market of this exchange.
     Both,
     /// On this exchange's spot market only.
@@ -105,6 +113,15 @@ impl VenueSet {
         let mut out = *self;
         for (mine, theirs) in out.0.iter_mut().zip(other.0) {
             *mine &= theirs;
+        }
+        out
+    }
+
+    /// The codes of this set that `other` does not hold.
+    pub fn without(&self, other: &Self) -> Self {
+        let mut out = *self;
+        for (mine, theirs) in out.0.iter_mut().zip(other.0) {
+            *mine &= !theirs;
         }
         out
     }
@@ -236,6 +253,83 @@ pub struct ListingBook {
     pub seen: VenueSet,
     /// Identities of TRADING markets per brand and kind, from the catalogs of connected cores.
     pub catalogs: HashMap<(Brand, bool), HashSet<String>>,
+    /// What each exchange's OWN donors are still warming up on: codes carried but not yet for
+    /// [`DONOR_WARMUP_MS`], or named by the mask of a client too young to have filled them.
+    ///
+    /// A row of that exchange whose other kind has a code here is not unknown, it is undecided:
+    /// see [`Listing::Pending`]. Kept per exchange so that one core reconnecting does not turn
+    /// the settled question marks of every other exchange into waits: a market its own,
+    /// long warmed-up donor maps to nothing stays unknown whoever else is warming up.
+    pub warming: HashMap<ExchangeId, VenueSet>,
+    /// The codes being warmed up on by any donor that no donor answers for yet.
+    ///
+    /// What a row waits on for the codes its own exchange's donors do not carry
+    /// ([`Self::carried_by`]) — all of them, on an exchange with no donor: such a row is answered
+    /// through its coin by whichever donor does carry the code.
+    pub warming_elsewhere: VenueSet,
+    /// The codes each exchange's own donors carry, warmed up or not.
+    pub carried_by: HashMap<ExchangeId, VenueSet>,
+    /// When the last warm-up this book knows of ends, in Unix milliseconds.
+    ///
+    /// An upper bound on the wait as this book sees it; a later book may know of another — a
+    /// donor that connected since, a venue that only then began to be carried.
+    pub last_settles_ms: Option<i64>,
+    /// Whether this book is about to be overtaken: a warm-up is running, or a client is still
+    /// younger than the warm-up and filling. Such a book is replaced every few seconds rather
+    /// than once a period, so what arrives meanwhile is on screen as it arrives.
+    pub settling: bool,
+}
+
+/// One answer a donor still owes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Wait {
+    /// The donor's own exchange.
+    pub exchange: ExchangeId,
+    /// The platform code it is warming up on.
+    pub code: u8,
+    /// When its silence about that code starts to count, in Unix milliseconds.
+    pub settles_ms: i64,
+    /// Whether the code is only PROMISED: named by the mask of a young client that does not
+    /// carry it yet, as against carried and waiting out its clock.
+    pub promised: bool,
+}
+
+impl ListingBook {
+    /// Record the answers donors still owe, leaving out the ones that are not really owed.
+    ///
+    /// Args:
+    ///     waits: Every warm-up the build found running.
+    ///     settled: The codes some donor already answers for.
+    ///     refused: The codes a client connected for the whole warm-up names in its mask and
+    ///         does not carry.
+    ///
+    /// Call it once [`Self::seen`] is complete: a refusal means "the stream does not send this"
+    /// only for a code nobody carries.
+    pub fn note_waits(&mut self, waits: &[Wait], settled: &VenueSet, refused: &VenueSet) {
+        for wait in waits {
+            // A mask's word alone, against a long-connected client that asked for the same code
+            // and never got it, with no donor anywhere carrying it: a promise the stream will
+            // not keep. Where somebody does carry it the refusal says only that the old client
+            // shares few coins with that venue, and the promise stands.
+            if wait.promised && refused.contains(wait.code) && !self.seen.contains(wait.code) {
+                continue;
+            }
+            self.warming
+                .entry(wait.exchange)
+                .or_default()
+                .insert(wait.code);
+            // An exchange with no donor is answered by anyone who carries the code; where
+            // somebody already does, this donor's warm-up holds nothing back from it.
+            if !settled.contains(wait.code) {
+                self.warming_elsewhere.insert(wait.code);
+            }
+            self.last_settles_ms = Some(
+                self.last_settles_ms
+                    .map_or(wait.settles_ms, |at| at.max(wait.settles_ms)),
+            );
+            self.settling = true;
+        }
+    }
 }
 
 /// The key two spellings of one coin share in the book: the identity without a contract tail.
@@ -269,6 +363,10 @@ pub struct Signer<'a> {
     other_catalog: Option<&'a HashSet<String>>,
     /// Whether `futures_type` means a cross-listing on this exchange.
     flag_counts: bool,
+    /// Whether a donor of this exchange is still warming up on a code of the other kind.
+    warming_own: bool,
+    /// Whether some other donor is, on a code this exchange's own donors do not carry.
+    warming_elsewhere: bool,
 }
 
 impl ListingBook {
@@ -290,15 +388,24 @@ impl ListingBook {
         let spot = venue.is_spot();
         let other = other_side(venue.brand, spot);
         let markets = self.by_market.get(&exchange);
+        let has_donor = markets.is_some_and(|found| found.len() >= MIN_CARRIED_MARKETS as usize);
+        // What this exchange's rows wait on: its own donors' warm-ups, and anyone's for the codes
+        // its own donors do not carry — the coin's reading across other donors is a witness too
+        // (see `Signer::sign`), and for an exchange with no donor it is the only one.
+        let own_carried = self.carried_by.get(&exchange).copied().unwrap_or_default();
+        let own_warming = self.warming.get(&exchange).copied().unwrap_or_default();
+        let elsewhere = self.warming_elsewhere.without(&own_carried);
         Some(Signer {
             spot,
             other,
             answerable: other.intersection(&self.seen),
             markets,
-            has_donor: markets.is_some_and(|found| found.len() >= MIN_CARRIED_MARKETS as usize),
+            has_donor,
             by_identity: &self.by_identity,
             other_catalog: self.catalogs.get(&(venue.brand, !spot)),
             flag_counts: futures_flag_means_listing(exchange.code),
+            warming_own: other.intersects(&own_warming),
+            warming_elsewhere: other.intersects(&elsewhere),
         })
     }
 
@@ -308,7 +415,8 @@ impl ListingBook {
     ///     row: The row's exchange, market and coin.
     ///
     /// Returns:
-    ///     Where the coin is listed, or [`Listing::Unknown`] when nothing answers.
+    ///     Where the coin is listed; [`Listing::Pending`] while the answer is on its way, and
+    ///     [`Listing::Unknown`] when nothing answers.
     pub fn sign(&self, row: &RowFacts<'_>) -> Listing {
         match self.signer(row.venue, row.exchange) {
             Some(signer) => signer.sign(row.market, row.identity, row.futures_flag),
@@ -326,7 +434,8 @@ impl Signer<'_> {
     ///     futures_flag: Whether the catalog's `futures_type` is set on the market.
     ///
     /// Returns:
-    ///     Where the coin is listed, or [`Listing::Unknown`] when nothing answers.
+    ///     Where the coin is listed; [`Listing::Pending`] while the answer is on its way, and
+    ///     [`Listing::Unknown`] when nothing answers.
     pub fn sign(&self, market: &str, identity: &str, futures_flag: bool) -> Listing {
         let key = identity_key(identity);
         let direct = self.markets.and_then(|markets| markets.get(market));
@@ -347,33 +456,43 @@ impl Signer<'_> {
             return Listing::Both;
         }
 
-        // The other kind's codes the stream carries at all. With none, its silence is structural
-        // and says nothing about this coin.
-        if self.answerable.is_empty() {
-            return Listing::Unknown;
-        }
-        // Who may say NO. Where the exchange has a donor of its own, the stream has to know THIS
-        // market: one with no price from anywhere on its own donor is one the server maps to
-        // nothing — a Bybit USDC perpetual, a Hyperliquid `kPEPE` — and that is unknown, not
-        // "listed nowhere else", however many namesakes other donors hold (`1000CAT` and `CAT`
-        // are both `CAT` on Binance).
+        // Who may say NO. Three conditions, all of them:
+        //
+        // - the stream carries some code of the other kind at all. With none, its silence is
+        //   structural and says nothing about this coin;
+        // - where the exchange has a donor of its own, the stream knows THIS market: one with no
+        //   price from anywhere on its own donor is one the server maps to nothing — a Bybit USDC
+        //   perpetual, a Hyperliquid `kPEPE` — and that is unknown, not "listed nowhere else",
+        //   however many namesakes other donors hold (`1000CAT` and `CAT` are both `CAT` on
+        //   Binance);
+        // - a witness: the market's own reading, or the coin's across the other donors — the
+        //   row's own donor may not carry the other kind's code at all, or may still be warming
+        //   up, and it is the same coin over there. An exchange with no donor has only the coin's
+        //   reading. Either way the witness needs a price from SOMEWHERE and a warmed-up donor
+        //   carrying every answerable code of the other kind.
         let market_known = direct.is_some_and(|found| !found.quoted.is_empty());
-        if self.has_donor && !market_known {
-            return Listing::Unknown;
-        }
-        // Past that, the market's own reading answers and so does the coin's across the other
-        // donors: the row's own donor may not carry the other kind's code at all, or may still be
-        // warming up, and it is the same coin over there. An exchange with no donor has only the
-        // coin's reading. Either way the witness needs a price from SOMEWHERE and a warmed-up
-        // donor carrying every answerable code of the other kind.
-        let only = [direct, by_coin]
-            .iter()
-            .flatten()
-            .any(|found| !found.quoted.is_empty() && self.answerable.is_subset(&found.asked));
+        let unmapped = self.has_donor && !market_known;
+        let only = !self.answerable.is_empty()
+            && !unmapped
+            && [direct, by_coin]
+                .iter()
+                .flatten()
+                .any(|found| !found.quoted.is_empty() && self.answerable.is_subset(&found.asked));
         match (only, self.spot) {
-            (false, _) => Listing::Unknown,
             (true, true) => Listing::SpotOnly,
             (true, false) => Listing::FuturesOnly,
+            // No NO yet, and a donor of the other kind's code is still inside its warm-up: the
+            // reasons above may be about to change, so the row is undecided, not unknown. Its
+            // OWN exchange's donor warming up can change all of them — the code gets carried,
+            // the market gets its first price, the witness warms up. Another exchange's donor
+            // can only become the witness through the coin, which a market its own donor maps
+            // to nothing never gets: that one is unknown already, and waiting would end where
+            // it started. Asked last on purpose: a warmed-up witness answers even while another
+            // donor warms up.
+            (false, _) if self.warming_own || (!unmapped && self.warming_elsewhere) => {
+                Listing::Pending
+            }
+            (false, _) => Listing::Unknown,
         }
     }
 }

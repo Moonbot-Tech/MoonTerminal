@@ -105,6 +105,9 @@ pub struct ScreenerView {
     /// on screen": rows of a core the preset hides are in the publication too, and counting them
     /// would blame the filters for a visible core that simply has no data yet.
     has_displayed_rows: bool,
+    /// Whether the table is empty because the Listed list hides rows whose answer is still on
+    /// its way; see `Prepared::hides_waiting_rows`.
+    listed_waiting: bool,
     /// Case-insensitive market or coin filter; a trailing space selects an exact ticker.
     coin_input: Entity<MoonInputState>,
     /// Minimum 24-hour volume filter, accepting `k` and `m` suffixes.
@@ -305,6 +308,7 @@ impl ScreenerView {
             scope_marker: None,
             sessions_total: 0,
             has_displayed_rows: false,
+            listed_waiting: false,
             coin_input,
             dvol_input,
             sort_key: restored_sort.0,
@@ -406,9 +410,12 @@ impl ScreenerView {
                             entry.venue = venue.clone();
                         }
                     }
-                    std::sync::Arc::new(super::prepared::Prepared::new(
-                        entries, &sort_key, sort_desc,
-                    ))
+                    let mut prepared =
+                        super::prepared::Prepared::new(entries, &sort_key, sort_desc);
+                    // Read after the rows were signed: the kept book is the one they were signed
+                    // with, or a newer one, and either says when the waiting rows settle.
+                    prepared.listing_settles_ms = source.listing_settles_ms();
+                    std::sync::Arc::new(prepared)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -480,6 +487,8 @@ impl ScreenerView {
         let (rows, total, shown) =
             self.prepared
                 .select(&allowed, &coin, min_vol, &self.sort_key, self.sort_desc);
+        self.listed_waiting =
+            rows.is_empty() && self.prepared.hides_waiting_rows(&allowed, &coin, min_vol);
         self.rows = Rc::new(rows);
         self.total = total;
         self.shown = shown;
@@ -700,11 +709,15 @@ impl ScreenerView {
             // the preset, or connected with no book yet, must not tell the user to go connect
             // something that is already connected. And when rows WERE published and the controls
             // of the bottom bar left none of them — the Type and Listed lists, a text or volume
-            // filter — the table says exactly that instead of claiming no data arrived.
+            // filter — the table says exactly that instead of claiming no data arrived. Unless
+            // the Listed list is what emptied it and its answers are still on their way: then
+            // "no rows match" would be false in a minute, and the table says how long instead.
             scope_marker::scope_empty_text(
                 self.scope_marker.as_ref(),
                 if self.sessions_total == 0 {
                     t!("screener.empty").to_string()
+                } else if let Some(seconds) = self.listed_wait_seconds() {
+                    t!("screener.listed_collecting", n = seconds).to_string()
                 } else if self.has_displayed_rows {
                     t!("screener.empty_filtered").to_string()
                 } else {
@@ -835,17 +848,33 @@ impl ScreenerView {
         )
     }
 
+    /// Seconds until the Listed answers can exist, while the table is empty because the Listed
+    /// list hides rows that are still waiting for theirs; `None` otherwise.
+    ///
+    /// A list narrowed to `Futures Only` in the first minute after the cores connect has nothing
+    /// to show yet, and that is a wait, not "no such coins". Whether it IS that case is decided
+    /// with the rows, in [`Self::filter_cached`]: a table emptied by anything else is just empty.
+    fn listed_wait_seconds(&self) -> Option<i64> {
+        self.listed_waiting.then(|| {
+            collecting_seconds(
+                self.prepared.listing_settles_ms,
+                moon_core::util::time::now_unix_ms_i64(),
+            )
+        })
+    }
+
     /// Build the Listed list: a tick per answer of the Listed column.
     ///
     /// "Only the one-sided coins" is two ticks here, `Spot Only` and `Futures Only`; unknown is a
     /// choice like the others, so the rows nothing could answer for can be looked at on their own.
+    /// A row whose answer is still on its way has no choice of its own and goes with unknown.
     fn listed_menu(&self, cx: &Context<Self>) -> impl IntoElement {
         let choices = LISTED_CHOICES.map(|listing| {
             let label = match listing {
                 Listing::Both => t!("screener.listed_both").to_string(),
                 Listing::SpotOnly => t!("screener.listed_spot_only").to_string(),
                 Listing::FuturesOnly => t!("screener.listed_futures_only").to_string(),
-                Listing::Unknown => UNKNOWN_CHOICE.to_string(),
+                Listing::Unknown | Listing::Pending => UNKNOWN_CHOICE.to_string(),
             };
             (listing, label)
         });
@@ -1192,13 +1221,31 @@ where
 }
 
 /// The bit one Listed answer occupies in [`CoinQuery`]'s mask.
+///
+/// An answer still on its way shares the bit of unknown: neither is an answer, the list has one
+/// tick for "no answer", and a waiting row must not vanish from under it for a minute.
 fn listing_bit(listing: Listing) -> u8 {
     match listing {
         Listing::Both => 1,
         Listing::SpotOnly => 2,
         Listing::FuturesOnly => 4,
-        Listing::Unknown => 8,
+        Listing::Unknown | Listing::Pending => 8,
     }
+}
+
+/// Whole seconds left until the waiting Listed answers settle, never under one.
+///
+/// The line this feeds is drawn only while some row is still waiting, and the book that settles
+/// them lands a few seconds after the moment it names: "0 s left" over a table still waiting
+/// would be wrong about exactly those seconds.
+///
+/// Args:
+///     settles_ms: When the last answer is expected, in Unix milliseconds.
+///     now_ms: Current Unix time in milliseconds, on the same clock.
+pub(super) fn collecting_seconds(settles_ms: Option<i64>, now_ms: i64) -> i64 {
+    settles_ms.map_or(1, |settles| {
+        (settles.saturating_sub(now_ms).saturating_add(999) / 1000).max(1)
+    })
 }
 
 /// The market kind of the venue a core is connected to, or `None` for one this build cannot name.

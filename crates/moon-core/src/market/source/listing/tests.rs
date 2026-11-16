@@ -113,6 +113,29 @@ fn a_donor_connected_before_the_first_look_is_already_warm() {
     assert_eq!(warm_origin(now, false, Some(-9_000)), now);
 }
 
+/// A young client's venue that crosses the carried threshold a build later is still counted from
+/// the client's connection, not from that build.
+///
+/// Breakage (the developer's bench, 2026-11-16): starting it at the build that first sees it
+/// carried. A terminal started with the Screener open reads every donor within seconds; whatever
+/// venue had fewer than ten markets at that first look began its minute at the second build, half
+/// a minute in, and the first one-sided answer came a minute and a half to two minutes after the
+/// start instead of one.
+#[test]
+fn a_young_donors_late_venue_counts_from_its_connection() {
+    let now = 10_000_000;
+    // Read a build ago, twenty seconds into its connection: still filling since it connected.
+    assert_eq!(warm_origin(now, true, Some(20_000)), now - 20_000);
+    // To the last millisecond of the warm-up.
+    assert_eq!(
+        warm_origin(now, true, Some(DONOR_WARMUP_MS - 1)),
+        now - (DONOR_WARMUP_MS - 1)
+    );
+    // Connected for the whole warm-up already: a venue turning up now is a mask change, and
+    // starts now.
+    assert_eq!(warm_origin(now, true, Some(DONOR_WARMUP_MS)), now);
+}
+
 /// Which origin a hold first seen on this build gets is decided by what the previous builds
 /// read, not by whether they left a clock.
 ///
@@ -192,4 +215,95 @@ fn a_core_forgotten_during_a_build_stays_forgotten() {
     // The next build, with no change during it, is kept as fresh.
     cache.store(1_000_001, book(), WarmClocks::default());
     assert!(!builds(&cache.claim(1_000_002)));
+}
+
+/// A book in which something is still settling is replaced every few seconds; a settled one
+/// once a period.
+///
+/// Breakage: one period for both. The minute a donor owes ends a few seconds after some build,
+/// and the answer then waits out up to half a minute more of a book that could already be
+/// replaced — the "minute" on screen runs to a minute and a half.
+#[test]
+fn a_settling_book_is_replaced_every_few_seconds() {
+    let settling = || {
+        Arc::new(ListingBook {
+            settling: true,
+            ..ListingBook::default()
+        })
+    };
+    let mut cache = ListingCache::default();
+    assert!(builds(&cache.claim(1_000_000)));
+    cache.store(1_000_000, settling(), WarmClocks::default());
+    assert!(!builds(&cache.claim(1_000_000 + MIN_REBUILD_MS - 1)));
+    assert!(builds(&cache.claim(1_000_000 + MIN_REBUILD_MS)));
+    // Nothing settling any more: the plain period again.
+    cache.store(1_005_000, book(), WarmClocks::default());
+    assert!(!builds(&cache.claim(1_005_000 + BOOK_TTL_MS - 1)));
+    assert!(builds(&cache.claim(1_005_000 + BOOK_TTL_MS)));
+}
+
+/// A client installed, replaced or given its first market list since the kept book was built
+/// makes that book stale at once — also when it happens while the next one is being built.
+///
+/// Breakage: finding out at the period. A donor that connects two seconds after a build stayed
+/// invisible for the remaining twenty-eight: its exchange read "nothing answers" and a list
+/// narrowed to `Spot Only` said "no rows match", with the answer a minute away.
+#[test]
+fn a_client_that_changed_makes_the_kept_book_stale() {
+    let before: Vec<ClientRevision> = vec![(7, Some((1, 1))), (8, None)];
+    let connected: Vec<ClientRevision> = vec![(7, Some((1, 1))), (8, Some((1, 0)))];
+    let listed: Vec<ClientRevision> = vec![(7, Some((1, 1))), (8, Some((1, 1)))];
+    let mut cache = ListingCache::default();
+    cache.note_revisions(before.clone());
+    assert!(builds(&cache.claim(1_000_000)));
+    cache.store(1_000_000, book(), WarmClocks::default());
+    cache.note_revisions(before);
+    assert!(!builds(&cache.claim(1_000_001)), "the same clients");
+
+    cache.note_revisions(connected);
+    assert!(builds(&cache.claim(1_000_002)), "core 8 connected");
+    // Its first market list lands WHILE that build runs: the build read it without one.
+    cache.note_revisions(listed.clone());
+    cache.store(1_000_002, book(), WarmClocks::default());
+    assert!(
+        builds(&cache.claim(1_000_003)),
+        "built from the old clients"
+    );
+    cache.store(1_000_003, book(), WarmClocks::default());
+    cache.note_revisions(listed);
+    assert!(!builds(&cache.claim(1_000_004)));
+}
+
+/// A venue counts as carried from ten markets up, and once counted stays so down to half that.
+///
+/// Breakage, either way. The bare threshold: a thin venue drifting between nine and eleven
+/// markets lost its clock at every dip and started a fresh warm-up at every rise — its rows
+/// blinked between an answer and a wait for as long as it hovered. No floor at all: a stream
+/// that stopped keeps its last prices for ten minutes, and the venue would go on answering for
+/// markets whose own price had long expired, down to the last one.
+#[test]
+fn a_venue_once_carried_stays_carried_down_to_half_the_threshold() {
+    assert!(!carries(MIN_CARRIED_MARKETS - 1, false));
+    assert!(carries(MIN_CARRIED_MARKETS, false));
+    assert!(carries(MIN_CARRIED_MARKETS - 1, true));
+    assert!(carries(MIN_CARRIED_MARKETS / 2, true));
+    assert!(!carries(MIN_CARRIED_MARKETS / 2 - 1, true));
+}
+
+/// A client is young for exactly the warm-up after its first market list, and one with no list
+/// is not promised anything.
+///
+/// Breakage: treating a client with no list as young. Its mask would keep every venue it names
+/// "on its way" for as long as it stays that way, and the rows waiting on it would never settle
+/// into an answer or a question mark.
+#[test]
+fn a_client_is_young_until_the_warm_up_after_its_first_list() {
+    let now = 10_000_000;
+    assert_eq!(
+        young_until(now, Some(20_000)),
+        Some(now + DONOR_WARMUP_MS - 20_000)
+    );
+    assert_eq!(young_until(now, Some(DONOR_WARMUP_MS - 1)), Some(now + 1));
+    assert_eq!(young_until(now, Some(DONOR_WARMUP_MS)), None);
+    assert_eq!(young_until(now, None), None);
 }

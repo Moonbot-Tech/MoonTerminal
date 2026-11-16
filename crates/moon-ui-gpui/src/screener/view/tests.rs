@@ -552,3 +552,19 @@ fn the_type_list_admits_a_kind_only_by_its_own_tick() {
     ));
     assert!(!super::type_admits(&derivatives, None));
 }
+
+/// The "still being collected" line counts whole seconds up, and never reaches zero.
+///
+/// Mutation: round down, or let it reach zero. The line is drawn while a row is still waiting,
+/// and the book that settles it lands a few seconds after the moment the count runs out — the
+/// table would read "0 s left" for those seconds, over rows that have not arrived.
+#[test]
+fn the_collecting_line_counts_whole_seconds_and_never_reads_zero() {
+    let now = 5_000_000;
+    assert_eq!(super::collecting_seconds(Some(now + 42_000), now), 42);
+    assert_eq!(super::collecting_seconds(Some(now + 41_001), now), 42);
+    assert_eq!(super::collecting_seconds(Some(now + 1), now), 1);
+    assert_eq!(super::collecting_seconds(Some(now), now), 1);
+    assert_eq!(super::collecting_seconds(Some(now - 4_000), now), 1);
+    assert_eq!(super::collecting_seconds(None, now), 1);
+}

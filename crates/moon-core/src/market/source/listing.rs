@@ -10,7 +10,10 @@
 //! - it is kept for [`BOOK_TTL_MS`]. A listing changes when an exchange lists a coin, which is
 //!   days apart; half a minute is how often it is worth paying for. The donor warm-up is carried
 //!   from book to book, but a donor first seen is aged by its own connection ([`warm_origin`]),
-//!   not by when this file first looked;
+//!   not by when this file first looked. While anything is still settling the book is replaced
+//!   every few seconds instead ([`MIN_REBUILD_MS`]), and at once when a client connects or gets
+//!   its first market list, so the answer waited for arrives with the minute and not up to a
+//!   period after it;
 //! - one build at a time: a caller that finds the book expired while another is building it gets
 //!   the old one rather than reading every core a second time in parallel;
 //! - nothing is built while no Screener is open, because nothing asks.
@@ -25,7 +28,7 @@ use std::sync::Arc;
 use crate::market::ScreenerRow;
 use crate::market::listing::{
     DONOR_WARMUP_MS, Evidence, LISTING_MAX_AGE_MS, ListingBook, MIN_CARRIED_MARKETS, VenueSet,
-    identity_key,
+    Wait, identity_key,
 };
 use crate::session::CoreId;
 
@@ -34,6 +37,15 @@ use super::{MarketDataSource, MarketLabel};
 
 /// How long one book serves before the cores are read again.
 const BOOK_TTL_MS: i64 = 30_000;
+
+/// How long a book serves while something in it is still settling.
+///
+/// A donor's minute ends a few seconds after some build, and its answer must not then sit out
+/// the rest of [`BOOK_TTL_MS`] as well; nor should the prices a just-connected donor is filling
+/// with wait half a minute to show. So while a warm-up runs, or a client is younger than the
+/// warm-up, the book is replaced this often — a handful of extra builds for the minute it lasts,
+/// against one every period afterwards.
+const MIN_REBUILD_MS: i64 = 5_000;
 
 /// Oldest previous book whose warm-up clocks are still trusted.
 ///
@@ -53,11 +65,17 @@ const WARM_CARRY_MS: i64 = BOOK_TTL_MS * 3;
 /// build has read is therefore aged by its own record: how long ago it first held a market
 /// list, before which no per-market price can have arrived.
 ///
-/// A client the builds HAVE been reading gets no such credit for a venue that turns up now: a
-/// build ago it was not carrying it, so its slots for that venue are filling at this moment,
-/// whatever the connection's age. What this cannot see is a venue switched on in a donor's mask
-/// while nobody watched and looked at within the few seconds its slots take to fill; that reads
-/// warm early, for one book period at most.
+/// A client the builds HAVE been reading, and which has been connected for the whole warm-up
+/// already, gets no such credit for a venue that turns up now: a build ago it was not carrying
+/// it, so that venue was switched on in its mask and its slots are filling at this moment,
+/// whatever the connection's age. A client still younger than the warm-up is different — every
+/// venue of it has been filling since it connected, and the one that crosses the carried
+/// threshold a build later is not a new stream. Counting that one from the build would add up to
+/// a book period to the minute, on exactly the start the user is watching.
+///
+/// What this cannot see is a venue switched on in a donor's mask while nobody watched and looked
+/// at within the few seconds its slots take to fill; that reads warm early, for one book period
+/// at most.
 ///
 /// Args:
 ///     now_ms: Current unix time in milliseconds.
@@ -68,15 +86,51 @@ const WARM_CARRY_MS: i64 = BOOK_TTL_MS * 3;
 /// Returns:
 ///     The start of the warm-up clock, never ahead of `now_ms`.
 fn warm_origin(now_ms: i64, read_before: bool, catalog_age_ms: Option<i64>) -> i64 {
-    match (read_before, catalog_age_ms) {
-        (false, Some(age)) => now_ms.saturating_sub(age.max(0)),
+    match catalog_age_ms {
+        Some(age) if !read_before || age < DONOR_WARMUP_MS => now_ms.saturating_sub(age.max(0)),
         _ => now_ms,
     }
+}
+
+/// When a client stops being young: [`DONOR_WARMUP_MS`] after it first held a market list.
+///
+/// Args:
+///     now_ms: Current unix time in milliseconds.
+///     catalog_age_ms: How long ago the client first applied a market list.
+///
+/// Returns:
+///     That moment while it is still ahead; `None` for a client past it, or with no list at all —
+///     which has no connection to count from, and is not promised an answer.
+fn young_until(now_ms: i64, catalog_age_ms: Option<i64>) -> Option<i64> {
+    let until = warm_origin(now_ms, false, catalog_age_ms).saturating_add(DONOR_WARMUP_MS);
+    (catalog_age_ms.is_some() && until > now_ms).then_some(until)
 }
 
 /// Whether a hold counted from `since` has lasted [`DONOR_WARMUP_MS`].
 fn warmed_up(now_ms: i64, since: i64) -> bool {
     now_ms.saturating_sub(since) >= DONOR_WARMUP_MS
+}
+
+/// One core's client as the cache compares it between builds: the core, and its slot's epoch and
+/// catalog version — `None` while the slot is empty.
+type ClientRevision = (CoreId, Option<(u64, u64)>);
+
+/// Whether a donor carries a venue: on enough markets to be a stream it receives, or — once it
+/// has been seen so — on at least half as many.
+///
+/// The second half is what keeps a thin venue from flickering. A deployer the stream quotes on
+/// twenty markets of a donor drifts under ten as its prices age out and back over as they tick;
+/// dropping its clock at each dip restarted its warm-up, took the one-sided answers of every row
+/// that needs it back for a minute, and repeated for as long as it hovered. Half, and not "any
+/// price at all": a stream that has stopped keeps its last prices for ten minutes, and a venue
+/// held on to down to the very last of them would go on answering for markets whose own price
+/// had long expired.
+///
+/// Args:
+///     markets: How many of the donor's markets hold a fresh price from the venue.
+///     had_clock: Whether the previous build counted the venue as carried.
+fn carries(markets: u32, had_clock: bool) -> bool {
+    markets >= MIN_CARRIED_MARKETS || (had_clock && markets >= MIN_CARRIED_MARKETS / 2)
 }
 
 /// One donor's hold on one venue: the core, the client it was read through, and the venue code.
@@ -140,6 +194,13 @@ pub(super) struct ListingCache {
     /// OTHER cores' warm-up clocks are carried, and losing it would restart every donor's
     /// warm-up each time any one core reconnects.
     expired: bool,
+    /// When the kept book ages out ahead of [`BOOK_TTL_MS`]: [`MIN_REBUILD_MS`] after a build
+    /// that found something still settling ([`ListingBook::settling`]). `None` otherwise.
+    due_ms: Option<i64>,
+    /// The clients the kept book was built from; see [`Self::note_revisions`].
+    revisions: Vec<ClientRevision>,
+    /// Whether the clients changed while a build was in flight.
+    stale_mid_build: bool,
     book: Arc<ListingBook>,
     /// The donors' warm-up clocks and the clients read, as the last build left them.
     warm: WarmClocks,
@@ -170,7 +231,9 @@ impl ListingCache {
     ///     to avoid that would read every core twice at the moment the window opens.
     fn claim(&mut self, now_ms: i64) -> Claim {
         let age = self.built_ms.map(|built| now_ms - built);
-        let fresh = !self.expired && age.is_some_and(|age| (0..BOOK_TTL_MS).contains(&age));
+        let fresh = !self.expired
+            && age.is_some_and(|age| (0..BOOK_TTL_MS).contains(&age))
+            && self.due_ms.is_none_or(|due| now_ms < due);
         if fresh || self.building {
             return Claim::Serve(self.book.clone());
         }
@@ -193,16 +256,37 @@ impl ListingCache {
             warm.forget_core(*core);
         }
         self.building = false;
-        self.expired = !forgotten.is_empty();
+        self.expired = !forgotten.is_empty() || std::mem::take(&mut self.stale_mid_build);
         self.built_ms = Some(now_ms);
+        self.due_ms = book.settling.then(|| now_ms.saturating_add(MIN_REBUILD_MS));
         self.book = book;
         self.warm = warm;
+    }
+
+    /// Compare the clients as they are now with the ones the kept book was built from.
+    ///
+    /// A client installed, replaced, or holding its first market list since then is one the book
+    /// has not read, and the book is stale whatever its age: a donor that connects two seconds
+    /// after a build would otherwise stay invisible for the rest of the period, its exchange
+    /// reading "nothing answers" while the answer is a minute away.
+    ///
+    /// Args:
+    ///     revisions: Every core's client epoch and catalog version, in a stable order.
+    fn note_revisions(&mut self, revisions: Vec<ClientRevision>) {
+        if self.revisions != revisions {
+            self.revisions = revisions;
+            self.expired = true;
+            // A build in flight may have read the clients before this change; the book it
+            // lands must not pass for fresh.
+            self.stale_mid_build = self.building;
+        }
     }
 
     /// Give the build right back without a book, after a build that did not finish.
     fn abandon(&mut self) {
         self.building = false;
         self.forgotten_mid_build.clear();
+        self.stale_mid_build = false;
     }
 
     /// Forget one core: its warm-up clocks, and the freshness of a book that may quote it.
@@ -232,17 +316,24 @@ impl MarketDataSource {
     /// Returns:
     ///     A book at most [`BOOK_TTL_MS`] old, or the previous one while another caller rebuilds.
     pub(in crate::market) fn listing_book(&self, now_ms: i64) -> Arc<ListingBook> {
-        let cache = self
-            .inner
-            .read()
-            .expect("market source poisoned")
-            .listing_cache
-            .clone();
-        // One statement, so the cache lock is released before the build below.
-        let claim = cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .claim(now_ms);
+        let (cache, revisions) = {
+            let inner = self.inner.read().expect("market source poisoned");
+            // Sorted, so two readings of the same clients compare equal whatever order the map
+            // hands them out in.
+            let mut revisions: Vec<ClientRevision> = inner
+                .clients
+                .iter()
+                .map(|(core, slot)| (*core, slot.catalog_revision()))
+                .collect();
+            revisions.sort_unstable_by_key(|(core, _)| *core);
+            (inner.listing_cache.clone(), revisions)
+        };
+        // One block, so the cache lock is released before the build below.
+        let claim = {
+            let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+            guard.note_revisions(revisions);
+            guard.claim(now_ms)
+        };
         let carried = match claim {
             Claim::Serve(book) => return book,
             Claim::Build(carried) => carried,
@@ -307,6 +398,11 @@ impl MarketDataSource {
         };
         let mut book = ListingBook::default();
         let mut next = WarmClocks::default();
+        // The answers still owed, and what decides which of them count; settled once every
+        // donor has been read, because one donor's refusal bears on another's promise.
+        let mut waits: Vec<Wait> = Vec::new();
+        let mut settled = VenueSet::default();
+        let mut refused = VenueSet::default();
         for (core, venue, client, epoch, catalog_age) in cores {
             let Some(snapshot) = client.snapshot_versioned() else {
                 continue;
@@ -380,22 +476,60 @@ impl MarketDataSource {
                     readings.push((handle.name().into(), identity, quoted));
                 }
             }
-            if readings.is_empty() {
-                continue;
-            }
             // Per venue: carried once it sits on enough markets, believed once that has lasted.
+            // Until then the answer is on its way, and the book says when: for a carried venue
+            // when its own clock runs out, and for one a YOUNG client's mask names but has not
+            // filled yet, when that client stops being young. Past that a mask alone promises
+            // nothing — it names venues the stream never sends, and a client that has asked for
+            // one for a whole warm-up without getting it is the proof. Done before the donor is
+            // skipped for having no reading: in its first seconds it has none, and is the one
+            // waited for.
+            let young_end = young_until(now_ms, catalog_age_ms);
+            // A young donor is still filling: what it holds now is not what it will hold in five
+            // seconds. So is a young client whose settings have not arrived — it may turn out to
+            // be a donor. A young core that is known to have no mask adds nothing to wait for:
+            // most cores are such, and each of them reconnecting must not put the book on the
+            // short period for a minute.
+            book.settling |=
+                young_end.is_some() && (!watched.is_empty() || settings.client_settings.is_none());
             let mut asked = VenueSet::default();
             for (byte, _) in &watched {
-                if markets_per_code[usize::from(*byte)] < MIN_CARRIED_MARKETS {
+                let key = (core, epoch, *byte);
+                let markets = markets_per_code[usize::from(*byte)];
+                if !carries(markets, carried.since.contains_key(&key)) {
+                    match young_end {
+                        Some(until) => waits.push(Wait {
+                            exchange: venue.id,
+                            code: *byte,
+                            settles_ms: until,
+                            promised: true,
+                        }),
+                        // Only a client that HAS a market list and has held it for the whole
+                        // warm-up refuses; one with no list on record proves nothing.
+                        None if catalog_age_ms.is_some() => refused.insert(*byte),
+                        None => {}
+                    }
                     continue;
                 }
                 book.seen.insert(*byte);
-                let key = (core, epoch, *byte);
+                book.carried_by.entry(venue.id).or_default().insert(*byte);
                 let since = carried.clock_of(key, now_ms, catalog_age_ms);
                 next.since.insert(key, since);
-                if warmed_up(now_ms, since) {
-                    asked.insert(*byte);
+                match warmed_up(now_ms, since) {
+                    true => {
+                        asked.insert(*byte);
+                        settled.insert(*byte);
+                    }
+                    false => waits.push(Wait {
+                        exchange: venue.id,
+                        code: *byte,
+                        settles_ms: since.saturating_add(DONOR_WARMUP_MS),
+                        promised: false,
+                    }),
                 }
+            }
+            if readings.is_empty() {
+                continue;
             }
             let markets = book.by_market.entry(venue.id).or_default();
             for (market, identity, quoted) in readings {
@@ -409,7 +543,24 @@ impl MarketDataSource {
                 }
             }
         }
+        book.note_waits(&waits, &settled, &refused);
         (book, next)
+    }
+
+    /// When the kept book expects its last pending answer, in Unix milliseconds.
+    ///
+    /// For the Screener's "still being collected" line. Reads the kept book and never builds one,
+    /// so it costs a lock and may be called from anywhere; `None` while nothing is warming up or
+    /// before the first book.
+    pub fn listing_settles_ms(&self) -> Option<i64> {
+        let cache = self
+            .inner
+            .read()
+            .expect("market source poisoned")
+            .listing_cache
+            .clone();
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        guard.book.last_settles_ms
     }
 
     /// Fill in where each market of one provider's catalog is listed.
