@@ -163,6 +163,11 @@ const LISTED_KEY: &str = "listed";
 /// show". One constant, so a cell and the choice that selects it cannot be spelled differently.
 pub(super) const UNKNOWN_CHOICE: &str = "?";
 
+/// How a Listed answer that is still on its way is written: the donor that will give it has not
+/// been connected for its warm-up yet. Not the question mark — that one stays for good, this one
+/// turns into an answer within the minute.
+const PENDING_MARK: &str = "…";
+
 /// Columns added after users could already hold a stored visible set, each with the migration
 /// version that introduced it, oldest first.
 ///
@@ -508,8 +513,10 @@ pub(super) fn screener_row(
                 None => MoonDataCell::text(UNKNOWN_CHOICE).tone(MoonTone::Muted),
             },
             // The one-sided answers are the reason the column exists, so they carry the accent;
-            // `Both` is the unremarkable case and unknown is the muted question mark.
+            // `Both` is the unremarkable case, unknown is the muted question mark and an answer
+            // still on its way the muted ellipsis.
             LISTED_KEY => match r.listing {
+                Listing::Pending => MoonDataCell::text(PENDING_MARK).tone(MoonTone::Muted),
                 Listing::Both => MoonDataCell::text(style.both.clone()).tone(MoonTone::Muted),
                 Listing::SpotOnly => {
                     MoonDataCell::text(style.spot_only.clone()).tone(MoonTone::Accent)

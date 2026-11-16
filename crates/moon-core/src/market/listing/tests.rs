@@ -351,3 +351,183 @@ fn an_unnamed_exchange_is_unknown_whatever_the_book_holds() {
     assert_eq!(unnamed.venue, None);
     assert_eq!(book.sign(&unnamed), Listing::Unknown);
 }
+
+/// The first Gate futures code, the other kind of a Gate spot row.
+const GATE_F: u8 = 9;
+
+fn wait(exchange: u8, code: u8, settles_ms: i64, promised: bool) -> Wait {
+    Wait {
+        exchange: ExchangeId {
+            code: exchange,
+            dex: 0,
+        },
+        code,
+        settles_ms,
+        promised,
+    }
+}
+
+/// A row that has no answer YET, while a donor of its own exchange is inside the warm-up, is
+/// pending — and stops being so the moment the answer can be given or the warm-up is over.
+///
+/// Breakage (the developer's bench, 2026-11-16): reading it as unknown. For the first minute
+/// after the cores connect every row of the Screener showed the same `?` as a market nothing can
+/// ever answer for, and ticking `Futures Only` emptied the table with "no rows match" — nothing
+/// on screen said the answer was a minute away.
+#[test]
+fn a_row_waiting_on_a_warming_donor_is_pending_not_unknown() {
+    let mut book = book_seeing(&[BYBIT_S, BINANCE_F]);
+    // Bybit futures has a donor that carries Bybit spot, but not for the warm-up yet.
+    give_donor(&mut book, BYBIT_F, &[BINANCE_F], &[]);
+    put_market(&mut book, BYBIT_F, "XUSDT", &[BINANCE_F], &[]);
+    book.note_waits(
+        &[wait(BYBIT_F, BYBIT_S, 60_000, false)],
+        &set(&[]),
+        &set(&[]),
+    );
+    assert_eq!(book.sign(&row(BYBIT_F, "XUSDT", "X")), Listing::Pending);
+    // A market the donor has no price for is waited for as well: in a donor's first seconds
+    // that is every market, and the one the server truly maps to nothing shows only afterwards.
+    assert_eq!(
+        book.sign(&row(BYBIT_F, "LATEUSDT", "LATE")),
+        Listing::Pending
+    );
+    // A positive never waits.
+    put_market(&mut book, BYBIT_F, "BOTHUSDT", &[BYBIT_S], &[]);
+    assert_eq!(book.sign(&row(BYBIT_F, "BOTHUSDT", "BOTH")), Listing::Both);
+
+    // The warm-up over: the same readings, now believed, and nothing left pending.
+    let mut settled = book_seeing(&[BYBIT_S, BINANCE_F]);
+    give_donor(&mut settled, BYBIT_F, &[BINANCE_F], &[BYBIT_S]);
+    put_market(&mut settled, BYBIT_F, "XUSDT", &[BINANCE_F], &[BYBIT_S]);
+    assert_eq!(
+        settled.sign(&row(BYBIT_F, "XUSDT", "X")),
+        Listing::FuturesOnly
+    );
+    assert_eq!(
+        settled.sign(&row(BYBIT_F, "LATEUSDT", "LATE")),
+        Listing::Unknown
+    );
+}
+
+/// A warmed-up witness answers even while another donor is still warming up on the same code.
+///
+/// Breakage: asking "is anything warming" first. One core reconnecting would then turn every
+/// one-sided answer of its exchange back into a wait for a minute, although the donors that gave
+/// those answers never went away.
+#[test]
+fn a_warmed_up_witness_answers_while_another_donor_warms_up() {
+    let mut book = book_seeing(&[BYBIT_S, BINANCE_F]);
+    give_donor(&mut book, BYBIT_F, &[BINANCE_F], &[BYBIT_S]);
+    put_market(&mut book, BYBIT_F, "XUSDT", &[BINANCE_F], &[BYBIT_S]);
+    book.note_waits(
+        &[wait(BYBIT_F, BYBIT_S, 60_000, false)],
+        &set(&[BYBIT_S]),
+        &set(&[]),
+    );
+    assert_eq!(book.sign(&row(BYBIT_F, "XUSDT", "X")), Listing::FuturesOnly);
+}
+
+/// A row waits on its own exchange's donors, and on another exchange's donor only for a code its
+/// own donors do not carry — and only if the coin's reading could answer it at all.
+///
+/// Breakage, either way. One set of warming codes for the whole book: a single core
+/// reconnecting names in its mask the codes of half the exchanges, and every row anywhere that
+/// honestly reads `?` — a market its own, long warmed-up donor maps to nothing — would turn into
+/// a wait for a minute and back, on every reconnect of any core. Own donors only: a row that
+/// just the other, still warming donor can answer — its own donor does not ask about the other
+/// kind — would read `?` for that minute and the narrowed table "no rows match".
+#[test]
+fn a_row_waits_on_another_donor_only_where_its_own_cannot_answer() {
+    let exchange = |code| ExchangeId { code, dex: 0 };
+    let mut book = book_seeing(&[BINANCE_S, GATE_F]);
+    // Binance futures has a warmed-up donor that carries Binance spot.
+    give_donor(&mut book, BINANCE_F, &[BYBIT_S], &[BINANCE_S]);
+    book.carried_by
+        .insert(exchange(BINANCE_F), set(&[BINANCE_S]));
+    // A Bybit futures donor reconnects and warms up on Binance spot and on Gate futures.
+    book.note_waits(
+        &[
+            wait(BYBIT_F, BINANCE_S, 60_000, false),
+            wait(BYBIT_F, GATE_F, 60_000, false),
+        ],
+        &set(&[]),
+        &set(&[]),
+    );
+    // Its own donor answers for Binance spot and maps nothing for this market: unknown, and the
+    // other donor's warm-up on the same code changes nothing.
+    assert_eq!(
+        book.sign(&row(BINANCE_F, "ODDPERP", "ODD")),
+        Listing::Unknown
+    );
+    // Gate spot has no donor of its own: its rows are answered through the coin by whoever
+    // carries Gate futures, and that is the donor still warming up.
+    assert_eq!(book.sign(&row(GATE_S, "X_USDT", "X")), Listing::Pending);
+
+    // Gate spot WITH a donor that does not ask about Gate futures: a market it does quote
+    // still waits on the other donor, and one it maps to nothing waits on no one.
+    give_donor(&mut book, GATE_S, &[BINANCE_S], &[BINANCE_S]);
+    put_market(&mut book, GATE_S, "X_USDT", &[BINANCE_S], &[BINANCE_S]);
+    book.carried_by.insert(exchange(GATE_S), set(&[BINANCE_S]));
+    assert_eq!(book.sign(&row(GATE_S, "X_USDT", "X")), Listing::Pending);
+    assert_eq!(book.sign(&row(GATE_S, "ODD_USDT", "ODD")), Listing::Unknown);
+
+    // With Gate futures already answered for by somebody, that warm-up holds nothing back.
+    let mut answered = book_seeing(&[GATE_F]);
+    answered.note_waits(
+        &[wait(BYBIT_F, GATE_F, 60_000, false)],
+        &set(&[GATE_F]),
+        &set(&[]),
+    );
+    assert_eq!(answered.sign(&row(GATE_S, "X_USDT", "X")), Listing::Unknown);
+}
+
+/// A young client's mask promises a code only until a long-connected client proves the stream
+/// does not send it; a code actually carried is owed whatever anyone was refused.
+///
+/// Breakage: taking every mask at its word. Masks name venues the stream never sends —
+/// Binance coin-margined, Hyperliquid spot — so each reconnect would hold the rows across from
+/// them in a wait for a minute that cannot end in an answer, and stretch the countdown with it.
+#[test]
+fn a_masks_promise_is_dropped_where_an_old_client_was_refused() {
+    let binance_spot = ExchangeId {
+        code: BINANCE_S,
+        dex: 0,
+    };
+    let mut book = ListingBook::default();
+    book.note_waits(
+        &[
+            wait(BINANCE_S, BINANCE_Q, 60_000, true),
+            wait(BINANCE_S, BINANCE_F, 40_000, true),
+        ],
+        &set(&[]),
+        &set(&[BINANCE_Q]),
+    );
+    assert!(book.warming[&binance_spot].contains(BINANCE_F));
+    assert!(!book.warming[&binance_spot].contains(BINANCE_Q));
+    assert_eq!(book.last_settles_ms, Some(40_000));
+    assert!(book.settling);
+
+    let mut carried = ListingBook::default();
+    carried.note_waits(
+        &[wait(BINANCE_S, BINANCE_Q, 60_000, false)],
+        &set(&[]),
+        &set(&[BINANCE_Q]),
+    );
+    assert!(carried.warming[&binance_spot].contains(BINANCE_Q));
+
+    // A refusal means "the stream does not send it" only while nobody carries the code: where
+    // some donor does, the old client merely shares few coins with that venue.
+    let mut sent = book_seeing(&[BINANCE_F]);
+    sent.note_waits(
+        &[wait(BINANCE_S, BINANCE_F, 40_000, true)],
+        &set(&[]),
+        &set(&[BINANCE_F]),
+    );
+    assert!(sent.warming[&binance_spot].contains(BINANCE_F));
+
+    // Nothing owed: the book is settled, and says so.
+    let mut quiet = ListingBook::default();
+    quiet.note_waits(&[], &set(&[]), &set(&[BINANCE_Q]));
+    assert!(!quiet.settling && quiet.last_settles_ms.is_none());
+}

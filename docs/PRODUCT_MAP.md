@@ -183,7 +183,8 @@ selector with exchange rows and saved core groups, a Coin column that names one 
 on every exchange and is searched by the Market box, Exchange and Type columns, and a Listed
 column — `Both`, `Spot Only`, `Futures Only` or `?` — saying whether the coin trades on both
 market kinds of that exchange, read from the arbitrage stream and the catalogs of connected
-cores; the footer holds a multi-select list for Type and one for Listed, both for the session
+cores, with `…` for the first minute after a core connects, while the answer is still on its
+way; the footer holds a multi-select list for Type and one for Listed, both for the session
 only), the news panel
 (per-core feed, tag filters, jump to a coin), Log (core lines, addresses
 redacted; for a core on a Linux server the terminal can enter, its whole trading log for a

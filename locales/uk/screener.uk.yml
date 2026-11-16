@@ -13,6 +13,10 @@ screener.empty_no_data: "Ринкові дані ще не отримано"
 # A fourth: rows WERE published and the bottom bar's controls — the Type and Listed lists, a text
 # or volume filter — left none of them.
 screener.empty_filtered: "Під вибрані фільтри немає рядків"
+# A fifth: the Listed list emptied the table while its answers are still on their way — the
+# cores connected under a minute ago. `%{n}` is the whole seconds left; `Listed` is the column's
+# title and stays as it is.
+screener.listed_collecting: "Listed ще збирається: залишилось %{n} с"
 screener.coins: "монет"
 screener.all_cores: "Усі ядра"
 screener.cores_n: "Ядер: %{n}"

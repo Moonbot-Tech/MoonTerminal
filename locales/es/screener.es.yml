@@ -13,6 +13,10 @@ screener.empty_no_data: "Aún no se han recibido datos de mercado"
 # A fourth: rows WERE published and the bottom bar's controls — the Type and Listed lists, a text
 # or volume filter — left none of them.
 screener.empty_filtered: "Ninguna fila coincide con los filtros actuales"
+# A fifth: the Listed list emptied the table while its answers are still on their way — the
+# cores connected under a minute ago. `%{n}` is the whole seconds left; `Listed` is the column's
+# title and stays as it is.
+screener.listed_collecting: "Listed aún se está recopilando: quedan %{n} s"
 screener.coins: "monedas"
 screener.all_cores: "Todos los núcleos"
 screener.cores_n: "Núcleos: %{n}"

@@ -220,3 +220,83 @@ fn scale_probe_prepared_selection() {
         );
     }
 }
+
+/// A row whose Listed answer is still on its way is found under the "no answer" tick and under
+/// no other, and the publication says that something is waiting.
+///
+/// Mutation: give the waiting state no bit, or the bit of an answer. With none, the rows vanish
+/// from under every tick for the first minute after the cores connect; with an answer's bit, a
+/// list narrowed to `Futures Only` fills with rows nobody has decided anything about.
+#[test]
+fn a_waiting_row_goes_with_the_no_answer_tick() {
+    use moon_core::market::listing::Listing;
+    use std::collections::HashSet;
+    let mut rows = entries(1, 3);
+    for (entry, listing) in
+        rows.iter_mut()
+            .zip([Listing::Pending, Listing::FuturesOnly, Listing::Unknown])
+    {
+        std::sync::Arc::make_mut(&mut entry.row.market_data).listing = listing;
+    }
+    let prepared = Prepared::new(rows, "market", false);
+    assert!(prepared.listing_pending);
+    let ticked = |answers: &[Listing]| {
+        let selected: HashSet<Listing> = answers.iter().copied().collect();
+        let query = crate::screener::view::CoinQuery::new("").listed_in(&selected);
+        let (indices, _, _) = prepared.select(&[Some(0)], &query, 0.0, "market", false);
+        indices
+            .iter()
+            .map(|&index| prepared.entries[index].row.market.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ticked(&[Listing::Unknown]), ["Xalpha0Usdt", "Xalpha2Usdt"]);
+    assert_eq!(ticked(&[Listing::FuturesOnly]), ["Xalpha1Usdt"]);
+    assert!(ticked(&[Listing::Both, Listing::SpotOnly]).is_empty());
+    // And a publication with nothing waiting says so.
+    assert!(!Prepared::new(entries(1, 3), "market", false).listing_pending);
+}
+
+/// The empty table may say "still being collected" only when the Listed list alone hides a row
+/// that is waiting for its answer.
+///
+/// Mutation: ask only whether anything in the publication is waiting. A text in the Market box
+/// that matches nothing, a core the table does not show, or a selection that admits waiting rows
+/// and found none would each put a countdown over a table that is simply, finally empty.
+#[test]
+fn only_the_listed_list_hiding_a_waiting_row_counts_as_a_wait() {
+    use moon_core::market::listing::Listing;
+    use std::collections::HashSet;
+    let mut rows = entries(2, 2);
+    for entry in &mut rows {
+        let listing = match entry.row.core {
+            0 => Listing::Pending,
+            _ => Listing::Both,
+        };
+        std::sync::Arc::make_mut(&mut entry.row.market_data).listing = listing;
+    }
+    let prepared = Prepared::new(rows, "market", false);
+    let query = |text: &str, answers: &[Listing]| {
+        let selected: HashSet<Listing> = answers.iter().copied().collect();
+        crate::screener::view::CoinQuery::new(text).listed_in(&selected)
+    };
+    let both_cores = [Some(0), Some(1)];
+    // Narrowed to an answer the waiting rows may yet get: a wait.
+    assert!(prepared.hides_waiting_rows(&both_cores, &query("", &[Listing::FuturesOnly]), 0.0));
+    // The ticks admit waiting rows: nothing is hidden by them.
+    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[Listing::Unknown]), 0.0));
+    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[]), 0.0));
+    // The Market box already drops them.
+    assert!(!prepared.hides_waiting_rows(
+        &both_cores,
+        &query("NOSUCHCOIN", &[Listing::FuturesOnly]),
+        0.0
+    ));
+    // So does the Vol. minimum.
+    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[Listing::FuturesOnly]), 1.0e12));
+    // The waiting core is not on screen.
+    assert!(!prepared.hides_waiting_rows(
+        &[None, Some(0)],
+        &query("", &[Listing::FuturesOnly]),
+        0.0
+    ));
+}

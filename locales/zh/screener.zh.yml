@@ -13,6 +13,10 @@ screener.empty_no_data: "尚未收到市场数据"
 # A fourth: rows WERE published and the bottom bar's controls — the Type and Listed lists, a text
 # or volume filter — left none of them.
 screener.empty_filtered: "没有符合当前筛选条件的行"
+# A fifth: the Listed list emptied the table while its answers are still on their way — the
+# cores connected under a minute ago. `%{n}` is the whole seconds left; `Listed` is the column's
+# title and stays as it is.
+screener.listed_collecting: "Listed 仍在收集中：还剩 %{n} 秒"
 screener.coins: "个币种"
 screener.all_cores: "全部核心"
 screener.cores_n: "核心：%{n}"
