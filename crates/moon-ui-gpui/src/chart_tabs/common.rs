@@ -135,6 +135,8 @@ pub(crate) enum StackSetting {
     /// the built-in default"; `Some(0)` copies "uncapped". The two travel together because a press
     /// that moved only one of them would leave the other saying something the reader never chose.
     MaxCharts(Option<u16>, bool),
+    /// MAIN only: whether the Detects feed also opens its charts in Main's stack.
+    MainDetects(bool),
 }
 
 /// A setting that ALSO has a default in `layout.toml`, inherited by every tab without an override
@@ -267,9 +269,12 @@ impl StackSetting {
         match self {
             // Main draws no arrival flash at all.
             StackSetting::ArrivalFlash(_) | StackSetting::ArrivalFrame(..) => !is_main,
-            // Ingest routes detects to numbered AddToChart tabs only: Main is opened by hand, and a
-            // custom tab holds the markets its owner picked.
-            StackSetting::MaxCharts(..) => !is_main && !is_custom,
+            // Detects reach numbered AddToChart tabs, and Main when its `MainDetects` is on; a
+            // custom tab holds the markets its owner picked. Main's cap governs the detects ITS
+            // switch lets in — see `LayoutPopupHost::applicable_here` for the switch's half.
+            StackSetting::MaxCharts(..) => !is_custom,
+            // Only Main has a choice: a numbered tab receives its detects by number, always.
+            StackSetting::MainDetects(_) => is_main,
             _ => true,
         }
     }
@@ -316,6 +321,7 @@ impl StackSetting {
                 s.max_charts = max;
                 s.max_charts_evict = Some(evict);
             }
+            StackSetting::MainDetects(v) => s.main_detects = Some(v),
         }
     }
 }
@@ -369,6 +375,9 @@ macro_rules! set_stack_setting {
             crate::chart_tabs::common::StackSetting::MaxCharts(max, evict) => {
                 $s.set_max_charts(max, Some(evict), $c)
             }
+            crate::chart_tabs::common::StackSetting::MainDetects(v) => {
+                $s.set_main_detects(Some(v), $c)
+            }
         }
     };
 }
@@ -412,6 +421,8 @@ pub(super) struct LayoutPopupSnapshot {
     /// ITSELF is not here: it lives in the popup's field like the two heights, and is read from
     /// there so a number typed but not yet committed is the one that travels.
     pub max_charts_evict: bool,
+    /// Whether Main opens the Detects feed's charts. Always false on a tab that is not Main.
+    pub main_detects: bool,
 }
 
 /// Host of the ⚙ layout-settings popup. Required methods expose host state and the target
@@ -705,10 +716,12 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
             .applies_to(self.target_is_main(cx), self.popup_is_custom(cx))
     }
 
-    /// Whether the detect-cap controls belong on this target's popup.
+    /// Whether the detect-cap controls belong on this target's popup: on Main, only while its
+    /// switch lets detects in — a cap over a feed that is not coming would be a dead control.
     fn detect_cap_applies(&self, cx: &App) -> bool {
-        StackSetting::MaxCharts(None, false)
-            .applies_to(self.target_is_main(cx), self.popup_is_custom(cx))
+        let is_main = self.target_is_main(cx);
+        StackSetting::MaxCharts(None, false).applies_to(is_main, self.popup_is_custom(cx))
+            && (!is_main || self.layout_popup_snapshot(cx).main_detects)
     }
 
     /// Keep only the values that mean something on THIS target, for a ⧉ press it is the source of.
@@ -722,10 +735,14 @@ pub(super) trait LayoutPopupHost: super::apply_row::ApplyRowHost + Sized + 'stat
         // state, not a KIND of tab, and a press from a popup that hid the control would otherwise
         // write this tab's unset divider over every addressed tab's own.
         let divider = self.divider_applies(cx);
+        // Main's cap is drawn only while its detect switch is on, and dynamic state again is what
+        // `applies_to` cannot see: a press from a Main that hides the cap must not carry it.
+        let cap = self.detect_cap_applies(cx);
         values
             .into_iter()
             .filter(|v| v.applies_to(is_main, is_custom))
             .filter(|v| divider || !matches!(v, StackSetting::Grid(..)))
+            .filter(|v| cap || !matches!(v, StackSetting::MaxCharts(..)))
             .collect()
     }
 
@@ -1019,6 +1036,7 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
     let fl_entity = entity.clone();
     let cc_entity = entity.clone();
     let hd_entity = entity.clone();
+    let md_entity = entity.clone();
     let cl_entity = entity;
     let row = super::apply_row::render_apply_row(
         this,
@@ -1058,8 +1076,18 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
                 }),
             }
         },
-        this.arrival_flash_applies(cx)
-            .then(|| layout_popup::DetectFlow {
+        // The frame appears where at least one of its three parts does: Main has the switch (and
+        // the cap under it), a custom tab the border alone, a numbered tab the cap and the border.
+        (this.arrival_flash_applies(cx) || this.target_is_main(cx)).then(|| {
+            layout_popup::DetectFlow {
+                main_detects: this.target_is_main(cx).then(|| {
+                    let toggle: Box<dyn Fn(bool, &mut App)> = Box::new(move |on, app| {
+                        md_entity.update(app, |this, cx| {
+                            this.apply_tab_setting(StackSetting::MainDetects(on), cx)
+                        });
+                    });
+                    (snap.main_detects, toggle)
+                }),
                 cap: this
                     .detect_cap_applies(cx)
                     .then(|| layout_popup::DetectCap {
@@ -1070,30 +1098,38 @@ pub(super) fn layout_popup_host<T: LayoutPopupHost>(
                                 .update(app, |this, cx| this.apply_max_charts_evict(checked, cx));
                         }),
                     }),
-                flash: snap.arrival_flash,
-                on_toggle_flash: Box::new(move |on, app| {
-                    fl_entity.update(app, |this, cx| {
-                        this.apply_tab_setting(StackSetting::ArrivalFlash(on), cx)
-                    });
-                }),
-                // Each toggle reads the other half from the target at click time, the way the
-                // cap's evict toggle reads the cap: a value captured at draw time would write the
-                // popup's last picture over a change that landed in between.
-                core_color: snap.arrival_core_color,
-                on_toggle_core_color: Box::new(move |on, app| {
-                    cc_entity.update(app, |this, cx| {
-                        let hold = this.layout_popup_snapshot(cx).arrival_hold;
-                        this.apply_tab_setting(StackSetting::ArrivalFrame(on, hold), cx)
-                    });
-                }),
-                hold: snap.arrival_hold,
-                on_toggle_hold: Box::new(move |on, app| {
-                    hd_entity.update(app, |this, cx| {
-                        let core_color = this.layout_popup_snapshot(cx).arrival_core_color;
-                        this.apply_tab_setting(StackSetting::ArrivalFrame(core_color, on), cx)
-                    });
-                }),
-            }),
+                arrival: this
+                    .arrival_flash_applies(cx)
+                    .then(|| layout_popup::ArrivalLooks {
+                        flash: snap.arrival_flash,
+                        on_toggle_flash: Box::new(move |on, app| {
+                            fl_entity.update(app, |this, cx| {
+                                this.apply_tab_setting(StackSetting::ArrivalFlash(on), cx)
+                            });
+                        }),
+                        // Each toggle reads the other half from the target at click time, the way
+                        // the cap's evict toggle reads the cap: a value captured at draw time would
+                        // write the popup's last picture over a change that landed in between.
+                        core_color: snap.arrival_core_color,
+                        on_toggle_core_color: Box::new(move |on, app| {
+                            cc_entity.update(app, |this, cx| {
+                                let hold = this.layout_popup_snapshot(cx).arrival_hold;
+                                this.apply_tab_setting(StackSetting::ArrivalFrame(on, hold), cx)
+                            });
+                        }),
+                        hold: snap.arrival_hold,
+                        on_toggle_hold: Box::new(move |on, app| {
+                            hd_entity.update(app, |this, cx| {
+                                let core_color = this.layout_popup_snapshot(cx).arrival_core_color;
+                                this.apply_tab_setting(
+                                    StackSetting::ArrivalFrame(core_color, on),
+                                    cx,
+                                )
+                            });
+                        }),
+                    }),
+            }
+        }),
         p,
         cx,
         move |mode, app| {

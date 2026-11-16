@@ -45,6 +45,8 @@ by this flag.
 - `MOON_FIXTURE_LAYOUT` / `MOON_FIXTURE_SETTINGS` — a `layout.toml` / `settings.toml` copied into the stand
   before the configuration is read, so a run opens with a chosen layout or, for example, at
   `ui_scale = 1.5` to check input and overlays under UI zoom.
+- `MOON_FIXTURE_CHARTS` — a `charts.json` copied in the same way, for the per-tab settings a chart
+  tab's ⚙ popup holds (for example Main's "Open detects" switch).
 
 Details of the set's layout and regeneration are in the internal documentation.
 

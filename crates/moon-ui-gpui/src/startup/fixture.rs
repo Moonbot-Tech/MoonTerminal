@@ -90,11 +90,16 @@ where
     // `settings.toml` — the UI scale a scripted run is to be checked at — can only reach it by
     // hand, which a scripted or blind run cannot do. `MOON_FIXTURE_LAYOUT` and
     // `MOON_FIXTURE_SETTINGS` each name a file to copy in BEFORE the configuration is read; the
-    // rest of the bench is untouched.
+    // rest of the bench is untouched. `MOON_FIXTURE_CHARTS` does the same for `charts.json`, where
+    // the per-tab settings live — a tab's ⚙ popup is the other thing a blind run cannot reach.
     for (var, to) in [
         (
             "MOON_FIXTURE_LAYOUT",
             moon_core::config::paths::layout_path(),
+        ),
+        (
+            "MOON_FIXTURE_CHARTS",
+            moon_core::config::paths::charts_path(),
         ),
         (
             "MOON_FIXTURE_SETTINGS",

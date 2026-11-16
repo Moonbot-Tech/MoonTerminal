@@ -214,6 +214,12 @@ pub struct ChartTabSpec {
     /// unshown when false. None takes the built-in default, which replaces the stalest chart.
     #[serde(default)]
     pub max_charts_evict: Option<bool>,
+    /// MAIN only: whether every detect the group's Detects feed would show also opens its chart in
+    /// Main's own stack, behind the chart on screen rather than in place of it. None is off — Main
+    /// was opened by hand alone before this setting existed, and an upgrade must not start opening
+    /// charts nobody asked for. Ignored on every numbered tab.
+    #[serde(default)]
+    pub main_detects: Option<bool>,
     /// LEGACY position of `Cancel Buy`, read once by the migration that made it a caption and then
     /// cleared. Not written any more — see [`ChartBtnPos`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,6 +314,7 @@ impl ChartTabSpec {
             arrival_hold: None,
             max_charts: None,
             max_charts_evict: None,
+            main_detects: None,
             cancel_buy_pos: None,
             panic_sell_pos: None,
             custom_coins: None,

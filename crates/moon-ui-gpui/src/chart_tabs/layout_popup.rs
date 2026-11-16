@@ -114,15 +114,24 @@ pub(super) struct GridControls<'a> {
     pub on_toggle_exact: DetectFlowToggle,
 }
 
-/// The arrival/detect controls, or `None` on a tab that draws no arrival flash at all.
+/// The arrival/detect controls, or `None` on a tab that has none of them.
 ///
 /// Bundled rather than passed as four more parameters: this function already carries fifteen
 /// callbacks, and these belong to one frame that appears or stays away as a unit.
 pub(super) struct DetectFlow<'a> {
-    /// The cap controls, or `None` on a tab detects never reach. The flash is NOT part of this: it
-    /// fires on any arrival, a hand-picked coin included, so a tab can want it off while having no
-    /// detect feed to cap.
+    /// MAIN only: the switch that lets the Detects feed open its charts in Main, and its handler.
+    /// `None` on every other tab, which receives its detects by number and has no choice to make.
+    pub main_detects: Option<(bool, DetectFlowToggle)>,
+    /// The cap controls, or `None` on a tab detects never reach — Main with its switch off
+    /// included. The flash is NOT part of this: it fires on any arrival, a hand-picked coin
+    /// included, so a tab can want it off while having no detect feed to cap.
     pub cap: Option<DetectCap<'a>>,
+    /// The arrival border's controls, or `None` on Main, which draws no arrival border at all.
+    pub arrival: Option<ArrivalLooks>,
+}
+
+/// The arrival border: whether it flashes, and its two looks.
+pub(super) struct ArrivalLooks {
     /// Whether an arriving chart flashes its border. The checkbox states the negative — "do not
     /// flash" is the thing a reader goes looking for — and inverts on the way in and out.
     pub flash: bool,
@@ -415,33 +424,54 @@ where
                 .child(cap_hint)
                 .child(evict_cb)
         });
-        // Stated as the negative: ticked means "do not flash", so the stored value is the inverse
-        // of the box on both directions.
-        let flash_cb = MoonCheckbox::new(SharedString::from(format!("{id}-no-arrival-flash")))
-            .label(t!("chart.layout.no_arrival_flash").to_string())
-            .checked(!flow.flash)
-            .on_change(move |ch: &bool, _w, app| (flow.on_toggle_flash)(!*ch, app));
-        // The two looks of the border mean nothing while it does not flash at all, so they go grey
-        // with it rather than promising a colour or a hold that nothing will draw. Their values are
-        // kept: unticking "no flash" brings back what the reader chose.
-        let core_color_cb =
-            MoonCheckbox::new(SharedString::from(format!("{id}-arrival-core-color")))
-                .label(t!("chart.layout.arrival_core_color").to_string())
-                .checked(flow.core_color)
-                .disabled(!flow.flash)
-                .on_change(move |ch: &bool, _w, app| (flow.on_toggle_core_color)(*ch, app));
-        let hold_cb = MoonCheckbox::new(SharedString::from(format!("{id}-arrival-hold")))
-            .label(t!("chart.layout.arrival_hold").to_string())
-            .checked(flow.hold)
-            .disabled(!flow.flash)
-            .on_change(move |ch: &bool, _w, app| (flow.on_toggle_hold)(*ch, app));
+        // Main's switch leads the frame: everything under it is about the feed it lets in.
+        let main_rows = flow.main_detects.map(|(on, on_toggle)| {
+            let main_cb = MoonCheckbox::new(SharedString::from(format!("{id}-main-detects")))
+                .label(t!("chart.layout.main_detects").to_string())
+                .checked(on)
+                .on_change(move |ch: &bool, _w, app| on_toggle(*ch, app));
+            let main_hint = div()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child(t!("chart.layout.main_detects_hint").to_string());
+            v_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .child(main_cb)
+                .child(main_hint)
+        });
+        let arrival_rows = flow.arrival.map(|looks| {
+            // Stated as the negative: ticked means "do not flash", so the stored value is the
+            // inverse of the box on both directions.
+            let flash_cb = MoonCheckbox::new(SharedString::from(format!("{id}-no-arrival-flash")))
+                .label(t!("chart.layout.no_arrival_flash").to_string())
+                .checked(!looks.flash)
+                .on_change(move |ch: &bool, _w, app| (looks.on_toggle_flash)(!*ch, app));
+            // The two looks of the border mean nothing while it does not flash at all, so they go
+            // grey with it rather than promising a colour or a hold that nothing will draw. Their
+            // values are kept: unticking "no flash" brings back what the reader chose.
+            let core_color_cb =
+                MoonCheckbox::new(SharedString::from(format!("{id}-arrival-core-color")))
+                    .label(t!("chart.layout.arrival_core_color").to_string())
+                    .checked(looks.core_color)
+                    .disabled(!looks.flash)
+                    .on_change(move |ch: &bool, _w, app| (looks.on_toggle_core_color)(*ch, app));
+            let hold_cb = MoonCheckbox::new(SharedString::from(format!("{id}-arrival-hold")))
+                .label(t!("chart.layout.arrival_hold").to_string())
+                .checked(looks.hold)
+                .disabled(!looks.flash)
+                .on_change(move |ch: &bool, _w, app| (looks.on_toggle_hold)(*ch, app));
+            v_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .child(flash_cb)
+                .child(core_color_cb)
+                .child(hold_cb)
+        });
         popup_group("frame-detect-flow", t!("chart.layout.frame_detect_flow")).child(
             v_flex()
                 .gap(design::ui_px(cx, 6.0))
+                .children(main_rows)
                 .children(cap_rows)
-                .child(flash_cb)
-                .child(core_color_cb)
-                .child(hold_cb),
+                .children(arrival_rows),
         )
     });
 

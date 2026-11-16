@@ -516,6 +516,23 @@ impl ChartTabs {
                 pending,
             )
         };
+        // Main's detect switch and the cap that goes with it. Read apart from the tuple above only
+        // to keep that tuple from growing again; restored BEFORE the first ingest, so a Main saved
+        // at its cap does not spend one detect getting there.
+        let (main_detects, main_cap) = {
+            let specs = &backend.read(cx).chart_specs;
+            let main_spec = specs.iter().find(|s| s.group == group && s.num == 0);
+            (
+                main_spec.and_then(|s| s.main_detects),
+                main_spec.map_or((None, None), |s| (s.max_charts, s.max_charts_evict)),
+            )
+        };
+        if main_detects.is_some() {
+            main.update(cx, |p, pcx| p.set_main_detects(main_detects, pcx));
+        }
+        if main_cap.0.is_some() || main_cap.1.is_some() {
+            main.update(cx, |p, pcx| p.set_max_charts(main_cap.0, main_cap.1, pcx));
+        }
         if main_scale.is_some() {
             main.update(cx, |p, pcx| p.set_scale(main_scale, pcx));
         }

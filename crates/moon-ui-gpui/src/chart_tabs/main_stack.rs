@@ -112,6 +112,13 @@ pub(crate) struct MainChartStack {
     layout_columns: Option<u8>,
     layout_columns_exact: Option<bool>,
     layout_min_slot: Option<u16>,
+    /// Whether the Detects feed also opens its charts here; `None` is off. See [`detects`].
+    main_detects: Option<bool>,
+    /// Cap on how many DETECT charts this stack keeps, raw as stored: `None` takes the built-in
+    /// default, `Some(0)` is uncapped. Hand-opened charts are not counted. See [`detects`].
+    max_charts: Option<u16>,
+    /// What a detect does at the cap; `None` takes the built-in default (replace the stalest).
+    max_charts_evict: Option<bool>,
     /// Size the stack was last painted at, written by the render probe. See `AddChartStack`.
     measured: Rc<Cell<Size<Pixels>>>,
     /// Whether the host presenting this stack is on screen.
@@ -195,6 +202,7 @@ fn remap_active_index<T>(
 }
 
 mod close;
+mod detects;
 mod focus;
 mod open;
 mod prefs;

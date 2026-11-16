@@ -302,7 +302,20 @@ impl super::ChartTabs {
             // Filtered per TARGET, not once for the press: a value can mean something on one
             // addressed tab and nothing on the next, and writing it where it means nothing leaves a
             // setting in the spec that the tab's own popup does not show and cannot clear.
-            let values = applicable(&apply.values, true, false);
+            let mut values = applicable(&apply.values, true, false);
+            // And by a fact `applies_to` cannot see: Main draws its cap only while its detect
+            // switch is on. Judged AFTER this press — a press from Main carries the switch itself
+            // — so a cap never lands on a Main whose popup would then hide it.
+            let main_detects = values
+                .iter()
+                .find_map(|v| match v {
+                    StackSetting::MainDetects(on) => Some(*on),
+                    _ => None,
+                })
+                .unwrap_or_else(|| self.main.read(cx).main_detects_on());
+            if !main_detects {
+                values.retain(|v| !matches!(v, StackSetting::MaxCharts(..)));
+            }
             self.main.update(cx, |s, c| {
                 for v in &values {
                     set_stack_setting!(s, c, v.clone());
@@ -567,6 +580,7 @@ pub(super) fn layout_values(
         StackSetting::ArrivalFrame(snap.arrival_core_color, snap.arrival_hold),
         StackSetting::MaxCharts(max_charts, snap.max_charts_evict),
         StackSetting::Grid(grid.0, grid.1, grid.2),
+        StackSetting::MainDetects(snap.main_detects),
     ]
 }
 

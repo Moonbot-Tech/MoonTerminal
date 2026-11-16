@@ -120,7 +120,8 @@ coins and a temporary coin ban (as in MB), coin search with tabs, where a coin i
 
 **Detects**: cards with configurable badges (own colours — a shared HEX history,
 see Other), the fired strategy's name, per-tab feed limit,
-AddToChart detects,
+AddToChart detects, the feed's charts opened on Main behind the chart on screen (a per-tab
+switch, with its own limit),
 sounds; the core colour (from Connections) paints the list rows.
 
 **Manual trading**: the window group shares the visible Size/TP/SL — the order goes out

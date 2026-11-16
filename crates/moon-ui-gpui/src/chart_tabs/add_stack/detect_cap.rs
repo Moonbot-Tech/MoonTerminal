@@ -82,7 +82,8 @@ pub(in crate::chart_tabs) enum Admission {
 /// `slots` carries one entry per LIVE chart: its index and how stale it is IF it may be evicted at
 /// all. `None` marks a chart that holds its place unconditionally — pinned, or opened by hand (see
 /// `ChartStackEntry::eviction_rank_ms`). Both still count toward the cap, because both still occupy
-/// the screen, but neither is ever the victim.
+/// the screen, but neither is ever the victim. (Main passes only its DETECT charts as slots: there
+/// a hand-opened chart does not count — see `main_stack::detects`.)
 ///
 /// The victim is the STALEST chart: the one that has gone longest without a fresh detect, since
 /// every repeat detect pushes its `born_ms` forward. Staleness rather than a TTL deadline, because
