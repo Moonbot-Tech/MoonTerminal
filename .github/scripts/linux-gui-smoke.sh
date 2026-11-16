@@ -18,7 +18,9 @@
 #
 # It fails when the window never appears, the process exits before the frame is captured, or the
 # captured frame is blank. A blank frame is measured, not assumed: a window of one flat colour has
-# a handful of distinct colours, a drawn interface has thousands.
+# a handful of distinct colours, a drawn interface has thousands. Under a window manager (below)
+# it also fails when the terminal does not survive a resize, does not apply the new size, or
+# shows a blank frame after it.
 #
 # `SMOKE_BLANK_FRAME=report` turns the blank-frame failure into a logged note, for an image whose
 # software Vulkan driver is known not to show the window at all. Measured on 2026-11-10 with one
@@ -32,9 +34,20 @@
 # captured beside it for the artifact only: the window uses a 32-bit visual on a 24-bit screen,
 # and what a root-window capture shows for such a child is left to the X server.
 #
+# `SMOKE_WINDOW_MANAGER=<command line>` runs the same check under a window manager and then
+# resizes the window through it. A bare X server never configures a window after it was created,
+# so that resize is the only place the terminal's handling of a size from the window manager
+# runs at all. The proof that it ran is the terminal's own account: its X11 backend logs one
+# `X11 resize, window N: <n> sizes applied, …; <m> frames, …` line per second of resizing, and the
+# script waits for one that reports an applied size and a frame. The window's geometry cannot
+# serve: the window manager sets it whether or not the terminal reacts. After that line the
+# process and the window manager must still be alive and, if the first frame was drawn, the
+# second (`window-resized.png`) must be drawn too.
+#
 # Usage: linux-gui-smoke.sh <path to moonterminal> <fixtures directory> <output directory>
 # Requires: Xvfb, dbus-run-session, gnome-keyring-daemon, secret-tool, xwininfo, and ImageMagick's
-# `import` and `identify`. `vulkaninfo`, when present, is recorded for the artifact. Linux only — it is never run on the macOS checkout, but stays inside the
+# `import` and `identify`; with `SMOKE_WINDOW_MANAGER`, also the window manager, `xprop` and
+# `xdotool`. `vulkaninfo`, when present, is recorded for the artifact. Linux only — it is never run on the macOS checkout, but stays inside the
 # portable shell subset the repository's script contract enforces.
 
 set -euo pipefail
@@ -67,17 +80,35 @@ if [ "$blank_frame" != "fail" ] && [ "$blank_frame" != "report" ]; then
     exit 2
 fi
 
+# A window manager's command line, or empty for a bare X server. A desktop session has one, and
+# the terminal's windows are treated differently under it: the window manager reparents, places
+# and configures a window after the terminal created it. With this set, the manager is started
+# first, and the terminal's window is captured a second time after being resized through it.
+window_manager=${SMOKE_WINDOW_MANAGER:-}
+# Seconds to wait for the window manager to announce itself, and for the terminal to report a
+# resize as applied and drawn.
+window_manager_wait_secs=30
+resize_wait_secs=60
+# The terminal's report of a resize it handled: at least one size applied and one frame after it.
+# The wording is MoonUI's (`moon-gpui-linux/src/linux/x11/resize_diag.rs`); if it changes there,
+# this check fails by timing out and names the line it waited for.
+resize_report='X11 resize, window [0-9]+: [1-9][0-9]* sizes applied, .*; [1-9][0-9]* frames, '
+
 display=:99
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
 app_pid=""
 xvfb_pid=""
+wm_pid=""
 
 # Stop what this script started and keep the application's own logs for the artifact.
 cleanup() {
     if [ -n "$app_pid" ]; then
         kill "$app_pid" 2>/dev/null || true
+    fi
+    if [ -n "$wm_pid" ]; then
+        kill "$wm_pid" 2>/dev/null || true
     fi
     if [ -n "$xvfb_pid" ]; then
         kill "$xvfb_pid" 2>/dev/null || true
@@ -101,7 +132,7 @@ trap cleanup EXIT
 # Print the tail of what the application wrote, then fail with the reason.
 fail() {
     echo "linux-gui-smoke: FAIL — $1" >&2
-    for log in "$out/stdout.log" "$out/stderr.log"; do
+    for log in "$out/stdout.log" "$out/stderr.log" "$out/window-manager.log"; do
         if [ -s "$log" ]; then
             echo "--- tail of $log" >&2
             tail -n 60 "$log" >&2
@@ -155,6 +186,49 @@ echo "linux-gui-smoke: Secret Service is unlocked"
 } >"$out/environment.txt"
 grep -E 'X.Org X Server|deviceName|driverInfo|apiVersion' "$out/environment.txt" || true
 
+if [ -n "$window_manager" ]; then
+    # Started up to three times. In run 43960917934 xfwm4 exited at once with "cannot open
+    # display" on a server that had just answered `xwininfo`, and started normally in the run
+    # before it on the same script; why is not established, so an early exit is retried and
+    # every attempt's output is kept.
+    : >"$out/window-manager.log"
+    wm_attempts=0
+    wm_up=""
+    while [ -z "$wm_up" ] && [ "$wm_attempts" -lt 3 ]; do
+        wm_attempts=$((wm_attempts + 1))
+        # A window manager that died leaves its announcement on the root window; without this
+        # the next attempt would read the dead one's and pass before it had taken the display.
+        xprop -root -remove _NET_SUPPORTING_WM_CHECK 2>/dev/null || true
+        # Unquoted on purpose: the variable is a command line, split into the command and its
+        # options.
+        # shellcheck disable=SC2086
+        $window_manager >>"$out/window-manager.log" 2>&1 &
+        wm_pid=$!
+        waited=0
+        while kill -0 "$wm_pid" 2>/dev/null; do
+            # A running window manager names its check window in this root property (EWMH).
+            if xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id'; then
+                wm_up=1
+                break
+            fi
+            if [ "$waited" -ge "$window_manager_wait_secs" ]; then
+                fail "the window manager did not take the display within ${window_manager_wait_secs} s"
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if [ -z "$wm_up" ]; then
+            wm_pid=""
+            echo "linux-gui-smoke: window manager attempt ${wm_attempts} exited early"
+            sleep 2
+        fi
+    done
+    if [ -z "$wm_up" ]; then
+        fail "the window manager exited before it took the display, three times (see window-manager.log)"
+    fi
+    echo "linux-gui-smoke: window manager is up after ${waited} s, attempt ${wm_attempts}: $window_manager"
+fi
+
 MOON_FIXTURE_DIR=$fixtures "$binary" --fixture >"$out/stdout.log" 2>"$out/stderr.log" &
 app_pid=$!
 
@@ -190,6 +264,76 @@ echo "linux-gui-smoke: whole screen has $(identify -format '%k' "$out/screen.png
 import -display "$display" -window "$window_id" "$out/window.png"
 colours=$(identify -format '%k' "$out/window.png")
 echo "linux-gui-smoke: the terminal's window has ${colours} distinct colours"
+
+# Under a window manager, resize the window through it and look again. This is the first time
+# since the window opened that the window manager hands the terminal a new size, which a bare X
+# server never does: a panic or a hang on that path, a size the terminal never applies or never
+# draws, and a window left blank by it show here and nowhere else in CI. A frame that is drawn
+# but wrong is not judged; `window-resized.png` is kept for the eye.
+if [ -n "$window_manager" ]; then
+    xprop -id "$window_id" >"$out/window-props.txt" 2>&1 || true
+    width=$(awk '/Width:/ { print $2; exit }' "$out/window-info.txt")
+    height=$(awk '/Height:/ { print $2; exit }' "$out/window-info.txt")
+    if [ -z "$width" ] || [ -z "$height" ]; then
+        fail "the window's size could not be read before the resize (see window-info.txt)"
+    fi
+    if ! kill -0 "$wm_pid" 2>/dev/null; then
+        wm_pid=""
+        fail "the window manager exited before the resize (see window-manager.log)"
+    fi
+    new_width=$((width - 120))
+    new_height=$((height - 80))
+    # Only what the terminal logs from here on counts: the window manager also configures the
+    # window while it opens.
+    logged_before=$(wc -l <"$out/stderr.log")
+    xdotool windowsize "$window_id" "$new_width" "$new_height" ||
+        fail "xdotool could not resize the window to ${new_width}x${new_height}"
+    waited=0
+    # `grep` reads to the end on purpose: with `-q` it would close the pipe early and `pipefail`
+    # would turn a match into a failure.
+    until tail -n "+$((logged_before + 1))" "$out/stderr.log" | grep -E "$resize_report" >/dev/null; do
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            app_pid=""
+            fail "the terminal exited after its window was resized to ${new_width}x${new_height}"
+        fi
+        if [ "$waited" -ge "$resize_wait_secs" ]; then
+            fail "the terminal did not report the resize to ${new_width}x${new_height} as applied and drawn within ${resize_wait_secs} s (no line matching '${resize_report}' in stderr.log)"
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    echo "linux-gui-smoke: the terminal reported the resize after ${waited} s:"
+    tail -n "+$((logged_before + 1))" "$out/stderr.log" | grep -E "$resize_report" | tail -n 1
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        app_pid=""
+        fail "the terminal exited after its window was resized to ${new_width}x${new_height}"
+    fi
+    # Without the manager `xdotool` resizes the window on the bare server, and the run would
+    # prove nothing about the path it exists for.
+    if ! kill -0 "$wm_pid" 2>/dev/null; then
+        wm_pid=""
+        fail "the window manager exited during the resize (see window-manager.log)"
+    fi
+    # A precondition of the frame check below, not a check of the terminal: this is the size the
+    # window manager gave the window.
+    xwininfo -id "$window_id" >"$out/window-info-resized.txt" 2>&1 || true
+    resized_width=$(awk '/Width:/ { print $2; exit }' "$out/window-info-resized.txt")
+    resized_height=$(awk '/Height:/ { print $2; exit }' "$out/window-info-resized.txt")
+    if [ "$resized_width" != "$new_width" ] || [ "$resized_height" != "$new_height" ]; then
+        fail "the window is ${resized_width:-?}x${resized_height:-?} after a resize to ${new_width}x${new_height}"
+    fi
+    import -display "$display" -window "$window_id" "$out/window-resized.png" ||
+        fail "the resized window could not be captured"
+    resized_colours=$(identify -format '%k' "$out/window-resized.png") ||
+        fail "the capture of the resized window could not be read"
+    echo "linux-gui-smoke: after a resize to ${new_width}x${new_height} the window has" \
+        "${resized_colours} distinct colours"
+    # Judged only against a first frame that was drawn: on an image whose driver shows nothing,
+    # both frames are blank and neither says anything about the resize.
+    if [ "$colours" -ge "$min_colours" ] && [ "$resized_colours" -lt "$min_colours" ]; then
+        fail "the window went blank after the resize (${resized_colours} distinct colours, need ${min_colours})"
+    fi
+fi
 if [ "$colours" -lt "$min_colours" ]; then
     if [ "$blank_frame" = "report" ]; then
         echo "linux-gui-smoke: the terminal's window is blank (${colours} distinct colours);" \

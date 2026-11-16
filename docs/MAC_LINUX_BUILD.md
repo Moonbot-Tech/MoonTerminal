@@ -183,7 +183,10 @@ builds it in a bare `ubuntu:22.04` container and starts it on a virtual display 
 is published. The diagnostic `Linux probe` workflow (`.github/workflows/linux-probe.yml`) does
 the same on every pull request and every push to `main`: it builds the terminal in a bare
 `ubuntu:22.04` container, runs the tests only a Linux machine can, and starts the result on a
-virtual display in bare `ubuntu:22.04`, `ubuntu:24.04` and `debian:13` containers. The package
+virtual display in bare `ubuntu:22.04`, `ubuntu:24.04` and `debian:13` containers — and once
+more in `ubuntu:24.04` under a window manager (`xfwm4` with its compositor, plus `xdotool`, which
+that run alone installs), where the window is resized through the manager and the terminal has to
+report the new size as applied and drawn. The package
 lists below are the ones those containers install — a contract test
 (`the_build_guide_and_the_linux_probe_install_the_same_packages`) fails when the two differ.
 

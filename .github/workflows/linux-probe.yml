@@ -16,7 +16,9 @@ permissions:
 #   Linux smoke — starts that binary on a virtual display in images that carry only run-time
 #                 packages, and fails unless a window with a drawn frame comes up (on the one
 #                 image whose software Vulkan driver cannot show it: unless the window comes up
-#                 and the process stays alive). Uploads the captured frame and the logs.
+#                 and the process stays alive). One entry repeats the run under a window manager
+#                 and resizes the window through it: the terminal must report the new size as
+#                 applied and drawn. Uploads the captured frames and the logs.
 # Read their logs; they never block.
 #
 # EVERY JOB RUNS IN A BARE DISTRIBUTION CONTAINER, not on the runner's own image, and that is the
@@ -197,7 +199,7 @@ jobs:
         run: cargo test -p moon-ui-gpui --bin moonterminal --target x86_64-unknown-linux-gnu
 
   linux-smoke:
-    name: Linux smoke (${{ matrix.image }}) — diagnostic
+    name: Linux smoke (${{ matrix.image }}${{ matrix.window-manager && ', window manager' || '' }}) — diagnostic
     needs: linux-probe
     runs-on: ubuntu-latest
     container: ${{ matrix.image }}
@@ -218,6 +220,14 @@ jobs:
             blank-frame: fail
           - image: "debian:13"
             blank-frame: fail
+          # The same image as a desktop session has it: under a window manager with a compositor.
+          # A bare X server never configures a window after the terminal created it, so in the
+          # runs above the terminal's handling of a size from the window manager never executes.
+          # Here the smoke script resizes the window through the manager and requires the terminal
+          # to survive it, to report the size as applied and drawn, and to show a frame again.
+          - image: "ubuntu:24.04"
+            blank-frame: fail
+            window-manager: "xfwm4 --compositor=on"
     steps:
       # The complete run-time list for a downloaded binary, quoted by docs/MAC_LINUX_BUILD.md:
       # the libraries the binary links (the probe job's `ldd` report) or opens once it runs
@@ -241,6 +251,11 @@ jobs:
         run: |
           apt-get install -y --no-install-recommends \
             ca-certificates git xvfb dbus x11-utils imagemagick fonts-dejavu-core vulkan-tools
+      # Only for the run under a window manager: the manager itself and the tool that resizes the
+      # window through it.
+      - name: Install the window manager
+        if: ${{ matrix.window-manager }}
+        run: apt-get install -y --no-install-recommends xfwm4 xdotool
       # For the smoke script and the committed chart fixture the run draws.
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -252,6 +267,7 @@ jobs:
       - name: Start the terminal on a virtual display
         env:
           SMOKE_BLANK_FRAME: ${{ matrix.blank-frame }}
+          SMOKE_WINDOW_MANAGER: ${{ matrix.window-manager }}
         run: bash .github/scripts/linux-gui-smoke.sh dist/moonterminal crates/moon-core/fixtures smoke-out
       - uses: actions/upload-artifact@v7
         # The frame and the logs matter most when the step above failed.
