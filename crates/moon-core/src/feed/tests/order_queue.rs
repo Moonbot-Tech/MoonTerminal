@@ -3,7 +3,7 @@
 use crate::feed::{FeedMsg, OrderRow, OrderTrace, OrderTracePoint, trade_sound_test_feed};
 
 /// Supplies two trace legs and independently owned labels, matching a busy open order.
-fn row(uid: u64) -> OrderRow {
+pub(crate) fn row(uid: u64) -> OrderRow {
     OrderRow {
         market: "XALPHAUSDT".into(),
         market_display: "XALPHAUSDT".into(),
@@ -105,7 +105,9 @@ fn message_bytes(msg: &FeedMsg) -> usize {
     }
 }
 
-/// Simulates two seconds without a drain at ten cores x 20 Hz x 200 orders, without sleeping.
+/// Measures what a producer that does not ask the order gate leaves in the channel: two seconds
+/// without a drain at ten cores x 20 Hz x 200 orders, without sleeping. A live feed asks the gate
+/// and can no longer build this queue (`order_gate`); the bench keeps the cost of one on record.
 #[test]
 #[ignore = "manual queue ownership and send-latency scale measurement"]
 fn bench_stalled_order_queue() {
@@ -128,7 +130,6 @@ fn bench_stalled_order_queue() {
     let mut messages = 0;
     for (_, feed) in &feeds {
         while let Ok(msg) = feed.rx.try_recv() {
-            crate::feed::note_drained();
             bytes += message_bytes(&msg);
             messages += 1;
         }
@@ -173,7 +174,6 @@ fn stalled_drain_retains_snapshot_only_terminal_orders() {
     }
     let mut actual = CoreData::new();
     while let Ok(message) = feed.rx.try_recv() {
-        crate::feed::note_drained();
         actual.apply(message);
     }
 

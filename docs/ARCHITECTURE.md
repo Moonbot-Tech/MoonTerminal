@@ -83,6 +83,15 @@ carries an Arc-backed order row at the moment of the event. The terminal builds 
 snapshot plus captured event rows, so a short terminal status (`Cancel`, `Fail`, `Done`) is not
 lost even if the latest snapshot has already dropped the uid from the live-list.
 
+Order batches are back-pressured by their consumer. A feed thread builds a table or a line copy
+only after the session drain has taken that core's previous one (`feed/order_gate.rs`); until then
+it keeps the debt and the captured event rows, and the take wakes it. A stalled UI or station
+loop therefore holds one order batch per live core rather than every table published during the
+stall, which is what once exhausted a station's memory. Captured rows past a threshold collapse to
+each order's latest row (`feed/live/pending_turns.rs`). A long stall drops intermediate reprices
+and whatever only a snapshot nobody published showed; a terminal status that arrived as an order
+event survives it. Every other feed message still queues without a limit.
+
 Order geometry resolves `UseCustomColors`, `BuyOrderColor`, `SellOrderColor` and `OrderLineKind`
 from the order's own core's confirmed strategy snapshot and kind-specific schema defaults. Retained orders keep strategy ID/name;
 a nonzero ID is authoritative, while an ID-less named row may match a unique name. Missing,

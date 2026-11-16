@@ -98,6 +98,36 @@ impl OrderDebts {
     }
 }
 
+/// How long the loop may sleep on the table's and the line copies' deadlines.
+///
+/// A due publication the consumer has no room for is not a deadline. It waits for the wake that
+/// taking the queued batch sends, and a zero wait for it would spin the feed thread for as long
+/// as the consumer stalls, so both waits are left out. A deadline still in the future keeps its
+/// place: by the time it fires the batch may be gone.
+///
+/// Args:
+///     table: The order table's throttle.
+///     lines: The line copies' throttle.
+///     now: The moment both are asked about.
+///     admitted: Whether the consumer has taken this core's previous order batch. Asked only
+///         when a publication is due, because a refusal arms a wake.
+///
+/// Returns:
+///     The table's and the line copies' waits; `None` for one the loop must not sleep on.
+pub(super) fn order_waits(
+    table: &CoalescedDeadline,
+    lines: &CoalescedDeadline,
+    now: Instant,
+    admitted: impl FnOnce() -> bool,
+) -> (Option<Duration>, Option<Duration>) {
+    let held = (table.is_due(now) || lines.is_due(now)) && !admitted();
+    if held {
+        (None, None)
+    } else {
+        (table.wait(now), lines.wait(now))
+    }
+}
+
 /// Whether `info_addr` is still the `ServerInfo` allocation observed at `ServerRestart`.
 ///
 /// The caller holds the `Arc<MoonStateSnapshot>` captured at the restart (`PinnedRestartInfo`).

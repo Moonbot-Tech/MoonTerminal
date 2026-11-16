@@ -11,6 +11,7 @@ mod mode_advice;
 pub mod news;
 pub mod news_marks;
 mod order_edit;
+mod order_gate;
 pub mod order_math;
 pub mod report_traces;
 mod retry;
@@ -29,6 +30,7 @@ pub use core_label::{clear_core_name, core_label, set_core_name};
 pub use live::{FieldMask, percentage_stop_price, percentage_take_price};
 pub use mode_advice::{SiblingOutcome, suggest_alternate_mode};
 pub use news::{NewsItem, NewsSnapshot};
+pub use order_gate::FeedRx;
 pub use report_traces::{ArchivedLineKind, ArchivedOrderTrace, ReportTracesOutcome};
 pub use strategies::{field_text_is_valid, strategy_kind_is_hidden};
 pub use types::*;
@@ -44,14 +46,14 @@ use crate::config::ServerConfig;
 use crate::db::ReportTx;
 use crate::market::SharedMarketStore;
 
-pub type FeedRx = Receiver<FeedMsg>;
-
 /// Feed messages sent and not yet drained, across every core.
 ///
-/// The channel is unbounded: a coordination loop that stalls lets it grow without a limit, and
-/// nothing else would show it (#1081). A core respawned or removed with messages still queued
-/// takes them off the count as its handle drops (`impl Drop for FeedHandle`); only what its
-/// thread sends between that and the receiver's drop stays counted.
+/// The channel is unbounded. Order batches, the one kind heavy and frequent enough to exhaust
+/// memory, are held to one per core by the feed thread itself (`order_gate`); every other kind
+/// still grows while the coordination loop stalls, and this count is what shows it (#1081). A
+/// core respawned or removed with messages still queued takes them off the count as its handle
+/// drops (`impl Drop for FeedHandle`); only what its thread sends between that and the
+/// receiver's drop stays counted.
 static QUEUED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 /// How many feed messages wait for the session drain, across every core.
@@ -59,8 +61,8 @@ pub fn queued_messages() -> i64 {
     QUEUED.load(Ordering::Relaxed)
 }
 
-/// The session drain took one message off a core's channel.
-pub(crate) fn note_drained() {
+/// One message left a core's channel; called by [`FeedRx`] alone.
+fn note_drained() {
     QUEUED.fetch_sub(1, Ordering::Relaxed);
 }
 
@@ -251,20 +253,46 @@ impl SharedMoonClient {
 pub struct FeedTx {
     data: Sender<FeedMsg>,
     wake: Option<FeedWakeTx>,
+    /// Shared with the [`FeedRx`] built from this sender, and with every clone of it.
+    orders: Arc<order_gate::OrderGate>,
 }
 
 impl FeedTx {
     fn new(data: Sender<FeedMsg>, wake: Option<FeedWakeTx>) -> Self {
-        Self { data, wake }
+        Self {
+            data,
+            wake,
+            orders: Arc::default(),
+        }
+    }
+
+    /// The gate the receiving half releases as it takes this sender's order batches.
+    fn order_gate(&self) -> Arc<order_gate::OrderGate> {
+        Arc::clone(&self.orders)
+    }
+
+    /// Whether the consumer has taken every order batch this core sent.
+    ///
+    /// The feed thread asks before it builds a table or a line copy. On `false` it publishes
+    /// nothing and keeps the debt; taking the queued batch wakes it.
+    pub(crate) fn order_batch_admitted(&self) -> bool {
+        self.orders.admit()
     }
 
     // The error returns the unsent message. Boxing it would change this public `Result`.
     #[allow(clippy::result_large_err)]
     pub fn send(&self, msg: FeedMsg) -> Result<(), SendError<FeedMsg>> {
+        let order_batch = order_gate::is_order_batch(&msg);
         // Counted before the send, so the drain can never see a message the count does not hold.
         QUEUED.fetch_add(1, Ordering::Relaxed);
+        if order_batch {
+            self.orders.sent();
+        }
         if let Err(unsent) = self.data.send(msg) {
             QUEUED.fetch_sub(1, Ordering::Relaxed);
+            if order_batch {
+                self.orders.taken();
+            }
             return Err(unsent);
         }
         if let Some(wake) = &self.wake {
@@ -1044,7 +1072,6 @@ impl Drop for FeedBacklog {
     /// Account for every queued message discarded with a replaced or removed core.
     fn drop(&mut self) {
         while self.rx.try_recv().is_ok() {
-            note_drained();
             #[cfg(test)]
             RETIRED_FOR_TEST.fetch_add(1, Ordering::Relaxed);
         }
@@ -1054,9 +1081,8 @@ impl Drop for FeedBacklog {
 impl Drop for FeedHandle {
     /// Hand the old core's FIFO to a named background thread instead of draining it on the caller.
     fn drop(&mut self) {
-        let (_, replacement) = std::sync::mpsc::channel();
         let backlog = FeedBacklog {
-            rx: std::mem::replace(&mut self.rx, replacement),
+            rx: std::mem::replace(&mut self.rx, FeedRx::closed()),
         };
         // If thread creation fails, dropping the closure destroys `backlog` here with the same
         // accounting, so a resource failure cannot leave `queued_messages` permanently inflated.
@@ -1132,6 +1158,7 @@ pub fn spawn(
     let tx = FeedTx::new(data_tx, wake);
     let (cmd_data_tx, cmd_rx) = std::sync::mpsc::channel::<QueuedCmd>();
     let (run_wake_tx, run_wake_rx) = std::sync::mpsc::channel::<()>();
+    let rx = FeedRx::new(rx, &tx, run_wake_tx.clone());
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let latest_market_role = LatestMarketRole::default();
     let cmd_tx = CoreCmdTx::new(cmd_data_tx, run_wake_tx.clone(), latest_market_role.clone());
@@ -1188,16 +1215,28 @@ pub fn spawn(
 /// Inert channel-backed feed for session-drain regressions; never constructs a live client.
 #[cfg(test)]
 pub(crate) fn trade_sound_test_feed() -> (FeedTx, FeedHandle) {
+    let (tx, handle, _producer_wakes) = order_gate_test_feed();
+    (tx, handle)
+}
+
+/// The same inert feed, with the wake its feed thread would sleep on.
+///
+/// Returns:
+///     The sender, the handle a session drains, and the receiver that gets one token each time
+///     the handle wakes the producer.
+#[cfg(test)]
+pub(crate) fn order_gate_test_feed() -> (FeedTx, FeedHandle, Receiver<()>) {
     let (data, rx) = std::sync::mpsc::channel();
     let (commands, _commands_rx) = std::sync::mpsc::channel();
-    let (wake, _wake_rx) = std::sync::mpsc::channel();
+    let (wake, wake_rx) = std::sync::mpsc::channel();
     let (stop, _stop_rx) = std::sync::mpsc::channel();
+    let tx = FeedTx::new(data, None);
     let handle = FeedHandle {
-        rx,
+        rx: FeedRx::new(rx, &tx, wake.clone()),
         cmd_tx: CoreCmdTx::new(commands, wake, LatestMarketRole::default()),
         client: SharedMoonClient::default(),
         _stop: stop,
         _join: std::thread::spawn(|| {}),
     };
-    (FeedTx::new(data, None), handle)
+    (tx, handle, wake_rx)
 }
