@@ -36,7 +36,7 @@ conn.endpoint_no_address: "The key carries no address — the terminal connects 
 
 
 # Tooltips.
-conn.tip.key: "The key is made in Moonbot, not on the website, and is copied AFTER the core is set up — it carries host, port and mode with it; the address and port can be changed in the Address:port column when needed. Order: 1) on the Moonbot server, open the core's UDP port for inbound traffic; 2) in Moonbot: the green dot at the bottom left (the Info window) → Moon Kernel → Settings → the Moon Proto window, Settings tab: tick Kernel (VPS), set Port, choose V0/V1/V2 (default V0), press Apply; 3) there, Key: → Copy Key (no key yet — New Key); 4) paste it here with the Paste button and press Save. The eye shows/hides it."
+conn.tip.key: "The key is made in Moonbot, not on the website, and is copied AFTER the core is set up — it carries host, port and mode with it; the address and port can be changed in the Address:port column when needed. Order: 1) on the Moonbot server, open the core's UDP port for inbound traffic; 2) in Moonbot: the green dot at the bottom left (the Info window) → Moon Kernel → Settings → the Moon Proto window, Settings tab: if there is no key yet, press New Key first; then tick Kernel (VPS), set Port, choose V0/V1/V2 (default V0), press Apply; 3) there, Key: → Copy Key; 4) paste it here with the Paste button and press Save. The eye shows/hides it."
 conn.key_ph: "Copy Key in Moonbot"
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".

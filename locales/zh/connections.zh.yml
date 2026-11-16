@@ -36,7 +36,7 @@ conn.endpoint_no_address: "密钥中没有地址——终端将连接 127.0.0.1�
 
 
 # Tooltips.
-conn.tip.key: "密钥在 Moonbot 中生成，而不是在网站上，并且要在核心设置完成之后再复制——它自带地址、端口和模式；必要时可在“地址:端口”列中修改地址和端口。步骤：1) 在运行 Moonbot 的服务器上开放核心的 UDP 端口入站；2) 在 Moonbot 中：左下角的绿色圆点（Info 窗口）→ Moon Kernel → Settings → Moon Proto 窗口的 Settings 标签页：勾选 Kernel (VPS)，设置 Port，选择 V0/V1/V2（默认 V0），点击 Apply；3) 在同一处 Key: → Copy Key（还没有密钥则点 New Key）；4) 用“粘贴”按钮粘贴到这里，然后点击“保存”。眼睛图标用于显示/隐藏密钥。"
+conn.tip.key: "密钥在 Moonbot 中生成，而不是在网站上，并且要在核心设置完成之后再复制——它自带地址、端口和模式；必要时可在“地址:端口”列中修改地址和端口。步骤：1) 在运行 Moonbot 的服务器上开放核心的 UDP 端口入站；2) 在 Moonbot 中：左下角的绿色圆点（Info 窗口）→ Moon Kernel → Settings → Moon Proto 窗口的 Settings 标签页：还没有密钥则先点 New Key；然后勾选 Kernel (VPS)，设置 Port，选择 V0/V1/V2（默认 V0），点击 Apply；3) 在同一处 Key: → Copy Key；4) 用“粘贴”按钮粘贴到这里，然后点击“保存”。眼睛图标用于显示/隐藏密钥。"
 conn.key_ph: "在 Moonbot 中 Copy Key"
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".

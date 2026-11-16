@@ -318,7 +318,7 @@ core_status.fault.next.syncing: "请等待。如果数字停止变化，将鼠�
 core_status.fault.next.stalled: "尝试会自动重复。如果同一步骤反复出现，将鼠标悬停在启动列上并发送日志"
 core_status.fault.next.aborted: "无需任何操作"
 core_status.fault.next.unknown: "请将此行和日志发给技术支持"
-core_status.fault.next.key: "密钥在 Moonbot 中创建，而不是在网站上。在 Moonbot 中：左下角的绿色圆点（Info 窗口）→ Moon Kernel 行 → Settings → Moon Proto 窗口的 Settings 标签页 → Key: → Copy Key（还没有密钥则点 New Key）。用“粘贴”按钮将其完整粘贴到“密钥”字段，然后点击“保存”——核心会自动连接"
+core_status.fault.next.key: "密钥在 Moonbot 中创建，而不是在网站上。在 Moonbot 中：左下角的绿色圆点（Info 窗口）→ Moon Kernel 行 → Settings → Moon Proto 窗口的 Settings 标签页 → Key: → Copy Key（还没有密钥则点 New Key，再点 Apply）。用“粘贴”按钮将其完整粘贴到“密钥”字段，然后点击“保存”——核心会自动连接"
 core_status.fault.next.endpoint_invalid: "在“设置 → 连接”中修正“地址:端口”列（地址、地址:端口 或 :端口），或将其清空以使用密钥中的地址，然后点击“保存”"
 core_status.fault.next.endpoint_unresolved: "检查名称是否有拼写错误，并确认这台电脑的网络和 DNS 工作正常——终端会自动重试。也可以直接输入 IP 来代替名称"
 core_status.fault.core.legacy_named: "核心报告的是 Moonbot %{server}，但未报告协议版本：它比本终端旧"

@@ -36,7 +36,7 @@ conn.endpoint_no_address: "Anahtarda adres yok — terminal 127.0.0.1'e, yani bu
 
 
 # Tooltips.
-conn.tip.key: "Anahtar sitede değil Moonbot'ta üretilir ve çekirdek kurulduktan SONRA kopyalanır — adres, port ve kipi kendisi taşır; adres ve port gerekirse Adres:port sütununda değiştirilir. Sıra: 1) Moonbot sunucusunda çekirdeğin UDP portunu gelen trafiğe açın; 2) Moonbot'ta: sol alttaki yeşil nokta (Info penceresi) → Moon Kernel → Settings → Moon Proto penceresi, Settings sekmesi: Kernel (VPS) işaretleyin, Port verin, V0/V1/V2 seçin (varsayılan V0), Apply'a basın; 3) orada Key: → Copy Key (anahtar yoksa New Key); 4) Yapıştır düğmesiyle buraya yapıştırın ve Kaydet'e basın. Göz gösterir/gizler."
+conn.tip.key: "Anahtar sitede değil Moonbot'ta üretilir ve çekirdek kurulduktan SONRA kopyalanır — adres, port ve kipi kendisi taşır; adres ve port gerekirse Adres:port sütununda değiştirilir. Sıra: 1) Moonbot sunucusunda çekirdeğin UDP portunu gelen trafiğe açın; 2) Moonbot'ta: sol alttaki yeşil nokta (Info penceresi) → Moon Kernel → Settings → Moon Proto penceresi, Settings sekmesi: anahtar yoksa önce New Key'e basın; sonra Kernel (VPS) işaretleyin, Port verin, V0/V1/V2 seçin (varsayılan V0), Apply'a basın; 3) orada Key: → Copy Key; 4) Yapıştır düğmesiyle buraya yapıştırın ve Kaydet'e basın. Göz gösterir/gizler."
 conn.key_ph: "Moonbot'ta Copy Key"
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".

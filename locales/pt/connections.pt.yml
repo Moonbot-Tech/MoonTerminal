@@ -36,7 +36,7 @@ conn.endpoint_no_address: "A chave não traz endereço — o terminal se conecta
 
 
 # Tooltips.
-conn.tip.key: "A chave é feita no Moonbot, não no site, e é copiada DEPOIS que o núcleo está configurado — ela leva host, porta e modo; o endereço e a porta podem ser trocados na coluna Endereço:porta quando preciso. Ordem: 1) no servidor do Moonbot, abra a porta UDP do núcleo para tráfego de entrada; 2) no Moonbot: o ponto verde embaixo à esquerda (janela Info) → Moon Kernel → Settings → janela Moon Proto, aba Settings: marque Kernel (VPS), defina Port, escolha V0/V1/V2 (padrão V0), pressione Apply; 3) ali, Key: → Copy Key (ainda sem chave — New Key); 4) cole aqui com o botão Colar e pressione Salvar. O olho mostra/oculta."
+conn.tip.key: "A chave é feita no Moonbot, não no site, e é copiada DEPOIS que o núcleo está configurado — ela leva host, porta e modo; o endereço e a porta podem ser trocados na coluna Endereço:porta quando preciso. Ordem: 1) no servidor do Moonbot, abra a porta UDP do núcleo para tráfego de entrada; 2) no Moonbot: o ponto verde embaixo à esquerda (janela Info) → Moon Kernel → Settings → janela Moon Proto, aba Settings: se ainda não houver chave, pressione New Key primeiro; depois marque Kernel (VPS), defina Port, escolha V0/V1/V2 (padrão V0), pressione Apply; 3) ali, Key: → Copy Key; 4) cole aqui com o botão Colar e pressione Salvar. O olho mostra/oculta."
 conn.key_ph: "Copy Key no Moonbot"
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".

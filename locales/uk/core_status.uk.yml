@@ -318,7 +318,7 @@ core_status.fault.next.syncing: "Зачекай. Якщо цифра стоїт�
 core_status.fault.next.stalled: "Спроба повториться сама. Якщо той самий крок усе не вдається, наведи курсор на колонку старту й надішли лог"
 core_status.fault.next.aborted: "Нічого робити не треба"
 core_status.fault.next.unknown: "Надішли цей рядок і лог у підтримку"
-core_status.fault.next.key: "Ключ створюється в Moonbot, не на сайті. У Moonbot: зелена крапка ліворуч унизу (вікно Info) → рядок Moon Kernel → Settings → вікно Moon Proto, вкладка Settings → Key: → Copy Key (ключа ще немає — New Key). Вставте його цілком у поле «Ключ» кнопкою «Вставити» і натисніть «Зберегти» — ядро підключиться саме"
+core_status.fault.next.key: "Ключ створюється в Moonbot, не на сайті. У Moonbot: зелена крапка ліворуч унизу (вікно Info) → рядок Moon Kernel → Settings → вікно Moon Proto, вкладка Settings → Key: → Copy Key (ключа ще немає — New Key, потім Apply). Вставте його цілком у поле «Ключ» кнопкою «Вставити» і натисніть «Зберегти» — ядро підключиться саме"
 core_status.fault.next.endpoint_invalid: "Виправте колонку «Адреса:порт» у Налаштуваннях → Підключення (адреса, адреса:порт або :порт) або очистьте її, щоб узяти адресу з ключа, і натисніть «Зберегти»"
 core_status.fault.next.endpoint_unresolved: "Перевірте ім'я на помилку і що на цьому комп'ютері працюють інтернет і DNS — термінал повторить спробу сам. Або впишіть замість імені IP"
 core_status.fault.core.legacy_named: "Ядро повідомляє Moonbot %{server} і не повідомляє версію протоколу: воно старіше за цей термінал"

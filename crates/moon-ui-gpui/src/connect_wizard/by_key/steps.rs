@@ -154,18 +154,21 @@ pub(super) fn port_screen(
 }
 
 /// Ordered Moonbot actions avoid repeating the navigation path in the checklist.
+///
+/// The key comes first: Moonbot's "New Key" reloads its window from the saved settings, so a
+/// mode tick or a port typed before it and not yet applied is silently dropped.
 pub(super) fn moonbot_screen(port: u16, cx: &App) -> Screen {
     let items = vec![
-        parts::numbered_item(
+        parts::item(
             1,
-            t!("connect_wizard.by_key.step1", port = port),
-            vec![],
+            "connect_wizard.by_key.step1",
+            Some("connect_wizard.by_key.step1_note"),
             cx,
         ),
-        parts::item(
+        parts::numbered_item(
             2,
-            "connect_wizard.by_key.step2",
-            Some("connect_wizard.by_key.step2_note"),
+            t!("connect_wizard.by_key.step2", port = port),
+            vec![],
             cx,
         ),
         parts::numbered_item(

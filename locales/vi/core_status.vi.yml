@@ -319,7 +319,7 @@ core_status.fault.next.syncing: "Hãy đợi. Nếu con số đứng yên, trỏ
 core_status.fault.next.stalled: "Lần thử tự lặp lại. Nếu cùng một bước cứ thất bại, trỏ vào cột khởi động và gửi nhật ký"
 core_status.fault.next.aborted: "Không cần làm gì"
 core_status.fault.next.unknown: "Gửi dòng này và nhật ký cho hỗ trợ"
-core_status.fault.next.key: "Khóa được tạo trong Moonbot, không phải trên trang web. Trong Moonbot: chấm xanh góc dưới trái (cửa sổ Info) → dòng Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings → Key: → Copy Key (chưa có khóa — New Key). Dán cả khóa vào ô Khóa bằng nút Dán và nhấn Lưu — core tự nối"
+core_status.fault.next.key: "Khóa được tạo trong Moonbot, không phải trên trang web. Trong Moonbot: chấm xanh góc dưới trái (cửa sổ Info) → dòng Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings → Key: → Copy Key (chưa có khóa — New Key, rồi Apply). Dán cả khóa vào ô Khóa bằng nút Dán và nhấn Lưu — core tự nối"
 core_status.fault.next.endpoint_invalid: "Sửa cột Địa chỉ:cổng trong Cài đặt → Kết nối (địa chỉ, địa chỉ:cổng hoặc :cổng), hoặc xóa trống để dùng địa chỉ của khóa, rồi nhấn Lưu"
 core_status.fault.next.endpoint_unresolved: "Kiểm tra tên có gõ sai không và máy tính này có internet và DNS hoạt động không — terminal tự thử lại. Hoặc nhập IP thay cho tên"
 core_status.fault.core.legacy_named: "Core báo Moonbot %{server} và không có phiên bản giao thức: nó cũ hơn terminal này"
