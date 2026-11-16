@@ -779,6 +779,136 @@ fn log_returns_exactly_the_selected_tail_from_a_stopped_core() {
     assert!(stdout(&relative).is_empty());
 }
 
+/// Listing the sibling `LOG_ADD_` / `LOG_NET_` files, or a wrong size, would offer days that are not
+/// the trading log.
+#[test]
+fn logdays_lists_only_the_daily_trading_logs_with_their_sizes() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    let logs = dir.join("logs");
+    sandbox.answer_at(&logs.join("LOG_2026-01-02.log"), "12345\n");
+    sandbox.answer_at(&logs.join("LOG_2026-01-03.log"), "");
+    sandbox.answer_at(
+        &logs.join("LOG_ADD_2026-01-02.log"),
+        "not the trading log\n",
+    );
+    sandbox.answer_at(
+        &logs.join("LOG_NET_2026-01-02.log"),
+        "not the trading log\n",
+    );
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["logdays", "3302", &dir_text]);
+
+    assert_ok(&output);
+    assert_eq!(
+        stdout(&output),
+        "LOGDAYS_BEGIN\nLOGDAY=2026-01-02 6\nLOGDAY=2026-01-03 0\n"
+    );
+    let empty = sandbox.instance("moonbot-b");
+    sandbox.executable(&empty.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    let output = sandbox.run(&["logdays", "3302", &sandbox.posix(&empty)]);
+    assert_ok(&output);
+    assert_eq!(stdout(&output), "LOGDAYS_BEGIN\n");
+}
+
+/// Sending the newest file, the journal, or a tail instead of the asked day would save the wrong
+/// text under that day's name.
+#[test]
+fn logday_returns_the_whole_asked_day_gzipped() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    let asked = (1..=1500)
+        .map(|line| format!("00:00:01  asked-{line}\n"))
+        .collect::<String>();
+    sandbox.answer_at(&dir.join("logs").join("LOG_2026-01-02.log"), &asked);
+    sandbox.answer_at(
+        &dir.join("logs").join("LOG_2026-01-03.log"),
+        "00:00:01  the newest day\n",
+    );
+    sandbox.answer("journal", "the service journal\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let output = sandbox.run(&["logday", "3302", "2026-01-02", "1000000", &dir_text]);
+
+    assert_ok(&output);
+    let Some(crate::core_cmds::LogDayReply::Gzip(gzip)) =
+        crate::core_cmds::split_log_day(&output.stdout)
+    else {
+        panic!("the reply must carry the day: {}", stdout(&output));
+    };
+    assert_eq!(
+        crate::core_cmds::gunzip_log_day(gzip).unwrap(),
+        asked.as_bytes()
+    );
+}
+
+/// Falling through to the journal, or accepting a path as the day, would return another file.
+#[test]
+fn logday_reports_a_missing_day_and_refuses_anything_but_a_date() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    sandbox.answer_at(
+        &dir.join("logs").join("LOG_2026-01-02.log"),
+        "00:00:01  x\n",
+    );
+    sandbox.answer_at(&dir.join("secret.log"), "outside the log folder\n");
+    sandbox.answer("journal", "the service journal\n");
+    let dir_text = sandbox.posix(&dir);
+
+    let missing = sandbox.run(&["logday", "3302", "2026-01-05", "1000000", &dir_text]);
+    assert_ok(&missing);
+    assert_eq!(stdout(&missing), "LOGDAY_NONE=1\n");
+
+    for day in ["../secret", "2026-01-02/../../secret", "2026-1-2", ""] {
+        let refused = sandbox.run(&["logday", "3302", day, "1000000", &dir_text]);
+        assert_eq!(refused.status.code(), Some(2), "day {day:?}");
+        assert!(stdout(&refused).is_empty(), "day {day:?}");
+    }
+    let relative = sandbox.run(&["logday", "3302", "2026-01-02", "1000000", "root/moonbot-a"]);
+    assert!(!relative.status.success());
+    assert!(stdout(&relative).is_empty());
+}
+
+/// Sending a file over the caller's limit would buffer it whole in the terminal's memory before
+/// anything could refuse it; a limit that is not a number must not be read as "no limit".
+#[test]
+fn logday_refuses_a_file_over_the_limit_before_sending_it() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    let dir = sandbox.instance("moonbot-a");
+    sandbox.executable(&dir.join("MoonBot"), "#!/bin/sh\nexit 0\n");
+    let day = "00:00:01  one line of the day\n";
+    sandbox.answer_at(&dir.join("logs").join("LOG_2026-01-02.log"), day);
+    let dir_text = sandbox.posix(&dir);
+    let size = day.len();
+
+    let below = (size - 1).to_string();
+    let over = sandbox.run(&["logday", "3302", "2026-01-02", &below, &dir_text]);
+    assert_ok(&over);
+    assert_eq!(stdout(&over), format!("LOGDAY_TOO_BIG={size}\n"));
+
+    let exact = sandbox.run(&["logday", "3302", "2026-01-02", &size.to_string(), &dir_text]);
+    assert_ok(&exact);
+    assert!(stdout(&exact).starts_with("LOGDAY_BEGIN\n"));
+
+    for limit in ["", "lots", "-1"] {
+        let refused = sandbox.run(&["logday", "3302", "2026-01-02", limit, &dir_text]);
+        assert_eq!(refused.status.code(), Some(2), "limit {limit:?}");
+        assert!(stdout(&refused).is_empty(), "limit {limit:?}");
+    }
+}
+
 /// Opening the new rule after deleting the old one or marking first could strand the changed endpoint.
 #[test]
 fn retarget_rewrites_only_the_port_and_moves_the_firewall_rule() {

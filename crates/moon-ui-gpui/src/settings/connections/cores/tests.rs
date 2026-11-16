@@ -406,6 +406,7 @@ fn body_with_status(
             retarget_recovery: false,
             exchange_attempt: 0,
             exchange_switched: None,
+            day_log: Default::default(),
         }),
         &open,
         &act,

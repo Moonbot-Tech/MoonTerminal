@@ -198,7 +198,9 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
     match view.cmd {
         Cmd::Status => status::build(facts, view),
         Cmd::RetryLogin => retry::build(facts, view),
-        Cmd::Log => log::build(facts, view),
+        // The day pull lives on the Log tab and has no page here; were this window ever pointed at
+        // it, the log page is the one that tells the user where they are.
+        Cmd::Log | Cmd::LogDay => log::build(facts, view),
         Cmd::Start | Cmd::Stop | Cmd::Restart => service::build(facts, view),
         Cmd::SwitchExchange => exchange::build(facts, view),
         Cmd::ApiKeys => keys::build(facts, view),
@@ -247,7 +249,7 @@ pub(super) fn title(cmd: Cmd) -> &'static str {
     match cmd {
         Cmd::Status => "core_cmds.status.title",
         Cmd::RetryLogin => "core_cmds.retry.title",
-        Cmd::Log => "core_cmds.log.title",
+        Cmd::Log | Cmd::LogDay => "core_cmds.log.title",
         Cmd::Restart => "core_cmds.service.restart_title",
         Cmd::Stop => "core_cmds.service.stop_title",
         Cmd::Start => "core_cmds.service.start_title",

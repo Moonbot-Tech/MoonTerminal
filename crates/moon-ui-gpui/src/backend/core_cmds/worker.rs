@@ -5,8 +5,8 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use moon_remote::core_cmds::{
-    self, Cmd, LocateResult, Located, LogLines, LogTail, Login, Refusal, ServiceAction,
-    ServiceFailed, ServiceInfo,
+    self, Cmd, LocateResult, Located, LogDay, LogDayUnusable, LogLines, LogTail, Login, Refusal,
+    ServiceAction, ServiceFailed, ServiceInfo,
 };
 use moon_remote::core_new::{self, ApiKeys, CoreStatus, Exchange};
 use moon_remote::script::Privilege;
@@ -29,7 +29,27 @@ pub(crate) enum Event {
     Key(Zeroizing<String>),
     Exchanges(Vec<Exchange>),
     ExchangeSwitched,
-    AddressChanged { host: String, port: u16 },
+    AddressChanged {
+        host: String,
+        port: u16,
+    },
+    /// The daily trading logs the core still has, newest first.
+    LogDays(Vec<LogDay>),
+    /// One day was pulled and stored under `file` in the terminal's log folder.
+    LogDaySaved {
+        date: String,
+        file: String,
+    },
+    /// The pull of that day ended in a failure. Reported apart from the command's phase: a listing
+    /// and a pull share one phase, and a listing that fails ahead of a queued pull is not the end
+    /// of that pull.
+    LogDayFailed {
+        date: String,
+    },
+    /// The core has no trading log for that day.
+    LogDayAbsent {
+        date: String,
+    },
 }
 
 /// The server calls needed by the command runner, isolated from SSH for deterministic tests.
@@ -77,6 +97,17 @@ pub(crate) trait Runner {
     ) -> anyhow::Result<(Zeroizing<String>, Option<String>)>;
     /// Read the existing MoonProto connection key.
     fn moonproto_key(&self, dir: &str) -> anyhow::Result<Zeroizing<String>>;
+    /// List the core's daily trading logs, with the cached directory as a stopped-core fallback.
+    fn log_days(&self, port: u16, dir_hint: Option<&str>) -> anyhow::Result<Vec<LogDay>>;
+    /// Pull one whole day of the core's trading log, or `None` when it has no file for that day.
+    fn log_day(
+        &self,
+        port: u16,
+        date: &str,
+        dir_hint: Option<&str>,
+    ) -> anyhow::Result<Option<Vec<u8>>>;
+    /// Store a pulled day in the terminal's log folder and return the stored file's name.
+    fn save_log_day(&self, date: &str, label: &str, raw: &[u8]) -> std::io::Result<String>;
 }
 
 /// The cached location facts needed to execute one request.
@@ -181,6 +212,23 @@ impl Runner for SshRunner {
     fn moonproto_key(&self, dir: &str) -> anyhow::Result<Zeroizing<String>> {
         core_cmds::moonproto_key(&self.conn, &self.privilege, dir)
     }
+
+    fn log_days(&self, port: u16, dir_hint: Option<&str>) -> anyhow::Result<Vec<LogDay>> {
+        core_cmds::log_days(&self.conn, &self.privilege, port, dir_hint)
+    }
+
+    fn log_day(
+        &self,
+        port: u16,
+        date: &str,
+        dir_hint: Option<&str>,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        core_cmds::log_day(&self.conn, &self.privilege, port, date, dir_hint)
+    }
+
+    fn save_log_day(&self, date: &str, label: &str, raw: &[u8]) -> std::io::Result<String> {
+        moon_core::applog::server_day::write_server_day(date, label, raw).map(|saved| saved.file)
+    }
 }
 
 /// Start a named worker thread whose events carry this spawn's generation.
@@ -240,6 +288,9 @@ fn serve(
                 Err(error) => {
                     located = None;
                     send(Event::Phase(cmd, CmdPhase::Failed(ssh_failure(error))));
+                    if let Some(date) = pulled_day(&request) {
+                        send(Event::LogDayFailed { date });
+                    }
                     log::info!("core-cmds {uid} {cmd:?}: failed");
                     continue;
                 }
@@ -291,8 +342,37 @@ fn serve(
     }
 }
 
+/// The day a request pulls, when it is a day pull.
+fn pulled_day(request: &CmdRequest) -> Option<String> {
+    match request {
+        CmdRequest::Run {
+            cmd: Cmd::LogDay,
+            args: CmdArgs::LogDay { date, .. },
+        } => Some(date.clone()),
+        _ => None,
+    }
+}
+
 /// Execute one request, publishing facts and progress as they arrive.
+///
+/// A day pull that fails anywhere on the way — at the locate, at the gate, in the transfer or in
+/// the write — is also reported as that pull's own failure; see [`Event::LogDayFailed`].
 fn run_with(
+    runner: &dyn Runner,
+    facts_snapshot: FactsSnapshot,
+    request: CmdRequest,
+    emit: &mut dyn FnMut(Event),
+) -> bool {
+    let pulled = pulled_day(&request);
+    let ok = run_request(runner, facts_snapshot, request, emit);
+    if !ok && let Some(date) = pulled {
+        emit(Event::LogDayFailed { date });
+    }
+    ok
+}
+
+/// Run the command a request names against the located core.
+fn run_request(
     runner: &dyn Runner,
     facts_snapshot: FactsSnapshot,
     request: CmdRequest,
@@ -466,6 +546,39 @@ fn run_with(
             }
             Err(error) => fail(cmd, ssh_failure(error), emit),
         },
+        // A pull holds this core's one session for as long as the day takes to arrive — a couple
+        // of seconds on an ordinary link — and every other command for the core waits behind it.
+        // A second session only for the log would need the server login opened twice.
+        Cmd::LogDay => match args {
+            CmdArgs::LogDay { date, label } => {
+                match runner.log_day(port, &date, Some(&located.dir)) {
+                    Ok(Some(raw)) => match runner.save_log_day(&date, &label, &raw) {
+                        Ok(file) => {
+                            emit(Event::LogDaySaved { date, file });
+                            done(cmd, emit)
+                        }
+                        Err(error) => fail(
+                            cmd,
+                            CmdError::Refused(format!("the log could not be saved: {error}")),
+                            emit,
+                        ),
+                    },
+                    Ok(None) => {
+                        emit(Event::LogDayAbsent { date });
+                        done(cmd, emit)
+                    }
+                    Err(error) => fail(cmd, ssh_failure(error), emit),
+                }
+            }
+            CmdArgs::None => match runner.log_days(port, Some(&located.dir)) {
+                Ok(days) => {
+                    emit(Event::LogDays(days));
+                    done(cmd, emit)
+                }
+                Err(error) => fail(cmd, ssh_failure(error), emit),
+            },
+            _ => invalid_args(cmd, emit),
+        },
     }
 }
 
@@ -570,8 +683,14 @@ fn invalid_args(cmd: Cmd, emit: &mut dyn FnMut(Event)) -> bool {
 }
 
 /// Preserve core and service refusals; only transport and location failures become SSH errors.
+///
+/// A day's log that arrived unusable is a refusal too: the connection carried it fine, and
+/// reopening the session — what an SSH error makes the worker do — would fetch the same thing.
 fn ssh_failure(error: anyhow::Error) -> CmdError {
-    if error.is::<ServiceFailed>() || error.is::<core_new::CoreRefusal>() {
+    if error.is::<ServiceFailed>()
+        || error.is::<core_new::CoreRefusal>()
+        || error.is::<LogDayUnusable>()
+    {
         CmdError::Refused(error.to_string())
     } else {
         CmdError::Ssh(format!("{error:#}"))

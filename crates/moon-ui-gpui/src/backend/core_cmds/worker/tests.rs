@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::net::Ipv4Addr;
 
 use moon_remote::core_cmds::{
-    Cmd, LocateResult, Located, LogLines, LogTail, ServiceAction, ServiceInfo,
+    Cmd, LocateResult, Located, LogDay, LogDayUnusable, LogLines, LogTail, ServiceAction,
+    ServiceInfo,
 };
 use moon_remote::core_new::{CoreState, CoreStatus, Exchange};
 use zeroize::Zeroizing;
@@ -46,6 +47,12 @@ struct FakeRunner {
     info_available: bool,
     info_active: bool,
     status_error: bool,
+    /// What the server holds for the asked day: `None` is a day the core has no file for.
+    day: Option<Vec<u8>>,
+    /// Whether the pulled day arrives unusable instead.
+    day_unusable: bool,
+    /// Whether storing a pulled day fails.
+    save_error: bool,
 }
 
 impl FakeRunner {
@@ -59,6 +66,9 @@ impl FakeRunner {
             info_available: true,
             info_active: true,
             status_error: false,
+            day: Some(b"00:00:01  CORE_A ready\n".to_vec()),
+            day_unusable: false,
+            save_error: false,
         }
     }
 
@@ -197,6 +207,35 @@ impl Runner for FakeRunner {
     fn moonproto_key(&self, dir: &str) -> anyhow::Result<Zeroizing<String>> {
         self.record(format!("moonproto_key:{dir}"));
         Ok(Zeroizing::new("TEST_CONNECTION_KEY".into()))
+    }
+
+    fn log_days(&self, port: u16, dir_hint: Option<&str>) -> anyhow::Result<Vec<LogDay>> {
+        self.record(format!("log_days:{port}:{}", dir_hint.unwrap_or("-")));
+        Ok(vec![LogDay {
+            date: "2026-01-02".into(),
+            bytes: 23,
+        }])
+    }
+
+    fn log_day(
+        &self,
+        port: u16,
+        date: &str,
+        dir_hint: Option<&str>,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.record(format!("log_day:{port}:{date}:{}", dir_hint.unwrap_or("-")));
+        if self.day_unusable {
+            return Err(LogDayUnusable("the log arrived damaged".into()).into());
+        }
+        Ok(self.day.clone())
+    }
+
+    fn save_log_day(&self, date: &str, label: &str, raw: &[u8]) -> std::io::Result<String> {
+        self.record(format!("save_log_day:{date}:{label}:{}", raw.len()));
+        if self.save_error {
+            return Err(std::io::Error::other("disk full"));
+        }
+        Ok(format!("{date}_{label}.server.log"))
     }
 }
 
@@ -421,6 +460,15 @@ fn every_command_reaches_its_runner_method() {
             "set_moonproto_address:",
         ),
         (Cmd::UpdateCore, CmdArgs::None, "status:"),
+        (Cmd::LogDay, CmdArgs::None, "log_days:"),
+        (
+            Cmd::LogDay,
+            CmdArgs::LogDay {
+                date: "2026-01-02".into(),
+                label: "CORE_A".into(),
+            },
+            "log_day:",
+        ),
     ];
 
     for (cmd, args, expected) in cases {
@@ -440,6 +488,156 @@ fn every_command_reaches_its_runner_method() {
             }));
         }
     }
+}
+
+/// Build the request that pulls the fixture's day under the fixture's label.
+fn pull_day() -> CmdRequest {
+    CmdRequest::Run {
+        cmd: Cmd::LogDay,
+        args: CmdArgs::LogDay {
+            date: "2026-01-02".into(),
+            label: "CORE_A".into(),
+        },
+    }
+}
+
+/// Opening the day menu must only list: pulling a day nobody picked would write a file unasked.
+#[test]
+fn listing_days_pulls_and_stores_nothing() {
+    let fake = FakeRunner::new();
+    let events = run(
+        &fake,
+        cached_snapshot(&fake),
+        CmdRequest::Run {
+            cmd: Cmd::LogDay,
+            args: CmdArgs::None,
+        },
+    );
+
+    assert!(events.iter().any(
+        |event| matches!(event, Event::LogDays(days) if days.len() == 1 && days[0].bytes == 23)
+    ));
+    assert_eq!(*fake.calls.borrow(), ["log_days:3302:/root/moonbot-a"]);
+}
+
+/// A pull's failure must name its day whichever step it failed at, and a failed listing must name
+/// none: the backend ends a pull by that day, and a listing can fail ahead of a queued pull.
+#[test]
+fn a_failed_pull_names_its_day_and_a_failed_listing_names_none() {
+    let failed_days = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::LogDayFailed { date } => Some(date.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Failed before the pull itself: no core answers on the port.
+    let nowhere = FakeRunner::with_locate(LocateResult::None);
+    assert_eq!(
+        failed_days(&run(&nowhere, snapshot(), pull_day())),
+        ["2026-01-02"]
+    );
+    // Failed in the pull.
+    let mut damaged = FakeRunner::new();
+    damaged.day_unusable = true;
+    assert_eq!(
+        failed_days(&run(&damaged, cached_snapshot(&damaged), pull_day())),
+        ["2026-01-02"]
+    );
+    // A pull that worked reports no failure.
+    let fine = FakeRunner::new();
+    assert!(failed_days(&run(&fine, cached_snapshot(&fine), pull_day())).is_empty());
+    // A listing that fails is not a pull.
+    let listing = CmdRequest::Run {
+        cmd: Cmd::LogDay,
+        args: CmdArgs::None,
+    };
+    let events = run(&nowhere, snapshot(), listing);
+    assert!(matches!(
+        phase(&events, Cmd::LogDay),
+        CmdPhase::Failed(CmdError::NoCore { port: 3302 })
+    ));
+    assert!(failed_days(&events).is_empty());
+}
+
+/// The pulled bytes must be stored under the asked day and label, and the stored name reported —
+/// the panel opens exactly that file.
+#[test]
+fn a_pulled_day_is_stored_and_its_file_reported() {
+    let fake = FakeRunner::new();
+    let events = run(&fake, cached_snapshot(&fake), pull_day());
+
+    assert_eq!(
+        *fake.calls.borrow(),
+        [
+            "log_day:3302:2026-01-02:/root/moonbot-a",
+            "save_log_day:2026-01-02:CORE_A:23"
+        ]
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::LogDaySaved { date, file }
+            if date == "2026-01-02" && file == "2026-01-02_CORE_A.server.log"
+    )));
+    assert!(matches!(phase(&events, Cmd::LogDay), CmdPhase::Done));
+}
+
+/// A day the core does not have is an answer, not a failure — and must not leave an empty file.
+#[test]
+fn a_missing_day_is_reported_and_nothing_is_stored() {
+    let mut fake = FakeRunner::new();
+    fake.day = None;
+    let events = run(&fake, cached_snapshot(&fake), pull_day());
+
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::LogDayAbsent { date } if date == "2026-01-02"))
+    );
+    assert!(matches!(phase(&events, Cmd::LogDay), CmdPhase::Done));
+    assert!(
+        !fake
+            .calls
+            .borrow()
+            .iter()
+            .any(|call| call.starts_with("save_log_day:"))
+    );
+}
+
+/// An unusable day or a failed write is a refusal: an SSH error would drop the session and the
+/// cached location for a fault the connection did not have.
+#[test]
+fn an_unusable_day_and_a_failed_write_refuse_without_an_ssh_failure() {
+    let mut damaged = FakeRunner::new();
+    damaged.day_unusable = true;
+    let events = run(&damaged, cached_snapshot(&damaged), pull_day());
+    assert!(matches!(
+        phase(&events, Cmd::LogDay),
+        CmdPhase::Failed(CmdError::Refused(reason)) if reason == "the log arrived damaged"
+    ));
+    assert!(
+        !damaged
+            .calls
+            .borrow()
+            .iter()
+            .any(|call| call.starts_with("save_log_day:"))
+    );
+
+    let mut full = FakeRunner::new();
+    full.save_error = true;
+    let events = run(&full, cached_snapshot(&full), pull_day());
+    assert!(matches!(
+        phase(&events, Cmd::LogDay),
+        CmdPhase::Failed(CmdError::Refused(reason)) if reason.contains("disk full")
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::LogDaySaved { .. }))
+    );
 }
 
 /// Opening the exchange picker must fetch choices rather than selecting an empty exchange name.

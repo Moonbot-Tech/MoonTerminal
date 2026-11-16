@@ -61,6 +61,12 @@ impl Render for LogPanel {
                         .child(t!("log.file").to_string()),
                 )
                 .child(self.file_combo(&self.available_files, cx));
+            if let Some(server_days) = self.server_day_combo(cx) {
+                controls = controls.child(server_days);
+            }
+            if let Some(paging) = self.page_controls(cx) {
+                controls = controls.child(paging);
+            }
         }
         controls = controls
             .child(

@@ -31,6 +31,8 @@ pub(in crate::settings) use tab::{
     subsection_header_row,
 };
 pub(in crate::settings) use table::conn_row_h_value;
+// The Log tab offers a core's server log on the same addresses this page offers server commands on.
+pub(crate) use core_menu::eligible as server_commands_eligible;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

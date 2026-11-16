@@ -103,6 +103,47 @@ pub struct LogTail {
     pub lines: Vec<String>,
 }
 
+/// One daily trading log a core still has on its server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogDay {
+    /// The server's own calendar day, `YYYY-MM-DD`, as the core names the file.
+    pub date: String,
+    /// Size of the file in bytes at the moment it was listed.
+    pub bytes: u64,
+}
+
+/// What the server answered when asked for one day's trading log.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LogDayReply<'a> {
+    /// The core has no file for that day.
+    Absent,
+    /// The whole file, gzipped, exactly as it followed the marker line.
+    Gzip(&'a [u8]),
+    /// The file is larger than the limit sent with the request; nothing of it was transferred.
+    TooBig(u64),
+}
+
+/// A day's log that reached this machine and cannot be used: cut short, not what was asked for, or
+/// over [`LOG_DAY_MAX_BYTES`].
+///
+/// Typed apart from a transport failure, because the connection is fine and reopening it — what a
+/// caller does on a transport failure — would only repeat the same answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogDayUnusable(pub String);
+
+impl std::fmt::Display for LogDayUnusable {
+    /// The reason, in words fit for the window that shows it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for LogDayUnusable {}
+
+/// Largest unpacked day accepted, so a damaged or hostile stream cannot fill this machine's memory.
+/// A busy core writes tens of megabytes a day; this leaves an order of magnitude above that.
+pub const LOG_DAY_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
 /// A command the terminal may request for a core.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Cmd {
@@ -117,6 +158,8 @@ pub enum Cmd {
     ConnectionKey,
     MoonProtoAddress,
     UpdateCore,
+    /// List the core's daily trading logs, or pull one of them onto this computer.
+    LogDay,
 }
 
 /// Why a located core cannot perform a requested command.
@@ -215,6 +258,90 @@ pub fn parse_log(text: &str) -> LogTail {
             .map(str::to_owned)
             .collect(),
     }
+}
+
+/// Whether `date` has the `YYYY-MM-DD` shape the server-side script accepts as a log day.
+///
+/// The shape is the whole check: the date becomes part of a path on the server, and a month the
+/// calendar does not have simply names a file that is not there.
+pub fn is_log_date(date: &str) -> bool {
+    let bytes = date.as_bytes();
+    bytes.len() == 10
+        && bytes.iter().enumerate().all(|(at, byte)| match at {
+            4 | 7 => *byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
+}
+
+/// Parse a `logdays` reply into the days the core still has, newest first.
+///
+/// Lines before the marker, and entries that are not a calendar day with a byte count, are dropped:
+/// the listing fills a menu the user picks from, and a name that is not a day cannot be pulled.
+pub fn parse_log_days(text: &str) -> Vec<LogDay> {
+    let mut days: Vec<LogDay> = text
+        .lines()
+        .skip_while(|line| *line != "LOGDAYS_BEGIN")
+        .skip(1)
+        .filter_map(|line| line.strip_prefix("LOGDAY="))
+        .filter_map(|entry| {
+            let (date, bytes) = entry.split_once(' ')?;
+            let bytes = bytes.parse().ok()?;
+            is_log_date(date).then(|| LogDay {
+                date: date.to_owned(),
+                bytes,
+            })
+        })
+        .collect();
+    days.sort_by(|a, b| b.date.cmp(&a.date));
+    days
+}
+
+/// Split a `logday` reply into "no such day", "over the limit", or the gzipped file that follows
+/// the marker line.
+///
+/// The marker is looked for at the start of a line only, and the first one wins: everything after
+/// it is binary and may contain any byte sequence, the marker's own included.
+pub fn split_log_day(stdout: &[u8]) -> Option<LogDayReply<'_>> {
+    const BEGIN: &[u8] = b"LOGDAY_BEGIN\n";
+    const NONE: &[u8] = b"LOGDAY_NONE=1\n";
+    const TOO_BIG: &[u8] = b"LOGDAY_TOO_BIG=";
+    let mut line = 0;
+    loop {
+        let rest = stdout.get(line..)?;
+        if rest.starts_with(BEGIN) {
+            return Some(LogDayReply::Gzip(&rest[BEGIN.len()..]));
+        }
+        if rest.starts_with(NONE) {
+            return Some(LogDayReply::Absent);
+        }
+        if let Some(size) = rest.strip_prefix(TOO_BIG) {
+            let end = size.iter().position(|byte| *byte == b'\n')?;
+            let size = std::str::from_utf8(&size[..end]).ok()?.parse().ok()?;
+            return Some(LogDayReply::TooBig(size));
+        }
+        line += rest.iter().position(|byte| *byte == b'\n')? + 1;
+    }
+}
+
+/// Unpack one day's log, refusing a stream that is cut short or larger than [`LOG_DAY_MAX_BYTES`].
+///
+/// A connection that drops mid-transfer leaves a gzip stream without its trailer, which the decoder
+/// reports as an error — so half a day is never returned as the day.
+pub fn gunzip_log_day(gzip: &[u8]) -> Result<Vec<u8>, LogDayUnusable> {
+    use std::io::Read;
+
+    let mut day = Vec::new();
+    flate2::read::GzDecoder::new(gzip)
+        .take(LOG_DAY_MAX_BYTES + 1)
+        .read_to_end(&mut day)
+        .map_err(|error| LogDayUnusable(format!("the log arrived damaged: {error}")))?;
+    if day.len() as u64 > LOG_DAY_MAX_BYTES {
+        return Err(LogDayUnusable(format!(
+            "the log is larger than {} MB",
+            LOG_DAY_MAX_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(day)
 }
 
 /// Refuse commands that the located installation is not allowed to perform.

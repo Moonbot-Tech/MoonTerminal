@@ -219,10 +219,96 @@ fn failed_service_display_excludes_journal_text() {
     assert_eq!(failure.tail, ["JOURNAL_SECRET", "second line"]);
 }
 
+/// A hand-installed core, and one without the `mb` wrapper, must still hand over its own log.
+#[test]
+fn a_day_pull_is_open_to_every_located_core() {
+    let hand = Located {
+        dir: "/opt/CORE_A".into(),
+        unit: "UNIT_01.service".into(),
+        ours: false,
+        has_mb: false,
+        active: Some(false),
+        port_known: true,
+    };
+    assert_eq!(gate(&hand, Cmd::LogDay), Ok(()));
+}
+
+/// Offering a name that is not a day would put a path fragment the script refuses into the menu,
+/// and an unsorted list would hide yesterday below last month.
+#[test]
+fn the_day_listing_keeps_only_calendar_days_newest_first() {
+    let reply = "noise before\nLOGDAY=1999-01-01 7\nLOGDAYS_BEGIN\n\
+                 LOGDAY=2026-01-02 2048\nLOGDAY=2026-01-10 31\nLOGDAY=abcd-ef-gh 5\n\
+                 LOGDAY=2026-01-03 many\nLOGDAY=2026-01-04\nother line\n";
+    assert_eq!(
+        parse_log_days(reply),
+        [
+            LogDay {
+                date: "2026-01-10".into(),
+                bytes: 31
+            },
+            LogDay {
+                date: "2026-01-02".into(),
+                bytes: 2048
+            },
+        ]
+    );
+    assert!(parse_log_days("LOGDAY=2026-01-02 2048\n").is_empty());
+    for bad in ["2026-1-02", "2026-01-02 ", "../../etc/pw", "2026/01/02", ""] {
+        assert!(!is_log_date(bad), "{bad:?} must not pass as a day");
+    }
+}
+
+/// Reading the marker inside the binary, or taking "no such day" for an empty file, would save
+/// garbage under the day's name.
+#[test]
+fn the_day_reply_splits_at_the_first_line_start_marker() {
+    assert_eq!(
+        split_log_day(b"LOGDAY_BEGIN\n\x1f\x8bLOGDAY_NONE=1\nLOGDAY_BEGIN\nrest"),
+        Some(LogDayReply::Gzip(
+            b"\x1f\x8bLOGDAY_NONE=1\nLOGDAY_BEGIN\nrest"
+        ))
+    );
+    assert_eq!(
+        split_log_day(b"a notice\nLOGDAY_NONE=1\n"),
+        Some(LogDayReply::Absent)
+    );
+    assert_eq!(
+        split_log_day(b"LOGDAY_TOO_BIG=987654321\n"),
+        Some(LogDayReply::TooBig(987_654_321))
+    );
+    assert_eq!(split_log_day(b"LOGDAY_TOO_BIG=many\n"), None);
+    assert_eq!(split_log_day(b"xLOGDAY_BEGIN\n\x1f\x8b"), None);
+    assert_eq!(split_log_day(b""), None);
+}
+
+/// A dropped connection must not be saved as a whole day.
+#[test]
+fn a_cut_day_is_refused_and_a_whole_one_unpacks() {
+    use std::io::Write;
+
+    let day = "00:00:01  first\n23:59:59  last\n".repeat(400);
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(day.as_bytes()).unwrap();
+    let gzip = encoder.finish().unwrap();
+
+    assert_eq!(gunzip_log_day(&gzip).unwrap(), day.as_bytes());
+    assert!(gunzip_log_day(&gzip[..gzip.len() / 2]).is_err());
+    assert!(gunzip_log_day(b"00:00:01  plain text, not gzip\n").is_err());
+}
+
 /// Removing a script arm or broadening the exception would leave the typed API calling a missing step.
 #[test]
 fn embedded_script_has_all_steps_and_only_safe_mb_exceptions() {
-    for arm in ["locate)", "info)", "service)", "log)", "retarget)"] {
+    for arm in [
+        "locate)",
+        "info)",
+        "service)",
+        "log)",
+        "logdays)",
+        "logday)",
+        "retarget)",
+    ] {
         assert!(SCRIPT.contains(arm), "missing script arm {arm}");
     }
     assert!(SCRIPT.contains("--status|--retry-login"));

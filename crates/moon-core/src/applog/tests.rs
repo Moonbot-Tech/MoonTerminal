@@ -83,6 +83,23 @@ fn file_name_matches_the_writer_spelling() {
     );
 }
 
+/// A core's file list must hold its live copies AND its pulled days, and nothing of a core whose
+/// name merely ends the same way — that one's log would open under the wrong core.
+#[test]
+fn a_file_belongs_to_its_own_label_in_both_kinds() {
+    use super::belongs_to_label;
+    assert!(belongs_to_label("2026-08-03_BinF1.log", "BinF1"));
+    assert!(belongs_to_label("2026-08-03_BinF1.server.log", "BinF1"));
+    assert!(!belongs_to_label("2026-08-03_xBinF1.log", "BinF1"));
+    assert!(!belongs_to_label("2026-08-03_xBinF1.server.log", "BinF1"));
+    assert!(!belongs_to_label(
+        "2026-08-03_BinF1.server.log.part",
+        "BinF1"
+    ));
+    assert!(!belongs_to_label("2026-08-03_BinF1.txt", "BinF1"));
+    assert!(!belongs_to_label("commands.log", "BinF1"));
+}
+
 /// The cursor arithmetic behind [`super::since`], in the three shapes it has to survive.
 #[test]
 fn unseen_counts_what_the_reader_missed() {

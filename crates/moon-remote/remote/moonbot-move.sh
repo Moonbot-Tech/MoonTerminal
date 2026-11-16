@@ -20,6 +20,13 @@
 #   log     <udp port> <200|500|1000> [<dir hint>]
 #                                               — print a bounded tail, using the hint only when
 #                                                 no running or installed core can be located
+#   logdays <udp port> [<dir hint>]             — list the daily trading logs the core still has,
+#                                                 one `LOGDAY=<yyyy-mm-dd> <bytes>` line each
+#   logday  <udp port> <yyyy-mm-dd> <max bytes> [<dir hint>]
+#                                               — print that day's whole trading log, gzipped, after
+#                                                 a `LOGDAY_BEGIN` line; `LOGDAY_NONE=1` when the
+#                                                 core has no file for that day, and
+#                                                 `LOGDAY_TOO_BIG=<bytes>` when it is over the limit
 #   retarget <instance dir> <new udp port>      — move the marker and its recorded firewall rule
 #   mb      <instance dir> <arguments…>         — one command of the core's own CLI; stdin passes
 #                                                 through; runs as the account the core runs as
@@ -93,6 +100,21 @@ locate_port() {
         ours=1
     fi
     return 0
+}
+
+# Set dir, and unit when a core owns UDP port $1, for the log steps. The directory hint $2 is used
+# only when no running or installed core can be located, and must name an instance directory: a
+# stopped core still has its log files.
+log_instance() {
+    if ! locate_port "$1"; then
+        dir=${2:-}
+        case $dir in /*) ;; *) exit 1;; esac
+        nl=$(printf '\n_')
+        nl=${nl%_}
+        case $dir in *"$nl"*) exit 1;; esac
+        test -x "$dir/MoonBot" || exit 1
+        unit=''
+    fi
 }
 
 # Print one stopped candidate whose executable exists and whose INI or marker confirms the port when known.
@@ -597,15 +619,7 @@ log)
     validate_port "${1:-}"
     n=${2:-}
     case $n in 200|500|1000);; *) exit 2;; esac
-    if ! locate_port "$p"; then
-        dir=${3:-}
-        case $dir in /*) ;; *) exit 1;; esac
-        nl=$(printf '\n_')
-        nl=${nl%_}
-        case $dir in *"$nl"*) exit 1;; esac
-        test -x "$dir/MoonBot" || exit 1
-        unit=''
-    fi
+    log_instance "$p" "${3:-}"
     log_file=''
     # ISO dates sort lexically, so the last matching path is the newest daily trading log.
     for candidate in "$dir"/logs/LOG_????-??-??.log; do
@@ -617,6 +631,50 @@ log)
         exit 0
     fi
     journalctl -u "$unit" -n "$n" --no-pager --utc -o short-iso
+    ;;
+logdays)
+    validate_port "${1:-}"
+    log_instance "$p" "${2:-}"
+    echo LOGDAYS_BEGIN
+    for candidate in "$dir"/logs/LOG_????-??-??.log; do
+        test -f "$candidate" || continue
+        day=${candidate##*/LOG_}
+        # The arithmetic expansion drops the padding a BSD `wc` prints before the count. A file
+        # that went away since the glob matched is skipped, not the end of the listing.
+        size=$(wc -c 2>/dev/null < "$candidate") || continue
+        printf 'LOGDAY=%s %s\n' "${day%.log}" "$((size))"
+    done
+    ;;
+logday)
+    validate_port "${1:-}"
+    day=${2:-}
+    # The day becomes part of a path: nothing but a date may reach it.
+    case $day in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+    *) exit 2 ;;
+    esac
+    max=${3:-}
+    case $max in ''|*[!0-9]*) exit 2;; esac
+    log_instance "$p" "${4:-}"
+    log_file=$dir/logs/LOG_$day.log
+    if test ! -f "$log_file"; then
+        echo LOGDAY_NONE=1
+        exit 0
+    fi
+    # A file past the caller's limit is refused before a byte of it is sent: the caller holds the
+    # whole reply in memory. A file still being written can grow past the limit after this check,
+    # which is why the caller caps what it unpacks as well.
+    size=$(wc -c < "$log_file")
+    if test "$((size))" -gt "$max"; then
+        printf 'LOGDAY_TOO_BIG=%s\n' "$((size))"
+        exit 0
+    fi
+    # A day is tens of megabytes of text; compressed it is a tenth of that on the wire. The service
+    # journal is never substituted: it is a different log. The file goes in through stdin: given
+    # its name, gzip compares the size before and after and complains about a log that grew
+    # meanwhile, which today's always does.
+    echo LOGDAY_BEGIN
+    gzip -c < "$log_file"
     ;;
 retarget)
     dest=$(resolve_dir "${1:-}")

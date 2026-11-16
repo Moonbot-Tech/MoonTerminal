@@ -1073,6 +1073,7 @@ fn empty_facts() -> CoreFacts {
         retarget_recovery: false,
         exchange_attempt: 0,
         exchange_switched: None,
+        day_log: Default::default(),
     }
 }
 
@@ -1122,6 +1123,8 @@ fn snapshot(facts: &CoreFacts, cmd: Cmd) -> CoreFacts {
         retarget_recovery: facts.retarget_recovery,
         exchange_attempt: facts.exchange_attempt,
         exchange_switched: facts.exchange_switched,
+        // The command window has no page for the day pull; the Log tab reads it from the backend.
+        day_log: Default::default(),
     }
 }
 
