@@ -70,6 +70,15 @@ impl CoalescedDeadline {
         );
     }
 
+    /// Queues a run that is due at once, cooldown or not.
+    ///
+    /// For work that was already allowed past the throttle and then could not be done: a
+    /// publication that bypasses the cooldown, held back because its consumer had no room. Going
+    /// through [`Self::queue`] instead would make it sit out a cooldown it was never subject to.
+    pub(super) fn force(&mut self, now: Instant) {
+        self.due_at = Some(now);
+    }
+
     /// Records that something authoritative already did the work, and clears what was queued.
     pub(super) fn satisfy(&mut self) {
         self.due_at = None;

@@ -66,6 +66,73 @@ fn missing_snapshot_defers_lines_and_table() {
     assert_eq!(table.wait(now), Some(Duration::from_millis(250)));
 }
 
+/// #1081: while the consumer holds this core's previous batch the feed thread may not send the
+/// table that is due. A zero wait for that table would turn the loop without a pause for the
+/// whole stall, on every core at once. Dropping the hold from `order_waits` is the edit this
+/// catches.
+#[test]
+fn a_held_publication_is_not_a_deadline_to_sleep_on() {
+    let now = Instant::now();
+    let mut table = deadline::CoalescedDeadline::new(ORDERS_TABLE_PERIOD);
+    let mut lines = deadline::CoalescedDeadline::new(ORDER_LINES_PERIOD);
+    table.queue(now);
+    lines.queue(now);
+
+    assert_eq!(
+        order_waits(&table, &lines, now, || true),
+        (Some(Duration::ZERO), Some(Duration::ZERO)),
+        "with room for it, a due publication runs on the next turn"
+    );
+    assert_eq!(order_waits(&table, &lines, now, || false), (None, None));
+}
+
+/// The hold is for a publication that is due. One still inside its cooldown keeps its deadline,
+/// or a table queued while the consumer was briefly behind would wait for an unrelated wake.
+/// The gate is not even asked then: a refusal arms a wake, and one nobody needs is a wasted turn.
+#[test]
+fn a_publication_still_cooling_down_keeps_its_deadline() {
+    let now = Instant::now();
+    let mut table = deadline::CoalescedDeadline::new(ORDERS_TABLE_PERIOD);
+    let lines = deadline::CoalescedDeadline::new(ORDER_LINES_PERIOD);
+    table.mark_attempt(now);
+    table.queue(now);
+
+    let waits = order_waits(&table, &lines, now, || {
+        panic!("nothing is due, the gate must not be asked")
+    });
+
+    assert_eq!(waits, (Some(ORDERS_TABLE_PERIOD), None));
+}
+
+/// The publication step as the loop runs it, against a consumer that stops reading for two
+/// seconds: one table goes out, none follows while it sits in the channel, and the first turn
+/// after the take sends the owed one.
+#[test]
+fn the_owed_table_goes_out_on_the_turn_after_the_take() {
+    let (tx, feed, wakes) = crate::feed::order_gate_test_feed();
+    let start = Instant::now();
+    let mut table = deadline::CoalescedDeadline::new(ORDERS_TABLE_PERIOD);
+    let mut sent_at = Vec::new();
+    for ms in (0..=2000).step_by(50).chain([2010]) {
+        if ms == 2010 {
+            assert_eq!(sent_at, [0], "tables went out with nobody reading");
+            assert!(feed.rx.try_recv().is_ok());
+            assert!(wakes.try_recv().is_ok(), "the feed thread was not woken");
+        }
+        let now = start + Duration::from_millis(ms);
+        table.queue(now);
+        let publish =
+            OrdersPublish::decide(table.is_due(now), false).filter(|_| tx.order_batch_admitted());
+        if publish.is_some() {
+            table.mark_attempt(now);
+            tx.send(FeedMsg::Orders(Vec::<crate::feed::OrderRow>::new().into()))
+                .unwrap();
+            sent_at.push(ms);
+        }
+    }
+    assert_eq!(sent_at, [0, 2010]);
+}
+
 /// Removing the restart gate would restore the exited letter; collapsing empty suffixes would
 /// lose the distinction between a reported release and an unknown build.
 #[test]

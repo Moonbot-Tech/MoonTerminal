@@ -136,3 +136,21 @@ fn a_deadline_idle_since_now_makes_its_first_trigger_wait() {
     assert_eq!(deadline.wait(start), Some(interval));
     assert!(deadline.is_due(start + interval));
 }
+
+/// The snapshot after an order command bypasses the table's cooldown. Held back because the
+/// consumer had no room, it is owed past that cooldown too: queued the ordinary way it would
+/// answer the command a quarter of a second late.
+#[test]
+fn forced_work_is_due_inside_the_cooldown() {
+    let start = Instant::now();
+    let soon = start + Duration::from_millis(10);
+    let mut deadline = CoalescedDeadline::new(Duration::from_millis(250));
+    deadline.mark_attempt(start);
+    deadline.queue(soon);
+    assert!(!deadline.is_due(soon), "the cooldown holds ordinary work");
+
+    deadline.force(soon);
+
+    assert!(deadline.is_due(soon));
+    assert_eq!(deadline.wait(soon), Some(Duration::ZERO));
+}

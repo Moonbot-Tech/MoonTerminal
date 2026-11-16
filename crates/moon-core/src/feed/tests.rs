@@ -5,7 +5,7 @@ use anyhow::anyhow;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-mod order_queue;
+pub(crate) mod order_queue;
 
 /// Observations made by each injected connection attempt, independently of the retry timer.
 pub(crate) type Attempt = (Instant, Vec<super::QueuedCmd>, usize);
@@ -21,8 +21,9 @@ pub(crate) fn backoff_feed(
     let (data, rx) = mpsc::channel();
     let (attempt_tx, attempts) = mpsc::channel();
     let (done_tx, done) = mpsc::channel();
+    let tx = super::FeedTx::new(data, None);
+    let rx = super::FeedRx::new(rx, &tx, wake.clone());
     let join = std::thread::spawn(move || {
-        let tx = super::FeedTx::new(data, None);
         let mut first = true;
         super::retry::run(&server, &tx, &stop_rx, || {
             let queued = commands_rx.try_iter().collect();

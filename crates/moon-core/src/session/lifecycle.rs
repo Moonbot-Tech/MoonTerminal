@@ -653,7 +653,6 @@ impl SessionManager {
         let mut synced = HashSet::new();
         'feed: for sess in &self.sessions {
             while let Ok(msg) = sess.handle.rx.try_recv() {
-                crate::feed::note_drained();
                 stats.any = true;
                 stats.sound_inputs |= Self::sound_input_msg(&msg);
                 match msg {

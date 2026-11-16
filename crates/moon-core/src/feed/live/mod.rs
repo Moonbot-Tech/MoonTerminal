@@ -20,7 +20,9 @@ use client_slot::{ClientSlotGuard, RunStateSeen};
 use loop_helpers::{
     closed_row_uid, hex_dump, should_publish_assets, tg_opened, trace_field_indices,
 };
-use publish_gate::{ORDER_LINES_PERIOD, ORDERS_TABLE_PERIOD, OrderDebts, OrdersPublish};
+use publish_gate::{
+    ORDER_LINES_PERIOD, ORDERS_TABLE_PERIOD, OrderDebts, OrdersPublish, order_waits,
+};
 pub(in crate::feed) use run_guards::{EndpointUnusable, KeyUnreadable, NeverOperational};
 use run_guards::{reconnect_is_operational, run_failed, startup_poll_settled};
 use strategy_publish::{
@@ -43,6 +45,7 @@ mod default_settings;
 mod dirty;
 mod identity_refresh;
 mod market_role;
+mod pending_turns;
 mod ping_clock;
 mod report_sync;
 mod service;
@@ -381,7 +384,7 @@ pub(super) fn run(
     // interval earlier.
     let mut orders_table = CoalescedDeadline::idle_since(ORDERS_TABLE_PERIOD, Instant::now());
     let mut orders_lines = CoalescedDeadline::new(ORDER_LINES_PERIOD);
-    let mut pending_turns: Vec<Vec<crate::feed::OrderRow>> = Vec::new();
+    let mut pending_turns = pending_turns::PendingTurns::default();
     // Latched while the client has no state snapshot to build order rows from, so the condition is
     // reported once per episode instead of on every turn.
     let mut snapshotless_orders = false;
@@ -616,16 +619,22 @@ pub(super) fn run(
         // wake for work that, in the only state where the snapshot is missing, can never run.
         if orders_mutated && server.feed.orders {
             if let Some(snap) = client.snapshot() {
-                snapshotless_orders = false;
-                let rows = coalesced_order_rows(
-                    build_snapshot_rows(server.id, &snap),
-                    std::mem::take(&mut pending_turns),
-                );
-                let published_at = Instant::now();
-                orders_table.mark_attempt(published_at);
-                orders_lines.mark_attempt(published_at);
-                if tx.send(FeedMsg::Orders(rows)).is_err() {
-                    break;
+                if tx.order_batch_admitted() {
+                    snapshotless_orders = false;
+                    let rows = coalesced_order_rows(
+                        build_snapshot_rows(server.id, &snap),
+                        pending_turns.take(),
+                    );
+                    let published_at = Instant::now();
+                    orders_table.mark_attempt(published_at);
+                    orders_lines.mark_attempt(published_at);
+                    if tx.send(FeedMsg::Orders(rows)).is_err() {
+                        break;
+                    }
+                } else {
+                    // The consumer has not taken this core's previous batch. Owe the table past
+                    // its cooldown, as this snapshot was: it goes out when that batch is taken.
+                    orders_table.force(Instant::now());
                 }
             }
         }
@@ -2452,10 +2461,15 @@ pub(super) fn run(
         if server.feed.orders
             && (had_domain_event || orders_table.is_queued() || orders_lines.is_queued())
         {
+            // Nothing is built while the consumer still holds this core's previous batch: a full
+            // table four times a second into a loop that is not reading is what exhausted a
+            // station's memory (#1081). Both debts and the captured turns stay here, taking that
+            // batch wakes this loop, and the sleep below leaves the held deadlines out.
             let publish = OrdersPublish::decide(
                 orders_table.is_due(orders_now),
                 orders_lines.is_due(orders_now),
-            );
+            )
+            .filter(|_| tx.order_batch_admitted());
             // Read the snapshot only for a publication that is actually owed, as above.
             if let Some(publish) = publish {
                 match client.snapshot() {
@@ -2463,7 +2477,7 @@ pub(super) fn run(
                         snapshotless_orders = false;
                         let rows = coalesced_order_rows(
                             build_snapshot_rows(server.id, &snap),
-                            std::mem::take(&mut pending_turns),
+                            pending_turns.take(),
                         );
                         let published_at = Instant::now();
                         orders_lines.mark_attempt(published_at);
@@ -2848,16 +2862,14 @@ pub(super) fn run(
         // The table's deadline is asked against the same reading as the account ones below, so
         // the two describe one moment. The startup poll below still reads its own clock.
         let wait_now = Instant::now();
-        let order_wait = server
-            .feed
-            .orders
-            .then(|| orders_table.wait(wait_now))
-            .flatten();
-        let order_lines_wait = server
-            .feed
-            .orders
-            .then(|| orders_lines.wait(wait_now))
-            .flatten();
+        // A publication held for the consumer is left out of the sleep: see `order_waits`.
+        let (order_wait, order_lines_wait) = if server.feed.orders {
+            order_waits(&orders_table, &orders_lines, wait_now, || {
+                tx.order_batch_admitted()
+            })
+        } else {
+            (None, None)
+        };
         // Without this a deferred strategy-edit publish would sleep until whichever unrelated
         // deadline fires next — the API-key poll, minutes out on a quiet core — instead of the
         // ~250 ms rate-limit window it is actually waiting on. The latch never loses the edit,
