@@ -874,6 +874,14 @@ pub struct WindowLayout {
     /// Read leniently like the other hand-editable numbers here; `None` means never migrated.
     #[serde(default, deserialize_with = "de_lenient_u32")]
     pub report_columns_migration: Option<u32>,
+    /// One-shot Screener column migrations already applied to [`Self::table_visible_columns`] and
+    /// to the legacy [`Self::screener_columns`].
+    ///
+    /// The Screener's counterpart of [`Self::report_columns_migration`], and kept here for the same
+    /// reason: the marker and the sets it guards share one document and one atomic write. `None`
+    /// means never migrated.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
+    pub screener_columns_migration: Option<u32>,
     /// Panel-tab index in its "home" tab strip at DETACH time, so returning it to the dock restores
     /// THE SAME position rather than the canonical priority position. Key: `group:panel`
     /// (for example, `default:Orders`). No entry → return by priority.

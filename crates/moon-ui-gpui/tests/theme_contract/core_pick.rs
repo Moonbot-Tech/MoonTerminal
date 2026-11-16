@@ -1,6 +1,6 @@
 //! The shared core-picker's affordances — unified All-row semantics and the saved-groups block —
-//! stay wired the same way across all six consumers: Orders, Alerts, Assets, Core Status, Report,
-//! Analytics. Prose: the module docs of `controls/core_quick.rs`, `controls/core_host.rs` and
+//! stay wired the same way across all seven consumers: Orders, Alerts, Assets, Core Status, Report,
+//! Analytics, Screener. Prose: the module docs of `controls/core_quick.rs`, `controls/core_host.rs` and
 //! `controls/core_combo.rs`.
 //!
 //! The picker offers exactly two things above its cores: the All row, which CLEARS the selection,
@@ -43,6 +43,7 @@ fn every_consumer_implements_core_combo_host_without_reimplementing_the_funnel()
         ("Assets", "panels/assets"),
         ("Core Status", "panels/core_status"),
         ("Report", "panels/report"),
+        ("Screener", "screener"),
     ] {
         let source = code_only(&read_module(module));
         assert!(

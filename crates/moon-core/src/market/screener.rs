@@ -36,6 +36,10 @@ pub struct ScreenerRow {
     pub market: String,
     /// Coin symbol, such as `BTC`.
     pub coin: String,
+    /// The coin's cross-exchange identity, uppercase — [`super::source::MarketLabel::identity`]:
+    /// `BONK` for a market one exchange spells `1kBONK` and another `1000BONK`. What a table uses
+    /// to line one coin up across exchanges; [`Self::coin`] stays the token to write and filter by.
+    pub identity: String,
     /// 24-hour volume from the server's market list, in the quote currency.
     pub vol_24h: f64,
     /// One-hour volume from 5-minute candles, in the quote currency.
@@ -310,11 +314,26 @@ impl MarketDataSource {
                 self.core_client(market_provider)
                     .and_then(|client| client.snapshot_versioned())
             });
+            // The label's own rule, taken whole: the catalog's canonic where there is one, the
+            // folded token otherwise, already uppercase. A second copy here would be a second
+            // opinion about what one coin is. One pass under the market lock, and the token is
+            // moved back out of the label rather than cloned twice.
+            let (coin, identity) = handle.with(|m| {
+                let label = super::source::MarketLabel {
+                    coin: m.market_currency.clone(),
+                    canonic: m.market_currency_canonic.clone(),
+                    quote: String::new(),
+                    contract: None,
+                };
+                let identity = label.identity();
+                (label.coin, identity)
+            });
             let mut row = ScreenerRow {
                 provider,
                 core: provider,
                 market: name.to_string(),
-                coin: handle.with(|m| m.market_currency.clone()),
+                coin,
+                identity,
                 ..ScreenerRow::default()
             };
             let Some(data) = data.as_ref() else {

@@ -21,18 +21,30 @@ fn controls_resample_market_data_after_immediate_cached_selection() {
         .split_once("fn set_sort(")
         .unwrap()
         .1
-        .split_once("fn set_source(")
+        .split_once("fn toggle_core(")
         .unwrap()
         .0;
     assert!(sort.contains("self.rebuild(cx);"));
+    // Every change of the core filter — one core, an exchange row, a saved group — lands in the
+    // picker host's one hook, so that hook is where the resample must be.
     let core = source
-        .split_once("fn set_source(")
+        .split_once("fn after_core_selection_change(")
         .unwrap()
         .1
-        .split_once("fn toggle_col(")
+        .split_once("\n    }")
         .unwrap()
         .0;
     assert!(core.contains("self.rebuild(cx);"));
+    for toggle in ["fn toggle_core(", "fn toggle_exchange_cores("] {
+        let body = source
+            .split_once(toggle)
+            .unwrap()
+            .1
+            .split_once("\n    }")
+            .unwrap()
+            .0;
+        assert!(body.contains("self.after_core_selection_change(cx);"));
+    }
     let rebuild = source
         .split_once("fn rebuild(")
         .unwrap()
@@ -41,6 +53,45 @@ fn controls_resample_market_data_after_immediate_cached_selection() {
         .unwrap()
         .0;
     assert!(rebuild.find("self.filter_cached(cx);").unwrap() < rebuild.find("cx.spawn(").unwrap());
+}
+
+/// The column migration runs once: guard first, the stored sets next, then the marker, then an
+/// unconditional dirty mark so the marker reaches disk.
+///
+/// Mutation: drop the marker write, or mark the layout dirty only when a set changed. Either way
+/// the guard never short-circuits on a later open, and a Coin column the user has hidden comes
+/// back every time the window opens. Pinned as a source contract because the block runs inside a
+/// view constructor, which needs a native GPUI window.
+#[test]
+fn the_column_migration_records_its_completion() {
+    let source = include_str!("../view.rs");
+    let block = source
+        .split_once("b.layout.screener_columns_migration.unwrap_or(0)")
+        .expect("the migration must be guarded by its marker")
+        .1
+        .split_once("});")
+        .expect("the migration runs in one backend update")
+        .0;
+    let guard = block
+        .find("return;")
+        .expect("an applied migration must not run again");
+    let rewrite = block
+        .find("add_new_columns(keys)")
+        .expect("the stored sets must gain the late columns");
+    let marker = block
+        .find("b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);")
+        .expect("the migration must record its completion");
+    let dirty = block
+        .find("b.layout_dirty = true;")
+        .expect("the marker must be flushed");
+    assert!(guard < rewrite && rewrite < marker && marker < dirty);
+    // Past the last stored set, nothing may open a new block: the marker and the dirty mark sit at
+    // the closure's own level, so neither can end up under a condition on whether a set changed.
+    let last_rewrite = block.rfind("add_new_columns(keys)").expect("checked above");
+    assert!(
+        !block[last_rewrite..dirty].contains('{'),
+        "the marker and the dirty mark must not depend on whether a set was rewritten"
+    );
 }
 use std::collections::HashSet;
 
