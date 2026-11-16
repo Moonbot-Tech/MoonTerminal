@@ -80,7 +80,7 @@ impl WgpuLayers {
             || self.cross_buffer.buffer.is_none()
             || self.tick_style_uniform.buffer.is_none()
         {
-            if self.cross_buffer.buffer.is_some() && !self.combo_dirty_ranges.is_empty() {
+            if self.cross_buffer.buffer.is_some() && self.cross_upload_is_partial() {
                 let mut recreated = false;
                 for &(start, count) in &self.combo_dirty_ranges {
                     let end = start.saturating_add(count).min(self.crosses.len());
@@ -122,6 +122,7 @@ impl WgpuLayers {
                 &[self.tick_style],
             );
             self.combo_buffers_dirty = false;
+            self.combo_upload_whole = false;
         }
         if self.price_line_buffers_dirty
             || self.last_line_buffer.buffer.is_none()
@@ -305,6 +306,12 @@ impl WgpuLayers {
         let recreated = slot.write(device, queue, label, wgpu::BufferUsages::STORAGE, data);
         *dirty = false;
         recreated
+    }
+
+    /// Whether the cross upload may copy only `combo_dirty_ranges` into an existing buffer,
+    /// rather than the whole ring a reset or damaging append left owed.
+    pub(super) fn cross_upload_is_partial(&self) -> bool {
+        !self.combo_upload_whole && !self.combo_dirty_ranges.is_empty()
     }
 
     /// Uploads the candle window's pending range. A lost buffer rewrites every retained row.

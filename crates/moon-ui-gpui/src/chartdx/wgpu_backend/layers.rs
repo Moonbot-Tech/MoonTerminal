@@ -71,6 +71,7 @@ impl WgpuLayers {
             hvol_buffer: BufferSlot::default(),
             hvol_style_uniform: BufferSlot::default(),
             combo_buffers_dirty: true,
+            combo_upload_whole: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             zones_dirty: true,
@@ -199,6 +200,7 @@ impl WgpuLayers {
         self.price_line_buffers_dirty = true;
         self.combo_texture = None;
         self.combo_dirty_ranges.clear();
+        self.combo_upload_whole = true;
     }
 
     pub fn reset_combo(&mut self, data: Vec<ChartCross>) {
@@ -220,6 +222,7 @@ impl WgpuLayers {
             tex.valid = false;
         }
         self.combo_dirty_ranges.clear();
+        self.combo_upload_whole = true;
     }
 
     pub fn append_combo(&mut self, data: &[ChartCross]) {
@@ -263,6 +266,7 @@ impl WgpuLayers {
                 tex.valid = false;
             }
             self.combo_dirty_ranges.clear();
+            self.combo_upload_whole = true;
         } else {
             let appended = data.len().min(self.combo_capacity);
             for (start, count) in cross_append_ranges(old_head, appended, self.combo_capacity) {

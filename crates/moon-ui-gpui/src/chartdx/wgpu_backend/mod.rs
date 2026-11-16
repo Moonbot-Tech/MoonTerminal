@@ -439,6 +439,9 @@ pub struct WgpuLayers {
     hvol_buffer: BufferSlot,
     hvol_style_uniform: BufferSlot,
     combo_buffers_dirty: bool,
+    /// The cross buffer owes the whole ring: a reset, capacity change or damaging append cleared
+    /// `combo_dirty_ranges`, so the ranges a later append pushes no longer cover every changed slot.
+    combo_upload_whole: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     /// Zone buffer owes an upload. Only a zone change stales the baked base.
@@ -461,4 +464,6 @@ pub struct WgpuLayers {
 mod layers;
 mod pipelines;
 mod render;
+#[cfg(test)]
+mod tests;
 mod upload;
