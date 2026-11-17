@@ -608,8 +608,10 @@ impl ReportPanel {
         // Strategy discovery can scan a large covering index, so the first background batch owns
         // it. A scoped window still seeds its selected label immediately.
         let mut strategies: Vec<ReportStrategy> = Vec::new();
-        if let Some(scope) = &scope {
-            upsert_strategy_choice(&mut strategies, scope.strategy, scope.strategy_name.clone());
+        if let Some(ReportScopeSubject::Strategy { key, name }) =
+            scope.as_ref().map(|scope| &scope.subject)
+        {
+            upsert_strategy_choice(&mut strategies, *key, name.clone());
         }
         let last_gen = generation
             .as_ref()
@@ -670,7 +672,12 @@ impl ReportPanel {
         let strategy_name_mask = String::new();
         let strategy_name_mask_input =
             cx.new(|cx| MoonInputState::new(window, cx).default_value(strategy_name_mask.clone()));
-        let coin_query = String::new();
+        // A coin scope opens on its exact ticker; every other panel starts with an empty field.
+        let coin_query = scope
+            .as_ref()
+            .map(ReportScope::coin_field_text)
+            .unwrap_or_default();
+        let scoped_coin = (!coin_query.is_empty()).then(|| coin_query.clone());
         // Both fields sit on the picker's whole-minute grid: the lower bound as picked, the upper
         // one floored into the range it came from.
         let from_query = scope
@@ -701,13 +708,16 @@ impl ReportPanel {
             }
             state
         });
-        let selected_strategies = scope.as_ref().map(|scope| HashSet::from([scope.strategy]));
+        let selected_strategies = scope
+            .as_ref()
+            .and_then(ReportScope::strategy)
+            .map(|strategy| HashSet::from([strategy]));
         // Scoped labels are seeded before the first metadata snapshot, so they are display choices
         // but not yet confirmed available choices.
         let available_strategy_keys = HashSet::new();
         let initial_selected_cores = scope
             .as_ref()
-            .map(|scope| HashSet::from([scope.strategy.core_uid]))
+            .map(|scope| HashSet::from([scope.core_uid()]))
             .unwrap_or_default();
         let ordered_cores = ordered_strategy_cores(&strategies, &cores, &backend.read(cx).config);
         let groups = strategy_groups(
@@ -757,6 +767,10 @@ impl ReportPanel {
                     // Defaults whenever the match list comes back up; several paths close it
                     // without passing `close_coin_popup`.
                     t.coin_expanded.clear();
+                    // Only a coin-scoped window titles itself by this field.
+                    if t.scoped_coin.is_some() {
+                        t.sync_standalone_window_title(cx);
+                    }
                     t.request_requery(cx);
                 }
             }
@@ -983,6 +997,7 @@ impl ReportPanel {
             coin,
             coin_query,
             coin_popup_open: false,
+            scoped_coin,
             coin_expanded: HashSet::new(),
             from,
             from_query,
@@ -1040,8 +1055,8 @@ impl ReportPanel {
             focus: cx.focus_handle(),
         };
         // A group Report created while a filter is on air joins it, before its first query rather
-        // than after. A scoped one is the strategy-scoped standalone window in the making — its
-        // core and strategy are already chosen, and `mark_standalone` has not run yet to say so.
+        // than after. A scoped one is the strategy- or coin-scoped standalone window in the making —
+        // its core and subject are already chosen, and `mark_standalone` has not run yet to say so.
         if scope.is_none() {
             this.adopt_broadcast_core_filter(cx);
         }
@@ -1054,26 +1069,30 @@ impl ReportPanel {
         this
     }
 
-    /// Replace the standalone window's exact strategy and inherited Analytics filters.
+    /// Replace the standalone window's exact strategy or coin and inherited Analytics filters.
     ///
     /// Args:
-    ///     scope: Replacement exact strategy, date, side, and emulator filters.
+    ///     scope: Replacement exact strategy or coin, date, side, and emulator filters.
     ///     window: Existing standalone Report window.
     ///     cx: Panel context used to update inputs and request one query.
     ///
     /// Returns:
-    ///     Nothing; row selection and unrelated coin filters are cleared, while Analytics
-    ///     ownership keeps durable host filters bypassed.
+    ///     Nothing; row selection is cleared and the coin field takes the scope's own text (empty
+    ///     for a strategy), while Analytics ownership keeps durable host filters bypassed.
     pub(crate) fn apply_scope(
         &mut self,
         scope: ReportScope,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        upsert_strategy_choice(&mut self.strategies, scope.strategy, scope.strategy_name);
-        self.group = report_group_for_core(&self.backend, scope.strategy.core_uid, cx);
-        self.sel_cores = HashSet::from([scope.strategy.core_uid]);
-        self.selected_strategies = Some(HashSet::from([scope.strategy]));
+        let core_uid = scope.core_uid();
+        let coin_text = scope.coin_field_text();
+        self.selected_strategies = scope.strategy().map(|strategy| HashSet::from([strategy]));
+        if let ReportScopeSubject::Strategy { key, name } = scope.subject {
+            upsert_strategy_choice(&mut self.strategies, key, name);
+        }
+        self.group = report_group_for_core(&self.backend, core_uid, cx);
+        self.sel_cores = HashSet::from([core_uid]);
         self.queue_strategy_select_sync(true, cx);
         self.side = scope.side;
         self.kind = ReportKind::from_filter(scope.emulator);
@@ -1086,7 +1105,9 @@ impl ReportPanel {
         // the scope handover, since this window is a singleton reused across scopes.
         self.closed_only = true;
         self.selection.clear();
-        self.coin_query.clear();
+        // Mirror first, so the Change event `set_value` emits below finds it already matching.
+        self.coin_query = coin_text.clone();
+        self.scoped_coin = (!coin_text.is_empty()).then(|| coin_text.clone());
         self.coin_popup_open = false;
         // The scope's bounds are exact seconds; the fields pick whole minutes, so the lower one is
         // floored and the upper one keeps the minute its inclusive bound ends in.
@@ -1104,7 +1125,7 @@ impl ReportPanel {
             .and_then(|secs| date_range::dt_of_secs(secs, self.bound_zone()));
 
         self.coin.update(cx, |input, input_cx| {
-            input.set_value(String::new(), window, input_cx)
+            input.set_value(coin_text, window, input_cx)
         });
         self.write_bound(Bound::From, from_value, window, cx);
         self.write_bound(Bound::To, to_value, window, cx);
@@ -1346,8 +1367,8 @@ impl ReportPanel {
     /// constructor that is what keeps the toolbar and the first result set describing the same
     /// filter — the first query is issued from the panel's first active render, well after this.
     ///
-    /// A strategy-scoped panel is skipped whole: its filters belong to the strategy it was opened
-    /// for. A missing field, and a missing entry, leave the current value standing rather than
+    /// A strategy- or coin-scoped panel is skipped whole: its filters belong to the strategy or
+    /// coin it was opened for. A missing field, and a missing entry, leave the current value standing rather than
     /// resetting it — so a panel that changes host context and finds nothing stored there keeps
     /// what it was showing. That is deliberately UNLIKE its neighbours in the same key space: an
     /// unwritten `:win` context resets widths and columns to their defaults, but resetting a

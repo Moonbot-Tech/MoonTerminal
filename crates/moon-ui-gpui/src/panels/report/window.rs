@@ -1,4 +1,5 @@
-//! Standalone scoped Report window opened from Analytics or Strategies.
+//! Standalone scoped Report window opened from Analytics and from the shared coin menu's strategy
+//! and coin entries.
 
 use super::*;
 
@@ -182,10 +183,10 @@ pub(super) fn report_title(
         .map_or(base.clone(), |(_, name)| format!("{base} — {name}"))
 }
 
-/// Build the standalone title for one exact strategy.
-pub(super) fn strategy_report_title(strategy_name: &str) -> String {
+/// Build the standalone title for one exact subject: a strategy name or a coin.
+pub(super) fn scoped_report_title(subject: &str) -> String {
     format!(
-        "{} — {strategy_name}",
+        "{} — {subject}",
         crate::persistence::panel_meta::panel_title("Report")
     )
 }
@@ -205,11 +206,26 @@ impl ReportPanel {
         })
     }
 
-    /// Resolve the visible title from the same exact strategy selection as the query.
+    /// Resolve the subject the standalone title names, if any.
+    ///
+    /// One exact strategy wins; otherwise a coin-scoped window names its coin while the coin
+    /// field still holds exactly the text the scope seeded. `None` leaves the core title.
+    fn standalone_title_subject(&self) -> Option<String> {
+        self.selected_strategy_name()
+            .map(str::to_owned)
+            .or_else(|| {
+                self.scoped_coin
+                    .as_deref()
+                    .filter(|seeded| *seeded == self.coin_query)
+                    .map(|seeded| seeded.trim().to_string())
+            })
+    }
+
+    /// Resolve the visible title from the same exact strategy or coin selection as the query.
     pub(super) fn standalone_title(&self) -> String {
-        self.selected_strategy_name().map_or_else(
+        self.standalone_title_subject().map_or_else(
             || report_title(&self.sel_cores, &self.cores),
-            strategy_report_title,
+            |subject| scoped_report_title(&subject),
         )
     }
 
@@ -225,7 +241,7 @@ impl ReportPanel {
             return;
         };
         let title = self.standalone_title();
-        let strategy_name = self.selected_strategy_name().map(str::to_owned);
+        let subject = self.standalone_title_subject();
         let selected = self.sel_cores.clone();
         let cores = self.cores.clone();
         cx.defer(move |cx| {
@@ -234,9 +250,9 @@ impl ReportPanel {
                 crate::window::titles::retitle(
                     handle.into(),
                     move |_| {
-                        strategy_name
+                        subject
                             .as_deref()
-                            .map_or_else(|| report_title(&selected, &cores), strategy_report_title)
+                            .map_or_else(|| report_title(&selected, &cores), scoped_report_title)
                     },
                     app,
                 );
@@ -245,12 +261,15 @@ impl ReportPanel {
     }
 }
 
-/// Open or retarget the singleton standalone Report window to one exact strategy.
+/// Open or retarget the singleton standalone Report window to one exact strategy or coin.
+///
+/// One window serves both subjects: opening a coin while a strategy window is up replaces its
+/// scope, exactly as a second strategy does.
 ///
 /// Args:
 ///     backend: Shared backend holding singleton handles.
 ///     scope: Exact replacement Report scope.
-///     owner: Optional Analytics or Strategies owner window.
+///     owner: Optional owner window: Analytics, or the window whose coin menu was clicked.
 ///     owner_display: Owner display fallback for placement.
 ///     cx: Application context used to update or create the window.
 ///
@@ -269,8 +288,8 @@ pub fn open_scoped(
     };
     if let (Some(handle), Some(view)) = existing {
         let next = scope.clone();
-        let title_text = strategy_report_title(&next.strategy_name);
-        let title_strategy = next.strategy_name.clone();
+        let title_text = scoped_report_title(next.title_subject());
+        let title_subject = next.title_subject().to_string();
         if handle
             .update(cx, |_, window, app| {
                 let updated = view
@@ -282,7 +301,7 @@ pub fn open_scoped(
                     window.set_window_title(&title_text);
                     crate::window::titles::retitle(
                         handle.into(),
-                        move |_| strategy_report_title(&title_strategy),
+                        move |_| scoped_report_title(&title_subject),
                         app,
                     );
                     window.activate_window();
@@ -295,7 +314,7 @@ pub fn open_scoped(
         }
     }
 
-    let group = report_group_for_core(&backend, scope.strategy.core_uid, cx);
+    let group = report_group_for_core(&backend, scope.core_uid(), cx);
     let saved = backend.read(cx).layout.report_window;
     let saved_origin = saved.map(|geometry| point(px(geometry.x as f32), px(geometry.y as f32)));
     // Report is the only tool window that judges its saved origin, and it does so to CLAMP the
@@ -329,8 +348,8 @@ pub fn open_scoped(
         px((REPORT_WINDOW_MIN_W * zoom).min(f32::from(bounds.size.width))),
         px((REPORT_WINDOW_MIN_H * zoom).min(f32::from(bounds.size.height))),
     );
-    let title_strategy = scope.strategy_name.clone();
-    let title = move |_: &App| strategy_report_title(&title_strategy);
+    let title_subject = scope.title_subject().to_string();
+    let title = move |_: &App| scoped_report_title(&title_subject);
     let mut options = crate::window::windowing::tool_window_options(
         title(cx),
         crate::window::windowing::restored_window_bounds(saved, bounds),

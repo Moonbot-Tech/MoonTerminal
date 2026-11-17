@@ -266,7 +266,7 @@ pub(super) enum ReportPeriodBucket {
 ///
 /// THREE authorities meet here and their precedence is fixed rather than incidental.
 ///
-/// `closed_only` is a QUERY predicate the HOST set — today only the strategy-scoped standalone window
+/// `closed_only` is a QUERY predicate the HOST set — today only the strategy- or coin-scoped standalone window
 /// — so it wins outright: someone who asked for closed trades gets closed trades whatever else is
 /// showing. `show_open` is the USER's own toolbar switch and comes next: with it off, the panel
 /// excludes still-running positions however far into the present the period reaches. Only when
@@ -302,7 +302,7 @@ pub(super) fn row_scope_for(closed_only: bool, show_open: bool) -> db::RowScope 
 
 /// Resolve which timestamp the period bounds apply to.
 ///
-/// `closed_only` is the HOST's word, as in [`row_scope_for`]: the strategy-scoped window hands
+/// `closed_only` is the HOST's word, as in [`row_scope_for`]: the strategy- or coin-scoped window hands
 /// over close-date bounds, so it stays on the close date whatever the user's dormant scope-menu
 /// value says — enforced here, at the one composition point, rather than by overwriting that value.
 ///
@@ -588,13 +588,34 @@ fn filters_ctx_id(detached: bool) -> String {
     crate::persistence::table_persist::ctx_id("report-filters", detached)
 }
 
-/// Initial or replacement filter applied to a standalone strategy Report window.
+/// What one standalone Report window is opened on: one exact strategy, or one exact coin.
+///
+/// The two are exclusive on purpose. A coin window shows every strategy of that coin, so it
+/// carries no strategy key, and a strategy window carries no coin text; each variant names the
+/// one core its subject belongs to, so the core cannot disagree with the subject.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReportScopeSubject {
+    /// Every trade of one exact strategy.
+    Strategy {
+        /// Exact strategy identity, including the core on which the id is meaningful.
+        key: ReportStrategyKey,
+        /// Human-readable name retained even when report metadata has not loaded yet.
+        name: String,
+    },
+    /// Every trade of one exact coin on one core, across all strategies.
+    Coin {
+        /// Core whose report rows are read.
+        core_uid: u64,
+        /// The coin as the Report column prints it (`PAID`, sometimes `VINEUSDT`), trimmed.
+        coin: String,
+    },
+}
+
+/// Initial or replacement filter applied to a standalone Report window.
 #[derive(Clone, Debug)]
 pub struct ReportScope {
-    /// Exact strategy identity, including the core on which the id is meaningful.
-    pub strategy: ReportStrategyKey,
-    /// Human-readable name retained even when report metadata has not loaded yet.
-    pub strategy_name: String,
+    /// The strategy or coin the window is opened on.
+    pub subject: ReportScopeSubject,
     /// Inclusive UTC lower close-date bound.
     pub date_from: Option<i64>,
     /// Inclusive UTC upper close-date bound.
@@ -610,13 +631,93 @@ impl ReportScope {
     pub fn for_strategy(strategy: ReportStrategyKey, strategy_name: String) -> Self {
         let filter = strategy_trades_filter(&ReportFilter::default(), strategy);
         Self {
-            strategy,
-            strategy_name,
+            subject: ReportScopeSubject::Strategy {
+                key: strategy,
+                name: strategy_name,
+            },
             date_from: filter.date_from,
             date_to: filter.date_to,
             side: filter.side,
             emulator: filter.emulator,
         }
+    }
+
+    /// Build the independent all-time scope opened from a coin's context menu.
+    ///
+    /// The same width the strategy item starts from — all time, both sides, the default kind —
+    /// so the two items differ only in their subject.
+    ///
+    /// Args:
+    ///     core_uid: Core of the clicked row; the same ticker on another core is another market.
+    ///     coin: The coin as the clicked surface prints it.
+    ///
+    /// Returns:
+    ///     A coin scope over every strategy of that core.
+    pub fn for_coin(core_uid: u64, coin: &str) -> Self {
+        let filter = ReportFilter::default();
+        Self {
+            subject: ReportScopeSubject::Coin {
+                core_uid,
+                coin: coin.trim().to_string(),
+            },
+            date_from: None,
+            date_to: None,
+            side: SideFilter::All,
+            emulator: filter.emulator,
+        }
+    }
+
+    /// Return the one core this scope reads.
+    pub fn core_uid(&self) -> u64 {
+        match &self.subject {
+            ReportScopeSubject::Strategy { key, .. } => key.core_uid,
+            ReportScopeSubject::Coin { core_uid, .. } => *core_uid,
+        }
+    }
+
+    /// Return the name the window title carries: the strategy name or the coin.
+    pub fn title_subject(&self) -> &str {
+        match &self.subject {
+            ReportScopeSubject::Strategy { name, .. } => name,
+            ReportScopeSubject::Coin { coin, .. } => coin,
+        }
+    }
+
+    /// Return the exact strategy this scope selects, or `None` for a coin scope (every strategy).
+    pub fn strategy(&self) -> Option<ReportStrategyKey> {
+        match &self.subject {
+            ReportScopeSubject::Strategy { key, .. } => Some(*key),
+            ReportScopeSubject::Coin { .. } => None,
+        }
+    }
+
+    /// Return the coin-field text this scope seeds: the exact ticker plus the trailing space that
+    /// asks the Report for an exact match, or an empty field for a strategy scope.
+    pub fn coin_field_text(&self) -> String {
+        match &self.subject {
+            ReportScopeSubject::Strategy { .. } => String::new(),
+            ReportScopeSubject::Coin { coin, .. } => exact_coin_field_text(coin),
+        }
+    }
+}
+
+/// Spell one ticker as the Report coin field's exact-match text.
+///
+/// The trailing space is the field's own exact-ticker switch (`report_coin_is_exact`): `SOL `
+/// keeps `SOL` and its contract tails (`SOL_RP`, `SOL_0925`) and drops `SOLV`, the same text a
+/// pick from the field's match list writes.
+///
+/// Args:
+///     coin: The ticker as printed; surrounding whitespace is dropped.
+///
+/// Returns:
+///     `"<ticker> "`, or an empty string for a blank ticker.
+pub(super) fn exact_coin_field_text(coin: &str) -> String {
+    let coin = coin.trim();
+    if coin.is_empty() {
+        String::new()
+    } else {
+        format!("{coin} ")
     }
 }
 
@@ -754,6 +855,11 @@ pub struct ReportPanel {
     coin_query: String,
     /// Whether the shared `controls::coin_search` match popup is open.
     coin_popup_open: bool,
+    /// Coin-field text a coin scope seeded (`"PAID "`), or `None` for any other panel.
+    ///
+    /// The standalone title names the coin only while the field still holds exactly this text;
+    /// an edit or a cleared field returns the window to its strategy or core title.
+    scoped_coin: Option<String>,
     /// Coin rows of that popup whose core list the user has flipped open or shut.
     ///
     /// Holds what was TOGGLED away from the default, not what is open; see
@@ -808,7 +914,7 @@ pub struct ReportPanel {
     /// pick. Persisted beside [`Self::side`]; [`Self::closed_only`] forces the close date, spelled
     /// once in [`period_basis_for`].
     pub(super) period_basis: db::PeriodBasis,
-    /// Whether a caller owns this panel's strategy-scoped filters.
+    /// Whether a caller owns this panel's strategy- or coin-scoped filters.
     ///
     /// A scoped standalone window is handed its side, kind and dates by its caller and forces
     /// `Period::All`; persisted values neither apply to it nor are written from it, or reopening a
@@ -826,7 +932,7 @@ pub struct ReportPanel {
     preference_revisions: state::ReportPreferenceRevisions,
     /// Retained owner-scoped dropdown whose popup invalidations never rebuild the Report body.
     scope_control: Entity<ReportScopeControl>,
-    /// Whether this strategy-scoped panel excludes undated/non-positive close timestamps.
+    /// Whether this strategy- or coin-scoped panel excludes undated/non-positive close timestamps.
     ///
     /// Today it is written from the same fact as [`Self::scoped`] and always equals it. They are
     /// kept apart because they answer different questions — this one is a QUERY predicate that a
@@ -964,7 +1070,7 @@ impl ReportPanel {
 
     /// Resolve workspace scope for group-owned Report instances.
     ///
-    /// The strategy-scoped standalone window deliberately returns `None` and keeps its exact
+    /// The strategy- or coin-scoped standalone window deliberately returns `None` and keeps its exact
     /// `ReportScope`, including offline historical core identities.
     ///
     /// Args:
@@ -983,7 +1089,7 @@ impl ReportPanel {
 
     /// Resolve the group's Report scope, widened when its session-derived universe is empty.
     ///
-    /// Like [`Self::workspace_scope`], the strategy-scoped standalone window returns `None` and
+    /// Like [`Self::workspace_scope`], the strategy- or coin-scoped standalone window returns `None` and
     /// keeps its exact `ReportScope`. Where it differs: an empty session-derived universe falls
     /// back to that group's configured, non-hidden active cores instead of resolving to the whole,
     /// unfiltered report database.
@@ -1036,7 +1142,7 @@ impl ReportPanel {
     ///
     /// Returns:
     ///     A marker derived from the same Report scope that [`Self::query_core_uids`] resolves, or
-    ///     `None` for the strategy-scoped standalone report, which keeps its exact retained scope
+    ///     `None` for the strategy- or coin-scoped standalone report, which keeps its exact retained scope
     ///     untouched.
     pub(super) fn scope_marker(&self, b: &Backend) -> Option<ScopeMarker> {
         let scope = self.report_scope(b)?;

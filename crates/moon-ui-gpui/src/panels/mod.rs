@@ -76,5 +76,5 @@ pub(crate) use detects::{
 pub use log::LogPanel;
 pub use news::NewsView;
 pub use orders::OrdersPanel;
-pub use report::{ReportPanel, ReportScope, open_scoped as open_scoped_report};
+pub use report::{ReportPanel, ReportScope, ReportScopeSubject, open_scoped as open_scoped_report};
 pub use stub::StubPanel;

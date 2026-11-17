@@ -1116,10 +1116,40 @@ fn strategy_trades_preset_leaves_the_main_report_filter_unchanged() {
     assert_eq!(main, before, "the main Report filter must not be mutated");
 
     let scope = ReportScope::for_strategy(strategy, "Momentum".to_string());
-    assert_eq!(scope.strategy, strategy);
-    assert_eq!(scope.strategy_name, "Momentum");
+    assert_eq!(scope.strategy(), Some(strategy));
+    assert_eq!(scope.core_uid(), 42);
+    assert_eq!(scope.title_subject(), "Momentum");
+    assert_eq!(
+        scope.coin_field_text(),
+        "",
+        "a strategy window opens on an empty coin field"
+    );
     assert_eq!((scope.date_from, scope.date_to), (None, None));
     assert_eq!(scope.side, SideFilter::All);
+}
+
+/// The coin item opens every strategy of one exact ticker on one core, over all time.
+///
+/// Mutation: dropping the trailing space from `exact_coin_field_text` turns `SOL` into a
+/// substring that keeps `SOLV`; giving the coin scope a strategy key narrows it to one strategy;
+/// keeping the caller's padding puts `" PAID "` into the title.
+#[test]
+fn coin_scope_is_one_exact_ticker_on_one_core_across_strategies() {
+    let scope = ReportScope::for_coin(7, "  PAID ");
+
+    assert_eq!(scope.strategy(), None, "every strategy of the coin");
+    assert_eq!(scope.core_uid(), 7);
+    assert_eq!(scope.title_subject(), "PAID");
+    assert_eq!(scope.coin_field_text(), "PAID ");
+    assert!(
+        moon_core::db::report_coin_is_exact(&scope.coin_field_text()),
+        "the seeded field must switch the Report into exact-ticker matching"
+    );
+    assert_eq!((scope.date_from, scope.date_to), (None, None));
+    assert_eq!(scope.side, SideFilter::All);
+    // CJK tickers pass through untouched: the field text is the coin as printed.
+    assert_eq!(ReportScope::for_coin(7, "龙虾").coin_field_text(), "龙虾 ");
+    assert_eq!(super::exact_coin_field_text("   "), "");
 }
 
 /// Selecting another strategy, or removing its core, must retitle the native standalone window as
@@ -1153,7 +1183,7 @@ fn standalone_strategy_changes_retarget_the_native_title() {
     }
 }
 
-/// A strategy-scoped standalone panel must neither restore stored filters nor write its own —
+/// A strategy- or coin-scoped standalone panel must neither restore stored filters nor write its own —
 /// two independent guards, because either can be dropped without breaking the other.
 ///
 /// Mutation: deleting the `if self.scoped { return false; }` guard from
@@ -1487,7 +1517,7 @@ fn period_basis_round_trips_through_the_panel_encoder_and_decoder() {
     );
 }
 
-/// `mod.rs::period_basis_for` -- a strategy-scoped (`closed_only`) panel is handed close-date
+/// `mod.rs::period_basis_for` -- a strategy- or coin-scoped (`closed_only`) panel is handed close-date
 /// bounds, so it must query on the close date whatever the dormant toolbar value says; an
 /// unscoped panel carries the user's pick. Dropping the `closed_only` arm, or ignoring the user's
 /// pick, reddens one of the four rows.
@@ -1513,7 +1543,7 @@ fn analytics_scope_forces_the_close_date_basis() {
 }
 
 /// `mod.rs::period_basis_caption_key` -- the basis choice lives inside the closed scope menu, so
-/// only a non-default (open-date) basis marks the trigger caption, and a strategy-scoped panel,
+/// only a non-default (open-date) basis marks the trigger caption, and a strategy- or coin-scoped panel,
 /// which queries on the close date regardless, never does. Marking the default, or honouring the
 /// dormant open-date pick under `closed_only`, reddens one of the four rows.
 #[test]
