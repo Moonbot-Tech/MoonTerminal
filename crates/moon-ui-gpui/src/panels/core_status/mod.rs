@@ -91,9 +91,10 @@ pub struct CoreStatusView {
     last_locale: String,
     /// Whether any server currently has a warning; drives the dock-tab badge.
     has_warn: bool,
-    /// Whether this instance is a detached window (vs a dock tab). Only a window renders the chart.
+    /// Whether this instance is a detached window (vs a dock tab). A window, and an Auto tab, render
+    /// the chart (see [`Self::chart_visible`]).
     detached: bool,
-    /// Selected chart X-axis span in the detached window.
+    /// Selected chart X-axis span in the detached window (or an Auto tab's chart).
     chart_window: ChartWindow,
     /// Server whose chart the detached window shows; clicking a server row selects it. `None` falls
     /// back to the first server.
@@ -552,6 +553,23 @@ impl CoreStatusView {
         cx: &mut Context<Self>,
     ) -> Self {
         Self::new(backend, group, true, window, cx)
+    }
+
+    /// Return whether this host draws the bottom CPU/memory/ping chart.
+    ///
+    /// A window always draws it. An Auto group dock tab draws it too, because Auto refuses
+    /// detached windows and the tab is the only place the chart could appear — the same split the
+    /// Assets panel uses for its wallets. The tab keeps its own `:dock` widths and mode: only the
+    /// chart is added, so `detached` stays false and the window's memory is never shared.
+    ///
+    /// Args:
+    ///     b: Backend snapshot holding the group's workspace mode.
+    ///
+    /// Returns:
+    ///     `true` when the chart belongs at the bottom of this host.
+    pub(super) fn chart_visible(&self, b: &Backend) -> bool {
+        self.detached
+            || b.workspace_mode(&self.group) == moon_core::config::WorkspaceMode::AutoTrading
     }
 
     /// Return the table state used by the detached window's auto-width reset button.

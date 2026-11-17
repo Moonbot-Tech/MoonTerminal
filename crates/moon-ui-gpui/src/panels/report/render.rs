@@ -401,9 +401,12 @@ impl Render for ReportPanel {
             .child(coin_field)
             .child(self.period_combo(cx));
         let scope_filters = design::chrome_section(cx).child(self.scope_control.clone());
-        // Manual bounds exist only in detached windows. Each caption stays attached to its field,
-        // while From and To remain independent sections so a narrow host can wrap between them.
-        let date_filters = self.detached.then(|| {
+        // Manual bounds exist in windows and on an Auto tab (`date_bounds_visible`). Each caption
+        // stays attached to its field, while From and To remain independent sections so a narrow
+        // host can wrap between them.
+        let dates_shown = self.date_bounds_visible(self.backend.read(cx));
+        self.dates_rendered = dates_shown;
+        let date_filters = dates_shown.then(|| {
             let from = design::chrome_section(cx)
                 .child(
                     div()
@@ -485,7 +488,7 @@ impl Render for ReportPanel {
                 },
                 signature: controls::filter_row_signature(
                     cx,
-                    self.detached,
+                    dates_shown,
                     strategy_mask_present,
                     core_fit.full_w,
                     controls::FilterRowLabels::of(&self.period, &scope_choices),

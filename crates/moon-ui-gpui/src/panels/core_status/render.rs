@@ -262,11 +262,11 @@ impl Render for CoreStatusView {
                     .child(line)
             });
 
-        // A detached window gets a live CPU/memory chart for ONE subject: a clicked core, else the
-        // clicked (or first) server's machine aggregate — never per-core overlays. The dock tab builds
-        // nothing here, so it pays no chart cost.
+        // A detached window, and an Auto tab, get a live CPU/memory chart for ONE subject: a clicked
+        // core, else the clicked (or first) server's machine aggregate — never per-core overlays. A
+        // Classic dock tab builds nothing here, so it pays no chart cost.
         let chart_el: Option<AnyElement> = self
-            .detached
+            .chart_visible(self.backend.read(cx))
             .then(|| {
                 let model = self.frame_chart(self.backend.read(cx));
                 let model = model.as_ref().as_ref()?;
