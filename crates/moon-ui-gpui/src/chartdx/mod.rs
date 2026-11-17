@@ -45,7 +45,7 @@ pub(crate) use figures_sync::FigureVisual;
 pub use handle::{ChartDataHandle, OrderRenderProbe};
 use helpers::{
     BOOK_FOCUS_HALF_FRAC, chart_market_diag, chart_market_diag_due, chart_market_diag_enabled,
-    mix_sig, scale_badge_pct, str_sig, time_scale_secs, union_range,
+    mix_sig, scale_badge_pct, str_sig, time_scale_ms, union_range,
 };
 use hits::{ActionPlacement, CursorState};
 pub(super) use hits::{

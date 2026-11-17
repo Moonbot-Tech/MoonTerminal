@@ -103,6 +103,23 @@ fn duration_shows_at_most_two_units() {
     assert_eq!(fmt_duration_short(0.0), format!("0{s}"));
 }
 
+/// A positive duration under a second prints in milliseconds, and one that rounds to a full
+/// second goes back to seconds (#1345: the time-scale badge at the 0.6 s super-zoom floor).
+///
+/// Breakage this pins: without the branch 0.6 s prints as "1s"; a threshold on `secs < 1.0`
+/// alone would print 0.9996 s as "1000ms".
+#[test]
+fn a_duration_under_a_second_prints_in_milliseconds() {
+    let _locale = crate::test_locale::force("en");
+    let (ms, s) = (
+        rust_i18n::t!("analytics.cal.dur_ms"),
+        rust_i18n::t!("analytics.cal.dur_s"),
+    );
+    assert_eq!(fmt_duration_short(0.6), format!("600{ms}"));
+    assert_eq!(fmt_duration_short(0.0125), format!("13{ms}"));
+    assert_eq!(fmt_duration_short(0.9996), format!("1{s}"));
+}
+
 /// A duration that cannot exist must not render as a number.
 #[test]
 fn duration_rejects_impossible_input() {

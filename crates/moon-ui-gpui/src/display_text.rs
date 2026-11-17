@@ -30,21 +30,27 @@ pub(crate) fn flatten_lines(text: &str) -> String {
 
 use rust_i18n::t;
 
-/// Format a short duration as at most two units: "45s", "1m 29s", "2h 15m", "3d 4h".
+/// Format a short duration as at most two units: "600ms", "45s", "1m 29s", "2h 15m", "3d 4h".
 ///
 /// Callers give it one line — a calendar cell, a menu row — so the second unit is dropped when it
 /// is zero and there is never a third. The unit names come from `analytics.cal.dur_*`, which is
 /// where they were first written; they are not calendar-specific and every caller reads the same
-/// four.
+/// five.
 ///
 /// Args:
-///     secs: Duration in seconds; negative and non-finite inputs yield an em dash.
+///     secs: Duration in seconds; negative and non-finite inputs yield an em dash. A positive
+///         duration that rounds below one second prints in whole milliseconds: the chart's
+///         time-scale badge reaches 0.6 s (#1345), and "1s" there would overstate it by two thirds.
 ///
 /// Returns:
 ///     Localized compact duration.
 pub(crate) fn fmt_duration_short(secs: f64) -> String {
     if !secs.is_finite() || secs < 0.0 {
         return "—".to_string();
+    }
+    let millis = (secs * 1000.0).round() as i64;
+    if secs > 0.0 && millis < 1000 {
+        return format!("{millis}{}", t!("analytics.cal.dur_ms"));
     }
     let total = secs.round() as i64;
     let (s, m, h, d) = (

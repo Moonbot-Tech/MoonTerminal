@@ -917,7 +917,8 @@ impl RenderState {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0.0, |d| d.as_millis() as f64);
                 // A date other than today uses day-month plus time for large time frames or windows.
-                let label = crate::chartdx::axes::format_clock_dated(unix, true, now_ms);
+                let label =
+                    crate::chartdx::axes::format_cursor_clock(unix, pr.readout_time_millis, now_ms);
                 let text_w = readout_text_width(&label, pr.readout_time_width);
                 let line_h = pr.readout_time_line_h.max(1.0);
                 let half_w = text_w * 0.5;

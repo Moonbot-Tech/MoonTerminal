@@ -1068,7 +1068,7 @@ fn the_time_scale_badge_prints_the_span_as_a_compact_duration() {
     let text = one_field(
         ChartLabelField::TimeScaleBadge,
         LabelInputs {
-            time_scale_s: Some(6_720),
+            time_scale_ms: Some(6_720_000),
             ..Default::default()
         },
     );

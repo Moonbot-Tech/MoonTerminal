@@ -156,9 +156,9 @@ maps:
     body:
       ru: Свечи, ордерные линии и закрытые сделки, нарисованные отдельным проходом GPU. Колесо — зум по
         времени, Shift или Alt + колесо — прокрутка влево-вправо. Tab или Delete на линии ордера на вход —
-        отменить его; зажать и провести мышью — снять все входы под курсором. Ctrl+Shift+колесо — супер-зум до 3 секунд.
+        отменить его; зажать и провести мышью — снять все входы под курсором. Ctrl+Shift+колесо — супер-зум до 0,6 секунды.
       en: Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift
-        or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 3 seconds. Tab or Delete over an
+        or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 0.6 seconds. Tab or Delete over an
         entry order line cancels it; hold and sweep to cancel every entry the pointer crosses.
     src:
       code: locales/en/hotkeys.en.yml — встроенные
@@ -394,10 +394,10 @@ maps:
       ru: Область графика
       en: Chart area
     body:
-      ru: Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. Ctrl+Shift+колесо — супер-зум до 3 секунд.
+      ru: Тот же GPU-график, что в MANUAL. Колесо — зум по времени, Shift или Alt + колесо — прокрутка. Ctrl+Shift+колесо — супер-зум до 0,6 секунды.
         В Обзоре выбор сводки не подменяет Main-график чужим ядром. Escape по последнему Main в режиме AUTO
         возвращает на Report.
-      en: The same GPU chart as MANUAL. Wheel zooms by time, Shift or Alt + wheel pans. Ctrl+Shift+wheel super zooms down to 3 seconds. Overview does
+      en: The same GPU chart as MANUAL. Wheel zooms by time, Shift or Alt + wheel pans. Ctrl+Shift+wheel super zooms down to 0.6 seconds. Overview does
         not retarget the Main chart to some other core. Escape on the last Main chart in AUTO reveals
         Report.
     src:

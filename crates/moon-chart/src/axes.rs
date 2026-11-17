@@ -102,7 +102,11 @@ pub const TIME_CAPTION_GAP_SHARE: f32 = 0.8;
 /// How a time-axis caption prints at a given step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimeCaptionKind {
-    /// A clock with seconds, for steps under a minute.
+    /// Steps under a second: a whole second prints its full clock, every mark between prints only
+    /// its millisecond field (`.250`). A full `HH:MM:SS.mmm` on every mark is wider than a 10 ms
+    /// gap on any plot the chart reaches, so the short form is what makes those steps readable.
+    Millis,
+    /// A clock with seconds, for steps from one second to under a minute.
     Seconds,
     /// A clock without seconds, for steps from a minute to six hours.
     Minutes,
@@ -117,9 +121,11 @@ impl TimeCaptionKind {
     ///     step_secs: A step returned by [`time_step`].
     ///
     /// Returns:
-    ///     Seconds under one minute, a date from one day, minutes between.
+    ///     Millis under one second, seconds under one minute, a date from one day, minutes between.
     pub fn of_step(step_secs: f64) -> Self {
-        if step_secs < 60.0 {
+        if step_secs < 1.0 {
+            Self::Millis
+        } else if step_secs < 60.0 {
             Self::Seconds
         } else if step_secs < DAY_SECS {
             Self::Minutes
@@ -136,6 +142,8 @@ impl TimeCaptionKind {
 /// slider does not reach it.)
 #[derive(Clone, Copy, Debug)]
 pub struct TimeCaptionWidths {
+    /// The short millisecond caption between whole seconds (`.250`).
+    pub millis: f32,
     /// A clock with seconds, dated when the window is not all today.
     pub seconds: f32,
     /// A clock without seconds, dated when the window is not all today.
@@ -145,9 +153,15 @@ pub struct TimeCaptionWidths {
 }
 
 impl TimeCaptionWidths {
-    /// The width of a caption of `kind`.
+    /// The caption width neighbouring marks of a `kind` step must hold apart.
+    ///
+    /// A millisecond step mixes two widths: every whole second is a full clock, every mark
+    /// between it is the short field. The pair that has to fit is a full clock beside a short one,
+    /// so the step is sized by their mean; sizing it by the short field alone would let the walk
+    /// drop the whole second, the one caption that says which second the marks belong to.
     fn of(&self, kind: TimeCaptionKind) -> f32 {
         match kind {
+            TimeCaptionKind::Millis => (self.millis + self.seconds) * 0.5,
             TimeCaptionKind::Seconds => self.seconds,
             TimeCaptionKind::Minutes => self.minutes,
             TimeCaptionKind::Date => self.date,
@@ -162,7 +176,8 @@ impl TimeCaptionWidths {
 /// target (one per 190 px) left captions 190–475 px apart, because neighbouring round steps
 /// differ by up to 2.5×, and short `HH:MM` or `DD.MM` captions sat in wide empty runs.
 ///
-/// Clock steps run from one second to twelve hours, then whole days (1, 2, 7, 14), then calendar
+/// Clock steps run from ten milliseconds (#1345: trades are stamped to the millisecond, and a
+/// stretched chart puts several of them inside one second) to twelve hours, then whole days (1, 2, 7, 14), then calendar
 /// months (1, 2, 3, 6, 12), each month step expressed as a multiple of [`MONTH_SECS`]. Without the
 /// day and month steps a window of weeks or months stayed on six-hour marks a pixel or two apart,
 /// so the spacing walk kept captions at arbitrary hours (`06:00`, `12:00`, `18:00`, `00:00`).
@@ -176,7 +191,13 @@ impl TimeCaptionWidths {
 ///     The smallest step that fits; when none does, or the inputs are degenerate, the coarsest
 ///     step, twelve months.
 pub fn time_step(window_sec: f64, plot_width_px: f32, widths: &TimeCaptionWidths) -> f64 {
-    const STEPS: [f64; 26] = [
+    const STEPS: [f64; 32] = [
+        0.01,
+        0.02,
+        0.05,
+        0.1,
+        0.2,
+        0.5,
         1.0,
         2.0,
         5.0,
@@ -233,7 +254,8 @@ pub fn calendar_months(step_secs: f64) -> Option<u32> {
 /// The left-to-right spacing walk over the round time-axis captions.
 ///
 /// A caption is kept when its left edge clears the previous kept caption's right edge by
-/// [`Self::MIN_GAP_PX`]. Which captions are kept never depends on the crosshair: the readout plate
+/// [`Self::MIN_GAP_PX`] and it lies inside the plot: a caption centred on a tick near either edge
+/// is dropped rather than cut by the edge, since a clipped `17:02:2` reads as a different time. Which captions are kept never depends on the crosshair: the readout plate
 /// only hides the kept caption under it, and that caption still holds its slot. Otherwise every
 /// caption to the right of the cursor was chosen again one step off, so a zoomed-out row there
 /// re-phased (`00:00`/`12:00` → `06:00`/`18:00`) on every mouse move while the left side stood
@@ -241,6 +263,7 @@ pub fn calendar_months(step_secs: f64) -> Option<u32> {
 pub struct TimeCaptionWalk {
     last_right: f32,
     plot_left: f32,
+    plot_right: f32,
 }
 
 impl TimeCaptionWalk {
@@ -252,11 +275,19 @@ impl TimeCaptionWalk {
     /// Args:
     ///     plot_left: Left edge of the plot; a caption starting more than a pixel left of it is
     ///         dropped rather than clipped.
-    pub fn new(plot_left: f32) -> Self {
+    ///     plot_right: Right edge of the plot; a caption ending more than a pixel right of it is
+    ///         dropped the same way.
+    pub fn new(plot_left: f32, plot_right: f32) -> Self {
         Self {
             last_right: f32::NEG_INFINITY,
             plot_left,
+            plot_right,
         }
+    }
+
+    /// Whether no caption has taken a slot yet, so the next kept one is the leftmost on the axis.
+    pub fn is_empty(&self) -> bool {
+        self.last_right == f32::NEG_INFINITY
     }
 
     /// Decides one caption; captions must be visited left to right.
@@ -269,7 +300,9 @@ impl TimeCaptionWalk {
     /// Returns:
     ///     Whether to draw it: it holds a slot and is not covered.
     pub fn place(&mut self, left: f32, right: f32, covered: bool) -> bool {
-        let slot = left >= self.last_right + Self::MIN_GAP_PX && left >= self.plot_left - 1.0;
+        let slot = left >= self.last_right + Self::MIN_GAP_PX
+            && left >= self.plot_left - 1.0
+            && right <= self.plot_right + 1.0;
         if slot {
             self.last_right = right;
         }

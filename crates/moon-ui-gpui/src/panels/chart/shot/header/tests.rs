@@ -16,7 +16,7 @@ fn inputs() -> HeaderInputs {
         zone: UTC,
         tf_min: 15,
         scale_pct: Some(7),
-        time_scale_s: None,
+        time_scale_ms: None,
         delta_3h: Some(3.1),
         delta_1h: Some(2.2),
         delta_15m: Some(1.3),
@@ -336,7 +336,7 @@ fn an_empty_run_uses_the_inset_instead_of_the_strip_midpoint() {
 fn the_time_scale_follows_the_y_scale_in_the_chart_spelling() {
     let _locale = crate::test_locale::force("en");
     let mut shown = inputs();
-    shown.time_scale_s = Some(6_720);
+    shown.time_scale_ms = Some(6_720_000);
 
     let tail: Vec<String> = header_strip(&shown).tail.iter().map(field_text).collect();
     let hidden: Vec<String> = header_strip(&inputs())

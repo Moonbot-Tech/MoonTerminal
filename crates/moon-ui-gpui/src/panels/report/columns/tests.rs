@@ -353,3 +353,33 @@ fn cell_isshort_text_matches_the_shared_side_word() {
     assert_eq!(short_text, side_word(true));
     assert_eq!(long_text, side_word(false));
 }
+
+/// The market-delta family prints at most two places, trailing zeros dropped, and a move under
+/// half a hundredth prints `0` with no sign (#1338). Prices and BTC profit keep their precision.
+///
+/// Breakage this pins: dropping the delta arm brings back the eight-place `424.19039569`;
+/// widening it to every numeric column flattens a `0.00001234` price to `0`; a plain `{:.2}`
+/// prints `-0` for a tiny negative delta.
+#[test]
+fn market_deltas_print_at_most_two_places() {
+    let axis = ReportAxis::identity_core_local();
+    let text = |col: &str, value: Value| {
+        cell(col, &value, None, MoonPalette::default(), &axis, 0, Tz::UTC).0
+    };
+    for (raw, shown) in [
+        (424.19039569, "424.19"),
+        (2.68740006, "2.69"),
+        (0.29641743, "0.3"),
+        (-0.00990112, "-0.01"),
+        (0.00442328, "0"),
+        (-0.00442328, "0"),
+        (87.80095977, "87.8"),
+    ] {
+        assert_eq!(text("d3h", Value::Real(raw)), shown, "{raw}");
+    }
+    assert_eq!(text("exchange1hdelta", Value::Real(0.31388810)), "0.31");
+    assert_eq!(text("vd1m", Value::Integer(17)), "17");
+    assert_eq!(text("pricebug", Value::Text("n/a".into())), "n/a");
+    assert_eq!(text("buyprice", Value::Real(0.00001234)), "0.00001234");
+    assert_eq!(text("quantity", Value::Real(12.3456)), "12.3456");
+}

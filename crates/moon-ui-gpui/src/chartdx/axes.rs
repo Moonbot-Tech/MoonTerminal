@@ -244,5 +244,40 @@ pub fn format_clock_dated_ms(unix_ms: i64, now_ms: i64) -> String {
     moon_core::util::display_time::format_chart_clock_ms(unix_ms, display_zone(), now_ms)
 }
 
+/// Format the short caption of a millisecond-step mark between two whole seconds: `.250`.
+///
+/// The millisecond field is the same in every display zone, since zone offsets are whole
+/// seconds, so it needs no zone lookup.
+///
+/// Args:
+///     unix_ms: Caption instant in UTC Unix milliseconds.
+///
+/// Returns:
+///     A dot and the three-digit millisecond field.
+pub fn format_millis_caption(unix_ms: f64) -> String {
+    format!(".{:03}", (unix_ms.round() as i64).rem_euclid(1000))
+}
+
+/// Format the crosshair's time readout: with milliseconds while the time axis steps in
+/// milliseconds, so the readout never stays on whole seconds beside a `.250` scale (#1345).
+///
+/// The text pass and the backdrop pass both call this with the same pane flag, so the plate is
+/// sized for the text it holds.
+///
+/// Args:
+///     unix_ms: Instant under the crosshair in UTC Unix milliseconds.
+///     millis: Whether the pane's time axis is on a sub-second step.
+///     now_ms: Current UTC Unix milliseconds used for the civil-day comparison.
+///
+/// Returns:
+///     `HH:MM:SS.mmm` or `HH:MM:SS`, optionally prefixed by `DD.MM`.
+pub fn format_cursor_clock(unix_ms: f64, millis: bool, now_ms: f64) -> String {
+    if millis {
+        format_clock_dated_ms(unix_ms.floor() as i64, now_ms as i64)
+    } else {
+        format_clock_dated(unix_ms, true, now_ms)
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -606,7 +606,8 @@ fn side_cell(ri: usize, val: &Value, p: MoonPalette) -> MoonDataCell {
 /// cell (`MoonUI crates/moon-gpui/src/styled.rs:149-151`), so the ellipsis was never missing —
 /// only the tooltip coverage was. A date column shows its full `YYYY-MM-DD HH:MM` form in the
 /// cell itself (the owner rejected a today-collapsed clock form) and repeats it in the tooltip
-/// like every other column.
+/// like every other column. The tooltip repeats the CELL text, so a market delta hovers in its
+/// two-place form too (#1338); its stored value is in the export and the clipboard copy.
 ///
 /// Args:
 ///     row: Visible row index used to give the hover target a stable identity.
@@ -835,6 +836,12 @@ pub(crate) fn cell(
             _ => (String::new(), None),
         },
         "basecurrency" => (basecurrency_text(v), None),
+        // The market-delta family prints at most two places, as MoonBot's report does (#1338);
+        // the generic path's eight places made these the widest columns on the table. A text
+        // value keeps the generic path.
+        _ if is_delta_report_column(col) && as_f64(v).is_some() => {
+            (as_f64(v).map(delta_text).unwrap_or_default(), None)
+        }
         // `valuation_rate` deliberately has no arm: applied rates span roughly 1e5 (BTC) down to
         // 1e-2 (IDR), and the generic numeric path already answers that with eight significant
         // digits, where the two decimals the profit cells use would flatten most rates to `0.00`.
@@ -880,6 +887,63 @@ pub(crate) fn cell(
             (text, color)
         }
         _ => (cell_display_text(v), None),
+    }
+}
+
+/// Whether a Report column is one of the core's market deltas, the snapshot figures MoonBot's own
+/// report rounds to two places.
+///
+/// Prices, quantities, money, the valuation rate and the hourly/daily volumes are NOT here: two
+/// places would print a real `0.00001234` price or a `-0.00041380` BTC profit as zero, and the
+/// volumes are shortened with `k` / `m` in MoonBot rather than cut to two places.
+///
+/// Args:
+///     col: Runtime report column name.
+///
+/// Returns:
+///     `true` for the delta family.
+fn is_delta_report_column(col: &str) -> bool {
+    matches!(
+        col,
+        "btc1hdelta"
+            | "exchange1hdelta"
+            | "btc24hdelta"
+            | "exchange24hdelta"
+            | "btc5mdelta"
+            | "bvsvratio"
+            | "pump1h"
+            | "dump1h"
+            | "d24h"
+            | "d3h"
+            | "d1h"
+            | "d15m"
+            | "d5m"
+            | "d1m"
+            | "dbtc1m"
+            | "vd1m"
+            | "pricebug"
+            | "d5s"
+            | "da1m"
+            | "dmark"
+    )
+}
+
+/// Display text of one market-delta cell: at most two places, trailing zeros dropped.
+///
+/// A move under `0.005` prints as `0`, the same cut MoonBot's report makes, and never as `-0`:
+/// a sign with no digit after it reads as a loss that is not there. Export, the clipboard and
+/// sorting keep the stored number.
+///
+/// Args:
+///     x: The stored delta.
+///
+/// Returns:
+///     `424.19`, `0.3`, `-0.01`, `0`.
+fn delta_text(x: f64) -> String {
+    let text = moon_core::util::fmt::compact(x, 2);
+    match text.strip_prefix('-') {
+        Some("0") => "0".to_string(),
+        _ => text,
     }
 }
 

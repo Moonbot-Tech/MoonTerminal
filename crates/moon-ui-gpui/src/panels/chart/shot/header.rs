@@ -133,9 +133,9 @@ pub(super) struct HeaderInputs {
     /// `None` means the badge is HIDDEN, not zero — its caption is switched off, or the chart has no
     /// price to measure against. See [`scale_field`] for the `0` convention.
     pub(super) scale_pct: Option<i32>,
-    /// The chart's own time-scale badge: the whole seconds the plot spans. `None` when the chart
+    /// The chart's own time-scale badge: the milliseconds the plot spans. `None` when the chart
     /// shows no such badge; see [`time_field`].
-    pub(super) time_scale_s: Option<i64>,
+    pub(super) time_scale_ms: Option<i64>,
     /// Price movement over the last three hours, in percent. UNSIGNED — see [`window_field`].
     pub(super) delta_3h: Option<f64>,
     /// Price movement over the last hour, in percent. UNSIGNED.
@@ -201,7 +201,7 @@ pub(super) fn header_strip(inputs: &HeaderInputs) -> ShotStrip {
         LeadGap::Field,
     ));
     tail.extend(scale_field(inputs.scale_pct, LeadGap::Field));
-    tail.extend(time_field(inputs.time_scale_s, LeadGap::Field));
+    tail.extend(time_field(inputs.time_scale_ms, LeadGap::Field));
     tail.extend(window_field("3h", inputs.delta_3h, LeadGap::Group));
     tail.extend(window_field("1h", inputs.delta_1h, LeadGap::Field));
     tail.extend(window_field("15m", inputs.delta_15m, LeadGap::Field));
@@ -368,13 +368,13 @@ fn scale_field(pct: Option<i32>, lead_gap: LeadGap) -> Option<StripField> {
 /// spelling. Bare, like [`scale_field`]: it is the token the reader can already see on the plot.
 ///
 /// Args:
-///     secs: The whole seconds the plot spans, or `None` when the chart hides the badge.
+///     ms: The milliseconds the plot spans, or `None` when the chart hides the badge.
 ///     lead_gap: The space charged in front of the field.
 ///
 /// Returns:
 ///     One field, or nothing at all.
-fn time_field(secs: Option<i64>, lead_gap: LeadGap) -> Option<StripField> {
-    let text = crate::display_text::fmt_duration_short(secs? as f64);
+fn time_field(ms: Option<i64>, lead_gap: LeadGap) -> Option<StripField> {
+    let text = crate::display_text::fmt_duration_short(ms? as f64 / 1_000.0);
     Some(plain(&text, RunStyle::Secondary, lead_gap))
 }
 

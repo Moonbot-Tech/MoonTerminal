@@ -79,8 +79,11 @@ feature — a row in the map, a new user word — a row in the dictionary.
   history from the core's archives, Last and Mark lines from the market-list prices the terminal
   (or its station) recorded around the trade.
 - **«Супер-растяжка»** (“super stretch”) — Moonbot's Ctrl+Shift+wheel zooms time down to
-  3 seconds. Plain wheel and Ctrl+wheel still stop at 30 seconds. The super-zoom hotkeys
-  use that same 3-second floor and are unbound by default (#493).
+  0.6 seconds, Moonbot's own floor (#1345). Plain wheel and Ctrl+wheel still stop at 30 seconds.
+  The super-zoom hotkeys use that same 0.6-second floor and are unbound by default (#493).
+  Stretched below a few seconds, the time axis steps in milliseconds (500 ms down to 10 ms):
+  a whole second keeps its full clock, the marks between print only `.mmm`, and the cursor
+  time carries milliseconds as soon as the axis does.
 - **«Фигуры»** (“Figures”) — drawing: Segment, Ray, Rectangle, Triangle,
   “Position”, two kinds of Fibonacci (including Moonbot's), fills, line styles,
   Ctrl+Z, magnet on Ctrl, figure alerts with sound and flags. A Zone prints its width in

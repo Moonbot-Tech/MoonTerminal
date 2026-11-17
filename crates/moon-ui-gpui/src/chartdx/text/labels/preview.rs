@@ -203,7 +203,7 @@ fn sample_inputs() -> LabelInputs {
         })),
         last_price: Some(51234.5),
         scale_badge: Some(12),
-        time_scale_s: Some(6_720),
+        time_scale_ms: Some(6_720_000),
         compare_pct: Some(1.2),
         delta_1h: Some(3.8),
         delta_24h: Some(-2.1),

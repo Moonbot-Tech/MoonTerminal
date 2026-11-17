@@ -27,8 +27,9 @@ fn price_labels_share_grid_precision_and_an_unknown_tick_fallback() {
     assert_eq!(super::format_price(0.01_f32, None), "0.01000");
 }
 
-/// Caption widths of the axis font at its default size: `HH:MM:SS`, `HH:MM`, `DD.MM`.
+/// Caption widths of the axis font at its default size: `.mmm`, `HH:MM:SS`, `HH:MM`, `DD.MM`.
 const WIDTHS: TimeCaptionWidths = TimeCaptionWidths {
+    millis: 30.0,
     seconds: 55.0,
     minutes: 35.0,
     date: 35.0,
@@ -54,11 +55,38 @@ fn the_densest_fitting_step_wins() {
 }
 
 /// A step fits only with a gap beside its caption, so a narrow plot steps coarser instead of
-/// crowding: a one-second mark is 60 px at 180 px for three seconds, under `HH:MM:SS` + gap.
+/// crowding: a one-second mark is 60 px at 180 px for three seconds, under `HH:MM:SS` + gap,
+/// while the same three seconds across 760 px have room for half-second marks.
 #[test]
 fn a_narrow_plot_steps_coarser_rather_than_crowding() {
-    assert_eq!(step(3.0, 760.0), 1.0);
+    assert_eq!(step(3.0, 760.0), 0.5);
     assert_eq!(step(3.0, 180.0), 2.0);
+}
+
+/// A stretched chart steps under one second, down to the 10 ms end of the ladder (#1345).
+///
+/// Breakage this pins: dropping the sub-second steps keeps a three-second window on whole
+/// seconds; sizing millisecond marks by the short `.mmm` alone would pick 20 ms at 0.6 s across
+/// 1600 px (53 px apart), where a full `HH:MM:SS` beside a `.mmm` needs 76.5 px.
+#[test]
+fn a_stretched_window_steps_in_milliseconds() {
+    // 400 px per second, the trade-window shot of #1345: 200 ms marks are 80 px apart.
+    assert_eq!(step(3.0, 1200.0), 0.2);
+    // The 0.6 s super-zoom floor across 1600 px: 50 ms marks are 133 px, 20 ms only 53 px.
+    assert_eq!(step(0.6, 1600.0), 0.05);
+    // 10 ms is reachable once a hundredth of a second spans the caption pair.
+    assert_eq!(step(0.1, 800.0), 0.01);
+    // Every millisecond step prints as one; a second does not.
+    for ms in [0.01, 0.02, 0.05, 0.1, 0.2, 0.5] {
+        assert_eq!(
+            super::TimeCaptionKind::of_step(ms),
+            super::TimeCaptionKind::Millis
+        );
+    }
+    assert_eq!(
+        super::TimeCaptionKind::of_step(1.0),
+        super::TimeCaptionKind::Seconds
+    );
 }
 
 /// A dated clock (`DD.MM HH:MM`) is wider than today's `HH:MM`, so the same window steps
@@ -160,7 +188,7 @@ fn price_grid_rounds_up_at_seven() {
 
 /// Drawn caption indices for 76 px captions centred every 60 px, optionally with one covered.
 fn drawn_time_captions(covered: Option<usize>) -> Vec<usize> {
-    let mut walk = super::TimeCaptionWalk::new(0.0);
+    let mut walk = super::TimeCaptionWalk::new(0.0, f32::INFINITY);
     (0..12)
         .filter(|&i| {
             let centre = 50.0 + 60.0 * i as f32;
@@ -179,6 +207,22 @@ fn a_covered_time_caption_keeps_its_slot() {
     assert_eq!(drawn_time_captions(Some(4)), expected);
     // A covered caption that would have been dropped for spacing changes nothing at all.
     assert_eq!(drawn_time_captions(Some(5)), open);
+}
+
+/// A caption that would cross either plot edge is dropped rather than cut by it (#1345: the
+/// shot's `17:02:23` was half outside the window), and the next one inside starts the row.
+#[test]
+fn a_caption_crossing_a_plot_edge_is_dropped() {
+    let mut walk = super::TimeCaptionWalk::new(100.0, 500.0);
+    assert!(walk.is_empty());
+    assert!(!walk.place(80.0, 130.0, false));
+    assert!(walk.is_empty());
+    assert!(walk.place(150.0, 200.0, false));
+    assert!(!walk.is_empty());
+    assert!(walk.place(460.0, 501.0, false));
+    assert!(!walk.place(520.0, 560.0, false));
+    let mut walk = super::TimeCaptionWalk::new(100.0, 500.0);
+    assert!(!walk.place(470.0, 530.0, false));
 }
 
 /// Without a usable tick the axis prints at the price's magnitude, which on Hyperliquid is the
