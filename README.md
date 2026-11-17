@@ -28,6 +28,7 @@
   <a href="#architecture">Architecture</a> ·
   <a href="#build">Build</a> ·
   <a href="#configuration">Configuration</a> ·
+  <a href="#where-updates-come-from">Updates</a> ·
   <a href="#documentation">Documentation</a>
 </p>
 
@@ -169,6 +170,21 @@ Settings → Connections
 Per-core connection setup — see the [Settings → Connections screenshot](#screenshots) above.
 
 Runtime config lives next to the executable. Server credentials are stored in encrypted config using the OS secure storage / keyring where available. Local config files and logs are ignored by Git.
+
+## Where updates come from
+
+Every release is built and published by [GitHub Actions](https://github.com/Moonbot-Tech/MoonTerminal/actions/workflows/release.yml) in this repository, from the public source. Nobody uploads a binary by hand.
+
+- A release is built only from a version tag that sits on `main`, and `main` changes only through a pull request. Each release page names the commit it was built from, and the build log is public.
+- Publishing waits for a maintainer's approval in a protected `release` environment. Before the release goes public, the workflow compares the SHA-256 digests GitHub computed for the uploaded Windows, Linux and station files with the files it built.
+- Releases are immutable: once published, neither the tag nor its files can be replaced.
+- The built-in updater installs only from these releases. It ignores drafts, pre-releases and any release that is not immutable, downloads only from `github.com/Moonbot-Tech/MoonTerminal/releases/download/<tag>/`, and checks the file's size and SHA-256 against the digest GitHub published before it replaces anything. On a mismatch the installed version stays as it is. Nothing is installed until you click **Update to …**.
+
+Windows SmartScreen warns about `MoonTerminal.exe` because the file is not code-signed yet. To check a downloaded file yourself, compare its hash with the `sha256:` value shown next to the file on the [release page](https://github.com/Moonbot-Tech/MoonTerminal/releases):
+
+```powershell
+Get-FileHash .\MoonTerminal.exe -Algorithm SHA256
+```
 
 ## Documentation
 
