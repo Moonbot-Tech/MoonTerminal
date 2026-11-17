@@ -749,3 +749,37 @@ fn review_latest_profit_uses_legacy_db_id() {
     assert_eq!(data.cores[0].last_close, 100);
     assert_eq!(data.cores[0].last_profit, Some(5.0));
 }
+
+/// The Profit Monitor must read a replica whose core holds 1500 stored clock-offset slices
+/// (#1372). One `OR` branch per slice joined flat made the period predicate a left-deep tree past
+/// SQLite's 1000-level expression depth, so every refresh failed with `Expression tree is too
+/// large (maximum depth 1000)` and the window showed no rows. The slices alternate 0/3600 s from
+/// true UTC 10000, after every fixture row, so each row still converts on the first, zero-offset
+/// slice and the totals are the plain fixture sums: core 1 12+3-2 = 13 over 3 trades, core 2 -5.
+#[test]
+fn profit_monitor_reads_a_long_clock_offset_history() {
+    let connection = fixture();
+    connection
+        .execute_batch(
+            "CREATE TABLE core_time_offset (
+                core_uid INTEGER, from_utc INTEGER, offset_secs INTEGER,
+                observed_at INTEGER, source TEXT
+            );
+            INSERT INTO core_time_offset VALUES (1, 0, 0, 0, 'fixture');
+            WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1500)
+            INSERT INTO core_time_offset
+                SELECT 1, 10000 + x, (x % 2) * 3600, 10000 + x, 'fixture' FROM n;",
+        )
+        .expect("long offset history fixture");
+
+    let scoped = profit_monitor_on(&connection, &query(0, 200)).expect("monitor aggregate");
+    let ProfitScope::Comparable { data, .. } = scoped else {
+        panic!("single-quote fixture must be comparable");
+    };
+    assert_eq!(data.cores.len(), 2);
+    assert_eq!(data.cores[0].core_uid, 1);
+    assert_eq!(data.cores[0].trades, 3);
+    assert!((data.cores[0].profit - 13.0).abs() < 1e-9);
+    assert_eq!(data.cores[1].core_uid, 2);
+    assert!((data.cores[1].profit + 5.0).abs() < 1e-9);
+}

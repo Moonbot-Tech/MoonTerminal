@@ -288,6 +288,7 @@ impl Query {
                 ));
             }
         }
+        let mut branches = crate::db::report_axis::bounded_or_terms(branches);
         let window = match branches.len() {
             0 => window(0, None, None),
             1 => branches.remove(0),

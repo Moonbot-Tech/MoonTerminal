@@ -219,3 +219,65 @@ fn correctness_2_report_axis_period_scale_probe() {
     });
     println!("report axis 100000 rows: {rows_ms:.3} ms; totals: {totals_ms:.3} ms");
 }
+
+/// A core with 1500 stored offset slices: zero offset until true UTC 10000, then alternating
+/// 0/3600 s every second, so every Report fixture row below 10000 converts as the identity.
+fn long_history_axis() -> ReportAxis {
+    let mut segments = vec![OffsetSegment {
+        from_utc: 0,
+        offset_secs: 0,
+    }];
+    segments.extend((1..=1500).map(|x| OffsetSegment {
+        from_utc: 10_000 + x,
+        offset_secs: (x as i32 % 2) * 3600,
+    }));
+    ReportAxis::from_measured(HashMap::from([(1, segments)]), chrono_tz::UTC)
+}
+
+/// The Report date filter must read a core with 1500 stored offset slices (#1372). One `OR`
+/// branch per slice joined flat exceeded SQLite's 1000-level expression depth, so the bounded
+/// period (coarse-range shape), the one-sided period (per-branch shape) and the open-date basis
+/// all failed to prepare. Rows 1400 and 1999 sit on the first, zero-offset slice, so the period
+/// 1000..=2000 holds both (7 + 99 = 106) and the period from 1500 holds only 1999.
+#[test]
+fn report_period_reads_a_long_clock_offset_history() {
+    let conn = Connection::open_in_memory().expect("in-memory Report fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, newrecid INTEGER, buydate INTEGER, closedate INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency INTEGER
+        );
+        INSERT INTO orders_rep VALUES
+            (1, 1, 1400, 1400, 7.0, 100.0, 1),
+            (1, 2, 1999, 1999, 99.0, 100.0, 1);",
+    )
+    .expect("seed Report rows");
+    for core_uids in [vec![], vec![1]] {
+        let bounded = ReportFilter {
+            core_uids: core_uids.clone(),
+            date_from: Some(1000),
+            date_to: Some(2000),
+            rows: RowScope::Closed,
+            axis: long_history_axis(),
+            ..Default::default()
+        };
+        let totals = query_totals(&conn, &bounded).expect("bounded Report totals");
+        assert_eq!(totals.quotes.orders, 2);
+        assert_eq!(totals.quotes.totals[0].profit, 106.0);
+
+        let one_sided = ReportFilter {
+            date_from: Some(1500),
+            date_to: None,
+            ..bounded.clone()
+        };
+        let table = query_reports(&conn, &one_sided, "profitbtc", false, 10)
+            .expect("one-sided Report rows");
+        assert_eq!(table.rec_ids, vec![2]);
+
+        let mut open_basis = bounded.clone();
+        open_basis.period_basis = super::super::PeriodBasis::OpenDate;
+        let table = query_reports(&conn, &open_basis, "profitbtc", false, 10)
+            .expect("open-basis Report rows");
+        assert_eq!(table.rec_ids, vec![1, 2]);
+    }
+}

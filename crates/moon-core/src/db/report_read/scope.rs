@@ -1,6 +1,7 @@
 //! scope items for report reads.
 
 use super::*;
+use crate::db::report_axis::bounded_or_terms;
 
 /// Return the canonical "this row is closed" test for one aliased source.
 ///
@@ -297,20 +298,24 @@ pub(super) fn append_row_scope(
         // the whole replica's history up to the window's end (18 ms for an empty day on 606k
         // rows, 30 days of the Mini App month = 0.7 s). The unary plus keeps the branch terms off
         // the index, so the coarse range is the only bound left to choose.
-        let closed = parts
-            .iter()
-            .filter_map(|p| {
-                p.closed
-                    .as_ref()
-                    .map(|c| format!("{}{}", p.guard, c.replace(CLOSEDATE, UNINDEXED_CLOSEDATE)))
-            })
-            .collect::<Vec<_>>()
-            .join(") OR (");
-        let open = parts
-            .iter()
-            .filter_map(|p| p.open.as_ref().map(|o| format!("{}{o}", p.guard)))
-            .collect::<Vec<_>>()
-            .join(") OR (");
+        let closed = bounded_or_terms(
+            parts
+                .iter()
+                .filter_map(|p| {
+                    p.closed.as_ref().map(|c| {
+                        format!("{}{}", p.guard, c.replace(CLOSEDATE, UNINDEXED_CLOSEDATE))
+                    })
+                })
+                .collect(),
+        )
+        .join(") OR (");
+        let open = bounded_or_terms(
+            parts
+                .iter()
+                .filter_map(|p| p.open.as_ref().map(|o| format!("{}{o}", p.guard)))
+                .collect(),
+        )
+        .join(") OR (");
         // The range is bound FIRST because it is emitted first, and the per-group bounds follow
         // in group order exactly as they did before this shape existed.
         params.push(Box::new(from));
@@ -326,7 +331,7 @@ pub(super) fn append_row_scope(
         }
         return;
     }
-    let branches = parts.iter().map(GroupPredicate::branch).collect::<Vec<_>>();
+    let branches = bounded_or_terms(parts.iter().map(GroupPredicate::branch).collect());
     for part in parts.iter_mut() {
         params.append(&mut part.bounds);
     }
@@ -451,6 +456,7 @@ pub(super) fn append_open_basis_scope(
             None => format!("{guard}1=1{window}"),
         });
     }
+    let branches = bounded_or_terms(branches);
     match branches.len() {
         0 => sql.push_str(" AND 1=0"),
         1 => sql.push_str(&format!(" AND {}", branches[0])),
