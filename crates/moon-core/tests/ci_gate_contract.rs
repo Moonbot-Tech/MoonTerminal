@@ -318,6 +318,25 @@ jobs:
         .collect()
 }
 
+/// The value of `key` in a job's `container:`, read from either spelling GitHub accepts: the
+/// one-line `container: <image>` (which carries only `image`) or the mapping, whose keys sit on
+/// the indented lines right below it. Comments are already stripped from `body` by `job_body`.
+fn container_field(body: &[&str], key: &str) -> Option<String> {
+    let at = body
+        .iter()
+        .position(|line| line.trim_start().starts_with("container:"))?;
+    let inline = body[at].trim().trim_start_matches("container:").trim();
+    if !inline.is_empty() {
+        return (key == "image").then(|| inline.to_owned());
+    }
+    let indent = body[at].len() - body[at].trim_start().len();
+    body[at + 1..]
+        .iter()
+        .take_while(|line| line.len() - line.trim_start().len() > indent)
+        .find_map(|line| line.trim().strip_prefix(&format!("{key}:")))
+        .map(|value| value.trim().to_owned())
+}
+
 /// Body lines of the named job, comments stripped.
 ///
 /// A job key is the only thing indented exactly two spaces inside the `jobs:` section, so the
@@ -804,10 +823,9 @@ fn the_linux_probe_is_diagnostic_builds_in_a_bare_container_and_starts_the_binar
     }
 
     let build = job_body(&probe, LINUX_PROBE_JOB).expect("Linux probe job");
-    assert!(
-        build
-            .iter()
-            .any(|line| line.trim() == "container: ubuntu:22.04"),
+    assert_eq!(
+        container_field(&build, "image").as_deref(),
+        Some("ubuntu:22.04"),
         "the Linux probe must build in the bare ubuntu:22.04 container — on the runner's own \
          image the install step no longer proves the documented package list, and a newer base \
          raises the glibc the uploaded binary demands"
@@ -1900,6 +1918,51 @@ fn releases_ship_the_station_under_the_names_its_updater_reads() {
     );
 }
 
+/// Breakage guarded: the fat-LTO link of the Linux terminal loses its swap in the release or in
+/// the probe, or the two drift apart. The link needs about 17.3 GB on a 16 GB runner that, on
+/// some machines, has no swap of its own (measured 2026-11-16: OOM-killed in 3 runs of 5 on
+/// main without it). The swap must come before the build, the container must be started with
+/// the options `swapon` needs and with its RAM capped below the runner's (uncapped, 2 runs of
+/// 10 lost the runner agent itself; capped at 13 or 14 GB, 10 of 10 green), and the probe must
+/// do all of it exactly as the release does, or a green probe stops predicting a green release.
+#[test]
+fn the_linux_release_link_and_the_probe_add_the_same_swap_before_the_build() {
+    let release = release_workflow_text();
+    let probe = linux_probe_workflow_text();
+    let swap = "run: bash .github/scripts/add-build-swap.sh 8";
+    let options =
+        "--cap-add=SYS_ADMIN --security-opt seccomp=unconfined --memory=13g --memory-swap=-1";
+    for (workflow, text, job, build) in [
+        (
+            "release.yml",
+            &release,
+            "linux",
+            "run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-unknown-linux-gnu",
+        ),
+        (
+            "linux-probe.yml",
+            &probe,
+            LINUX_PROBE_JOB,
+            "run: cargo build -p moon-ui-gpui --bin moonterminal --release --target x86_64-unknown-linux-gnu",
+        ),
+    ] {
+        let body =
+            job_body(text, job).unwrap_or_else(|| panic!("{workflow} must keep the `{job}` job"));
+        assert_eq!(
+            container_field(&body, "options").as_deref(),
+            Some(options),
+            "{workflow}:{job} must start its container with `{options}` — swapon is denied \
+             without the capability, and without the cap the link starves the runner agent"
+        );
+        let swapped = body.iter().position(|line| line.trim() == swap);
+        let built = body.iter().position(|line| line.trim() == build);
+        assert!(
+            matches!((swapped, built), (Some(s), Some(b)) if s < b),
+            "{workflow}:{job} must `{swap}` before `{build}`"
+        );
+    }
+}
+
 /// Breakage guarded: the Linux terminal stops shipping, ships under a name its updater never
 /// looks for (`moon_core::update::linux_terminal_asset_name`), is built on the runner's own image
 /// (a newer glibc than users have), goes out without the tags and so never asks for an update,
@@ -1914,8 +1977,12 @@ fn releases_ship_the_linux_terminal_built_started_and_verified() {
     let has = |body: &[&str], want: &str| body.iter().any(|line| line.trim() == want);
     let asset = moon_core::update::linux_terminal_asset_name();
 
+    assert_eq!(
+        container_field(&linux, "image").as_deref(),
+        Some("ubuntu:22.04"),
+        "the release must build the Linux terminal in the bare ubuntu:22.04 container"
+    );
     for want in [
-        "container: ubuntu:22.04".to_owned(),
         "fetch-depth: 0".to_owned(),
         "run: cargo build -p moon-ui-gpui --bin moonterminal --release --locked --target x86_64-unknown-linux-gnu".to_owned(),
         format!("cp target/x86_64-unknown-linux-gnu/release/moonterminal dist/{asset}"),
