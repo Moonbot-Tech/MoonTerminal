@@ -523,19 +523,31 @@ fn every_hlsl_entry_point_compiles() {
     }
 }
 
-/// `time_scale_secs` must state the WHOLE plot width in time — the future margin right of the live
+/// `time_scale_ms` must state the WHOLE plot width in time — the future margin right of the live
 /// edge included — and nothing for a plot with no width; otherwise the badge reports a span that
 /// is not the one on screen.
 #[test]
-fn the_time_scale_is_the_full_plot_width_in_seconds() {
+fn the_time_scale_is_the_full_plot_width_in_milliseconds() {
     let mut view = moon_chart::view::ChartView::new(0.0);
     // 1000 px at 1/6720 px per ms: a plot 6720 s wide, 1 h 52 min.
     view.px_per_ms = 1.0 / 6_720.0;
     view.right_margin_frac = 0.1;
 
-    assert_eq!(time_scale_secs(&view, 1_000.0), Some(6_720));
-    assert_eq!(time_scale_secs(&view, 500.0), Some(3_360));
-    assert_eq!(time_scale_secs(&view, 0.0), None);
+    assert_eq!(time_scale_ms(&view, 1_000.0), Some(6_720_000));
+    assert_eq!(time_scale_ms(&view, 500.0), Some(3_360_000));
+    assert_eq!(time_scale_ms(&view, 0.0), None);
+}
+
+/// A super-zoomed plot under one second keeps its milliseconds; from a second up the badge stays
+/// on whole seconds (#1345). Breakage this pins: rounding every span to seconds prints the 0.6 s
+/// floor as "1s"; keeping milliseconds everywhere re-lays the caption on f32 noise.
+#[test]
+fn the_time_scale_keeps_milliseconds_only_under_a_second() {
+    let mut view = moon_chart::view::ChartView::new(0.0);
+    view.px_per_ms = 1_000.0 / 600.0;
+    assert_eq!(time_scale_ms(&view, 1_000.0), Some(600));
+    view.px_per_ms = 1_000.0 / 2_400.4;
+    assert_eq!(time_scale_ms(&view, 1_000.0), Some(2_000));
 }
 
 /// Catches reverting to a fixed width or dropping shrink/cap/broom rules when a user widens the book.

@@ -2,8 +2,8 @@
 //!
 //! The live edge follows the LOCAL clock, while every tick carries the CORE's trade time. When
 //! the PC clock lags the core, the newest ticks sit to the right of the edge; the right margin is
-//! only 10% of the window (0.3 s at super zoom), so a lag of a few hundred milliseconds already
-//! runs them under the order book. This estimator learns the offset between the newest trade
+//! only 10% of the window (3 s at the plain-wheel floor, 60 ms at super zoom), so a lag of a few
+//! hundred milliseconds already runs them under the order book. This estimator learns the offset between the newest trade
 //! times and the local clock as trades arrive, and the live edge is placed at `now + offset`.
 //!
 //! One estimator belongs to one chart source (core and market); a new source starts from zero.

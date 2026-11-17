@@ -53,7 +53,7 @@ pub(super) fn compose(png: &[u8], inputs: &ShotInputs, when_ms: i64) -> anyhow::
         zone: crate::chartdx::axes::display_zone(),
         tf_min: inputs.tf_min,
         scale_pct: inputs.scale_pct,
-        time_scale_s: inputs.time_scale_s,
+        time_scale_ms: inputs.time_scale_ms,
         delta_3h: inputs.delta_3h,
         delta_1h: inputs.delta_1h,
         delta_15m: inputs.delta_15m,

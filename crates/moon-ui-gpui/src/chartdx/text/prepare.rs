@@ -749,6 +749,19 @@ impl RenderState {
             let mut skip_time_label_x = None;
             let mut skip_price_label_y = None;
 
+            let now_ms = moon_core::util::time::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_millis() as f64);
+            let right_unix = left_unix + window_ms;
+            // The axis step is fitted before the crosshair readout: a sub-second step puts the
+            // readout on milliseconds too, and the backdrop pass reads the same flag. Nothing to
+            // fit when neither the axis nor the readout will be drawn.
+            let time_step_ms = (time_axis_visible || cursor.is_some()).then(|| {
+                self.fitted_time_step_ms(ctx, left_unix, right_unix, window_ms, plot_w, now_ms)
+            });
+            let millis_clock = time_step_ms.is_some_and(|step| step < 1000.0);
+            self.panes[idx].readout_time_millis = millis_clock;
+
             if let Some(cursor) = cursor {
                 self.draw_tick_volume_readout(ctx, idx, cursor, sf, &mut placed)?;
             }
@@ -759,11 +772,9 @@ impl RenderState {
 
                 if cx_log >= plot_left && cx_log <= plot_right {
                     let unix = left_unix + (cx_log - plot_left) as f64 / time_to_px as f64;
-                    let now_ms = moon_core::util::time::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0.0, |d| d.as_millis() as f64);
                     // For a day other than today, show "DD.MM HH:MM:SS" for large timeframes/windows.
-                    let label = crate::chartdx::axes::format_clock_dated(unix, true, now_ms);
+                    let label =
+                        crate::chartdx::axes::format_cursor_clock(unix, millis_clock, now_ms);
                     let metrics = self.measure_label_text(ctx, &label);
                     let width = metrics.width.as_f32();
                     let line_h = metrics.line_height.as_f32();
@@ -974,42 +985,25 @@ impl RenderState {
                 }
             }
 
-            // Place time labels at ROUND local-time boundaries (`time_step`: 1 s to 6 h, then days
-            // and calendar months, the densest step whose measured captions fit). Fixed window
+            // Place time labels at ROUND local-time boundaries (`time_step`: 10 ms to 12 h, then
+            // days and calendar months, the densest step whose measured captions fit). Fixed window
             // fractions previously produced non-round times with uneven steps, such as 19:46,
             // 19:56, 20:05 (+10, then +9).
             if !time_axis_visible {
                 continue;
             }
-            let now_ms = moon_core::util::time::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0.0, |d| d.as_millis() as f64);
-            let right_unix = left_unix + window_ms;
-            // One caption of each kind, measured in the axis font. The left edge decides
-            // whether clocks carry a date (a window reaching back past today does); a 1 January
-            // date prints as a shorter year, so the wider of the two edges stands for dates.
-            let mut width_of = |label: String| self.measure_text(ctx, &label).width.as_f32();
-            let widths = moon_chart::axes::TimeCaptionWidths {
-                seconds: width_of(crate::chartdx::axes::format_clock_dated(
-                    left_unix, true, now_ms,
-                )),
-                minutes: width_of(crate::chartdx::axes::format_clock_dated(
-                    left_unix, false, now_ms,
-                )),
-                date: width_of(crate::chartdx::axes::format_date_caption(left_unix)).max(width_of(
-                    crate::chartdx::axes::format_date_caption(right_unix),
-                )),
+            // Fitted above whenever the axis is visible.
+            let Some(step_ms) = time_step_ms else {
+                continue;
             };
-            let step_ms = (moon_chart::axes::time_step(window_ms / 1000.0, plot_w, &widths)
-                * 1000.0)
-                .max(1000.0);
             let kind = moon_chart::axes::TimeCaptionKind::of_step(step_ms / 1000.0);
-            let with_sec = kind == moon_chart::axes::TimeCaptionKind::Seconds;
+            let millis_step = kind == moon_chart::axes::TimeCaptionKind::Millis;
+            let with_sec = millis_step || kind == moon_chart::axes::TimeCaptionKind::Seconds;
             // Day and month steps land on local midnights: the date is the whole caption.
             let date_only = kind == moon_chart::axes::TimeCaptionKind::Date;
             // Thin labels horizontally in narrow windows. The kept set ignores the crosshair; the
             // readout plate only hides the one it covers (`TimeCaptionWalk` says why).
-            let mut walk = moon_chart::axes::TimeCaptionWalk::new(plot_left);
+            let mut walk = moon_chart::axes::TimeCaptionWalk::new(plot_left, plot_right);
             for unix in crate::chartdx::axes::aligned_ticks_ms(left_unix, right_unix + 0.5, step_ms)
             {
                 // The rightmost ~10% is future space beyond the live edge; do not label times that
@@ -1022,8 +1016,14 @@ impl RenderState {
                 // labels in windows spanning several days appeared to run backward.
                 let label = if date_only {
                     crate::chartdx::axes::format_date_caption(unix)
-                } else {
+                } else if !millis_step || (unix.round() as i64).rem_euclid(1000) == 0 {
                     crate::chartdx::axes::format_clock_dated(unix, with_sec, now_ms)
+                } else if walk.is_empty() {
+                    // The leftmost caption of a millisecond row carries the whole clock, so a
+                    // window that holds no whole second still says which second it shows.
+                    crate::chartdx::axes::format_clock_dated_ms(unix.round() as i64, now_ms as i64)
+                } else {
+                    crate::chartdx::axes::format_millis_caption(unix)
                 };
                 let metrics = self.measure_text(ctx, &label);
                 let half_w = metrics.width.as_f32() * 0.5;
@@ -1064,5 +1064,47 @@ impl RenderState {
             }
         }
         Ok((price_axis_width > 0.0).then_some(price_axis_width))
+    }
+
+    /// The round time-axis step for one pane's window, fitted to captions measured in the axis
+    /// font.
+    ///
+    /// One caption of each kind is measured. The left edge decides whether clocks carry a date (a
+    /// window reaching back past today does); a 1 January date prints as a shorter year, so the
+    /// wider of the two edges stands for dates.
+    ///
+    /// Args:
+    ///     ctx: Text context the captions are measured in.
+    ///     left_unix: Window start in UTC Unix milliseconds.
+    ///     right_unix: Window end in UTC Unix milliseconds.
+    ///     window_ms: Window width in milliseconds.
+    ///     plot_w: Plot width in logical pixels.
+    ///     now_ms: Current UTC Unix milliseconds, for the dated-clock decision.
+    ///
+    /// Returns:
+    ///     The step in milliseconds, from 10 ms up to twelve months.
+    fn fitted_time_step_ms(
+        &mut self,
+        ctx: &GpuCanvasTextContext<'_>,
+        left_unix: f64,
+        right_unix: f64,
+        window_ms: f64,
+        plot_w: f32,
+        now_ms: f64,
+    ) -> f64 {
+        let mut width_of = |label: String| self.measure_text(ctx, &label).width.as_f32();
+        let widths = moon_chart::axes::TimeCaptionWidths {
+            millis: width_of(crate::chartdx::axes::format_millis_caption(left_unix)),
+            seconds: width_of(crate::chartdx::axes::format_clock_dated(
+                left_unix, true, now_ms,
+            )),
+            minutes: width_of(crate::chartdx::axes::format_clock_dated(
+                left_unix, false, now_ms,
+            )),
+            date: width_of(crate::chartdx::axes::format_date_caption(left_unix)).max(width_of(
+                crate::chartdx::axes::format_date_caption(right_unix),
+            )),
+        };
+        moon_chart::axes::time_step(window_ms / 1000.0, plot_w, &widths) * 1000.0
     }
 }

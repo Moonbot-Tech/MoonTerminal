@@ -33,9 +33,9 @@ pub(in crate::chartdx) struct PaneRender {
     /// relative to price. `None` while there is no price to measure against. Computed
     /// by `sync_from_market_source` from the panel's logical `ChartView`.
     pub(in crate::chartdx) scale_badge: Option<i32>,
-    /// Current X-scale badge: the whole seconds the plot spans, from [`time_scale_secs`]. Computed
+    /// Current X-scale badge: the milliseconds the plot spans, from [`time_scale_ms`]. Computed
     /// by `sync_from_market_source` beside [`Self::scale_badge`].
-    pub(in crate::chartdx) time_scale_s: Option<i64>,
+    pub(in crate::chartdx) time_scale_ms: Option<i64>,
     /// Finished translucent plate under the corner caption, in DEVICE pixels `[x, y, w, h]`.
     ///
     /// Computed by `prepare_text`, which owns the caption's geometry, and drawn verbatim by
@@ -210,6 +210,10 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) readout_rects: Vec<ReadoutRect>,
     pub(in crate::chartdx) readout_time_width: f32,
     pub(in crate::chartdx) readout_time_line_h: f32,
+    /// Whether the crosshair time readout carries milliseconds: the time axis is on a
+    /// sub-second step. Set by the text pass, read by the backdrop pass, so both format the
+    /// readout the same way.
+    pub(in crate::chartdx) readout_time_millis: bool,
     pub(in crate::chartdx) readout_price_width: f32,
     pub(in crate::chartdx) readout_price_line_h: f32,
     pub(in crate::chartdx) history_cursor: ChartHistoryCursor,
@@ -632,7 +636,7 @@ impl PaneRender {
             ticker_catalog_key: 0,
             ticker_resolved: false,
             scale_badge: None,
-            time_scale_s: None,
+            time_scale_ms: None,
             caption_plates: [[0.0; 4]; text::CAPTION_PLATES],
             caption_bars: Vec::new(),
             caption_bars_scratch: Vec::new(),
@@ -684,6 +688,7 @@ impl PaneRender {
             readout_rects: Vec::new(),
             readout_time_width: 0.0,
             readout_time_line_h: 0.0,
+            readout_time_millis: false,
             readout_price_width: 0.0,
             readout_price_line_h: 0.0,
             history_cursor: ChartHistoryCursor::default(),

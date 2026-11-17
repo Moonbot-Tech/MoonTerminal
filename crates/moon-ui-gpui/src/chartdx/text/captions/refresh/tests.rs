@@ -156,7 +156,7 @@ fn change_input(state: &mut crate::chartdx::RenderState, field: usize) {
         8 => state.trade_labels = Some(Rc::new(crate::chartdx::TradeLabels::default())),
         9 => pane.cached_last_price = Some(100.0),
         10 => pane.scale_badge = Some(20),
-        11 => pane.time_scale_s = Some(60),
+        11 => pane.time_scale_ms = Some(60_000),
         12 => {
             pane.orderbook_only = true;
             pane.cached_last_price = Some(100.0);
@@ -266,7 +266,7 @@ fn owned_inputs(state: &crate::chartdx::RenderState) -> crate::chartdx::text::La
         trade: state.trade_labels.clone(),
         last_price: pr.cached_last_price,
         scale_badge: pr.scale_badge,
-        time_scale_s: pr.time_scale_s,
+        time_scale_ms: pr.time_scale_ms,
         compare_pct: state
             .compare_ref_price
             .filter(|_| pr.orderbook_only)

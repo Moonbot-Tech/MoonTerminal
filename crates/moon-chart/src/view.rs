@@ -246,8 +246,11 @@ const DEFAULT_RIGHT_MARGIN_FRAC: f32 = 0.10;
 const DEFAULT_WINDOW_MS: f32 = DEFAULT_HISTORY_MS / (1.0 - DEFAULT_RIGHT_MARGIN_FRAC);
 /// Plain wheel zoom stops at a 30-second plot window.
 const MIN_WINDOW_MS: f32 = 30_000.0;
-/// Ctrl+Shift+wheel and super-zoom hotkeys allow a three-second plot window.
-const SUPER_MIN_WINDOW_MS: f32 = 3_000.0;
+/// Ctrl+Shift+wheel and super-zoom hotkeys allow a 0.6-second plot window.
+///
+/// MoonBot's own super-zoom floor (#1345). Three seconds held the time axis on half-second marks;
+/// at 0.6 s the millisecond steps of `axes::time_step` reach 50 ms on an ordinary plot.
+const SUPER_MIN_WINDOW_MS: f32 = 600.0;
 
 thread_local! {
     /// Last time-window width a zoom gesture settled on in this process, in milliseconds.
@@ -344,7 +347,7 @@ struct FrameRequest {
 /// Which time-zoom gesture is changing the X scale.
 ///
 /// The floor and the live-edge rule travel together. A caller cannot ask for the
-/// three-second floor and the unmodified-wheel pin at the same time.
+/// super-zoom floor and the unmodified-wheel pin at the same time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum XZoom {
     /// Unmodified wheel. Thirty-second floor. A chart that is already live changes
@@ -353,7 +356,7 @@ pub enum XZoom {
     /// Ctrl+wheel. Thirty-second floor. The time under the cursor stays put, and a
     /// live chart lets go unless that shift still lands inside the rejoin radius.
     Ctrl,
-    /// Ctrl+Shift+wheel and the super-zoom hotkeys. Three-second floor.
+    /// Ctrl+Shift+wheel and the super-zoom hotkeys. 0.6-second floor.
     /// Cursor-anchored, with the same live-edge rule as [`XZoom::Ctrl`].
     Super,
 }

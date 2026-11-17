@@ -941,12 +941,12 @@ fn super_zoom_floor_and_plain_escape_work_at_every_width() {
         view.zoom_x_at(2.0, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 15_000.0).abs() < 0.1);
         view.zoom_x_at(1_000_000.0, width, width * 0.5, now, XZoom::Super);
-        assert!((view.visible_x(width).1 - 3_000.0).abs() < 0.1);
+        assert!((view.visible_x(width).1 - 600.0).abs() < 0.1);
         view.zoom_x_at(2.0, width, width * 0.5, now, XZoom::Ctrl);
-        assert!((view.visible_x(width).1 - 3_000.0).abs() < 0.1);
+        assert!((view.visible_x(width).1 - 600.0).abs() < 0.1);
         view.zoom_x_at(0.5, width, width * 0.5, now, XZoom::Ctrl);
-        assert!((view.visible_x(width).1 - 6_000.0).abs() < 0.1);
-        view.zoom_x_at(0.125, width, width * 0.5, now, XZoom::Ctrl);
+        assert!((view.visible_x(width).1 - 1_200.0).abs() < 0.1);
+        view.zoom_x_at(0.025, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 48_000.0).abs() < 0.1);
         view.zoom_x_at(2.0, width, width * 0.5, now, XZoom::Ctrl);
         assert!((view.visible_x(width).1 - 30_000.0).abs() < 0.1);
@@ -1250,6 +1250,7 @@ fn a_remembered_width_opens_a_new_chart_at_that_history() {
 }
 
 /// A super-zoom memory of 3s must open the next chart at the 30-second plain floor, not at 3s.
+/// Super-zoom then reaches its own 0.6-second floor on the opened chart.
 /// Opening below that floor would put a chart the user has not super-zoomed into the super-zoom
 /// band, where a later plain wheel cannot use the 30-second floor as its in-stop.
 #[test]
@@ -1278,8 +1279,8 @@ fn a_super_zoom_memory_opens_at_the_plain_wheel_floor() {
     }
     let (_, after_super) = view.visible_x(WIDTH);
     assert!(
-        (after_super - 3_000.0).abs() < 1.0,
-        "super-zoom on the opened chart did not reach 3s ({after_super} ms)"
+        (after_super - 600.0).abs() < 1.0,
+        "super-zoom on the opened chart did not reach 0.6s ({after_super} ms)"
     );
 }
 

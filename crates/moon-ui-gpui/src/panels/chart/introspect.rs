@@ -138,7 +138,7 @@ impl ChartPanel {
             // and whether it is shown are decided in `chartdx`, and a second copy of that decision
             // would be free to disagree with the badge inside the picture.
             scale_pct: self.chart.scale_badge(),
-            time_scale_s: self.chart.time_scale_secs(),
+            time_scale_ms: self.chart.time_scale_ms(),
         }
     }
 

@@ -35,7 +35,7 @@ use super::TradeWindowView;
 pub(super) enum TradeHotkey {
     /// Step the price scale one preset; `up` is Moonbot's "+" — a WIDER band, zooming OUT.
     ScaleStep { up: bool },
-    /// Step the time axis with the three-second floor.
+    /// Step the time axis with the 0.6-second super-zoom floor.
     SuperZoom { zoom_in: bool },
 }
 

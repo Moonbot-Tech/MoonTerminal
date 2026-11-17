@@ -166,9 +166,9 @@ pub enum HotkeyAction {
     ScalePlus,
     /// Step the active chart's Y scale DOWN a preset — a tighter band, zooming IN.
     ScaleMinus,
-    /// Step the calling window's time axis inward with the three-second floor.
+    /// Step the calling window's time axis inward with the 0.6-second super-zoom floor.
     SuperZoomIn,
-    /// Step the calling window's time axis outward with the three-second floor.
+    /// Step the calling window's time axis outward with the 0.6-second super-zoom floor.
     SuperZoomOut,
     /// Moonbot's Ctrl+Right, "Center chart", on EVERY chart: drop the manual Y view, put the last
     /// price at the centre and return to the live edge, scales untouched.

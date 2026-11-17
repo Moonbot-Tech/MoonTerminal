@@ -167,7 +167,7 @@ fn wheel_delta(x: f32, y: f32, modifiers: Modifiers) -> f32 {
 
 /// Resolve Ctrl+Shift before the Shift/Alt pan gesture, and Ctrl alone before a plain zoom.
 ///
-/// Ctrl+Shift is the three-second super zoom. Shift or Alt pans, including a Windows
+/// Ctrl+Shift is the 0.6-second super zoom. Shift or Alt pans, including a Windows
 /// wheel that the platform moved onto X. Ctrl without those keys is a cursor-anchored
 /// zoom that may leave the live edge. Anything else is the unmodified wheel, which
 /// keeps a live chart pinned to now.

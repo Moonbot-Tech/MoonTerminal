@@ -1236,10 +1236,10 @@ impl ChartDataState {
             let next_time = if pr.orderbook_only {
                 None
             } else {
-                time_scale_secs(&pane.view, chart_area.w)
+                time_scale_ms(&pane.view, chart_area.w)
             };
-            if pr.time_scale_s != next_time {
-                pr.time_scale_s = next_time;
+            if pr.time_scale_ms != next_time {
+                pr.time_scale_ms = next_time;
                 pixels_changed = true;
             }
             let area_win = Rect {

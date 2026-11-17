@@ -76,7 +76,7 @@ impl RenderState {
                 trade,
                 last_price,
                 scale_badge,
-                time_scale_s,
+                time_scale_ms,
                 compare_pct: held_compare_pct,
                 delta_1h,
                 delta_24h,
@@ -117,7 +117,7 @@ impl RenderState {
             sync!(trade, self.trade_labels);
             sync!(last_price, pr.cached_last_price);
             sync!(scale_badge, pr.scale_badge);
-            sync!(time_scale_s, pr.time_scale_s);
+            sync!(time_scale_ms, pr.time_scale_ms);
             sync!(held_compare_pct, compare_pct);
             sync!(delta_1h, pr.delta_1h);
             sync!(delta_24h, pr.delta_24h);

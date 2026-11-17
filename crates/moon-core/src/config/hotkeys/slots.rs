@@ -41,9 +41,9 @@ pub enum KeySlot {
     ShiftSellDown,
     ScalePlus,
     ScaleMinus,
-    /// Zoom the time axis in to the three-second floor.
+    /// Zoom the time axis in to the 0.6-second super-zoom floor.
     SuperZoomIn,
-    /// Zoom the time axis out while respecting the three-second floor.
+    /// Zoom the time axis out while respecting the 0.6-second super-zoom floor.
     SuperZoomOut,
     /// Moonbot's built-in Ctrl+Right, "Center chart": back to the price and the live edge.
     CenterChart,

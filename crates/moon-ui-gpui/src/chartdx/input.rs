@@ -24,7 +24,7 @@ pub(crate) enum WheelMode {
     Zoom,
     /// Ctrl+wheel. Thirty-second floor, cursor-anchored, so a live chart may let go.
     CtrlZoom,
-    /// Ctrl+Shift+wheel. Three-second floor, cursor-anchored.
+    /// Ctrl+Shift+wheel. 0.6-second floor, cursor-anchored.
     SuperZoom,
     /// Horizontal time pan (Shift or Alt).
     Pan,

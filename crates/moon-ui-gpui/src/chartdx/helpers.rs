@@ -30,17 +30,27 @@ pub(super) fn scale_badge_pct(view: &moon_chart::view::ChartView) -> Option<i32>
     Some(view.visible_scale_percent()?.round() as i32)
 }
 
-/// Return the whole seconds the plot spans horizontally, for the time-scale badge, or `None` when
+/// Return the milliseconds the plot spans horizontally, for the time-scale badge, or `None` when
 /// the plot has no width to measure.
+///
+/// A span of a second or more is held to whole seconds, as the badge always printed it, so a
+/// sub-millisecond change of an f32 window cannot re-lay the caption. Under a second (the 0.6 s
+/// super-zoom floor, #1345) whole milliseconds are kept, which seconds would round to "1s".
 ///
 /// The FULL plot width, the empty future margin right of the live edge included — the answer to
 /// "what fits on the chart", read the same on a live chart and a paused one. Taken from
 /// [`moon_chart::view::ChartView::visible_x`], the one source of X geometry the axis and the tick
 /// culling already read, so the badge cannot disagree with the labels under it.
-pub(super) fn time_scale_secs(view: &moon_chart::view::ChartView, plot_w: f32) -> Option<i64> {
+pub(super) fn time_scale_ms(view: &moon_chart::view::ChartView, plot_w: f32) -> Option<i64> {
     let (_, window_ms) = view.visible_x(plot_w);
-    let secs = f64::from(window_ms) / 1_000.0;
-    (plot_w > 0.0 && secs.is_finite() && secs >= 0.0).then(|| secs.round() as i64)
+    let ms = f64::from(window_ms);
+    (plot_w > 0.0 && ms.is_finite() && ms >= 0.0).then(|| {
+        if ms < 999.5 {
+            ms.round() as i64
+        } else {
+            (ms / 1_000.0).round() as i64 * 1_000
+        }
+    })
 }
 
 /// Whether the market channel is on (`channels.markets` in `cfg/diagnostics.toml`, or

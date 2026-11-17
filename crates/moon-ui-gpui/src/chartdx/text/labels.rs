@@ -468,9 +468,12 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             (text, None)
         }),
         // The shared compact duration, the same one the chart shot's header prints for this figure.
-        ChartLabelField::TimeScaleBadge => inputs
-            .time_scale_s
-            .map(|secs| (crate::display_text::fmt_duration_short(secs as f64), None)),
+        ChartLabelField::TimeScaleBadge => inputs.time_scale_ms.map(|ms| {
+            (
+                crate::display_text::fmt_duration_short(ms as f64 / 1_000.0),
+                None,
+            )
+        }),
         // Deliberately the chart's own percentage formatter and not `fmt::signed_pct`: this figure
         // sits at the price the reader is comparing against, where a deviation that rounds to zero
         // still carries the DIRECTION, and the shared formatter drops the sign there on purpose.

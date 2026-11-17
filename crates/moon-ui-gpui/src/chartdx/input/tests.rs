@@ -88,7 +88,7 @@ fn the_break_speed_scales_with_the_display() {
     assert!(!at_2x.hold.flicked);
 }
 
-/// Passing the plain floor from either wheel branch or the hotkey loses the three-second view.
+/// Passing the plain floor from either wheel branch or the hotkey loses the 0.6-second view.
 #[test]
 fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
     use crate::chartdx::pane::ContainerKind;
@@ -124,7 +124,7 @@ fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
                 1.0
             ));
         }
-        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 3000.0).abs() < 0.1);
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 600.0).abs() < 0.1);
         assert!(input.wheel(
             -3.0,
             false,
@@ -134,11 +134,11 @@ fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
             900.0,
             1.0
         ));
-        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 6000.0).abs() < 0.1);
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 1200.0).abs() < 0.1);
         assert!(input.super_zoom(true, &mut container, 900.0, 1.0));
-        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 3000.0).abs() < 0.1);
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 600.0).abs() < 0.1);
         assert!(input.super_zoom(false, &mut container, 900.0, 1.0));
-        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 6000.0).abs() < 0.1);
+        assert!((container.view_mut(0).unwrap().visible_x(width).1 - 1200.0).abs() < 0.1);
     }
     input.orderbook_only = true;
     assert!(!input.super_zoom(true, &mut container, 900.0, 1.0));

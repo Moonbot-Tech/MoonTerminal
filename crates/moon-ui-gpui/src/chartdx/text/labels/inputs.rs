@@ -44,8 +44,8 @@ pub(in crate::chartdx) struct LabelInputs {
     pub last_price: Option<f32>,
     /// Y-scale badge as a whole percentage; `None` while it is hidden.
     pub scale_badge: Option<i32>,
-    /// Time-scale badge: the whole seconds the plot spans; `None` while there is no plot to measure.
-    pub time_scale_s: Option<i64>,
+    /// Time-scale badge: the milliseconds the plot spans; `None` while there is no plot to measure.
+    pub time_scale_ms: Option<i64>,
     /// Comparison-mode difference from the locked anchor, in percent.
     pub compare_pct: Option<f32>,
     /// Signed one-hour and 24-hour changes, from the readout the header ticker uses.

@@ -135,3 +135,20 @@ fn a_midnight_skipped_by_dst_still_gets_its_date_tick() {
         .collect();
     assert_eq!(days, vec![(6, 0), (7, 0), (8, 1), (9, 0), (10, 0)]);
 }
+
+/// Millisecond steps land on round milliseconds of the wall clock, in an offset zone too (#1345).
+///
+/// Breakage this pins: a lattice that stops at whole seconds, or a short caption that drops its
+/// zero padding (`.5` for five milliseconds reads as half a second).
+#[test]
+fn millisecond_steps_and_their_short_captions() {
+    let zone = chrono_tz::Asia::Kolkata;
+    let left = 1_774_738_800_480.0;
+    let ticks = aligned_ticks_ms_in_zone(left, left + 1_000.0, 200.0, zone);
+    let fields: Vec<String> = ticks
+        .iter()
+        .map(|unix| super::format_millis_caption(*unix))
+        .collect();
+    assert_eq!(fields, vec![".600", ".800", ".000", ".200", ".400"]);
+    assert_eq!(super::format_millis_caption(1_000_005.0), ".005");
+}

@@ -257,7 +257,13 @@ fn new_view(
             .read(vcx)
             .report_axis(crate::chartdx::axes::display_zone()),
     );
-    let epoch = crate::chartdx::now_unix_ms();
+    // The chart's time origin sits at the ENTRY, not at the moment the window opens. GPU geometry
+    // is f32 milliseconds from this origin, whose step grows with the distance: a deal a week old
+    // measured from now lands on a 64 ms grid, which the millisecond time axis (#1345) would print
+    // finer than the prints are drawn. From the entry, the deal and its context stay well under a
+    // millisecond. A historical chart never follows the live edge, so nothing needs the origin
+    // to be "now".
+    let epoch = buy_utc_ms as f64;
     let panel_backend = owner.clone();
     let panel_market = market.clone();
     let panel = vcx.new(|pcx| {
