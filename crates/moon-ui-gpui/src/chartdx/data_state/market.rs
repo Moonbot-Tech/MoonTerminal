@@ -2141,6 +2141,10 @@ impl ChartDataState {
         } else {
             Vec::new()
         };
+        // On a trade window the measuring captions are answered by the pointer path from the
+        // replay (`sync_replay_cursor_volumes`), and what it files is left alone below. A frozen
+        // chart without a replay keeps the old rule: nothing is read, anything held is dropped.
+        let replay_owns_volumes = !live && self.trade_replay.is_some();
         // The arbitrage column, on its own gate AND its own clock. The readout asks the core venue
         // by venue — each call takes the market lock — so it is read a few times a second rather
         // than on every revision, which on a busy coin is several times that. A column of prices is
@@ -2302,7 +2306,13 @@ impl ChartDataState {
                     pr.label_arb_read_ms = 0;
                     pr.label_arb_market.clear();
                 }
-                pr.label_cursor_ms = cursor_ms;
+                // A trade window's measuring captions belong to the pointer path, which answers
+                // them from the replay (`sync_replay_cursor_volumes`); this path reads nothing there
+                // and must not reset or clear what that path filed, or every market revision would
+                // put the window's figures back to a dash until the mouse moved.
+                if !replay_owns_volumes {
+                    pr.label_cursor_ms = cursor_ms;
+                }
                 if let Some((market, rows, liq)) = volumes {
                     pr.label_volumes = rows;
                     pr.label_liquidations = liq;
@@ -2310,7 +2320,10 @@ impl ChartDataState {
                     pr.label_volume_market = market;
                     pr.label_volume_spans.clear();
                     pr.label_volume_spans.extend_from_slice(&wanted_spans);
-                } else if wanted_spans.is_empty() && !pr.label_volumes.is_empty() {
+                } else if !replay_owns_volumes
+                    && wanted_spans.is_empty()
+                    && !pr.label_volumes.is_empty()
+                {
                     // Switched off, like the column above: held figures would come back stale the
                     // moment a volume caption was switched on again.
                     pr.label_volumes.clear();

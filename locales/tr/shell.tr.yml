@@ -848,6 +848,7 @@ chart_labels.unit_day: "g"
 chart_labels.unit_hour: "sa"
 chart_labels.unit_minute: "dk"
 chart_labels.unit_second: "sn"
+chart_labels.unit_millisecond: "ms"
 # --- Chart buttons: captions that ACT rather than report ---
 chart_labels.group.action: "Düğmeler"
 chart_labels.field.act_cancel_buy: "Cancel Buy düğmesi"

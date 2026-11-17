@@ -41,8 +41,8 @@ pub(in crate::chartdx) use format::hours_and_minutes;
 use format::{
     LOCK_CLOSED, LOCK_OPEN, STAR_OFF, STAR_ON, caption_prefix, colored_sign, cut, detect_line,
     figure, fmt_countdown, fmt_tf_countdown, liquidations, marked, no_cursor_dash, non_empty,
-    plain, price_label, signed_pct_label, span_label, tags_text, volume, volume_amount, volume_bar,
-    window,
+    not_measured, plain, price_label, signed_pct_label, span_label, tags_text, volume,
+    volume_amount, volume_bar, window,
 };
 pub(in crate::chartdx) use inputs::{ActionInputs, BasisStats, LabelInputs, basis_index};
 pub(in crate::chartdx) use pnl::collect_open_stats;
@@ -639,18 +639,27 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                 }
             })
             .or_else(|| no_cursor_dash(part)),
+        // A side the source cannot split — a trade replay reaching its bars — is a dash, never the
+        // prints' part alone: that part is not the period's side.
         ChartLabelField::WindowBuyVolume => volume(inputs, part)
-            .map(|v| volume_amount(part, v, v.buy_quote, v.buy_base))
+            .map(|v| match v.sides_known() {
+                true => volume_amount(part, v, v.buy_quote, v.buy_base),
+                false => not_measured(),
+            })
             .or_else(|| no_cursor_dash(part)),
         ChartLabelField::WindowSellVolume => volume(inputs, part)
-            .map(|v| volume_amount(part, v, v.sell_quote, v.sell_base))
+            .map(|v| match v.sides_known() {
+                true => volume_amount(part, v, v.sell_quote, v.sell_base),
+                false => not_measured(),
+            })
             .or_else(|| no_cursor_dash(part)),
         ChartLabelField::WindowTrades => volume(inputs, part)
-            .map(|v| {
-                (
+            .map(|v| match v.trades_known() {
+                true => (
                     marked(fmt::compact_si(f64::from(v.trades)), v.complete),
                     None,
-                )
+                ),
+                false => not_measured(),
             })
             .or_else(|| no_cursor_dash(part)),
         ChartLabelField::WindowLiquidations => liquidations(inputs, part)

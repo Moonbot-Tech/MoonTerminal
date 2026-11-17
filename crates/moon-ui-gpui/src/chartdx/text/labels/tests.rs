@@ -1490,7 +1490,56 @@ fn sample_readout() -> moon_core::market::VolumeSpanReadout {
         complete: true,
         base_exact: true,
         total_quote_candles: None,
+        replay: None,
     }
+}
+
+/// A trade replay's figures print only what the replay holds: its sides on the prints, its marked
+/// total where it reaches the bars, and a dash for the trade count, the coin amount and any side
+/// the bars cannot split (#1349).
+///
+/// Breakage: printing the replay's empty count as `0`, or the bars' 62/38 lean as `Bv`/`Sv`,
+/// states figures the window does not have.
+#[test]
+fn a_replay_readout_prints_only_what_the_replay_holds() {
+    use moon_core::market::trade_replay::{ReplayVolume, ReplayVolumeFit};
+    let _locale = crate::test_locale::force("en");
+    let replay = |fit| {
+        moon_core::market::VolumeSpanReadout::from_replay(ReplayVolume {
+            buy_quote: 12_000.0,
+            sell_quote: 4_000.0,
+            bars_quote: 2_000.0,
+            fit,
+        })
+    };
+    let field = |f, fit| one_field(f, volumes(replay(fit))).expect("prints");
+
+    let bought = field(ChartLabelField::WindowBuyVolume, ReplayVolumeFit::Exact);
+    assert!(bought.contains("12") && !bought.contains('~'), "{bought:?}");
+    let cut = field(ChartLabelField::WindowBuyVolume, ReplayVolumeFit::CutSecond);
+    assert!(cut.contains('~'), "{cut:?}");
+    // The caption keeps its prefix (`Trd1h: `); the VALUE is the dash, never a zero count.
+    let trades = field(ChartLabelField::WindowTrades, ReplayVolumeFit::Exact);
+    assert!(trades.ends_with(": —"), "{trades:?}");
+
+    let side = field(ChartLabelField::WindowSellVolume, ReplayVolumeFit::Bars);
+    assert!(
+        side.ends_with('—') && !side.contains('~'),
+        "the bars carry no split: {side:?}"
+    );
+    let total = field(ChartLabelField::WindowVolume, ReplayVolumeFit::Bars);
+    assert!(total.contains("18") && total.contains('~'), "{total:?}");
+
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::WindowBuyVolume);
+    row.parts[0].units = moon_core::config::VolumeUnits::Base;
+    cfg.rows[0] = row;
+    let coins = texts_of(&cfg, volumes(replay(ReplayVolumeFit::Exact))).remove(0);
+    assert!(
+        coins.ends_with('—'),
+        "a replay holds no coin amount: {coins:?}"
+    );
 }
 
 /// The block's three figures must come from ONE reading: `Bv + Sv` is what `Vol` prints.

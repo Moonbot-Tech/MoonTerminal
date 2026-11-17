@@ -974,3 +974,157 @@ fn admitted_set_moves_the_signature_only_for_money_captions() {
     ));
     assert_eq!(money_wide, data.source_market_signature(&source));
 }
+
+/// A trade window answers the percent ruler and the cursor captions from its own replay: the
+/// prints' per-second split over a stretch the chart's candles are withheld from (#1358, #1349),
+/// and a later market pass must not put the captions back to a dash.
+#[test]
+fn trade_window_reads_volume_from_its_replay() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(trade_window_replay_volume)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// One frozen trade window over ten seconds of prints, measured by the ruler and the cursor.
+fn trade_window_replay_volume() {
+    crate::test_locale::warm();
+    let _window = crate::test_support::SharedWindowGuard::take();
+    use gpui::{Bounds, GpuFrameInfo, point, px, size};
+    use moon_core::config::ChartTheme;
+    use moon_core::market::trade_replay::venue_caps::TickValue;
+    use moon_core::market::trade_replay::{
+        Coverage, TickStatus, TickThinning, TradeReplaySeries, TradeReplaySource, replay_window_ms,
+    };
+    use moon_core::market::{ChartCandle, MarketDataSource, MarketStore, side_slots_of_ticks};
+    use std::rc::Rc;
+    use std::time::Instant;
+
+    let window = replay_window_ms(100_000, 110_000, 30_000).unwrap();
+    let mut engine = crate::chartdx::ChartEngine::new(0.0, ChartTheme::default());
+    engine.open(42, "XALPHAUSDT");
+    engine.set_historical(true);
+    // One print a second, 20 quote each, buying on even seconds and selling on odd ones.
+    let ticks: Vec<moon_core::feed::Tick> = (100..=110)
+        .map(|s| moon_core::feed::Tick {
+            time_ms: (s * 1000) as f64,
+            price: 2.0,
+            qty: 10.0,
+            side: if s % 2 == 0 {
+                moon_core::feed::Side::Buy
+            } else {
+                moon_core::feed::Side::Sell
+            },
+        })
+        .collect();
+    let side_slots = side_slots_of_ticks(&ticks, TickValue::Base);
+    let (first_min, last_min) = (
+        window.from_ms.div_euclid(60_000),
+        window.to_ms.div_euclid(60_000),
+    );
+    let candles: Vec<ChartCandle> = (first_min..=last_min)
+        .map(|m| ChartCandle {
+            t_open_ms: (m * 60_000) as f64,
+            open: 2.0,
+            high: 2.1,
+            low: 1.9,
+            close: 2.05,
+            volume: 600.0,
+            quote_volume: 1200.0,
+        })
+        .collect();
+    engine.set_trade_replay(Some(Rc::new(TradeReplaySeries {
+        source: TradeReplaySource::CoreTicks,
+        venue: None,
+        window,
+        tf_ms: 60_000,
+        candles,
+        ticks,
+        identity: 1358,
+        tick_status: TickStatus::Served,
+        thinning: TickThinning::Raw,
+        partial: true,
+        side_slots,
+        covered: Coverage::one((100_000, 110_999)),
+    })));
+    engine.show_time_range(100_000.0, 110_000.0, 0.25);
+    engine.set_scene_visible(true);
+    let source = MarketDataSource::new(MarketStore::shared(0.0));
+    engine.set_market_source(Some(source.clone()));
+    let frame = |engine: &mut crate::chartdx::ChartEngine| {
+        let mut data = engine.data.borrow_mut();
+        data.mark_view_dirty();
+        data.frame(GpuFrameInfo {
+            now: Instant::now(),
+            bounds: Bounds {
+                origin: point(px(20.0), px(80.0)),
+                size: size(px(1000.0), px(600.0)),
+            },
+            scale_factor: 1.0,
+            content_zoom: 1.0,
+            presentable: true,
+        });
+    };
+    frame(&mut engine);
+
+    let line = |engine: &mut crate::chartdx::ChartEngine, t0: f64, t1: f64| {
+        engine.set_ruler(
+            Some(crate::chartdx::ruler::RulerSpan {
+                pane: 0,
+                t0_ms: t0,
+                p0: 2.0,
+                t1_ms: t1,
+                p1: 2.05,
+            }),
+            &source,
+        );
+        engine
+            .state
+            .borrow()
+            .ruler
+            .as_ref()
+            .unwrap()
+            .volume_line
+            .clone()
+    };
+    // Seconds 102..107: three buys and three sells of 20 each, measured, no tilde.
+    let money = |v: f64| crate::chartdx::text::quote_turnover_label(v as f32, "USDT").unwrap();
+    let (bv, sv) = (
+        rust_i18n::t!("chart_labels.short.window_buy_volume").to_string(),
+        rust_i18n::t!("chart_labels.short.window_sell_volume").to_string(),
+    );
+    assert_eq!(
+        line(&mut engine, 102_000.0, 108_000.0),
+        Some(format!("{bv}{} · {sv}{}", money(60.0), money(60.0))),
+        "#1358: a ruler over the prints reads the replay's split"
+    );
+    let outside = line(&mut engine, window.from_ms as f64 + 1_000.0, 90_000.0).unwrap();
+    assert!(
+        outside.contains('~'),
+        "candle seconds are an estimate: {outside}"
+    );
+
+    // The factory cursor block measures ten seconds around the pointer.
+    engine.set_cursor(Some((0, 520.0, 300.0)));
+    engine.sync_cursor_volumes(&source);
+    let held = |engine: &crate::chartdx::ChartEngine| {
+        let data = engine.data.borrow();
+        let st = data.render.borrow();
+        st.panes[0].label_volumes.clone()
+    };
+    let rows = held(&engine);
+    assert!(
+        !rows.is_empty(),
+        "#1349: the cursor caption reads the replay"
+    );
+    assert!(rows.iter().all(|(_, r)| r.replay.is_some()), "{rows:?}");
+    // A market pass on the frozen window must leave what the pointer path filed.
+    frame(&mut engine);
+    assert_eq!(
+        held(&engine),
+        rows,
+        "the market path cleared the replay's figures"
+    );
+}

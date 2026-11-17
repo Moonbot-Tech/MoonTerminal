@@ -70,12 +70,13 @@ pub(super) fn liquidations(inputs: &LabelInputs, part: &ChartLabelPart) -> Optio
 /// Share of the period's traded value this caption's side accounts for, for the bar beside it.
 ///
 /// `None` whenever there is nothing to compare: a caption that is not a side, a bar switched off,
-/// or a market that did not trade — a full bar over a silent market would read as "all buying".
+/// a market that did not trade — a full bar over a silent market would read as "all buying" — or
+/// sides the source cannot split (a trade replay reaching its bars).
 pub(super) fn volume_bar(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<VolumeBar> {
     if !part.bar || !part.field.uses_volume_bar() {
         return None;
     }
-    let readout = volume(inputs, part)?;
+    let readout = volume(inputs, part).filter(|r| r.sides_known())?;
     // Finite AND positive: a market that did not trade has nothing to divide by, and a non-finite
     // total would put a NaN share into the cache key — where a value that does not equal itself
     // re-formats the whole corner on every revision.
@@ -113,6 +114,14 @@ pub(super) fn no_cursor_dash(part: &ChartLabelPart) -> Option<(String, Option<De
 /// reader can see it is waiting for a place to measure rather than broken.
 pub(super) const NO_CURSOR: &str = "—";
 
+/// A figure the readout's source cannot state — a trade count or a coin amount from a trade
+/// replay, or a side where the replay reaches its unsplit bars.
+///
+/// The same dash a measuring caption prints with no pointer: "not measured", never zero.
+pub(super) fn not_measured() -> (String, Option<DeltaSign>) {
+    (NO_CURSOR.to_string(), None)
+}
+
 /// The period a volume caption names, as the chart spells it: `1м`, `500 сд`.
 ///
 /// One spelling for three shapes, so the block's own heading and the prefix on the figures under it
@@ -146,6 +155,8 @@ pub(super) fn volume_amount(
 ) -> (String, Option<DeltaSign>) {
     let (value, exact) = match part.units {
         VolumeUnits::Quote => (quote, true),
+        // A source that keeps quote value only — a trade replay — has no coin amount to mark.
+        VolumeUnits::Base if !readout.base_known() => return not_measured(),
         VolumeUnits::Base => (base, readout.base_exact),
     };
     (

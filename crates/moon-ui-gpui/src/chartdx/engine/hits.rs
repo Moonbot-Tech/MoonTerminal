@@ -317,6 +317,11 @@ impl ChartEngine {
         // signature. Invalidating it here is what makes a configuration change reach a chart whose
         // market and orders have not moved — the same reason `set_chart_graphics` resets it.
         data.last_order_sig = u64::MAX;
+        // A trade window's measuring captions are filed by the pointer path only; a new set of
+        // periods must not wait for the mouse to move.
+        if !data.draws_live_market() {
+            data.invalidate_replay_cursor_volumes();
+        }
         data.mark_view_dirty();
         true
     }

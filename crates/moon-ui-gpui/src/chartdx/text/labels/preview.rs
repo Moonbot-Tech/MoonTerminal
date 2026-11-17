@@ -157,6 +157,7 @@ fn sample_volume() -> VolumeSpanReadout {
         complete: true,
         base_exact: true,
         total_quote_candles: None,
+        replay: None,
     }
 }
 

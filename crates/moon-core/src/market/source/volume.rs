@@ -172,7 +172,10 @@ impl VolumeAt {
     /// `None` for a TRADE COUNT read around a point: the retained rings are read forward from a
     /// cursor, so "the N trades before this moment" is not a question they answer cheaply, and
     /// answering a different one silently is worse than printing nothing.
-    fn bounds(self, span: VolumeSpan, now: i64) -> Option<(i64, i64)> {
+    ///
+    /// Public so a reader that answers the same anchor from another source — a closed trade's
+    /// replay — measures exactly the period a live read would.
+    pub fn bounds(self, span: VolumeSpan, now: i64) -> Option<(i64, i64)> {
         match (self, span) {
             (VolumeAt::Now, VolumeSpan::Millis(ms)) => Some((now.saturating_sub(ms), now)),
             (VolumeAt::Around(at), VolumeSpan::Millis(ms)) => {
@@ -220,9 +223,52 @@ pub struct VolumeSpanReadout {
     /// all, which is why it answers only the TOTAL — the sides over such a period stay marked
     /// incomplete rather than being back-filled from a number that cannot be halved.
     pub total_quote_candles: Option<f64>,
+    /// Set when the figures come from a closed trade's frozen replay rather than a trade ring.
+    ///
+    /// The replay keeps its prints as a per-second split in quote currency, so it has no trade
+    /// count and no coin amounts, and outside its tick coverage it has no split at all — a caption
+    /// prints a dash for whatever this says the replay cannot answer. See
+    /// [`Self::sides_known`], [`Self::trades_known`] and [`Self::base_known`]. `None` on every
+    /// live read.
+    pub replay: Option<crate::market::trade_replay::ReplayVolume>,
 }
 
 impl VolumeSpanReadout {
+    /// The readout a closed trade's replay gives over one period.
+    ///
+    /// The sides are the prints' own; they are whole only when [`ReplayVolumeFit::Exact`] holds.
+    /// The bars' share outside the coverage is carried on [`Self::replay`] and enters only the
+    /// stated total ([`Self::total_quote_stated`]), never a side.
+    ///
+    /// [`ReplayVolumeFit::Exact`]: crate::market::trade_replay::ReplayVolumeFit::Exact
+    pub fn from_replay(volume: crate::market::trade_replay::ReplayVolume) -> Self {
+        Self {
+            buy_quote: volume.buy_quote,
+            sell_quote: volume.sell_quote,
+            complete: volume.fit == crate::market::trade_replay::ReplayVolumeFit::Exact,
+            replay: Some(volume),
+            ..Self::default()
+        }
+    }
+
+    /// Whether the bought and sold amounts mean anything. False on a replay period that reaches
+    /// the bars: their turnover has no split, and the prints' part alone is not the period's.
+    pub fn sides_known(self) -> bool {
+        self.replay
+            .is_none_or(|r| r.fit != crate::market::trade_replay::ReplayVolumeFit::Bars)
+    }
+
+    /// Whether [`Self::trades`] is a count. False on a replay: its per-second split keeps the
+    /// value of the prints, not how many there were.
+    pub fn trades_known(self) -> bool {
+        self.replay.is_none()
+    }
+
+    /// Whether the coin amounts exist at all. False on a replay, which keeps quote value only.
+    pub fn base_known(self) -> bool {
+        self.replay.is_none()
+    }
+
     /// Everything traded over the span, both sides together, in the quote currency.
     ///
     /// The two halves, always: this is what keeps `Bv + Sv` equal to what a `Vol` caption prints
@@ -237,7 +283,14 @@ impl VolumeSpanReadout {
     /// Prefers the candle ring over a partial sum of the sides: a day's volume is a figure the
     /// terminal HAS, and printing a marked fraction of it instead would be a worse answer to the
     /// same question. The sides keep their own mark either way — they really are incomplete there.
+    ///
+    /// A replay's total is the prints plus the bars' share over the uncovered part, whole only on
+    /// [`crate::market::trade_replay::ReplayVolumeFit::Exact`]: the bars' share is spread evenly
+    /// over each minute, never the true turnover of those seconds.
     pub fn total_quote_stated(self) -> (f64, bool) {
+        if let Some(replay) = self.replay {
+            return (replay.total_quote(), self.complete);
+        }
         match self.total_quote_candles {
             Some(total) if !self.complete => (total, true),
             _ => (self.total_quote(), self.complete),
@@ -249,10 +302,11 @@ impl VolumeSpanReadout {
         self.buy_base + self.sell_base
     }
 
-    /// Share of the traded value that was BUYING, in percent, or `None` when nothing traded.
+    /// Share of the traded value that was BUYING, in percent, or `None` when nothing traded or
+    /// the sides are not known ([`Self::sides_known`]).
     pub fn buy_share_pct(self) -> Option<f64> {
         let total = self.total_quote();
-        (total > 0.0).then(|| self.buy_quote / total * 100.0)
+        (self.sides_known() && total > 0.0).then(|| self.buy_quote / total * 100.0)
     }
 
     /// Add one trade row.
@@ -479,6 +533,7 @@ impl MarketDataSource {
                         complete: true,
                         base_exact: true,
                         total_quote_candles: None,
+                        replay: None,
                     },
                     // Everything inside the track's own hour is SUMMED from buckets it keeps up to
                     // date, so the cost is the bucket count and not the market's trade rate. Both
