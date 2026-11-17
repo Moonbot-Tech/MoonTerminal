@@ -568,5 +568,34 @@ pub struct RowOffsetGroup {
     pub local_to: Option<i64>,
 }
 
+/// Most operands [`bounded_or_terms`] leaves side by side in one flat `OR` chain.
+const FLAT_OR_TERMS: usize = 64;
+
+/// Fold the operands of a per-segment disjunction so its expression depth stays bounded.
+///
+/// SQLite parses `a OR b OR c` as a left-deep tree and refuses to prepare one deeper than
+/// `SQLITE_MAX_EXPR_DEPTH` (1000), so one operand per [`RowOffsetGroup`] put a long clock-offset
+/// history past it (`Expression tree is too large`, #1372). Past [`FLAT_OR_TERMS`] operands,
+/// consecutive runs are wrapped into parenthesised sub-disjunctions, repeatedly, until at most
+/// that many remain: depth grows with the logarithm of the count instead of the count. Operand
+/// order is kept, so positional `?` parameters still bind in emission order, and SQLite's WHERE
+/// analysis splits nested `OR`s back into one term list, so the plan does not change. At or
+/// below the limit the operands come back untouched, keeping every ordinary history's SQL text.
+///
+/// Args:
+///     terms: Disjunction operands, each a complete boolean expression.
+///
+/// Returns:
+///     At most [`FLAT_OR_TERMS`] operands meaning the same disjunction, for the caller's own join.
+pub(in crate::db) fn bounded_or_terms(mut terms: Vec<String>) -> Vec<String> {
+    while terms.len() > FLAT_OR_TERMS {
+        terms = terms
+            .chunks(FLAT_OR_TERMS)
+            .map(|chunk| format!("(({}))", chunk.join(") OR (")))
+            .collect();
+    }
+    terms
+}
+
 #[cfg(test)]
 mod tests;
