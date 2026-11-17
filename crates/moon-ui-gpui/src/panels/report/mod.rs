@@ -862,7 +862,8 @@ pub struct ReportPanel {
     widths_id: String,
     /// Content-derived base widths cached until report data, locale, or resolved typography changes.
     natural_widths: NaturalWidthsCache,
-    /// Whether the panel is detached; docked tabs omit manual date fields for a compact filter row.
+    /// Whether the panel is detached; a Classic docked tab omits the manual date fields for a
+    /// compact filter row (see [`Self::date_bounds_visible`] for the Auto tab).
     detached: bool,
     /// Whether the filter row's two selectors currently render compact, and what undoes that.
     ///
@@ -870,6 +871,10 @@ pub struct ReportPanel {
     /// lives in a dock, where a narrow tab in a wide window is exactly the case a window-width
     /// ladder gets wrong. Written only by the row probe in `render`.
     wrap_fit: crate::controls::wrap_fit::WrapFit,
+    /// Whether the last render drew the From/To fields. A workspace-mode switch compares it with
+    /// [`Self::date_bounds_visible`] to repaint exactly when the row gains or loses them, rather
+    /// than on every workspace revision.
+    dates_rendered: bool,
     /// Whether this panel owns the dedicated standalone Report tool window and its title bar.
     standalone: bool,
     // `table_state()` exposes the retained state to the detached window's automatic-width button.
@@ -938,6 +943,25 @@ impl ReportPanel {
     pub(super) fn bound_zone(&self) -> Tz {
         self.report_axis().zone()
     }
+
+    /// Return whether this host draws the manual From/To date fields.
+    ///
+    /// A window always draws them. An Auto group dock tab draws them too, because Auto refuses
+    /// detached windows and the tab is the only place those fields could appear — the same split
+    /// the Assets panel uses for its wallets. The tab keeps its own `:dock` storage: only the two
+    /// fields are added, never the window's widths or saved filters, so `detached` stays false.
+    /// The strategy-scoped standalone window is detached, so it needs no clause of its own.
+    ///
+    /// Args:
+    ///     b: Backend snapshot holding the group's workspace mode.
+    ///
+    /// Returns:
+    ///     `true` when the From/To fields belong on this host's filter row.
+    pub(super) fn date_bounds_visible(&self, b: &Backend) -> bool {
+        self.detached
+            || b.workspace_mode(&self.group) == moon_core::config::WorkspaceMode::AutoTrading
+    }
+
     /// Resolve workspace scope for group-owned Report instances.
     ///
     /// The strategy-scoped standalone window deliberately returns `None` and keeps its exact

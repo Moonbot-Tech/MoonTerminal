@@ -458,7 +458,7 @@ pub(super) struct CoreFit {
 ///
 /// Args:
 ///     cx: Application context supplying the resolved typography, UI scale and locale.
-///     detached: Whether the row carries the manual date bounds, which only a window shows.
+///     dates: Whether the row carries the manual date bounds (a window or an Auto tab).
 ///     mask: Whether the Auto-workspace strategy-name mask field is on the row.
 ///     core_full_w: Rendered width of the core selector at full size — a pinned workspace fits that
 ///         trigger to a core name, so hashing the width covers the pin mode and the name at once.
@@ -467,7 +467,7 @@ pub(super) struct CoreFit {
 ///     The digest for `wrap_fit::RowFit::signature`.
 pub(super) fn filter_row_signature(
     cx: &App,
-    detached: bool,
+    dates: bool,
     mask: bool,
     core_full_w: f32,
     labels: FilterRowLabels,
@@ -475,7 +475,7 @@ pub(super) fn filter_row_signature(
     crate::controls::wrap_fit::signature(
         cx,
         (
-            detached,
+            dates,
             mask,
             core_full_w.to_bits(),
             labels.period,

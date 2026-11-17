@@ -875,8 +875,18 @@ impl ReportPanel {
             if this.standalone {
                 return;
             }
+            // Leaving Auto takes the From/To fields off a docked tab while the panel lives on. A
+            // typed day must not keep filtering the table from fields nobody can see or clear, so
+            // it is dropped here; the fields themselves are emptied on the next render, which
+            // holds the window `write_bound` needs.
+            let dates_cleared = this.clear_hidden_date_bounds(cx);
+            if this.date_bounds_visible(this.backend.read(cx)) != this.dates_rendered {
+                cx.notify();
+            }
             let scope = this.report_scope(this.backend.read(cx));
-            if scope == this.last_workspace_scope {
+            // Dropped bounds change the row set exactly like a new scope does, so they take the
+            // same clear-and-requery path below.
+            if scope == this.last_workspace_scope && !dates_cleared {
                 return;
             }
             let period_bucket =
@@ -1009,6 +1019,7 @@ impl ReportPanel {
             preference_revisions: expected_revisions,
             scope_control,
             wrap_fit: crate::controls::wrap_fit::WrapFit::default(),
+            dates_rendered: false,
             closed_only: scope.is_some(),
             selection: ReportSelection::default(),
             needs_query: true,
@@ -1213,6 +1224,43 @@ impl ReportPanel {
         self.write_bound(Bound::To, to, window, cx);
     }
 
+    /// Drop typed From/To bounds that this host no longer draws.
+    ///
+    /// Only an Auto dock tab can lose its date fields while the panel lives on: the same instance
+    /// stays docked when the group switches back to Classic. The bounds are never persisted, so
+    /// clearing them loses nothing a restart would have kept. The `All` a typed bound forced on the
+    /// period menu goes with them: the menu returns to the stored preset, the user's last real
+    /// choice, as a restart would. An open calendar is closed, since its field is no longer drawn.
+    /// The pickers are emptied through `sync_display_zone_fields` on the next render, because
+    /// writing a picker's value needs a window.
+    ///
+    /// Args:
+    ///     cx: Panel context used to read the group's workspace mode and stored filters.
+    ///
+    /// Returns:
+    ///     `true` when a bound was dropped and the caller must requery.
+    pub(super) fn clear_hidden_date_bounds(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.date_bounds_visible(self.backend.read(cx))
+            || (self.from_query.is_none() && self.to_query.is_none())
+        {
+            return false;
+        }
+        self.from_query = None;
+        self.to_query = None;
+        if let Some(stored) = crate::persistence::table_persist::report_filters(
+            self.backend.read(cx),
+            &filters_ctx_id(self.detached),
+        ) {
+            self.period = apply_period_from_prefs(stored, self.last_period_bucket, self.period);
+        }
+        self.bounds_pending = false;
+        for picker in [self.from.clone(), self.to.clone()] {
+            picker.update(cx, |state, state_cx| state.set_open(false, state_cx));
+        }
+        self.display_zone_fields_dirty = true;
+        true
+    }
+
     /// Schedule synchronization of the retained strategy combobox on its next render.
     ///
     /// Args:
@@ -1363,7 +1411,7 @@ impl ReportPanel {
     /// Switch a newly created detached panel to its `:win` persistence context.
     ///
     /// Reload widths, visible columns, and the comment preference for detached mode, and enable the
-    /// detached-only manual date controls.
+    /// manual date controls (which an Auto dock tab draws too, see `date_bounds_visible`).
     ///
     /// Toolbar filters use the same separate key but a different missing-entry rule: the first
     /// detach inherits the docked panel's current filters rather than resetting them. Once a

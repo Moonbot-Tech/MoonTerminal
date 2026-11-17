@@ -1,6 +1,7 @@
-//! Detached-window CPU / memory time chart for ONE subject.
+//! Detached-window (and Auto-tab) CPU / memory time chart for ONE subject.
 //!
-//! Built only when the panel is a full window (never a dock tab, so the tab pays no canvas cost).
+//! Built only when the panel is a full window or an Auto dock tab (`CoreStatusView::chart_visible`);
+//! a Classic dock tab never builds it, so that tab pays no canvas cost.
 //! The subject — the selected server's machine aggregate, or, once a core is clicked in the expanded
 //! server list, that single core's process — contributes two filled-and-stroked series on a fixed
 //! 0..100 % Y axis: CPU and memory. Individual cores are NOT overlaid on the server aggregate; the
