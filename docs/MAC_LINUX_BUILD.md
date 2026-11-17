@@ -191,7 +191,9 @@ Both builds add 8 GB of swap first (`.github/scripts/add-build-swap.sh`), which 
 containers start with `--cap-add=SYS_ADMIN --security-opt seccomp=unconfined`: the release
 profile's fat-LTO link needs about 17.3 GB, a hosted runner has 16 GB of RAM and, on some
 machines, no swap, and without the extra swap the OOM killer ended the link in 3 runs of 5
-(measured 2026-11-16). A local build on a machine with less than about 18 GB of RAM plus swap
+(measured 2026-11-16). The containers are also capped at 13 GB of RAM (`--memory=13g
+--memory-swap=-1`), so the link pages inside the container: uncapped, the whole VM ran short
+and the runner agent lost its connection in 2 runs of 10. A local build on a machine with less than about 18 GB of RAM plus swap
 hits the same wall.
 
 What neither of them covers: any distribution outside the Debian/Ubuntu family, a Wayland

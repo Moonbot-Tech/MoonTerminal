@@ -228,10 +228,12 @@ jobs:
     # container, so the binary asks for glibc 2.35 and nothing newer, with the package list
     # docs/MAC_LINUX_BUILD.md gives. The asset is the single executable a Linux build's updater
     # looks for (`moon_core::update`); a contract test holds the two names together. The options
-    # exist for `swapon` alone, the same as the probe's — a contract test holds the two equal.
+    # are the probe's, explained there: the capability for `swapon`, the memory cap so the link
+    # pages inside the container instead of starving the runner agent. A contract test holds the
+    # two equal.
     container:
       image: ubuntu:22.04
-      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined --memory=13g --memory-swap=-1
     env:
       DEBIAN_FRONTEND: noninteractive
     # A job container runs steps with `sh` unless told otherwise.

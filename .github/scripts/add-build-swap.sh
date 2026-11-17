@@ -7,7 +7,10 @@
 # ubuntu:22.04 container). A hosted `ubuntu-latest` runner has 15.7-16.0 GB of RAM and either a
 # 3 GB swap file or none at all, which one is luck of the draw: without swap the kernel's OOM
 # killer ends the link with SIGKILL (cgroup `oom_kill 1`), with 3 GB it squeaks through with
-# about 0.4 GB to spare. Eight more GB measured 3 builds out of 3 green with about 9 GB unused.
+# about 0.4 GB to spare. With eight more GB and no memory cap, 8 builds of 10 were green and 2
+# lost their runner: the whole VM ran short of RAM and the runner agent stopped answering. With
+# the container capped at 13 GB (`--memory=13g --memory-swap=-1`), the link pages inside its own
+# cgroup and 5 of 5 were green.
 #
 # Usage: add-build-swap.sh <size in GiB>
 # The job's container must be started with `--cap-add=SYS_ADMIN --security-opt

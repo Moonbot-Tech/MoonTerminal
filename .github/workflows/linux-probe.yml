@@ -78,11 +78,14 @@ jobs:
     name: Linux probe (x86_64 GUI build) — diagnostic
     runs-on: ubuntu-latest
     # The capability and the unconfined seccomp profile exist for `swapon` alone — see the swap
-    # step below. release.yml's linux job starts its container with the same options; a contract
-    # test holds the two equal.
+    # step below. The memory cap keeps the link's paging inside the container: uncapped, the
+    # whole VM ran short of RAM and the runner agent itself stopped answering ("lost
+    # communication with the server", 2 runs of 10); capped at 13 GB with unlimited swap, 5 of 5
+    # green. release.yml's linux job starts its container with the same options; a contract test
+    # holds the two equal.
     container:
       image: ubuntu:22.04
-      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
+      options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined --memory=13g --memory-swap=-1
     # Probe: the Linux GUI has never been a gate. Do not fail the pipeline — read the job log.
     continue-on-error: true
     # A cold release build with fat LTO on a hosted runner, 29-37 min of it on the link alone

@@ -1921,15 +1921,17 @@ fn releases_ship_the_station_under_the_names_its_updater_reads() {
 /// Breakage guarded: the fat-LTO link of the Linux terminal loses its swap in the release or in
 /// the probe, or the two drift apart. The link needs about 17.3 GB on a 16 GB runner that, on
 /// some machines, has no swap of its own (measured 2026-11-16: OOM-killed in 3 runs of 5 on
-/// main without it, 3 of 3 green with 8 GB added). The swap must come before the build, the
-/// container must be started with the options `swapon` needs, and the probe must do all of it
-/// exactly as the release does, or a green probe stops predicting a green release.
+/// main without it). The swap must come before the build, the container must be started with
+/// the options `swapon` needs and with its RAM capped below the runner's (uncapped, 2 runs of
+/// 10 lost the runner agent itself; capped at 13 or 14 GB, 10 of 10 green), and the probe must
+/// do all of it exactly as the release does, or a green probe stops predicting a green release.
 #[test]
 fn the_linux_release_link_and_the_probe_add_the_same_swap_before_the_build() {
     let release = release_workflow_text();
     let probe = linux_probe_workflow_text();
     let swap = "run: bash .github/scripts/add-build-swap.sh 8";
-    let options = "--cap-add=SYS_ADMIN --security-opt seccomp=unconfined";
+    let options =
+        "--cap-add=SYS_ADMIN --security-opt seccomp=unconfined --memory=13g --memory-swap=-1";
     for (workflow, text, job, build) in [
         (
             "release.yml",
@@ -1950,7 +1952,7 @@ fn the_linux_release_link_and_the_probe_add_the_same_swap_before_the_build() {
             container_field(&body, "options").as_deref(),
             Some(options),
             "{workflow}:{job} must start its container with `{options}` — swapon is denied \
-             without them, and the swap step fails"
+             without the capability, and without the cap the link starves the runner agent"
         );
         let swapped = body.iter().position(|line| line.trim() == swap);
         let built = body.iter().position(|line| line.trim() == build);
