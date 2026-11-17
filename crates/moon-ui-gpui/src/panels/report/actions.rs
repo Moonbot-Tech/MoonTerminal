@@ -311,7 +311,7 @@ impl ReportPanel {
     ///
     /// Replaces one complete map entry per mutation because the six values form one filter set. The
     /// replacement still merges one value deliberately: unless this call represents an explicit
-    /// period-menu pick, it carries the already-stored period forward. A strategy-scoped panel
+    /// period-menu pick, it carries the already-stored period forward. A strategy- or coin-scoped panel
     /// writes nothing — see [`ReportPanel::scoped`].
     ///
     /// The period is the ONE member that is not read off the live panel. `self.period` also shows
@@ -595,6 +595,67 @@ impl ReportPanel {
         cx.notify();
     }
 
+    /// Write a whole value into the coin field as one programmatic substitution and requery.
+    ///
+    /// The mirror is updated before the input, so the `Change` event the input emits finds it
+    /// already matching and neither reopens the match popup nor requests a second query. A
+    /// coin-scoped window retitles here, because that event will not reach the subscription's
+    /// own retitle.
+    ///
+    /// Args:
+    ///     text: The complete new field value, such as `"PAID "` for an exact ticker.
+    ///     window: Window hosting the input.
+    ///     cx: Panel context.
+    ///
+    /// Returns:
+    ///     Nothing; the period, strategies, cores and side are left exactly as they were.
+    pub(super) fn set_coin_filter_text(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.coin_query = text.clone();
+        self.coin_popup_open = false;
+        self.coin.update(cx, |input, input_cx| {
+            input.set_value(text, window, input_cx)
+        });
+        self.sync_standalone_window_title(cx);
+        self.request_requery(cx);
+    }
+
+    /// Build the row menu's "filter this report to the coin" entry, or `None` for a blank coin.
+    ///
+    /// MoonBot's «Фильтр PAID»: it narrows the report the user clicked in, keeping its period and
+    /// strategies, through the same exact-ticker text a pick from the field's match list writes.
+    /// The coin is the column as printed, so a row whose market no longer resolves still filters.
+    ///
+    /// Args:
+    ///     coin: The row's coin column text.
+    ///     cx: Panel context whose entity the entry updates.
+    ///
+    /// Returns:
+    ///     The menu entry, placed by the shared menu among its coin actions.
+    fn coin_filter_item(&self, coin: &str, cx: &mut Context<Self>) -> Option<MoonMenuItem> {
+        let coin = coin.trim();
+        if coin.is_empty() {
+            return None;
+        }
+        let text = super::exact_coin_field_text(coin);
+        let view = cx.entity();
+        Some(
+            MoonMenuItem::with_key(
+                "rep-row-coin-filter",
+                t!("coin_menu.coin_filter", coin = coin).to_string(),
+            )
+            .on_click(move |_, window, app| {
+                window.close_context_menu(app);
+                let text = text.clone();
+                view.update(app, |this, cx| this.set_coin_filter_text(text, window, cx));
+            }),
+        )
+    }
+
     /// Open the row's right-click menu at the cursor: the shared token menu, plus this trade's log.
     ///
     /// ONE menu for the whole row — every cell opens it, not just the coin. It is the same menu the
@@ -666,7 +727,8 @@ impl ReportPanel {
         let Some(values) = data.rows.get(row) else {
             return;
         };
-        let ctx = columns::row_coin_menu_ctx(
+        let filter_here = self.coin_filter_item(&columns::row_coin_text(values, &self.cols), cx);
+        let mut ctx = columns::row_coin_menu_ctx(
             values,
             &self.cols,
             columns::ReportCoinMenuScope {
@@ -688,6 +750,7 @@ impl ReportPanel {
             &self.backend,
             cx,
         );
+        ctx.filter_here = filter_here;
         crate::controls::open_coin_menu(
             ctx,
             self.backend.clone(),
@@ -940,7 +1003,7 @@ impl ReportPanel {
     }
 
     /// Capture the current effective export authority without applying workspace state to a
-    /// standalone strategy-scoped Report.
+    /// standalone strategy- or coin-scoped Report.
     ///
     /// Args:
     ///     cx: Application context used to read Backend and workspace revision state.

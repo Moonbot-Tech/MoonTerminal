@@ -297,7 +297,7 @@ pub(super) fn row_coin_menu_ctx(
             .position(|col| col == name)
             .and_then(|ix| values.get(ix))
     };
-    let coin = column("coin").map(value_to_string).unwrap_or_default();
+    let coin = row_coin_text(values, cols);
     let strat_id = column("strategyid")
         .and_then(|value| match value {
             Value::Integer(id) => Some(*id as u64),
@@ -353,7 +353,24 @@ pub(super) fn row_coin_menu_ctx(
             target.focus_record_id,
         )),
         trailing,
+        filter_here: None,
     }
+}
+
+/// Read one report row's coin column as printed, or an empty string when the row has none.
+///
+/// Args:
+///     values: The row's cell values, parallel to `cols`.
+///     cols: Runtime report schema in source order.
+///
+/// Returns:
+///     The stored coin identity (`PAID`, sometimes a full market such as `VINEUSDT`).
+pub(super) fn row_coin_text(values: &[Value], cols: &[String]) -> String {
+    cols.iter()
+        .position(|col| col == "coin")
+        .and_then(|ix| values.get(ix))
+        .map(value_to_string)
+        .unwrap_or_default()
 }
 
 /// Build a full-cell clickable coin cell.

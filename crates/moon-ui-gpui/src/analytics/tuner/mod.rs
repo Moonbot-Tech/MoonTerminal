@@ -238,11 +238,13 @@ impl AnalyticsView {
         crate::panels::open_scoped_report(
             self.backend.clone(),
             crate::panels::ReportScope {
-                strategy: moon_core::db::ReportStrategyKey {
-                    core_uid,
-                    strategy_id,
+                subject: crate::panels::ReportScopeSubject::Strategy {
+                    key: moon_core::db::ReportStrategyKey {
+                        core_uid,
+                        strategy_id,
+                    },
+                    name,
                 },
-                strategy_name: name,
                 date_from,
                 date_to,
                 side: query.side,

@@ -290,12 +290,8 @@ impl Render for ReportPanel {
                             .display_coin()
                     );
                     view.update(app, |this, cx| {
-                        this.coin_query = base.clone();
-                        this.coin_popup_open = false;
-                        cx.notify();
+                        this.set_coin_filter_text(base.clone(), window, cx)
                     });
-                    coin_input.update(app, |inp, c| inp.set_value(base.clone(), window, c));
-                    view.update(app, |this, cx| this.request_requery(cx));
                     // The pick closed the list; holding the keyboard afterwards would eat the
                     // editing shortcuts the hotkeys are bound to. See `release_focus`.
                     crate::controls::coin_search::release_focus(&coin_input, window, app);

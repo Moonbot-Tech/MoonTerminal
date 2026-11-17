@@ -18,7 +18,9 @@
 use std::rc::Rc;
 
 use gpui::*;
-use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowExt as _};
+use moon_ui::{
+    MoonContextMenuWindowExt as _, MoonMenuItem, MoonNotification, MoonTone, MoonWindowExt as _,
+};
 use rust_i18n::t;
 
 use moon_core::config::SPLIT_ORDER_PARTS;
@@ -87,6 +89,25 @@ pub struct CoinMenuCtx {
     /// task number no other caller has — without this module learning about that panel. Empty for
     /// callers that add nothing.
     pub trailing: Vec<MoonMenuItem>,
+    /// The clicked panel's own "narrow this list to the coin" entry, placed among the coin actions.
+    ///
+    /// Only the Report has a list to narrow, so only it supplies one; every other caller passes
+    /// `None`. Like [`Self::trailing`] it keeps panel state out of this module.
+    pub filter_here: Option<MoonMenuItem>,
+}
+
+impl CoinMenuCtx {
+    /// Return the coin as the clicked surface prints it, trimmed.
+    ///
+    /// A Report row carries its stored coin column in [`Self::history`]; that is what the
+    /// Report's coin field matches, and it survives a market that no longer resolves, which
+    /// empties [`Self::coin`]. Every other surface prints the base token itself.
+    fn shown_coin(&self) -> &str {
+        match &self.history {
+            Some(crate::backend::ChartHistoryScope::Report { exact_coin, .. }) => exact_coin.trim(),
+            _ => self.coin.trim(),
+        }
+    }
 }
 
 /// Opens the shared token context menu at window-coordinate `pos`, usually `event.position`.
@@ -127,6 +148,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
     let b = backend.read(cx);
     let core = ctx.core;
     let coin = ctx.coin.clone();
+    let shown_coin = ctx.shown_coin().to_string();
     let mut items: Vec<MoonMenuItem> = Vec::new();
 
     // Navigation requires a market. Do not duplicate Open when already on the chart, and skip
@@ -249,22 +271,43 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
             )
             .on_click(move |_, window, app| {
                 window.close_context_menu(app);
+                let owner = window.window_handle();
                 let owner_display = window.display(app).map(|display| display.id());
-                crate::panels::open_scoped_report(
-                    backend_report.clone(),
-                    crate::panels::ReportScope::for_strategy(
-                        moon_core::db::ReportStrategyKey {
-                            core_uid: core,
-                            strategy_id: sid as i64,
-                        },
-                        strategy_name.clone(),
-                    ),
-                    Some(window.window_handle()),
-                    owner_display,
-                    app,
+                let backend = backend_report.clone();
+                let scope = crate::panels::ReportScope::for_strategy(
+                    moon_core::db::ReportStrategyKey {
+                        core_uid: core,
+                        strategy_id: sid as i64,
+                    },
+                    strategy_name.clone(),
                 );
+                // Deferred: clicked inside the standalone Report itself, this window is leased
+                // for the click, and the retarget's `handle.update` would fail and open a second
+                // Report instead of reusing the singleton.
+                app.defer(move |app| {
+                    crate::panels::open_scoped_report(
+                        backend,
+                        scope,
+                        Some(owner),
+                        owner_display,
+                        app,
+                    );
+                });
             }),
         );
+    }
+
+    // Coin actions: they join the strategy section when there is one, so «Все сделки монеты»
+    // sits directly under «Все сделки стратегии»; a manual row opens a section of its own.
+    if !shown_coin.is_empty() {
+        if ctx.strat_id.is_none() && !items.is_empty() {
+            items.push(MoonMenuItem::separator());
+        }
+        items.push(copy_coin_item(&shown_coin));
+        items.push(coin_report_item(backend, core, &shown_coin));
+        if let Some(item) = ctx.filter_here {
+            items.push(item);
+        }
     }
 
     // Order actions.
@@ -387,6 +430,68 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
     }
 
     items
+}
+
+/// The "copy the ticker" entry: the coin cell is not selectable text, so this is how a ticker
+/// reaches the Report's coin field, a strategy coin list or a message.
+///
+/// The clipboard gets exactly the printed coin — no blacklist spelling, no market key, no
+/// keyboard-layout mapping (`龙虾` stays `龙虾`). The ticker is not a secret, so the toast may
+/// name it; it is deliberately not logged.
+///
+/// Args:
+///     coin: The coin as the clicked surface prints it, trimmed and non-empty.
+///
+/// Returns:
+///     The menu entry, its label naming the ticker.
+fn copy_coin_item(coin: &str) -> MoonMenuItem {
+    let coin = coin.to_string();
+    MoonMenuItem::with_key(
+        "coin-copy",
+        t!("coin_menu.copy_coin", coin = coin.as_str()).to_string(),
+    )
+    .on_click(move |_, window, app| {
+        window.close_context_menu(app);
+        app.write_to_clipboard(ClipboardItem::new_string(coin.clone()));
+        window.push_notification(
+            MoonNotification::success(
+                t!("coin_menu.coin_copied", coin = coin.as_str()).to_string(),
+            ),
+            app,
+        );
+    })
+}
+
+/// The "every trade of this coin" entry, the twin of «Все сделки стратегии в отчёте».
+///
+/// It opens or retargets the same singleton standalone Report the strategy entry uses — all
+/// time, every strategy, the clicked row's one core, the exact ticker — and leaves the report
+/// the user clicked in untouched.
+///
+/// Args:
+///     backend: Shared backend holding the singleton Report window.
+///     core: Core of the clicked row; the same ticker on another core is another market.
+///     coin: The coin as the clicked surface prints it, trimmed and non-empty.
+///
+/// Returns:
+///     The menu entry; the window title, not the label, carries the ticker.
+fn coin_report_item(backend: &Entity<Backend>, core: CoreId, coin: &str) -> MoonMenuItem {
+    let backend = backend.clone();
+    let coin = coin.to_string();
+    MoonMenuItem::with_key("coin-coin-report", t!("coin_menu.coin_report").to_string()).on_click(
+        move |_, window, app| {
+            window.close_context_menu(app);
+            let owner = window.window_handle();
+            let owner_display = window.display(app).map(|display| display.id());
+            let backend = backend.clone();
+            let scope = crate::panels::ReportScope::for_coin(core, &coin);
+            // Deferred for the same reason as the strategy entry: a click inside the standalone
+            // Report leases that window, and a nested retarget would open a second one.
+            app.defer(move |app| {
+                crate::panels::open_scoped_report(backend, scope, Some(owner), owner_display, app);
+            });
+        },
+    )
 }
 
 /// Validate every captured mutation target against one current workspace authority snapshot.

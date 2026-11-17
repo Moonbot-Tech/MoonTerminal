@@ -200,3 +200,33 @@ fn strategy_report_action_follows_goto_in_the_same_strategy_section() {
     assert!(section.contains("crate::panels::open_scoped_report("));
     assert!(section.contains("crate::panels::ReportScope::for_strategy("));
 }
+
+/// The coin entries sit directly under the strategy Report entry, ahead of the order section, and
+/// key off the printed coin rather than the blacklist token or a strategy.
+///
+/// Mutation: moving the coin block under `if let Some(sid) = ctx.strat_id` hides it on manual
+/// rows; gating it on `coin` (the resolved base) hides it on a Report row whose market no longer
+/// resolves; moving it after `// Order actions.` separates it from its strategy twin.
+#[test]
+fn coin_entries_follow_the_strategy_report_on_the_printed_coin() {
+    let source = include_str!("../coin_menu.rs");
+    let body = source
+        .split("fn build_items(")
+        .nth(1)
+        .expect("menu builder must exist");
+    let strategy_report = body
+        .find("\"coin-strat-report\"")
+        .expect("strategy Report entry must exist");
+    let coin_block = body
+        .find("if !shown_coin.is_empty() {")
+        .expect("coin entries must key off the printed coin");
+    let orders = body
+        .find("// Order actions.")
+        .expect("order section must exist");
+
+    assert!(strategy_report < coin_block && coin_block < orders);
+    let block = &body[coin_block..orders];
+    assert!(block.contains("copy_coin_item(&shown_coin)"));
+    assert!(block.contains("coin_report_item(backend, core, &shown_coin)"));
+    assert!(block.contains("ctx.filter_here"));
+}
