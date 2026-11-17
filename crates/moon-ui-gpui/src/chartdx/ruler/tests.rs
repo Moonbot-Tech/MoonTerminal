@@ -50,7 +50,7 @@ fn a_duration_reads_in_its_two_largest_units() {
         unit("chart_labels.unit_minute"),
         unit("chart_labels.unit_second"),
     );
-    assert_eq!(duration_text(999.0), format!("0{s}"));
+    assert_eq!(duration_text(1_000.0), format!("1{s}"));
     assert_eq!(duration_text(59_999.0), format!("59{s}"));
     assert_eq!(duration_text(60_000.0), format!("1{m} 00{s}"));
     assert_eq!(
@@ -62,6 +62,60 @@ fn a_duration_reads_in_its_two_largest_units() {
         format!("2{d} 03{h}")
     );
     assert_eq!(duration_text(f64::NAN), format!("0{s}"));
+}
+
+/// Under a second the span is whole milliseconds, rounded down, so a stretched chart's sub-second
+/// drag no longer reads `0s` (#1359); the second ladder starts exactly at 1000 ms.
+#[test]
+fn a_sub_second_duration_reads_in_milliseconds() {
+    let _locale = crate::test_locale::force("ru");
+    assert_eq!(duration_text(842.9), "842мс");
+    assert_eq!(duration_text(999.0), "999мс");
+    assert_eq!(duration_text(1_000.0), "1с");
+    assert_eq!(duration_text(f64::INFINITY), "0с");
+}
+
+fn replay(buy: f64, sell: f64, bars: f64, fit: ReplayVolumeFit) -> Option<ReplayVolume> {
+    Some(ReplayVolume {
+        buy_quote: buy,
+        sell_quote: sell,
+        bars_quote: bars,
+        fit,
+    })
+}
+
+/// On a trade window the prints' split is printed — marked when an end cuts a traded second — and
+/// a period reaching the bars prints only its marked total, never the bars' lean as sides (#1358).
+#[test]
+fn the_replay_volume_line_splits_only_on_the_prints() {
+    let _locale = crate::test_locale::force("en");
+    let (bv, sv, vol) = (
+        unit("chart_labels.short.window_buy_volume"),
+        unit("chart_labels.short.window_sell_volume"),
+        unit("chart_labels.short.window_volume"),
+    );
+    let money = |v: f64| crate::chartdx::text::quote_turnover_label(v as f32, "USDT").unwrap();
+    assert_eq!(
+        replay_volume_text(replay(300.0, 200.0, 0.0, ReplayVolumeFit::Exact), "USDT"),
+        Some(format!("{bv}{} · {sv}{}", money(300.0), money(200.0)))
+    );
+    // A covered stretch that did not trade is a measured zero, not a missing line.
+    assert_eq!(
+        replay_volume_text(replay(0.0, 0.0, 0.0, ReplayVolumeFit::Exact), "USDT"),
+        Some(format!("{bv}{} · {sv}{}", money(0.0), money(0.0)))
+    );
+    assert_eq!(
+        replay_volume_text(
+            replay(300.0, 200.0, 0.0, ReplayVolumeFit::CutSecond),
+            "USDT"
+        ),
+        Some(format!("{bv}~{} · {sv}~{}", money(300.0), money(200.0)))
+    );
+    assert_eq!(
+        replay_volume_text(replay(300.0, 200.0, 1_000.0, ReplayVolumeFit::Bars), "USDT"),
+        Some(format!("{vol}~{}", money(1_500.0)))
+    );
+    assert_eq!(replay_volume_text(None, "USDT"), None);
 }
 
 fn readout(buy: f64, sell: f64, complete: bool) -> VolumeSpanReadout {

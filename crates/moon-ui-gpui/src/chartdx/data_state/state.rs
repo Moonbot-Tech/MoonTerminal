@@ -278,6 +278,8 @@ impl ChartDataState {
     ) {
         self.trade_replay = series;
         self.force_history_reread();
+        // The measuring captions answered from the previous series must be read from this one.
+        self.invalidate_replay_cursor_volumes();
     }
 
     /// Lay the price file's recorded lines over the replay's, or take them away.

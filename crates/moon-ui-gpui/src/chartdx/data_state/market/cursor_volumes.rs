@@ -23,12 +23,13 @@ impl ChartDataState {
         &mut self,
         source: &moon_core::market::MarketDataSource,
     ) -> bool {
-        // A frozen replay reads no live history at all — see the `live` gate in
+        // A frozen chart reads no live history at all — see the `live` gate in
         // `sync_from_market_source`. Without this the pointer path would keep filling the
         // measuring captions the market path has stopped answering, and the window would print
-        // what traded in the last ten seconds beside a trade that closed hours ago.
+        // what traded in the last ten seconds beside a trade that closed hours ago. A trade
+        // window answers them from its own replay instead.
         if !self.draws_live_market() {
-            return false;
+            return self.sync_replay_cursor_volumes();
         }
         let mut st = self.render.borrow_mut();
         if !st.chart_labels.any_cursor_anchored() {
@@ -91,4 +92,120 @@ impl ChartDataState {
         }
         changed
     }
+
+    /// The measuring captions of a trade window, answered from the closed trade's own replay.
+    ///
+    /// The volume band at the bottom of that window is already this replay's bought and sold per
+    /// second; the corner caption read nothing and printed a dash over it (#1349). Only the
+    /// cursor-anchored periods in milliseconds are answered: a live-edge block means the market
+    /// now and stays blank, a period counted in trades cannot be answered from per-second slots,
+    /// and the replay carries no liquidations — each of those keeps its dash.
+    ///
+    /// The whole readout set of the pane is this path's own here: the market path files nothing on
+    /// a frozen chart. A pane is re-read when the pointer's quantized moment or the asked periods
+    /// changed, which is one comparison on every other move. A new series or a new caption
+    /// configuration forgets the held periods first ([`Self::invalidate_replay_cursor_volumes`]),
+    /// so a pointer resting on the chart is re-read too.
+    ///
+    /// Returns:
+    ///     Whether any caption changed.
+    pub(in crate::chartdx) fn sync_replay_cursor_volumes(&mut self) -> bool {
+        // A historical chart without a replay has nothing frozen to answer from.
+        let Some(series) = self.trade_replay.clone() else {
+            return false;
+        };
+        let mut st = self.render.borrow_mut();
+        // Nothing measures around the pointer and nothing is held: one check, no walk.
+        if !st.chart_labels.any_cursor_anchored()
+            && st.panes.iter().all(|pr| pr.label_volumes.is_empty())
+        {
+            return false;
+        }
+        let keys: Vec<VolumeSpanKey> = st
+            .chart_labels
+            .volume_spans()
+            .into_iter()
+            .filter(|key| key.anchor == LabelAnchor::Cursor)
+            .collect();
+        let mut changed = false;
+        for idx in 0..st.panes.len() {
+            let cursor_ms = st.pane_cursor_unix_ms(idx);
+            let wanted = resolve_span_keys(&keys, cursor_ms);
+            let Some(pr) = st.panes.get(idx) else {
+                continue;
+            };
+            let idle = keys.is_empty() && pr.label_volumes.is_empty();
+            if idle
+                || (pr.label_cursor_ms == cursor_ms
+                    && same_period_set(&pr.label_volume_spans, &wanted))
+            {
+                continue;
+            }
+            let rows = replay_volume_rows(&series, &wanted);
+            if let Some(pr) = st.panes.get_mut(idx) {
+                pr.label_cursor_ms = cursor_ms;
+                pr.label_volume_spans = wanted;
+                pr.label_volumes = rows;
+                pr.label_liquidations.clear();
+            }
+            if st.refresh_pane_labels(idx) {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Forget which periods the panes' replay figures answer, and read them again now.
+    ///
+    /// The pointer path skips a pane whose moment and periods are unchanged. That is right while
+    /// the series and the configuration stand still, and wrong the moment either is replaced: a
+    /// trade window gets its tick-backed series seconds after the bar-only one, and a pointer
+    /// resting on the chart would keep the bars' estimate until it crossed into the next second.
+    ///
+    /// Returns:
+    ///     Whether any caption changed.
+    pub(in crate::chartdx) fn invalidate_replay_cursor_volumes(&mut self) -> bool {
+        for pr in self.render.borrow_mut().panes.iter_mut() {
+            pr.label_volume_spans.clear();
+            pr.label_cursor_ms = None;
+        }
+        self.sync_replay_cursor_volumes()
+    }
+}
+
+/// One readout per asked period that a replay can answer: cursor-anchored, in milliseconds.
+///
+/// Measured over exactly the bounds a live read would use ([`VolumeAt::bounds`]), so the same
+/// caption covers the same ten seconds on a live chart and on a trade.
+///
+/// Args:
+///     series: The trade window's frozen replay.
+///     wanted: The resolved periods the captions ask for.
+fn replay_volume_rows(
+    series: &moon_core::market::trade_replay::TradeReplaySeries,
+    wanted: &[(VolumeSpan, VolumeAt)],
+) -> Vec<((VolumeSpan, VolumeAt), VolumeSpanReadout)> {
+    let asked: Vec<((VolumeSpan, VolumeAt), (i64, i64))> = wanted
+        .iter()
+        .filter(|(_, at)| matches!(at, VolumeAt::Around(_)))
+        .filter_map(|&(span, at)| Some(((span, at), at.bounds(span, 0)?)))
+        .collect();
+    // Counted only when a read happens, like the ruler's: a pointer off the plot reads nothing.
+    if asked.is_empty() {
+        return Vec::new();
+    }
+    let started = std::time::Instant::now();
+    let rows: Vec<_> = asked
+        .into_iter()
+        .filter_map(|(key, (from, to))| {
+            let volume = series.volume_between(from, to)?;
+            Some((key, VolumeSpanReadout::from_replay(volume)))
+        })
+        .collect();
+    crate::diag::bump(&crate::diag::CHART_VOLUME_READS);
+    crate::diag::bump_by(
+        &crate::diag::CHART_VOLUME_READ_US,
+        started.elapsed().as_micros() as u64,
+    );
+    rows
 }

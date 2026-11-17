@@ -111,6 +111,7 @@ chart_labels.short.temp_ban_left: pt
 chart_labels.short.volume_24h: es pt vi zh
 chart_labels.span.at_cursor: es pt
 chart_labels.tf: pt
+chart_labels.unit_millisecond: es tr pt vi zh
 chart_labels.tf.auto: es pt
 city.AKL: es tr pt vi
 city.ALA: es pt vi

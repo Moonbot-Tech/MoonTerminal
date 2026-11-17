@@ -848,6 +848,7 @@ chart_labels.unit_day: "d"
 chart_labels.unit_hour: "h"
 chart_labels.unit_minute: "m"
 chart_labels.unit_second: "s"
+chart_labels.unit_millisecond: "ms"
 # --- Chart buttons: captions that ACT rather than report ---
 chart_labels.group.action: "Botões"
 chart_labels.field.act_cancel_buy: "Botão Cancel Buy"

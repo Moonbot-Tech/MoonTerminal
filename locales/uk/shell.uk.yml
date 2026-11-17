@@ -848,6 +848,7 @@ chart_labels.unit_day: "д"
 chart_labels.unit_hour: "год"
 chart_labels.unit_minute: "хв"
 chart_labels.unit_second: "с"
+chart_labels.unit_millisecond: "мс"
 # --- Chart buttons: captions that ACT rather than report ---
 chart_labels.group.action: "Кнопки"
 chart_labels.field.act_cancel_buy: "Кнопка «Cancel Buy»"

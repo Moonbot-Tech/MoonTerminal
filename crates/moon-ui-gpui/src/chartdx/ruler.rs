@@ -8,6 +8,7 @@
 //! The text is formatted HERE, once per change of the measured span, so the per-frame passes only
 //! place it.
 
+use moon_core::market::trade_replay::{ReplayVolume, ReplayVolumeFit};
 use moon_core::market::{MarketDataSource, VolumeAt, VolumeSpan, VolumeSpanReadout};
 use rust_i18n::t;
 
@@ -70,7 +71,10 @@ impl ChartEngine {
     /// Returns:
     ///     Whether anything the chart draws changed.
     pub fn set_ruler(&mut self, span: Option<RulerSpan>, source: &MarketDataSource) -> bool {
-        let live = self.data.borrow().draws_live_market();
+        let (live, replay) = {
+            let data = self.data.borrow();
+            (data.draws_live_market(), data.trade_replay.clone())
+        };
         let mut st = self.state.borrow_mut();
         let Some(span) = span else {
             let had = st.ruler.take().is_some();
@@ -92,7 +96,20 @@ impl ChartEngine {
             Some(line) => line,
             None => st.panes.get(span.pane).and_then(|pr| {
                 let (from, to) = period?;
-                // A frozen replay reads no live history: its rings hold the present, not the trade
+                // A trade window answers from its own replay: the prints' per-second split inside
+                // the tick coverage, the bars outside it. The chart's drawn candles cannot — they
+                // are withheld wherever the prints are, which is the middle of the window (#1358).
+                if let Some(series) = replay.as_ref().filter(|_| !live) {
+                    let started = std::time::Instant::now();
+                    let volume = series.volume_between(from, to);
+                    crate::diag::bump(&crate::diag::CHART_VOLUME_READS);
+                    crate::diag::bump_by(
+                        &crate::diag::CHART_VOLUME_READ_US,
+                        started.elapsed().as_micros() as u64,
+                    );
+                    return replay_volume_text(volume, &pr.quote);
+                }
+                // A frozen chart reads no live history: its rings hold the present, not the period
                 // on screen. The candles are the chart's own and answer for any period.
                 let readout = match (live, pr.core) {
                     (true, Some(core)) => {
@@ -175,11 +192,22 @@ fn pct_text(from: f64, to: f64) -> Option<String> {
     (from > 0.0 && pct.is_finite()).then(|| format!("{pct:+.2}%"))
 }
 
-/// A measured duration: `42с`, `12м 30с`, `3ч 05м`, `2д 03ч`.
+/// A measured duration: `842мс`, `42с`, `12м 30с`, `3ч 05м`, `2д 03ч`.
 ///
 /// Two units at most — the larger and the next — because the ruler is read at a glance and a
 /// third unit adds nothing at that scale. Rounded down: a measurement states what elapsed.
+///
+/// Under a second it is whole milliseconds: on a stretched chart a drag across part of one second
+/// is a real span, and `0с` would say nothing lasted (#1359). A non-finite span has no duration
+/// and stays `0с`.
 pub(super) fn duration_text(ms: f64) -> String {
+    if ms.is_finite() && ms < 1000.0 {
+        return format!(
+            "{}{}",
+            ms.max(0.0) as i64,
+            t!("chart_labels.unit_millisecond")
+        );
+    }
     let secs = if ms.is_finite() {
         (ms / 1000.0) as i64
     } else {
@@ -241,6 +269,25 @@ pub(super) fn volume_text(
         (Some(r), _) if r.total_quote() > 0.0 => split(r, "~"),
         (_, Some((v, false))) => total(v),
         _ => None,
+    }
+}
+
+/// The ruler's second line on a trade window, from the replay's own figures.
+///
+/// On the prints the split is printed, marked `~` when an end cuts a traded second (the stored
+/// split is one second, so that second is a time share). Reaching the bars prints the total only,
+/// marked: the bars carry no buy/sell split, and the band's 62/38 lean is not a measurement.
+///
+/// Args:
+///     volume: The replay's answer over the period, `None` when nothing reaches it.
+///     quote: The market's quote asset; empty means the unit is unknown and nothing is printed.
+pub(super) fn replay_volume_text(volume: Option<ReplayVolume>, quote: &str) -> Option<String> {
+    let volume = volume?;
+    match volume.fit {
+        ReplayVolumeFit::Bars => volume_text(None, Some((volume.total_quote(), true)), quote),
+        ReplayVolumeFit::Exact | ReplayVolumeFit::CutSecond => {
+            volume_text(Some(VolumeSpanReadout::from_replay(volume)), None, quote)
+        }
     }
 }
 

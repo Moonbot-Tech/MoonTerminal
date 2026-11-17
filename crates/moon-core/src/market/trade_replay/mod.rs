@@ -34,6 +34,7 @@ pub mod gate;
 mod read_ticks;
 pub mod rest;
 mod settings;
+mod span_volume;
 pub(crate) mod tick_tiles;
 pub mod trade_cache;
 pub mod venue_caps;
@@ -48,6 +49,7 @@ pub use settings::{
     adopt_larger, long_position_ms, margin_ms, min_tail_s, normalize, record_tail_ms,
     set_long_position_min, set_margin_s, set_min_tail_s, window,
 };
+pub use span_volume::{ReplayVolume, ReplayVolumeFit};
 pub use tick_tiles::TileSource;
 pub use worker::{TickAnswer, TickQuery, query_held};
 
