@@ -392,6 +392,8 @@ pub(crate) struct TradeWindowView {
     record: ChartTradeRecord,
     /// Full Report-period snapshot retained independently of the drawing preference.
     history: std::rc::Rc<Vec<ChartTradeRecord>>,
+    /// Projection prepared alongside the full snapshot.
+    prepared_history: std::rc::Rc<crate::chartdx::trade_history_sync::PreparedTradeHistory>,
     /// Stable nearest rows prepared with the snapshot off-thread; shared by trace asks and draws.
     neighbours: Vec<ChartTradeRecord>,
     /// Replacing this task cancels the previous re-click's neighbour selection.
@@ -512,21 +514,27 @@ impl TradeWindowView {
     ///
     /// Args:
     ///     history: Full snapshot from the newly clicked Report period.
+    ///     prepared: Camera-independent chart inputs prepared for that snapshot.
     ///     cx: View context used to schedule selection.
-    fn replace_history(&mut self, history: Vec<ChartTradeRecord>, cx: &mut Context<Self>) {
+    fn replace_history(
+        &mut self,
+        history: Vec<ChartTradeRecord>,
+        prepared: crate::chartdx::trade_history_sync::PreparedTradeHistory,
+        cx: &mut Context<Self>,
+    ) {
         self.history_generation = self.history_generation.wrapping_add(1);
         let generation = self.history_generation;
         let focus = self.record.clone();
         self.history_selection = Some(cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            let (history, neighbours) = executor
+            let (history, prepared, neighbours) = executor
                 .spawn(async move {
                     let neighbours = traces::select_neighbours(&history, &focus);
-                    (history, neighbours)
+                    (history, prepared, neighbours)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.apply_history(generation, history, neighbours, cx);
+                this.apply_history(generation, history, prepared, neighbours, cx);
             });
         }));
     }
@@ -537,19 +545,22 @@ impl TradeWindowView {
     /// Args:
     ///     generation: Replacement request that produced these rows.
     ///     history: Full Report-period snapshot.
+    ///     prepared: Chart inputs built for that snapshot off-thread.
     ///     neighbours: Stable nearest rows prepared for the retained focus.
     ///     cx: View context used to publish chart and trace updates.
     fn apply_history(
         &mut self,
         generation: u64,
         history: Vec<ChartTradeRecord>,
+        prepared: crate::chartdx::trade_history_sync::PreparedTradeHistory,
         neighbours: Vec<ChartTradeRecord>,
         cx: &mut Context<Self>,
     ) {
         apply_current_selection(self.history_generation, generation, || {
             self.history = std::rc::Rc::new(history);
+            self.prepared_history = std::rc::Rc::new(prepared);
             self.neighbours = neighbours;
-            let history = visible_history(&self.history, &self.record, self.show_other_trades);
+            let history = self.chart_history(cx);
             self.panel.update(cx, |panel, pcx| {
                 panel.publish_trade_history(history, pcx);
             });
@@ -561,6 +572,18 @@ impl TradeWindowView {
         });
     }
 
+    /// Stage the full projection and select the retained rows or the one focused marker.
+    fn chart_history(&self, cx: &App) -> std::rc::Rc<Vec<ChartTradeRecord>> {
+        let history = visible_history(&self.history, &self.record, self.show_other_trades);
+        if self.show_other_trades {
+            self.panel
+                .read(cx)
+                .debug_data_handle()
+                .prepare_frozen_trade_history(&history, &self.prepared_history);
+        }
+        history
+    }
+
     /// Change only the published arrow set and remember the preference through layout persistence.
     /// The retained snapshot makes toggling independent of DB reads, replay fetches and framing.
     fn set_other_trades(&mut self, show: bool, cx: &mut Context<Self>) {
@@ -568,7 +591,7 @@ impl TradeWindowView {
             return;
         }
         self.show_other_trades = show;
-        let history = visible_history(&self.history, &self.record, show);
+        let history = self.chart_history(cx);
         self.panel.update(cx, |panel, pcx| {
             panel.publish_trade_history(history, pcx);
         });
@@ -1198,12 +1221,12 @@ impl TradeWindowView {
         // The RAW records, deliberately: correcting them here would double-correct, since B.1
         // (`chartdx/trade_history_sync.rs`) already applies the axis inside
         // `append_trade_history_geometry`.
-        let history = visible_history(&self.history, &self.record, self.show_other_trades);
+        let history = first_publish.then(|| self.chart_history(cx));
         self.panel.update(cx, |panel, pcx| {
             panel.attach_trade_replay(Some(std::rc::Rc::new(series)), pcx);
-            if !first_publish {
+            let Some(history) = history else {
                 return;
-            }
+            };
             // THE ENTRY AND EXIT ARROWS. Owning a `ChartPanel` is not enough on its own: the
             // marker geometry is built during the userdata pass, and that pass only ever sees the
             // trades handed to this layer. The live Report path fills it from the open-request

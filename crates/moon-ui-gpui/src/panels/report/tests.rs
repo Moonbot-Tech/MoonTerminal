@@ -16,6 +16,200 @@ use moon_core::db::{OffsetSegment, ReportAxis, ReportFilter, RowScope, report_re
 use rusqlite::Connection;
 use std::path::PathBuf;
 
+/// Published report page with a cold/revision control and an instrumented virtual table.
+struct BenchReportPage {
+    cols: std::rc::Rc<Vec<String>>,
+    pages: [std::rc::Rc<Vec<Vec<rusqlite::types::Value>>>; 2],
+    width_rows: [Vec<std::sync::Arc<super::widths::RowIdentity>>; 2],
+    command: std::rc::Rc<std::cell::Cell<Option<(usize, bool)>>>,
+    visited: std::rc::Rc<std::cell::Cell<usize>>,
+    scroll: moon_ui::MoonVirtualListScrollHandle,
+    active: usize,
+    widths: super::widths::NaturalWidthsCache,
+    axis: ReportAxis,
+}
+
+impl gpui::Render for BenchReportPage {
+    /// Publish row identities, measure natural widths and lay out the real virtual table.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        use moon_ui::{
+            MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableWidthPolicy, MoonPalette,
+        };
+
+        let cores = vec![1; 500];
+        if let Some((next, cold)) = self.command.take() {
+            self.active = next;
+            if cold {
+                self.widths = Default::default();
+            }
+            let identities = self.width_rows[next].clone();
+            assert_eq!(identities.len(), 500);
+            self.widths.publish(identities, false);
+        }
+        let p = MoonPalette::active(cx);
+        let rows = self.pages[self.active].clone();
+        let cols = self.cols.clone();
+        let axis = self.axis.clone();
+        let visible: Vec<_> = (0..cols.len()).collect();
+        self.widths
+            .refresh(&cols, &rows, &cores, &visible, p, &axis, chrono_tz::UTC, cx);
+        let columns = super::columns::report_columns(&cols, &visible, &self.widths.widths);
+        assert_eq!(columns.len(), cols.len());
+        assert_eq!(rows.len(), 500);
+        let visited = self.visited.clone();
+        let table = MoonDataTable::new("bench-report", rows.len(), move |ix, _, _| {
+            visited.set(visited.get().max(ix + 1));
+            let row = &rows[ix];
+            let quote = super::columns::row_quote(&cols, row);
+            MoonDataRow::new(cols.iter().zip(row).map(|(col, value)| {
+                let (text, color) =
+                    super::columns::cell(col, value, quote, p, &axis, 1, chrono_tz::UTC);
+                MoonDataCell::text(text)
+                    .text_color(color.unwrap_or_else(|| super::columns::cell_color(col, p)))
+            }))
+        })
+        .columns(columns)
+        .track_scroll(&self.scroll)
+        .width_policy(MoonDataTableWidthPolicy::Preserve)
+        .style(crate::design::table_style(p));
+        moon_ui::v_flex().size_full().child(table)
+    }
+}
+
+/// Prepare two pages that differ by just one published row.
+fn bench_report_page() -> BenchReportPage {
+    use crate::test_support::fixtures;
+    use rusqlite::types::Value;
+    use std::rc::Rc;
+
+    let cols = [
+        "coin",
+        "core_name",
+        "comment",
+        "profitpct",
+        "profitbtc",
+        "buydate",
+        "closedate",
+        "spentbtc",
+        "sellreason",
+        "strategyid",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    let rows: Vec<_> = fixtures::deals(500)
+        .into_iter()
+        .rev()
+        .map(|deal| {
+            vec![
+                Value::Text(deal.coin),
+                Value::Text(deal.core_name),
+                Value::Text(format!("UNIT_01 synthetic trade {}", deal.report_uid)),
+                Value::Real(deal.profit.unwrap()),
+                Value::Real(deal.fact_pnl),
+                Value::Integer(deal.buy_ms / 1000),
+                Value::Integer(deal.close_ms / 1000),
+                Value::Real(deal.spent),
+                Value::Text(deal.sell_reason),
+                Value::Integer(deal.strategy_id),
+            ]
+        })
+        .collect();
+    let mut changed = rows.clone();
+    changed[7][2] = Value::Text("UNIT_02 updated synthetic trade".into());
+    // The Report reader prepares row identities before handing a page to the UI.
+    let cores = vec![1; rows.len()];
+    let width_rows = [&rows, &changed].map(|rows| super::widths::row_identities(rows, &cores));
+    BenchReportPage {
+        cols: Rc::new(cols),
+        pages: [Rc::new(rows), Rc::new(changed)],
+        width_rows,
+        command: Rc::new(std::cell::Cell::new(Some((0, true)))),
+        visited: Rc::new(std::cell::Cell::new(0)),
+        scroll: moon_ui::MoonVirtualListScrollHandle::new(),
+        active: 0,
+        widths: Default::default(),
+        axis: ReportAxis::from_measured(Default::default(), chrono_tz::UTC),
+    }
+}
+
+/// Measure cold and one-row changed Report page publication through the next draw.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_report_first_page_500() {
+    use crate::test_support::{bench, fixtures};
+    fixtures::on_visual_stack(|| {
+        let mut app = fixtures::visual_app();
+        let probe = bench_report_page();
+        let command = probe.command.clone();
+        let visited = probe.visited.clone();
+        let window = app.open_window(
+            gpui::size(gpui::px(1280.0), gpui::px(630.0)),
+            move |_, _| probe,
+        );
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), &app);
+        let mut draw = |next, cold| {
+            command.set(Some((next, cold)));
+            visited.set(0);
+            visual.update(|window, cx| {
+                window.refresh();
+                let _ = window.draw(cx);
+            });
+            assert!(visited.get() > 0 && visited.get() < 500);
+        };
+        bench::measure("report_first_page_500_cold_publication_draw", 24, || {
+            draw(0, true)
+        });
+        let mut next = 1;
+        bench::measure(
+            "report_first_page_500_changed_row_publication_draw",
+            24,
+            || {
+                draw(next, false);
+                next = 1 - next;
+            },
+        );
+    });
+}
+
+/// Measure a warm Report table draw after stepping by the initial viewport range.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_report_scroll_step() {
+    use crate::test_support::{bench, fixtures};
+    fixtures::on_visual_stack(|| {
+        let mut app = fixtures::visual_app();
+        let probe = bench_report_page();
+        let scroll = probe.scroll.clone();
+        let visited = probe.visited.clone();
+        let window = app.open_window(
+            gpui::size(gpui::px(1280.0), gpui::px(630.0)),
+            move |_, _| probe,
+        );
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), &app);
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let step = visited.get();
+        assert!((2..100).contains(&step));
+        let mut target = step;
+        bench::measure("report_scroll_step_500_warm_viewport_draw", 24, || {
+            visited.set(0);
+            scroll.scroll_to_item_strict(target, gpui::ScrollStrategy::Top);
+            visual.update(|window, cx| {
+                window.refresh();
+                let _ = window.draw(cx);
+            });
+            assert!((target + 1..target + 2 * step).contains(&visited.get()));
+            target = step - target;
+        });
+    });
+}
+
 /// Allocate one process-unique data root outside the working tree.
 fn export_fixture_root() -> PathBuf {
     std::env::temp_dir().join(format!(

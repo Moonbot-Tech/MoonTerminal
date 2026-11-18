@@ -15,6 +15,27 @@ pub struct ChartCross {
     pub qty: f32,
 }
 
+/// Fill a shared backend buffer with trade crosses using epoch-relative coordinates.
+pub fn fill_cross_upload(
+    ticks: &[moon_core::feed::Tick],
+    epoch_ms: f64,
+    out: &mut Vec<ChartCross>,
+) {
+    use moon_core::feed::Side;
+
+    out.clear();
+    out.reserve(ticks.len());
+    out.extend(ticks.iter().map(|tick| ChartCross {
+        time_rel: (tick.time_ms - epoch_ms) as f32,
+        price: tick.price,
+        side: match tick.side {
+            Side::Buy => 0,
+            Side::Sell => 1,
+        },
+        qty: tick.qty.max(0.0),
+    }));
+}
+
 /// Line pattern codes, shared by the full-width line and the segment.
 ///
 /// The code IS Delphi's `TPenStyle` index, the same number the core's chart-object blob carries at

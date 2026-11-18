@@ -228,6 +228,9 @@ impl DetectsPanel {
             self.items.pop_front();
             changed = true;
         }
+        if changed {
+            self.visible_cards = None;
+        }
         changed
     }
 
@@ -281,6 +284,7 @@ impl DetectsPanel {
         if self.items.len() == before {
             return;
         }
+        self.visible_cards = None;
         self.arm_prune_timer(cx);
         cx.notify();
     }

@@ -1128,3 +1128,213 @@ fn trade_window_replay_volume() {
         "the market path cleared the replay's figures"
     );
 }
+
+/// One frozen replay with 100,000 candles and 100,000 trades for chart frame benches.
+fn scale_replay() -> moon_core::market::trade_replay::TradeReplaySeries {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::market::side_slots_of_ticks;
+    use moon_core::market::trade_replay::venue_caps::TickValue;
+    use moon_core::market::trade_replay::{
+        Coverage, TickStatus, TickThinning, TradeReplaySource, replay_window_ms,
+    };
+
+    let candles = crate::test_support::fixtures::candles(100_000);
+    let ticks: Vec<_> = (0..100_000)
+        .map(|index| Tick {
+            time_ms: (crate::test_support::fixtures::EPOCH_MS + index * 60_000) as f64,
+            price: 10.0 + (index % 100) as f32 / 100.0,
+            qty: 1.0,
+            side: if index % 2 == 0 {
+                Side::Buy
+            } else {
+                Side::Sell
+            },
+        })
+        .collect();
+    let from_ms = candles.first().expect("candles").t_open_ms as i64;
+    let to_ms = candles.last().expect("candles").t_open_ms as i64 + 60_000;
+    let side_slots = side_slots_of_ticks(&ticks, TickValue::Base);
+    moon_core::market::trade_replay::TradeReplaySeries {
+        source: TradeReplaySource::CoreTicks,
+        venue: None,
+        window: replay_window_ms(from_ms, to_ms, 30_000).expect("replay window"),
+        tf_ms: 60_000,
+        candles,
+        ticks,
+        identity: 1,
+        tick_status: TickStatus::Served,
+        thinning: TickThinning::Raw,
+        partial: false,
+        side_slots,
+        covered: Coverage::one((from_ms, to_ms)),
+    }
+}
+
+/// Construct the frozen chart and complete its initial frame before navigation is measured.
+fn scale_chart() -> crate::chartdx::ChartEngine {
+    use std::rc::Rc;
+
+    use moon_core::config::ChartTheme;
+    use moon_core::market::{MarketDataSource, MarketStore};
+
+    let replay = scale_replay();
+    assert_eq!(replay.candles.len(), 100_000);
+    assert_eq!(replay.ticks.len(), 100_000);
+    let left = replay.window.from_ms as f64;
+    let right = replay.window.to_ms as f64;
+    let mut engine = crate::chartdx::ChartEngine::new(
+        crate::test_support::fixtures::EPOCH_MS as f64,
+        ChartTheme::default(),
+    );
+    engine.open(1, "XALPHAUSDT");
+    engine.set_historical(true);
+    engine.set_trade_replay(Some(Rc::new(replay)));
+    engine.set_follow(false, right);
+    engine.show_time_range(left, right, 0.0);
+    engine.set_scene_visible(true);
+    engine.set_market_source(Some(MarketDataSource::new(MarketStore::shared(
+        crate::test_support::fixtures::EPOCH_MS as f64,
+    ))));
+    scale_chart_frame(&mut engine);
+    engine
+}
+
+/// Prepare one app-owned chart CPU frame; native presentation is outside this measurement.
+fn scale_chart_frame(engine: &mut crate::chartdx::ChartEngine) {
+    use std::time::Instant;
+
+    use gpui::{Bounds, GpuFrameInfo, point, px, size};
+
+    let decision = engine.data.borrow_mut().frame(GpuFrameInfo {
+        now: Instant::now(),
+        bounds: Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(1_000.0), px(600.0)),
+        },
+        scale_factor: 1.0,
+        content_zoom: 1.0,
+        presentable: true,
+    });
+    assert!(!matches!(decision, gpui::GpuFrameDecision::Skip));
+}
+
+/// Time a pan input and its following frozen 100,000-row chart frame.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_chart_frame_pan() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            crate::test_locale::warm();
+            let _window = crate::test_support::SharedWindowGuard::take();
+            let mut engine = scale_chart();
+            let mut input = crate::chartdx::input::ChartInput::default();
+            input.hovered_pane = Some(0);
+            crate::test_support::bench::measure(
+                "bench_s_chart_frame_pan stimulus=pan_plus_cpu_frame trades=100000 candles=100000 native_present=excluded",
+                5,
+                || {
+                    assert!(engine.with_container_mut(|container| input.wheel(
+                        60.0,
+                        false,
+                        crate::chartdx::input::WheelMode::Pan,
+                        true,
+                        container,
+                        1_000.0,
+                        1.0,
+                    )));
+                    scale_chart_frame(&mut engine);
+                },
+            );
+        })
+        .expect("bench thread")
+        .join()
+        .expect("bench result");
+}
+
+/// Time a zoom input and its following frozen 100,000-row chart frame.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_chart_frame_zoom() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            crate::test_locale::warm();
+            let _window = crate::test_support::SharedWindowGuard::take();
+            let mut engine = scale_chart();
+            let mut input = crate::chartdx::input::ChartInput::default();
+            input.hovered_pane = Some(0);
+            let mut step = 0;
+            crate::test_support::bench::measure(
+                "bench_s_chart_frame_zoom stimulus=zoom_plus_cpu_frame trades=100000 candles=100000 native_present=excluded",
+                5,
+                || {
+                    step += 1;
+                    assert!(engine.with_container_mut(|container| input.wheel(
+                        if step % 2 == 0 { -3.0 } else { 3.0 },
+                        false,
+                        crate::chartdx::input::WheelMode::CtrlZoom,
+                        true,
+                        container,
+                        1_000.0,
+                        1.0,
+                    )));
+                    scale_chart_frame(&mut engine);
+                },
+            );
+        })
+        .expect("bench thread")
+        .join()
+        .expect("bench result");
+}
+
+/// Isolate the frozen history, volume-band sampling and backend-neutral reset preparation.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_chart_replay_cpu_stages() {
+    use moon_core::market::{CandleReadParams, ChartHistoryBuffers};
+
+    let replay = scale_replay();
+    let epoch = replay.window.from_ms as f64;
+    let right = (replay.window.to_ms as f64 - epoch) as f32;
+    let mut buffers = ChartHistoryBuffers::default();
+    let params = CandleReadParams {
+        tf_ms: replay.tf_ms,
+        trades_from_rel_ms: 0.0,
+        trades_limit: usize::MAX,
+        shipped_revision: u64::MAX,
+        series_reset: true,
+    };
+    crate::test_support::bench::measure("chart_replay_read_100k_full_fit", 12, || {
+        let result = replay.read_with_price_window(
+            epoch,
+            0.0,
+            right,
+            Some((0.0, right)),
+            Some(&params),
+            &mut buffers,
+        );
+        assert_eq!(buffers.ticks.len(), 100_000);
+        assert!(result.tick_price_range.is_some());
+    });
+    let mut upload = Vec::new();
+    crate::test_support::bench::measure("chart_replay_cross_reset_prep_100k", 12, || {
+        moon_chart::layers::fill_cross_upload(&buffers.ticks, epoch, &mut upload);
+        let order = moon_chart::tick_volume::TickTimeOrder::for_reset(&upload, 100_000);
+        assert_eq!(upload.len(), 100_000);
+        assert_eq!(order.max_lateness(), 0.0);
+    });
+    let span = (replay.window.to_ms - replay.window.from_ms) as f64;
+    let step = moon_chart::side_volume::sample_step_ms((1_000.0 / span) as f32);
+    let tf_ms = moon_chart::side_volume::effective_tf_ms(0, span).max(step);
+    let mut sides = Vec::new();
+    crate::test_support::bench::measure("chart_replay_side_volume_100k", 12, || {
+        replay.side_volume_into(
+            tf_ms,
+            step,
+            (replay.window.from_ms, replay.window.to_ms),
+            &mut sides,
+        );
+        assert!(!sides.is_empty());
+    });
+}

@@ -640,6 +640,7 @@ pub(crate) fn open(
     );
     opts.display_id = display_id;
     let b = backend.clone();
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "connect-wizard");
     let created = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| ConnectWizardView::new(b.clone(), window, cx));
@@ -657,6 +658,7 @@ pub(crate) fn open(
             )
         })
     });
+    drop(open_span);
     match created {
         Ok(handle) => {
             backend.update(cx, |bk, _| bk.connect_wizard_window = Some(handle));

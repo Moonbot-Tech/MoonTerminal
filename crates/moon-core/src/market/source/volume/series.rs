@@ -380,7 +380,7 @@ pub fn synthetic_sides(
     to_ms: i64,
 ) -> Vec<SideVolumeBucket> {
     let mut slots: Vec<Slot> = Vec::new();
-    push_candle_slots(&mut slots, candles, |_| true);
+    push_candle_slots(&mut slots, candles, &[]);
     finish_slots(slots, tf_ms, step_ms, from_ms, to_ms)
 }
 
@@ -481,13 +481,7 @@ pub fn replay_sides(
     to_ms: i64,
 ) -> Vec<SideVolumeBucket> {
     let mut slots: Vec<Slot> = tick_slots.to_vec();
-    // A bar's second is the replay's answer only where the ticks are not: a second inside the
-    // covered span already holds the same prints.
-    push_candle_slots(&mut slots, candles, |slot_id| {
-        !covered
-            .iter()
-            .any(|&(lo, hi)| slot_inside_span(slot_id, lo, hi))
-    });
+    push_candle_slots(&mut slots, candles, covered);
     finish_slots(slots, tf_ms, step_ms, from_ms, to_ms)
 }
 
@@ -498,18 +492,19 @@ fn slot_inside_span(id: i64, lo: i64, hi: i64) -> bool {
     open >= lo && open + SIDE_BUCKET_MS - 1 <= hi
 }
 
-/// Spread each candle's turnover over its seconds, leaned by its direction, keeping the seconds
-/// `keep` accepts.
+/// Spread each candle's turnover over its seconds, leaned by its direction, skipping seconds
+/// already answered by exhaustive tick coverage.
 ///
 /// Args:
 ///     slots: Where the slots go, unsorted.
 ///     candles: One-minute bars.
-///     keep: Which one-second slots (by id) to take.
+///     covered: Inclusive spans that hold the real prints.
 fn push_candle_slots(
     slots: &mut Vec<Slot>,
     candles: &[crate::market::ChartCandle],
-    keep: impl Fn(i64) -> bool,
+    covered: &[(i64, i64)],
 ) {
+    let parts = (60_000 / SIDE_BUCKET_MS).max(1);
     for c in candles {
         if !(c.quote_volume.is_finite() && c.quote_volume > 0.0 && c.t_open_ms.is_finite()) {
             continue;
@@ -517,14 +512,19 @@ fn push_candle_slots(
         // Minutes, spread over the minute's slots. The share is per SECOND, so a bar of which
         // only some seconds are taken contributes only those seconds' share — never the whole
         // minute squeezed into the remainder.
-        let candle_ms = 60_000i64;
-        let parts = (candle_ms / SIDE_BUCKET_MS).max(1);
+        let first = (c.t_open_ms as i64).div_euclid(SIDE_BUCKET_MS);
+        let end = first + parts;
+        // A span covering both endpoints also covers every slot between them.
+        if covered
+            .iter()
+            .any(|&(lo, hi)| slot_inside_span(first, lo, hi) && slot_inside_span(end - 1, lo, hi))
+        {
+            continue;
+        }
         let buy_share: f64 = if c.close >= c.open { 0.62 } else { 0.38 };
         let total = f64::from(c.quote_volume) / parts as f64;
-        let first = (c.t_open_ms as i64).div_euclid(SIDE_BUCKET_MS);
-        for i in 0..parts {
-            let id = first + i;
-            if !keep(id) {
+        for id in first..end {
+            if covered.iter().any(|&(lo, hi)| slot_inside_span(id, lo, hi)) {
                 continue;
             }
             slots.push(Slot {

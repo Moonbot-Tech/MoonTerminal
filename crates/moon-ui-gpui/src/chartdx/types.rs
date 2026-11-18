@@ -3,7 +3,7 @@
 
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_core::data::PriceLinePoint;
-use moon_core::feed::{PricePoint, Side, Tick};
+use moon_core::feed::{PricePoint, Tick};
 
 /// Convert sRGB `[u8; 3]` to `[f32; 4]` with alpha one for cbuffer colors converted to linear by shaders.
 pub fn rgb4(c: [u8; 3]) -> [f32; 4] {
@@ -42,20 +42,7 @@ pub fn unpack_rgb(packed: u32) -> [u8; 3] {
     [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8]
 }
 
-/// Fill the GPU trade-cross buffer from ticks, converting time relative to the epoch.
-pub fn fill_cross_upload(ticks: &[Tick], epoch_ms: f64, out: &mut Vec<ChartCross>) {
-    out.clear();
-    out.reserve(ticks.len());
-    out.extend(ticks.iter().map(|t| ChartCross {
-        time_rel: (t.time_ms - epoch_ms) as f32,
-        price: t.price,
-        side: match t.side {
-            Side::Buy => 0,
-            Side::Sell => 1,
-        },
-        qty: t.qty.max(0.0),
-    }));
-}
+pub use moon_chart::layers::fill_cross_upload;
 
 /// Fill the GPU LIQUIDATION trade-cross buffer from ticks.
 ///

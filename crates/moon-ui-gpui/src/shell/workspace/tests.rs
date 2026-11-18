@@ -1,5 +1,432 @@
 //! Regression tests for Auto-workspace Shell presentation policy.
 
+use super::super::status_bar::{StatusInputs, StatusMemo, StatusModel};
+use super::{RailInputs, RailMemo, RailModel};
+use crate::test_support::{
+    bench::measure,
+    fixtures::{EPOCH_MS, PanelFixture},
+};
+use moon_core::session::{ConnDown, ConnSummary, LicenseSummary, ReportSyncRow};
+use std::{collections::HashMap, rc::Rc};
+
+/// Build fixture rows with the same canonical input assembler and flattening as the live rail.
+fn build_test_rail<'a>(
+    input: &RailInputs<'a>,
+    live: impl IntoIterator<Item = (u64, &'a str)>,
+) -> RailModel {
+    let order = moon_core::session::core_order::CoreOrder::new(input.config);
+    let rows = super::rail_inputs(
+        &input.config.servers,
+        &order,
+        live,
+        |id| input.store.core(id),
+        |server| input.venues.get(&server.id).cloned(),
+        |group, server, live| {
+            let mut availability = rail_availability(group, server, live);
+            if let Some(server) = server {
+                availability = (input.availability)(server);
+                availability.live_session = live;
+            }
+            availability
+        },
+        |server| {
+            input
+                .grouping
+                .by_server
+                .then(|| super::core_machine(server, input.store.core(server.id)))
+                .flatten()
+        },
+    );
+    let roster = crate::workspace::derive_workspace_roster(
+        &rows,
+        input.group,
+        input.selected,
+        input.config.servers.len(),
+        input.grouping,
+    );
+    let mut items = vec![RailItem::Overview {
+        selected: roster.overview_selected,
+    }];
+    super::append_roster_items(
+        &mut items,
+        roster.servers,
+        |server| match server {
+            crate::workspace::RosterServer::Address(address) => {
+                let label = input
+                    .server_names
+                    .get(&address.to_string())
+                    .map_or("Server", String::as_str);
+                (label.to_owned().into(), "1".into())
+            }
+            crate::workspace::RosterServer::Unknown => ("Unknown".into(), "?".into()),
+        },
+        |_| "1".into(),
+        |_| None,
+    );
+    RailModel {
+        items: items.into(),
+        summary: roster.summary,
+    }
+}
+
+/// Supply aligned fixture facts to the rail memo for a single group.
+fn test_rail_inputs<'a>(
+    fixture: &'a PanelFixture,
+    venues: &'a HashMap<u64, moon_core::venue::CoreVenue>,
+    names: &'a HashMap<String, String>,
+) -> RailInputs<'a> {
+    RailInputs {
+        config: &fixture.config,
+        store: &fixture.store,
+        venues,
+        group: &fixture.sessions[0].group,
+        selected: None,
+        grouping: crate::workspace::RosterGrouping::default(),
+        server_names: names,
+        availability: &|server| rail_availability(&server.group, Some(server), false),
+        locale: "en",
+        logos_ready: false,
+    }
+}
+
+/// Apply the real status presentation builder to synthetic connection and license summaries.
+fn build_test_status(input: &StatusInputs<'_>, fixture: &PanelFixture) -> StatusModel {
+    let mut conn = ConnSummary {
+        total: 0,
+        ready: 0,
+        down: Vec::new(),
+        report_sync: Vec::new(),
+    };
+    let mut license = LicenseSummary::default();
+    for session in fixture.sessions.iter().filter(|s| s.group == input.group) {
+        conn.total += 1;
+        let core = input.store.core(session.id).unwrap();
+        if core.status == ConnStatus::Ready {
+            conn.ready += 1;
+            if let Some(progress) = core.report_sync {
+                conn.report_sync.push(ReportSyncRow {
+                    id: session.id,
+                    name: session.name.clone(),
+                    progress,
+                });
+            }
+        } else {
+            conn.down.push(ConnDown {
+                id: session.id,
+                name: session.name.clone(),
+                status: core.status.clone(),
+                fault: core.fault.clone(),
+                startup: core.startup,
+            });
+        }
+        if let Some(state) = core.license {
+            license.known += 1;
+            license.paid += usize::from(state.paid_version);
+            license.free += usize::from(!state.paid_version);
+        }
+    }
+    license.total = conn.total;
+    StatusModel::build(input, conn, license)
+}
+
+/// Supply one group's status, using a fixed clock unless the test advances it.
+fn test_status_inputs(fixture: &PanelFixture) -> StatusInputs<'_> {
+    StatusInputs {
+        config: &fixture.config,
+        store: &fixture.store,
+        group: &fixture.sessions[0].group,
+        locale: "en",
+        now_ms: EPOCH_MS,
+    }
+}
+
+/// Look up model rows from the same unmodified fixture on each simulated draw.
+fn cached_test_rail(
+    memo: &mut RailMemo,
+    input: &RailInputs<'_>,
+    fixture: &PanelFixture,
+) -> Rc<RailModel> {
+    let live = fixture.sessions.iter().map(|s| (s.id, s.group.as_str()));
+    memo.resolve(input, live.clone(), || build_test_rail(input, live))
+}
+
+/// Look up status from the same group fixture on each simulated draw.
+fn cached_test_status(
+    memo: &mut StatusMemo,
+    input: &StatusInputs<'_>,
+    fixture: &PanelFixture,
+) -> Rc<StatusModel> {
+    let sessions = fixture
+        .sessions
+        .iter()
+        .filter(|row| row.group == input.group)
+        .map(|s| (s.id, s.name.as_str()));
+    memo.resolve(input, sessions, || build_test_status(input, fixture))
+}
+
+/// Time the warmed rail memo and its allocation-free live comparison.
+#[test]
+#[ignore = "synthetic 60-core rail timing"]
+fn bench_s_shell_rail_model_60() {
+    let fixture = PanelFixture::connecting_fleet();
+    let venues = HashMap::new();
+    let names = HashMap::new();
+    let input = test_rail_inputs(&fixture, &venues, &names);
+    let mut memo = RailMemo::default();
+    measure("shell_rail_model_60", 500, || {
+        cached_test_rail(&mut memo, &input, &fixture)
+    });
+}
+
+/// Time the warmed status memo with 40 cores connecting or failing.
+#[test]
+#[ignore = "synthetic 60-core connection status timing"]
+fn bench_s_status_bar_connect_60() {
+    let _locale = crate::test_locale::force("en");
+    let fixture = PanelFixture::connecting_fleet();
+    let input = test_status_inputs(&fixture);
+    let mut memo = StatusMemo::default();
+    measure("status_bar_connect_60", 500, || {
+        cached_test_status(&mut memo, &input, &fixture)
+    });
+}
+
+/// Time rail and status models with the clock popover closed, without constructing Backend.
+#[test]
+#[ignore = "partial synthetic 60-core Shell model timing"]
+fn bench_s_shell_root_draw_60() {
+    let _locale = crate::test_locale::force("en");
+    let fixture = PanelFixture::connecting_fleet();
+    let venues = HashMap::new();
+    let names = HashMap::new();
+    let rail = test_rail_inputs(&fixture, &venues, &names);
+    let status = test_status_inputs(&fixture);
+    let mut rail_memo = RailMemo::default();
+    let mut status_memo = StatusMemo::default();
+    measure("shell_root_draw_60_partial", 500, || {
+        (
+            cached_test_rail(&mut rail_memo, &rail, &fixture),
+            cached_test_status(&mut status_memo, &status, &fixture),
+        )
+    });
+}
+
+/// Compare every virtual item and count against a fresh build, and prove the memo really hits.
+fn assert_rail_parity(
+    memo: &mut RailMemo,
+    input: &RailInputs<'_>,
+    fixture: &PanelFixture,
+    previous: Option<&Rc<RailModel>>,
+) -> Rc<RailModel> {
+    let cached = cached_test_rail(memo, input, fixture);
+    let fresh = build_test_rail(
+        input,
+        fixture.sessions.iter().map(|s| (s.id, s.group.as_str())),
+    );
+    assert_eq!(cached.summary, fresh.summary);
+    assert!(cached.items == fresh.items);
+    if let Some(previous) = previous {
+        assert!(
+            !Rc::ptr_eq(previous, &cached),
+            "changed rail input reused stale model"
+        );
+    }
+    assert!(Rc::ptr_eq(&cached, &cached_test_rail(memo, input, fixture)));
+    cached
+}
+
+/// Changing config, diagnostics, session membership, selection or presentation invalidates rail rows.
+#[test]
+fn rail_memo_matches_fresh_model_across_input_changes() {
+    use moon_core::config::{CoreSortMode, Secret, TransportVersion, WorkspaceMembership};
+    use moon_core::feed::{ConnFault, ConnFaultKind, CoreEndpoint, CoreStartupState};
+
+    let mut fixture = PanelFixture::connecting_fleet();
+    let mut venues = HashMap::new();
+    let mut names = HashMap::new();
+    let mut memo = RailMemo::default();
+    let mut model = assert_rail_parity(
+        &mut memo,
+        &test_rail_inputs(&fixture, &venues, &names),
+        &fixture,
+        None,
+    );
+    let edits: &[fn(&mut PanelFixture)] = &[
+        |f| f.config.core_sort = CoreSortMode::AddedNewest,
+        |f| f.config.servers[0].uid = 67,
+        |f| f.config.servers[0].name = "CORE_RENAMED".into(),
+        |f| f.config.servers[0].transport = Some(TransportVersion::V2),
+        |f| f.config.servers[0].key = Secret::new("synthetic invalid key"),
+        |f| f.config.servers[0].active = false,
+        |f| f.config.servers[1].workspace_membership = WorkspaceMembership::ClassicOnly,
+        |f| f.config.servers[2].group = "UNIT_02".into(),
+        |f| f.sessions[3].group = "UNIT_02".into(),
+        |f| {
+            f.sessions.pop();
+        },
+        |f| f.config.servers.swap(0, 1),
+        |f| {
+            f.config.servers.pop();
+        },
+        |f| f.store.core_mut(21).unwrap().status = ConnStatus::Ready,
+        |f| f.store.core_mut(22).unwrap().startup.state = CoreStartupState::Failed,
+        |f| {
+            let core = f.store.core_mut(22).unwrap();
+            core.fault = Some(ConnFault {
+                kind: ConnFaultKind::KeyUnparsable { empty: true },
+                identity: Default::default(),
+                startup: core.startup,
+            });
+        },
+        |f| f.store.core_mut(20).unwrap().status = ConnStatus::Stage("initializing".into()),
+    ];
+    for edit in edits {
+        edit(&mut fixture);
+        model = assert_rail_parity(
+            &mut memo,
+            &test_rail_inputs(&fixture, &venues, &names),
+            &fixture,
+            Some(&model),
+        );
+    }
+
+    venues.insert(
+        4,
+        moon_core::venue::CoreVenue::from_id(moon_core::feed::ExchangeId::new(1)),
+    );
+    model = assert_rail_parity(
+        &mut memo,
+        &test_rail_inputs(&fixture, &venues, &names),
+        &fixture,
+        Some(&model),
+    );
+    let mut input = test_rail_inputs(&fixture, &venues, &names);
+    input.selected = Some(4);
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    input.group = "UNIT_02";
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    input.availability = &|server| crate::workspace::WorkspaceCoreAvailability {
+        group_active: false,
+        core_active: server.active,
+        live_session: false,
+        window: crate::workspace::WorkspaceWindowState::Opening,
+    };
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    input.logos_ready = true;
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    input.locale = "ru";
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    input.grouping.by_exchange = false;
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    input.grouping.by_server = true;
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+
+    let mut input = test_rail_inputs(&fixture, &venues, &names);
+    input.grouping.by_server = true;
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    fixture.store.core_mut(4).unwrap().endpoint = Some(CoreEndpoint {
+        address: "192.0.2.14".parse().unwrap(),
+        port: 1001,
+    });
+    let mut input = test_rail_inputs(&fixture, &venues, &names);
+    input.grouping.by_server = true;
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    names.insert("192.0.2.14".into(), "UNIT_03".into());
+    let mut input = test_rail_inputs(&fixture, &venues, &names);
+    input.grouping.by_server = true;
+    model = assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+    fixture.config.servers[5].endpoint_override = "192.0.2.15".into();
+    let mut input = test_rail_inputs(&fixture, &venues, &names);
+    input.grouping.by_server = true;
+    assert_rail_parity(&mut memo, &input, &fixture, Some(&model));
+}
+
+/// Compare the connection text, catch-up and license state with the uncached builder.
+fn assert_status_parity(
+    memo: &mut StatusMemo,
+    input: &StatusInputs<'_>,
+    fixture: &PanelFixture,
+    previous: Option<&Rc<StatusModel>>,
+) -> Rc<StatusModel> {
+    let cached = cached_test_status(memo, input, fixture);
+    assert_eq!(*cached, build_test_status(input, fixture));
+    if let Some(previous) = previous {
+        assert!(
+            !Rc::ptr_eq(previous, &cached),
+            "changed status input reused stale model"
+        );
+    }
+    assert!(Rc::ptr_eq(
+        &cached,
+        &cached_test_status(memo, input, fixture)
+    ));
+    cached
+}
+
+/// Invalidate the diagnosis on connection changes and exactly when report catch-up becomes visible.
+#[test]
+fn status_memo_matches_fresh_diagnostics_across_input_changes() {
+    use moon_core::config::{CoreSortMode, Secret, TransportVersion};
+    use moon_core::feed::{
+        ConnFault, ConnFaultKind, CoreStartupState, LicenseState, ReportSyncProgress,
+    };
+
+    let _locale = crate::test_locale::force("en");
+    let mut fixture = PanelFixture::connecting_fleet();
+    let mut memo = StatusMemo::default();
+    let mut model = assert_status_parity(&mut memo, &test_status_inputs(&fixture), &fixture, None);
+    let edits: &[fn(&mut PanelFixture)] = &[
+        |f| f.config.core_sort = CoreSortMode::AddedNewest,
+        |f| f.config.servers[0].name = "CORE_RENAMED".into(),
+        |f| f.config.servers[0].uid = 67,
+        |f| f.config.servers[0].transport = Some(TransportVersion::V2),
+        |f| f.config.servers[0].key = Secret::new("synthetic invalid key"),
+        |f| f.sessions[21].name = "CORE_DOWN".into(),
+        |f| f.sessions[22].group = "UNIT_02".into(),
+        |f| f.store.core_mut(21).unwrap().status = ConnStatus::Ready,
+        |f| f.store.core_mut(22).unwrap().startup.state = CoreStartupState::Failed,
+        |f| {
+            let core = f.store.core_mut(22).unwrap();
+            core.fault = Some(ConnFault {
+                kind: ConnFaultKind::KeyUnparsable { empty: true },
+                identity: Default::default(),
+                startup: core.startup,
+            });
+        },
+        |f| {
+            f.store.core_mut(2).unwrap().license = Some(LicenseState {
+                paid_version: true,
+                ..LicenseState::default()
+            })
+        },
+        |f| f.store.core_mut(2).unwrap().report_sync = Some(ReportSyncProgress::started(EPOCH_MS)),
+    ];
+    for edit in edits {
+        edit(&mut fixture);
+        model = assert_status_parity(
+            &mut memo,
+            &test_status_inputs(&fixture),
+            &fixture,
+            Some(&model),
+        );
+    }
+    assert!(model.sync_value.is_none());
+    let mut input = test_status_inputs(&fixture);
+    input.now_ms += 1_999;
+    assert!(Rc::ptr_eq(
+        &model,
+        &cached_test_status(&mut memo, &input, &fixture)
+    ));
+    input.now_ms += 1;
+    model = assert_status_parity(&mut memo, &input, &fixture, Some(&model));
+    assert!(model.sync_value.is_some());
+    input.locale = "ru";
+    rust_i18n::set_locale("ru");
+    model = assert_status_parity(&mut memo, &input, &fixture, Some(&model));
+    input.group = "UNIT_02";
+    assert_status_parity(&mut memo, &input, &fixture, Some(&model));
+}
+
 /// Reintroducing unconditional ranking wastes a fleet scan on empty and singleton lists.
 #[test]
 fn status_lists_skip_rank_table_when_nothing_to_order() {
@@ -31,13 +458,15 @@ fn status_lists_skip_rank_table_when_nothing_to_order() {
     }
 }
 
-/// Backend-free Shell construction contract prevents moving index creation into the row loop.
+/// The status memo still uses one fleet index per build, outside the down-core loop.
 #[test]
-fn shell_status_builds_one_fleet_index_per_render() {
+fn shell_status_builds_one_fleet_index_per_model_build() {
+    let status = include_str!("../status_bar.rs");
     let render = include_str!("../render.rs");
-    assert_eq!(render.matches("FleetModeIndex::new(").count(), 1);
-    assert!(render.contains("if conn.down.is_empty()"));
-    assert!(!render.contains("crate::conn_diag::fleet_mode_suggestion("));
+    assert_eq!(status.matches("FleetModeIndex::new(").count(), 1);
+    assert!(status.contains("if conn.down.is_empty()"));
+    assert!(!status.contains("crate::conn_diag::fleet_mode_suggestion("));
+    assert!(render.contains("self.status_model.resolve("));
 }
 
 /// Restoring per-row advice or bypassing rail_inputs disconnects the indexed production path.

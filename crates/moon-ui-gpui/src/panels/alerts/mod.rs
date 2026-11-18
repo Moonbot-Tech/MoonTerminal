@@ -815,6 +815,8 @@ impl Focusable for AlertsPanel {
 impl Panel for AlertsPanel {
     /// Coalesces hidden-tab work into one rebuild when the panel becomes visible.
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "alerts")
+            .with_window(|| _window.window_handle().window_id().as_u64());
         if self.gate.set_active(active) {
             self.reload(cx);
             cx.notify();
@@ -907,6 +909,8 @@ impl Render for AlertsPanel {
     /// Returns:
     ///     The complete Alerts panel element tree.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "alerts")
+            .with_window(|| _window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::ALERTS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::ALERTS_RENDER_US);
         let p = MoonPalette::active(cx);

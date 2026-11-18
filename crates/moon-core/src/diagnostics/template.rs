@@ -204,6 +204,19 @@ ENV: MOON_RENDER_DIAG=1",
     },
     KeyDoc {
         section: "channels",
+        key: "ui_stall",
+        default: "false",
+        doc: "\
+UI stall probe -> `logs/ui_stall.log`: every UI-thread frame, window open, panel switch or
+handler that took longer than `limits.ui_stall_ms`, with the panel/window/action it was doing.
+Chart-frame contributors are matched by time and are not bound to a window.
+Answers \"the terminal hitched when I opened X\".
+COST: low. One relaxed atomic load per probed site while off; when on, a clock read per site and
+one write per second.
+ENV: MOON_UI_STALL_DIAG=1",
+    },
+    KeyDoc {
+        section: "channels",
         key: "detect",
         default: "false",
         doc: "\
@@ -393,6 +406,12 @@ on a busy account the requests arrive several times a second.",
 Minimum gap between two market-trace lines about the same subject, in milliseconds. Only
 meaningful while `markets` is on. The order-book pull runs five times a second, so without this
 floor the channel would emit at that rate per market.",
+    },
+    KeyDoc {
+        section: "limits",
+        key: "ui_stall_ms",
+        default: "8",
+        doc: "UI stall threshold in milliseconds. Defaults to 8 ms, approximately one frame at 120 Hz. Clamped to 4..=1000.",
     },
 ];
 

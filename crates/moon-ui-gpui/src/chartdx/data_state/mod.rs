@@ -4,6 +4,44 @@
 
 use super::*;
 
+#[cfg(test)]
+impl ChartEngine {
+    /// Prepare one app-owned CPU frame from sibling-module benchmark fixtures.
+    pub(crate) fn prepare_frame_for_tests(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
+        self.data.borrow_mut().frame(info)
+    }
+
+    /// Build the same orders-pass trade geometry when a headless frame has no session.
+    pub(crate) fn trade_geometry_for_tests(
+        &self,
+        core: CoreId,
+        lines_drawn: Option<&[f64]>,
+        (start, end): (f64, f64),
+    ) -> (
+        trade_history_sync::TradeGeometry,
+        Vec<moon_chart::layers::MarkerInstance>,
+        Vec<moon_chart::layers::SegInstance>,
+    ) {
+        let data = self.data.borrow();
+        let mut layout = self.container.borrow_mut();
+        let view = &mut layout.panes_mut()[0].view;
+        // A headless frame without market rows may not consume the pending camera request.
+        view.show_time_range(start, end, 1_000.0, 0.0);
+        let mut markers = Vec::new();
+        let mut segs = Vec::new();
+        let geometry = data.append_trade_history_geometry(
+            0,
+            core,
+            view,
+            &mut markers,
+            &mut segs,
+            lines_drawn,
+            &mut None,
+        );
+        (geometry, markers, segs)
+    }
+}
+
 pub(in crate::chartdx) struct ChartDataState {
     pub(in crate::chartdx) container: Rc<RefCell<Container>>,
     pub(in crate::chartdx) render: Rc<RefCell<RenderState>>,
@@ -90,6 +128,8 @@ pub(in crate::chartdx) struct ChartDataState {
     pub(in crate::chartdx) news_hovered: Option<usize>,
     /// Durable closed trades for this exact Main chart target.
     pub(in crate::chartdx) trade_history: std::rc::Rc<Vec<moon_core::db::ChartTradeRecord>>,
+    /// Optional frozen projection keyed to the exact raw rows and report axis.
+    pub(in crate::chartdx) prepared_trade_rows: Option<trade_history_sync::PreparedTradeRows>,
     /// Cores the panel admitted for `trade_history`, or `None` when no set was handed over.
     ///
     /// `None` draws own-core only: no history load has published a set, the target was cleared, or

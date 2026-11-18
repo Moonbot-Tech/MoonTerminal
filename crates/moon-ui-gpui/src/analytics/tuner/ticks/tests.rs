@@ -2,6 +2,107 @@ use std::time::Duration;
 
 use super::fetch_wait_text;
 
+/// Deals viewport with the production row builder and no trade-opening callback.
+struct BenchDeals {
+    rows: std::rc::Rc<Vec<super::DealRow>>,
+    scroll: moon_ui::MoonVirtualListScrollHandle,
+    visited: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl gpui::Render for BenchDeals {
+    /// Resolve the same deal elements as the app for the range requested by the virtual list.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        let rows = self.rows.clone();
+        let visited = self.visited.clone();
+        let palette = moon_ui::MoonPalette::active(cx);
+        let row_h = super::deal_row_h(cx);
+        let scale = crate::design::ui_value(cx, 1.0);
+        let admission = super::tail::Admission::at(0, crate::test_support::fixtures::EPOCH_MS);
+        let action: super::DealAction = std::rc::Rc::new(|_, _, _, _| {});
+        assert_eq!(rows.len(), 5000);
+        let list =
+            moon_ui::MoonVirtualList::new("bench-deals", rows.len(), row_h, move |ix, _, app| {
+                visited.set(visited.get().max(ix + 1));
+                super::deal_row(
+                    &rows[ix],
+                    false,
+                    super::PlanCell(None),
+                    action.clone(),
+                    false,
+                    palette,
+                    scale,
+                    row_h,
+                    &admission,
+                    app,
+                )
+            })
+            .track_scroll(&self.scroll)
+            .surface(false)
+            .border(false)
+            .radius(0.0);
+        gpui::div().size_full().child(list)
+    }
+}
+
+/// Time the draw after moving a populated Deals list by one viewport.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_deals_scroll_step_5k() {
+    use crate::test_support::{bench, fixtures};
+    use gpui::{ScrollStrategy, px, size};
+    use std::{cell::Cell, rc::Rc};
+
+    fixtures::on_visual_stack(|| {
+        const HEIGHT: f32 = 600.0;
+        let mut app = fixtures::visual_app();
+        let rows = Rc::new(
+            fixtures::deals(5000)
+                .into_iter()
+                .map(|deal| super::DealRow {
+                    deal,
+                    tape: super::state::TapeStatus::NoAddress,
+                    verdict: None,
+                    address: None,
+                    ticks: None,
+                    entry_line: None,
+                    held: None,
+                })
+                .collect(),
+        );
+        let scroll = moon_ui::MoonVirtualListScrollHandle::new();
+        let visited = Rc::new(Cell::new(0));
+        let probe = BenchDeals {
+            rows,
+            scroll: scroll.clone(),
+            visited: visited.clone(),
+        };
+        let window = app.open_window(size(px(1280.0), px(HEIGHT)), move |_, _| probe);
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), &app);
+        let step = visual.update(|window, cx| {
+            let _ = window.draw(cx);
+            (HEIGHT / super::deal_row_h(cx)) as usize
+        });
+        assert!(visited.get() >= step && visited.get() < 2 * step);
+        let mut target = step;
+        bench::measure("deals_scroll_step_5k_warm_viewport_draw", 24, || {
+            visited.set(0);
+            scroll.scroll_to_item_strict(target, ScrollStrategy::Top);
+            visual.update(|window, cx| {
+                window.refresh();
+                let _ = window.draw(cx);
+            });
+            assert!(visited.get() > target);
+            assert!(visited.get() < target + 2 * step);
+            target = step - target;
+        });
+    });
+}
+
 /// Localizing the variant marker or reverting the current heading makes the grid disagree with KPI.
 #[test]
 fn livefix_tick_headings_match_the_shared_vocabulary() {

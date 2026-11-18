@@ -569,6 +569,7 @@ fn open_bound(
     );
     opts.display_id = display_id;
     let b = backend.clone();
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "core-expert");
     let created = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| CoreExpertView::new(b.clone(), &bind, window, cx));
@@ -584,6 +585,7 @@ fn open_bound(
             )
         })
     });
+    drop(open_span);
     match created {
         Ok(handle) => {
             backend.update(cx, |bk, _| bk.core_expert_window = Some(handle));

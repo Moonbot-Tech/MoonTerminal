@@ -11,6 +11,7 @@
 //! cluster snapshot uploaded for hit-testing.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_chart::trade_marks::{self, TradeCluster, TradeMark};
@@ -163,7 +164,7 @@ pub(crate) struct TradeGeometry {
     /// indices back to the panel's record list. Carrying the map rather than a record id also
     /// sidesteps the legacy rows whose id column collapses to `0`, which cannot tell two trades
     /// apart at all.
-    pub sources: Rc<[usize]>,
+    pub sources: Arc<[usize]>,
     /// `clusters` indices ascending by time, so a hit test visits only the arrows near the cursor.
     pub order_by_t: Vec<u32>,
     /// Index of the first arrow in the pane's userdata marker union: cluster `i` is marker
@@ -194,11 +195,53 @@ pub(crate) enum TradeHoverChange {
 pub(crate) struct TradeSource {
     /// What the marks were built from; see `append_trade_history_geometry`.
     key: u64,
-    marks: Vec<TradeMark>,
+    marks: Arc<[TradeMark]>,
     /// Record-list index of each mark, as `TradeGeometry::sources`.
-    sources: Rc<[usize]>,
-    sorted: trade_marks::SortedActions,
+    sources: Arc<[usize]>,
+    sorted: Arc<trade_marks::SortedActions>,
 }
+
+/// Camera-independent projection of an exact-core trade window's full history.
+pub(crate) struct PreparedTradeHistory {
+    axis: moon_core::db::ReportAxis,
+    core: CoreId,
+    source: TradeSource,
+}
+
+impl PreparedTradeHistory {
+    /// Lift report stamps and sort the actions before handing the snapshot to GPUI.
+    pub(crate) fn new(
+        records: &[ChartTradeRecord],
+        core: CoreId,
+        axis: moon_core::db::ReportAxis,
+    ) -> Self {
+        debug_assert!(records.iter().all(|record| record.core_uid == core));
+        let marks = records
+            .iter()
+            .map(|record| trade_mark_with(record, &axis, true, true))
+            .collect::<Vec<_>>();
+        let sources = (0..marks.len()).collect::<Arc<[_]>>();
+        let sorted = Arc::new(trade_marks::sort_actions(&trade_marks::explode_actions(
+            &marks,
+        )));
+        Self {
+            axis,
+            core,
+            source: TradeSource {
+                key: 0,
+                marks: marks.into(),
+                sources,
+                sorted,
+            },
+        }
+    }
+}
+
+/// Tie a frozen projection to the exact allocation published through the chart panel.
+pub(in crate::chartdx) type PreparedTradeRows = (
+    std::rc::Weak<Vec<ChartTradeRecord>>,
+    Rc<PreparedTradeHistory>,
+);
 
 /// The time span a pane's trade geometry is built over, keyed so it moves only in coarse steps.
 ///
@@ -279,7 +322,15 @@ impl ChartDataState {
     /// Returns:
     ///     Whether the record set changed.
     pub(super) fn set_trade_history(&mut self, records: Rc<Vec<ChartTradeRecord>>) -> bool {
-        if Rc::ptr_eq(&self.trade_history, &records) || self.trade_history == records {
+        if Rc::ptr_eq(&self.trade_history, &records) {
+            return false;
+        }
+        if self.trade_history == records {
+            if let Some((rows, _)) = &mut self.prepared_trade_rows
+                && rows.as_ptr() == Rc::as_ptr(&records)
+            {
+                *rows = Rc::downgrade(&self.trade_history);
+            }
             return false;
         }
         self.trade_history = records;
@@ -561,7 +612,7 @@ impl ChartDataState {
         TradeGeometry {
             order_by_t: trade_marks::order_by_time(&clusters),
             clusters,
-            sources: Rc::clone(&source.sources),
+            sources: Arc::clone(&source.sources),
             marker_offset,
             ctx: Some(ctx),
             span: window,
@@ -578,6 +629,29 @@ impl ChartDataState {
     /// Returns:
     ///     The pane's retained trade source.
     fn trade_source(&self, core: CoreId, lines_drawn: Option<&[f64]>, key: u64) -> TradeSource {
+        let prepared = self
+            .prepared_trade_rows
+            .as_ref()
+            .and_then(|(rows, prepared)| {
+                (rows.as_ptr() == Rc::as_ptr(&self.trade_history)
+                    && prepared.axis.same_offsets(&self.report_axis)
+                    && prepared.core == core
+                    && self.trade_history_cores.is_none()
+                    && !self.draws_live_market())
+                .then_some(&prepared.source)
+            });
+        if let Some(prepared) = prepared
+            && lines_drawn.is_none()
+            && self.chart_graphics.show_real_trades
+            && self.chart_graphics.show_emulator_trades
+        {
+            return TradeSource {
+                key,
+                marks: prepared.marks.clone(),
+                sources: prepared.sources.clone(),
+                sorted: prepared.sorted.clone(),
+            };
+        }
         // One sort for the whole history. The twin test used to scan every retained close for
         // every row, on the UI thread, each time this source was rebuilt. The frozen viewer
         // answers the same window against the store's own closes.
@@ -617,7 +691,14 @@ impl ChartDataState {
                     {
                         (true, true)
                     } else if let Some(drawn) = drawn_index.as_ref() {
-                        self.archived_line_ends(record, drawn)
+                        if let Some(source) = prepared {
+                            self.frozen_archived_line_ends(
+                                record,
+                                drawn.contains(source.marks[index].close_ms),
+                            )
+                        } else {
+                            self.archived_line_ends(record, drawn)
+                        }
                     } else {
                         (false, false)
                     }
@@ -629,20 +710,38 @@ impl ChartDataState {
                 }
                 // Built in the same pass as the marks, so the two lists cannot fall out of step.
                 sources.push(index);
-                Some(trade_mark_with(
-                    record,
-                    &self.report_axis,
-                    !entry_lined,
-                    !exit_lined,
-                ))
+                let mut mark = prepared.map_or_else(
+                    || trade_mark_with(record, &self.report_axis, true, true),
+                    |source| source.marks[index],
+                );
+                mark.show_entry = !entry_lined;
+                mark.show_exit = !exit_lined;
+                Some(mark)
             })
             .collect::<Vec<_>>();
-        let sorted = trade_marks::sort_actions(&trade_marks::explode_actions(&marks));
+        let sorted = if let Some(prepared) = prepared {
+            let mut indices = vec![None; self.trade_history.len()];
+            for (mark, &record) in sources.iter().enumerate() {
+                indices[record] = Some(mark);
+            }
+            prepared.sorted.remap(|action| {
+                let index = indices[action.mark]?;
+                let mark = &marks[index];
+                let show = if action.buy != mark.is_short {
+                    mark.show_entry
+                } else {
+                    mark.show_exit
+                };
+                show.then_some(index)
+            })
+        } else {
+            trade_marks::sort_actions(&trade_marks::explode_actions(&marks))
+        };
         TradeSource {
             key,
-            marks,
+            marks: marks.into(),
             sources: sources.into(),
-            sorted,
+            sorted: Arc::new(sorted),
         }
     }
 }

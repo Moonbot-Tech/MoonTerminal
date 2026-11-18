@@ -1,6 +1,161 @@
 //! Responsive rail geometry, flattened items, and deferred topology guards.
 
 use super::*;
+use crate::shell::fleet_model::FleetModelKey;
+use crate::workspace::{RosterGrouping, WorkspaceCoreAvailability, WorkspaceRosterSummary};
+use moon_core::config::{AppConfig, ServerConfig, WorkspaceMembership};
+use moon_core::feed::{ConnFault, CoreStartupStatus};
+use moon_core::session::CoreStore;
+use std::borrow::Cow;
+use std::net::IpAddr;
+
+/// The inputs that affect rail membership, grouping, and the flattened headings.
+pub(in crate::shell) struct RailInputs<'a> {
+    pub(in crate::shell) config: &'a AppConfig,
+    pub(in crate::shell) store: &'a CoreStore,
+    pub(in crate::shell) venues: &'a HashMap<CoreId, CoreVenue>,
+    pub(in crate::shell) group: &'a str,
+    pub(in crate::shell) selected: Option<CoreId>,
+    pub(in crate::shell) grouping: RosterGrouping,
+    pub(in crate::shell) server_names: &'a HashMap<String, String>,
+    pub(in crate::shell) availability: &'a dyn Fn(&ServerConfig) -> WorkspaceCoreAvailability,
+    pub(in crate::shell) locale: &'a str,
+    pub(in crate::shell) logos_ready: bool,
+}
+
+/// Live and configured facts used by one rail item and its group headings.
+#[derive(PartialEq, Eq)]
+struct RailCore<'a> {
+    group: Cow<'a, str>,
+    membership: WorkspaceMembership,
+    availability: WorkspaceCoreAvailability,
+    endpoint_override: Option<Cow<'a, str>>,
+    endpoint: Option<IpAddr>,
+    venue: Option<Cow<'a, CoreVenue>>,
+    status: Option<Cow<'a, ConnStatus>>,
+    fault: Option<Cow<'a, ConnFault>>,
+    startup: Option<CoreStartupStatus>,
+}
+
+impl<'a> RailCore<'a> {
+    /// Borrow each per-core dependency without building a roster row.
+    fn read(inputs: &RailInputs<'a>, server: &'a ServerConfig) -> Self {
+        let core = inputs.store.core(server.id);
+        let by_server = inputs.grouping.by_server;
+        Self {
+            group: Cow::Borrowed(&server.group),
+            membership: server.workspace_membership,
+            availability: (inputs.availability)(server),
+            endpoint_override: by_server
+                .then_some(Cow::Borrowed(server.endpoint_override.as_str())),
+            endpoint: core
+                .filter(|_| by_server)
+                .and_then(|core| core.endpoint)
+                .map(|endpoint| endpoint.address),
+            venue: inputs.venues.get(&server.id).map(Cow::Borrowed),
+            status: core.map(|core| Cow::Borrowed(&core.status)),
+            fault: core.and_then(|core| core.fault.as_ref()).map(Cow::Borrowed),
+            startup: core.map(|core| core.startup),
+        }
+    }
+
+    /// Own only the facts retained across renders.
+    fn into_owned(self) -> RailCore<'static> {
+        RailCore {
+            group: Cow::Owned(self.group.into_owned()),
+            membership: self.membership,
+            availability: self.availability,
+            endpoint_override: self
+                .endpoint_override
+                .map(|value| Cow::Owned(value.into_owned())),
+            endpoint: self.endpoint,
+            venue: self.venue.map(|value| Cow::Owned(value.into_owned())),
+            status: self.status.map(|value| Cow::Owned(value.into_owned())),
+            fault: self.fault.map(|value| Cow::Owned(value.into_owned())),
+            startup: self.startup,
+        }
+    }
+}
+
+/// Per-window memo of the inputs and flattened virtual-list data.
+#[derive(Default)]
+pub(in crate::shell) struct RailMemo(Option<RailCache>);
+
+/// Exact values that produced the cached model, including live membership in original order.
+struct RailCache {
+    fleet: FleetModelKey,
+    cores: Vec<RailCore<'static>>,
+    live: Vec<(CoreId, String)>,
+    group: String,
+    selected: Option<CoreId>,
+    grouping: RosterGrouping,
+    server_names: HashMap<String, String>,
+    locale: String,
+    logos_ready: bool,
+    model: Rc<RailModel>,
+}
+
+/// Virtual items and stable counts, shared across frames while the inputs agree.
+pub(in crate::shell) struct RailModel {
+    pub(in crate::shell) items: Rc<[RailItem]>,
+    pub(in crate::shell) summary: WorkspaceRosterSummary,
+}
+
+impl RailMemo {
+    /// Check borrowed source facts on every draw and rebuild the rail only on a change.
+    pub(in crate::shell) fn resolve<'a>(
+        &mut self,
+        inputs: &RailInputs<'a>,
+        live: impl ExactSizeIterator<Item = (CoreId, &'a str)> + Clone,
+        build: impl FnOnce() -> RailModel,
+    ) -> Rc<RailModel> {
+        let cores = inputs
+            .config
+            .servers
+            .iter()
+            .map(|server| RailCore::read(inputs, server));
+        if let Some(cache) = &self.0
+            && cache.group == inputs.group
+            && cache.selected == inputs.selected
+            && cache.grouping == inputs.grouping
+            && cache.locale == inputs.locale
+            && cache.logos_ready == inputs.logos_ready
+            && (!inputs.grouping.by_server || &cache.server_names == inputs.server_names)
+            && cache.fleet.matches(inputs.config, inputs.store)
+            && cache.live.len() == live.len()
+            && cache
+                .live
+                .iter()
+                .zip(live.clone())
+                .all(|((id, group), (new_id, new_group))| *id == new_id && group == new_group)
+            && cache
+                .cores
+                .iter()
+                .zip(cores.clone())
+                .all(|(old, new)| old == &new)
+        {
+            return cache.model.clone();
+        }
+        let model = Rc::new(build());
+        self.0 = Some(RailCache {
+            fleet: FleetModelKey::capture(inputs.config, inputs.store),
+            cores: cores.map(RailCore::into_owned).collect(),
+            live: live.map(|(id, group)| (id, group.to_owned())).collect(),
+            group: inputs.group.to_owned(),
+            selected: inputs.selected,
+            grouping: inputs.grouping,
+            server_names: if inputs.grouping.by_server {
+                inputs.server_names.clone()
+            } else {
+                HashMap::new()
+            },
+            locale: inputs.locale.to_owned(),
+            logos_ready: inputs.logos_ready,
+            model: model.clone(),
+        });
+        model
+    }
+}
 
 /// Minimum body width reserved for the active Auto dock tab while the rail is dragged.
 const AUTO_DOCK_MIN_WIDTH: f32 = 420.0;
@@ -32,10 +187,10 @@ pub(super) fn icon_workspace_summary(configured: usize) -> String {
 }
 
 /// One flattened virtual-list item in the all-core rail.
-// `Exchange` holds the logo and the core list for one heading. The rail rebuilds these by value.
-#[derive(Clone)]
+// `Exchange` holds the logo and core list for one heading, shared by visible row renders.
+#[derive(Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
-pub(super) enum RailItem {
+pub(in crate::shell) enum RailItem {
     /// Current group aggregate scope.
     Overview { selected: bool },
     /// Machine heading of the optional server grouping, its name resolved before the virtual row

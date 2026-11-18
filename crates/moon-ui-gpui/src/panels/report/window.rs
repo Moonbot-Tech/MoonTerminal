@@ -358,7 +358,8 @@ pub fn open_scoped(
     );
     options.display_id = display.map(|display| display.id());
     let backend_for_window = backend.clone();
-    if let Ok(handle) = cx.open_window(options, move |window, cx| {
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "report");
+    let opened = cx.open_window(options, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let panel = cx.new(|cx| {
             ReportPanel::new_with_scope(backend_for_window.clone(), group, Some(scope), window, cx)
@@ -375,7 +376,9 @@ pub fn open_scoped(
                     .background_policy(moon_ui::MoonBackgroundPolicy::Opaque),
             )
         })
-    }) {
+    });
+    drop(open_span);
+    if let Ok(handle) = opened {
         backend.update(cx, |backend, _| {
             backend.report_window = Some(handle);
         });

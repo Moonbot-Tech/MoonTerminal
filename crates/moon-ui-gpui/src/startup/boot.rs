@@ -696,14 +696,17 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let coord_report_revision = report_revision;
     let coord_persistence = persistence.clone();
     cx.spawn(async move |cx| {
+        use crate::diag::stall::{self, FrameSample, StallKind};
+
         let executor = cx.update(|cx| cx.background_executor().clone());
         let mut report_revision_gate = ReportRevisionGate::new(Instant::now());
         let mut recovery_notice_shown = None;
         let mut last_report = Instant::now();
-        // GPUI times every `Window::draw` itself when frame tracing is on; the collector
-        // hands over the ones recorded since the previous poll. Created before tracing is
-        // enabled, which is harmless — it simply sees nothing until it is.
+        // GPUI times every `Window::draw`; the collector follows the active trace's cursor.
         let mut frame_timings = gpui::FrameTimingCollector::new();
+        let mut render_since = None;
+        let mut stall_since = None;
+        let mut stall_writer = stall::Writer::default();
         // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
         let mut last_assets_rev_sum: u64 = 0;
         loop {
@@ -727,6 +730,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 &crate::diag::COORD_TICK_SLOW,
                 20_000,
             );
+            let stall_tick = stall::span(StallKind::Tick, "coord_tick");
             cx.update(|cx| {
                 if let Some(guard) = &coord_instance
                     && super::instance::poll_activation(guard) {
@@ -968,36 +972,63 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     );
                 }
             });
+            drop(stall_tick);
             drop(tick_us);
             if last_report.elapsed().as_millis() >= 1000 {
                 let ms = last_report.elapsed().as_secs_f64() * 1000.0;
                 last_report = Instant::now();
-                // Follow the render channel, which is live: turning tracing off also clears
-                // GPUI's buffer, so a switch flipped back on cannot report stale frames.
-                let trace_wanted = crate::diag::is_enabled();
-                if gpui::frame_trace_enabled() != trace_wanted {
-                    gpui::set_frame_trace_enabled(trace_wanted);
+                // File metadata and parsing can stall on a slow volume, so poll off the UI thread.
+                let (diagnostics_update, polled_at) = executor
+                    .spawn(async {
+                        let update = moon_core::diagnostics::poll();
+                        (update, Instant::now())
+                    })
+                    .await;
+                let render_enabled = crate::diag::is_enabled();
+                let stall_enabled = stall::enabled();
+                let trace_wanted = render_enabled || stall_enabled;
+                if trace_wanted && gpui::set_frame_trace_enabled(true) {
+                    // Disabling tracing cleared the buffer and reset its sequence counter.
+                    frame_timings = gpui::FrameTimingCollector::new();
                 }
-                if trace_wanted {
-                    for frame in frame_timings.collect_unseen() {
+                render_since = render_enabled.then(|| render_since.unwrap_or(polled_at));
+                let stall_capture = stall_since.or(stall_enabled.then_some(polled_at));
+                if gpui::frame_trace_enabled() {
+                    let frames = frame_timings.collect_unseen();
+                    for frame in frames
+                        .iter()
+                        .filter(|frame| stall::frame_started_since(frame.draw_start, render_since))
+                    {
                         crate::diag::note_frame_draw(
                             frame.draw_duration(),
                             frame.dirty_to_draw_duration(),
                         );
                     }
+                    if stall_capture.is_some() {
+                        stall::note_frames(
+                            frames
+                                .into_iter()
+                                .filter(|frame| {
+                                    stall::frame_started_since(frame.draw_start, stall_capture)
+                                        && (stall_enabled || frame.draw_start < polled_at)
+                                })
+                                .map(|frame| FrameSample {
+                                    window_id: frame.window_id.as_u64(),
+                                    draw_start: frame.draw_start,
+                                    draw_end: frame.draw_end,
+                                }),
+                        );
+                    }
+                    // GPUI clears its frame buffer on disable, so fold the final stall frames first.
+                    if !trace_wanted {
+                        gpui::set_frame_trace_enabled(false);
+                    }
                 }
-                // Pick up an edit to `cfg/diagnostics.toml` without a restart — the state worth
-                // observing is usually the one a restart would destroy.
-                //
-                // On the BACKGROUND executor, never here: this task runs on the foreground thread,
-                // and the file sits beside the executable, on whatever volume that is — a network
-                // share or a synchronised folder turns one `stat` per second into a stall the whole
-                // UI feels. The work is all atomics and a lock, so it is safe off-thread.
-                if let Some(cfg) = cx
-                    .update(|cx| cx.background_executor().clone())
-                    .spawn(async { moon_core::diagnostics::poll() })
-                    .await
-                {
+                stall_since = stall_capture.filter(|_| stall_enabled);
+                // The capture is thread-local. Only the owned batch crosses to the writer.
+                let drained = stall::drain();
+                stall_writer.submit(&executor, drained);
+                if let Some(cfg) = diagnostics_update {
                     moon_core::diagnostics::announce(&cfg);
                 }
                 // Point-in-time context for the diagnostics line: process/system CPU, counts of

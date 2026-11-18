@@ -11,7 +11,7 @@ use crate::panels::orders::{OrdCol, OrderEntry, OrdersViewState, prepare_entries
 fn entry(core: u64, uid: u64, coin: &str, size: f64) -> OrderEntry {
     OrderEntry::new(
         core,
-        &format!("Core {core}"),
+        format!("Core {core}").into(),
         std::sync::Arc::new(OrderRow {
             market: format!("{coin}USDT"),
             market_display: format!("{coin}USDT"),
@@ -263,7 +263,7 @@ fn precomputed_pnl_keys_match_order_math() {
         let pnl = moon_core::feed::order_math::order_pnl(&row.row);
         let pnl_pct = moon_core::feed::order_math::order_pnl_pct(&row.row);
         let pnl_tp = moon_core::feed::order_math::order_pnl_at_tp(&row.row);
-        let rebuilt = OrderEntry::new(row.core, &row.core_name, row.row.clone());
+        let rebuilt = OrderEntry::new(row.core, row.core_name.clone(), row.row.clone());
         assert_eq!(rebuilt.pnl, pnl);
         assert_eq!(rebuilt.pnl_pct, pnl_pct);
         assert_eq!(rebuilt.pnl_tp, pnl_tp);

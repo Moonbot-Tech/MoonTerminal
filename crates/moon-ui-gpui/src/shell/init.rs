@@ -242,6 +242,9 @@ impl Shell {
             &dock,
             window,
             |this, dock, event: &DockEvent, window, cx| {
+                let _stall = matches!(event, DockEvent::LayoutChanged).then(|| {
+                    crate::diag::stall::span(crate::diag::stall::StallKind::Resize, "dock:layout")
+                });
                 let auto = this.backend.read(cx).workspace_mode(&this.group)
                     == moon_core::config::WorkspaceMode::AutoTrading;
                 match event {
@@ -532,6 +535,8 @@ impl Shell {
             auto_only_panels: Vec::new(),
             exchange_logo_prewarm_started: false,
             exchange_logos_ready: false,
+            rail_model: Default::default(),
+            status_model: Default::default(),
             applying_auto_topology: false,
             auto_topology_guard_generation: 0,
             workspace_resize_state,

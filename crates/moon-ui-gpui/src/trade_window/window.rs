@@ -40,24 +40,10 @@ const MAX_WINDOWS: usize = 2;
 ///
 /// Args:
 ///     backend: Shared application state.
-///     record: The clicked trade, already resolved from the durable replica.
-///     meta: What that trade carried beside its prices — the detect line, the strategy, the exit
-///         reason — read in the same background pass as the record itself.
-///     history: All closed neighbours selected from the same Report snapshot.
-///     neighbours: Nearest trace rows, prepared on that snapshot's background reader.
-///     market: Exchange-native market the coin resolved to.
-///     stamps: Entry and exit times, already formatted in the Report's own clock.
+///     seed: The clicked trade and the history prepared on the same background reader.
 ///     cx: Application context.
-pub(crate) fn open_trade_window(
-    backend: &Entity<Backend>,
-    record: ChartTradeRecord,
-    meta: TradeMeta,
-    history: Vec<ChartTradeRecord>,
-    neighbours: Vec<ChartTradeRecord>,
-    market: String,
-    stamps: (String, String),
-    cx: &mut App,
-) {
+pub(crate) fn open_trade_window(backend: &Entity<Backend>, seed: TradeSeed, cx: &mut App) {
+    let record = &seed.record;
     let key = (record.core_uid, record.record_id);
     let open: Vec<((u64, i64), WindowHandle<Root>)> = backend.read(cx).trade_windows.clone();
     if let Some((_, handle)) = open.iter().find(|(k, _)| *k == key) {
@@ -65,7 +51,9 @@ pub(crate) fn open_trade_window(
             window.activate_window();
             root.view().clone().downcast::<TradeWindowView>().ok()
         }) {
-            view.update(cx, |view, cx| view.replace_history(history, cx));
+            view.update(cx, |view, cx| {
+                view.replace_history(seed.history, seed.prepared, cx)
+            });
         }
         return;
     }
@@ -112,7 +100,7 @@ pub(crate) fn open_trade_window(
         Some(fallback),
         cx,
     );
-    let title = format!("MoonTerminal - {} - {}", record.coin, stamps.1);
+    let title = format!("MoonTerminal - {} - {}", record.coin, seed.stamps.1);
     let mut opts = crate::window::windowing::trade_window_options(
         title,
         // The cascade offset is inert while maximized: every trade window then covers the same
@@ -131,14 +119,7 @@ pub(crate) fn open_trade_window(
     // Kept for the failure log below, which the move into the window builder would otherwise take.
     let (coin, record_id) = (record.coin.clone(), record.record_id);
     let owner = backend.clone();
-    let seed = TradeSeed {
-        record,
-        meta,
-        history,
-        neighbours,
-        market,
-        stamps,
-    };
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "trade-window");
     let opened = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_chart_clear_color(window, cx);
         let host = Host::Window {
@@ -153,6 +134,7 @@ pub(crate) fn open_trade_window(
             )
         })
     });
+    drop(open_span);
     match opened {
         Ok(handle) => {
             backend.update(cx, |b, _| b.trade_windows.push((key, handle)));
@@ -173,6 +155,8 @@ pub(crate) struct TradeSeed {
     pub(crate) meta: TradeMeta,
     /// All closed neighbours selected from the same Report snapshot.
     pub(crate) history: Vec<ChartTradeRecord>,
+    /// UTC marks and sorted actions for those same rows, independent of the viewport.
+    pub(crate) prepared: crate::chartdx::trade_history_sync::PreparedTradeHistory,
     /// Nearest trace rows in stable distance order, prepared off the UI thread.
     pub(crate) neighbours: Vec<ChartTradeRecord>,
     /// Exchange-native market the coin resolved to.
@@ -223,6 +207,7 @@ fn new_view(
         record,
         meta,
         history,
+        prepared,
         neighbours,
         market,
         stamps,
@@ -365,6 +350,7 @@ fn new_view(
         ),
         record: record.clone(),
         history: std::rc::Rc::new(history),
+        prepared_history: std::rc::Rc::new(prepared),
         neighbours,
         show_other_trades,
         history_selection: None,

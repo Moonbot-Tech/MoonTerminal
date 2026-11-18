@@ -98,6 +98,8 @@ mod window_sync;
 
 use {rail_item::*, rail_model::*, status::*, topology::*};
 
+pub(super) use rail_model::RailMemo;
+
 pub(super) use topology::{
     auto_workspace_tab_to_persist, auto_workspace_topology_is_persistable, rehome_auto_panel,
     resolved_auto_workspace_tab,
@@ -426,6 +428,8 @@ impl Shell {
         moon_h_resizable(state_id)
             .with_state(&resize_state)
             .on_resize(move |state, _, cx| {
+                let _stall =
+                    crate::diag::stall::span(crate::diag::stall::StallKind::Resize, "splitter");
                 let scale = design::ui_value(cx, 1.0).max(0.01);
                 let Some(width) = state
                     .read(cx)
@@ -473,133 +477,155 @@ impl Shell {
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (roster, prefs, server_order, server_names) = {
-            let backend = self.backend.read(cx);
-            let order = moon_core::session::core_order::CoreOrder::new(&backend.config);
-            let venues = backend.session.core_venues();
-            let store = backend.session.store();
-            let configured_total = backend.config.servers.len();
-            let prefs = rail_settings::RailPrefs::restore(&backend.layout);
-            // Each core's machine, resolved ONCE per render and only while server grouping is on:
-            // the fallback inside `core_machine` decodes a key.
-            let machines: HashMap<CoreId, std::net::IpAddr> = if prefs.group_by_server {
-                backend
-                    .config
-                    .servers
-                    .iter()
-                    .filter_map(|server| {
-                        core_machine(server, store.core(server.id)).map(|ip| (server.id, ip))
-                    })
-                    .collect()
-            } else {
-                HashMap::new()
-            };
-            let inputs = rail_inputs(
-                &backend.config.servers,
-                &order,
-                backend
-                    .session
-                    .sessions()
-                    .iter()
-                    .map(|session| (session.id, session.group.as_str())),
-                |id| store.core(id),
-                |server| venues.get(&server.id).cloned(),
-                |group, server, live| {
-                    backend.workspace_core_availability_resolved(group, server, live)
-                },
-                |server| machines.get(&server.id).copied(),
-            );
-            let roster = crate::workspace::derive_workspace_roster(
-                &inputs,
-                &self.group,
-                backend.valid_auto_workspace_core(&self.group),
-                configured_total,
-                prefs.grouping(),
-            );
-            // The order `Server N` numbers machines in. Feed-reported addresses first, in address
-            // order, across the whole fleet rather than this rail's membership filter: that is
-            // exactly what Core Status ranks when it shows the fleet, so a machine reads the same
-            // number in both. Machines only a configuration names (offline cores) follow them,
-            // numbered after every machine Core Status can show, so they never shift its numbers.
-            let (server_order, server_names) = if prefs.group_by_server {
-                let mut reported: Vec<std::net::IpAddr> = backend
-                    .config
-                    .servers
-                    .iter()
-                    .filter_map(|server| store.core(server.id)?.endpoint)
-                    .map(|endpoint| endpoint.address)
-                    .collect();
-                reported.sort_unstable();
-                reported.dedup();
-                let mut configured: Vec<std::net::IpAddr> = machines
-                    .values()
-                    .copied()
-                    .filter(|ip| reported.binary_search(ip).is_err())
-                    .collect();
-                configured.sort_unstable();
-                configured.dedup();
-                reported.extend(configured);
-                (reported, backend.layout.core_server_names.clone())
-            } else {
-                Default::default()
-            };
-            (roster, prefs, server_order, server_names)
+        let backend = self.backend.read(cx);
+        let prefs = rail_settings::RailPrefs::restore(&backend.layout);
+        let logos_ready = self.exchange_logos_ready;
+        let locale = rust_i18n::locale();
+        let live = backend
+            .session
+            .sessions()
+            .iter()
+            .map(|session| (session.id, session.group.as_str()));
+        let availability = |server: &moon_core::config::ServerConfig| {
+            backend.workspace_core_availability_resolved(&server.group, Some(server), false)
         };
-        let slots = prefs.slots(density);
+        let inputs = RailInputs {
+            config: &backend.config,
+            store: backend.session.store(),
+            venues: backend.session.core_venues(),
+            group: &self.group,
+            selected: backend.valid_auto_workspace_core(&self.group),
+            grouping: prefs.grouping(),
+            server_names: &backend.layout.core_server_names,
+            availability: &availability,
+            locale: locale.as_ref(),
+            logos_ready,
+        };
+        let roster = self
+            .rail_model
+            .borrow_mut()
+            .resolve(&inputs, live.clone(), || {
+                let order = moon_core::session::core_order::CoreOrder::new(&backend.config);
+                let venues = backend.session.core_venues();
+                let store = backend.session.store();
+                let configured_total = backend.config.servers.len();
+                // Each core's machine, resolved on a model miss and only while server grouping is on:
+                // the fallback inside `core_machine` decodes a key.
+                let machines: HashMap<CoreId, std::net::IpAddr> = if prefs.group_by_server {
+                    backend
+                        .config
+                        .servers
+                        .iter()
+                        .filter_map(|server| {
+                            core_machine(server, store.core(server.id)).map(|ip| (server.id, ip))
+                        })
+                        .collect()
+                } else {
+                    HashMap::new()
+                };
+                let roster_inputs = rail_inputs(
+                    &backend.config.servers,
+                    &order,
+                    live,
+                    |id| store.core(id),
+                    |server| venues.get(&server.id).cloned(),
+                    |group, server, live| {
+                        backend.workspace_core_availability_resolved(group, server, live)
+                    },
+                    |server| machines.get(&server.id).copied(),
+                );
+                let roster = crate::workspace::derive_workspace_roster(
+                    &roster_inputs,
+                    &self.group,
+                    inputs.selected,
+                    configured_total,
+                    prefs.grouping(),
+                );
+                // The order `Server N` numbers machines in. Feed-reported addresses first, in address
+                // order, across the whole fleet rather than this rail's membership filter: that is
+                // exactly what Core Status ranks when it shows the fleet, so a machine reads the same
+                // number in both. Machines only a configuration names (offline cores) follow them,
+                // numbered after every machine Core Status can show, so they never shift its numbers.
+                let (server_order, server_names) = if prefs.group_by_server {
+                    let mut reported: Vec<std::net::IpAddr> = backend
+                        .config
+                        .servers
+                        .iter()
+                        .filter_map(|server| store.core(server.id)?.endpoint)
+                        .map(|endpoint| endpoint.address)
+                        .collect();
+                    reported.sort_unstable();
+                    reported.dedup();
+                    let mut configured: Vec<std::net::IpAddr> = machines
+                        .values()
+                        .copied()
+                        .filter(|ip| reported.binary_search(ip).is_err())
+                        .collect();
+                    configured.sort_unstable();
+                    configured.dedup();
+                    reported.extend(configured);
+                    (reported, backend.layout.core_server_names.clone())
+                } else {
+                    Default::default()
+                };
+                let mut items = vec![RailItem::Overview {
+                    selected: roster.overview_selected,
+                }];
+                // Linear: a fleet spans a handful of machines, and this runs once per server heading.
+                let ordinal = |address| {
+                    server_order
+                        .iter()
+                        .position(|candidate| *candidate == address)
+                        .map_or(0, |index| index + 1)
+                };
+                append_roster_items(
+                    &mut items,
+                    roster.servers,
+                    |server| match server {
+                        RosterServer::Address(address) => {
+                            let label = crate::panels::server_display_name(
+                                address,
+                                ordinal(address),
+                                &server_names,
+                            );
+                            // Icon density has room for one glyph. Every default name starts "Server", so
+                            // the glyph is its number there; a custom name keeps its own first letter.
+                            let short = if server_names.contains_key(&address.to_string()) {
+                                label.chars().next().unwrap_or('?').to_string()
+                            } else {
+                                ordinal(address).to_string()
+                            };
+                            (SharedString::from(label), SharedString::from(short))
+                        }
+                        RosterServer::Unknown => (
+                            SharedString::from(t!("workspace.server_unknown")),
+                            SharedString::from("?"),
+                        ),
+                    },
+                    // The ordinal, not the address: element ids surface in the UI atlas, and an address
+                    // there would publish where the user's cores live.
+                    |server| match server {
+                        RosterServer::Address(address) => ordinal(address).to_string(),
+                        RosterServer::Unknown => "unknown".to_string(),
+                    },
+                    |venue| {
+                        logos_ready
+                            .then_some(venue)
+                            .flatten()
+                            .and_then(|venue| venue.brand())
+                            .and_then(crate::media::exchange_logos::exchange_logo)
+                    },
+                );
+                RailModel {
+                    items: items.into(),
+                    summary: roster.summary,
+                }
+            });
+        let items = roster.items.clone();
         let run = RailRun {
-            slots,
+            slots: prefs.slots(density),
             exchange_controls: prefs.exchange_controls,
         };
-
-        let mut items = vec![RailItem::Overview {
-            selected: roster.overview_selected,
-        }];
-        let logos_ready = self.exchange_logos_ready;
-        // Linear: a fleet spans a handful of machines, and this runs once per server heading.
-        let ordinal = |address| {
-            server_order
-                .iter()
-                .position(|candidate| *candidate == address)
-                .map_or(0, |index| index + 1)
-        };
-        append_roster_items(
-            &mut items,
-            roster.servers,
-            |server| match server {
-                RosterServer::Address(address) => {
-                    let label = crate::panels::server_display_name(
-                        address,
-                        ordinal(address),
-                        &server_names,
-                    );
-                    // Icon density has room for one glyph. Every default name starts "Server", so
-                    // the glyph is its number there; a custom name keeps its own first letter.
-                    let short = if server_names.contains_key(&address.to_string()) {
-                        label.chars().next().unwrap_or('?').to_string()
-                    } else {
-                        ordinal(address).to_string()
-                    };
-                    (SharedString::from(label), SharedString::from(short))
-                }
-                RosterServer::Unknown => (
-                    SharedString::from(t!("workspace.server_unknown")),
-                    SharedString::from("?"),
-                ),
-            },
-            // The ordinal, not the address: element ids surface in the UI atlas, and an address
-            // there would publish where the user's cores live.
-            |server| match server {
-                RosterServer::Address(address) => ordinal(address).to_string(),
-                RosterServer::Unknown => "unknown".to_string(),
-            },
-            |venue| {
-                logos_ready
-                    .then_some(venue)
-                    .flatten()
-                    .and_then(|venue| venue.brand())
-                    .and_then(crate::media::exchange_logos::exchange_logo)
-            },
-        );
         let item_count = items.len();
         let row_height = design::ui_value(cx, 30.0);
         let backend = self.backend.clone();

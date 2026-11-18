@@ -99,16 +99,27 @@ impl ChartDataState {
         // The same predicate `orders::sync` picks its frozen branch by, so the two passes agree
         // on which rule applies — a store not yet built is still a frozen viewer, whose exits are
         // then lined by nothing.
-        let placed = ReportEntry::of_record(record, &self.report_axis).is_some();
         match self.draws_live_market() {
-            true => line_ends(record, &self.archived_lines, placed),
-            false => frozen_line_ends(
+            true => line_ends(
                 record,
                 &self.archived_lines,
-                placed,
-                self.is_live_twin(record, drawn),
+                ReportEntry::of_record(record, &self.report_axis).is_some(),
             ),
+            false => self.frozen_archived_line_ends(record, self.is_live_twin(record, drawn)),
         }
+    }
+
+    /// Suppress a frozen trade's arrows only when its close matches an order in the store.
+    pub(super) fn frozen_archived_line_ends(
+        &self,
+        record: &ChartTradeRecord,
+        stored: bool,
+    ) -> (bool, bool) {
+        if !stored {
+            return (false, false);
+        }
+        let placed = ReportEntry::of_record(record, &self.report_axis).is_some();
+        frozen_line_ends(record, &self.archived_lines, placed, true)
     }
 
     /// Replace the resolved lines and wake the order pass.

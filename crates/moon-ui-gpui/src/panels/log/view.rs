@@ -17,6 +17,8 @@ impl Render for LogPanel {
     /// Returns:
     ///     The complete responsive Log panel element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "log")
+            .with_window(|| window.window_handle().window_id().as_u64());
         // First line, as every sibling panel does it. Without a render rate, a cost inside this
         // element tree cannot be told apart from one on the revision path — and the whole point of
         // the counters below is telling those two apart.

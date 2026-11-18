@@ -519,7 +519,8 @@ pub fn open(
     );
     opts.display_id = display_id;
     let b = backend.clone();
-    if let Ok(handle) = cx.open_window(opts, move |window, cx| {
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "analytics");
+    let opened = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| AnalyticsView::new(b, window, cx));
         // NoFill: the tuner's trade pane draws a chart UNDER the GPUI scene, and an opaque root
@@ -530,7 +531,9 @@ pub fn open(
                 Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::NoFill),
             )
         })
-    }) {
+    });
+    drop(open_span);
+    if let Ok(handle) = opened {
         backend.update(cx, |bk, _| bk.analytics_window = Some(handle));
         crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
         crate::window::windowing::activate_new_window(handle.into(), cx);

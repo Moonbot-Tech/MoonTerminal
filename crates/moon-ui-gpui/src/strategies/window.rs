@@ -471,7 +471,8 @@ pub fn open(
     );
     opts.display_id = display_id;
     let b = backend.clone();
-    if let Ok(handle) = cx.open_window(opts, move |window, cx| {
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "strategies");
+    let opened = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| StrategiesView::new(b, window, cx));
         cx.new(|cx| {
@@ -479,7 +480,9 @@ pub fn open(
                 Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
             )
         })
-    }) {
+    });
+    drop(open_span);
+    if let Ok(handle) = opened {
         backend.update(cx, |bk, _| bk.strategies_window = Some(handle));
         crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
         crate::window::windowing::activate_new_window(handle.into(), cx);

@@ -257,6 +257,7 @@ fn spawn_group_window_inner(
     let theme = cfg.chart_theme().clone();
     let b = backend.clone();
     let g = group.clone();
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "group-window");
     let opened = cx.open_window(opts, move |window, cx| {
         windowing::configure_dwm_window(window);
         windowing::configure_shell_clear_color(window, cx);
@@ -268,6 +269,7 @@ fn spawn_group_window_inner(
             )
         })
     });
+    drop(open_span);
     if let Ok(handle) = opened {
         backend.update(cx, |bk, bcx| {
             bk.opening_group_windows.remove(&group);

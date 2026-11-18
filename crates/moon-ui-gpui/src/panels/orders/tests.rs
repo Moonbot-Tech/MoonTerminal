@@ -8,8 +8,8 @@ use moon_core::feed::OrderRow;
 
 use super::sort::orders_signatures_from;
 use super::{
-    ObserveAction, OrderEntry, OrdersCacheKey, OrdersInputs, OrdersViewState, apply_main_lift,
-    collect_scoped, collect_scoped_shared, main_highlights, orders_observe_action,
+    CoreId, ObserveAction, OrdCol, OrderEntry, OrdersCacheKey, OrdersInputs, OrdersViewState,
+    apply_main_lift, collect_scoped, collect_scoped_shared, main_highlights, orders_observe_action,
     orders_observe_step, prepare_entries,
 };
 
@@ -88,7 +88,7 @@ fn bench_goal_b_orders_revision() {
     let previous_rows: HashMap<_, _> = previous
         .0
         .iter()
-        .map(|entry| ((entry.core, entry.row.uid), entry.row.clone()))
+        .map(|entry| ((entry.core, entry.row.uid), entry))
         .collect();
     let revisions: HashMap<_, _> = (1..=10).map(|core| (core, 0)).collect();
     measure("goal_b_orders_reused_revision", 100, || {
@@ -133,8 +133,12 @@ fn bench_goal_b_orders_revision() {
     );
     for (actual, expected) in actual.iter().zip(expected) {
         assert_eq!(
-            (actual.core, &actual.core_name, format!("{:?}", actual.row)),
-            (expected.0, &expected.1, format!("{:?}", expected.2))
+            (
+                actual.core,
+                actual.core_name.as_str(),
+                format!("{:?}", actual.row)
+            ),
+            (expected.0, expected.1.as_str(), format!("{:?}", expected.2))
         );
     }
     let mut elapsed = [0u128; 2];
@@ -243,7 +247,7 @@ fn reference_collect(cores: &[(u64, String, Vec<OrderRow>)]) -> Vec<OrderEntry> 
         for row in rows {
             entries.push(OrderEntry::new(
                 *core,
-                name,
+                name.clone().into(),
                 std::sync::Arc::new(row.clone()),
             ));
         }
@@ -525,6 +529,115 @@ fn rejected_scoped_session_names<'a>(
     names
 }
 
+/// Resolve the same core-and-order inputs used by the session-first collector.
+fn bench_order_inputs(
+    fixture: &crate::test_support::fixtures::PanelFixture,
+) -> impl Iterator<Item = (CoreId, &str, &[OrderRow])> {
+    fixture.sessions.iter().map(|session| {
+        let core = fixture.store.core(session.id).unwrap();
+        (session.id, session.name.as_str(), core.orders.as_slice())
+    })
+}
+
+/// Measure cold collection and a changed first core against the prior populated cache.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_orders_rebuild_5k() {
+    use crate::test_support::{bench, fixtures::PanelFixture};
+    let mut fixture = PanelFixture::new(20, 100, 5000, 0, 0);
+    let view = OrdersViewState {
+        kind: super::OrderKind::All,
+        ..OrdersViewState::default()
+    };
+    let overlays = HashMap::new();
+    let main_open: HashSet<_> = fixture
+        .sessions
+        .iter()
+        .map(|session| (session.id, "XALPHAUSDT".to_owned()))
+        .collect();
+    bench::measure("orders_rebuild_5k_cold", 24, || {
+        let entries = collect_scoped(bench_order_inputs(&fixture), |_, _| true);
+        let (mut entries, real, emulated, _) =
+            prepare_entries(entries, &view, &overlays, &[], None);
+        let highlights = main_highlights(&entries, &main_open);
+        apply_main_lift(&mut entries, &view, &highlights, &main_open);
+        assert_eq!(
+            (entries.len(), real, emulated, highlights.len()),
+            (5000, 2500, 2500, 20)
+        );
+        (entries, highlights)
+    });
+    let (base, _, _, signature) = prepare_entries(
+        collect_scoped(bench_order_inputs(&fixture), |_, _| true),
+        &view,
+        &overlays,
+        &[],
+        None,
+    );
+    let old_revisions: HashMap<_, _> = fixture
+        .store
+        .cores()
+        .map(|(id, core)| (id, core.orders_table_rev))
+        .collect();
+    let core = fixture.store.core_mut(1).unwrap();
+    let mut rows = core.orders.clone();
+    rows[0].price += 1.0;
+    core.apply(moon_core::feed::FeedMsg::Orders(rows.into()));
+    let revisions: HashMap<_, _> = fixture
+        .store
+        .cores()
+        .map(|(id, core)| (id, core.orders_table_rev))
+        .collect();
+    assert_ne!(revisions[&1], old_revisions[&1]);
+    bench::measure("orders_rebuild_5k_revision_change", 24, || {
+        let previous = base
+            .iter()
+            .map(|entry| ((entry.core, entry.row.uid), entry))
+            .collect();
+        let entries = collect_scoped_shared(
+            bench_order_inputs(&fixture),
+            |_, _| true,
+            &previous,
+            &revisions,
+            &old_revisions,
+        );
+        let (mut entries, real, emulated, _) =
+            prepare_entries(entries, &view, &overlays, &base, Some(signature));
+        let highlights = main_highlights(&entries, &main_open);
+        apply_main_lift(&mut entries, &view, &highlights, &main_open);
+        assert_eq!(
+            (entries.len(), real, emulated, highlights.len()),
+            (5000, 2500, 2500, 20)
+        );
+        (entries, highlights)
+    });
+}
+
+/// Measure header sorting of a populated table, with each sample starting in feed order.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_orders_sort_5k() {
+    use crate::test_support::{bench, fixtures::PanelFixture};
+    let fixture = PanelFixture::new(20, 100, 5000, 0, 0);
+    let entries = collect_scoped(bench_order_inputs(&fixture), |_, _| true);
+    assert_eq!(entries.len(), 5000);
+    let view = OrdersViewState {
+        header_sort: Some((OrdCol::CurP, false)),
+        ..OrdersViewState::default()
+    };
+    let overlays = HashMap::new();
+    let mut unsorted = (0..26)
+        .map(|_| entries.clone())
+        .collect::<Vec<_>>()
+        .into_iter();
+    bench::measure("orders_sort_5k_populated_header_change", 24, || {
+        let mut rows = unsorted.next().unwrap();
+        super::sort::sort_entries(&mut rows, &view, &overlays);
+        assert_eq!(rows.len(), 5000);
+        rows
+    });
+}
+
 /// Measure the real clone, sort, highlight, and lift work avoided by each unchanged due tick.
 #[test]
 #[ignore]
@@ -663,7 +776,7 @@ fn shared_collect_tracks_each_core_revision() {
     let initial = collect(&cores, &empty, &revisions);
     let previous: HashMap<_, _> = initial
         .iter()
-        .map(|entry| ((entry.core, entry.row.uid), entry.row.clone()))
+        .map(|entry| ((entry.core, entry.row.uid), entry))
         .collect();
     let shared = collect(&cores, &previous, &revisions);
     assert!(std::sync::Arc::ptr_eq(&initial[0].row, &shared[0].row));
@@ -676,6 +789,65 @@ fn shared_collect_tracks_each_core_revision() {
     assert!(!std::sync::Arc::ptr_eq(&initial[0].row, &fresh[0].row));
     assert!(std::sync::Arc::ptr_eq(&initial[1].row, &fresh[1].row));
     assert_eq!(fresh[0].row.price, updated[0].2[0].price);
+}
+
+/// Reusing entries must preserve the fresh row, footer totals and sort after control changes.
+#[test]
+fn shared_revision_scope_and_sort_match_a_full_rebuild() {
+    let mut cores = fixture();
+    let old = reference_collect(&cores);
+    let previous = old
+        .iter()
+        .map(|entry| ((entry.core, entry.row.uid), entry))
+        .collect();
+    let old_revisions = cores.iter().map(|(core, _, _)| (*core, 0)).collect();
+    let changed = cores[0].0;
+    cores[0].2[0].price += 4.0;
+    let revisions = cores
+        .iter()
+        .map(|(core, _, _)| (*core, u64::from(*core == changed)))
+        .collect();
+    let overlays = HashMap::new();
+    let default_view = OrdersViewState {
+        kind: super::OrderKind::All,
+        ..Default::default()
+    };
+    let (base, _, _, old_signature) =
+        prepare_entries(old.clone(), &default_view, &overlays, &[], None);
+    for (scope, view) in [
+        (None, default_view),
+        (Some(changed), default_view),
+        (
+            None,
+            OrdersViewState {
+                header_sort: Some((super::OrdCol::CurP, true)),
+                ..default_view
+            },
+        ),
+    ] {
+        let keep = |core, _: &OrderRow| scope.is_none_or(|id| id == core);
+        let mut full = reference_collect(&cores);
+        full.retain(|entry| keep(entry.core, &entry.row));
+        let fresh = prepare_entries(full, &view, &overlays, &[], None);
+        let reused = collect_scoped_shared(
+            cores
+                .iter()
+                .map(|(core, name, rows)| (*core, name.as_str(), rows.as_slice())),
+            keep,
+            &previous,
+            &revisions,
+            &old_revisions,
+        );
+        let actual = prepare_entries(reused, &view, &overlays, &base, Some(old_signature));
+        assert_eq!((actual.1, actual.2), (fresh.1, fresh.2));
+        let rows = |entries: Vec<OrderEntry>| {
+            entries
+                .into_iter()
+                .map(|e| (e.core, e.row.uid, e.row.price, e.pnl, e.pnl_pct, e.pnl_tp))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rows(actual.0), rows(fresh.0));
+    }
 }
 
 /// Equal active keys reuse the old permutation even when the source sequence is reversed.

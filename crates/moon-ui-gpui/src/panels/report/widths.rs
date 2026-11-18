@@ -76,6 +76,67 @@ const NATURAL_PAD: f32 = 28.0;
 /// display scale may round a pixel under the natural one.
 const NATURAL_SLACK: f32 = 8.0;
 
+/// Whole-string advances for one resolved font and size, bounded even for long comments.
+#[derive(Default)]
+struct TextWidths {
+    normal: FontWidths,
+    semibold: FontWidths,
+}
+
+/// Exact glyph advances and whole strings under one resolved weight and size.
+struct FontWidths {
+    ascii: [Option<f32>; 128],
+    strings: std::collections::HashMap<String, f32>,
+}
+
+impl Default for FontWidths {
+    /// A fresh typography environment has no remembered advances.
+    fn default() -> Self {
+        Self {
+            ascii: [None; 128],
+            strings: Default::default(),
+        }
+    }
+}
+
+impl TextWidths {
+    /// Reuse the exact ordered glyph sum for repeated cell or header text.
+    fn measure(
+        &mut self,
+        measurer: &mut design::MonoBodyTextMeasurer<'_>,
+        text: &str,
+        weight: FontWeight,
+    ) -> f32 {
+        let widths = if weight == FontWeight::NORMAL {
+            &mut self.normal
+        } else if weight == FontWeight::SEMIBOLD {
+            &mut self.semibold
+        } else {
+            return measurer.text_width(text, weight);
+        };
+        if let Some(&width) = widths.strings.get(text) {
+            return width;
+        }
+        let width = if text.is_ascii() {
+            // Sum in the same glyph order as the general measurer. Most Report cells use ASCII,
+            // and an array lookup saves a hash for every character of a unique coin or comment.
+            text.bytes()
+                .map(|byte| {
+                    *widths.ascii[usize::from(byte)].get_or_insert_with(|| {
+                        measurer.text_width(char::from(byte).encode_utf8(&mut [0; 4]), weight)
+                    })
+                })
+                .sum()
+        } else {
+            measurer.text_width(text, weight)
+        };
+        if text.len() <= 128 && widths.strings.len() < 2048 {
+            widths.strings.insert(text.to_owned(), width);
+        }
+        width
+    }
+}
+
 /// Rendering identity for one content-derived Report width batch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NaturalWidthsEnvironment {
@@ -114,6 +175,7 @@ pub(super) struct NaturalWidthsCache {
     /// Base widths keyed by runtime column name.
     pub(super) widths: std::collections::HashMap<String, f32>,
     environment: Option<NaturalWidthsEnvironment>,
+    text_widths: TextWidths,
     axis: Option<ReportAxis>,
     zone: Option<Tz>,
     identities: std::collections::HashMap<Arc<RowIdentity>, u64>,
@@ -255,12 +317,14 @@ impl NaturalWidthsCache {
         if self.environment.as_ref() != Some(&environment) {
             self.clear();
             self.environment = Some(environment);
+            self.text_widths = TextWidths::default();
         }
         if self.axis.as_ref() != Some(axis) || self.zone != Some(display_zone) {
             self.clear();
             self.axis = Some(axis.clone());
             self.zone = Some(display_zone);
         }
+        let quote_index = cols.iter().position(|column| column == "basecurrency");
         for &index in visible {
             let Some(column) = cols.get(index) else {
                 continue;
@@ -293,7 +357,8 @@ impl NaturalWidthsCache {
                     p,
                     axis,
                     display_zone,
-                    &mut measurer,
+                    quote_index,
+                    |text, weight| self.text_widths.measure(&mut measurer, text, weight),
                 ) {
                     self.widths
                         .entry(column)
@@ -323,7 +388,8 @@ impl NaturalWidthsCache {
 ///     p: Active palette used by cell formatting.
 ///     axis: Time axis for replicated timestamp columns, matching the renderer exactly.
 ///     display_zone: User-selected zone for terminal-written timestamp columns.
-///     measurer: Exact per-refresh text measurer shared across every visible column.
+///     quote_index: Column holding the row's effective quote currency, when present.
+///     measure: Exact text advance under the current Report typography.
 ///
 /// Returns:
 ///     Content-derived base width for every runtime column.
@@ -337,7 +403,8 @@ fn natural_widths(
     p: MoonPalette,
     axis: &ReportAxis,
     display_zone: Tz,
-    measurer: &mut design::MonoBodyTextMeasurer<'_>,
+    quote_index: Option<usize>,
+    mut measure: impl FnMut(&str, FontWeight) -> f32,
 ) -> std::collections::HashMap<String, f32> {
     visible
         .iter()
@@ -345,7 +412,7 @@ fn natural_widths(
             let column = cols.get(column_index)?;
             let (floor, ceiling) = width_bounds(column);
             let mut width = bases.get(column).map_or_else(
-                || measurer.text_width(&columns::header_label(column), FontWeight::SEMIBOLD),
+                || measure(&columns::header_label(column), FontWeight::SEMIBOLD),
                 |base| base - NATURAL_PAD,
             );
             // Generic cells use the same predicate in the renderer, so the two emphasized profit
@@ -367,14 +434,16 @@ fn natural_widths(
                 let text = columns::cell(
                     column,
                     value,
-                    columns::row_quote(cols, row),
+                    quote_index
+                        .and_then(|index| row.get(index))
+                        .and_then(moon_core::db::QuoteCurrency::from_report_value),
                     p,
                     axis,
                     core_uids.get(row_index).copied().unwrap_or(0),
                     display_zone,
                 )
                 .0;
-                width = width.max(measurer.text_width(&text, weight));
+                width = width.max(measure(&text, weight));
                 // A date prints one fixed pattern of digits and separators in the monospaced
                 // body font, so every non-empty stamp is exactly as wide as the first. This is the
                 // early exit the 150 px ceiling used to give these columns for free; without it a

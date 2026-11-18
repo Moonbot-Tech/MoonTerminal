@@ -1,5 +1,36 @@
 use super::*;
 
+/// A blocked channel write must leave other channels free to open, append, and flush.
+#[test]
+fn locked_channel_does_not_block_another_channels_write() {
+    let root = std::env::temp_dir().join(format!("moon-channel-isolation-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let writers = ChannelWriters::default();
+    let blocked = channel_writer(&writers, "channel_a.log");
+    let hold = blocked.lock().unwrap();
+    let finished = std::thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let writers = &writers;
+        let root = &root;
+        scope.spawn(move || {
+            let written = channel_writer(writers, "channel_b.log")
+                .lock()
+                .unwrap()
+                .write_lines(root, None, &["independent".into()]);
+            let _ = tx.send(written);
+        });
+        let finished = rx.recv_timeout(Duration::from_secs(2));
+        drop(hold);
+        finished
+    });
+    drop(writers);
+    let content = std::fs::read_to_string(root.join("channel_b.log"));
+    std::fs::remove_file(root.join("channel_b.log")).unwrap();
+    std::fs::remove_dir(root).unwrap();
+    assert_eq!(finished, Ok(true));
+    assert_eq!(content.unwrap(), "independent\n");
+}
+
 /// Dated tape writes must retain legacy lines, rotate by UTC day, and leave other channels undated;
 /// losing the old file or writing tomorrow's lines into today's file would break log retention.
 #[test]

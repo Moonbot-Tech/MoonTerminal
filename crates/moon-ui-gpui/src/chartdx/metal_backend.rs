@@ -646,7 +646,7 @@ impl MetalLayers {
             self.combo_capacity,
             &data,
         );
-        self.refresh_tick_time_order();
+        self.tick_time_order = TickTimeOrder::for_reset(&self.crosses, self.cross_count);
         if self.crosses.len() < self.combo_capacity {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());

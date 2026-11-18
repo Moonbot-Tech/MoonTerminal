@@ -309,8 +309,7 @@ impl LogPanel {
             return;
         }
         // Pulled again: the name is the same and the content is not.
-        self.file_page.close();
-        self.loaded_name = None;
+        self.named_page.invalidate();
         self.reset_to_live();
         let backend = self.backend.clone();
         self.reload_rows(backend.read(cx), cx);

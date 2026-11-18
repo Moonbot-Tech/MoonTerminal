@@ -145,6 +145,7 @@ pub fn open_coin_menu(
 /// Returns:
 ///     Navigation and currently applicable mutation entries for the clicked token or order.
 fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
+    let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "coin-menu");
     let b = backend.read(cx);
     let core = ctx.core;
     let coin = ctx.coin.clone();

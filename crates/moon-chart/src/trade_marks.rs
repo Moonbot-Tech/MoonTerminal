@@ -411,6 +411,25 @@ pub struct SortedActions {
     keys: [Vec<TradeAction>; 4],
 }
 
+impl SortedActions {
+    /// Keep selected ends while remapping mark indices in their original record order.
+    /// Monotone indices retain the final tie-break of each sorted partition.
+    pub fn remap(&self, mut mark: impl FnMut(TradeAction) -> Option<usize>) -> Self {
+        Self {
+            keys: self.keys.each_ref().map(|part| {
+                part.iter()
+                    .filter_map(|&action| {
+                        Some(TradeAction {
+                            mark: mark(action)?,
+                            ..action
+                        })
+                    })
+                    .collect()
+            }),
+        }
+    }
+}
+
 /// Partition and sort actions the way the clustering sweep reads them.
 ///
 /// Args:

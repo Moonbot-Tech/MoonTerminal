@@ -153,3 +153,118 @@ fn moonbot_import_has_one_entry() {
         "the one import entry is {sites:?}"
     );
 }
+
+use std::rc::Rc;
+
+use gpui::{
+    AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, VisualTestContext,
+    Window, div, px,
+};
+use moon_ui::MoonInputState;
+
+use super::nav::{NavCounts, nav_model, nav_sidebar};
+use super::{Tab, TabSet};
+
+/// Headless Settings navigation fixture used when no Backend entity is available.
+struct SettingsNavBench {
+    query: Entity<MoonInputState>,
+    active: Tab,
+    counts: NavCounts,
+}
+
+impl Render for SettingsNavBench {
+    /// Draw the production Settings navigation model and sidebar.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let model = nav_model("", TabSet::default(), &self.counts);
+        assert_eq!(model.items.len(), Tab::ALL.len());
+        div().size_full().child(nav_sidebar(
+            &model,
+            self.active,
+            &self.query,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _| {}),
+            cx,
+        ))
+    }
+}
+
+/// Build and draw one navigation fixture, returning the number of visited pages.
+fn draw_settings_nav(cx: &mut gpui::TestAppContext, config: &AppConfig) -> VisualTestContext {
+    let counts = NavCounts {
+        cores: config.servers.len() as u32,
+        ..NavCounts::default()
+    };
+    let window = cx.open_window(gpui::size(px(860.0), px(620.0)), |window, cx| {
+        SettingsNavBench {
+            query: cx.new(|cx| MoonInputState::new(window, cx)),
+            active: Tab::Cores,
+            counts,
+        }
+    });
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    visual
+}
+
+/// Time config draft construction, icon discovery, and the first production navigation draw.
+#[gpui::test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_settings_open(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let config = crate::test_support::fixtures::app_config(20);
+    crate::test_support::bench::measure(
+        "bench_s_settings_open stimulus=cold_open_first_draw servers=20 partial_(no_Backend_wiring)",
+        3,
+        || {
+            let draft = super::apply::reverted(&config);
+            assert_eq!(draft.servers.len(), 20);
+            let icons = super::IconSet::discover();
+            let mut visual = draw_settings_nav(cx, &draft);
+            visual.update(|window, _| window.remove_window());
+            (draft, icons)
+        },
+    );
+}
+
+/// Time a warm visit to every Settings page through the production navigation model and draw.
+#[gpui::test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_settings_page_switch_all(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let config = crate::test_support::fixtures::app_config(20);
+    let window = cx.open_window(gpui::size(px(860.0), px(620.0)), |window, cx| {
+        SettingsNavBench {
+            query: cx.new(|cx| MoonInputState::new(window, cx)),
+            active: Tab::Cores,
+            counts: NavCounts {
+                cores: 20,
+                ..NavCounts::default()
+            },
+        }
+    });
+    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    crate::test_support::bench::measure(
+        "bench_s_settings_page_switch_all stimulus=warm_all_pages pages=18 partial_(navigation_only_no_Backend)",
+        3,
+        || {
+            for tab in Tab::ALL {
+                window
+                    .update(&mut visual, |view, _, cx| {
+                        view.active = tab;
+                        cx.notify();
+                    })
+                    .expect("Settings navigation fixture");
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+                assert_eq!(super::dirty_pages(&config, &config).len(), 0);
+            }
+            Tab::ALL.len()
+        },
+    );
+    visual.update(|window, _| window.remove_window());
+}

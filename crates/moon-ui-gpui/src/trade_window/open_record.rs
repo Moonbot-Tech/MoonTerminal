@@ -10,9 +10,11 @@
 
 use chrono::TimeZone;
 use gpui::*;
-use moon_core::db::{self, ChartTradeRecord, ReportFilter, TradeMeta};
+use moon_core::db::{self, ChartTradeRecord, ReportFilter};
+use std::collections::HashMap;
 
 use crate::Backend;
+use crate::chartdx::trade_history_sync::PreparedTradeHistory;
 
 /// SQLite's largest positive limit, reserving the history reader's truncation probe row.
 /// A trade window must retain the whole period, including a clicked row older than 1,000 trades.
@@ -20,6 +22,33 @@ const HISTORY_LIMIT: usize = (i64::MAX - 1) as usize;
 
 #[cfg(test)]
 mod tests;
+
+/// The most recent pending standalone open for each record.
+#[derive(Default)]
+struct RecordOpenGeneration {
+    next: u64,
+    pending: HashMap<(u64, RecordKey), u64>,
+}
+
+impl Global for RecordOpenGeneration {}
+
+impl RecordOpenGeneration {
+    /// Supersede an older request for this record and return the new request's token.
+    fn next(&mut self, key: (u64, RecordKey)) -> u64 {
+        self.next = self.next.wrapping_add(1);
+        self.pending.insert(key, self.next);
+        self.next
+    }
+
+    /// Consume the newest request even if its read failed or the owning backend disappeared.
+    fn complete(&mut self, key: (u64, RecordKey), generation: u64) -> bool {
+        if self.pending.get(&key) != Some(&generation) {
+            return false;
+        }
+        self.pending.remove(&key);
+        true
+    }
+}
 
 /// Everything the opener needs from the clicked row, resolved on the UI thread.
 ///
@@ -46,7 +75,7 @@ pub(crate) struct RecordTarget {
 /// in for each other ([`ChartTradeRecord::report_uid`] says so): the Report table addresses its
 /// rows by the replica's own `newrecid`/row id, the tuner's deal table by the core's `ReportUID`,
 /// the key the order traces and the tape coverage are filed under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RecordKey {
     /// [`ChartTradeRecord::record_id`].
     RecordId(i64),
@@ -112,22 +141,17 @@ pub(crate) fn open_trade_record(
     target: RecordTarget,
     cx: &mut App,
 ) {
-    let backend = backend.clone();
+    let key = (target.core, target.record);
+    let generation = cx.default_global::<RecordOpenGeneration>().next(key);
+    let backend = backend.downgrade();
     resolve_trade_record(axis, target, cx, move |seed, cx| {
-        let Some(seed) = seed else {
-            return;
-        };
-        let super::TradeSeed {
-            record,
-            meta,
-            history,
-            neighbours,
-            market,
-            stamps,
-        } = seed;
-        super::open_trade_window(
-            &backend, record, meta, history, neighbours, market, stamps, cx,
-        );
+        if cx
+            .default_global::<RecordOpenGeneration>()
+            .complete(key, generation)
+            && let (Some(backend), Some(seed)) = (backend.upgrade(), seed)
+        {
+            super::open_trade_window(&backend, seed, cx);
+        }
     });
 }
 
@@ -157,26 +181,10 @@ pub(crate) fn resolve_trade_record(
     // trade-history read is.
     cx.spawn(async move |cx| {
         let executor = cx.update(|cx| cx.background_executor().clone());
-        let found = executor
-            .spawn(async move { load_trade(core, coin, record, filter) })
+        let seed = executor
+            .spawn(async move { load_trade(core, coin, record, filter, market, axis) })
             .await;
-        cx.update(|cx| {
-            let seed = found.map(|(record, meta, history, neighbours)| {
-                let stamps = (
-                    stamp(&axis, core, record.buy_stamp()),
-                    stamp(&axis, core, record.close_stamp()),
-                );
-                super::TradeSeed {
-                    record,
-                    meta,
-                    history,
-                    neighbours,
-                    market,
-                    stamps,
-                }
-            });
-            done(seed, cx);
-        });
+        cx.update(|cx| done(seed, cx));
     })
     .detach();
 }
@@ -192,6 +200,8 @@ pub(crate) fn resolve_trade_record(
 ///     coin: Exact stored coin token.
 ///     record: Clicked record identity.
 ///     filter: Published filter, including its time axis.
+///     market: Canonical chart symbol from the clicked column.
+///     axis: Axis for stamps and the camera-independent chart projection.
 ///
 /// Returns:
 ///     Focus, metadata, full period history and prepared trace neighbours, or `None` when the
@@ -201,12 +211,9 @@ fn load_trade(
     coin: String,
     record: RecordKey,
     filter: ReportFilter,
-) -> Option<(
-    ChartTradeRecord,
-    TradeMeta,
-    Vec<ChartTradeRecord>,
-    Vec<ChartTradeRecord>,
-)> {
+    market: String,
+    axis: db::ReportAxis,
+) -> Option<super::TradeSeed> {
     let conn = db::open_reader_with(db::CHART_TRADE_HISTORY_ATTACH).ok()?;
     let snapshot = db::read_snapshot(&conn).ok()?;
     let history = period_history(&snapshot, core, &coin, &filter).ok()?;
@@ -215,8 +222,34 @@ fn load_trade(
         .ok()
         .flatten()
         .unwrap_or_default();
-    let neighbours = super::traces::select_neighbours(&history, &record);
-    Some((record, meta, history, neighbours))
+    drop(snapshot);
+    drop(conn);
+    let stamps = (
+        stamp(&axis, core, record.buy_stamp()),
+        stamp(&axis, core, record.close_stamp()),
+    );
+    let (neighbours, prepared) = prepare_history(&history, &record, axis);
+    Some(super::TradeSeed {
+        record,
+        meta,
+        history,
+        prepared,
+        neighbours,
+        market,
+        stamps,
+    })
+}
+
+/// Prepare the bounded trace neighbours and the full marker source from one snapshot.
+fn prepare_history(
+    history: &[ChartTradeRecord],
+    record: &ChartTradeRecord,
+    axis: db::ReportAxis,
+) -> (Vec<ChartTradeRecord>, PreparedTradeHistory) {
+    (
+        super::traces::select_neighbours(history, record),
+        PreparedTradeHistory::new(history, record.core_uid, axis),
+    )
 }
 
 /// Read all matching closed trades and retain those with either endpoint in the filter's period.

@@ -549,6 +549,145 @@ fn candle_params(shipped_revision: u64) -> CandleReadParams {
     }
 }
 
+/// A changed camera or published market must match the full-scan history and fit, including
+/// clipped coarse candles and the uncovered slivers of the tick walk.
+#[test]
+fn retained_replay_window_matches_frozen_scan_through_navigation_and_replacement() {
+    use std::rc::Rc;
+
+    const END: i64 = 100_000 * MINUTE_MS;
+    let mut series = bars_only_series();
+    series.source = TradeReplaySource::CoreTicks;
+    series.covered = Coverage::one((MINUTE_MS + 100, END - MINUTE_MS - 101));
+    series.candles = (0..100_000)
+        .map(|i| candle(i * MINUTE_MS, 5.0, 12.0, 9.0))
+        .collect();
+    series.ticks = (0..100_000)
+        .map(|i| Tick {
+            time_ms: (i * MINUTE_MS) as f64 + 0.5,
+            price: if i % 13 == 0 {
+                0.0
+            } else {
+                1.0 + (i % 101) as f32
+            },
+            qty: 1.0,
+            side: crate::feed::Side::Buy,
+        })
+        .collect();
+    let mut switched = series.clone();
+    // Keep the same identity, length, and coverage to exercise replacement of progressive data.
+    switched.ticks[1].price = 250.0;
+    let (series, switched) = (Rc::new(series), Rc::new(switched));
+    let mut retained = ReplayTickWindow::default();
+    let mut out = ChartHistoryBuffers::default();
+
+    for (source, from, to, visible, tf_ms) in [
+        (&series, 0, END, (0, END), MINUTE_MS),
+        (&series, -5, END + 5, (MINUTE_MS, 2 * MINUTE_MS), MINUTE_MS),
+        (
+            &series,
+            MINUTE_MS + 1,
+            END / 2,
+            (3 * MINUTE_MS, END / 2),
+            5 * MINUTE_MS,
+        ),
+        (&series, END / 2, END, (END - 7 * MINUTE_MS, END), MINUTE_MS),
+        (&series, 0, END, (MINUTE_MS, 2 * MINUTE_MS), MINUTE_MS),
+        (&switched, 0, END, (MINUTE_MS, 2 * MINUTE_MS), MINUTE_MS),
+    ] {
+        // The camera sends relative bounds as f32, so compare against the bounds it can send.
+        let from = (from as f32).round() as i64;
+        let to = (to as f32).round() as i64;
+        let visible_start = (visible.0 as f32).round() as f64;
+        let visible_end = (visible.1 as f32).round() as f64;
+        let mut params = candle_params(0);
+        params.tf_ms = tf_ms;
+        let read = retained.read(
+            source,
+            0.0,
+            (from as f32, to as f32),
+            Some((visible.0 as f32, visible.1 as f32)),
+            Some(&params),
+            &mut out,
+        );
+        let expected_ticks: Vec<_> = source
+            .ticks
+            .iter()
+            .filter(|t| (from..=to).contains(&(t.time_ms as i64)) && t.price > 0.0)
+            .collect();
+        assert!(
+            retained
+                .ticks()
+                .iter()
+                .map(|t| (t.time_ms, t.price, t.qty, t.side))
+                .eq(expected_ticks
+                    .iter()
+                    .map(|t| (t.time_ms, t.price, t.qty, t.side)))
+        );
+        let mut prices = expected_ticks
+            .iter()
+            .filter(|t| (visible_start..=visible_end).contains(&t.time_ms))
+            .map(|t| t.price);
+        let first = prices.next().expect("fixtures have visible ticks");
+        let expected_fit = prices.fold((first, first), |(lo, hi), price| {
+            (lo.min(price), hi.max(price))
+        });
+        assert_eq!(read.tick_price_range, Some(expected_fit));
+        assert_eq!(read.last_price, expected_ticks.last().map(|t| t.price));
+
+        let clipped: Vec<_> = source
+            .candles
+            .iter()
+            .copied()
+            .filter(|c| (from - tf_ms..=to).contains(&(c.t_open_ms as i64)))
+            .collect();
+        let mut resampled = Vec::new();
+        let bars = if tf_ms > MINUTE_MS {
+            crate::market::candles::resample(&clipped, tf_ms, &mut resampled);
+            resampled
+        } else {
+            clipped
+        };
+        let expected_bars: Vec<_> = bars
+            .into_iter()
+            .flat_map(|c| {
+                let open = c.t_open_ms as i64;
+                let end = open + tf_ms;
+                [
+                    (open, end.min(MINUTE_MS + 100)),
+                    (open.max(END - MINUTE_MS - 100), end),
+                ]
+                .into_iter()
+                .filter_map(move |(lo, hi)| {
+                    let width = hi - lo;
+                    if width <= 0 {
+                        return None;
+                    }
+                    let share = width as f64 / tf_ms as f64;
+                    Some((
+                        ChartCandle {
+                            t_open_ms: lo as f64,
+                            volume: (f64::from(c.volume) * share) as f32,
+                            quote_volume: (f64::from(c.quote_volume) * share) as f32,
+                            ..c
+                        },
+                        if width == tf_ms { 0.0 } else { width as f32 },
+                    ))
+                })
+            })
+            .collect();
+        assert_eq!(out.candles.len(), expected_bars.len());
+        assert_eq!(out.candle_tf_ms.len(), expected_bars.len());
+        assert!(
+            out.candles
+                .iter()
+                .copied()
+                .zip(out.candle_tf_ms.iter().copied())
+                .eq(expected_bars)
+        );
+    }
+}
+
 /// `market/trade_replay/mod.rs:TradeReplaySeries::read_into` must clear each buffer, reset the
 /// combo, retain a candle-derived Y range on a repeat read, and ship fresh bars; dropping any of
 /// those branches duplicates or hides the dedicated trade chart.

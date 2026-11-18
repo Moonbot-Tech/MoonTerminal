@@ -48,10 +48,46 @@ fn the_early_and_late_paths_point_at_the_same_file() {
     );
 }
 
+/// Older files must acquire both stall keys without changing their existing values.
+#[test]
+fn an_older_file_gets_both_ui_stall_keys() {
+    let old = "[channels]\nrender = true\n\n[limits]\nlog_ring_lines = 1000\n";
+    let state = FileState::Parsed(config::parse(old).expect("valid older configuration"));
+    let (text, _) = plan_write(&state, Some(old)).expect("the missing keys must be appended");
+    assert!(text.contains("render = true\n"));
+    assert!(text.contains("log_ring_lines = 1000\n"));
+    assert!(text.contains("# ENV: MOON_UI_STALL_DIAG=1\nui_stall = false\n"));
+    assert!(text.contains("ui_stall_ms = 8\n"));
+}
+
+/// An absent key is opt-in, an environment override enables only this channel, and extreme
+/// thresholds cannot flood the probe or make it effectively silent.
+#[test]
+fn ui_stall_defaults_environment_and_bounds() {
+    let mut cfg = config::parse("").expect("empty configuration uses defaults");
+    assert!(!cfg.channels.ui_stall);
+    assert_eq!(cfg.limits.ui_stall_ms, 8);
+
+    config::apply_env(&mut cfg, |key| {
+        (key == "MOON_UI_STALL_DIAG").then(|| "1".to_string())
+    });
+    assert!(cfg.channels.ui_stall);
+    assert!(cfg.any_active());
+    assert_eq!(cfg.active_summary().as_deref(), Some("channels.ui_stall"));
+
+    for (configured, expected) in [(0, 4), (99_999, 1_000)] {
+        let cfg = config::parse(&format!("[limits]\nui_stall_ms = {configured}"))
+            .expect("valid threshold");
+        assert_eq!(cfg.limits.ui_stall_ms, expected);
+    }
+}
+
+/// The same apply path serves startup and reload, including turning a channel back off.
 #[test]
 fn applying_a_config_publishes_and_retracts_every_switch() {
     let mut cfg = DiagCfg::default();
     cfg.channels.render = true;
+    cfg.channels.ui_stall = true;
     cfg.channels.detect = true;
     cfg.channels.assets = true;
     cfg.channels.markets = true;
@@ -62,10 +98,13 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     cfg.limits.log_ring_lines = 12_345;
     cfg.limits.balance_repeat_window_sec = 9;
     cfg.limits.market_trace_min_interval_ms = 250;
+    cfg.limits.ui_stall_ms = 42;
     apply(&cfg);
 
     assert!(render() && detect() && assets() && markets() && hl_limit() && settings() && orders());
     assert!(arb_coverage());
+    assert!(ui_stall());
+    assert_eq!(ui_stall_threshold(), Duration::from_millis(42));
     assert_eq!(
         with_orders_selector(|s| s.to_string()).as_deref(),
         Some("GateF/BTC")
@@ -77,6 +116,8 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     // Retraction matters as much as publication: a file edited back to `false` has to switch the
     // channel off, which a one-way `force_enable`-style flag could not do.
     apply(&DiagCfg::default());
+    assert!(!ui_stall());
+    assert_eq!(ui_stall_threshold(), Duration::from_millis(8));
     assert!(
         !render()
             && !detect()

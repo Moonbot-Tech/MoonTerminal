@@ -291,6 +291,8 @@ impl ChartTabs {
         // would overwrite its native placement with the smaller restore rectangle.
         let restore_size = restored_chart_size(restored, geom);
         let host_bucket = bucket.clone();
+        let open_span =
+            crate::diag::stall::span(crate::diag::stall::StallKind::Open, "chart:detach");
         let opened = cx.open_window(opts, move |window, cx| {
             crate::window::windowing::configure_chart_clear_color(window, cx);
             let host = cx.new(|cx| {
@@ -312,6 +314,7 @@ impl ChartTabs {
                 )
             })
         });
+        drop(open_span);
         if let Ok(handle) = opened {
             // Independent, not owned: `detached_chart_window_options`.
             crate::window::titles::track(handle.into(), false, title, cx);

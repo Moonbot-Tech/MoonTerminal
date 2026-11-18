@@ -34,6 +34,7 @@ pub(crate) use core_settings::{
 };
 pub(crate) mod core_settings_popup;
 mod docks;
+mod fleet_model;
 mod header;
 mod init;
 mod metrics;
@@ -78,6 +79,10 @@ pub(crate) struct Shell {
     exchange_logo_prewarm_started: bool,
     /// UI-thread edge proving the blocking logo prewarm completed before render-time resolution.
     exchange_logos_ready: bool,
+    /// Memoized virtual-list model, validated against live inputs before reuse.
+    rail_model: std::cell::RefCell<workspace::RailMemo>,
+    /// Group connection and license model shared by stable frames.
+    status_model: status_bar::StatusMemo,
     /// Suppress DockEvent persistence while Auto topology is installed programmatically.
     applying_auto_topology: bool,
     /// Monotonic token preventing an older deferred guard release from exposing newer effects.

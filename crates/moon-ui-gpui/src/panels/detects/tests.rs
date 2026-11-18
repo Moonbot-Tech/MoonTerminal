@@ -10,6 +10,188 @@ use crate::workspace::scope_marker::ScopeMarker;
 use moon_core::config::WorkspaceMode;
 use rust_i18n::t;
 
+/// Measure cold ring traversal and selection before the panel starts history requests.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_detects_ingest_300() {
+    use super::selection::{Incoming, feed_admits, newest_per_market, select};
+    use crate::test_support::{
+        bench,
+        fixtures::{EPOCH_MS, PanelFixture},
+    };
+
+    let fixture = PanelFixture::new(20, 100, 0, 0, 300);
+    let held = Default::default();
+    bench::measure("detects_ingest_300_cold_ring_selection", 24, || {
+        let mut incoming = Vec::new();
+        for session in &fixture.sessions {
+            let core = fixture.store.core(session.id).unwrap();
+            let fresh = newest_per_market(core.detects.iter().map(|row| &**row), 0);
+            for row in fresh.into_iter().rev() {
+                let ttl_ms = feed_admits(row, false, 60, EPOCH_MS as f64 + 1000.0).unwrap();
+                incoming.push(Incoming {
+                    core: session.id,
+                    name: &session.name,
+                    color: [1, 2, 3],
+                    row,
+                    ttl_ms,
+                });
+            }
+        }
+        assert_eq!(incoming.len(), 300);
+        let selected = select(&held, incoming, false);
+        assert_eq!(selected.len(), 48);
+        selected
+    });
+}
+
+/// Headless grid of capped Detects cards with populated chart vectors and a fixture clock.
+struct BenchDetectGrid {
+    items: std::collections::VecDeque<super::DetectItem>,
+    visible: Option<super::VisibleCards>,
+    config: moon_core::config::AppConfig,
+    now: std::rc::Rc<std::cell::Cell<f64>>,
+    prune: bool,
+}
+
+impl gpui::Render for BenchDetectGrid {
+    /// Paint production cards, optionally running the expiry pass the timer runs before drawing.
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        let cfg = moon_core::config::DetectViewCfg::default();
+        let p = moon_ui::MoonPalette::active(cx);
+        let now = self.now.get();
+        if self.prune {
+            super::VisibleCards::prune(&mut self.visible, &mut self.items, now);
+        }
+        let indices =
+            super::VisibleCards::get(&mut self.visible, &self.items, (1..=20).collect(), false);
+        assert_eq!(indices.len(), 48);
+        moon_ui::h_flex()
+            .size_full()
+            .flex_wrap()
+            .gap_1p5()
+            .content_start()
+            .children(indices.iter().map(|&index| {
+                let item = &self.items[index];
+                let secs = ((item.ttl_ms - (now - item.born_ms)) / 1000.0)
+                    .ceil()
+                    .max(0.0) as u32;
+                cards::card(
+                    item,
+                    secs,
+                    &cfg,
+                    self.config.chart_theme(),
+                    &self.config.badges,
+                    p,
+                    p.is_light(),
+                    cx,
+                )
+            }))
+    }
+}
+
+/// Run the capped headless draw, with the optional one-second expiry/countdown stimulus.
+fn bench_detects_draw(name: &'static str, tick: bool) {
+    use crate::test_support::{bench, fixtures};
+
+    fixtures::on_visual_stack(move || {
+        let mut app = fixtures::visual_app();
+        let cfg = fixtures::app_config(20);
+        let born = fixtures::EPOCH_MS as f64;
+        let candles = fixtures::candles(super::DETECT_THUMB_BARS);
+        let items = (0..super::MAX_DETECT_BTNS)
+            .map(|i| {
+                let mut item = detect_item(
+                    Some((i % 20 + 1) as u64),
+                    &format!("XALPHA{i}USDT"),
+                    born,
+                    0,
+                );
+                item.bars = candles
+                    .iter()
+                    .map(|bar| (bar.open, bar.high, bar.low, bar.close))
+                    .collect();
+                item.line = candles.iter().map(|bar| bar.close).collect();
+                item
+            })
+            .collect();
+        let now = std::rc::Rc::new(std::cell::Cell::new(born));
+        let clock = now.clone();
+        let window = app.open_window(
+            gpui::size(gpui::px(1280.0), gpui::px(900.0)),
+            move |_, _| BenchDetectGrid {
+                items,
+                visible: None,
+                config: cfg,
+                now: clock,
+                prune: tick,
+            },
+        );
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), &app);
+        bench::measure(name, 24, || {
+            if tick {
+                now.set(now.get() + 1000.0);
+            }
+            visual.update(|window, cx| {
+                window.refresh();
+                let _ = window.draw(cx);
+            });
+        });
+    });
+}
+
+/// Measure a warm repaint with 48 detection cards and chart vectors.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_detects_draw_48() {
+    bench_detects_draw("detects_draw_48_warm_card_grid", false);
+}
+
+/// Measure a one-second change of the countdown with all retained cards still visible.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_detects_tick_1s() {
+    bench_detects_draw("detects_tick_1s_expiry_and_countdown_draw", true);
+}
+
+/// An expired core card must release a retained crowd card, and changing scope does the same.
+#[test]
+fn visible_queue_reveals_crowd_in_reverse_order_after_scope_change_or_expiry() {
+    use super::VisibleCards;
+    use std::collections::VecDeque;
+
+    let mut items = VecDeque::from([
+        detect_item(None, "XALPHA", 30_000.0, 0),
+        detect_item(Some(1), "XALPHA", 0.0, 0),
+        detect_item(Some(2), "XBETA", 30_000.0, 0),
+    ]);
+    let mut cache = None;
+    assert_eq!(
+        VisibleCards::get(&mut cache, &items, vec![1, 2], true),
+        [2, 1]
+    );
+    assert_eq!(VisibleCards::get(&mut cache, &items, vec![2], true), [2, 0]);
+    assert_eq!(
+        VisibleCards::get(&mut cache, &items, vec![1, 2], true),
+        [2, 1]
+    );
+    assert!(VisibleCards::prune(&mut cache, &mut items, 61_000.0));
+    let indices = VisibleCards::get(&mut cache, &items, vec![1, 2], true);
+    assert_eq!(
+        indices
+            .iter()
+            .map(|&i| items[i].market.as_str())
+            .collect::<Vec<_>>(),
+        ["XBETA", "XALPHA"]
+    );
+    assert!(items[indices[1]].crowd().is_some());
+}
+
 /// Build a synthetic card without an application or market-data connection.
 pub(super) fn detect_item(
     core: Option<u64>,
@@ -169,7 +351,8 @@ fn presentation_scope_keeps_hidden_detection_cards_retained() {
         .nth(1)
         .expect("Detects render must exist");
     assert!(render.contains("effective_workspace_scope"));
-    assert!(render.contains("detection_core_visible(item.core(), &visible_cores)"));
+    assert!(render.contains("VisibleCards::get(") && render.contains("visible_cores,"));
+    assert!(src.contains("detection_core_visible(item.core(), &cores)"));
 }
 
 /// The AddToChart setting gates BOTH ends. Ingestion skips a chart-routed row while the setting is
@@ -199,7 +382,8 @@ fn add_to_chart_cards_are_gated_at_ingest_and_at_presentation() {
         .split("impl Render for DetectsPanel")
         .nth(1)
         .expect("Detects render must exist");
-    assert!(render.contains("detection_route_visible(item.add_to_chart, cfg.show_add_to_chart)"));
+    assert!(render.contains("VisibleCards::get(") && render.contains("cfg.show_add_to_chart,"));
+    assert!(src.contains("detection_route_visible(item.add_to_chart, show_routed)"));
 }
 
 /// The setting must work in BOTH directions. Ingestion drops chart-routed rows while it is off and
@@ -527,7 +711,8 @@ fn the_card_carries_the_cross_exchange_key_and_not_the_local_one() {
         "a core card must freeze the catalog's cross-exchange identity"
     );
     assert!(
-        src.contains(".map(|it| it.identity.as_str())"),
+        src.contains(".map(|item| item.identity.as_str())")
+            && src.contains("crowd_card_yields(&item.identity, &cored)"),
         "the duplicate rule must compare the identity the card froze"
     );
     let crowd = include_str!("crowd.rs");

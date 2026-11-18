@@ -172,10 +172,78 @@ impl DetectItem {
     }
 }
 
+/// Reverse queue positions selected under one workspace scope and route preference.
+struct VisibleCards {
+    cores: Vec<CoreId>,
+    show_routed: bool,
+    indices: Vec<usize>,
+}
+
+impl VisibleCards {
+    /// Compute crowd suppression from the same admitted core cards that will be drawn.
+    fn new(items: &VecDeque<DetectItem>, cores: Vec<CoreId>, show_routed: bool) -> Self {
+        let admitted = |item: &DetectItem| {
+            detection_core_visible(item.core(), &cores)
+                && detection_route_visible(item.add_to_chart, show_routed)
+        };
+        let cored: HashSet<_> = items
+            .iter()
+            .filter(|item| item.core().is_some() && admitted(item))
+            .map(|item| item.identity.as_str())
+            .collect();
+        let indices = items
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, item)| {
+                admitted(item)
+                    && (item.crowd().is_none() || !crowd_card_yields(&item.identity, &cored))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        Self {
+            cores,
+            show_routed,
+            indices,
+        }
+    }
+
+    /// Refresh when the live scope or the route preference changes; queue mutations clear the slot.
+    fn get<'a>(
+        slot: &'a mut Option<Self>,
+        items: &VecDeque<DetectItem>,
+        cores: Vec<CoreId>,
+        show_routed: bool,
+    ) -> &'a [usize] {
+        if !slot.as_ref().is_some_and(|selection| {
+            selection.cores == cores && selection.show_routed == show_routed
+        }) {
+            *slot = Some(Self::new(items, cores, show_routed));
+        }
+        &slot
+            .as_ref()
+            .expect("visible card selection initialized")
+            .indices
+    }
+
+    /// Expire cards and clear the selection only when the queue changes.
+    fn prune(slot: &mut Option<Self>, items: &mut VecDeque<DetectItem>, now_ms: f64) -> bool {
+        let before = items.len();
+        items.retain(|it| !detect_expired(now_ms, it.born_ms, it.ttl_ms));
+        let changed = items.len() != before;
+        if changed {
+            *slot = None;
+        }
+        changed
+    }
+}
+
+/// Retain the group's detection queue and present it under the current workspace scope.
 pub struct DetectsPanel {
     backend: Entity<Backend>,
     group: String,
     items: VecDeque<DetectItem>,
+    visible_cards: Option<VisibleCards>,
     last_seq: HashMap<CoreId, u64>,
     /// How far this panel has read the crowd rule's own ring. See [`DetectsPanel::ingest_crowd`].
     crowd_cursor: u64,
@@ -217,6 +285,8 @@ impl DetectsPanel {
     pub fn new(backend: Entity<Backend>, group: String, cx: &mut Context<Self>) -> Self {
         let initial_sig = detects_sig(backend.read(cx), &group);
         cx.observe(&backend, |this, backend, cx| {
+            let _stall =
+                crate::diag::stall::span(crate::diag::stall::StallKind::Observe, "detects:feed");
             let now = now_unix_ms();
             let sig = detects_sig(backend.read(cx), &this.group);
             let mut changed = false;
@@ -291,6 +361,7 @@ impl DetectsPanel {
             backend,
             group,
             items: VecDeque::new(),
+            visible_cards: None,
             last_seq: HashMap::new(),
             // From zero rather than from the ring's head: the ring holds at most a minute's worth
             // of live cards, and a panel opened just after a crossing should show it exactly as it
@@ -454,14 +525,15 @@ impl DetectsPanel {
             item.snapshot_pending = true;
             self.items.push_back(item);
         }
+        if changed {
+            self.visible_cards = None;
+        }
         changed
     }
 
+    /// Expiry changes suppression as well as the queue: a surviving crowd card may now appear.
     fn prune(&mut self, now_ms: f64) -> bool {
-        let before = self.items.len();
-        self.items
-            .retain(|it| !detect_expired(now_ms, it.born_ms, it.ttl_ms));
-        self.items.len() != before
+        VisibleCards::prune(&mut self.visible_cards, &mut self.items, now_ms)
     }
 
     /// Arms a one-second refresh timer while the queue is nonempty. On wake it clears the armed
@@ -478,6 +550,10 @@ impl DetectsPanel {
             executor.timer(Duration::from_millis(1000)).await;
             let alive = cx.update(|cx| {
                 this.update(cx, |this, cx| {
+                    let _stall = crate::diag::stall::span(
+                        crate::diag::stall::StallKind::Observe,
+                        "detects:prune",
+                    );
                     this.prune_timer_armed = false;
                     let pruned = this.prune(now_unix_ms());
                     // Refresh countdowns while cards remain, and paint the transition to empty
@@ -521,6 +597,7 @@ impl DetectsPanel {
         }
         self.items
             .retain(|it| !(it.core() == Some(core) && it.market == market));
+        self.visible_cards = None;
         self.arm_prune_timer(cx);
         cx.notify();
     }
@@ -551,6 +628,7 @@ impl DetectsPanel {
         }
         self.items
             .retain(|it| !(it.core() == Some(core) && it.market == market));
+        self.visible_cards = None;
         self.arm_prune_timer(cx);
         cx.notify();
     }
@@ -594,6 +672,8 @@ impl Render for DetectsPanel {
     ///     Toolbar and filtered card grid without discarding out-of-scope retained cards, or the
     ///     toolbar above one centred sentence naming why the feed is empty.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "detects")
+            .with_window(|| _window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::DETECTS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::DETECTS_RENDER_US);
         let p = MoonPalette::active(cx);
@@ -608,7 +688,7 @@ impl Render for DetectsPanel {
         let now = now_unix_ms();
         // The scope value is kept, not consumed straight into its ids: its membership counts are
         // what tells an empty feed whether a preset is hiding a full one.
-        let (marker, visible_cores, available_cores, retained_reachable) = {
+        let (marker, visible_cores, available_cores) = {
             let b = self.backend.read(cx);
             let scope =
                 b.effective_workspace_scope(&self.group, crate::workspace::RetainedCoreScope::All);
@@ -618,26 +698,7 @@ impl Render for DetectsPanel {
                 scope.membership_shown(),
                 available,
             );
-            // Count only the retained cards a preset change could actually bring BACK. A card
-            // whose core has gone unavailable is unreachable, not hidden: deactivating a server
-            // makes `SessionManager::reconcile` drop the core outright
-            // (`moon-core/src/session/lifecycle.rs:304`), and nothing evicts the card it left
-            // behind until its `KeepAlert` expires. Counting it as retained would tell a
-            // multi-core group whose other cores are merely idle that the scope is hiding
-            // detects, and send the user widening a preset that can never reveal them.
-            // A crowd card is not counted either, for a different reason: no preset can hide it,
-            // so it can never be one of the cards a preset change would bring back.
-            let retained_reachable = self
-                .items
-                .iter()
-                .filter(|it| {
-                    it.core().is_some_and(|core| {
-                        b.workspace_core_availability(&self.group, core)
-                            .is_available()
-                    })
-                })
-                .count();
-            (marker, scope.ids().to_vec(), available, retained_reachable)
+            (marker, scope.ids().to_vec(), available)
         };
 
         // Place the gear-triggered configuration toolbar and divider above the feed.
@@ -651,27 +712,15 @@ impl Render for DetectsPanel {
         // Render fixed-size cards in reverse insertion order in a wrapping grid. Newly inserted
         // markets appear first; a repeated core-market detection refreshes its existing position.
         let mut container = h_flex().flex_wrap().gap_1p5().content_start();
-        let mut shown = 0usize;
-        // Coins a core has already put on this screen. Collected from the cards that pass the
-        // same two filters the loop below applies, so a core card the preset is hiding does not
-        // silently take the crowd's card down with it — and the crowd's card is NOT dropped at
-        // ingest, so it appears by itself the moment the core's own card expires.
-        let cored: HashSet<&str> = self
-            .items
-            .iter()
-            .filter(|it| {
-                it.core().is_some()
-                    && detection_core_visible(it.core(), &visible_cores)
-                    && detection_route_visible(it.add_to_chart, cfg.show_add_to_chart)
-            })
-            .map(|it| it.identity.as_str())
-            .collect();
-
-        for it in self.items.iter().rev().filter(|item| {
-            detection_core_visible(item.core(), &visible_cores)
-                && detection_route_visible(item.add_to_chart, cfg.show_add_to_chart)
-                && (item.crowd().is_none() || !crowd_card_yields(&item.identity, &cored))
-        }) {
+        let indices = VisibleCards::get(
+            &mut self.visible_cards,
+            &self.items,
+            visible_cores,
+            cfg.show_add_to_chart,
+        );
+        let shown = indices.len();
+        for &index in indices {
+            let it = &self.items[index];
             let secs = ((it.ttl_ms - (now - it.born_ms)) / 1000.0).ceil().max(0.0) as u32;
             let card = cards::card(it, secs, &cfg, &theme, &badges, p, is_light, cx)
                 .id(SharedString::from(it.key()))
@@ -716,8 +765,24 @@ impl Render for DetectsPanel {
                 }
             };
             container = container.child(card);
-            shown += 1;
         }
+
+        // Only the empty feed needs to distinguish a preset hiding reachable cards from
+        // cards whose cores are unavailable. Crowd cards have no core and cannot be hidden.
+        let retained_reachable = if shown == 0 {
+            let b = self.backend.read(cx);
+            self.items
+                .iter()
+                .filter(|item| {
+                    item.core().is_some_and(|core| {
+                        b.workspace_core_availability(&self.group, core)
+                            .is_available()
+                    })
+                })
+                .count()
+        } else {
+            0
+        };
 
         // An empty feed states WHY it is empty instead of painting a blank pane under the gear. It
         // replaces the scroll box rather than sitting inside it — an empty scroll container would

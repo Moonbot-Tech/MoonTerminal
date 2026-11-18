@@ -644,3 +644,40 @@ fn key_with(k: &VisibleKey) -> VisibleKey {
         ready: k.ready.clone(),
     }
 }
+
+/// Time a populated 2,000-row search and name-sort through the production list pipeline.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_tuner_list_filter_2k() {
+    let all: Vec<_> = (0..2_000)
+        .map(|index| {
+            let mut row = g(
+                &format!("UNIT_{index:04}"),
+                if index % 2 == 0 {
+                    "MoonShot"
+                } else {
+                    "MoonHook"
+                },
+                Some(2),
+                index as i64 % 5,
+                index as f64 - 1_000.0,
+            );
+            row.n = index as i64;
+            row
+        })
+        .collect();
+    let mut key = key_over(all.len());
+    key.search_lower = "unit_".into();
+    key.active_only = true;
+    key.sort = Some((SORT_NAME.into(), false));
+    crate::test_support::bench::measure(
+        "bench_s_tuner_list_filter_2k stimulus=warm_filter_sort rows=2000",
+        7,
+        || {
+            let result = filter_sort_indices(&all, &key);
+            assert_eq!(result.2, all.len());
+            assert!(!result.0.is_empty());
+            result
+        },
+    );
+}

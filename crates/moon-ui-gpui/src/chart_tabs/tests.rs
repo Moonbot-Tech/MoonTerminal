@@ -326,3 +326,160 @@ fn layout_close_commits_custom_name_on_both_hosts() {
         assert!(rename.contains("if name.is_empty()"));
     }
 }
+
+/// Frozen replay shared by chart tab-selection and new-market frame benches.
+fn chart_tab_replay() -> std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries> {
+    use moon_core::feed::{Side, Tick};
+    use moon_core::market::side_slots_of_ticks;
+    use moon_core::market::trade_replay::venue_caps::TickValue;
+    use moon_core::market::trade_replay::{
+        Coverage, TickStatus, TickThinning, TradeReplaySeries, TradeReplaySource, replay_window_ms,
+    };
+
+    let candles = crate::test_support::fixtures::candles(100_000);
+    let ticks: Vec<_> = (0..100_000)
+        .map(|index| Tick {
+            time_ms: (crate::test_support::fixtures::EPOCH_MS + index * 60_000) as f64,
+            price: 10.0 + (index % 100) as f32 / 100.0,
+            qty: 1.0,
+            side: if index % 2 == 0 {
+                Side::Buy
+            } else {
+                Side::Sell
+            },
+        })
+        .collect();
+    let from_ms = candles.first().expect("candles").t_open_ms as i64;
+    let to_ms = candles.last().expect("candles").t_open_ms as i64 + 60_000;
+    let side_slots = side_slots_of_ticks(&ticks, TickValue::Base);
+    std::rc::Rc::new(TradeReplaySeries {
+        source: TradeReplaySource::CoreTicks,
+        venue: None,
+        window: replay_window_ms(from_ms, to_ms, 30_000).expect("replay window"),
+        tf_ms: 60_000,
+        candles,
+        ticks,
+        identity: 1,
+        tick_status: TickStatus::Served,
+        thinning: TickThinning::Raw,
+        partial: false,
+        side_slots,
+        covered: Coverage::one((from_ms, to_ms)),
+    })
+}
+
+/// Construct a chart for one market over the shared frozen replay.
+fn chart_tab_engine(
+    market: &str,
+    replay: std::rc::Rc<moon_core::market::trade_replay::TradeReplaySeries>,
+) -> crate::chartdx::ChartEngine {
+    use moon_core::config::ChartTheme;
+    use moon_core::market::{MarketDataSource, MarketStore};
+
+    assert_eq!(replay.candles.len(), 100_000);
+    assert_eq!(replay.ticks.len(), 100_000);
+    let left = replay.window.from_ms as f64;
+    let right = replay.window.to_ms as f64;
+    let mut engine = crate::chartdx::ChartEngine::new(
+        crate::test_support::fixtures::EPOCH_MS as f64,
+        ChartTheme::default(),
+    );
+    engine.open(1, market);
+    engine.set_historical(true);
+    engine.set_trade_replay(Some(replay));
+    engine.set_follow(false, right);
+    engine.show_time_range(left, right, 0.0);
+    engine.set_scene_visible(true);
+    engine.set_market_source(Some(MarketDataSource::new(MarketStore::shared(
+        crate::test_support::fixtures::EPOCH_MS as f64,
+    ))));
+    engine
+}
+
+/// Prepare the chart frame immediately following a chart-tab action.
+fn chart_tab_frame(engine: &mut crate::chartdx::ChartEngine) {
+    use std::time::Instant;
+
+    use gpui::{Bounds, GpuFrameInfo, point, px, size};
+
+    engine.set_scene_visible(false);
+    engine.set_scene_visible(true);
+    engine.with_container_mut(|_| {});
+    let decision = engine.prepare_frame_for_tests(GpuFrameInfo {
+        now: Instant::now(),
+        bounds: Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(1_000.0), px(600.0)),
+        },
+        scale_factor: 1.0,
+        content_zoom: 1.0,
+        presentable: true,
+    });
+    std::hint::black_box(decision);
+}
+
+/// Time alternating selection of two existing populated charts and their following frames.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_chart_tab_select() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            crate::test_locale::warm();
+            let _window = crate::test_support::SharedWindowGuard::take();
+            let replay = chart_tab_replay();
+            let mut engines = [
+                chart_tab_engine("XALPHAUSDT", replay.clone()),
+                chart_tab_engine("XBETAUSDT", replay),
+            ];
+            chart_tab_frame(&mut engines[0]);
+            chart_tab_frame(&mut engines[1]);
+            let mut step = 0;
+            crate::test_support::bench::measure(
+                "bench_s_chart_tab_select stimulus=existing_tab_plus_cpu_frame trades=100000 candles=100000 partial_(no_Backend_wiring)",
+                5,
+                || {
+                    step += 1;
+                    let tab = if step % 2 == 0 {
+                        Tab::Main
+                    } else {
+                        Tab::Custom(super::CUSTOM_NUM_BASE, ChartBucket::Shared)
+                    };
+                    assert_eq!(coin_search_bucket(&tab, Some(1)), Some(ChartBucket::Core(1)));
+                    chart_tab_frame(&mut engines[step % 2]);
+                },
+            );
+        })
+        .expect("bench thread")
+        .join()
+        .expect("bench result");
+}
+
+/// Time a new-market chart replacement and the following frozen-history frame.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_chart_new_market_switch() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            crate::test_locale::warm();
+            let _window = crate::test_support::SharedWindowGuard::take();
+            let replay = chart_tab_replay();
+            let mut step = 0;
+            crate::test_support::bench::measure(
+                "bench_s_chart_new_market_switch stimulus=new_market_plus_history_cpu_frame trades=100000 candles=100000 partial_(no_Backend_wiring)",
+                3,
+                || {
+                    step += 1;
+                    let market = if step % 2 == 0 { "XALPHAUSDT" } else { "XBETAUSDT" };
+                    let mut engine = chart_tab_engine(market, replay.clone());
+                    chart_tab_frame(&mut engine);
+                    assert!(engine.uses_market(1, market));
+                    engine
+                },
+            );
+        })
+        .expect("bench thread")
+        .join()
+        .expect("bench result");
+}

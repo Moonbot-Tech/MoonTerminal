@@ -68,6 +68,7 @@ impl ChartDataState {
             news_marks: std::rc::Rc::new(Vec::new()),
             news_hovered: None,
             trade_history: std::rc::Rc::new(Vec::new()),
+            prepared_trade_rows: None,
             trade_history_cores: None,
             report_axis: moon_core::db::ReportAxis::identity_core_local(),
             trade_history_revision: 0,
@@ -558,6 +559,8 @@ impl ChartDataState {
     /// Returns:
     ///     `Skip` when this chart must not prepare, otherwise the render state's decision.
     pub(crate) fn frame(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
+        let _stall =
+            crate::diag::stall::span(crate::diag::stall::StallKind::ChartFrame, "chart:frame");
         if !self.scene_visible || !info.presentable || info.bounds.is_empty() {
             self.last_frame_tick_at = None;
             // Same counter `RenderState::frame` bumps for a direct caller. This path no

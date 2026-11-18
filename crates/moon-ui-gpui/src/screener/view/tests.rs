@@ -4,6 +4,74 @@ use super::super::table::tests::sort_entries;
 use super::{CoinQuery, Entry, matches_coin_filter};
 use moon_core::market::ScreenerRow;
 
+/// Measure the cached publication filter after the Market field gains a character.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_screener_keystroke() {
+    use super::super::prepared::Prepared;
+    use crate::test_support::{
+        bench,
+        fixtures::{PanelFixture, core_store},
+    };
+
+    let fixture = PanelFixture::new(20, 100, 5000, 0, 0);
+    let symbols = core_store(1, 0, 0, 3000, 0);
+    let catalogue = &symbols.core(1).unwrap().assets.rows;
+    let entries: Vec<_> = fixture
+        .sessions
+        .iter()
+        .flat_map(|session| {
+            catalogue.iter().enumerate().map(move |(i, symbol)| Entry {
+                row: ScreenerRow {
+                    provider: session.id,
+                    core: session.id,
+                    market: symbol.market.clone(),
+                    coin: symbol.coin.clone(),
+                    vol_24h: ((i * 7919) % 100_000) as f64,
+                    ..Default::default()
+                }
+                .into(),
+                core_name: session.name.clone().into(),
+                market_uc: symbol.market.clone().into(),
+                coin_uc: symbol.coin.clone().into(),
+                venue: Default::default(),
+            })
+        })
+        .collect();
+    assert_eq!(entries.len(), 60_000);
+    let publication = Prepared::new(entries, "vol24", true);
+    let ranks: Vec<_> = (0..20).map(Some).collect();
+    let query = CoinQuery::new("XA");
+    bench::measure("screener_keystroke_warm_filtered_cached_sort", 24, || {
+        let (indices, total, shown) = publication.select(&ranks, &query, 0.0, "vol24", true);
+        assert_eq!(total, 60_000);
+        assert_eq!(shown, 59_980);
+        assert_eq!(indices.len(), shown);
+        (indices, total, shown)
+    });
+}
+
+/// The same revision reuses its snapshot; changing a core or replacing it retires that snapshot.
+#[test]
+fn order_count_memo_tracks_table_revision_and_fleet_epoch() {
+    use std::sync::Arc;
+
+    let mut memo = super::OrderCountMemo::default();
+    let store = crate::test_support::fixtures::core_store(1, 0, 1, 0, 0);
+    let orders = &store.core(1).unwrap().orders;
+    let market = orders[0].market.as_str();
+    let old = memo.counts(1, 1, orders);
+    let other = memo.counts(2, 1, orders);
+    assert_eq!(old[market], 1);
+    assert!(Arc::ptr_eq(&old, &memo.counts(1, 1, orders)));
+    let empty = memo.counts(1, 2, &[]);
+    assert!(empty.is_empty());
+    assert_eq!(old[market], 1);
+    assert!(Arc::ptr_eq(&other, &memo.counts(2, 1, orders)));
+    memo.update_fleet_epoch(1);
+    assert_eq!(memo.counts(1, 2, orders)[market], 1);
+}
+
 /// Cached-only control handlers would miss market-only feed updates until another backend event.
 /// Pin the refresh wiring as a source contract because these handlers require a native GPUI window.
 #[test]

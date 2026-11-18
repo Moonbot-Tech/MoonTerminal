@@ -699,3 +699,168 @@ mod core_row_layout {
         }
     }
 }
+
+use gpui::{AppContext as _, ParentElement as _, Styled as _};
+
+/// Convert the production folder model into a fully expanded synthetic MoonTree forest.
+fn scale_forest(
+    store: &moon_core::session::CoreStore,
+) -> (Vec<moon_ui::MoonTreeItem>, Vec<gpui::SharedString>, usize) {
+    use crate::strategies::logic::{FolderNode, build_node};
+    use moon_ui::MoonTreeItem;
+
+    fn children(
+        node: &FolderNode<'_>,
+        core: u64,
+        prefix: &str,
+        expanded: &mut Vec<gpui::SharedString>,
+        visited: &mut usize,
+    ) -> Vec<MoonTreeItem> {
+        let mut rows = Vec::new();
+        for (name, child) in node.children() {
+            let path = format!("{prefix}/{name}");
+            let id = format!("core-{core}-folder-{path}");
+            expanded.push(id.clone().into());
+            rows.push(
+                MoonTreeItem::new(id, name)
+                    .folder(true)
+                    .children(children(child, core, &path, expanded, visited)),
+            );
+        }
+        rows.extend(node.strategies.iter().map(|row| {
+            *visited += 1;
+            MoonTreeItem::new(format!("core-{core}-strategy-{}", row.id), row.name.clone())
+        }));
+        rows
+    }
+
+    let mut forest = Vec::new();
+    let mut expanded = Vec::new();
+    let mut visited = 0;
+    for core in 1..=20 {
+        let data = store.core(core).expect("scale fixture core");
+        let root = build_node(data.strategies.iter());
+        let id = format!("core-{core}");
+        expanded.push(id.clone().into());
+        forest.push(
+            MoonTreeItem::new(id, format!("CORE_{core:02}"))
+                .folder(true)
+                .children(children(&root, core, "", &mut expanded, &mut visited)),
+        );
+    }
+    (forest, expanded, visited)
+}
+
+/// Minimal headless host for the real MoonTree flattening, virtualization, and draw path.
+struct StrategyTreeBench {
+    state: gpui::Entity<moon_ui::MoonTreeState>,
+}
+
+impl gpui::Render for StrategyTreeBench {
+    /// Draw one synthetic tree row through MoonTree's custom renderer.
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        gpui::div()
+            .size_full()
+            .child(moon_ui::MoonTree::custom(&self.state, |entry, _, _, _| {
+                gpui::div().child(entry.item().id().to_string())
+            }))
+    }
+}
+
+/// Open a headless tree fixture with the supplied forest already installed.
+fn open_strategy_tree(
+    cx: &mut gpui::TestAppContext,
+    items: Vec<moon_ui::MoonTreeItem>,
+    expanded: Vec<gpui::SharedString>,
+) -> (
+    gpui::WindowHandle<StrategyTreeBench>,
+    gpui::VisualTestContext,
+) {
+    let window = cx.open_window(gpui::size(gpui::px(1_200.0), gpui::px(800.0)), |_, cx| {
+        let state = cx.new(|cx| moon_ui::MoonTreeState::new(cx));
+        state.update(cx, |state, cx| {
+            state.set_items(items, cx);
+            state.set_expanded(expanded, cx);
+        });
+        StrategyTreeBench { state }
+    });
+    let visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    (window, visual)
+}
+
+/// Time rules loading, a 20x100 folder build, and the first headless tree draw.
+#[gpui::test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_strategies_open_2k(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let store = crate::test_support::fixtures::core_store(20, 100, 0, 0, 0);
+    crate::test_support::bench::measure(
+        "bench_s_strategies_open_2k stimulus=cold_open_first_draw cores=20 strategies=2000 partial_(no_Backend_wiring)",
+        3,
+        || {
+            let rules = crate::strategies::rules::Rules::load();
+            let (items, expanded, visited) = scale_forest(&store);
+            assert_eq!(visited, 2_000);
+            let (_window, mut visual) = open_strategy_tree(cx, items, expanded);
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            visual.update(|window, _| window.remove_window());
+            (rules, visited)
+        },
+    );
+}
+
+/// Time warm tree frames and frames following a real CoreStore strategy revision.
+#[gpui::test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_strategies_render_tree(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let mut store = crate::test_support::fixtures::core_store(20, 100, 0, 0, 0);
+    let (items, expanded, visited) = scale_forest(&store);
+    assert_eq!(visited, 2_000);
+    let (window, mut visual) = open_strategy_tree(cx, items, expanded);
+    crate::test_support::bench::measure(
+        "bench_s_strategies_render_tree_warm stimulus=warm_reuse rows=2000",
+        5,
+        || {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        },
+    );
+    let mut revision = 0;
+    crate::test_support::bench::measure(
+        "bench_s_strategies_render_tree_revision stimulus=store_revision_change rows=2000",
+        3,
+        || {
+            revision += 1;
+            let mut rows = store.core(1).expect("core").strategies.clone();
+            rows[0].name = format!("UNIT_REV_{revision}");
+            store
+                .core_mut(1)
+                .expect("core")
+                .apply(moon_core::feed::FeedMsg::Strategies(rows));
+            let (items, expanded, visited) = scale_forest(&store);
+            assert_eq!(visited, 2_000);
+            window
+                .update(&mut visual, |view, _, cx| {
+                    view.state.update(cx, |state, cx| {
+                        state.set_items(items, cx);
+                        state.set_expanded(expanded, cx);
+                    });
+                })
+                .expect("tree window");
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        },
+    );
+    visual.update(|window, _| window.remove_window());
+}
