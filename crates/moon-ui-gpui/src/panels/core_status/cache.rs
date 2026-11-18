@@ -819,15 +819,14 @@ impl CoreStatusView {
                     .cached_floors(generation, &locale, || built)
             }
         };
-        // One list for the header and every row. The drag map is read inside this block so the
-        // borrow ends before the venue read below. Width 0 (not measured yet) keeps every key.
-        // Keyed on every input but the rows, which the generation stands for. The dragged widths
-        // and the measured width move during a column drag; the rest only with the snapshot.
+        // One list for the header and every row. Width 0 (not measured yet) keeps every key.
+        // Keyed on every input but the rows, which the generation stands for (the floors move
+        // with the rows and the locale). A dragged width is not an input: the drop is decided on
+        // the columns' minimums, and the table shrinks a wide drag back toward them itself.
         let columns_key = super::frame_cache::ColumnsKey {
             generation,
             hidden: hidden.clone(),
             uniform: uniform.iter().map(|fact| fact.key).collect(),
-            dragged: self.table_state.read(cx).column_widths.clone(),
             measured_w_bits: self.flat_measured_w.to_bits(),
             locale,
         };
@@ -838,7 +837,6 @@ impl CoreStatusView {
                 let built = table::projected_column_keys(
                     hidden,
                     &uniform_keys,
-                    &columns_key.dragged,
                     self.flat_measured_w,
                     &floors,
                 );

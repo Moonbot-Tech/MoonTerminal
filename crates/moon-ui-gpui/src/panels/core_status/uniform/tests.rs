@@ -181,13 +181,7 @@ fn matching_builds_keep_the_version_column() {
         let uniform: Vec<&str> = facts.iter().map(|fact| fact.key).collect();
         assert!(!uniform.contains(&"version"));
         for width in [300.0, 720.0, 1920.0] {
-            let keys = projected_column_keys(
-                &HashSet::new(),
-                &uniform,
-                &HashMap::new(),
-                width,
-                &HashMap::new(),
-            );
+            let keys = projected_column_keys(&HashSet::new(), &uniform, width, &HashMap::new());
             assert!(keys.contains(&"version"), "{suffix:?} at {width}px");
         }
     }

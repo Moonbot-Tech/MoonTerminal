@@ -1,8 +1,10 @@
 //! How many Flat-column tiers a narrow Core Status dock drops.
 //!
-//! Dropping follows measured widths, in a fixed order. Core ping and the core name (which carries
-//! the status dot) are never in a tier, so a dock that is only a few pixels wide still shows who
-//! is offline and what their ping is.
+//! Dropping is the last resort, in a fixed order: the table first shrinks every column toward its
+//! minimum (`table.rs::column_minimum`, the widest figure it shows), and a tier leaves only when
+//! even the minimums do not fit. Core ping and the core name (which carries the status dot) are
+//! never in a tier, so a dock that is only a few pixels wide still shows who is offline and what
+//! their ping is.
 
 /// Column ids removed together, cheapest tier first.
 ///
@@ -14,7 +16,8 @@ pub(super) const DROP_TIERS: [&[&str]; 3] = [
     &["mem_used", "server"],
 ];
 
-/// Smallest drop level at which the measured columns fit.
+/// Smallest drop level at which the columns fit at the widths given (the caller passes each
+/// column's minimum).
 ///
 /// Level 0 removes nothing. Level 1 removes the first tier, level 2 the first two, level 3
 /// every tier. A key that does not appear in `measured` contributes 0. The fit test is

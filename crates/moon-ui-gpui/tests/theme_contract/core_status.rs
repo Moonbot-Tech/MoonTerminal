@@ -65,7 +65,7 @@ fn core_status_section_row_derives_its_cell_count_from_declared_columns() {
     let section = code_only(braced_body(&table, "fn section_row("));
 
     assert!(
-        host.contains("filled_columns(&column_keys, state.read(cx));")
+        host.contains("filled_columns(&column_keys, state.read(cx), floors);")
             && host.contains("let section_column_count = column_keys.len();")
             && host.contains("section_column_count,")
             && host.contains(".columns(table_columns)"),
@@ -260,7 +260,8 @@ fn core_status_alarms_table_has_an_always_visible_vertical_bar() {
 /// the previous subject), drop the rail follow from `rebuild_cache` or run it before the groups
 /// are replaced (an Auto rail switch leaves it, or resolves the core to a stale server), or drop
 /// the filler strip from the table-state observer or the filler record from render (the first
-/// drag's leftover share becomes the filler's minimum and the width drop fires mid-drag).
+/// drag's leftover share becomes the filler's minimum, and widening a neighbour then shrinks
+/// every column, the ones left of the divider too).
 #[test]
 fn core_status_chart_follows_picks_and_the_filler_keeps_no_width() {
     let interactions = read_src("panels/core_status/interactions.rs");

@@ -310,7 +310,6 @@ pub(super) struct ColumnsKey {
     pub(super) generation: u64,
     pub(super) hidden: HashSet<String>,
     pub(super) uniform: Vec<&'static str>,
-    pub(super) dragged: HashMap<String, f32>,
     pub(super) measured_w_bits: u32,
     pub(super) locale: String,
 }
