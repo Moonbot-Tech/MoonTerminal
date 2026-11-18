@@ -269,6 +269,7 @@ impl CoreStatusView {
     ) -> Self {
         let core_status_revision = backend.read(cx).core_status_revision.clone();
         cx.observe(&core_status_revision, |this, _, cx| {
+            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Observe, "core-status");
             this.refresh_sample(cx);
         })
         .detach();

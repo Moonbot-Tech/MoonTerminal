@@ -269,6 +269,7 @@ impl ChartInput {
         fallback_w: f32,
         ppp: f32,
     ) -> bool {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "chart:input");
         // Non-finite deltas are refused HERE, at the one place they enter, because everything
         // downstream carries NaN silently: the threshold test below is false for NaN so it does not
         // return early, `signum()` of a NaN accumulator is NaN, `View::zoom_x_at` multiplies the

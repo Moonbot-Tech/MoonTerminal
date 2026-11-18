@@ -95,6 +95,7 @@ pub fn open(
     opts.display_id = display_id;
     let b = backend.clone();
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "assets").with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| AssetsView::new(b, AssetsScope::All, true, true, window, cx));
         cx.new(|cx| {

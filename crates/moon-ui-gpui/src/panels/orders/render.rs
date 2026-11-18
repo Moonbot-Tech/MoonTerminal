@@ -11,6 +11,7 @@ impl Focusable for OrdersPanel {
 impl Panel for OrdersPanel {
     /// Coalesces hidden-tab work into one rebuild when the panel becomes visible.
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "orders").with_window(|| _window.window_handle().window_id().as_u64());
         if self.gate.set_active(active) {
             let backend = self.backend.clone();
             self.rebuild_cache(backend.read(cx));
@@ -117,6 +118,7 @@ impl Render for OrdersPanel {
     /// Returns:
     ///     The complete Orders panel element tree.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "orders").with_window(|| _window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::ORDERS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::ORDERS_RENDER_US);
         let view = self.view;

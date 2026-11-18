@@ -195,6 +195,7 @@ fn open_window(
             );
             let view_backend = backend.clone();
             let opened = cx.open_window(options, move |window, cx| {
+                let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "profit-monitor").with_window(|| window.window_handle().window_id().as_u64());
                 crate::window::windowing::configure_shell_clear_color(window, cx);
                 crate::window::windowing::set_group_window_icon(window, 0);
                 let view = cx.new(|cx| ProfitMonitorView::new(view_backend, window, cx));

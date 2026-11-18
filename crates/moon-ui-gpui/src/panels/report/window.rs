@@ -359,6 +359,7 @@ pub fn open_scoped(
     options.display_id = display.map(|display| display.id());
     let backend_for_window = backend.clone();
     if let Ok(handle) = cx.open_window(options, move |window, cx| {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "report").with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let panel = cx.new(|cx| {
             ReportPanel::new_with_scope(backend_for_window.clone(), group, Some(scope), window, cx)

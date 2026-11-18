@@ -73,6 +73,7 @@ pub(crate) fn open_on(
     );
     opts.display_id = display;
     let created = cx.open_window(opts, move |window, cx| {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "core-cmds").with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| CoreCmdsView::new(backend.clone(), uid, cmd, window, cx));
         let weak = view.downgrade();

@@ -140,6 +140,7 @@ pub(crate) fn open_trade_window(
         stamps,
     };
     let opened = cx.open_window(opts, move |window, cx| {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "trade-window").with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_chart_clear_color(window, cx);
         let host = Host::Window {
             window_id: window.window_handle().window_id(),

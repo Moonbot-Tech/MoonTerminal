@@ -228,6 +228,7 @@ impl Render for ReportPanel {
     /// Returns:
     ///     The complete Report surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "report").with_window(|| window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::REPORT_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::REPORT_RENDER_US);
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);

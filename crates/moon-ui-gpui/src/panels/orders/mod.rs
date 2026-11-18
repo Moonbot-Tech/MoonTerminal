@@ -433,6 +433,7 @@ impl OrdersPanel {
         // Repaint after a backend drain only when the represented cache key changed or the refresh
         // gate admits its periodic update.
         cx.observe(&backend, |this, backend, cx| {
+            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Observe, "orders");
             crate::diag::bump(&crate::diag::ORDERS_OBS_FIRE);
             let now = moon_chart::paint::now_unix_ms();
             let b = backend.read(cx);

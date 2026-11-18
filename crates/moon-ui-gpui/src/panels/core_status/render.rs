@@ -25,6 +25,7 @@ impl Render for CoreStatusView {
     /// Returns:
     ///     Full dock, detached-window, or group-host panel contents.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "core-status").with_window(|| window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::CORE_STATUS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::CORE_STATUS_RENDER_US);
         // The interactive picker must agree with the rows below it, which already route through

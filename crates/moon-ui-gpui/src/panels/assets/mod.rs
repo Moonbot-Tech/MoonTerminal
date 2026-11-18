@@ -229,6 +229,7 @@ impl AssetsView {
     ) -> Self {
         // Refresh sale markers independently between full rebuilds and periodic transfer retries.
         cx.observe(&backend, |this, backend, cx| {
+            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Observe, "assets");
             let now = moon_chart::paint::now_unix_ms();
             let b = backend.read(cx);
             let sig = this.assets_sig(b);

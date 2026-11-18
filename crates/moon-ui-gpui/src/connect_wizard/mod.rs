@@ -641,6 +641,7 @@ pub(crate) fn open(
     opts.display_id = display_id;
     let b = backend.clone();
     let created = cx.open_window(opts, move |window, cx| {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "connect-wizard").with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| ConnectWizardView::new(b.clone(), window, cx));
         // The handle goes when the window does; an install it shows goes on in the backend.

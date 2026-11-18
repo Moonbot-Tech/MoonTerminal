@@ -426,6 +426,7 @@ impl Shell {
         moon_h_resizable(state_id)
             .with_state(&resize_state)
             .on_resize(move |state, _, cx| {
+                let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Resize, "splitter");
                 let scale = design::ui_value(cx, 1.0).max(0.01);
                 let Some(width) = state
                     .read(cx)

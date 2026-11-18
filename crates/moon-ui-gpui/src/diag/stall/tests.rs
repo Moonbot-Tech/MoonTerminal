@@ -199,3 +199,57 @@ fn boot_folds_frames_before_draining_and_recreates_collector_on_enable() {
     assert!(fold.contains("stall::note_frames("));
     assert!(flush.contains("stall_writer.submit(&executor, drained)"));
 }
+
+/// Catch a dropped probe when editing any instrumented UI entry point.
+#[test]
+fn ui_stall_spans_cover_instrumented_sources() {
+    macro_rules! assert_covered {
+        ($path:literal, $expected:literal) => {
+            assert_eq!(
+                include_str!(concat!("../../", $path))
+                    .matches("stall::span(")
+                    .count(),
+                $expected,
+                "stall coverage changed in {}",
+                $path,
+            );
+        };
+    }
+
+    assert_covered!("analytics/mod.rs", 1);
+    assert_covered!("analytics/profit_monitor/window.rs", 1);
+    assert_covered!("analytics/render.rs", 1);
+    assert_covered!("chart_tabs/mod.rs", 1);
+    assert_covered!("chart_tabs/windows.rs", 1);
+    assert_covered!("chartdx/data_state/state.rs", 1);
+    assert_covered!("chartdx/input.rs", 1);
+    assert_covered!("connect_wizard/mod.rs", 1);
+    assert_covered!("controls/coin_menu.rs", 1);
+    assert_covered!("core_cmds.rs", 1);
+    assert_covered!("core_expert.rs", 1);
+    assert_covered!("panels/alerts/mod.rs", 2);
+    assert_covered!("panels/assets/mod.rs", 1);
+    assert_covered!("panels/assets/render.rs", 2);
+    assert_covered!("panels/assets/window.rs", 1);
+    assert_covered!("panels/core_status/mod.rs", 1);
+    assert_covered!("panels/core_status/panel.rs", 1);
+    assert_covered!("panels/core_status/render.rs", 1);
+    assert_covered!("panels/detects/mod.rs", 3);
+    assert_covered!("panels/log/mod.rs", 1);
+    assert_covered!("panels/log/view.rs", 1);
+    assert_covered!("panels/news/mod.rs", 1);
+    assert_covered!("panels/orders/mod.rs", 1);
+    assert_covered!("panels/orders/render.rs", 2);
+    assert_covered!("panels/report/render.rs", 1);
+    assert_covered!("panels/report/window.rs", 1);
+    assert_covered!("screener/view.rs", 3);
+    assert_covered!("settings/apply.rs", 1);
+    assert_covered!("settings/mod.rs", 3);
+    assert_covered!("settings/render.rs", 2);
+    assert_covered!("shell/workspace.rs", 1);
+    assert_covered!("strategies/mod.rs", 1);
+    assert_covered!("strategies/window.rs", 1);
+    assert_covered!("trade_window/window.rs", 1);
+    assert_covered!("window/detached.rs", 2);
+    assert_covered!("window/group_window.rs", 1);
+}

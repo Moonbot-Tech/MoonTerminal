@@ -284,6 +284,7 @@ impl SettingsView {
     ///     [`SaveOutcome::Saved`] only when the config reached disk and any password change was
     ///     accepted; the window must stay open on anything else.
     pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> SaveOutcome {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "settings:save").with_window(|| window.window_handle().window_id().as_u64());
         self.backend
             .update(cx, |backend, _| backend.finish_pending_persistence());
         // Passwords FIRST. Applying them only changes key material in memory; the config write

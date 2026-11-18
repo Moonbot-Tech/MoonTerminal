@@ -388,6 +388,7 @@ impl DetachedWindow {
     ) -> Self {
         // Persist geometry from causal bounds events instead of polling during render or backend pulses.
         cx.observe_window_bounds(window, |this, window, cx| {
+            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Resize, "detached:geometry").with_window(|| window.window_handle().window_id().as_u64());
             this.persist_geometry(window, cx);
         })
         .detach();
@@ -422,6 +423,7 @@ impl DetachedWindow {
         let key = (group.clone(), panel.clone());
         let window_id = window.window_handle().window_id();
         cx.on_release(move |this, app| {
+            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Close, "detached").with_window(|| this.window_id.as_u64());
             if !this.user_close.get() {
                 return;
             }

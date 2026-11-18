@@ -570,6 +570,7 @@ fn open_bound(
     opts.display_id = display_id;
     let b = backend.clone();
     let created = cx.open_window(opts, move |window, cx| {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "core-expert").with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| CoreExpertView::new(b.clone(), &bind, window, cx));
         // Registered from inside the constructor, the way the Report window registers its panel:
