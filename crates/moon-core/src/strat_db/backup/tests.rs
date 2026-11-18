@@ -249,3 +249,58 @@ fn a_foreign_lookalike_cannot_satisfy_the_scheduled_slot() {
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Pins which directory names count as application-owned snapshots: the bare stamp, `-manual`, and
+/// `-manual-` with two digits, and nothing else.
+#[test]
+fn snapshot_stamp_accepts_only_scheduled_and_manual_names() {
+    for name in [
+        "20260101-120000",
+        "20260101-120000-manual",
+        "20260101-120000-manual-07",
+    ] {
+        assert_eq!(snapshot_stamp(name), Some("20260101-120000"), "{name}");
+    }
+    for name in [
+        "",
+        "20260101-12000",
+        "20260101_120000",
+        "2026010a-120000",
+        "20260101-120000-",
+        "20260101-120000-manua",
+        "20260101-120000-manual-7",
+        "20260101-120000-manual-0a",
+        "20260101-120000-manual-007",
+        "20260101-120000-backup",
+        "20260101-120000-manualx01",
+    ] {
+        assert_eq!(snapshot_stamp(name), None, "{name}");
+    }
+}
+
+/// Pins the completion check's rejections: a file instead of a directory, a missing database, a
+/// database shorter than the SQLite header, a missing marker, and a marker with other contents.
+#[test]
+fn completed_snapshot_requires_a_directory_a_sqlite_file_and_the_exact_marker() {
+    let root = temp_root("completion-shape");
+    let plain_file = root.join("file");
+    std::fs::write(&plain_file, b"x").unwrap();
+    assert!(!is_completed_snapshot(&plain_file));
+    assert!(!is_completed_snapshot(&root.join("absent")));
+
+    let dir = root.join("snapshot");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join(COMPLETION_NAME), COMPLETION_CONTENT).unwrap();
+    assert!(!is_completed_snapshot(&dir));
+    std::fs::write(dir.join(DATABASE_NAME), b"SQLite format").unwrap();
+    assert!(!is_completed_snapshot(&dir));
+    std::fs::write(dir.join(DATABASE_NAME), b"SQLite format 3\0").unwrap();
+    assert!(is_completed_snapshot(&dir));
+    std::fs::remove_file(dir.join(COMPLETION_NAME)).unwrap();
+    assert!(!is_completed_snapshot(&dir));
+    std::fs::write(dir.join(COMPLETION_NAME), b"moonterminal-other-backup-v1\n").unwrap();
+    assert!(!is_completed_snapshot(&dir));
+    std::fs::write(dir.join(COMPLETION_NAME), COMPLETION_CONTENT).unwrap();
+    assert!(is_completed_snapshot(&dir));
+    let _ = std::fs::remove_dir_all(root);
+}
