@@ -106,7 +106,6 @@ impl Render for CoreStatusView {
                         &marker,
                         self.core_selection.clone(),
                         &floors,
-                        self.flat_measured_w,
                         cx,
                     )
                     .into_any_element();

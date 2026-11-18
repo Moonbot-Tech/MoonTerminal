@@ -91,25 +91,26 @@ pub(super) fn visible_column_keys(
 
 /// Column keys the Flat table draws, after the width drop.
 ///
-/// The Columns menu and the same-for-all line run first. The measured dock width
-/// then removes [`columns_fit::DROP_TIERS`] from that list. Header and rows both take this vec,
-/// so they cannot disagree. A width of `0.5` or less means the canvas has not measured yet and
-/// drops nothing: the first frame would otherwise flash a stripped table.
+/// The Columns menu and the same-for-all line run first. Then the measured dock width removes
+/// [`columns_fit::DROP_TIERS`] — but only when the columns would not fit even shrunk to their
+/// minimums ([`column_minimum`]). Down to that point the table keeps every column and lets
+/// `MoonDataTable`'s fit mode shrink them, each no narrower than its own minimum, so a window a
+/// little narrower than the saved widths narrows the columns instead of hiding a group of them.
+/// Header and rows both take this vec, so they cannot disagree. A width of `0.5` or less means
+/// the canvas has not measured yet and drops nothing: the first frame would otherwise flash a
+/// stripped table.
 ///
 /// Args:
 ///     hidden_by_user: Column ids unchecked in the Columns menu.
 ///     uniform: Column ids every reporting core agrees on.
-///     dragged: User-dragged widths keyed by column id. Missing keys use the defaults.
 ///     available: Measured table width in pixels, or `0` before the first measure.
-///     floors: Minimum content width per column, including the 12+8 px cell padding.
-///         Missing keys contribute 0. The drop uses the wider of this and the current width.
+///     floors: Content floors from [`content_floors`].
 ///
 /// Returns:
 ///     Ordered keys shared by column descriptors and every rendered row.
 pub(super) fn projected_column_keys(
     hidden_by_user: &HashSet<String>,
     uniform: &[&str],
-    dragged: &HashMap<String, f32>,
     available: f32,
     floors: &HashMap<String, f32>,
 ) -> Vec<&'static str> {
@@ -119,7 +120,7 @@ pub(super) fn projected_column_keys(
     }
     let measured: Vec<(&str, f32)> = keys
         .iter()
-        .map(|key| (*key, width_for_drop(key, dragged, floors)))
+        .map(|key| (*key, column_minimum(key, floors)))
         .collect();
     let level = columns_fit::drop_level(&measured, available);
     columns_fit::apply_drop(&keys, level)
@@ -169,36 +170,44 @@ pub(super) fn flat_measure_host(
         )
 }
 
-/// Width one column contributes to the drop decision.
+/// `MoonDataTable`'s shared fit-mode minimum (`MIN_COLUMN_WIDTH` in MoonUI, private there).
 ///
-/// A dragged width wins. Otherwise the same default [`columns`] declares, so the fit test and
-/// the table cannot use two different numbers for one key.
-fn column_width(key: &str, dragged: &HashMap<String, f32>) -> f32 {
-    dragged
-        .get(key)
-        .copied()
-        .unwrap_or_else(|| default_column_width(key))
-}
+/// A column with no measured figure still cannot shrink below it, so the drop decision counts it
+/// rather than zero.
+const SHARED_MIN_COLUMN: f32 = 40.0;
 
-/// Width one column contributes to the drop decision.
+/// Narrowest the core-name column shrinks to: the status dot, its gap and about ten characters
+/// of name. The name truncates, so it has no figure to measure.
+const CORE_MIN: f32 = 120.0;
+
+/// Narrowest the server column shrinks to; the server name truncates the same way.
+const SERVER_MIN: f32 = 80.0;
+
+/// Narrowest width one Flat column may be shrunk to before a whole tier must leave the table.
 ///
-/// The current width is the drag, or the declared default. The content floor is the widest
-/// figure plus cell padding. The drop keeps whichever is wider, so a figure that does not fit
-/// the declared slot can push a tier out instead of being clipped.
+/// A measured column's minimum is its widest figure plus padding ([`content_floors`]), so a
+/// shrunk column never cuts a number. The name and server columns truncate, so theirs is fixed.
+/// The build column does not shrink below its declared width: beside the number it reserves a
+/// build-letter slot on every row, an update button slot that keeps its width while invisible,
+/// and an update-phase badge, all with gaps that scale with the font setting — the declared
+/// width is sized for that whole row, where a figure measurement would undercount it. The same
+/// value is the column's `MoonDataTableColumn::min_width` and its share of the drop decision,
+/// so the table and the drop cannot disagree about what fits.
 ///
 /// Args:
 ///     key: Canonical column id.
-///     dragged: User-dragged widths. Missing keys use the defaults.
-///     floors: Measured content floors. Missing keys contribute 0.
+///     floors: Content floors from [`content_floors`]. A missing key has no figure yet.
 ///
 /// Returns:
-///     The width, in the same pixels the table uses for column descriptors.
-pub(super) fn width_for_drop(
-    key: &str,
-    dragged: &HashMap<String, f32>,
-    floors: &HashMap<String, f32>,
-) -> f32 {
-    column_width(key, dragged).max(floors.get(key).copied().unwrap_or(0.0))
+///     The minimum, in the same pixels the table uses for column descriptors.
+pub(super) fn column_minimum(key: &str, floors: &HashMap<String, f32>) -> f32 {
+    let own = match key {
+        "core" => CORE_MIN,
+        "server" => SERVER_MIN,
+        "version" => default_column_width(key).max(floors.get(key).copied().unwrap_or(0.0)),
+        _ => floors.get(key).copied().unwrap_or(0.0),
+    };
+    own.max(SHARED_MIN_COLUMN)
 }
 
 /// Unscaled font size `MoonTableCell` draws when the caller does not set one.
@@ -207,7 +216,14 @@ const CELL_FONT: f32 = 10.5;
 /// Weight of that default cell face.
 const CELL_WEIGHT: f32 = 400.0;
 
-/// Widest rendered figure of each column, plus the table's 12+8 px cell padding.
+/// Width of the mini CPU bar drawn before the percent in the two CPU cells, design pixels.
+const CPU_BAR_W: f32 = 38.0;
+
+/// Gap between that bar and the percent, design pixels.
+const CPU_BAR_GAP: f32 = 6.0;
+
+/// Widest rendered figure of each column, plus the table's 12+8 px cell padding, plus the CPU
+/// cells' bar and its gap, which they draw before the percent on every row.
 ///
 /// Name and server are omitted: those cells truncate.
 /// The result is cached by the caller on the row generation and the locale, because the
@@ -232,7 +248,14 @@ pub(super) fn content_floors(rows: &[CoreStatusRow], cx: &App) -> HashMap<String
                 let width = crate::design::ui_text_width(cx, &text, CELL_FONT, CELL_WEIGHT, true);
                 widest = widest.max(width);
             }
-            (widest > 0.0).then_some((key.to_string(), widest + CELL_PAD_LEFT + CELL_PAD_RIGHT))
+            let beside = match key {
+                "cpu_proc" | "cpu_sys" => crate::design::ui_value(cx, CPU_BAR_W + CPU_BAR_GAP),
+                _ => 0.0,
+            };
+            (widest > 0.0).then_some((
+                key.to_string(),
+                widest + beside + CELL_PAD_LEFT + CELL_PAD_RIGHT,
+            ))
         })
         .collect()
 }
@@ -250,70 +273,6 @@ fn figure_for_floor(row: &CoreStatusRow, key: &str) -> String {
         )),
         _ => cell_text_for(row, key),
     }
-}
-
-/// Raise each descriptor to its content floor, then spend only the slack above those floors
-/// when the dock is narrower than the declared sum.
-///
-/// `MoonDataTable`'s Fit policy otherwise scales every column toward a shared 40 px minimum,
-/// which cuts a retained ping below the figure the drop decision just reserved. After this
-/// pass the widths sum to the dock whenever the floors themselves fit, so Fit has nothing
-/// left to shrink.
-///
-/// Args:
-///     columns: Descriptors at their declared widths, in display order.
-///     floors: Content floors from [`content_floors`]. Missing keys stay at the declared width.
-///     available: Measured dock width. `0` leaves the declared widths alone.
-///
-/// Returns:
-///     The same descriptors with widths that are at least the floor and, when possible, fit.
-pub(super) fn respect_content_floors(
-    mut columns: Vec<MoonDataTableColumn>,
-    floors: &HashMap<String, f32>,
-    available: f32,
-) -> Vec<MoonDataTableColumn> {
-    for column in &mut columns {
-        let floor = floors.get(column.key.as_ref()).copied().unwrap_or(0.0);
-        column.width = column.width.max(floor);
-    }
-    if available <= 0.5 {
-        return columns;
-    }
-    let sum: f32 = columns.iter().map(|column| column.width).sum();
-    if sum <= available + 0.5 {
-        return columns;
-    }
-    let floor_of =
-        |column: &MoonDataTableColumn| floors.get(column.key.as_ref()).copied().unwrap_or(0.0);
-    let floor_sum: f32 = columns.iter().map(floor_of).sum();
-    if floor_sum >= available {
-        for column in &mut columns {
-            let floor = floor_of(column);
-            if floor > 0.0 {
-                column.width = floor;
-            }
-        }
-        return columns;
-    }
-    let slack_total = (sum - floor_sum).max(0.0);
-    if slack_total <= 0.0 {
-        return columns;
-    }
-    let extra = available - floor_sum;
-    let mut used = 0.0_f32;
-    let last = columns.len().saturating_sub(1);
-    for (index, column) in columns.iter_mut().enumerate() {
-        let floor = floor_of(column);
-        let slack = (column.width - floor).max(0.0);
-        let width = if index == last {
-            (available - used).max(floor)
-        } else {
-            floor + extra * (slack / slack_total)
-        };
-        column.width = width;
-        used += width;
-    }
-    columns
 }
 
 /// Declared width of one Flat column, in logical pixels.
@@ -485,8 +444,9 @@ pub(super) fn fill_target(
 ///
 /// `MoonDataTable` records every header's current width on the first drag of ANY column, the
 /// filler's leftover share included. Kept, that share would become the filler's minimum:
-/// widening a neighbour by one pixel would overflow the table, shrink every column at once and,
-/// through the width drop, take a whole tier of columns off mid-drag.
+/// widening a neighbour by one pixel would overflow the table and make fit mode shrink every
+/// column at once, those left of the dragged divider included, so the divider slides off the
+/// cursor.
 ///
 /// Args:
 ///     widths: The Flat table's retained widths.
@@ -502,22 +462,29 @@ pub(super) fn strip_fill_width(widths: &mut HashMap<String, f32>, fill: Option<&
 ///
 /// [`fill_target`] gets `fill` and loses its resize handle, as the filling columns of Problems
 /// and Warnings do: its width is whatever the others leave, so a drag on it would have nothing
-/// to set. Every other descriptor keeps its declared width.
+/// to set. Every descriptor carries its [`column_minimum`] as `min_width`, which bounds how far
+/// `MoonDataTable`'s fit mode shrinks it in a narrow dock, and a declared width under that
+/// minimum is raised to it so an untouched column never starts out cutting its own figure.
 ///
 /// Args:
 ///     keys: Visible column keys, in source order.
 ///     state: Table state carrying the user-dragged widths and the dragged column order.
+///     floors: Content floors from [`content_floors`].
 ///
 /// Returns:
 ///     The keys rows render, and one descriptor per key.
 pub(super) fn filled_columns(
     keys: &[&'static str],
     state: &MoonDataTableState,
+    floors: &HashMap<String, f32>,
 ) -> (Vec<&'static str>, Vec<MoonDataTableColumn>) {
     let fill = fill_target(keys, state);
     let descriptors = columns(keys)
         .into_iter()
         .map(|column| {
+            let minimum = column_minimum(column.key.as_ref(), floors);
+            let mut column = column.min_width(minimum);
+            column.width = column.width.max(minimum);
             if Some(column.key.as_ref()) == fill {
                 let mut column = column.fill();
                 column.resizable = false;
@@ -552,9 +519,7 @@ pub(super) fn filled_columns(
 ///         into a scope by the right-click handler.
 ///     marker: This panel's scope marker, which swaps the empty-state sentence when the active
 ///         preset hid every configured core.
-///     floors: Content floors for the visible columns. The descriptors are raised to these
-///         and then slack-compressed into `available`.
-///     available: Measured table width. `0` keeps the declared widths.
+///     floors: Content floors for the visible columns; see [`filled_columns`].
 ///     cx: Panel context used for palette, empty-state localization, and the sort callback.
 ///
 /// Returns:
@@ -573,7 +538,6 @@ pub(super) fn core_status_table(
     marker: &ScopeMarker,
     selection: RowSelection<CoreId>,
     floors: &HashMap<String, f32>,
-    available: f32,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
     // Keyed on the CORES, not the lines: a table holding nothing but headings is not representable
@@ -593,9 +557,8 @@ pub(super) fn core_status_table(
     // Taken from `columns()` rather than written as a literal: a heading row must emit EXACTLY as
     // many cells as there are columns, or `MoonDataTable` skips the whole cell permutation for it.
     // Deriving the count keeps a column added elsewhere in this table a no-op for the headings.
-    let (keys, table_columns) = filled_columns(&column_keys, state.read(cx));
+    let (keys, table_columns) = filled_columns(&column_keys, state.read(cx), floors);
     let column_keys = Rc::new(keys);
-    let table_columns = respect_content_floors(table_columns, floors, available);
     let section_column_count = column_keys.len();
     let row_column_keys = column_keys.clone();
     // Cloned BEFORE `lines`/`rows`/`view` are moved into the row-builder and sort closures below:
@@ -1195,7 +1158,7 @@ fn cpu_bar_cell(
     }
     let selector = id.to_string();
     let bar = value.map(|pct| {
-        div().w(design::ui_px(app, 38.0)).flex_none().child(
+        div().w(design::ui_px(app, CPU_BAR_W)).flex_none().child(
             MoonProgress::new(SharedString::from(format!("cs-cpu-bar-{which}-{}", r.id)))
                 .value(f32::from(pct))
                 .color(color)
@@ -1208,7 +1171,7 @@ fn cpu_bar_cell(
             .debug_selector(move || selector)
             .w_full()
             .items_center()
-            .gap(design::ui_px(app, 6.0))
+            .gap(design::ui_px(app, CPU_BAR_GAP))
             .when_some(bar, |row, bar| row.child(bar))
             .child(
                 div()

@@ -135,19 +135,12 @@ fn a_second_render_with_unchanged_revisions_recomputes_nothing() {
             generation,
             hidden: HashSet::new(),
             uniform: Vec::new(),
-            dragged: HashMap::new(),
             measured_w_bits: 1100.0f32.to_bits(),
             locale: locale.clone(),
         };
         frame.columns.get_or_build(columns_key, || {
             builds.set(builds.get() + 1);
-            table::projected_column_keys(
-                &HashSet::new(),
-                &[],
-                &HashMap::new(),
-                1100.0,
-                &HashMap::new(),
-            )
+            table::projected_column_keys(&HashSet::new(), &[], 1100.0, &HashMap::new())
         });
     };
     render(&mut frame);
@@ -277,7 +270,6 @@ fn bench_body() {
         std::hint::black_box(table::projected_column_keys(
             &HashSet::new(),
             &[],
-            &HashMap::new(),
             1100.0,
             &HashMap::new(),
         ));

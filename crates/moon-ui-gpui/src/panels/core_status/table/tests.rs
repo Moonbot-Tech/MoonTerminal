@@ -147,30 +147,39 @@ fn cell_text_for_keeps_numbers_while_the_core_is_connecting() {
     assert_eq!(cell_text_for(&connecting, "ping"), "12 ms");
 }
 
-/// A narrow measured width removes the drop tiers in order. Ping and the name stay.
-/// Width 0 has not been measured and removes nothing.
+/// Columns shrink before any of them leaves: a width below the declared sum but above the sum
+/// of the columns' minimums keeps every column. Below the minimums the drop tiers go in order;
+/// ping and the name stay. Width 0 has not been measured and removes nothing.
 ///
-/// Breaks when the render helper drops the name, or strips columns before the canvas has a width.
+/// Breaks when the drop is decided on declared or dragged widths again (a window a little
+/// narrower than the saved layout then hides a whole tier instead of narrowing the columns),
+/// when the render helper drops the name, or when it strips columns before the canvas has a
+/// width.
 #[test]
-fn projected_column_keys_follow_drop_tiers_at_a_narrow_width() {
+fn projected_column_keys_shrink_before_they_drop() {
     let hidden = HashSet::new();
-    let dragged = HashMap::new();
     let floors = HashMap::new();
-    let wide = projected_column_keys(&hidden, &[], &dragged, 100_000.0, &floors);
-    let unmeasured = projected_column_keys(&hidden, &[], &dragged, 0.0, &floors);
+    let wide = projected_column_keys(&hidden, &[], 100_000.0, &floors);
+    let unmeasured = projected_column_keys(&hidden, &[], 0.0, &floors);
     assert_eq!(unmeasured, wide);
 
-    let sum: f32 = wide.iter().map(|key| default_column_width(key)).sum();
-    let tier0: f32 = ["cpu_sys", "startup"]
-        .into_iter()
-        .map(default_column_width)
-        .sum();
-    let tier1: f32 = ["free_phys", "ping_exch"]
-        .into_iter()
-        .map(default_column_width)
-        .sum();
+    let minimum = |key: &str| super::column_minimum(key, &floors);
+    let declared: f32 = wide.iter().map(|key| default_column_width(key)).sum();
+    let sum: f32 = wide.iter().map(|key| minimum(key)).sum();
+    assert!(
+        sum < declared - 100.0,
+        "minimums {sum} vs declared {declared}"
+    );
+    let shrunk = projected_column_keys(&hidden, &[], sum + 1.0, &floors);
+    assert_eq!(
+        shrunk, wide,
+        "between the minimums and the declared widths nothing drops"
+    );
+
+    let tier0: f32 = ["cpu_sys", "startup"].into_iter().map(minimum).sum();
+    let tier1: f32 = ["free_phys", "ping_exch"].into_iter().map(minimum).sum();
     let available = sum - tier0 - tier1 + 1.0;
-    let narrow = projected_column_keys(&hidden, &[], &dragged, available, &floors);
+    let narrow = projected_column_keys(&hidden, &[], available, &floors);
     let expected: Vec<&str> = wide
         .iter()
         .copied()
@@ -229,7 +238,7 @@ struct ProductionProbe {
     rows: Vec<CoreStatusRow>,
     /// Column ids after the drop for this width.
     keys: Vec<&'static str>,
-    /// Content floors the descriptors are compressed against.
+    /// Content floors the descriptors take their `min_width` from.
     floors: HashMap<String, f32>,
     /// Dock width. Also the table's Fit viewport.
     width: f32,
@@ -244,8 +253,8 @@ impl Render for ProductionProbe {
         let keys = self.keys.clone();
         let rows = self.rows.clone();
         let names: HashMap<ServerKey, String> = HashMap::new();
-        let columns =
-            super::respect_content_floors(super::columns(&self.keys), &self.floors, self.width);
+        let (_, columns) =
+            super::filled_columns(&self.keys, &MoonDataTableState::new(), &self.floors);
         let width = self.width;
         let table = MoonDataTable::new("cs-flat-layout", rows.len(), move |index, _, app| {
             super::core_status_row(&rows[index], &keys, &names, None, false, palette, app)
@@ -299,10 +308,12 @@ impl Render for MeasureProbe {
 
 /// Columns still on screen at this dock width, in display order.
 ///
-/// 1640 fits every declared column. 1100 and 720 have shed all three drop tiers. The lists are
-/// written out: a helper that walked the tiers again would stay green after the order changed.
+/// 1640 fits every declared column. 1100 is narrower than the declared sum but wider than the
+/// columns' minimums, so every column stays and the table shrinks them; 720 is below even the
+/// minimums. The lists are written out: a helper that walked the tiers again would stay green
+/// after the order changed.
 fn expected_keys(width: f32) -> &'static [&'static str] {
-    if width >= 1_640.0 {
+    if width >= 1_100.0 {
         &[
             "core",
             "server",
@@ -320,6 +331,9 @@ fn expected_keys(width: f32) -> &'static [&'static str] {
             "tz_off",
         ]
     } else {
+        // All three tiers are gone: the CPU minimum carries its bar and the build column does
+        // not shrink below its declared width, so even process memory and the server name do
+        // not fit at their minimums here.
         &[
             "core",
             "version",
@@ -365,17 +379,32 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
         .sys
         .round_trip_ms = Some(12_345);
     let hidden = HashSet::new();
-    let dragged = HashMap::new();
     let empty_floors = HashMap::new();
-    let wide = projected_column_keys(&hidden, &[], &dragged, 100_000.0, &empty_floors);
+    let wide = projected_column_keys(&hidden, &[], 100_000.0, &empty_floors);
     let mut line_h: HashMap<(&str, i32), f32> = HashMap::new();
 
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
         for width in WIDTHS {
             let floors = cx.update(|app| super::content_floors(&rows, app));
-            let keys = projected_column_keys(&hidden, &[], &dragged, width, &floors);
-            assert_eq!(keys, expected_keys(width), "{code} @ {width}");
+            let keys = projected_column_keys(&hidden, &[], width, &floors);
+            if width >= 1_640.0 || width < 1_000.0 {
+                assert_eq!(keys, expected_keys(width), "{code} @ {width}");
+            } else {
+                // 1100 sits at the edge of the first tier: its startup cells carry each
+                // language's own words, so a long translation (Turkish) gives up that cheapest
+                // tier while a short one keeps every column. Nothing beyond it may go.
+                let gone: Vec<&str> = expected_keys(width)
+                    .iter()
+                    .copied()
+                    .filter(|key| !keys.contains(key))
+                    .collect();
+                assert!(
+                    gone.iter()
+                        .all(|key| columns_fit::DROP_TIERS[0].contains(key)),
+                    "{code} @ {width}: only the first tier may drop, gone {gone:?}"
+                );
+            }
             let ping_text = cell_text_for(
                 rows.iter().find(|row| row.id == 2).expect("ready core"),
                 "ping",
@@ -445,7 +474,7 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
         let floors = cx.update(|app| super::content_floors(&rows, app));
-        let keys = projected_column_keys(&hidden, &[], &dragged, 260.0, &floors);
+        let keys = projected_column_keys(&hidden, &[], 260.0, &floors);
         let mut visual = layout_fixture::open(cx, 260.0, 420.0, {
             let rows = rows.clone();
             let floors = floors.clone();
@@ -578,6 +607,8 @@ struct DockProbe {
     keys: Vec<&'static str>,
     /// Table state carrying the persisted drags the probe restores.
     state: Entity<MoonDataTableState>,
+    /// Content floors the descriptors take their minimums from; empty leaves the shared ones.
+    floors: HashMap<String, f32>,
 }
 
 impl Render for DockProbe {
@@ -586,7 +617,7 @@ impl Render for DockProbe {
         let p = MoonPalette::active(cx);
         let rows = self.rows.clone();
         let lines = self.lines.clone();
-        let (keys, columns) = super::filled_columns(&self.keys, self.state.read(cx));
+        let (keys, columns) = super::filled_columns(&self.keys, self.state.read(cx), &self.floors);
         let count = keys.len();
         let names: HashMap<ServerKey, String> = HashMap::new();
         let table = MoonDataTable::new(
@@ -666,13 +697,15 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
     assert_eq!(sections, 2, "fixture must span two exchanges");
     let rows = Rc::new(rows);
     let lines = Rc::new(lines);
-    let keys = visible_column_keys(&HashSet::new(), &[]);
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
         for (width, all_dragged) in WIDTHS
             .into_iter()
             .flat_map(|width| [(width, false), (width, true)])
         {
+            // The columns production draws at this width: the drop runs before the table, so
+            // the probe never asks the table to fit more than their minimums allow.
+            let keys = projected_column_keys(&HashSet::new(), &[], width, &HashMap::new());
             let mut visual = layout_fixture::open(cx, width, 420.0, {
                 let rows = rows.clone();
                 let lines = lines.clone();
@@ -688,6 +721,7 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
                         lines,
                         keys,
                         state: cx.new(|_| state),
+                        floors: HashMap::new(),
                     }
                 }
             });
@@ -922,6 +956,7 @@ fn persisted_layout_last_column_absorbs_the_leftover(cx: &mut gpui::TestAppConte
                         lines,
                         keys,
                         state,
+                        floors: HashMap::new(),
                     }
                 }
             });
@@ -1035,6 +1070,7 @@ fn a_width_change_moves_only_the_columns_right_of_the_divider(cx: &mut gpui::Tes
                     lines,
                     keys,
                     state,
+                    floors: HashMap::new(),
                 }
             }
         });
@@ -1078,9 +1114,9 @@ fn a_width_change_moves_only_the_columns_right_of_the_divider(cx: &mut gpui::Tes
 /// The filler loses its saved width and its resize handle; nothing else does.
 ///
 /// Breaks when the filler keeps a width (the first drag's leftover share would become its
-/// minimum: one more pixel on a neighbour overflows the table and the width drop takes a tier
-/// off mid-drag), when the strip removes another column's width, or when the filler gets a
-/// resize handle back.
+/// minimum: one more pixel on a neighbour overflows the table and fit mode shrinks every
+/// column, the ones left of the divider too), when the strip removes another column's width, or
+/// when the filler gets a resize handle back.
 #[test]
 fn the_filler_keeps_no_width_and_no_resize_handle() {
     // `filled_columns` translates the column titles; the first lookup must not run on the
@@ -1102,10 +1138,91 @@ fn the_filler_keeps_no_width_and_no_resize_handle() {
     );
     assert!(!super::strip_fill_width(&mut state.column_widths, None));
 
-    let (_, columns) = super::filled_columns(&keys, &state);
+    let (_, columns) = super::filled_columns(&keys, &state, &HashMap::new());
     for column in &columns {
         let is_fill = column.key.as_ref() == "tz_off";
         assert_eq!(column.fill, is_fill, "{} fill", column.key);
         assert_eq!(column.resizable, !is_fill, "{} resize handle", column.key);
     }
+}
+
+/// A saved layout wider than the window narrows its columns instead of hiding a tier.
+///
+/// The widths are a real reported layout: eleven columns dragged once, summing to about 1270 px
+/// before the two API columns and startup join them, in a window about 1190 px wide. Every
+/// column must stay, none may be narrower than its own minimum (so no figure is cut), and the
+/// last one must end inside the window. Breaks when the drop is decided on the saved widths
+/// again — the second tier (free RAM, exchange ping) then leaves at this width — or when the
+/// table shrinks a column below the figure it shows.
+#[gpui::test]
+fn a_saved_layout_wider_than_the_window_shrinks_instead_of_hiding(cx: &mut gpui::TestAppContext) {
+    crate::test_locale::warm();
+    layout_fixture::install_dark(cx);
+    let (rows, lines) = dock_fixture();
+    let floors = cx.update(|app| super::content_floors(&rows, app));
+    let width = 1_190.0;
+    let all = visible_column_keys(&HashSet::new(), &[]);
+    let keys = projected_column_keys(&HashSet::new(), &[], width, &floors);
+    assert_eq!(keys, all, "every column fits at its minimum in {width} px");
+
+    let saved = [
+        ("core", 203.3),
+        ("server", 113.9),
+        ("version", 132.7),
+        ("ping", 87.5),
+        ("ping_exch", 99.8),
+        ("cpu_proc", 124.2),
+        ("cpu_sys", 124.2),
+        ("cpus", 82.8),
+        ("mem_used", 103.5),
+        ("free_phys", 113.9),
+        ("api_key", 86.6),
+    ];
+    let mut seeded = MoonDataTableState::new();
+    for (key, saved_width) in saved {
+        seeded.set_column_width(key, saved_width);
+    }
+    let rows = Rc::new(rows);
+    let lines = Rc::new(lines);
+    let mut visual = layout_fixture::open(cx, width, 420.0, {
+        let keys = keys.clone();
+        let floors = floors.clone();
+        move |_, cx| DockProbe {
+            rows,
+            lines,
+            keys,
+            state: cx.new(|_| seeded),
+            floors,
+        }
+    });
+    layout_fixture::draw(&mut visual);
+    let slot = visual.debug_bounds("cs-dock-slot").expect("content slot");
+    let mut left = f32::from(slot.left());
+    // Every column but the filler (the last one) has a resize strip flush with its right edge.
+    for key in &keys[..keys.len() - 1] {
+        let strip = visual
+            .debug_bounds(layout_fixture::leak_selector(format!(
+                "cs-dock-table:resize:{key}"
+            )))
+            .unwrap_or_else(|| panic!("{key} resize strip"));
+        let right = f32::from(strip.right());
+        let drawn = right - left;
+        let minimum = super::column_minimum(key, &floors);
+        assert!(
+            drawn + 1.0 >= minimum,
+            "{key} drawn {drawn} px, under its minimum {minimum}"
+        );
+        assert!(
+            right <= f32::from(slot.right()) + 0.5,
+            "{key} ends at {right}, past the window edge {}",
+            f32::from(slot.right())
+        );
+        left = right;
+    }
+    let last = keys[keys.len() - 1];
+    let room = f32::from(slot.right()) - left;
+    assert!(
+        room + SCROLLBAR_SLACK + 1.0 >= super::column_minimum(last, &floors),
+        "{last} has {room} px left, under its minimum"
+    );
 }
