@@ -481,6 +481,9 @@ pub(in crate::chartdx) struct PaneRender {
     /// idle chart pays nothing. A ratio scale (Fibonacci) is the exception and always names its
     /// levels — a level whose price appears only under the cursor cannot be read at a glance.
     pub(in crate::chartdx) figure_labels: Vec<moon_chart::figures::FigureLabel>,
+    /// What this pane drew of its auto figures: the userdata segment the price pass may redraw,
+    /// the line records the captions, the hover and the right-click read.
+    pub(in crate::chartdx) auto: crate::chartdx::auto_figures_sync::pane::AutoPaneDrawn,
     /// Stable priority order for `order_labels`, rebuilt together with order labels.
     /// Cursor-only text frames must not allocate/sort it again.
     pub(in crate::chartdx) order_label_order: Vec<usize>,
@@ -799,6 +802,7 @@ impl PaneRender {
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
+            auto: Default::default(),
             order_label_order: Vec::new(),
             order_caption_scratch: Vec::new(),
             orderbook_labels: Vec::new(),

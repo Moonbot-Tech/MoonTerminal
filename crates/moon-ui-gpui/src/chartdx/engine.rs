@@ -88,6 +88,7 @@ impl ChartEngine {
             cursor_labels: true,
             cursor_badge: None,
             ruler: None,
+            auto_hover: None,
             pixel_scale: 1.0,
             #[cfg(windows)]
             scissor_rs: None,

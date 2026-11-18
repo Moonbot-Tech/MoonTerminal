@@ -60,12 +60,7 @@ fn big_jumps_bad_spans_and_fixed_rows() {
     assert_eq!(auto.update(1_000.0 * H), TfId::D1);
     assert_eq!(auto.update(f64::NAN), TfId::D1);
     assert_eq!(auto.update(0.0), TfId::D1);
-    assert_eq!(
-        resolve(TfSource::Fixed(TfId::H1), &mut auto, 1.0 * H),
-        TfId::H1
-    );
     assert_eq!(auto.current(), Some(TfId::D1));
-    assert_eq!(resolve(TfSource::Auto, &mut auto, 1_000.0 * H), TfId::D1);
 }
 
 /// Where the bars come from, case by case.

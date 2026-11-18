@@ -444,11 +444,14 @@ impl ChartDataState {
             };
             let hot = hovered == Some((pane, mark, buy));
             let marker = trade_marks::trade_marker(&geom.clusters[ix], ctx, hot);
-            if !pr
-                .layers
-                .patch_markers(&[(geom.marker_offset + ix as u32, marker)])
-            {
+            let at = geom.marker_offset + ix as u32;
+            if !pr.layers.patch_markers(&[(at, marker)]) {
                 return false;
+            }
+            // The retained buffers mirror what is uploaded: the auto-figure price pass re-uploads
+            // them whole (`auto_figures_sync::pane`), and a stale copy would shrink the arrow back.
+            if let Some(slot) = pr.ud_scratch.markers.get_mut(at as usize) {
+                *slot = marker;
             }
             pr.gpu_prepare_dirty = true;
             touched = true;

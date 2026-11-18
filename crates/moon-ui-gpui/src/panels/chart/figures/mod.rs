@@ -85,7 +85,7 @@ impl ChartPanel {
     }
 
     /// Return the `(core, market)` chart key for a pane index.
-    fn fig_pane_key(&self, pane: usize) -> Option<(CoreId, String)> {
+    pub(in crate::panels::chart) fn fig_pane_key(&self, pane: usize) -> Option<(CoreId, String)> {
         self.chart
             .with_container(|c| c.pane(pane).map(|p| (p.core, p.market.clone())))
     }
@@ -374,7 +374,7 @@ impl ChartPanel {
     /// The hover highlight, the grab, the right-click menu and the delete gesture all ask the
     /// same question, and a figure that lights up but cannot be clicked is worse than one that does
     /// neither — so the band is stated once here rather than at each of them.
-    fn fig_hit_threshold(&self) -> f32 {
+    pub(in crate::panels::chart) fn fig_hit_threshold(&self) -> f32 {
         HIT_PX * self.last_ppp.max(1.0)
     }
 

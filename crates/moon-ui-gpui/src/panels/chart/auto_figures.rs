@@ -10,7 +10,10 @@
 //! - the tab's auto-figure configuration changes → the keys of the edited rows move (a style edit
 //!   moves no key and only re-publishes);
 //! - the pane switches market → its slots are dropped and every drawn row runs once;
-//! - an `Auto` row's visible span crosses a hysteresis threshold → that row's timeframe moves.
+//! - an `Auto` row's visible span crosses a hysteresis threshold AND stays past it for
+//!   [`AUTO_TF_DWELL`] → that row's timeframe moves. Before the pane's time scale is measured an
+//!   `Auto` row is not resolved at all: an unmeasured span would read as the finest timeframe and
+//!   start an M1 job nobody asked for.
 //!
 //! The keys are evaluated on the panel's existing wakes — the backend observer, the render path
 //! after a settings or camera change — and on ONE timer armed for the earliest moment a key can
@@ -21,22 +24,28 @@
 //! comes back through the task itself, and the publication bumps the engine's figure revision, so
 //! the pane's userdata is rebuilt once — not the scene. Superseded results are recognised by key
 //! and dropped, so a job outliving a newer one cannot overwrite it.
+//!
+//! What follows the PRICE — the kept set, each line's side, its events, the captions — is not
+//! decided here but in the engine's price pass (`chartdx::auto_figures_sync`), which sees a price
+//! change where it happens. This module publishes a run's answer selected against the price of
+//! that moment, and the pass keeps it current. Hover, the card and the right-click menu are in
+//! [`menu`].
 
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
-use moon_chart::auto_figures::take;
-use moon_chart::auto_figures::tf::{self, AutoTf};
-use moon_core::config::auto_figures::{AutoFiguresCfg, DetectorParams};
+use moon_chart::auto_figures::tf::AutoTf;
+use moon_core::config::auto_figures::{AutoFiguresCfg, DetectorParams, TfId, TfSource};
 use moon_core::session::CoreId;
 
 use super::ChartPanel;
 use crate::chartdx::auto_figures_sync::job::{
     self, AutoRowOutcome, CacheAddr, PaneJob, RowKey, last_closed_open_ms, next_key_change_ms,
 };
-use crate::chartdx::auto_figures_sync::{AutoPaneFigures, AutoRowDrawn};
+use crate::chartdx::auto_figures_sync::select::select_kept;
+use crate::chartdx::auto_figures_sync::{AutoPaneFigures, AutoRowDrawn, LineKey, RowTitle};
 use crate::chartdx::now_unix_ms;
 
 /// Back-off after consecutive cache reads that did not happen (worker busy or gone), by failure
@@ -54,6 +63,76 @@ const READ_RETRY: [Duration; 3] = [
 /// to about twenty per bar.
 const LAG_RECHECK: Duration = Duration::from_secs(15);
 
+/// How long an `Auto` row's span has to stay past a hysteresis threshold before the row switches
+/// timeframe (`docs-internal/AUTO_FIGURES.md` §5: "switch only when the window went past the
+/// threshold with a margin AND held there").
+///
+/// The margin alone stops jitter around one threshold; it does not stop a sweep. A wheel spun
+/// through three notches, or a pan that drags the span across a threshold and back, crosses
+/// thresholds on consecutive frames, and every crossing used to be a detector job and a redraw for
+/// a timeframe that was gone a frame later. 400 ms is longer than a deliberate notch-to-notch
+/// wheel rhythm and short enough that a zoom the reader stops at shows its lines without a
+/// noticeable wait.
+pub(super) const AUTO_TF_DWELL: Duration = Duration::from_millis(400);
+
+/// How often an `Auto` row asks again while its pane's time scale is not measured yet. The first
+/// market sync measures it, normally within a frame of the pane appearing, and the wake stops
+/// being armed the moment it does.
+const UNMEASURED_RECHECK: Duration = Duration::from_millis(250);
+
+/// How many of those rechecks a pane gets before it waits for the panel's ordinary wakes instead:
+/// five seconds. A pane that never gets a span (a book-only pane has none) must not turn this into
+/// a 4 Hz wake for as long as it is open.
+const UNMEASURED_RETRIES: u8 = 20;
+
+/// `Auto`'s timeframe with a dwell on top of its hysteresis: the timeframe the row USES, and the
+/// switch it is waiting to make.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct DwellTf {
+    /// The timeframe settled on, with its hysteresis memory.
+    settled: AutoTf,
+    /// A different timeframe the span has asked for, and since when.
+    pending: Option<(TfId, Instant)>,
+}
+
+impl DwellTf {
+    /// Feed the visible span at `now`; returns the timeframe to use and, while a switch is
+    /// pending, when to ask again.
+    ///
+    /// The first answer is taken at once — there is nothing on screen to keep. After that a new
+    /// answer from [`AutoTf::update`] is held for [`AUTO_TF_DWELL`]: it is adopted only when the
+    /// span still asks for the same timeframe once the dwell has passed. A span that comes back to
+    /// the settled timeframe, or asks for yet another one, restarts the wait.
+    pub(super) fn update(&mut self, visible_ms: f64, now: Instant) -> (TfId, Option<Instant>) {
+        let mut probe = self.settled;
+        let next = probe.update(visible_ms);
+        let Some(current) = self.settled.current() else {
+            self.settled = probe;
+            self.pending = None;
+            return (next, None);
+        };
+        if next == current {
+            self.pending = None;
+            return (current, None);
+        }
+        match self.pending {
+            Some((tf, since)) if tf == next => {
+                if now.saturating_duration_since(since) >= AUTO_TF_DWELL {
+                    self.settled = probe;
+                    self.pending = None;
+                    (next, None)
+                } else {
+                    (current, Some(since + AUTO_TF_DWELL))
+                }
+            }
+            _ => {
+                self.pending = Some((next, now));
+                (current, Some(now + AUTO_TF_DWELL))
+            }
+        }
+    }
+}
+
 /// One panel's auto-figure state: the configuration it last applied, the per-pane row slots and
 /// the one timer waiting for the next candle close.
 #[derive(Default)]
@@ -66,6 +145,8 @@ pub(super) struct AutoFiguresState {
     timer: Option<(i64, u64)>,
     /// Generation of the most recently armed wake.
     timer_gen: u64,
+    /// The auto line under the pointer.
+    hover: menu::AutoHoverState,
 }
 
 /// One pane target's rows.
@@ -73,13 +154,19 @@ struct PaneSlots {
     target: (CoreId, String),
     /// Indexed like the configuration's rows.
     rows: Vec<RowSlot>,
+    /// Lines the user hid from the right-click menu. Not persisted, and gone with the slots when
+    /// the pane changes market — "hidden until the market changes".
+    hidden: Vec<LineKey>,
+    /// Rechecks spent waiting for the time scale, against [`UNMEASURED_RETRIES`]; reset once it is
+    /// measured.
+    unmeasured_retries: u8,
 }
 
 /// One row of one pane.
 #[derive(Default)]
 struct RowSlot {
-    /// `Auto`'s memory of the timeframe it settled on, for its hysteresis.
-    auto_tf: AutoTf,
+    /// `Auto`'s memory of the timeframe it settled on, for its hysteresis and dwell.
+    auto_tf: DwellTf,
     /// The last accepted run. Its key is what "unchanged" is measured against.
     done: Option<Arc<AutoRowOutcome>>,
     /// The key of a run in flight.
@@ -162,22 +249,6 @@ fn split_no_cache(
 fn retry_due_ms(slot: &RowSlot, now: Instant, now_ms: f64) -> Option<i64> {
     let (_, at) = slot.retry.as_ref()?;
     Some(now_ms as i64 + at.saturating_duration_since(now).as_millis() as i64)
-}
-
-/// The figures a row keeps: `take::select` against `ref_price`, each with its side of that price.
-fn kept_lines(
-    outcome: &AutoRowOutcome,
-    take: &moon_core::config::auto_figures::Take,
-    ref_price: f64,
-    at_ms: f64,
-) -> Vec<(usize, bool)> {
-    take::select(&outcome.found, take, ref_price, at_ms)
-        .into_iter()
-        .filter_map(|i| {
-            let price = outcome.found.get(i)?.shape.price_at(at_ms)?;
-            Some((i, price >= ref_price))
-        })
-        .collect()
 }
 
 /// The touch tolerance a row's zone band shows, in % of price; `0` for a detector without one.
@@ -263,12 +334,16 @@ impl ChartPanel {
                     self.auto_figures.panes.push(PaneSlots {
                         target: target.clone(),
                         rows: Vec::new(),
+                        hidden: Vec::new(),
+                        unmeasured_retries: 0,
                     });
                     self.auto_figures.panes.len() - 1
                 }
             };
             let pane = &mut self.auto_figures.panes[at];
             pane.rows.resize_with(cfg.rows.len(), RowSlot::default);
+            let measured = view.visible_ms.filter(|v| *v > 0);
+            let mut unmeasured_wait = false;
             let mut jobs: Vec<(usize, RowKey)> = Vec::new();
             for (ix, (row, slot)) in cfg.rows.iter().zip(pane.rows.iter_mut()).enumerate() {
                 let Some(params) = row.detector.known().filter(|_| row.is_drawn()) else {
@@ -276,8 +351,26 @@ impl ChartPanel {
                     *slot = RowSlot::default();
                     continue;
                 };
-                let visible = view.visible_ms.map_or(0.0, |v| v as f64);
-                let tf = tf::resolve(row.tf, &mut slot.auto_tf, visible).min(params.coarsest_tf());
+                let resolved = match row.tf {
+                    TfSource::Fixed(tf) => tf,
+                    TfSource::Auto => {
+                        // Before the pane's time scale is measured there is no span to choose
+                        // from: resolving one would read as the finest timeframe and start a job
+                        // for it. Keep whatever the row drew and ask again shortly.
+                        let Some(visible) = measured else {
+                            unmeasured_wait = true;
+                            continue;
+                        };
+                        let (tf, recheck) = slot.auto_tf.update(visible as f64, now);
+                        if let Some(at) = recheck {
+                            let wake = now_ms as i64
+                                + at.saturating_duration_since(now).as_millis() as i64;
+                            next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
+                        }
+                        tf
+                    }
+                };
+                let tf = resolved.min(params.coarsest_tf());
                 let key = RowKey {
                     detector: *params,
                     tf,
@@ -292,6 +385,13 @@ impl ChartPanel {
                 } else if let Some(retry) = retry_due_ms(slot, now, now_ms) {
                     next_wake = Some(next_wake.map_or(retry, |w| w.min(retry)));
                 }
+            }
+            if measured.is_some() {
+                pane.unmeasured_retries = 0;
+            } else if unmeasured_wait && pane.unmeasured_retries < UNMEASURED_RETRIES {
+                pane.unmeasured_retries += 1;
+                let wake = now_ms as i64 + UNMEASURED_RECHECK.as_millis() as i64;
+                next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
             }
             if !jobs.is_empty() {
                 self.spawn_auto_job(idx, target.clone(), jobs, view.chart_tf_ms, now_ms, cx);
@@ -415,7 +515,8 @@ impl ChartPanel {
             .and_then(|i| self.chart.auto_pane_view(i, target.0, &target.1))
             .and_then(|v| v.last_price);
         let now_ms = now_unix_ms();
-        let mut set = AutoPaneFigures::default();
+        let mut scratch = Vec::new();
+        let mut rows = Vec::new();
         for (row_ix, (row, slot)) in cfg.rows.iter().zip(&pane.rows).enumerate() {
             let (Some(params), Some(outcome)) = (row.detector.known(), slot.done.as_ref()) else {
                 continue;
@@ -424,15 +525,30 @@ impl ChartPanel {
                 continue;
             }
             let ref_price = last_price.or(outcome.last_close).unwrap_or(f64::NAN);
-            set.rows.push(AutoRowDrawn {
+            let mut drawn = AutoRowDrawn {
                 row_ix,
+                title: RowTitle::of(row, params.kind()),
                 style: row.style,
+                caption: row.caption.clone(),
+                take: row.take,
+                marks: row.events,
+                policy: params.broken_policy(),
                 tolerance_pct: tolerance_pct(params),
-                kept: kept_lines(outcome, &row.take, ref_price, now_ms),
-                ref_ms: now_ms,
                 outcome: outcome.clone(),
-            });
+                kept: Vec::new(),
+                ref_ms: now_ms,
+            };
+            // The same selection the engine's price pass repeats on every price change.
+            drawn.kept = select_kept(
+                &drawn.outcome,
+                &drawn.rules(&pane.hidden),
+                ref_price,
+                now_ms,
+                &mut scratch,
+            );
+            rows.push(drawn);
         }
+        let set = AutoPaneFigures::new(rows, pane.hidden.clone());
         // One line per publication — a run completing or a configuration edit, never a frame — so
         // the app log says which source each row read and whether its history was short.
         log::info!("auto figures {}: {}", target.1, set.summary());
@@ -486,6 +602,8 @@ impl ChartPanel {
         .detach();
     }
 }
+
+mod menu;
 
 #[cfg(test)]
 mod tests;

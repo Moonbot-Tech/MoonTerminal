@@ -672,6 +672,16 @@ impl RenderState {
                 });
             }
 
+            // Auto-figure captions after the figure readouts: built on revisions, placed here.
+            self.draw_auto_captions(
+                ctx,
+                idx,
+                sf,
+                [plot_left, plot_top, plot_right, plot_bottom],
+                label_x,
+                &mut placed,
+            )?;
+
             // Sells-to-zone mode marker: a badge riding the crosshair while the mode is armed,
             // so the mode is visible where the eyes already are — Moonbot marks its own
             // cursor the same way. Deliberately NOT behind the crosshair-label switch: that switch

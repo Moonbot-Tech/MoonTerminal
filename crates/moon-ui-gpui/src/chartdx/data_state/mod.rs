@@ -232,6 +232,8 @@ pub(in crate::chartdx) struct ChartDataState {
     /// Monotonic rather than the wall clock this feature is about: it paces a CHECK, and a check
     /// paced by a clock the user can move backwards would stop happening.
     pub(in crate::chartdx) last_countdown_check: Option<Instant>,
+    /// When the auto-figure age captions were last re-checked; see `tick_auto_captions`.
+    pub(in crate::chartdx) last_auto_caption_tick: Option<Instant>,
     pub(in crate::chartdx) view_dirty: bool,
 }
 

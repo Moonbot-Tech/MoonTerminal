@@ -861,6 +861,13 @@ pub(super) fn mouse_down_right(
         cx.stop_propagation();
         return;
     }
+    // An auto line's menu after the order menu: a trading line under the same point is the one
+    // a right click is for, and an auto line is never more than a reading aid.
+    if within && this.try_open_auto_figure_menu(pos, e.position, window, cx) {
+        this.suppress_rmb_up = true;
+        cx.stop_propagation();
+        return;
+    }
     if within
         && clicks.is_some_and(|count| {
             this.try_place_order_click(TradeMouseButton::Right, e.modifiers, count, pos, cx)
@@ -1084,6 +1091,11 @@ pub(super) fn mouse_move(
         if this.sync_trade_hover(pos, within, cx) {
             cx.notify();
         }
+        // Auto lines: same threshold; the hit test reads the lines the pane last drew. Repaints
+        // only when the hovered line, and so the card, changes.
+        if this.sync_auto_hover(pos, within, cx) {
+            cx.notify();
+        }
         let order_hover_changed = if within {
             let changed = this.sync_order_hover(pos, cx);
             this.sweep_cancel_hold(cx);
@@ -1284,6 +1296,9 @@ pub(super) fn hover(
             cx.notify();
         }
         if this.clear_warn_hover(cx) {
+            cx.notify();
+        }
+        if this.clear_auto_hover() {
             cx.notify();
         }
         if this.clear_trade_hover(cx) {

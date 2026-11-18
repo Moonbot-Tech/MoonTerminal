@@ -8,7 +8,8 @@ use crate::chartdx::text::fmt_pct;
 #[cfg(test)]
 mod tests;
 
-fn hash_order_zones(zones: &[moon_chart::layers::ZoneInstance]) -> u64 {
+/// Signature of the zone buffer, which lives in the base cache: a change re-bakes it.
+pub(in crate::chartdx) fn hash_order_zones(zones: &[moon_chart::layers::ZoneInstance]) -> u64 {
     let mut h = 0x9E37_79B9_7F4A_7C15u64 ^ zones.len() as u64;
     for z in zones {
         h = h.rotate_left(5) ^ z.price0.to_bits() as u64;
@@ -491,20 +492,6 @@ impl ChartDataState {
                             labels: &mut pr.figure_labels,
                         },
                     );
-                    // The chart's own auto figures, through the same layers and BEFORE the zone
-                    // hash below for the same reason: a zone band is a fill in the base cache.
-                    self.append_auto_figure_geometry(
-                        pane.core,
-                        &pane.market,
-                        pane.view.epoch_ms,
-                        &mut moon_chart::figures::FigureBuffers {
-                            zones,
-                            hlines,
-                            segs,
-                            markers,
-                            labels: &mut pr.figure_labels,
-                        },
-                    );
                     // News marks, then trade history, then warning badges ride the same layer
                     // after the orders, so none of them is hidden under an order line's cross.
                     // The order among these three is their stacking order, last one on top.
@@ -524,6 +511,29 @@ impl ChartDataState {
                     );
                     // Warning badges ride the same layer, after news.
                     self.append_warn_geometry(pane.view.epoch_ms, markers);
+                    // The chart's own auto figures LAST, so the price pass can redraw their
+                    // segment alone (`auto_figures_sync::pane`), and BEFORE the zone hash below:
+                    // a zone band is a fill in the base cache. Passive figures emit no readouts.
+                    let mut no_labels = Vec::new();
+                    self.append_auto_figure_geometry(
+                        pane.core,
+                        &pane.market,
+                        pane.view.epoch_ms,
+                        &mut moon_chart::figures::FigureBuffers {
+                            zones,
+                            hlines,
+                            segs,
+                            markers,
+                            labels: &mut no_labels,
+                        },
+                        &mut pr.auto,
+                    );
+                    crate::chartdx::auto_figures_sync::pane::refresh_auto_captions(
+                        &mut pr.auto,
+                        pr.cached_last_price.map(f64::from),
+                        now,
+                        pr.price_tick.tick(),
+                    );
                     let zone_sig = hash_order_zones(zones);
                     if pr.last_order_zone_sig != zone_sig {
                         pr.last_order_zone_sig = zone_sig;
@@ -623,6 +633,8 @@ impl ChartDataState {
                     // Figure readouts live beside the order labels and must go with them: the
                     // text pass would otherwise keep drawing a label whose line is no longer there.
                     pr.figure_labels.clear();
+                    // So do the auto lines, their captions and their hit records.
+                    pr.auto.clear();
                     pr.last_order_lines_rev = u64::MAX;
                     pr.last_figures_sig = u64::MAX;
                     pr.last_order_lines_sync_ms = now;

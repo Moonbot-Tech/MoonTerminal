@@ -31,6 +31,7 @@
 
 use std::sync::Arc;
 
+use moon_chart::auto_figures::events;
 use moon_chart::auto_figures::tf::{self, BarSource};
 use moon_chart::auto_figures::{self, DetectCtx, Found};
 use moon_core::config::auto_figures::{DetectorParams, TfId};
@@ -146,6 +147,10 @@ pub(crate) struct AutoRowOutcome {
     pub lagging: bool,
     /// Every figure the detector found, before `take::select`.
     pub found: Vec<Found>,
+    /// The newest closed bars the detector read, oldest first — only as many as the row's events
+    /// can look at ([`recent_len`]). The events pass runs on every price change and must not
+    /// re-read the cache or re-resample for that; these few bars are all it needs.
+    pub recent: Vec<ChartCandle>,
 }
 
 impl AutoRowOutcome {
@@ -193,7 +198,20 @@ pub(crate) fn without_cache(key: RowKey, source: BarSource, needed: u32) -> Auto
         read_failed: false,
         lagging: false,
         found: Vec::new(),
+        recent: Vec::new(),
     }
+}
+
+/// Spare bars kept beyond the false-break window, so a few unusable bars (skipped by the events
+/// pass) at the tail do not shorten what it can look back over.
+const RECENT_SLACK: usize = 4;
+
+/// How many of a row's newest closed bars its events need: the false-break window of its policy,
+/// the bar before the break and the last bar (`events::line_events` reads `window + 2` valid
+/// bars), plus [`RECENT_SLACK`].
+pub(crate) fn recent_len(detector: &DetectorParams) -> usize {
+    let window = usize::from(events::false_break_window(detector.broken_policy()));
+    window.saturating_add(2 + RECENT_SLACK)
 }
 
 /// Run every row of `job`. Each cache kind is read at most once, wide enough for every row that
@@ -293,6 +311,7 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                     read_failed,
                     lagging,
                     found,
+                    recent: bars[bars.len().saturating_sub(recent_len(&key.detector))..].to_vec(),
                 },
             )
         })

@@ -1,17 +1,25 @@
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use moon_chart::auto_figures::tf::BarSource;
+use moon_chart::auto_figures::{Found, FoundShape, Touch};
+use moon_chart::figures::FigureBuffers;
 use moon_core::config::ChartTheme;
 use moon_core::config::LabelColor;
-use moon_core::config::auto_figures::{DetectorParams, SwingParams, TfId};
+use moon_core::config::auto_figures::{
+    AutoEvent, BrokenPolicy, CaptionPart, CaptionPlace, CaptionShow, DetectorParams, EventMarks,
+    LineCaption, LineStyle, SwingParams, Take, TakeOrder, TakeSide, TfId,
+};
 use moon_core::market::ChartCandle;
 
 use super::job::{
-    BarCache, PaneJob, RowKey, cache_bars, closed_bars, last_closed_open_ms, next_key_change_ms,
-    run, with_chart_tail,
+    AutoRowOutcome, BarCache, PaneJob, RowKey, cache_bars, closed_bars, last_closed_open_ms,
+    next_key_change_ms, run, with_chart_tail,
 };
-use super::{native_closed_candles, resolve_rgb};
+use super::pane::{AutoPaneDrawn, append_auto_geometry, refresh_auto_captions};
+use super::select::select_kept;
+use super::{AutoPaneFigures, AutoRowDrawn, LineKey, RowTitle, native_closed_candles, resolve_rgb};
 use crate::chartdx::types::CandleGpu;
 
 const MIN: i64 = 60_000;
@@ -276,4 +284,173 @@ fn line_colours_come_from_the_theme_or_the_users_pick() {
     let picked = theme.label_positive;
     let packed = (u32::from(picked[0]) << 16) | (u32::from(picked[1]) << 8) | u32::from(picked[2]);
     assert_eq!(resolve_rgb(LabelColor::Fixed(packed), true, &theme), picked);
+}
+
+/// A published row of horizontal levels at `levels`, keeping the nearest one per side.
+fn level_row(levels: &[f64]) -> AutoRowDrawn {
+    let key = key(TfId::H1, (DAY0 + 12 * 3_600_000) as f64, 200);
+    let outcome = AutoRowOutcome {
+        key,
+        source: BarSource::ChartSeries,
+        bars: 200,
+        needed: 200,
+        last_close: Some(100.0),
+        read_failed: false,
+        lagging: false,
+        found: levels
+            .iter()
+            .enumerate()
+            .map(|(i, &price)| Found {
+                shape: FoundShape::Horizontal { price },
+                touches: vec![Touch { t_ms: 1.0, price }; 3],
+                strength: 1.0,
+                // Distinct first anchors: what tells two levels of one row apart across runs.
+                first_ms: (DAY0 + i as i64 * 3_600_000) as f64,
+                last_ms: (DAY0 + 10 * 3_600_000) as f64,
+                broken: None,
+            })
+            .collect(),
+        recent: Vec::new(),
+    };
+    AutoRowDrawn {
+        row_ix: 0,
+        title: RowTitle::Named("Levels".into()),
+        style: LineStyle::default(),
+        caption: LineCaption::default(),
+        take: Take {
+            count: 1,
+            side: TakeSide::Both,
+            order: TakeOrder::Nearest,
+        },
+        marks: EventMarks::default(),
+        policy: BrokenPolicy::default(),
+        tolerance_pct: 0.0,
+        outcome: Arc::new(outcome),
+        kept: Vec::new(),
+        ref_ms: 0.0,
+    }
+}
+
+/// A set of one level row selected against `price`, the way the panel publishes it.
+fn published(levels: &[f64], hidden: Vec<LineKey>, price: f64) -> AutoPaneFigures {
+    let mut row = level_row(levels);
+    row.kept = select_kept(
+        &row.outcome,
+        &row.rules(&hidden),
+        price,
+        0.0,
+        &mut Vec::new(),
+    );
+    AutoPaneFigures::new(vec![row], hidden)
+}
+
+fn sides(set: &AutoPaneFigures) -> Vec<(usize, bool)> {
+    set.rows[0].kept.iter().map(|k| (k.ix, k.above)).collect()
+}
+
+/// Breakage: selecting only at publication (review finding C) — after price crosses a level its
+/// side (and `BySign` colour) and the kept set would stay stale until the next bar close.
+#[test]
+fn a_price_crossing_a_level_reselects_the_set_and_flips_its_side() {
+    let set = published(&[90.0, 95.0, 105.0, 112.0], Vec::new(), 100.0);
+    // The nearest above (105, index 2) and the nearest below (95, index 1).
+    assert_eq!(sides(&set), vec![(2, true), (1, false)]);
+    // A tick that moves nothing drawn replaces nothing.
+    assert!(set.reselect(100.5, 0.0).is_none());
+    // Price crosses 105: it becomes the support, 112 the resistance.
+    let next = set
+        .reselect(106.0, 0.0)
+        .expect("the drawn lines changed sides");
+    assert_eq!(sides(&next), vec![(3, true), (2, false)]);
+}
+
+/// Breakage: a hidden line pulled back in by the next selection, or replaced by a line the user
+/// never saw.
+#[test]
+fn a_hidden_line_stays_hidden_and_leaves_its_slot_empty() {
+    let row = level_row(&[95.0, 105.0]);
+    let hidden = vec![LineKey::of(0, &row.outcome.found[1])];
+    let set = published(&[95.0, 105.0], hidden, 100.0);
+    assert_eq!(sides(&set), vec![(0, false)]);
+    // Still hidden after a price change re-selects.
+    let next = set.reselect(96.0, 0.0);
+    assert!(next.is_none_or(|n| sides(&n) == vec![(0, false)]));
+}
+
+/// Breakage: events computed at publication only, so an approach never lights up as price moves.
+#[test]
+fn a_kept_line_shows_an_approach_once_price_comes_near() {
+    let set = published(&[95.0, 105.0], Vec::new(), 100.0);
+    assert!(set.rows[0].kept.iter().all(|k| k.events.is_empty()));
+    // 0.1 % below the 105 level: inside the default 0.3 % approach distance.
+    let next = set.reselect(104.9, 0.0).expect("an event appeared");
+    let at_105 = next.rows[0].kept.iter().find(|k| k.ix == 1).unwrap();
+    assert!(at_105.events.contains(AutoEvent::Approach));
+}
+
+/// Breakage: a caption rebuilt on every price tick, or never rebuilt when its printed distance
+/// moves.
+#[test]
+fn captions_are_rebuilt_only_when_a_printed_value_moves() {
+    let mut row = level_row(&[105.0]);
+    row.caption = LineCaption {
+        parts: vec![CaptionPart::RowName, CaptionPart::DistancePct],
+        place: CaptionPlace::RightEnd,
+        show: CaptionShow::Always,
+    };
+    row.kept = select_kept(&row.outcome, &row.rules(&[]), 100.0, 0.0, &mut Vec::new());
+    let set = Rc::new(AutoPaneFigures::new(vec![row], Vec::new()));
+    let (mut zones, mut hlines, mut segs, mut markers, mut labels) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut drawn = AutoPaneDrawn::default();
+    append_auto_geometry(
+        Some(&set),
+        &ChartTheme::default(),
+        1.0,
+        0.0,
+        &mut FigureBuffers {
+            zones: &mut zones,
+            hlines: &mut hlines,
+            segs: &mut segs,
+            markers: &mut markers,
+            labels: &mut labels,
+        },
+        &mut drawn,
+    );
+    assert!(refresh_auto_captions(&mut drawn, Some(100.0), 0.0, None));
+    assert_eq!(drawn.lines[0].text.as_deref(), Some("Levels · +5.00%"));
+    // 100.0 → 100.000_1: the distance still prints +5.00 %, nothing is rebuilt.
+    assert!(!refresh_auto_captions(
+        &mut drawn,
+        Some(100.000_1),
+        0.0,
+        None
+    ));
+    // 100 → 101: +3.96 %.
+    assert!(refresh_auto_captions(&mut drawn, Some(101.0), 0.0, None));
+    assert_eq!(drawn.lines[0].text.as_deref(), Some("Levels · +3.96%"));
+}
+
+/// Breakage: keying a line by its first anchor alone — a period's high and low share it, so hiding,
+/// hovering or pinning the low acted on the high (seen live: "pin" copied the day's high).
+#[test]
+fn a_periods_high_and_low_are_different_lines() {
+    let bar = |t: i64, price: f64| Found {
+        shape: FoundShape::Horizontal { price },
+        touches: vec![Touch {
+            t_ms: t as f64,
+            price,
+        }],
+        strength: 1.0,
+        first_ms: DAY0 as f64,
+        last_ms: (DAY0 + 3_600_000) as f64,
+        broken: None,
+    };
+    let high = bar(DAY0 + 600_000, 2.0);
+    let low = bar(DAY0 + 1_200_000, 1.0);
+    assert_ne!(LineKey::of(0, &high), LineKey::of(0, &low));
+    // The next run nudges a level's price (one more touch moves its mean): still the same line.
+    let mut rerun = low.clone();
+    rerun.shape = FoundShape::Horizontal { price: 1.01 };
+    assert_eq!(LineKey::of(0, &low), LineKey::of(0, &rerun));
 }

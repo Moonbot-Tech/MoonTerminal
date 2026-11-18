@@ -3,12 +3,10 @@ use std::time::{Duration, Instant};
 
 use moon_chart::auto_figures::tf::BarSource;
 use moon_chart::auto_figures::{Found, FoundShape};
-use moon_core::config::auto_figures::{
-    DetectorParams, SwingParams, Take, TakeOrder, TakeSide, TfId,
-};
+use moon_core::config::auto_figures::{DetectorParams, SwingParams, TfId};
 use moon_core::market::ChartCandle;
 
-use super::{RowSlot, accept, kept_lines, needs_run, split_no_cache};
+use super::{AUTO_TF_DWELL, DwellTf, RowSlot, accept, needs_run, split_no_cache};
 use crate::chartdx::auto_figures_sync::job::{AutoRowOutcome, RowKey};
 
 const HOUR: i64 = 3_600_000;
@@ -42,6 +40,7 @@ fn outcome(key: RowKey, levels: &[f64]) -> AutoRowOutcome {
                 broken: None,
             })
             .collect(),
+        recent: Vec::new(),
     }
 }
 
@@ -186,17 +185,31 @@ fn a_lagging_answer_is_rechecked_and_then_settles() {
     assert!(!needs_run(&slot, &key(HOUR), now + Duration::from_secs(60)));
 }
 
+/// Breakage: switching on the first threshold crossing (no dwell) — a wheel sweep would start a
+/// detector job per crossing — or never adopting a span that stayed put.
 #[test]
-fn kept_lines_carry_their_side_of_the_reference_price() {
-    let found = outcome(key(0), &[90.0, 95.0, 105.0, 112.0]);
-    let take = Take {
-        count: 1,
-        side: TakeSide::Both,
-        order: TakeOrder::Nearest,
-    };
-    let kept = kept_lines(&found, &take, 100.0, 0.0);
-    // The nearest above (105, index 2) and the nearest below (95, index 1), each with its side.
-    assert_eq!(kept, vec![(2, true), (1, false)]);
-    // No reference price, no side and no distance: nothing is kept.
-    assert!(kept_lines(&found, &take, f64::NAN, 0.0).is_empty());
+fn an_auto_timeframe_switches_only_after_the_span_held_past_the_dwell() {
+    let t0 = Instant::now();
+    let mut dwell = DwellTf::default();
+    // 2 h on screen: the first answer is taken at once.
+    assert_eq!(dwell.update(2.0 * HOUR as f64, t0), (TfId::M1, None));
+    // Zoomed out to 8 h (past 4 h × 1.25): asked for M5, held.
+    let (tf, recheck) = dwell.update(8.0 * HOUR as f64, t0);
+    assert_eq!(tf, TfId::M1);
+    assert_eq!(recheck, Some(t0 + AUTO_TF_DWELL));
+    // Back to 2 h before the dwell ran out: the switch is forgotten.
+    let half = t0 + AUTO_TF_DWELL / 2;
+    assert_eq!(dwell.update(2.0 * HOUR as f64, half), (TfId::M1, None));
+    // Out again; the wait restarts from this moment, not from the first crossing.
+    let again = t0 + AUTO_TF_DWELL;
+    assert_eq!(dwell.update(8.0 * HOUR as f64, again).0, TfId::M1);
+    assert_eq!(
+        dwell.update(8.0 * HOUR as f64, again + AUTO_TF_DWELL / 2).0,
+        TfId::M1
+    );
+    // Held past the dwell: adopted.
+    assert_eq!(
+        dwell.update(8.0 * HOUR as f64, again + AUTO_TF_DWELL),
+        (TfId::M5, None)
+    );
 }

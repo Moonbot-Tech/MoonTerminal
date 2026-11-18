@@ -1,7 +1,7 @@
 //! Timeframe resolution for a row: `TfSource::Auto` from the visible time span, with hysteresis,
 //! and where a row's bars come from once its timeframe is known. Decisions only — no I/O.
 
-use moon_core::config::auto_figures::{TfId, TfSource};
+use moon_core::config::auto_figures::TfId;
 
 /// `Auto`'s table: the visible span, in HOURS, at which each timeframe starts, widest first (the
 /// shape of `hvol::AUTO_TF_TABLE`).
@@ -29,8 +29,8 @@ const AUTO_TF_TABLE: [(f64, TfId); 7] = [
 /// back and forth.
 ///
 /// The spec also asks for a dwell ("switch once the span has STAYED past the threshold"). That needs
-/// a clock, and this module has none by design; it is left to the stage-3/6 caller, which owns the
-/// frame clock and can hold an [`AutoTf::update`] result for as long as it likes before using it.
+/// a clock, and this module has none by design; the terminal's chart panel holds an
+/// [`AutoTf::update`] result for its dwell before using it (`panels::chart::auto_figures::DwellTf`).
 pub const HYSTERESIS_MARGIN: f64 = 0.25;
 
 /// The timeframe the table gives a visible span, without hysteresis.
@@ -97,15 +97,6 @@ impl AutoTf {
         };
         self.current = Some(next);
         next
-    }
-}
-
-/// The timeframe a row runs on: its fixed one, or `Auto`'s pick for the span. A fixed row leaves
-/// `auto` untouched, so switching a row back to `Auto` starts from the last automatic choice.
-pub fn resolve(source: TfSource, auto: &mut AutoTf, visible_ms: f64) -> TfId {
-    match source {
-        TfSource::Fixed(tf) => tf,
-        TfSource::Auto => auto.update(visible_ms),
     }
 }
 

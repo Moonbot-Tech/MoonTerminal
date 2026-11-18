@@ -449,11 +449,16 @@ diag_counters!(
     //     still paid for its reads.
     //   * `autofigures_lines` — auto-figure lines emitted into the userdata buffers per second. It
     //     moves with every userdata REBUILD of a pane that shows auto figures (an order revision or
-    //     an order-line hover rebuilds the whole layer, auto lines included), so it reads as
-    //     "rebuilds × lines": a steady rate on a quiet chart means something rebuilds the layer
-    //     without cause. It never moves on a frame that rebuilds nothing.
-    //   * `autofigures_events` — events derived on the lines (approach, squeeze, breakout, false
-    //     break, bounce). Reserved: events land in a later stage, and until then it stays 0.
+    //     an order-line hover rebuilds the whole layer, auto lines included) and with every redraw
+    //     of the auto segment alone (the price pass, when a price change moved which lines are
+    //     drawn, their side or their events), so it reads as "rebuilds × lines": a steady rate on a
+    //     quiet chart means something rebuilds the layer without cause. It never moves on a frame
+    //     that rebuilds nothing.
+    //   * `autofigures_events` — lines whose events (approach, squeeze, breakout, false break,
+    //     bounce) were derived: a publication, and the price pass on every PRICE CHANGE of a pane
+    //     showing auto lines — kept lines × price changes. It must stay flat through a mouse
+    //     storm, a pan or a zoom at an unchanged price: those reach the pass only as a camera sync,
+    //     which its price gate turns away.
     AUTOFIGURES_DETECT => "autofigures_detect",
     AUTOFIGURES_DETECT_US => "autofigures_detect_us",
     AUTOFIGURES_LINES => "autofigures_lines",

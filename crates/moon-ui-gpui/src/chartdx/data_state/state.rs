@@ -97,6 +97,7 @@ impl ChartDataState {
             last_source_market_sig: u64::MAX,
             last_volume_prepared_rev: 0,
             last_countdown_check: None,
+            last_auto_caption_tick: None,
             view_dirty: true,
         }
     }
@@ -585,6 +586,7 @@ impl ChartDataState {
             crate::diag::bump(&crate::diag::CHART_PREPARE);
         }
         self.tick_countdown_captions(now);
+        self.tick_auto_captions(now);
         self.tick_eviction_rebakes(now);
         self.render.borrow_mut().frame(info)
     }

@@ -13,14 +13,23 @@
 //!   into [`ChartDataState::figures_sig`] and stamps the panes dirty — the same gate the user's
 //!   figures ride — so the next order sync rebuilds the userdata buffers ONCE. Nothing here runs
 //!   per frame: [`ChartDataState::append_auto_figure_geometry`] is called only from that rebuild.
+//! - The PRICE PASS ([`ChartDataState::auto_figures_on_price`]) follows the current price: the
+//!   kept set and each line's side (its `BySign` colour) and events depend on it ([`select`]). It
+//!   runs at the end of a market sync, gated on the price having moved, and replaces a published
+//!   set only when its drawn lines changed; the panes showing it then redraw their auto segment
+//!   alone ([`pane`]), without the order sync.
+//! - Captions are strings built on those same revisions ([`pane::refresh_auto_captions`]) and only
+//!   placed by the text pass; hover and right-click hit-test the drawn lines through
+//!   [`pane::AutoPaneDrawn::line_at`].
 //!
 //! ## Why a second, passive figure list rather than the store
 //!
-//! An auto figure must not be saved, hovered, selected, dragged, listed as an alert or upserted to
-//! a core. Every one of those paths reads `FigureStore` — persistence, `pick_figure`, the Alerts
-//! panel, the alert reconcile — so keeping auto figures OUT of it makes all six guarantees
-//! structural instead of a flag each path has to remember (`from_server` shows how many places a
-//! flag has to reach). They still draw as figures: each found shape becomes a figure-tool value
+//! An auto figure must not be saved, selected, dragged, listed as an alert or upserted to a core.
+//! Every one of those paths reads `FigureStore` — persistence, `pick_figure`, the Alerts panel, the
+//! alert reconcile — so keeping auto figures OUT of it makes those guarantees structural instead of
+//! a flag each path has to remember (`from_server` shows how many places a flag has to reach). The
+//! one interaction they do have — hover and right-click — hit-tests this module's own record of
+//! what was drawn, never the store; "pin as figure" is how a line becomes an ordinary figure. They still draw as figures: each found shape becomes a figure-tool value
 //! (`moon_chart::auto_figures::draw`) and goes through `build_passive_figure_geometry`, the same
 //! sink and the same tools as the store's figures, so the three GPU backends need no change.
 //!
@@ -28,52 +37,95 @@
 //! their colour is resolved against THIS engine's theme at that moment: a theme switch forces the
 //! rebuild anyway, and then the lines follow it with nothing extra to invalidate.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use moon_chart::auto_figures::draw::{ResolvedStyle, append_shapes};
 use moon_core::config::ChartTheme;
 use moon_core::config::LabelColor;
-use moon_core::config::auto_figures::LineStyle;
+use moon_core::config::auto_figures::{BrokenPolicy, EventMarks, LineCaption, LineStyle, Take};
 use moon_core::market::ChartCandle;
 use moon_core::session::CoreId;
 
 use super::ChartDataState;
 use super::types::CandleGpu;
 
+pub(crate) mod caption;
 pub(crate) mod job;
+pub(crate) mod pane;
+pub(crate) mod select;
 
 #[cfg(test)]
 mod tests;
 
-/// One drawn row of one pane: its detector's outcome and the figures the row keeps.
+pub(crate) use caption::RowTitle;
+pub(crate) use select::{KeptLine, LineKey, RowRules};
+
+/// One drawn row of one pane: its detector's outcome, the figures the row keeps, and the settings
+/// the price pass re-selects them by.
 #[derive(Debug, Clone)]
 pub(crate) struct AutoRowDrawn {
-    /// The row's index in its kind's configuration — what a later stage's popup, caption and
-    /// right-click name the row by.
+    /// The row's index in its kind's configuration — what the caption, the hover card and the
+    /// right-click menu name the row by.
     pub row_ix: usize,
+    /// What the row's lines are called.
+    pub title: RowTitle,
     /// How the row draws, copied at publication.
     pub style: LineStyle,
+    /// What the row prints on its lines.
+    pub caption: LineCaption,
+    /// Which of the found lines the row keeps, re-applied on every price change.
+    pub take: Take,
+    /// Which events the row marks.
+    pub marks: EventMarks,
+    /// The row's broken-line policy, for the false-break window of its events.
+    pub policy: BrokenPolicy,
     /// The row's touch tolerance in % of price, for the zone band.
     pub tolerance_pct: f32,
-    /// Everything the detector run produced, shared with the panel that holds it for later
-    /// stages (touches, timeframe, break, short history).
+    /// Everything the detector run produced, shared with the panel that holds it.
     pub outcome: Arc<job::AutoRowOutcome>,
-    /// Indices into `outcome.found` of the kept figures, each with whether it lies ABOVE the
-    /// reference price it was selected against (what a `BySign` colour reads).
-    pub kept: Vec<(usize, bool)>,
-    /// The moment the selection was made, Unix ms: where a squeeze's sloped half stops when its
-    /// apex lies further ahead.
+    /// The drawn lines, ranked: indices into `outcome.found` with their side and events.
+    pub kept: Vec<KeptLine>,
+    /// The moment the selection was made, Unix ms: where sloped lines were projected for it, and
+    /// where a squeeze's sloped half stops when its apex lies further ahead.
     pub ref_ms: f64,
+}
+
+impl AutoRowDrawn {
+    /// The rules this row selects by, with the pane's hidden lines.
+    pub(crate) fn rules<'a>(&'a self, hidden: &'a [LineKey]) -> RowRules<'a> {
+        RowRules {
+            row_ix: self.row_ix,
+            take: &self.take,
+            marks: &self.marks,
+            policy: self.policy,
+            hidden,
+        }
+    }
 }
 
 /// Everything one pane's auto figures draw.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AutoPaneFigures {
     pub rows: Vec<AutoRowDrawn>,
+    /// Lines the user hid on this pane target until it changes market. Owned by the panel,
+    /// carried here so the price pass drops them too.
+    pub hidden: Vec<LineKey>,
+    /// The price (`f32` bits) the price pass last evaluated this set at; `None` until it has.
+    /// Interior: the pass runs over a shared set and replaces it only when the selection moved.
+    eval_price: Cell<Option<u32>>,
 }
 
 impl AutoPaneFigures {
+    /// A set of `rows`, with `hidden` lines left out by every later re-selection.
+    pub(crate) fn new(rows: Vec<AutoRowDrawn>, hidden: Vec<LineKey>) -> Self {
+        Self {
+            rows,
+            hidden,
+            eval_price: Cell::new(None),
+        }
+    }
+
     /// One line describing every row for the app log: its index, timeframe, bar source, bars read
     /// against bars needed (`short` when fewer, `lagging` when the cache had not filled the newest
     /// bucket yet), figures found and lines kept.
@@ -100,6 +152,42 @@ impl AutoPaneFigures {
             })
             .collect::<Vec<_>>()
             .join("; ")
+    }
+
+    /// The same set re-selected against `price` at `now_ms`, or `None` when no row's drawn lines
+    /// — which ones, their sides, their events — moved.
+    ///
+    /// What makes the price pass cheap to run on every tick: an unchanged answer replaces nothing,
+    /// so it rebuilds no geometry and uploads nothing.
+    pub(crate) fn reselect(&self, price: f64, now_ms: f64) -> Option<Self> {
+        let mut scratch = Vec::new();
+        let mut next: Option<Vec<Vec<KeptLine>>> = None;
+        for (i, row) in self.rows.iter().enumerate() {
+            let kept = select::select_kept(
+                &row.outcome,
+                &row.rules(&self.hidden),
+                price,
+                now_ms,
+                &mut scratch,
+            );
+            match &mut next {
+                Some(all) => all.push(kept),
+                None if kept != row.kept => {
+                    let mut all: Vec<Vec<KeptLine>> =
+                        self.rows[..i].iter().map(|r| r.kept.clone()).collect();
+                    all.push(kept);
+                    next = Some(all);
+                }
+                None => {}
+            }
+        }
+        let next = next?;
+        let mut set = self.clone();
+        for (row, kept) in set.rows.iter_mut().zip(next) {
+            row.kept = kept;
+            row.ref_ms = now_ms;
+        }
+        Some(set)
     }
 }
 
@@ -152,58 +240,141 @@ impl ChartDataState {
         true
     }
 
-    /// The published auto figures of one pane target, if any.
-    pub(crate) fn auto_figures_of(&self, core: CoreId, market: &str) -> Option<&AutoPaneFigures> {
-        self.auto_figures
-            .iter()
-            .find(|((c, m), _)| *c == core && m == market)
-            .map(|(_, set)| set.as_ref())
-    }
-
-    /// Appends one pane target's auto figures to the userdata buffers, after the user's figures.
+    /// Appends one pane target's auto figures to the userdata buffers, recording what was drawn
+    /// in `drawn`.
     ///
-    /// Called only from the userdata rebuild in `orders::sync`, gated on `figures_sig`. Bands go
-    /// into the zone buffer BEFORE that rebuild hashes it, so a zone that appears or moves re-bakes
-    /// the base cache exactly like an order zone or a figure fill.
+    /// Called only from the userdata rebuild in `orders::sync`, gated on `figures_sig`, and LAST
+    /// among the layers, so the price pass can redraw this segment alone ([`pane`]). Bands go into
+    /// the zone buffer BEFORE that rebuild hashes it, so a zone that appears or moves re-bakes the
+    /// base cache exactly like an order zone or a figure fill.
     pub(super) fn append_auto_figure_geometry(
         &self,
         core: CoreId,
         market: &str,
         epoch_ms: f64,
         out: &mut moon_chart::figures::FigureBuffers<'_>,
+        drawn: &mut pane::AutoPaneDrawn,
     ) {
+        drawn.segment = Some(pane::SegmentBase {
+            zones: out.zones.len(),
+            hlines: out.hlines.len(),
+            segs: out.segs.len(),
+            markers: out.markers.len(),
+        });
+        drawn.epoch_ms = epoch_ms;
+        drawn.target = Some((core, market.to_owned()));
         // Book-only mode leaves a 1 px plot with no time axis; the news layer skips it too.
-        if self.orderbook_only {
+        let set = self
+            .auto_figures_rc(core, market)
+            .filter(|_| !self.orderbook_only);
+        pane::append_auto_geometry(set, &self.theme, self.last_ppp, epoch_ms, out, drawn);
+    }
+
+    /// The published set of one pane target, shared.
+    fn auto_figures_rc(&self, core: CoreId, market: &str) -> Option<&Rc<AutoPaneFigures>> {
+        self.auto_figures
+            .iter()
+            .find(|((c, m), _)| *c == core && m == market)
+            .map(|(_, set)| set)
+    }
+
+    /// The price pass: re-select every published set against its pane's current price, redraw the
+    /// auto segment of every pane whose drawn set is no longer the published one, and refresh the
+    /// captions whose printed values moved.
+    ///
+    /// Called at the end of a market sync — where a price change is first seen. A mouse move, a
+    /// pan or a zoom reaches it only as a camera sync with an UNCHANGED price, which the price gate
+    /// turns away. Cost when the price did not move: one comparison per published target and one
+    /// caption hash per pane. When it moved: `take::select` and the events of the kept lines,
+    /// O(found + kept) per row. Geometry is rebuilt only for a pane whose drawn lines actually
+    /// changed, and only its auto segment.
+    pub(super) fn auto_figures_on_price(&mut self) {
+        if !self.scene_visible {
             return;
         }
-        let Some(set) = self.auto_figures_of(core, market) else {
-            return;
-        };
-        let mut figures = Vec::new();
-        let mut bands = Vec::new();
-        let mut lines = 0u64;
-        for row in &set.rows {
-            for &(ix, above) in &row.kept {
-                let Some(found) = row.outcome.found.get(ix) else {
-                    continue;
-                };
-                let rgb = resolve_rgb(row.style.color, above, &self.theme);
-                append_shapes(
-                    found,
-                    &ResolvedStyle::new(&row.style, rgb),
-                    row.tolerance_pct,
-                    row.ref_ms,
-                    &mut figures,
-                    &mut bands,
-                );
-                lines += 1;
+        let now_ms = super::now_unix_ms();
+        let mut st = self.render.borrow_mut();
+        for (target, set) in &mut self.auto_figures {
+            let price = st
+                .panes
+                .iter()
+                .find(|pr| pr.active && pr.core == Some(target.0) && pr.market == target.1)
+                .and_then(|pr| pr.cached_last_price)
+                .filter(|p| p.is_finite() && *p > 0.0);
+            let Some(price) = price else {
+                continue;
+            };
+            if set.eval_price.get() == Some(price.to_bits()) {
+                continue;
+            }
+            set.eval_price.set(Some(price.to_bits()));
+            if let Some(next) = set.reselect(f64::from(price), now_ms) {
+                next.eval_price.set(Some(price.to_bits()));
+                *set = Rc::new(next);
             }
         }
-        crate::diag::bump_by(&crate::diag::AUTOFIGURES_LINES, lines);
-        if figures.is_empty() && bands.is_empty() {
+        let mut base_changed = false;
+        let mut changed = false;
+        for pr in &mut st.panes {
+            if !pr.active {
+                continue;
+            }
+            let current = pr.core.and_then(|core| {
+                self.auto_figures
+                    .iter()
+                    .find(|((c, m), _)| *c == core && *m == pr.market)
+                    .map(|(_, set)| set)
+            });
+            let current = current.filter(|_| !self.orderbook_only);
+            if pr.auto.redrawable_for(pr.core, &pr.market) && !pr.auto.draws(current) {
+                base_changed |= redraw_auto_segment(pr, current, &self.theme, self.last_ppp);
+                changed = true;
+            }
+            changed |= pane::refresh_auto_captions(
+                &mut pr.auto,
+                pr.cached_last_price.map(f64::from),
+                now_ms,
+                pr.price_tick.tick(),
+            );
+        }
+        if base_changed {
+            st.base_dirty = true;
+        }
+        if changed {
+            st.needs_present = true;
+        }
+    }
+
+    /// Re-print the age part of the captions as the clock moves it, at most once a second.
+    ///
+    /// The one caption input that changes with nothing but time. Without this a quiet market would
+    /// show "5m" for an hour; with it the frame path pays one hash per pane per second, and builds
+    /// a string only when an age's printed count moved.
+    pub(super) fn tick_auto_captions(&mut self, now: std::time::Instant) {
+        if !self.scene_visible
+            || self
+                .last_auto_caption_tick
+                .is_some_and(|last| now.duration_since(last) < AUTO_CAPTION_TICK)
+        {
             return;
         }
-        moon_chart::figures::build_passive_figure_geometry(&figures, &bands, epoch_ms, out);
+        self.last_auto_caption_tick = Some(now);
+        let now_ms = super::now_unix_ms();
+        let mut st = self.render.borrow_mut();
+        let mut changed = false;
+        for pr in &mut st.panes {
+            if pr.active {
+                changed |= pane::refresh_auto_captions(
+                    &mut pr.auto,
+                    pr.cached_last_price.map(f64::from),
+                    now_ms,
+                    pr.price_tick.tick(),
+                );
+            }
+        }
+        if changed {
+            st.needs_present = true;
+        }
     }
 
     /// What the panel reads to evaluate pane `idx`'s row keys, or `None` while the pane is not
@@ -255,6 +426,61 @@ impl ChartDataState {
             now_ms,
         )
     }
+}
+
+/// How often the age captions are re-checked against the clock.
+const AUTO_CAPTION_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Redraw ONE pane's auto segment from `set` without the order sync: truncate the retained
+/// userdata to the segment's base, append the auto geometry again, re-upload. Returns whether the
+/// zone buffer changed, which re-bakes the base cache (a zone band lives in it).
+///
+/// Everything in front of the segment — orders, figures, news, trade arrows, warning badges — is
+/// left exactly as the last full rebuild made it; see [`pane`] for why that is sound.
+fn redraw_auto_segment(
+    pr: &mut super::PaneRender,
+    set: Option<&Rc<AutoPaneFigures>>,
+    theme: &ChartTheme,
+    ppp: f32,
+) -> bool {
+    let Some(base) = pr.auto.segment else {
+        return false;
+    };
+    let mut scratch = std::mem::take(&mut pr.ud_scratch);
+    scratch.zones.truncate(base.zones);
+    scratch.hlines.truncate(base.hlines);
+    scratch.segs.truncate(base.segs);
+    scratch.markers.truncate(base.markers);
+    // Passive figures emit no readouts; the buffer exists only to satisfy the sink.
+    let mut no_labels = Vec::new();
+    let epoch_ms = pr.auto.epoch_ms;
+    pane::append_auto_geometry(
+        set,
+        theme,
+        ppp,
+        epoch_ms,
+        &mut moon_chart::figures::FigureBuffers {
+            zones: &mut scratch.zones,
+            hlines: &mut scratch.hlines,
+            segs: &mut scratch.segs,
+            markers: &mut scratch.markers,
+            labels: &mut no_labels,
+        },
+        &mut pr.auto,
+    );
+    let zone_sig = super::data_state::orders::hash_order_zones(&scratch.zones);
+    let base_changed = pr.last_order_zone_sig != zone_sig;
+    pr.last_order_zone_sig = zone_sig;
+    super::trade_history_sync::set(
+        &mut pr.layers,
+        &scratch.zones,
+        &scratch.hlines,
+        &scratch.segs,
+        &scratch.markers,
+    );
+    pr.ud_scratch = scratch;
+    pr.gpu_prepare_dirty = true;
+    base_changed
 }
 
 /// Whether a GPU candle row is one of the series' own timeframe rather than a coarser prefix row.

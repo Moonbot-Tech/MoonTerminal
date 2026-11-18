@@ -123,7 +123,10 @@ pub fn append_shapes(
 
 /// The time span `extend` gives a figure anchored to its first and last touch, `±∞` meaning "to
 /// that plot edge". An unusable anchor time widens to the edge rather than dropping the line.
-fn span(found: &Found, extend: Extend) -> (f64, f64) {
+///
+/// Public because the terminal places a line's caption on the stretch that is DRAWN: a caption
+/// at the left end of a level must sit where the level starts, not where the plot does.
+pub fn time_span(found: &Found, extend: Extend) -> (f64, f64) {
     let first = if found.first_ms.is_finite() && found.first_ms > 0.0 {
         found.first_ms
     } else {
@@ -142,7 +145,7 @@ fn span(found: &Found, extend: Extend) -> (f64, f64) {
 
 /// A level at `price` over the span `extend` gives it, as the figure tool that draws that span.
 fn horizontal(price: f64, found: &Found, extend: Extend, push: &mut impl FnMut(FigureKind)) {
-    let (t0, t1) = span(found, extend);
+    let (t0, t1) = time_span(found, extend);
     let kind = match (t0.is_finite(), t1.is_finite()) {
         (true, false) => FigureKind::HorizontalRay(HorizontalRay {
             origin: FigNode::new(t0, price),
@@ -259,7 +262,7 @@ fn zone(
             hi = hi.max(p);
         }
     }
-    let (t0_ms, t1_ms) = span(found, style.extend);
+    let (t0_ms, t1_ms) = time_span(found, style.extend);
     let c = |v: u8| f32::from(v) / 255.0;
     bands.push(FigureBand {
         t0_ms,

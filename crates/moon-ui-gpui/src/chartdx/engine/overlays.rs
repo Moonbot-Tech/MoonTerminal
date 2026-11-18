@@ -53,6 +53,72 @@ impl ChartEngine {
         self.data.borrow_mut().set_auto_figures(core, market, set)
     }
 
+    /// The drawn auto line nearest `pos` on `pane`, within `threshold` pixels.
+    ///
+    /// Reads what the pane last DREW, so the hit matches the picture on screen. Auto lines are
+    /// found here only — never through the figure store — which is what keeps them out of
+    /// selection and dragging.
+    pub(crate) fn auto_line_at(
+        &self,
+        pane: usize,
+        pos: moon_core::figures::proj::PxPoint,
+        proj: &dyn moon_core::figures::Proj,
+        threshold: f32,
+    ) -> Option<super::auto_figures_sync::LineKey> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)?
+            .auto
+            .line_at(pos, proj, threshold)
+    }
+
+    /// Read the drawn auto line `key` of `pane`.
+    pub(crate) fn with_auto_line<R>(
+        &self,
+        pane: usize,
+        key: super::auto_figures_sync::LineKey,
+        read: impl FnOnce(&super::auto_figures_sync::pane::AutoLineRec) -> R,
+    ) -> Option<R> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)?
+            .auto
+            .line(key)
+            .map(read)
+    }
+
+    /// The figure-tool values the auto line `key` of `pane` is drawn as — what "pin as figure"
+    /// copies into the store.
+    pub(crate) fn auto_line_figures(
+        &self,
+        pane: usize,
+        key: super::auto_figures_sync::LineKey,
+    ) -> Vec<moon_core::figures::Figure> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)
+            .map(|pr| pr.auto.line_figures(key))
+            .unwrap_or_default()
+    }
+
+    /// Set the auto line under the pointer. Returns whether it changed; a change asks for a
+    /// present, so an `OnHover` caption appears or goes, and rebuilds nothing.
+    pub(crate) fn set_auto_hover(
+        &mut self,
+        hover: Option<(usize, super::auto_figures_sync::LineKey)>,
+    ) -> bool {
+        let mut st = self.state.borrow_mut();
+        if st.auto_hover == hover {
+            return false;
+        }
+        st.auto_hover = hover;
+        st.needs_present = true;
+        true
+    }
+
     /// What pane `idx` currently shows, for evaluating its auto-figure keys without copying
     /// candles. `None` until the pane is stamped with that target.
     pub(crate) fn auto_pane_view(
