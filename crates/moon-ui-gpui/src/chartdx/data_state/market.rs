@@ -517,10 +517,10 @@ impl ChartDataState {
                 // history, clipped to that replay; late archive answers trigger this read again.
                 let history = match self.trade_replay.as_ref() {
                     Some(series) => {
-                        let mut read = series.read_with_price_window(
+                        let mut read = pr.replay_ticks.read(
+                            series,
                             pane.view.epoch_ms,
-                            history_from,
-                            history_to,
+                            (history_from, history_to),
                             price_scan,
                             candle_params_opt,
                             &mut pr.history_buffers,
@@ -601,10 +601,10 @@ impl ChartDataState {
             if capacity_changed && history.as_ref().is_some_and(|h| !h.combo_reset) {
                 let read_timer = crate::diag::timer();
                 history = match self.trade_replay.as_ref() {
-                    Some(series) => Some(series.read_with_price_window(
+                    Some(series) => Some(pr.replay_ticks.read(
+                        series,
                         pane.view.epoch_ms,
-                        history_from,
-                        history_to,
+                        (history_from, history_to),
                         price_scan,
                         candle_params_opt,
                         &mut pr.history_buffers,
@@ -757,6 +757,11 @@ impl ChartDataState {
                 pixels_changed = true;
             }
             let last_price = if let Some(history) = history {
+                let ticks = if self.trade_replay.is_some() {
+                    pr.replay_ticks.ticks()
+                } else {
+                    &pr.history_buffers.ticks
+                };
                 if scan_price {
                     pr.cached_tick_price = history.tick_price_range;
                     pr.price_scan_window = Some(price_scan_key);
@@ -778,15 +783,11 @@ impl ChartDataState {
                 if history.combo_reset {
                     crate::diag::bump_by(
                         &crate::diag::CHART_HISTORY_RESET_ROWS,
-                        (pr.history_buffers.ticks.len()
+                        (ticks.len()
                             + pr.history_buffers.last_points.len()
                             + pr.history_buffers.mark_points.len()) as u64,
                     );
-                    fill_cross_upload(
-                        &pr.history_buffers.ticks,
-                        pane.view.epoch_ms,
-                        &mut pr.cross_upload,
-                    );
+                    fill_cross_upload(ticks, pane.view.epoch_ms, &mut pr.cross_upload);
                     crate::diag::bump_by(
                         &crate::diag::CHART_COMBO_UPLOAD_LEN,
                         pr.cross_upload.len() as u64,
@@ -812,12 +813,8 @@ impl ChartDataState {
                     pr.pan_reset_cam_px = cam_px;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
-                } else if !pr.history_buffers.ticks.is_empty() {
-                    fill_cross_upload(
-                        &pr.history_buffers.ticks,
-                        pane.view.epoch_ms,
-                        &mut pr.cross_upload,
-                    );
+                } else if !ticks.is_empty() {
+                    fill_cross_upload(ticks, pane.view.epoch_ms, &mut pr.cross_upload);
                     crate::diag::bump_by(
                         &crate::diag::CHART_COMBO_UPLOAD_LEN,
                         pr.cross_upload.len() as u64,
@@ -1118,7 +1115,7 @@ impl ChartDataState {
                         history.provider,
                         history.revision,
                         history.combo_reset,
-                        pr.history_buffers.ticks.len(),
+                        ticks.len(),
                         history.price_lines_changed,
                         history.clipped,
                         history.caught_up,

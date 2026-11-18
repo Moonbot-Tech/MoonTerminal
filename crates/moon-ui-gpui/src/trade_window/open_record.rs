@@ -145,7 +145,9 @@ pub(crate) fn open_trade_record(
     let generation = cx.default_global::<RecordOpenGeneration>().next(key);
     let backend = backend.downgrade();
     resolve_trade_record(axis, target, cx, move |seed, cx| {
-        if cx.default_global::<RecordOpenGeneration>().complete(key, generation)
+        if cx
+            .default_global::<RecordOpenGeneration>()
+            .complete(key, generation)
             && let (Some(backend), Some(seed)) = (backend.upgrade(), seed)
         {
             super::open_trade_window(&backend, seed, cx);

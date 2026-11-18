@@ -218,6 +218,8 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) readout_price_line_h: f32,
     pub(in crate::chartdx) history_cursor: ChartHistoryCursor,
     pub(in crate::chartdx) history_buffers: ChartHistoryBuffers,
+    /// Filtered replay ticks retained while the camera stays over the same source slice.
+    pub(in crate::chartdx) replay_ticks: moon_core::market::trade_replay::ReplayTickWindow,
     /// Last source slice signature used to decide if retained chart history must be read.
     pub(in crate::chartdx) source_history_sig: u64,
     /// Last provider generation seen by this pane. Changed generation means source replacement.
@@ -699,6 +701,7 @@ impl PaneRender {
             readout_price_line_h: 0.0,
             history_cursor: ChartHistoryCursor::default(),
             history_buffers: ChartHistoryBuffers::default(),
+            replay_ticks: Default::default(),
             source_history_sig: u64::MAX,
             source_generation: u64::MAX,
             source_archive: u64::MAX,

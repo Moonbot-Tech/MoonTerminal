@@ -1288,7 +1288,7 @@ fn bench_s_chart_frame_zoom() {
         .expect("bench result");
 }
 
-/// Isolate the frozen history materialization and backend-neutral reset preparation.
+/// Isolate the frozen history, volume-band sampling and backend-neutral reset preparation.
 #[test]
 #[ignore = "bench: S-smooth"]
 fn bench_s_chart_replay_cpu_stages() {
@@ -1323,5 +1323,18 @@ fn bench_s_chart_replay_cpu_stages() {
         let order = moon_chart::tick_volume::TickTimeOrder::for_reset(&upload, 100_000);
         assert_eq!(upload.len(), 100_000);
         assert_eq!(order.max_lateness(), 0.0);
+    });
+    let span = (replay.window.to_ms - replay.window.from_ms) as f64;
+    let step = moon_chart::side_volume::sample_step_ms((1_000.0 / span) as f32);
+    let tf_ms = moon_chart::side_volume::effective_tf_ms(0, span).max(step);
+    let mut sides = Vec::new();
+    crate::test_support::bench::measure("chart_replay_side_volume_100k", 12, || {
+        replay.side_volume_into(
+            tf_ms,
+            step,
+            (replay.window.from_ms, replay.window.to_ms),
+            &mut sides,
+        );
+        assert!(!sides.is_empty());
     });
 }

@@ -32,6 +32,7 @@ pub mod archive;
 pub mod coverage;
 pub mod gate;
 mod read_ticks;
+pub use read_ticks::ReplayTickWindow;
 pub mod rest;
 mod settings;
 mod span_volume;
@@ -1102,8 +1103,6 @@ impl TradeReplaySeries {
         )
     }
 
-    /// Read retained replay rows while fitting Y only to the visible interval, not prefetch.
-    /// The original `read_into` API fits the whole requested interval for non-prefetch callers.
     /// The bought/sold split over this replay, sampled as the live band is.
     ///
     /// See [`crate::market::source::replay_sides`]: the prints' own sides inside
@@ -1140,7 +1139,7 @@ impl TradeReplaySeries {
         );
     }
 
-    /// Copy the prepared tick slice for this ask, fitting the visible prices in the same pass.
+    /// Copy retained ticks and candles, fitting Y to the visible interval independently of prefetch.
     pub fn read_with_price_window(
         &self,
         epoch_ms: f64,
@@ -1149,6 +1148,26 @@ impl TradeReplaySeries {
         price_window: Option<(f32, f32)>,
         candle_params: Option<&CandleReadParams>,
         out: &mut ChartHistoryBuffers,
+    ) -> ChartHistoryRead {
+        self.read_history(
+            epoch_ms,
+            (from_rel_ms, to_rel_ms),
+            price_window,
+            candle_params,
+            out,
+            None,
+        )
+    }
+
+    /// Answer the same history protocol for callers that own either a copy or a retained tick window.
+    fn read_history(
+        &self,
+        epoch_ms: f64,
+        (from_rel_ms, to_rel_ms): (f32, f32),
+        price_window: Option<(f32, f32)>,
+        candle_params: Option<&CandleReadParams>,
+        out: &mut ChartHistoryBuffers,
+        retained: Option<(&std::rc::Rc<Self>, &mut ReplayTickWindow)>,
     ) -> ChartHistoryRead {
         // The live path clears these before every read, and the caller relies on that: this read
         // re-emits the whole window rather than draining a live edge, so extending without
@@ -1168,6 +1187,9 @@ impl TradeReplaySeries {
         // A non-finite bound converts to a saturated or zero timestamp and would silently ask for
         // the wrong window; there is nothing sensible to draw for one.
         if !epoch_ms.is_finite() || !from_rel_ms.is_finite() || !to_rel_ms.is_finite() {
+            if let Some((_, window)) = retained {
+                *window = ReplayTickWindow::default();
+            }
             return read;
         }
         let from_ms = (epoch_ms + f64::from(from_rel_ms)).round() as i64;
@@ -1202,72 +1224,25 @@ impl TradeReplaySeries {
         read.revision = revision;
         read.candles_revision = revision;
 
-        // The frozen run is already prepared in time order. Camera moves select its slice rather
-        // than re-filtering the retained tail, and the copy also supplies the visible price fit.
-        read.tick_price_range =
-            read_ticks::copy_ticks(&self.ticks, (from_ms, to_ms), price_window, &mut out.ticks);
-        read.combo_left_rel_ms = out.ticks.first().map(|t| (t.time_ms - epoch_ms) as f32);
-        read.combo_capacity = out.ticks.len().max(1);
+        let ticks = if let Some((source, window)) = retained {
+            window.select(source, (from_ms, to_ms));
+            read.tick_price_range = read_ticks::price_range(window.ticks(), price_window);
+            window.ticks()
+        } else {
+            read.tick_price_range =
+                read_ticks::copy_ticks(&self.ticks, (from_ms, to_ms), price_window, &mut out.ticks);
+            &out.ticks
+        };
+        read.combo_left_rel_ms = ticks.first().map(|t| (t.time_ms - epoch_ms) as f32);
+        read.combo_capacity = ticks.len().max(1);
         read.combo_reset = true;
         read.replace_price_lines();
-        read.last_price = out.ticks.last().map(|t| t.price);
+        read.last_price = ticks.last().map(|t| t.price);
 
         // Bars, only when the caller both wants them and does not already hold this exact series.
         if let Some(params) = candle_params {
             if params.shipped_revision != revision {
-                let clipped: Vec<ChartCandle> = self
-                    .candles
-                    .iter()
-                    .filter(|c| {
-                        c.t_open_ms.is_finite()
-                            && (c.t_open_ms as i64) >= from_ms.saturating_sub(tf_ms)
-                            && (c.t_open_ms as i64) <= to_ms
-                    })
-                    .copied()
-                    .collect();
-                // The rows are fetched at one minute, but the caller draws them at the timeframe
-                // IT asked for and sets no per-candle width. Shipping raw minutes under a coarser
-                // request draws every body at the wider timeframe, so adjacent bars overlap and
-                // the series reads as corrupt rather than as wrong. Aggregating is the same
-                // answer the live path gives, through the same helper.
-                match tf_ms > self.tf_ms {
-                    true => crate::market::candles::resample(&clipped, tf_ms, &mut out.candles),
-                    false => out.candles.extend(clipped),
-                }
-                // WHERE THE POINTS ARE, THE BARS STEP ASIDE. A tick series carries the exchange's
-                // own one-minute klines for the WHOLE window (see `Self::candles`), which is what
-                // keeps the ground the points never reached drawn — but inside a covered span the
-                // two layers are the same trades told twice.
-                //
-                // A bar that only partly overlaps a span is cut to the uncovered pieces. Keeping
-                // that minute whole paints its body and wick across the prints (a short trade is
-                // two full minute candles sitting on the ticks). Dropping the minute drops the
-                // gap inside it too, and a missing tile or a budget stop must still show a bar.
-                // The piece keeps the minute's OHLC — the uncovered seconds have no prints of
-                // their own to rebuild it — and its turnover is only that piece's share of the
-                // minute, so the volume band does not squeeze the whole minute into the stub.
-                // A piece the full bar wide stays on the series timeframe (`candle_tf_ms` 0); a
-                // stub carries its own width.
-                //
-                // Decided from the WALK's own interval, never from pixels and never from the rows:
-                // `Self::covered` is what the tick stage proved exhaustive, while the extrema of
-                // the points are merely a subset of it — a covered minute the venue happened to
-                // publish no trade in would keep its bar under a row-derived rule and read as a
-                // stray candle floating inside the trace. Empty there is a `Klines1m` series,
-                // which is what keeps a still-loading window whole: the bar-only stage walked no
-                // ticks, so nothing is cut until the upgrade lands. Per SPAN, never over the
-                // hull: a long position's two stretches keep the middle's bars drawn.
-                //
-                // Applied AFTER the aggregation above so one rule covers both paths, and to the
-                // OUTPUT timeframe, which is the width the caller actually draws.
-                if !self.covered.is_empty() {
-                    withhold_covered_bars(
-                        &mut out.candles,
-                        &mut out.candle_tf_ms,
-                        tf_ms,
-                        &self.covered,
-                    );
-                }
+                self.read_candles(from_ms, to_ms, tf_ms, out);
                 read.candles_changed = true;
             }
         }
@@ -1280,102 +1255,101 @@ impl TradeReplaySeries {
                 .and_then(|(from, to)| price_range_of_candles(&self.candles, tf_ms, from, to));
         }
         if read.last_price.is_none() {
-            read.last_price = self
-                .candles
+            read.last_price = self.candles[..candle_end(&self.candles, to_ms)]
                 .iter()
-                .rfind(|c| c.t_open_ms.is_finite() && (c.t_open_ms as i64) <= to_ms)
+                .rfind(|c| c.t_open_ms.is_finite())
                 .map(|c| c.close);
         }
         read
     }
+
+    /// Clip the ordered input, resample to displayed width, then subtract exhaustive tick spans.
+    fn read_candles(&self, from_ms: i64, to_ms: i64, tf_ms: i64, out: &mut ChartHistoryBuffers) {
+        let left = from_ms.saturating_sub(tf_ms);
+        let lo = self
+            .candles
+            .partition_point(|c| (c.t_open_ms as i64) < left);
+        let clipped = &self.candles[lo..candle_end(&self.candles, to_ms)];
+        let mut resampled = Vec::new();
+        let valid = |c: &&ChartCandle| c.t_open_ms.is_finite();
+        let rows = if tf_ms > self.tf_ms {
+            // Clip before aggregation: a boundary bucket may contain only part of its native rows.
+            let clipped: Vec<_> = clipped.iter().filter(valid).copied().collect();
+            crate::market::candles::resample(&clipped, tf_ms, &mut resampled);
+            resampled.as_slice()
+        } else {
+            clipped
+        };
+        if self.covered.is_empty() {
+            out.candles.extend(rows.iter().filter(valid).copied());
+        } else {
+            withhold_covered_bars(rows, out, tf_ms, &self.covered);
+        }
+    }
 }
 
-/// Replace `candles` with the pieces that sit outside `covered`, and write each piece's width.
-///
-/// Coverage is inclusive milliseconds. A bar is the half-open interval `[open, open + tf)`.
-/// A piece that is the whole bar is stored at `tf_out` 0 so the chart uses the series
-/// timeframe; a stub stores its own width in milliseconds. Turnover is scaled by the piece's
-/// share of the bar. OHLC is the bar's own: the uncovered seconds have no prints to split it.
-///
-/// Args:
-///     candles: Bars at the timeframe the caller draws, replaced in place.
-///     tf_out: Parallel widths, cleared and filled one entry per surviving piece.
-///     tf_ms: That timeframe, in milliseconds.
-///     covered: The tick walk's exhaustive spans.
+/// Locate the end of an inclusive clipping interval in the ordered candle source.
+fn candle_end(candles: &[ChartCandle], to_ms: i64) -> usize {
+    candles.partition_point(|c| (c.t_open_ms as i64) <= to_ms)
+}
+
+/// Emit only uncovered pieces, visiting sorted bars and exhaustive spans without scratch lists.
 fn withhold_covered_bars(
-    candles: &mut Vec<ChartCandle>,
-    tf_out: &mut Vec<f32>,
-    tf_ms: i64,
+    candles: &[ChartCandle],
+    out: &mut ChartHistoryBuffers,
+    width: i64,
     covered: &Coverage,
 ) {
-    let src = std::mem::take(candles);
-    tf_out.clear();
-    let width = tf_ms.max(1);
-    for candle in src {
+    let mut spans = covered.spans();
+    for &candle in candles {
         if !candle.t_open_ms.is_finite() {
             continue;
         }
         let open = candle.t_open_ms as i64;
-        for (start, piece_w) in uncovered_pieces(open, width, covered) {
-            let whole = start == open && piece_w == width;
-            let mut piece = candle;
-            if !whole {
-                piece.t_open_ms = start as f64;
-                let share = piece_w as f64 / width as f64;
-                piece.volume = (f64::from(piece.volume) * share) as f32;
-                piece.quote_volume = (f64::from(piece.quote_volume) * share) as f32;
-            }
-            candles.push(piece);
-            tf_out.push(if whole { 0.0 } else { piece_w as f32 });
+        let end = open.saturating_add(width);
+        while spans.first().is_some_and(|&(_, to)| to < open) {
+            spans = &spans[1..];
         }
+        let mut start = open;
+        for &(from, to) in spans {
+            if from >= end {
+                break;
+            }
+            let cut_end = to.saturating_add(1);
+            if cut_end > from {
+                push_candle_piece(out, candle, start, from, width);
+                start = start.max(cut_end);
+                if start >= end {
+                    break;
+                }
+            }
+        }
+        push_candle_piece(out, candle, start, end, width);
     }
 }
 
-/// The parts of the half-open bar `[open, open + width)` that no covered span contains.
-///
-/// Args:
-///     open: The bar's opening millisecond.
-///     width: The bar's width in milliseconds. Zero yields nothing.
-///     covered: Inclusive spans, disjoint and ascending.
-///
-/// Returns:
-///     `(start_ms, width_ms)` pieces, ascending, each of positive width.
-fn uncovered_pieces(open: i64, width: i64, covered: &Coverage) -> Vec<(i64, i64)> {
-    if width <= 0 {
-        return Vec::new();
+/// Preserve OHLC while scaling turnover by the surviving fraction of the half-open candle.
+fn push_candle_piece(
+    out: &mut ChartHistoryBuffers,
+    mut candle: ChartCandle,
+    start: i64,
+    end: i64,
+    width: i64,
+) {
+    let piece_width = end.saturating_sub(start);
+    if piece_width <= 0 {
+        return;
     }
-    let mut pieces = vec![(open, open.saturating_add(width))];
-    for &(from, to) in covered.spans() {
-        let cut_lo = from;
-        let cut_hi = to.saturating_add(1);
-        if cut_lo >= cut_hi {
-            continue;
-        }
-        let mut next = Vec::with_capacity(pieces.len() + 1);
-        for (lo, hi) in pieces {
-            if cut_hi <= lo || cut_lo >= hi {
-                next.push((lo, hi));
-                continue;
-            }
-            if cut_lo > lo {
-                next.push((lo, cut_lo));
-            }
-            if cut_hi < hi {
-                next.push((cut_hi, hi));
-            }
-        }
-        pieces = next;
-        if pieces.is_empty() {
-            break;
-        }
+    let whole = start == candle.t_open_ms as i64 && piece_width == width;
+    if !whole {
+        candle.t_open_ms = start as f64;
+        let share = piece_width as f64 / width as f64;
+        candle.volume = (f64::from(candle.volume) * share) as f32;
+        candle.quote_volume = (f64::from(candle.quote_volume) * share) as f32;
     }
-    pieces
-        .into_iter()
-        .filter_map(|(lo, hi)| {
-            let piece_w = hi.saturating_sub(lo);
-            (piece_w > 0).then_some((lo, piece_w))
-        })
-        .collect()
+    out.candles.push(candle);
+    out.candle_tf_ms
+        .push(if whole { 0.0 } else { piece_width as f32 });
 }
 
 /// Lowest low and highest high across displayed candle buckets intersecting a window.
@@ -1395,19 +1369,14 @@ fn price_range_of_candles(
     from_ms: i64,
     to_ms: i64,
 ) -> Option<(f32, f32)> {
+    let bucket = |c: &ChartCandle| (c.t_open_ms as i64).div_euclid(tf_ms) as f64 * tf_ms as f64;
+    let lo = candles.partition_point(|c| bucket(c) + tf_ms as f64 <= from_ms as f64);
+    let hi = candles.partition_point(|c| bucket(c) <= to_ms as f64);
     candles
+        .get(lo..hi)?
         .iter()
         .filter(|c| {
-            c.t_open_ms.is_finite()
-                && crate::market::candles::candle_intersects_window(
-                    (c.t_open_ms as i64).div_euclid(tf_ms.max(1)) as f64 * tf_ms.max(1) as f64,
-                    tf_ms as f64,
-                    from_ms as f64,
-                    to_ms as f64,
-                )
-                && c.low.is_finite()
-                && c.high.is_finite()
-                && c.high > 0.0
+            c.t_open_ms.is_finite() && c.low.is_finite() && c.high.is_finite() && c.high > 0.0
         })
         .fold(None, |acc: Option<(f32, f32)>, c| {
             Some(match acc {
