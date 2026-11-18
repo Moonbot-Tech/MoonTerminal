@@ -39,7 +39,9 @@ feature — a row in the map, a new user word — a row in the dictionary.
   Telegram bot/Mini App hosting, and an optional MCP service that lets an owner-approved AI client
   work with its cores.
 - `crates/moon-remote` — Linux server setup, station administration and a Linux core's
-  server commands (`core_cmds`: find its service by its MoonProto port, control it) over SSH, used by the terminal and the `moon-remote` command-line tool.
+  server commands (`core_cmds`: find its service by its MoonProto port, control it; `egress`: bind
+  its outgoing connections to one of the server's IPv4 addresses through systemd `NFTSet=` and an
+  nftables table of its own) over SSH, used by the terminal and the `moon-remote` command-line tool.
 - `crates/moon-ui-gpui` — panels and windows: chartdx (render state, shaders
   DX11/native/Metal, texts), panels/, settings/, analytics/, strategies/,
   chart_tabs/.
@@ -177,7 +179,9 @@ an existing Moonbot core by its key, step by step (port, Moon Proto window, key)
 to the server with an SSH key, a new core's install or a move offers to turn off the server's
 password login (ticked by default). A core on a Linux server (a
 non-loopback literal IPv4 address) has server commands on its right-click menu: status, retry the
-exchange login, log, restart/stop/start its service, and — only for a core MoonTerminal installed —
+exchange login, log, restart/stop/start its service, its outgoing IP (which of the server's
+addresses it reaches the exchange from; systemd 255+, picked as well on the new-core check screen
+and typed on the move's server step), and — only for a core MoonTerminal installed —
 change exchange, API keys, show the connection key, MoonProto address, update; without a server
 login the menu offers to add one; when the server's status reports a failed exchange login, the
 core's card shows a banner with Retry.

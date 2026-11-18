@@ -5,7 +5,8 @@
 //! moon-remote --data <dir> core-new --host <h> [--port 22] --login <user> --login-key <file>
 //!             [--host-key <SHA256:...>] --dir <instance dir> --proto-port <udp>
 //!             [--public-ip <ipv4>] [--package <url>] [--key-out <file>]
-//!             [--exchange <id> | --demo]
+//!             [--exchange <id> | --demo] [--egress <ipv4>]
+//! moon-remote --data <dir> core-egress       --host <h> ... --proto-port <udp> --egress <ipv4|off>
 //! moon-remote --data <dir> core-new-status   --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-new-exchanges --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-new-keys      --host <h> ... --dir <instance dir> --exchange <id>
@@ -20,6 +21,8 @@
 //! taken from `MOON_REMOTE_API_KEY` / `MOON_REMOTE_API_SECRET`, and reach the core on stdin only.
 //! With `--demo` the core starts on MoonBot's demo settings instead of its defaults: it logs in to
 //! MoonBot's demo exchange account by itself, in the emulator, and takes no keys.
+//! `--egress` binds the core's outgoing connections to another address of the server before its
+//! first start; `core-egress` binds (or with `off` unbinds) an installed core and restarts it.
 //! `core-move-remove --dir` takes the instance out again.
 
 use std::net::Ipv4Addr;
@@ -27,6 +30,7 @@ use std::net::Ipv4Addr;
 use anyhow::Context;
 use moon_remote::core_move;
 use moon_remote::core_new::{self, ApiKeys, CoreStatus};
+use moon_remote::egress;
 use moon_remote::script::Privilege;
 use moon_remote::ssh::{Conn, Target};
 use zeroize::Zeroizing;
@@ -38,6 +42,23 @@ use super::move_cli::{connect, required};
 pub fn run(command: &str, target: Target, args: &mut Args) -> anyhow::Result<()> {
     match command {
         "core-new" => new_core(target, args),
+        "core-egress" => {
+            let proto_port: u16 = required(args, "--proto-port")?
+                .parse()
+                .context("--proto-port")?;
+            let egress = match required(args, "--egress")?.as_str() {
+                "off" => None,
+                address => Some(address.parse::<Ipv4Addr>().context("--egress")?),
+            };
+            let (conn, privilege) = connect(&target, args)?;
+            args.done()?;
+            egress::set(&conn, &privilege, proto_port, egress)?;
+            println!(
+                "EGRESS_OK={}",
+                egress.map_or_else(|| "off".to_owned(), |a| a.to_string())
+            );
+            Ok(())
+        }
         "core-new-status" => {
             let dir = required(args, "--dir")?;
             let (conn, privilege) = connect(&target, args)?;
@@ -92,6 +113,10 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
     let key_out = args.value("--key-out")?;
     let exchange = args.value("--exchange")?;
     let demo = args.flag("--demo");
+    let egress = match args.value("--egress")? {
+        Some(address) => Some(address.parse::<Ipv4Addr>().context("--egress")?),
+        None => None,
+    };
     anyhow::ensure!(
         !(demo && exchange.is_some()),
         "--demo starts the core on MoonBot's demo account: it takes no --exchange"
@@ -110,6 +135,7 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
         proto_port,
         &package,
         demo.then_some(core_new::DEMO_SETTINGS),
+        egress,
     )?;
     println!(
         "MOVE_DIRECTORY={}\nMOVE_SERVICE={}",

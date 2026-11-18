@@ -79,6 +79,11 @@ pub(crate) struct ConnectWizardView {
     eula_ticked: bool,
     /// The exchange picked on the keys step, by its `mb --exchange` id.
     exchange: Entity<MoonSelectState<String>>,
+    /// The new core's outgoing address, picked on the check step from the server's addresses;
+    /// `None` is the primary one.
+    egress: Entity<MoonSelectState<Option<std::net::Ipv4Addr>>>,
+    /// The values the egress select was last filled with, to refill it only when a check differs.
+    egress_offered: Vec<Option<std::net::Ipv4Addr>>,
     api_key: Entity<MoonInputState>,
     api_secret: Entity<MoonInputState>,
     rsa_bundle: Entity<MoonTextAreaState>,
@@ -95,6 +100,9 @@ pub(crate) struct ConnectWizardView {
     move_at_server: bool,
     /// Whether the move's technical log is unfolded.
     move_log_open: bool,
+    /// The moved core's outgoing address, typed on the move's server step; empty is the primary.
+    /// The move checks and installs in one run, so there is no check screen to pick it on.
+    move_egress: Entity<MoonInputState>,
     /// The session-only provider login branch and its injectable network call.
     login: login::LoginState,
     /// A folder name for the server step, set where no window is at hand to set it.
@@ -114,6 +122,7 @@ impl ConnectWizardView {
             cx.new(|cx| MoonInputState::new(window, cx).masked(masked))
         };
         let exchange = cx.new(|cx| MoonSelectState::new(Vec::new(), None, window, cx));
+        let egress = cx.new(|cx| MoonSelectState::new(Vec::new(), None, window, cx));
         let (language, theme) = look_pickers(&backend, window, cx);
         let look_language = backend.read(cx).config.language;
         // A running install continues where it stands.
@@ -129,6 +138,8 @@ impl ConnectWizardView {
             eula: EulaAcceptance::load().filter(EulaAcceptance::covers_current),
             eula_ticked: false,
             exchange,
+            egress,
+            egress_offered: Vec::new(),
             api_key: input(false, window, cx),
             api_secret: input(true, window, cx),
             rsa_bundle: cx.new(|cx| MoonTextAreaState::new(window, cx).multi_line(true).rows(4)),
@@ -139,6 +150,7 @@ impl ConnectWizardView {
             move_uid: None,
             move_at_server: false,
             move_log_open: false,
+            move_egress: input(false, window, cx),
             login: login::LoginState::default(),
             pending_dir: None,
             #[cfg(windows)]
@@ -410,7 +422,8 @@ impl ConnectWizardView {
             }
         }
         self.error = None;
-        self.command(NewCommand::Install, cx);
+        let egress = self.egress.read(cx).selected_value().copied().flatten();
+        self.command(NewCommand::Install { egress }, cx);
     }
 
     /// Pass a command to the install.

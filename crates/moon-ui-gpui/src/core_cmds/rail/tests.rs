@@ -24,6 +24,8 @@ fn installation_and_service_state_gate_commands() {
             Cmd::Restart,
             Cmd::Stop,
             Cmd::Start,
+            // Bound through the core's systemd unit: a hand-installed core can be bound too.
+            Cmd::Egress,
         ] {
             assert!(available(form, None, cmd));
             assert!(!available(MenuForm::NoLogin, None, cmd));

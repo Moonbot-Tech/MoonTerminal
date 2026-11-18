@@ -141,6 +141,9 @@ pub(crate) enum CmdArgs {
         date: String,
         label: String,
     },
+    /// Bind the core's outgoing connections to this server address, or unbind them with `None`.
+    /// Without it (`CmdArgs::None`), `Cmd::Egress` only reads the binding and the choices.
+    Egress(Option<std::net::Ipv4Addr>),
 }
 
 impl std::fmt::Debug for CmdArgs {
@@ -165,6 +168,7 @@ impl std::fmt::Debug for CmdArgs {
                 .field("date", date)
                 .field("label", label)
                 .finish(),
+            Self::Egress(address) => f.debug_tuple("Egress").field(address).finish(),
         }
     }
 }

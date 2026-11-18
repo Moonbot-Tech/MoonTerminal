@@ -11,6 +11,7 @@ pub mod app_key;
 pub mod core_cmds;
 pub mod core_move;
 pub mod core_new;
+pub mod egress;
 pub mod error;
 pub mod hosts;
 pub mod key_only;

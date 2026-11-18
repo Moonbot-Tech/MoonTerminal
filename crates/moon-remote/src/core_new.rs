@@ -231,12 +231,16 @@ pub fn install(
     proto_port: u16,
     package_url: &str,
     settings: Option<&[u8]>,
+    egress: Option<std::net::Ipv4Addr>,
 ) -> anyhow::Result<Installed> {
     let port = proto_port.to_string();
     let mut args = vec![dir, port.as_str(), package_url];
     if settings.is_some() {
         args.push("settings");
     }
+    // Bound before the first start; the install fails if the started core is not bound.
+    let egress = crate::egress::install_option(egress);
+    args.extend(egress.as_deref());
     let out = privilege.run(
         conn,
         &command("install-fresh", &args),

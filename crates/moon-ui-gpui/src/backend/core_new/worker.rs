@@ -68,8 +68,9 @@ pub(crate) fn close_password_line(
 
 /// The user's next step.
 pub(crate) enum NewCommand {
-    /// Install the core and turn on its MoonProto server.
-    Install,
+    /// Install the core and turn on its MoonProto server; `egress` binds its outgoing
+    /// connections to that server address before its first start (`None`: the primary one).
+    Install { egress: Option<std::net::Ipv4Addr> },
     /// Select `exchange` and give it `keys`; the core logs in.
     SetKeys { exchange: String, keys: ApiKeys },
     /// Log in again with the stored keys.
@@ -109,7 +110,7 @@ pub(super) fn run(form: NewForm, tx: &mpsc::Sender<Event>, commands: &mpsc::Rece
     // A dropped channel is the backend forgetting the install: the login goes with this thread.
     while let Ok(command) = commands.recv() {
         let result = match (&command, dir.as_deref()) {
-            (NewCommand::Install, None) => match install(&form, &send) {
+            (NewCommand::Install { egress }, None) => match install(&form, *egress, &send) {
                 Ok(done) => {
                     // A demo core is past its login already: nothing is asked of the user.
                     let connected = if form.demo {
@@ -187,7 +188,11 @@ fn check(
 /// exchanges. MoonProto waits for the exchange: MoonBot keeps its settings per exchange, so the key
 /// handed out now would belong to the default exchange rather than the user's. A demo core starts
 /// on MoonBot's demo settings, so its initialization is its login to the demo account as well.
-fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
+fn install(
+    form: &NewForm,
+    egress: Option<std::net::Ipv4Addr>,
+    send: &dyn Fn(Event),
+) -> Result<String, Installing> {
     let (conn, privilege) = login(form).map_err(Installing::Nothing)?;
     send(Event::Line(
         if form.demo {
@@ -204,6 +209,7 @@ fn install(form: &NewForm, send: &dyn Fn(Event)) -> Result<String, Installing> {
         form.proto_port,
         core_move::RELEASE_PACKAGE,
         form.demo.then_some(core_new::DEMO_SETTINGS),
+        egress,
     )
     .map_err(Installing::Nothing)?;
     let dir = installed.dir;

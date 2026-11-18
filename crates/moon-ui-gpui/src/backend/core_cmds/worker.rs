@@ -108,6 +108,9 @@ pub(crate) trait Runner {
     ) -> anyhow::Result<Option<Vec<u8>>>;
     /// Store a pulled day in the terminal's log folder and return the stored file's name.
     fn save_log_day(&self, date: &str, label: &str, raw: &[u8]) -> std::io::Result<String>;
+    /// Bind the core on `port` to `address` (`None`: unbind): a running core is restarted there, a
+    /// stopped one stays stopped and takes it on its next start.
+    fn egress(&self, port: u16, address: Option<Ipv4Addr>) -> anyhow::Result<()>;
 }
 
 /// The cached location facts needed to execute one request.
@@ -211,6 +214,10 @@ impl Runner for SshRunner {
 
     fn moonproto_key(&self, dir: &str) -> anyhow::Result<Zeroizing<String>> {
         core_cmds::moonproto_key(&self.conn, &self.privilege, dir)
+    }
+
+    fn egress(&self, port: u16, address: Option<Ipv4Addr>) -> anyhow::Result<()> {
+        moon_remote::egress::set(&self.conn, &self.privilege, port, address)
     }
 
     fn log_days(&self, port: u16, dir_hint: Option<&str>) -> anyhow::Result<Vec<LogDay>> {
@@ -539,6 +546,22 @@ fn run_request(
             },
             _ => invalid_args(cmd, emit),
         },
+        // Opening the page reads the binding and the server's addresses; a choice restarts the
+        // core on it, and the fresh info shows whether it took.
+        Cmd::Egress => match args {
+            CmdArgs::None => info_after(runner, cmd, port, None, emit),
+            CmdArgs::Egress(address) => match runner.egress(port, address) {
+                Ok(()) => info_after(runner, cmd, port, None, emit),
+                Err(error) => {
+                    // The script puts the previous binding back on a failure: show what stands.
+                    if let Ok(Some(info)) = runner.info(port) {
+                        emit(Event::Info(info));
+                    }
+                    fail(cmd, ssh_failure(error), emit)
+                }
+            },
+            _ => invalid_args(cmd, emit),
+        },
         Cmd::UpdateCore => match runner.status(&located.dir) {
             Ok(status) => {
                 emit(Event::Status(status));
@@ -625,6 +648,7 @@ fn info_after_status_failure(
                 active: "inactive".into(),
                 uptime_s: None,
                 memory: None,
+                egress: Default::default(),
             }));
         }
         Err(_) => {}
@@ -652,6 +676,7 @@ fn info_after(
                     active: "inactive".into(),
                     uptime_s: None,
                     memory: None,
+                    egress: Default::default(),
                 }));
                 done(cmd, emit)
             }
@@ -690,6 +715,7 @@ fn ssh_failure(error: anyhow::Error) -> CmdError {
     if error.is::<ServiceFailed>()
         || error.is::<core_new::CoreRefusal>()
         || error.is::<LogDayUnusable>()
+        || error.is::<moon_remote::egress::EgressRefused>()
     {
         CmdError::Refused(error.to_string())
     } else {

@@ -17,7 +17,8 @@
 //!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es|uk|tr|pt|vi|zh])
 //! moon-remote --data <dir> core-move | core-move-start | core-move-finish | core-move-remove |
 //!                          core-close-password …                              (see move_cli.rs)
-//! moon-remote --data <dir> core-new | core-new-status | core-new-exchanges | core-new-keys …
+//! moon-remote --data <dir> core-new | core-new-status | core-new-exchanges | core-new-keys |
+//!                          core-new-retry | core-egress …
 //!                                                                              (see new_cli.rs)
 //! ```
 //!
@@ -279,14 +280,14 @@ fn run() -> anyhow::Result<()> {
             move_cli::run(&command, target, &mut args)?;
         }
         "core-new" | "core-new-status" | "core-new-exchanges" | "core-new-keys"
-        | "core-new-retry" => {
+        | "core-new-retry" | "core-egress" => {
             new_cli::run(&command, target, &mut args)?;
         }
         other => anyhow::bail!(
             "unknown command {other:?}: setup | station-bin | station-update | cores | status | \
              telegram | core-move | core-move-start | core-move-finish | core-move-remove | \
              core-close-password | core-new | core-new-status | core-new-exchanges | \
-             core-new-keys | core-new-retry"
+             core-new-keys | core-new-retry | core-egress"
         ),
     }
     Ok(())

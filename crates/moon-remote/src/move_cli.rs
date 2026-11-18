@@ -8,7 +8,7 @@
 //!              [--from <host:port>]
 //!              | --key-file <packet> | --new-key)
 //!             --dir <instance dir> --proto-port <udp> [--public-ip <ipv4>]
-//!             [--package <url>] [--key-out <file>] [--old-stopped]
+//!             [--package <url>] [--key-out <file>] [--old-stopped] [--egress <ipv4>]
 //! moon-remote --data <dir> core-move-start  --host <h> ... --dir <instance dir> --old-stopped
 //! moon-remote --data <dir> core-move-finish --host <h> ... --dir <instance dir>
 //! moon-remote --data <dir> core-move-remove --host <h> ... --dir <instance dir>
@@ -105,6 +105,10 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
         .value("--package")?
         .unwrap_or_else(|| core_move::RELEASE_PACKAGE.to_owned());
     let key_out = args.value("--key-out")?;
+    let egress = match args.value("--egress")? {
+        Some(address) => Some(address.parse::<Ipv4Addr>().context("--egress")?),
+        None => None,
+    };
     let public_ip = match args.value("--public-ip")? {
         Some(ip) => ip.parse::<Ipv4Addr>().context("--public-ip")?,
         None => target.host.parse::<Ipv4Addr>().map_err(|_| {
@@ -175,6 +179,7 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
             archive: &plan.archive.bytes,
             key_packet: &plan.packet_text,
             ini_flag_added: plan.archive.ini_flag_added,
+            egress,
         },
         say,
     )?;

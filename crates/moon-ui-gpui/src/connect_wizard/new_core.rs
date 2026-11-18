@@ -258,8 +258,11 @@ impl ConnectWizardView {
                 }
                 .to_string(),
                 cx,
-            ))
-            .child(note(t!("connect_wizard.check.outside"), cx));
+            ));
+        if let Some(egress) = self.egress_choice(check, cx) {
+            facts = facts.child(egress);
+        }
+        facts = facts.child(note(t!("connect_wizard.check.outside"), cx));
         facts = facts.pb(design::ui_px(cx, 6.0));
         let eula = self.eula_block(cx);
         let can_install = self.eula.is_some() || self.eula_ticked;
@@ -277,6 +280,85 @@ impl ConnectWizardView {
                     .render(),
             )
             .with_log()
+    }
+
+    /// The outgoing-address choice of a server with more than one address: a select, or why the
+    /// server cannot bind a core. A single-address server shows nothing. The select's items always
+    /// follow this check, so a pick made for another server is never carried into this install.
+    fn egress_choice(&mut self, check: &ServerCheck, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let alternatives = check.egress.alternatives();
+        let offered: Vec<Option<std::net::Ipv4Addr>> = if check.egress.supported() {
+            std::iter::once(None)
+                .chain(alternatives.iter().copied().map(Some))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if offered != self.egress_offered {
+            self.egress_offered = offered.clone();
+            let primary = match check.egress.primary {
+                Some(address) => t!(
+                    "connect_wizard.check.egress_primary",
+                    address = address.to_string()
+                ),
+                None => t!("connect_wizard.check.egress_primary_unknown"),
+            }
+            .to_string();
+            self.egress.update(cx, |state, cx| {
+                state.set_items(
+                    offered.iter().map(|value| {
+                        let label = value.map_or_else(|| primary.clone(), |a| a.to_string());
+                        MoonSelectItem::new(*value, label)
+                    }),
+                    cx,
+                );
+                if state.selected_value().is_none() {
+                    state.set_selected_value(&None);
+                }
+            });
+        }
+        if alternatives.is_empty() {
+            return None;
+        }
+        if !check.egress.supported() {
+            return Some(
+                fact(
+                    false,
+                    t!(
+                        "connect_wizard.check.egress_old",
+                        found = check.egress.systemd,
+                        min = moon_remote::egress::MIN_SYSTEMD
+                    )
+                    .to_string(),
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+        Some(
+            v_flex()
+                .gap(design::ui_px(cx, 4.0))
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(design::ui_px(cx, 10.0))
+                        .child(
+                            div()
+                                .w(design::font_w_px(cx, 170.0))
+                                .child(t!("connect_wizard.check.egress").to_string()),
+                        )
+                        .child(
+                            div().w(design::font_w_px(cx, 260.0)).child(
+                                MoonSelect::new(&self.egress)
+                                    .id("cw-egress")
+                                    .menu_width(design::font_w(cx, 260.0)),
+                            ),
+                        ),
+                )
+                .child(note(t!("connect_wizard.check.egress_note"), cx))
+                .into_any_element(),
+        )
     }
 
     /// The agreement: a checkbox until it is accepted, then the date it was.

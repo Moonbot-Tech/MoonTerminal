@@ -405,6 +405,7 @@ fn worker_invalidation_clears_endpoint_dependent_facts() {
         active: "active".into(),
         uptime_s: Some(60),
         memory: None,
+        egress: Default::default(),
     });
     facts.status = Some(login_error());
     facts.log = Some(Default::default());
@@ -567,6 +568,7 @@ fn retarget_recovery_survives_backend_info_refresh() {
             active: "inactive".into(),
             uptime_s: None,
             memory: None,
+            egress: Default::default(),
         }));
 
         let cached = facts.located.as_ref().expect("location");
@@ -580,6 +582,7 @@ fn retarget_recovery_survives_backend_info_refresh() {
             active: "active".into(),
             uptime_s: Some(1),
             memory: None,
+            egress: Default::default(),
         }));
         assert!(!facts.retarget_recovery);
     }

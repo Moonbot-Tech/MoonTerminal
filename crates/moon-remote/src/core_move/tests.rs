@@ -12,6 +12,7 @@ fn the_check_reports_what_the_server_has() {
             mem_total_mb: 961,
             mem_available_mb: 540,
             ufw_active: true,
+            egress: Default::default(),
         }
     );
 }
