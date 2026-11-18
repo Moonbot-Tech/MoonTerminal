@@ -43,10 +43,12 @@ pub struct Touch {
     pub price: f64,
 }
 
-/// A horizontal figure that a bar has CLOSED beyond after its last touch.
+/// A figure — a horizontal level, a squeeze's level or a sloped trend line — that a bar has
+/// CLOSED beyond after its last touch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Broken {
-    /// Open time of the first bar that closed beyond.
+    /// Open time of the first bar of the LATEST break episode: a close back on the original side
+    /// ends an episode, and the next close beyond starts a new one (see `scan_break`).
     pub at_ms: f64,
     /// Closed bars after the breaking one, up to the last bar of the input.
     pub bars_since: u32,

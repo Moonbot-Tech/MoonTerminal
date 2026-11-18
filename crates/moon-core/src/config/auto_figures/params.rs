@@ -75,7 +75,8 @@ pub enum TfSource {
     Fixed(TfId),
 }
 
-/// What happens to a horizontal level once a bar has CLOSED beyond it.
+/// What happens to a level or a line once a bar has CLOSED beyond it — a horizontal `Swing`
+/// level, the level of a `Squeeze`, and a sloped `Trend` line alike.
 ///
 /// A per-row choice (LinKvo, 18.11.2026): removing it at once hides a false breakout, keeping it
 /// for a while shows one.
@@ -328,6 +329,22 @@ impl DetectorParams {
     /// time — the current day or week in full, the previous one plus all of the current one —
     /// plus one: the detector refuses a period whose first bar is missing, and the extra bar is the
     /// slack for a bar that opens exactly at the boundary. An upper bound, never short.
+    /// The coarsest timeframe on which this detector can answer at all.
+    ///
+    /// Detectors read CLOSED bars only, so a row whose bar is as long as the period it measures
+    /// never sees that period: on D1 the current day's bar is always still forming, and a `Day`
+    /// row there would draw nothing for ever. `D1` — no limit — for every other kind. Applied to a
+    /// `Fixed` timeframe by `sanitize`, and to a resolved `Auto` one by the caller.
+    pub fn coarsest_tf(&self) -> TfId {
+        match self {
+            DetectorParams::PeriodExtreme(PeriodExtremeParams {
+                period: ExtremePeriod::Day,
+                ..
+            }) => TfId::H4,
+            _ => TfId::D1,
+        }
+    }
+
     pub fn bars_needed(&self, tf: TfId) -> u32 {
         const DAY_MS: i64 = 86_400_000;
         match self {

@@ -11,7 +11,7 @@
 
 use super::{
     AutoFigureRow, AutoFiguresCfg, BrokenPolicy, DetectorParams, EventMarks, LineCaption,
-    LineStyle, RowDetector, SqueezeParams, SwingParams, Take, TrendParams,
+    LineStyle, RowDetector, SqueezeParams, SwingParams, Take, TfSource, TrendParams,
 };
 
 /// Most rows one configuration keeps. Every visible row is a detector run, so an unbounded list —
@@ -73,6 +73,11 @@ impl AutoFigureRow {
         // interpret would corrupt it for the build that can.
         if let RowDetector::Known(params) = &mut self.detector {
             sanitize_detector(params);
+            // A fixed timeframe the detector cannot answer on draws nothing for ever; pull it down
+            // to the coarsest one that works. `TfId` orders smallest first.
+            if let TfSource::Fixed(tf) = &mut self.tf {
+                *tf = (*tf).min(params.coarsest_tf());
+            }
         }
         sanitize_take(&mut self.take);
         self.style.sanitize();

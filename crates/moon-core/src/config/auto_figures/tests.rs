@@ -567,3 +567,25 @@ fn bars_needed_per_kind() {
     });
     assert_eq!(trend.bars_needed(TfId::M1), 77);
 }
+
+/// A `Day` extreme on D1 reads only closed bars and so could never see the forming day; sanitize
+/// pulls such a fixed timeframe down to H4, and leaves a `PrevDay` row on D1 alone — its day is
+/// closed.
+#[test]
+fn a_timeframe_the_detector_cannot_answer_on_is_pulled_down() {
+    let mut day = AutoFigureRow::new(DetectorParams::PeriodExtreme(PeriodExtremeParams {
+        period: ExtremePeriod::Day,
+        which: ExtremeWhich::Both,
+    }));
+    day.tf = TfSource::Fixed(TfId::D1);
+    day.sanitize();
+    assert_eq!(day.tf, TfSource::Fixed(TfId::H4));
+
+    let mut prev = AutoFigureRow::new(DetectorParams::PeriodExtreme(PeriodExtremeParams {
+        period: ExtremePeriod::PrevDay,
+        which: ExtremeWhich::Both,
+    }));
+    prev.tf = TfSource::Fixed(TfId::D1);
+    prev.sanitize();
+    assert_eq!(prev.tf, TfSource::Fixed(TfId::D1));
+}
