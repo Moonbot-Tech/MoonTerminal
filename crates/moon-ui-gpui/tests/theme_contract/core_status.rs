@@ -265,18 +265,26 @@ fn core_status_alarms_table_has_an_always_visible_vertical_bar() {
 fn core_status_chart_follows_picks_and_the_filler_keeps_no_width() {
     let interactions = read_src("panels/core_status/interactions.rs");
     let press = code_only(braced_body(&interactions, "pub(super) fn select_core_row("));
+    let pressed = press
+        .find(".press(clicked, order")
+        .expect("selection press");
+    let selected = press
+        .find("self.core_selection.contains(Some(*core))")
+        .expect("selected-after-press check");
+    let picked = press
+        .find("self.chart.pick_core(core, server)")
+        .expect("chart pick");
     assert!(
-        press.contains(".press(clicked, order")
-            && press.contains("self.core_selection.contains(Some(*core))")
-            && press.contains("self.chart.pick_core(core, server)"),
-        "a core-row press that leaves its core selected must move the chart to it"
+        pressed < selected && selected < picked,
+        "the chart pick must read the selection AFTER the press, or a plain click on an \
+         unselected core would not move the chart"
     );
     let rail = code_only(braced_body(
         &interactions,
         "pub(super) fn follow_rail_core(",
     ));
     assert!(
-        rail.contains("WorkspaceMode::AutoTrading")
+        rail.contains("== moon_core::config::WorkspaceMode::AutoTrading")
             && rail.contains("valid_auto_workspace_core(&self.group)")
             && rail.contains("self.chart.follow_rail(rail, server)"),
         "the chart follows the Auto rail's core, and only in Auto mode"

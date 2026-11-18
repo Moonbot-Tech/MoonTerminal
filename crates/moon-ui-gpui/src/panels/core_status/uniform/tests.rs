@@ -10,7 +10,8 @@ use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{ApiKeyState, CoreStatusRow};
 
 fn row(name: &str, status: ConnStatus) -> CoreStatusRow {
-    // Row builders translate; the first lookup must not run on the 2 MiB test stack.
+    // `uniform_columns` translates the clock tooltip; the first lookup must not run on the
+    // 2 MiB test stack.
     crate::test_locale::warm();
     CoreStatusRow {
         id: 1,
