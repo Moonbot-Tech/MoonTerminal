@@ -12,11 +12,7 @@
 //! the only visible selection indicator while the picker is closed. Keeping both time and code
 //! present also gives the ticker's hand-summed popup offset a stable clock shape to measure.
 //!
-//! Search is intentionally deferred until this popup is hosted on `Shell`, like
-//! `core_settings_content` in `shell/render.rs`. `MoonPopover` takes content eagerly, so the
-//! inline design builds every row on every header render, and MoonUI's searchable list requires an
-//! `Entity<MoonComboboxState<_>>` created with a `&mut Window`; this free function receives only
-//! `&App`. Moving the popup state solves both constraints without a hand-rolled filter input.
+//! The popover mounts its menu only while open, so a closed clock formats just its trigger.
 
 use std::rc::Rc;
 
@@ -288,6 +284,102 @@ pub(crate) fn compact_header_clock(
     render_header_clock(backend, p, ClockPrecision::Minutes, cx)
 }
 
+/// A city row's key, localized caption, time, selectable city, and checked state.
+struct ClockMenuRow {
+    key: String,
+    label: String,
+    right: String,
+    city: Option<&'static City>,
+    selected: bool,
+}
+
+/// Build the clock picker rows from the same instant as the header clock.
+fn clock_menu_rows(selected: chrono_tz::Tz, now: DateTime<Utc>) -> Vec<ClockMenuRow> {
+    let show_system = cities::by_zone_id(selected.name()).is_none();
+    let mut rows = Vec::with_capacity(cities::CITIES.len() + usize::from(show_system));
+    if show_system {
+        rows.push(ClockMenuRow {
+            key: "tz-system".into(),
+            label: t!("header.clock_system", zone = selected.name()).to_string(),
+            right: picker_right_label(selected, now),
+            city: None,
+            selected: true,
+        });
+    }
+    rows.extend(cities::CITIES.iter().map(|city| ClockMenuRow {
+        key: format!("tz-{}", city.code),
+        label: format!("{}  {}", city.code, city.name()),
+        right: picker_right_label(city.zone, now),
+        city: Some(city),
+        selected: city.zone == selected,
+    }));
+    rows
+}
+
+/// Menu content rendered when MoonUI mounts the open popover subtree.
+#[derive(IntoElement)]
+struct ClockMenu {
+    backend: Entity<Backend>,
+    selected: chrono_tz::Tz,
+    now: DateTime<Utc>,
+}
+
+impl RenderOnce for ClockMenu {
+    /// Resolve picker captions and callbacks when the popover requests the menu.
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let Self {
+            backend,
+            selected,
+            now,
+        } = self;
+        // Clone the entity once; every city action shares this handle.
+        let backend = Rc::new(backend);
+        let items: Vec<_> = clock_menu_rows(selected, now)
+            .into_iter()
+            .map(
+                |ClockMenuRow {
+                     key,
+                     label,
+                     right,
+                     city,
+                     selected,
+                 }| {
+                    let item = MoonMenuItem::with_key(key, label)
+                        .right_label(right)
+                        .selected(selected)
+                        .checked(selected);
+                    if let Some(city) = city {
+                        let backend = backend.clone();
+                        item.on_click(move |_, _, cx| {
+                            backend.update(cx, |b, bcx| {
+                                // A menu left open across a transition needs the offset at selection time.
+                                commit_city(b, city, now_utc(), bcx);
+                                bcx.notify();
+                            });
+                        })
+                    } else {
+                        item.disabled(true)
+                    }
+                },
+            )
+            .collect();
+
+        MoonPopupMenu::new("header-clock-menu")
+            // One compact row: the caption is a single line, and the pinned header is now
+            // held out of the scrolling region, so its height has to be declared for the row
+            // list's budget. MoonUI floors it at the menu's own row height regardless.
+            .header(20.0, t!("header.clock_pick").to_string())
+            .fit_width(200.0, 560.0)
+            .size(MoonSize::Xs)
+            .mono(true)
+            // Cap the viewport at about 11 cities so the full curated list cannot overrun a
+            // short window; the remaining rows stay reachable by scrolling.
+            .max_height_ui(300.0)
+            .items(items)
+            .render()
+    }
+}
+
 /// Render one clock precision through the single selected-zone and popover implementation.
 ///
 /// Args:
@@ -297,7 +389,7 @@ pub(crate) fn compact_header_clock(
 ///     cx: Application context used to build the shared popover.
 ///
 /// Returns:
-///     Clock trigger and eagerly prepared city-selection popover.
+///     Clock trigger and popover with lazily rendered city rows.
 fn render_header_clock(
     backend: &Entity<Backend>,
     p: MoonPalette,
@@ -305,51 +397,9 @@ fn render_header_clock(
     cx: &App,
 ) -> AnyElement {
     let selected = selected_zone(backend, cx);
-    // One instant for the header and every menu row, so no row can straddle a second and disagree
-    // with the clock above it. `MoonPopover` builds its content eagerly, so this loop runs whether
-    // the popup is open or not — reading the system clock per row would be that cost per frame.
+    // An open menu shares the trigger's instant so their clocks cannot straddle a second.
     let now = now_utc();
     let (time, code) = clock_parts(selected, now, precision);
-
-    // One shared handle for all 47 rows: cloning an `Entity` takes a read lock on the entity map,
-    // so a clone per row is not the refcount bump it reads as.
-    let backend = Rc::new(backend.clone());
-    let selected_curated = cities::by_zone_id(selected.name());
-    let mut items =
-        Vec::with_capacity(cities::CITIES.len() + usize::from(selected_curated.is_none()));
-    if selected_curated.is_none() {
-        items.push(
-            MoonMenuItem::with_key(
-                "tz-system",
-                t!("header.clock_system", zone = selected.name()).to_string(),
-            )
-            .right_label(picker_right_label(selected, now))
-            .selected(true)
-            .checked(true)
-            .disabled(true),
-        );
-    }
-    for city in cities::CITIES {
-        let is_selected = city.zone == selected;
-        let backend = backend.clone();
-        items.push(
-            MoonMenuItem::with_key(
-                format!("tz-{}", city.code),
-                format!("{}  {}", city.code, city.name()),
-            )
-            .right_label(picker_right_label(city.zone, now))
-            .selected(is_selected)
-            .checked(is_selected)
-            .on_click(move |_, _, cx| {
-                backend.update(cx, |b, bcx| {
-                    // `now_utc()` again rather than the captured snapshot: a popup left open across
-                    // a transition would otherwise mirror an offset that has since moved.
-                    commit_city(b, city, now_utc(), bcx);
-                    bcx.notify();
-                });
-            }),
-        );
-    }
 
     let row = h_flex()
         .id("header-clock")
@@ -381,20 +431,10 @@ fn render_header_clock(
         .fit_content()
         .close_on_content_click(true)
         .trigger(row)
-        .content(
-            MoonPopupMenu::new("header-clock-menu")
-                // One compact row: the caption is a single line, and the pinned header is now
-                // held out of the scrolling region, so its height has to be declared for the row
-                // list's budget. MoonUI floors it at the menu's own row height regardless.
-                .header(20.0, t!("header.clock_pick").to_string())
-                .fit_width(200.0, 560.0)
-                .size(MoonSize::Xs)
-                .mono(true)
-                // Cap the viewport at about 11 cities so the full curated list cannot overrun a
-                // short window; the remaining rows stay reachable by scrolling.
-                .max_height_ui(300.0)
-                .items(items)
-                .render(),
-        )
+        .content(ClockMenu {
+            backend: backend.clone(),
+            selected,
+            now,
+        })
         .into_any_element()
 }

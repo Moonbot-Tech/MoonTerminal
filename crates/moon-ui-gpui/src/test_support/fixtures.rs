@@ -340,6 +340,24 @@ pub(crate) struct PanelFixture {
 }
 
 impl PanelFixture {
+    /// Build one group of 60 live sessions, 40 still connecting or failing.
+    pub(crate) fn connecting_fleet() -> Self {
+        let mut fixture = Self::new(60, 0, 0, 0, 0);
+        for id in 21..=60 {
+            let status = if id % 2 == 0 {
+                ConnStatus::Connecting
+            } else {
+                ConnStatus::Failed("connection timed out".into())
+            };
+            fixture
+                .store
+                .core_mut(id)
+                .unwrap()
+                .apply(FeedMsg::Status(status));
+        }
+        fixture
+    }
+
     /// Build the roster from the same configured identities that populate the store.
     pub(crate) fn new(
         cores: usize,

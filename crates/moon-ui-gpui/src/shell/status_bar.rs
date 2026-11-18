@@ -5,19 +5,277 @@ use rust_i18n::t;
 
 use moon_ui::{MoonPalette, MoonStatusBar, MoonStatusIndicator, MoonStatusItem, MoonTooltipView};
 
-use moon_core::config::TransportVersion;
-use moon_core::feed::ConnStatus;
+use moon_core::config::{AppConfig, TransportVersion};
+use moon_core::feed::{ConnFault, ConnStatus, CoreStartupStatus, ReportSyncProgress};
 use moon_core::metrics::MetricsSnapshot;
-use moon_core::session::{ConnSummary, CoreId, LicenseSummary};
+use moon_core::session::{ConnSummary, CoreId, CoreStore, LicenseSummary, store::CoreData};
 use moon_core::update::BuildIdentity;
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::design;
 
 use super::Shell;
+use super::fleet_model::FleetModelKey;
 
 /// How long a report catch-up must run before the status bar mentions it, ms.
 const REPORT_SYNC_SHOW_AFTER_MS: i64 = 2_000;
+
+/// Borrowed inputs to one group window's connection and license presentation.
+pub(super) struct StatusInputs<'a> {
+    pub(super) config: &'a AppConfig,
+    pub(super) store: &'a CoreStore,
+    pub(super) group: &'a str,
+    pub(super) locale: &'a str,
+    pub(super) now_ms: i64,
+}
+
+/// Visible connection facts and the catch-up threshold for one session.
+#[derive(PartialEq, Eq)]
+struct StatusSession<'a> {
+    id: CoreId,
+    name: Cow<'a, str>,
+    status: Option<Cow<'a, ConnStatus>>,
+    fault: Option<Cow<'a, ConnFault>>,
+    startup: Option<CoreStartupStatus>,
+    sync: Option<(ReportSyncProgress, bool)>,
+    paid_license: Option<bool>,
+}
+
+impl<'a> StatusSession<'a> {
+    /// Only ready cores contribute catch-up progress, and only down cores need diagnosis.
+    fn read(id: CoreId, name: &'a str, core: Option<&'a CoreData>, now_ms: i64) -> Self {
+        let ready = core.is_some_and(|core| core.status == ConnStatus::Ready);
+        let down = core.filter(|_| !ready);
+        Self {
+            id,
+            name: Cow::Borrowed(name),
+            status: core.map(|core| Cow::Borrowed(&core.status)),
+            fault: down.and_then(|core| core.fault.as_ref().map(Cow::Borrowed)),
+            startup: down.map(|core| core.startup),
+            sync: core
+                .filter(|_| ready)
+                .and_then(|core| core.report_sync)
+                .map(|sync| (sync, sync_visible(sync, now_ms))),
+            paid_license: core
+                .and_then(|core| core.license)
+                .map(|license| license.paid_version),
+        }
+    }
+
+    /// Retain an owned copy only on a miss.
+    fn into_owned(self) -> StatusSession<'static> {
+        StatusSession {
+            id: self.id,
+            name: Cow::Owned(self.name.into_owned()),
+            status: self.status.map(|status| Cow::Owned(status.into_owned())),
+            fault: self.fault.map(|fault| Cow::Owned(fault.into_owned())),
+            startup: self.startup,
+            sync: self.sync,
+            paid_license: self.paid_license,
+        }
+    }
+}
+
+/// The precise wall-clock transition at which a persistent catch-up first becomes visible.
+fn sync_visible(progress: ReportSyncProgress, now_ms: i64) -> bool {
+    now_ms.saturating_sub(progress.started_ms) >= REPORT_SYNC_SHOW_AFTER_MS
+}
+
+/// Stable status fields shared by compact and regular layouts.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct StatusModel {
+    pub(super) ready: usize,
+    pub(super) total: usize,
+    pub(super) any_failed: bool,
+    pub(super) down_text: SharedString,
+    pub(super) sync_value: Option<SharedString>,
+    pub(super) license_total: usize,
+    pub(super) license_known: usize,
+    pub(super) license_paid: usize,
+    pub(super) license_free: usize,
+}
+
+impl StatusModel {
+    /// Rank and diagnose the snapshot, indexing transport evidence once for the whole fleet.
+    pub(super) fn build(
+        input: &StatusInputs<'_>,
+        mut conn: ConnSummary,
+        license: LicenseSummary,
+    ) -> Self {
+        // The tooltip follows the same canonical ordering as the header core list.
+        super::workspace::sort_status_lists(
+            &mut conn.down,
+            &mut conn.report_sync,
+            |row| row.id,
+            |row| row.id,
+            || moon_core::session::core_order::CoreOrder::new(input.config),
+        );
+        let mode_suggestions = if conn.down.is_empty() {
+            HashMap::new()
+        } else {
+            let index = crate::conn_diag::FleetModeIndex::new(&input.config.servers, |id| {
+                input
+                    .store
+                    .core(id)
+                    .is_some_and(|core| core.status == ConnStatus::Ready)
+            });
+            conn.down
+                .iter()
+                .map(|row| (row.id, index.suggestion(row.id)))
+                .collect()
+        };
+        let (down_text, sync_value) =
+            connection_status_text(&conn, &mode_suggestions, input.now_ms);
+        Self {
+            total: conn.total,
+            ready: conn.ready,
+            any_failed: conn
+                .down
+                .iter()
+                .any(|row| matches!(row.status, ConnStatus::Failed(_) | ConnStatus::Disconnected)),
+            down_text: down_text.into(),
+            sync_value: sync_value.map(Into::into),
+            license_total: license.total,
+            license_known: license.known,
+            license_paid: license.paid,
+            license_free: license.free,
+        }
+    }
+}
+
+/// Per-window memo. Validate borrowed source facts even when refresh bypasses Backend observers.
+#[derive(Default)]
+pub(super) struct StatusMemo(Option<StatusCache>);
+
+/// The snapshot that produced one memoized status model.
+struct StatusCache {
+    group: String,
+    locale: String,
+    fleet: FleetModelKey,
+    sessions: Vec<StatusSession<'static>>,
+    model: Rc<StatusModel>,
+}
+
+impl StatusMemo {
+    /// Reuse formatted diagnostics for equal inputs, including elapsed catch-up visibility.
+    pub(super) fn resolve<'a>(
+        &mut self,
+        input: &StatusInputs<'a>,
+        sessions: impl Iterator<Item = (CoreId, &'a str)> + Clone,
+        build: impl FnOnce() -> StatusModel,
+    ) -> Rc<StatusModel> {
+        let facts = sessions
+            .map(|(id, name)| StatusSession::read(id, name, input.store.core(id), input.now_ms));
+        let mut current = facts.clone();
+        if let Some(cache) = &self.0
+            && cache.group == input.group
+            && cache.locale == input.locale
+            && cache.fleet.matches(input.config, input.store)
+            && cache
+                .sessions
+                .iter()
+                .all(|old| current.next().is_some_and(|new| old == &new))
+            && current.next().is_none()
+        {
+            return cache.model.clone();
+        }
+        let model = Rc::new(build());
+        self.0 = Some(StatusCache {
+            group: input.group.to_owned(),
+            locale: input.locale.to_owned(),
+            fleet: FleetModelKey::capture(input.config, input.store),
+            sessions: facts.map(StatusSession::into_owned).collect(),
+            model: model.clone(),
+        });
+        model
+    }
+}
+
+/// Format the connection diagnostics and report catch-up indicator at the supplied time.
+fn connection_status_text(
+    conn: &ConnSummary,
+    mode_suggestions: &HashMap<CoreId, Option<TransportVersion>>,
+    now_ms: i64,
+) -> (String, Option<String>) {
+    // Include only non-ready cores in the tooltip, each as name, reason and NEXT STEP.
+    //
+    // This is the surface a user who has opened no panel at all reads first, so it carries the
+    // action and not just the complaint. It used to print the raw `ConnStatus` payload: an
+    // English stage name such as "connected, init..." and a MoonProto error string, both built
+    // in a crate that cannot translate them. The verdict replaces both, and the two remaining
+    // arms are the states that genuinely carry no further evidence.
+    let down_text: String = conn
+        .down
+        .iter()
+        .map(|row| {
+            let reason =
+                match moon_core::feed::diagnose(&row.status, row.fault.as_ref(), &row.startup) {
+                    Some(d) => crate::conn_diag::fault_line(
+                        &d,
+                        mode_suggestions.get(&row.id).copied().flatten(),
+                    ),
+                    None => match row.status {
+                        ConnStatus::Disconnected => t!("status.disconnected").to_string(),
+                        _ => t!("status.connecting").to_string(),
+                    },
+                };
+            format!("{}: {reason}", row.name)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Report history still arriving (#665) — without this nothing tells a user that the Report
+    // is short because it is still downloading. A catch-up that ends within a couple of seconds
+    // is the steady state on every connect and would only blink the bar.
+    let syncing: Vec<_> = conn
+        .report_sync
+        .iter()
+        .filter(|row| sync_visible(row.progress, now_ms))
+        .collect();
+    let percent_text = |done: i64, span: i64| {
+        if span > 0 {
+            format!("{}%", i128::from(done) * 100 / i128::from(span))
+        } else {
+            "…".to_string()
+        }
+    };
+    let sync_value = (!syncing.is_empty()).then(|| {
+        let (done, span) = syncing
+            .iter()
+            .filter_map(|row| row.progress.done_and_span())
+            .fold((0i64, 0i64), |(d, s), (rd, rs)| {
+                (d.saturating_add(rd), s.saturating_add(rs))
+            });
+        let percent = percent_text(done, span);
+        if syncing.len() > 1 {
+            format!("{} · {percent}", syncing.len())
+        } else {
+            percent
+        }
+    });
+    let sync_text = (!syncing.is_empty()).then(|| {
+        let mut text = t!("status.reports_sync_tip").to_string();
+        for row in &syncing {
+            let (done, span) = row.progress.done_and_span().unwrap_or((0, 0));
+            text.push('\n');
+            text.push_str(&t!(
+                "status.reports_sync_row",
+                name = row.name.as_str(),
+                percent = percent_text(done, span),
+                rows = row.progress.rows
+            ));
+        }
+        text
+    });
+    let down_text = [Some(down_text).filter(|t| !t.is_empty()), sync_text]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (down_text, sync_value)
+}
 
 impl Shell {
     /// Build the lower status bar as three semantic groups plus right-aligned actions.
@@ -28,127 +286,36 @@ impl Shell {
     /// dividers separate those concerns.
     ///
     /// Args:
-    ///     conn: Connection summary for the cores in this group window.
-    ///     license: Aggregated license state for the same cores.
+    ///     status: Memoized connection and license facts for this group window.
     ///     snap: Current process and system resource telemetry.
     ///     book_levels: Order-book level count for the active Main chart.
     ///     fps: Smoothed shell render rate.
     ///     chrome_width: Current window width used to select the compact narrow layout.
-    ///     mode_suggestions: Fleet-wide "try this mode instead" advice for `conn.down`'s cores,
-    ///         keyed by core id (`conn_diag::fleet_mode_suggestion`, computed by the caller —
-    ///         only it holds both the live config and the store).
     ///     cx: Application context used for theme tokens, text measurement, and actions.
     ///
     /// Returns:
     ///     The complete scaled status row with connection tooltip and clickable right actions.
     pub(super) fn status_bar(
         &self,
-        conn: ConnSummary,
-        license: LicenseSummary,
+        status: &StatusModel,
         snap: MetricsSnapshot,
         book_levels: usize,
         fps: f32,
         chrome_width: f32,
-        mode_suggestions: &HashMap<CoreId, Option<TransportVersion>>,
         cx: &App,
     ) -> impl IntoElement {
         // A picture of the interface should not differ from the last one because of the machine's load.
         #[cfg(uidoc)]
         let (snap, fps) = crate::uidoc::steady_status(snap, fps);
-        let all_ok = conn.total > 0 && conn.ready == conn.total;
-        let any_failed = conn
-            .down
-            .iter()
-            .any(|row| matches!(row.status, ConnStatus::Failed(_) | ConnStatus::Disconnected));
+        let all_ok = status.total > 0 && status.ready == status.total;
         let p = MoonPalette::active(cx);
         let badge_col = if all_ok {
             p.green
-        } else if any_failed {
+        } else if status.any_failed {
             p.red
         } else {
             p.amber
         };
-        // Include only non-ready cores in the tooltip, each as name, reason and NEXT STEP.
-        //
-        // This is the surface a user who has opened no panel at all reads first, so it carries the
-        // action and not just the complaint. It used to print the raw `ConnStatus` payload: an
-        // English stage name such as "connected, init..." and a MoonProto error string, both built
-        // in a crate that cannot translate them. The verdict replaces both, and the two remaining
-        // arms are the states that genuinely carry no further evidence.
-        let down_text: String = conn
-            .down
-            .iter()
-            .map(|row| {
-                let reason = match moon_core::feed::diagnose(
-                    &row.status,
-                    row.fault.as_ref(),
-                    &row.startup,
-                ) {
-                    Some(d) => crate::conn_diag::fault_line(
-                        &d,
-                        mode_suggestions.get(&row.id).copied().flatten(),
-                    ),
-                    None => match row.status {
-                        ConnStatus::Disconnected => t!("status.disconnected").to_string(),
-                        _ => t!("status.connecting").to_string(),
-                    },
-                };
-                format!("{}: {reason}", row.name)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // Report history still arriving (#665) — without this nothing tells a user that the Report
-        // is short because it is still downloading. A catch-up that ends within a couple of seconds
-        // is the steady state on every connect and would only blink the bar.
-        let now_ms = moon_core::util::time::now_unix_ms_i64();
-        let syncing: Vec<_> = conn
-            .report_sync
-            .iter()
-            .filter(|row| {
-                now_ms.saturating_sub(row.progress.started_ms) >= REPORT_SYNC_SHOW_AFTER_MS
-            })
-            .collect();
-        let percent_text = |done: i64, span: i64| {
-            if span > 0 {
-                format!("{}%", i128::from(done) * 100 / i128::from(span))
-            } else {
-                "…".to_string()
-            }
-        };
-        let sync_value = (!syncing.is_empty()).then(|| {
-            let (done, span) = syncing
-                .iter()
-                .filter_map(|row| row.progress.done_and_span())
-                .fold((0i64, 0i64), |(d, s), (rd, rs)| {
-                    (d.saturating_add(rd), s.saturating_add(rs))
-                });
-            let percent = percent_text(done, span);
-            if syncing.len() > 1 {
-                format!("{} · {percent}", syncing.len())
-            } else {
-                percent
-            }
-        });
-        let sync_text = (!syncing.is_empty()).then(|| {
-            let mut text = t!("status.reports_sync_tip").to_string();
-            for row in &syncing {
-                let (done, span) = row.progress.done_and_span().unwrap_or((0, 0));
-                text.push('\n');
-                text.push_str(&t!(
-                    "status.reports_sync_row",
-                    name = row.name.as_str(),
-                    percent = percent_text(done, span),
-                    rows = row.progress.rows
-                ));
-            }
-            text
-        });
-        let down_text = [Some(down_text).filter(|t| !t.is_empty()), sync_text]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("\n\n");
 
         // The caption is translated WHOLE, colon included (`%{value}`), rather than glued together
         // as "label + ': ' + tail": punctuation and word order are the translator's business. The
@@ -156,21 +323,28 @@ impl Shell {
         let connection_value = if all_ok {
             "OK".to_string()
         } else {
-            format!("{}/{}", conn.ready, conn.total)
+            format!("{}/{}", status.ready, status.total)
         };
         let status_text = t!("status.connection", value = connection_value.clone()).to_string();
         // PRO/FREE are plan names, on the deliberately-untranslated list (locales/README.md).
-        let (license_value, license_color) = if license.total == 0 || license.known == 0 {
-            ("…".to_string(), p.text_muted)
-        } else if license.known < license.total {
-            (format!("{}/{}", license.known, license.total), p.amber)
-        } else if license.paid == license.total {
-            ("PRO".to_string(), p.green)
-        } else if license.free == license.total {
-            ("FREE".to_string(), p.amber)
-        } else {
-            (format!("PRO {}/{}", license.paid, license.total), p.amber)
-        };
+        let (license_value, license_color) =
+            if status.license_total == 0 || status.license_known == 0 {
+                ("…".to_string(), p.text_muted)
+            } else if status.license_known < status.license_total {
+                (
+                    format!("{}/{}", status.license_known, status.license_total),
+                    p.amber,
+                )
+            } else if status.license_paid == status.license_total {
+                ("PRO".to_string(), p.green)
+            } else if status.license_free == status.license_total {
+                ("FREE".to_string(), p.amber)
+            } else {
+                (
+                    format!("PRO {}/{}", status.license_paid, status.license_total),
+                    p.amber,
+                )
+            };
         let license_text = t!("status.license", value = license_value.clone()).to_string();
 
         // At the supported 520px minimum, full localized captions cannot coexist with every live
@@ -188,15 +362,15 @@ impl Shell {
                  RAM {:.1} MiB · Δ5s {:+.1} MiB",
                 snap.cpu_process, snap.cpu_system, snap.gpu_process, snap.mem_mb, snap.mem_delta_mb
             );
-            if !down_text.is_empty() {
+            if !status.down_text.is_empty() {
                 text.push_str("\n\n");
-                text.push_str(&down_text);
+                text.push_str(status.down_text.as_ref());
             }
-            Some(text)
-        } else if down_text.is_empty() {
+            Some(SharedString::from(text))
+        } else if status.down_text.is_empty() {
             None
         } else {
-            Some(down_text)
+            Some(status.down_text.clone())
         };
 
         let mut right_items = Vec::new();
@@ -289,7 +463,7 @@ impl Shell {
             .weight(600.0)
             .gap_after(status_gap),
         ];
-        if let Some(value) = sync_value {
+        if let Some(value) = &status.sync_value {
             items.push(MoonStatusItem::separator().gap_after(status_gap));
             items.push(
                 MoonStatusItem::new(if compact {

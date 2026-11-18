@@ -170,19 +170,29 @@ impl Render for Shell {
         self.last_frame = Some(now_inst);
         let fps = self.fps;
 
-        let (conn, license, snap, book_levels, mode_suggestions) = {
+        let (status, snap, book_levels) = {
             let b = self.backend.read(cx);
-            let mut conn = b.session.conn_summary_group(&self.group);
-            // The disconnected-cores tooltip is a core list like any other — rank it the same
-            // way, or it reads in a different order than the header pill right above it.
-            super::workspace::sort_status_lists(
-                &mut conn.down,
-                &mut conn.report_sync,
-                |row| row.id,
-                |row| row.id,
-                || moon_core::session::core_order::CoreOrder::new(&b.config),
-            );
-            let license = b.session.license_summary_group(&self.group);
+            let locale = rust_i18n::locale();
+            let inputs = super::status_bar::StatusInputs {
+                config: &b.config,
+                store: b.session.store(),
+                group: &self.group,
+                locale: locale.as_ref(),
+                now_ms: moon_core::util::time::now_unix_ms_i64(),
+            };
+            let sessions = b
+                .session
+                .sessions()
+                .iter()
+                .filter(|session| session.group == self.group)
+                .map(|session| (session.id, session.name.as_str()));
+            let status = self.status_model.resolve(&inputs, sessions, || {
+                super::status_bar::StatusModel::build(
+                    &inputs,
+                    b.session.conn_summary_group(&self.group),
+                    b.session.license_summary_group(&self.group),
+                )
+            });
             let snap = b.snap;
             // The status bar needs only the order-book level count for the current Main chart.
             let book_levels = match b.main_chart_target(&self.group) {
@@ -191,25 +201,7 @@ impl Render for Shell {
                 }),
                 None => 0,
             };
-            // Fleet-wide "try another mode" advice for the (small) non-ready set the bar tooltip
-            // shows -- see `conn_diag::fleet_mode_suggestion`. Computed here, not inside
-            // `status_bar`, because only this scope has both the live config and the store.
-            let store = b.session.store();
-            let is_ready = |id: moon_core::session::CoreId| {
-                store
-                    .core(id)
-                    .is_some_and(|core| core.status == moon_core::feed::ConnStatus::Ready)
-            };
-            let mode_suggestions = if conn.down.is_empty() {
-                std::collections::HashMap::new()
-            } else {
-                let index = crate::conn_diag::FleetModeIndex::new(&b.config.servers, is_ready);
-                conn.down
-                    .iter()
-                    .map(|row| (row.id, index.suggestion(row.id)))
-                    .collect()
-            };
-            (conn, license, snap, book_levels, mode_suggestions)
+            (status, snap, book_levels)
         };
         let chrome_width = f32::from(window.viewport_size().width);
         let p = MoonPalette::active(cx);
@@ -428,16 +420,7 @@ impl Render for Shell {
             // ── Status bar, fully ported from egui's lower `shell::ui` panel ──
             .child({
                 let _t = crate::diag::scope(&crate::diag::SHELL_STATUS_US);
-                self.status_bar(
-                    conn,
-                    license,
-                    snap,
-                    book_levels,
-                    fps,
-                    chrome_width,
-                    &mode_suggestions,
-                    cx,
-                )
+                self.status_bar(&status, snap, book_levels, fps, chrome_width, cx)
             })
             // The header's in-flow logo and spacer own dragging. A fixed overlay here would
             // cover MANUAL/AUTO when the responsive header hides its logo (#712).

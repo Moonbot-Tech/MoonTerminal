@@ -501,6 +501,46 @@ fn order_row(uid: u64, create_time_ms: f64) -> OrderRow {
     }
 }
 
+/// Time one initial full Orders snapshot per core with payload allocation outside the sample.
+#[test]
+#[ignore = "synthetic 60-core connect ingestion timing"]
+fn bench_s_orders_batch_ingest_connect() {
+    use std::time::Instant;
+
+    const CORES: usize = 60;
+    const ROWS: u64 = 100;
+    const SAMPLES: usize = 50;
+    let mut samples = Vec::with_capacity(SAMPLES);
+    for iteration in 0..SAMPLES + 2 {
+        let mut cores: Vec<_> = (0..CORES).map(|_| CoreData::new()).collect();
+        let batches: Vec<_> = (0..CORES)
+            .map(|_| {
+                let rows: Vec<_> = (1..=ROWS)
+                    .map(|uid| order_row(uid, 1_700_000_040_000.0 + uid as f64))
+                    .collect();
+                FeedMsg::Orders(rows.into())
+            })
+            .collect();
+        let start = Instant::now();
+        for (core, batch) in cores.iter_mut().zip(batches) {
+            core.apply(batch);
+        }
+        let elapsed = start.elapsed();
+        std::hint::black_box(cores);
+        if iteration >= 2 {
+            samples.push(elapsed);
+        }
+    }
+    samples.sort_unstable();
+    let ms = |index: usize| samples[index].as_secs_f64() * 1000.0;
+    println!(
+        "BENCH orders_batch_ingest_connect cores={CORES} rows_per_core={ROWS} n={SAMPLES} p50_ms={:.3} p95_ms={:.3} max_ms={:.3}",
+        ms(SAMPLES.div_ceil(2) - 1),
+        ms((SAMPLES * 95).div_ceil(100) - 1),
+        ms(SAMPLES - 1),
+    );
+}
+
 /// An order row carrying a LOOSE trace sample: `create_time_ms - anchor_ms` is the skew these
 /// tests want the estimator to adopt. Since HIGH 4, `create_time_ms - now_ms` alone can no longer
 /// feed the estimator (see `session::clock_skew`), so every store-level test that needs an actual

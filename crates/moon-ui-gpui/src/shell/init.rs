@@ -535,6 +535,8 @@ impl Shell {
             auto_only_panels: Vec::new(),
             exchange_logo_prewarm_started: false,
             exchange_logos_ready: false,
+            rail_model: Default::default(),
+            status_model: Default::default(),
             applying_auto_topology: false,
             auto_topology_guard_generation: 0,
             workspace_resize_state,
