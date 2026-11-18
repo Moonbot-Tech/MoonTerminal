@@ -100,8 +100,8 @@ pub const MAX_RING_LINES: usize = 1_000_000;
 pub const DEFAULT_BALANCE_WINDOW_SEC: u64 = 5;
 /// Default floor between two market-trace lines about the same subject.
 pub const DEFAULT_MARKET_FLOOR_MS: u64 = 1000;
-/// Default threshold for a slow UI operation, approximately one frame at 60 Hz.
-pub const DEFAULT_UI_STALL_MS: u64 = 16;
+/// Default threshold for a slow UI operation, approximately one frame at 120 Hz.
+pub const DEFAULT_UI_STALL_MS: u64 = 8;
 /// Lowest accepted UI stall threshold.
 pub const MIN_UI_STALL_MS: u64 = 4;
 /// Highest accepted UI stall threshold.

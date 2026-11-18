@@ -410,8 +410,8 @@ floor the channel would emit at that rate per market.",
     KeyDoc {
         section: "limits",
         key: "ui_stall_ms",
-        default: "16",
-        doc: "UI stall threshold in milliseconds. Clamped to 4..=1000.",
+        default: "8",
+        doc: "UI stall threshold in milliseconds. Defaults to 8 ms, approximately one frame at 120 Hz. Clamped to 4..=1000.",
     },
 ];
 

@@ -57,7 +57,7 @@ fn an_older_file_gets_both_ui_stall_keys() {
     assert!(text.contains("render = true\n"));
     assert!(text.contains("log_ring_lines = 1000\n"));
     assert!(text.contains("# ENV: MOON_UI_STALL_DIAG=1\nui_stall = false\n"));
-    assert!(text.contains("ui_stall_ms = 16\n"));
+    assert!(text.contains("ui_stall_ms = 8\n"));
 }
 
 /// An absent key is opt-in, an environment override enables only this channel, and extreme
@@ -66,7 +66,7 @@ fn an_older_file_gets_both_ui_stall_keys() {
 fn ui_stall_defaults_environment_and_bounds() {
     let mut cfg = config::parse("").expect("empty configuration uses defaults");
     assert!(!cfg.channels.ui_stall);
-    assert_eq!(cfg.limits.ui_stall_ms, 16);
+    assert_eq!(cfg.limits.ui_stall_ms, 8);
 
     config::apply_env(&mut cfg, |key| {
         (key == "MOON_UI_STALL_DIAG").then(|| "1".to_string())
@@ -117,7 +117,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     // channel off, which a one-way `force_enable`-style flag could not do.
     apply(&DiagCfg::default());
     assert!(!ui_stall());
-    assert_eq!(ui_stall_threshold(), Duration::from_millis(16));
+    assert_eq!(ui_stall_threshold(), Duration::from_millis(8));
     assert!(
         !render()
             && !detect()
