@@ -786,10 +786,13 @@ pub struct WindowLayout {
     /// see [`super::auto_figures`].
     #[serde(default, deserialize_with = "de_lenient_auto_figures")]
     pub auto_figures: super::auto_figures::AutoFiguresCfg,
-    /// Defaults for tabs torn off into their own windows — empty means "follow the fields above".
+    /// Defaults for tabs torn off into their own windows — empty means "follow the Main defaults",
+    /// except for the auto figures, which follow this kind's own built-in set (Main's rows,
+    /// switched off; [`super::chart_defaults::ChartTabKind::builtin_auto_figures`]).
     ///
-    /// The three fields above are the MAIN kind's defaults and keep their keys, so a profile
-    /// written before the split opens exactly as it did. See [`super::chart_defaults`].
+    /// The base fields — `candle_view`, `chart_graphics`, `chart_labels` and `auto_figures` — are
+    /// the MAIN kind's defaults and keep their keys, so a profile written before the split opens
+    /// exactly as it did. See [`super::chart_defaults`].
     #[serde(
         default,
         deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"
@@ -797,15 +800,17 @@ pub struct WindowLayout {
     pub chart_defaults_addto: Box<super::chart_defaults::ChartTabDefaults>,
     /// Defaults for tabs under the anchor lock, wherever they live. Empty means "follow Main" for
     /// the candles and the graphics, and this kind's OWN shipped set for the captions — see
-    /// [`super::chart_labels::ChartLabelsCfg::compare_default`].
+    /// [`super::chart_labels::ChartLabelsCfg::compare_default`] — and for the auto figures (Main's
+    /// rows, switched off).
     #[serde(
         default,
         deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"
     )]
     pub chart_defaults_compare: Box<super::chart_defaults::ChartTabDefaults>,
     /// Defaults for the trade-detail window. Empty means "follow this kind's own built-in set" —
-    /// which, for the captions, is NOT Main's: see
-    /// [`super::chart_labels::ChartLabelsCfg::trade_default`].
+    /// which, for the captions, is NOT Main's (see
+    /// [`super::chart_labels::ChartLabelsCfg::trade_default`]), and for the auto figures is Main's
+    /// rows switched off.
     #[serde(
         default,
         deserialize_with = "super::chart_defaults::ChartTabDefaults::de_lenient_boxed"

@@ -15,11 +15,21 @@
 //! before its touches are counted (that keeps flat pairs out of the candidate list); the check on
 //! the final endpoints is the one that decides.
 //!
-//! Cost on `P` pivots of a kind and `n` bars: O(P³) to count touches over every pair, plus
-//! O(C·(P + A)) to accept `C` candidates against `A` accepted lines, plus O(n) body checks per
-//! line that survives the overlap test. The default 150-bar window holds ~20 pivots of a kind;
-//! 2 000 bars with 3/3 pivots hold ~285, which is tens of millions of cheap float operations —
-//! acceptable on a bar close, never per frame.
+//! A broken line — a close beyond it after its last touch, the latest such episode — is handled by
+//! the row's `TrendParams::broken` exactly as a level is: `Remove` drops it, `Keep { bars }` keeps
+//! it flagged.
+//!
+//! Cost. A line search reads at most [`MAX_LINE_PIVOTS`] pivots of its kind — the most recent ones
+//! — whatever the lookback and pivot width, because the scanner will call it with any parameters
+//! `sanitize` allows (5 000 bars at width 1 is ~1 700 pivots of a kind, ~8·10⁸ touch checks
+//! uncapped). With `P ≤ 200`: P²/2 ≈ 2·10⁴ pairs, each counting touches over P pivots, ≈ 4·10⁶
+//! touch checks of a dozen float operations; then each candidate is recounted (another ≤ 4·10⁶)
+//! and checked for overlap against the accepted lines, and only a candidate that survives the
+//! overlap test pays a body check over at most `n` bars, which stops at the first break past the
+//! allowed count. Measured on 18.11.2026 with the dev profile (`opt-level = 2` for this crate):
+//! the worst case `sanitize` admits — 5 000 bars at width 1, every peak on one line, so every pair
+//! is a full-count candidate (`the_line_search_is_capped_to_the_newest_pivots`) — finishes inside
+//! the 0.10 s the whole detector test run takes. Acceptable on a bar close, never per frame.
 
 use moon_core::config::auto_figures::{DetectorKind, DetectorParams, TrendSide};
 use moon_core::market::candles::ChartCandle;
@@ -27,8 +37,13 @@ use moon_core::market::candles::ChartCandle;
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
     DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, line_price_at, pct_frac,
-    scan_break, touch_strength, window,
+    scan_break, survives, touch_strength, window,
 };
+
+/// Most pivots of one kind a line search considers: the most recent ones. Bounds the O(P³) pair
+/// search (see the module doc); 200 pivots at the default 3/3 width span ~1 400 bars, well past the
+/// default 150-bar lookback, so the cap bites only on the extreme parameters it exists for.
+pub const MAX_LINE_PIVOTS: usize = 200;
 
 /// The `Trend` registry row.
 pub struct Trend;
@@ -66,6 +81,12 @@ impl Detector for Trend {
                     PivotKind::Low => Side::Above,
                 };
                 let (t0, p0, t1, p1) = (line.t0_ms, line.p0, line.t1_ms, line.p1);
+                let broken = scan_break(win, line.last_idx, origin, |t| {
+                    line_price_at(t0, p0, t1, p1, t)
+                });
+                if !survives(broken, p.broken) {
+                    continue;
+                }
                 out.push(Found {
                     shape: FoundShape::Sloped {
                         t0_ms: t0,
@@ -81,9 +102,7 @@ impl Detector for Trend {
                         line.last_idx,
                         win.len(),
                     ),
-                    broken: scan_break(win, line.last_idx, origin, |t| {
-                        line_price_at(t0, p0, t1, p1, t)
-                    }),
+                    broken,
                     touches: line.touches,
                 });
             }
@@ -147,6 +166,8 @@ pub(crate) fn find_lines(
         .iter()
         .filter(|q| q.kind == spec.kind && q.price > 0.0)
         .collect();
+    // The most recent pivots only: the cap that keeps the pair search bounded (module doc).
+    let piv = &piv[piv.len().saturating_sub(MAX_LINE_PIVOTS)..];
     let min_touches = spec.min_touches.max(2);
     if tf_ms <= 0 || piv.len() < min_touches {
         return Vec::new();
@@ -185,9 +206,7 @@ pub(crate) fn find_lines(
         let set: Vec<usize> = (0..piv.len())
             .filter(|&k| touches_line(piv[k], pa, pb, spec.tol_frac))
             .collect();
-        let overlaps = accepted_sets
-            .iter()
-            .any(|s| s.iter().filter(|k| set.contains(k)).count() >= 2);
+        let overlaps = accepted_sets.iter().any(|s| shares_two(s, &set));
         if overlaps {
             continue;
         }
@@ -239,6 +258,28 @@ fn slope_ok(t0: f64, p0: f64, t1: f64, p1: f64, tf: f64, spec: &LineSpec) -> boo
     abs >= spec.min_slope_frac && abs <= spec.max_slope_frac
 }
 
+/// Two ascending index lists share at least two entries. A two-pointer walk that stops at the
+/// second shared entry: O(|a| + |b|) at worst, and immediate for the common case of a candidate
+/// that is the same line as an accepted one.
+fn shares_two(a: &[usize], b: &[usize]) -> bool {
+    let (mut i, mut j, mut shared) = (0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                shared += 1;
+                if shared >= 2 {
+                    return true;
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    false
+}
+
 /// Pivot `q` lies within `tol_frac` of the line through `a` and `b`, at `q`'s time.
 fn touches_line(q: &Pivot, a: &Pivot, b: &Pivot, tol_frac: f64) -> bool {
     line_price_at(a.t_ms, a.price, b.t_ms, b.price, q.t_ms)
@@ -246,7 +287,9 @@ fn touches_line(q: &Pivot, a: &Pivot, b: &Pivot, tol_frac: f64) -> bool {
 }
 
 /// Bars between the line's first and last touch whose BODY crosses it by more than the tolerance:
-/// above a resistance through highs, below a support through lows.
+/// above a resistance through highs, below a support through lows. Counting stops one past
+/// `max_body_breaks` — that already rejects the line — so a bad candidate costs only the bars up to
+/// its deciding break.
 fn body_breaks(win: &[ChartCandle], line: &Line, spec: &LineSpec) -> usize {
     let Some(span) = win.get(line.first_idx..=line.last_idx) else {
         return usize::MAX;
@@ -264,6 +307,7 @@ fn body_breaks(win: &[ChartCandle], line: &Line, spec: &LineSpec) -> usize {
                 PivotKind::Low => bottom < at * (1.0 - spec.tol_frac),
             }
         })
+        .take(spec.max_body_breaks.saturating_add(1))
         .count()
 }
 

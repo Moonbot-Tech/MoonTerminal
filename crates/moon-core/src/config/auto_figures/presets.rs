@@ -111,9 +111,10 @@ impl AutoFigurePreset {
                     period: ExtremePeriod::Day,
                     which: ExtremeWhich::Both,
                 }),
-                // The extreme of a calendar day is the same price on any bars that cover it; the
-                // hour chart is fine enough to place it and coarse enough to be cheap.
-                TfSource::Fixed(TfId::H1),
+                // The detector reads CLOSED bars only, so a new high or low of the day shows up
+                // when the bar that printed it closes: the lag is one bar of this timeframe. Five
+                // minutes keeps it at most five minutes; the pass stays cheap — one day is 288 bars.
+                TfSource::Fixed(TfId::M5),
                 LineStyle {
                     line_kind: LineKind::Dash,
                     ..LineStyle::default()
@@ -124,7 +125,9 @@ impl AutoFigurePreset {
                     period: ExtremePeriod::PrevDay,
                     which: ExtremeWhich::Both,
                 }),
-                TfSource::Fixed(TfId::H1),
+                // Yesterday's range is complete, but a break of it is read from today's closed
+                // bars — the same one-bar lag as the day's own extremes, so the same timeframe.
+                TfSource::Fixed(TfId::M5),
                 LineStyle {
                     line_kind: LineKind::DashDot,
                     ..LineStyle::default()

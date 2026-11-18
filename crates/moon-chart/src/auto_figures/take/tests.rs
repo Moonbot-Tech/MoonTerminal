@@ -126,7 +126,10 @@ fn real_levels_respect_count_and_side() {
             lookback_bars: 2_000,
             ..SwingParams::default()
         }),
-        &DetectCtx { tf_ms: 300_000 },
+        &DetectCtx {
+            tf_ms: 300_000,
+            now_ms: 0.0,
+        },
     );
     assert!(found.len() > 4, "enough levels to cut: {}", found.len());
     let price = f64::from(bars[bars.len() - 1].close);

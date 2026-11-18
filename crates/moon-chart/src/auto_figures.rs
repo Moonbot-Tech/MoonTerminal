@@ -19,7 +19,7 @@
 //! A bar with a non-finite or non-positive price, or `high < low`, is skipped wherever it would be
 //! read — it never panics a detector and never becomes a touch.
 
-use moon_core::config::auto_figures::{DetectorKind, DetectorParams};
+use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams};
 use moon_core::market::candles::ChartCandle;
 
 pub mod events;
@@ -130,19 +130,39 @@ pub struct Found {
     /// touch for pivot detectors, the period's bars for a period extreme.
     pub first_ms: f64,
     pub last_ms: f64,
-    /// Set once a bar closed beyond a horizontal after its last touch and the row's
-    /// `BrokenPolicy` still keeps it; also reported, informationally, for a previous period's
-    /// extreme and for a sloped trend line, which carry no policy of their own.
+    /// The latest break episode after the last touch, set when the row's `BrokenPolicy` still
+    /// keeps the figure (`Keep { bars }`; `Remove` drops it instead). For a squeeze it is the
+    /// level's break. A previous period's extreme reports it informationally and is never
+    /// dropped: a period's high is a fact, not a hypothesis a break disproves.
     pub broken: Option<Broken>,
 }
 
 /// What a detector legitimately needs beyond its bars and parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetectCtx {
     /// Bar length of `bars`, ms. Sloped lines are built in time, and their slope bounds are in %
     /// per BAR, so the bar length is what converts one into the other. A value `<= 0` makes the
     /// sloped detectors return nothing.
     pub tf_ms: i64,
+    /// The caller's reference time, ms: the open of the bar still forming, or the last tick's
+    /// time. Handed in rather than read from a clock, so a detector stays a pure function of its
+    /// arguments. Only calendar detectors read it ("today" is the UTC day of this moment); a
+    /// value that is not a positive finite number falls back to the last valid bar's open time.
+    pub now_ms: f64,
+}
+
+impl DetectCtx {
+    /// The reference time a calendar detector uses: `now_ms` when usable, never earlier than the
+    /// last valid bar (a stale `now_ms` must not turn yesterday back into "today"); the last valid
+    /// bar's open when `now_ms` is unusable; `None` when there is neither.
+    pub fn reference_ms(&self, bars: &[ChartCandle]) -> Option<f64> {
+        let last = bars.iter().rev().find(|b| bar_ok(b)).map(|b| b.t_open_ms);
+        match (positive(self.now_ms), last) {
+            (Some(now), Some(last)) => Some(now.max(last)),
+            (Some(now), None) => Some(now),
+            (None, last) => last,
+        }
+    }
 }
 
 /// A detector: one module, one [`REGISTRY`] row.
@@ -243,11 +263,15 @@ pub(crate) fn within(price: f64, line: f64, frac: f64) -> bool {
     line > 0.0 && (price - line).abs() <= line * frac
 }
 
-/// First close after `from_idx` beyond a line on the side opposite `origin`, with the bars since
-/// and whether the last valid close is back on `origin`'s side.
+/// The LATEST break episode after `from_idx`: the first close of the most recent run of closes
+/// beyond the line on the side opposite `origin`, with the bars since that close and whether the
+/// last valid close is back on `origin`'s side.
 ///
-/// `line_at` gives the line's price at a bar's open time; a bar where it gives `None` is skipped.
-/// Cost O(bars after `from_idx`).
+/// An episode ends at a close back on `origin`'s side; a close beyond after that starts a new one,
+/// so a level that broke, came back and broke again reports its SECOND break — the one a
+/// `Keep { bars }` countdown must run from. A close exactly on the line neither ends nor starts an
+/// episode. `line_at` gives the line's price at a bar's open time; a bar where it gives `None` is
+/// skipped. Cost O(bars after `from_idx`).
 pub(crate) fn scan_break(
     bars: &[ChartCandle],
     from_idx: usize,
@@ -255,6 +279,7 @@ pub(crate) fn scan_break(
     line_at: impl Fn(f64) -> Option<f64>,
 ) -> Option<Broken> {
     let mut broken_at: Option<usize> = None;
+    let mut beyond = false;
     let mut last_side: Option<Side> = None;
     for (k, b) in bars.iter().enumerate().skip(from_idx.saturating_add(1)) {
         if !bar_ok(b) {
@@ -263,11 +288,14 @@ pub(crate) fn scan_break(
         let Some(line) = line_at(b.t_open_ms) else {
             continue;
         };
-        let side = side_of(f64::from(b.close), line);
-        if side.is_some() {
-            last_side = side;
-        }
-        if broken_at.is_none() && side == Some(origin.opposite()) {
+        let Some(side) = side_of(f64::from(b.close), line) else {
+            continue;
+        };
+        last_side = Some(side);
+        if side == origin {
+            beyond = false;
+        } else if !beyond {
+            beyond = true;
             broken_at = Some(k);
         }
     }
@@ -278,6 +306,17 @@ pub(crate) fn scan_break(
         bars_since: u32::try_from(last - at).unwrap_or(u32::MAX),
         returned: last_side == Some(origin),
     })
+}
+
+/// Whether a figure with this break survives `policy`: always when unbroken; never under
+/// `Remove`; under `Keep { bars }` while at most `bars` bars have closed after the break, or after
+/// that once the last close is back on the original side.
+pub(crate) fn survives(broken: Option<Broken>, policy: BrokenPolicy) -> bool {
+    match (broken, policy) {
+        (None, _) => true,
+        (Some(_), BrokenPolicy::Remove) => false,
+        (Some(b), BrokenPolicy::Keep { bars }) => b.bars_since <= u32::from(bars) || b.returned,
+    }
 }
 
 /// A rank that grows with the touch count first and the figure's age second: `touches` plus the

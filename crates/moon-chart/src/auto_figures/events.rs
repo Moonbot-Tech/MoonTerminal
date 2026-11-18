@@ -86,7 +86,10 @@ pub fn false_break_window(policy: BrokenPolicy) -> u16 {
 ///     price: The current price, for `Approach`.
 ///     at_ms: The moment the current price belongs to, for projecting sloped lines.
 ///     marks: Which events the row shows; an unmarked event is never set.
-///     policy: The row's broken policy, for the false-break window.
+///     policy: The row's broken policy, for the false-break window — the row's
+///         `DetectorParams::broken_policy()`, which answers for every detector kind (a period
+///         extreme, which has no policy of its own, answers the default). Taken as the policy
+///         rather than the params so the scanner can call this without a row.
 pub fn line_events(
     lines: &[Found],
     bars: &[ChartCandle],

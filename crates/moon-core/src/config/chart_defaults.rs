@@ -10,9 +10,10 @@
 //! on `WindowLayout` stays the [`ChartTabKind::Main`] default — an old profile keeps working, and a
 //! reader who never touches the feature keeps one default for everything — and the other kinds hold
 //! [`ChartTabDefaults`], which is empty until the first time a default is set FOR that kind. Empty
-//! means "follow Main", except for the CAPTIONS of the two kinds that ship their own set — the
-//! trade window ([`crate::config::ChartLabelsCfg::trade_default`]) and a comparison
-//! ([`crate::config::ChartLabelsCfg::compare_default`]); see
+//! means "follow Main", except where a kind ships its own set: the CAPTIONS of the trade window
+//! ([`crate::config::ChartLabelsCfg::trade_default`]) and of a comparison
+//! ([`crate::config::ChartLabelsCfg::compare_default`]), and the AUTO FIGURES of every non-Main
+//! kind, which ship Main's rows switched off ([`ChartTabKind::builtin_auto_figures`]); see
 //! [`WindowLayout::set_chart_labels_default`](super::layout::WindowLayout::set_chart_labels_default)
 //! for what the first press does about that.
 
@@ -185,8 +186,9 @@ impl ChartTabKind {
 ///
 /// A kind that ships its own set for a setting is skipped instead: it does not follow Main, so
 /// there is nothing to separate it from, and a copy taken today would outlive every later
-/// improvement to that set. For the captions that is both the trade window and a comparison; see
-/// [`ChartTabKind::builtin_labels`].
+/// improvement to that set. For the captions that is both the trade window and a comparison (see
+/// [`ChartTabKind::builtin_labels`]); for the auto figures it is every non-Main kind (see
+/// [`ChartTabKind::builtin_auto_figures`]).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartTabDefaults {

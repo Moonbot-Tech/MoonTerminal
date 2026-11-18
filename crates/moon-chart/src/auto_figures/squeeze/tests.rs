@@ -1,7 +1,8 @@
+use super::super::Touch;
 use super::super::test_bars::{M5_MS, ace, bar, from_hl, range};
 use super::super::within;
 use super::*;
-use moon_core::config::auto_figures::SwingParams;
+use moon_core::config::auto_figures::{BrokenPolicy, SwingParams};
 
 /// A ceiling at 100 touched on bars 4, 8, 12 and lows rising 90, 92, 94 on bars 2, 6, 10 — an
 /// ascending triangle. The lows line projects to 96 on the last bar (14): 4 % under the level.
@@ -43,7 +44,10 @@ fn run(bars: &[ChartCandle], p: SqueezeParams) -> Vec<Found> {
     Squeeze.detect(
         bars,
         &DetectorParams::Squeeze(p),
-        &DetectCtx { tf_ms: M5_MS },
+        &DetectCtx {
+            tf_ms: M5_MS,
+            now_ms: 0.0,
+        },
     )
 }
 
@@ -107,14 +111,51 @@ fn falling_highs_over_a_floor() {
     assert_eq!((p0, p1), (110.0, 106.0));
 }
 
-/// A close through the level ends the formation, whatever the broken policy keeps.
+/// A close through the level is the squeeze's breakout, and the LEVEL's policy decides: `Remove`
+/// drops the formation, `Keep{3}` keeps it flagged with the level's break.
 ///
-/// Breakage: squeezing into a level that is already broken.
+/// Breakage: filtering broken levels out regardless of the policy (no breakout is ever visible on
+/// a squeeze row), or keeping a broken formation unflagged.
 #[test]
-fn a_broken_level_is_no_squeeze() {
+fn a_broken_level_follows_the_level_policy() {
     let mut bars = from_hl(&ASCENDING);
     bars.push(bar(15, 99.0, 102.0, 99.0, 101.0));
-    assert!(run(&bars, params(5.0)).is_empty());
+    let mut remove = params(5.0);
+    remove.level.broken = BrokenPolicy::Remove;
+    assert!(run(&bars, remove).is_empty());
+
+    let mut keep = params(5.0);
+    keep.level.broken = BrokenPolicy::Keep { bars: 3 };
+    let found = run(&bars, keep);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let broken = found[0].broken.expect("the level's break is carried");
+    assert_eq!(broken.at_ms, bars[15].t_open_ms);
+    assert_eq!(broken.bars_since, 0);
+}
+
+/// A pivot that is both a level touch and a line touch is counted once.
+///
+/// Breakage: concatenating the two touch lists, which counts that pivot twice and inflates the
+/// formation's touches and strength.
+#[test]
+fn a_shared_pivot_is_one_touch() {
+    let t = |t_ms: f64, price: f64| Touch { t_ms, price };
+    let level = [t(1.0, 100.0), t(3.0, 99.7), t(5.0, 100.0)];
+    let line = [t(2.0, 98.0), t(3.0, 99.7), t(4.0, 99.0)];
+    let merged = merge_touches(&level, &line);
+    assert_eq!(
+        merged,
+        vec![
+            t(1.0, 100.0),
+            t(2.0, 98.0),
+            t(3.0, 99.7),
+            t(4.0, 99.0),
+            t(5.0, 100.0)
+        ]
+    );
+    // Two different pivots of one bar (its high and its low) are two touches.
+    let outside = merge_touches(&[t(1.0, 100.0)], &[t(1.0, 95.0)]);
+    assert_eq!(outside.len(), 2);
 }
 
 /// Edge inputs: nothing, too few bars, no usable timeframe.
@@ -130,7 +171,10 @@ fn degenerate_inputs_are_safe() {
             .detect(
                 &bars,
                 &DetectorParams::Squeeze(params(0.5)),
-                &DetectCtx { tf_ms: 0 },
+                &DetectCtx {
+                    tf_ms: 0,
+                    now_ms: 0.0
+                },
             )
             .is_empty()
     );
@@ -198,5 +242,9 @@ fn real_candles_keep_the_structural_invariants() {
 }
 
 fn run_tf(bars: &[ChartCandle], p: SqueezeParams, tf_ms: i64) -> Vec<Found> {
-    Squeeze.detect(bars, &DetectorParams::Squeeze(p), &DetectCtx { tf_ms })
+    Squeeze.detect(
+        bars,
+        &DetectorParams::Squeeze(p),
+        &DetectCtx { tf_ms, now_ms: 0.0 },
+    )
 }

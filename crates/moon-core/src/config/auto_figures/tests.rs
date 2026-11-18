@@ -67,7 +67,7 @@ fn assert_shipped_rows(cfg: &AutoFiguresCfg) {
             (Some(DetectorKind::Swing), TfSource::Fixed(TfId::H1)),
             (Some(DetectorKind::Swing), TfSource::Fixed(TfId::H4)),
             (Some(DetectorKind::Squeeze), TfSource::Fixed(TfId::M15)),
-            (Some(DetectorKind::PeriodExtreme), TfSource::Fixed(TfId::H1)),
+            (Some(DetectorKind::PeriodExtreme), TfSource::Fixed(TfId::M5)),
         ]
     );
     assert!(cfg.rows.iter().all(|r| r.visible));
@@ -470,4 +470,100 @@ fn per_kind_storage_never_freezes_a_follower() {
     assert!(layout.reset_auto_figures_default(ChartTabKind::AddTo));
     assert_eq!(layout.stored_auto_figures(ChartTabKind::AddTo), None);
     assert!(!layout.auto_figures_for(ChartTabKind::AddTo).enabled);
+}
+
+/// Every kind answers a broken policy: its own for the pivot detectors (`Squeeze` through its
+/// level), the default for a period extreme.
+///
+/// Breakage: the trend or squeeze arm returning the default, so a row's `Remove` never reaches the
+/// event layer's false-break window.
+#[test]
+fn broken_policy_answers_for_every_kind() {
+    let remove = BrokenPolicy::Remove;
+    let swing = DetectorParams::Swing(SwingParams {
+        broken: remove,
+        ..SwingParams::default()
+    });
+    let trend = DetectorParams::Trend(TrendParams {
+        broken: remove,
+        ..TrendParams::default()
+    });
+    let mut squeeze_params = SqueezeParams::default();
+    squeeze_params.level.broken = remove;
+    let squeeze = DetectorParams::Squeeze(squeeze_params);
+    for params in [swing, trend, squeeze] {
+        assert_eq!(params.broken_policy(), remove, "{:?}", params.kind());
+    }
+    assert_eq!(
+        DetectorKind::PeriodExtreme.default_params().broken_policy(),
+        BrokenPolicy::Keep { bars: 3 }
+    );
+}
+
+/// A trend row written before `broken` existed loads with the default policy, and `sanitize`
+/// bounds a trend's `Keep` like a level's.
+///
+/// Breakage: the new field without a default (every old trend row fails to load), or the trend
+/// policy left out of the repair.
+#[test]
+fn trend_broken_policy_loads_and_is_sanitized() {
+    let old: DetectorParams = toml::from_str(
+        "kind = \"trend\"
+lookback_bars = 120
+",
+    )
+    .expect("an old trend row");
+    let DetectorParams::Trend(t) = old else {
+        panic!("a trend row");
+    };
+    assert_eq!(t.lookback_bars, 120);
+    assert_eq!(t.broken, BrokenPolicy::Keep { bars: 3 });
+
+    let mut row = AutoFigureRow::new(DetectorParams::Trend(TrendParams {
+        broken: BrokenPolicy::Keep { bars: u16::MAX },
+        ..TrendParams::default()
+    }));
+    row.sanitize();
+    assert_eq!(
+        row.detector.known().map(DetectorParams::broken_policy),
+        Some(BrokenPolicy::Keep {
+            bars: AF_BROKEN_KEEP_MAX
+        })
+    );
+}
+
+/// The bars a row needs: the lookback for the pivot detectors, and for a period extreme the whole
+/// period from its start up to the latest reference time plus one bar, rounded up.
+///
+/// Breakage: a period extreme asking for its lookback (it has none) and the caller fetching zero
+/// bars; a floor instead of a ceiling coming one bar short on a timeframe that does not divide the
+/// day.
+#[test]
+fn bars_needed_per_kind() {
+    let extreme = |period| {
+        DetectorParams::PeriodExtreme(PeriodExtremeParams {
+            period,
+            which: ExtremeWhich::Both,
+        })
+    };
+    // 288 five-minute bars in a day, 24 hourly, 1 daily; 6 four-hour bars a day.
+    assert_eq!(extreme(ExtremePeriod::Day).bars_needed(TfId::M5), 289);
+    assert_eq!(extreme(ExtremePeriod::PrevDay).bars_needed(TfId::M5), 577);
+    assert_eq!(extreme(ExtremePeriod::Week).bars_needed(TfId::H1), 169);
+    assert_eq!(extreme(ExtremePeriod::PrevWeek).bars_needed(TfId::H4), 85);
+    assert_eq!(extreme(ExtremePeriod::Day).bars_needed(TfId::D1), 2);
+
+    let swing = DetectorParams::Swing(SwingParams {
+        lookback_bars: 321,
+        ..SwingParams::default()
+    });
+    assert_eq!(swing.bars_needed(TfId::H1), 321);
+    let mut squeeze = SqueezeParams::default();
+    squeeze.level.lookback_bars = 654;
+    assert_eq!(DetectorParams::Squeeze(squeeze).bars_needed(TfId::M15), 654);
+    let trend = DetectorParams::Trend(TrendParams {
+        lookback_bars: 77,
+        ..TrendParams::default()
+    });
+    assert_eq!(trend.bars_needed(TfId::M1), 77);
 }

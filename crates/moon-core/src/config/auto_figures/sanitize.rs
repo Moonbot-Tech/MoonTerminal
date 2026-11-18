@@ -26,8 +26,11 @@ pub const AF_THICKNESS_MIN: f32 = 0.5;
 pub const AF_THICKNESS_MAX: f32 = 8.0;
 /// Weakest zone opacity kept; a fainter band is invisible and is dropped to "no zone".
 pub const AF_ZONE_ALPHA_MIN: f32 = 0.02;
-/// Bars searched: below the minimum no pivot can be confirmed, above the maximum the local candle
-/// cache has nothing more to give (90 days of 5-minute bars is ~26k; 4h bars are far fewer).
+/// Bars searched. Below the minimum no pivot can be confirmed. The maximum is a COST bound, not a
+/// data one: every detector pass scales with the bars and the pivots they hold, and 5 000 bars
+/// already reach past the local 5-minute cache's whole retention (15 days, 4 320 bars) and cover
+/// ~3.5 days of 1-minute bars, 7 months of 1-hour ones. The line search is capped separately, by
+/// pivots rather than bars (`moon_chart::auto_figures::trend::MAX_LINE_PIVOTS`).
 pub const AF_LOOKBACK_MIN: u32 = 10;
 pub const AF_LOOKBACK_MAX: u32 = 5_000;
 /// Pivot width, bars per side. Zero makes every bar a pivot.
@@ -122,12 +125,18 @@ fn sanitize_swing(p: &mut SwingParams) {
     p.lookback_bars = lookback(p.lookback_bars, p.pivot_left, p.pivot_right);
     p.tolerance_pct = pct(p.tolerance_pct, d.tolerance_pct, AF_TOLERANCE_MIN);
     p.min_touches = p.min_touches.clamp(1, AF_TOUCHES_MAX);
-    if let BrokenPolicy::Keep { bars } = &mut p.broken {
+    sanitize_broken(&mut p.broken);
+}
+
+/// A `Keep` policy holds a broken line at most [`AF_BROKEN_KEEP_MAX`] bars.
+fn sanitize_broken(policy: &mut BrokenPolicy) {
+    if let BrokenPolicy::Keep { bars } = policy {
         *bars = (*bars).min(AF_BROKEN_KEEP_MAX);
     }
 }
 
-/// As [`sanitize_swing`], plus the slope window: both bounds non-negative and in order.
+/// As [`sanitize_swing`] (the broken-line policy included), plus the slope window: both bounds
+/// non-negative and in order.
 fn sanitize_trend(p: &mut TrendParams) {
     let d = TrendParams::default();
     p.pivot_left = p.pivot_left.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
@@ -144,6 +153,7 @@ fn sanitize_trend(p: &mut TrendParams) {
         .abs()
         .min(AF_SLOPE_MAX);
     (p.min_slope_pct_per_bar, p.max_slope_pct_per_bar) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+    sanitize_broken(&mut p.broken);
 }
 
 /// The level half as a swing, plus the sloped half's touches and both distances.

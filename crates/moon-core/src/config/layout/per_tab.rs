@@ -194,11 +194,13 @@ impl WindowLayout {
     ///   detached from Main. Moving it instead — silently redressing tabs the reader did not tick
     ///   — is the worse of the two.
     ///
-    /// "The shipped set" therefore means what the kind ships FOR THIS SETTING, and only the
-    /// captions have any: a comparison and the trade window answer
-    /// [`super::chart_defaults::ChartTabKind::builtin_labels`], while candles and graphics ship
-    /// none at all. For everything else — and for `AddTo` even in the captions — an emptied slot
-    /// means "follow Main again" rather than a set of its own.
+    /// "The shipped set" therefore means what the kind ships FOR THIS SETTING. The captions and
+    /// the auto figures have one: a comparison and the trade window answer
+    /// [`super::chart_defaults::ChartTabKind::builtin_labels`] for the captions, and every
+    /// non-Main kind answers [`super::chart_defaults::ChartTabKind::builtin_auto_figures`] (Main's
+    /// rows, switched off) for the auto figures. Candles and graphics ship none at all. For those
+    /// — and for `AddTo`'s captions — an emptied slot means "follow Main again" rather than a set
+    /// of its own.
     pub fn reset_candle_view_default(&mut self, kind: super::chart_defaults::ChartTabKind) -> bool {
         match self.kind_defaults_mut(kind) {
             Some(d) => d.candle_view.take().is_some(),

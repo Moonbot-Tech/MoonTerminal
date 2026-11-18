@@ -21,9 +21,16 @@ const AUTO_TF_TABLE: [(f64, TfId); 7] = [
 ];
 
 /// How far past a threshold the span must go before `Auto` switches, as a fraction of the span:
-/// 25 %. One line notch of the wheel zooms 2× (`chartdx/input.rs`), so a deliberate notch always
-/// lands past the margin and switches at once, while trackpad jitter and a span sitting right on a
-/// threshold never flip the lines back and forth.
+/// 25 % — a coarser timeframe takes over at 1.25× its threshold, a finer one at 1/1.25 of the
+/// current one's. One line notch of the wheel zooms 2× (`chartdx/input.rs`), and that does NOT
+/// always switch: a notch that lands between a threshold and 1.25× of it (2.4 h → 4.8 h stays on
+/// 1 m, since 4.8 h < 5 h) waits for the next notch, which always clears the margin. What the
+/// margin buys is that trackpad jitter and a span sitting right on a threshold never flip the lines
+/// back and forth.
+///
+/// The spec also asks for a dwell ("switch once the span has STAYED past the threshold"). That needs
+/// a clock, and this module has none by design; it is left to the stage-3/6 caller, which owns the
+/// frame clock and can hold an [`AutoTf::update`] result for as long as it likes before using it.
 pub const HYSTERESIS_MARGIN: f64 = 0.25;
 
 /// The timeframe the table gives a visible span, without hysteresis.
@@ -68,7 +75,8 @@ impl AutoTf {
     /// (`auto_tf(span / (1 + m))` is coarser), finer only when it is short of the current one's
     /// threshold by the margin (`auto_tf(span · (1 + m))` is finer). A zoom across several
     /// thresholds at once lands on the timeframe the margin-adjusted span reaches, not one step at a
-    /// time. A span that is not a positive number changes nothing.
+    /// time. A span that is not a positive number changes nothing. There is no dwell here — see
+    /// [`HYSTERESIS_MARGIN`] for why it belongs to the caller.
     pub fn update(&mut self, visible_ms: f64) -> TfId {
         if !visible_ms.is_finite() || visible_ms <= 0.0 {
             return self.current.unwrap_or_else(|| auto_tf(visible_ms));

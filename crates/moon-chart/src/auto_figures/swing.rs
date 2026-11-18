@@ -8,8 +8,9 @@
 //!
 //! A level's ORIGINAL side is read from its latest touch: a pivot high there makes it a resistance
 //! (price came from below), a pivot low a support. A close beyond the level — strictly past its
-//! price, on the other side — after that latest touch breaks it, and the row's `BrokenPolicy`
-//! decides whether it is dropped or kept flagged.
+//! price, on the other side — after that latest touch breaks it; the LATEST such break episode is
+//! the one reported (see `scan_break`), and the row's `BrokenPolicy` decides whether the level is
+//! dropped or kept flagged.
 //!
 //! Cost on `n` bars with `P` pivots and `L` levels: O(n·(left+right) + P log P + L·n).
 
@@ -18,7 +19,7 @@ use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
-    Broken, DetectCtx, Detector, Found, FoundShape, Side, Touch, pct_frac, scan_break,
+    Broken, DetectCtx, Detector, Found, FoundShape, Side, Touch, pct_frac, scan_break, survives,
     touch_strength, window,
 };
 
@@ -126,14 +127,8 @@ fn build_level(
         PivotKind::Low => Side::Above,
     };
     let broken = scan_break(win, last.idx, origin, |_| Some(price));
-    if let Some(b) = broken {
-        let keep = match policy {
-            BrokenPolicy::Remove => false,
-            BrokenPolicy::Keep { bars } => b.bars_since <= u32::from(bars) || b.returned,
-        };
-        if !keep {
-            return None;
-        }
+    if !survives(broken, policy) {
+        return None;
     }
     Some(Level {
         price,

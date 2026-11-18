@@ -30,7 +30,10 @@ fn detect_dispatches_by_the_parameters_kind() {
         (100.0, 95.0),
         (92.0, 87.0),
     ]);
-    let ctx = DetectCtx { tf_ms: M5_MS };
+    let ctx = DetectCtx {
+        tf_ms: M5_MS,
+        now_ms: 0.0,
+    };
     let swing = DetectorParams::Swing(SwingParams {
         pivot_left: 1,
         pivot_right: 1,
@@ -83,7 +86,10 @@ fn line_price_is_linear_in_time_and_positive() {
 /// Breakage: an unchecked index on an empty or 1-bar slice inside any detector.
 #[test]
 fn every_detector_survives_empty_and_tiny_input() {
-    let ctx = DetectCtx { tf_ms: M5_MS };
+    let ctx = DetectCtx {
+        tf_ms: M5_MS,
+        now_ms: 0.0,
+    };
     let one = from_hl(&[(100.0, 99.0)]);
     let nan = vec![test_bars::bar(0, f32::NAN, f32::NAN, f32::NAN, f32::NAN); 20];
     for kind in DetectorKind::ALL {

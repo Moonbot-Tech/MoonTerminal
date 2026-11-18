@@ -1,9 +1,10 @@
 //! `Squeeze`: a horizontal level plus a sloped line from its OTHER side converging into it —
 //! rising lows pressing a resistance, falling highs pressing a support. One formation, one figure.
 //!
-//! The level half is exactly a `Swing` level of `params.level` that is not broken (a broken level
-//! has nothing left to press against, so a level the policy keeps flagged is not used). The sloped
-//! half is a line through pivot LOWS for a resistance (pivot HIGHS for a support) found by the
+//! The level half is exactly a `Swing` level of `params.level`, under the level's own
+//! `BrokenPolicy`: `Remove` drops a squeeze whose level broke, `Keep { bars }` keeps it with the
+//! level's break in `Found::broken`, so the breakout of a squeeze is visible for those bars and the
+//! event layer can mark it as a breakout or a false break. The sloped half is a line through pivot LOWS for a resistance (pivot HIGHS for a support) found by the
 //! `Trend` line search with `trend_tolerance_pct` and `min_trend_touches`, which must:
 //! - rise toward a resistance / fall toward a support (converge, not diverge);
 //! - have every touch strictly on the level's original side;
@@ -18,8 +19,9 @@
 //! The contract gives the sloped half no body-break or slope bounds of its own; it is searched with
 //! [`MAX_BODY_BREAKS`] and with no slope bounds beyond the direction above.
 //!
-//! Cost: one pivot pass, the `Swing` levels and two `Trend` line searches (see their modules), plus
-//! O(L·S) to pair `L` levels with `S` lines.
+//! Cost: one pivot pass, the `Swing` levels and two `Trend` line searches (each capped at
+//! `trend::MAX_LINE_PIVOTS` pivots, see that module), plus O(L·S) to pair `L` levels with `S`
+//! lines.
 
 use moon_core::config::auto_figures::{DetectorKind, DetectorParams, SqueezeParams};
 use moon_core::market::candles::ChartCandle;
@@ -28,7 +30,7 @@ use super::pivots::{PivotKind, find_pivots};
 use super::swing::{Level, levels_from};
 use super::trend::{Line, LineSpec, find_lines};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, bar_ok, pct_frac, touch_strength, window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, pct_frac, touch_strength, window,
 };
 
 /// Bodies allowed to cross the sloped half between its first and last touch. One, not zero: a
@@ -66,10 +68,9 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
     };
     let mut pivots = Vec::new();
     find_pivots(win, p.level.pivot_left, p.level.pivot_right, &mut pivots);
-    let levels: Vec<Level> = levels_from(win, &pivots, &p.level)
-        .into_iter()
-        .filter(|l| l.broken.is_none())
-        .collect();
+    // `levels_from` has already applied the level's policy: what is left is either unbroken or
+    // kept flagged.
+    let levels: Vec<Level> = levels_from(win, &pivots, &p.level);
     if levels.is_empty() {
         return Vec::new();
     }
@@ -129,9 +130,7 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
         line_used[pair.line] = true;
         let level = &levels[pair.level];
         let line = &lines_for(origin)[pair.line];
-        let mut touches = level.touches.clone();
-        touches.extend_from_slice(&line.touches);
-        touches.sort_by(|a, b| a.t_ms.total_cmp(&b.t_ms));
+        let touches = merge_touches(&level.touches, &line.touches);
         let first_idx = level.first_idx.min(line.first_idx);
         let last_idx = level.last_idx.max(line.last_idx);
         out.push(Found {
@@ -147,10 +146,24 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
             last_ms: touches.last().map_or(0.0, |t| t.t_ms),
             strength: touch_strength(touches.len(), first_idx, last_idx, win.len()),
             touches,
-            broken: None,
+            broken: level.broken,
         });
     }
     out
+}
+
+/// The touches of both halves in time order, each pivot once.
+///
+/// A pivot can belong to both: a level groups pivot highs AND lows within its band, so a low just
+/// under a resistance can be both a level touch and a touch of the rising lows line. Counted twice,
+/// it would inflate the formation's touch count and its strength.
+fn merge_touches(level: &[Touch], line: &[Touch]) -> Vec<Touch> {
+    let mut touches = Vec::with_capacity(level.len() + line.len());
+    touches.extend_from_slice(level);
+    touches.extend_from_slice(line);
+    touches.sort_by(|a, b| a.t_ms.total_cmp(&b.t_ms).then(a.price.total_cmp(&b.price)));
+    touches.dedup_by(|a, b| a.t_ms == b.t_ms && a.price == b.price);
+    touches
 }
 
 /// The gap between `line` projected to `last_t` and `level`, as a fraction of the level price —

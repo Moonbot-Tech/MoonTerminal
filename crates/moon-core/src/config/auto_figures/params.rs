@@ -130,14 +130,18 @@ impl Default for SwingParams {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtremePeriod {
-    /// The current UTC day, still forming.
+    /// The UTC day of the caller's reference time (`moon_chart::auto_figures::DetectCtx::now_ms`),
+    /// from its CLOSED bars only: the bar still forming is not in the range, so a new extreme it
+    /// prints lags by at most one bar of the row's timeframe. Right after UTC midnight, before a
+    /// bar of the new day has closed, this is nothing — not yesterday.
     #[default]
     Day,
-    /// The previous complete UTC day.
+    /// The complete UTC day before the reference time's.
     PrevDay,
-    /// The current ISO week (Monday 00:00 UTC onward), still forming.
+    /// The ISO week (Monday 00:00 UTC onward) of the reference time, from its closed bars only,
+    /// like `Day`.
     Week,
-    /// The previous complete ISO week.
+    /// The complete ISO week before the reference time's.
     PrevWeek,
 }
 
@@ -190,6 +194,10 @@ pub struct TrendParams {
     /// trend, and a near-vertical one is noise.
     pub min_slope_pct_per_bar: f32,
     pub max_slope_pct_per_bar: f32,
+    /// What happens to a line once a bar has CLOSED beyond it after its last touch — the same
+    /// choice a level row makes. Added after the first files were written: `#[serde(default)]`
+    /// on the struct loads a file without it as the default policy.
+    pub broken: BrokenPolicy,
 }
 
 impl Default for TrendParams {
@@ -204,6 +212,7 @@ impl Default for TrendParams {
             max_body_breaks: 0,
             min_slope_pct_per_bar: 0.005,
             max_slope_pct_per_bar: 2.0,
+            broken: BrokenPolicy::default(),
         }
     }
 }
@@ -285,12 +294,59 @@ pub enum DetectorParams {
 }
 
 impl DetectorParams {
+    /// The detector kind these parameters belong to.
     pub fn kind(&self) -> DetectorKind {
         match self {
             DetectorParams::Swing(_) => DetectorKind::Swing,
             DetectorParams::PeriodExtreme(_) => DetectorKind::PeriodExtreme,
             DetectorParams::Trend(_) => DetectorKind::Trend,
             DetectorParams::Squeeze(_) => DetectorKind::Squeeze,
+        }
+    }
+
+    /// The row's broken-line policy — what the event layer's false-break window is read from, for
+    /// every kind alike.
+    ///
+    /// A period extreme has no policy of its own (its line is a fact of the calendar and is never
+    /// dropped), so it answers [`BrokenPolicy::default`]: a false break of yesterday's high is
+    /// then judged over the same few bars a level row uses by default.
+    pub fn broken_policy(&self) -> BrokenPolicy {
+        match self {
+            DetectorParams::Swing(p) => p.broken,
+            DetectorParams::PeriodExtreme(_) => BrokenPolicy::default(),
+            DetectorParams::Trend(p) => p.broken,
+            DetectorParams::Squeeze(p) => p.level.broken,
+        }
+    }
+
+    /// How many closed bars of `tf` the detector needs to give a full answer — what the caller
+    /// fetches, and what it compares against before saying "not enough history" instead of
+    /// silently drawing nothing.
+    ///
+    /// The lookback for the pivot detectors (`Squeeze`: its level's). For a period extreme, the
+    /// bars that cover the requested period from its START up to the latest possible reference
+    /// time — the current day or week in full, the previous one plus all of the current one —
+    /// plus one: the detector refuses a period whose first bar is missing, and the extra bar is the
+    /// slack for a bar that opens exactly at the boundary. An upper bound, never short.
+    pub fn bars_needed(&self, tf: TfId) -> u32 {
+        const DAY_MS: i64 = 86_400_000;
+        match self {
+            DetectorParams::Swing(p) => p.lookback_bars,
+            DetectorParams::Trend(p) => p.lookback_bars,
+            DetectorParams::Squeeze(p) => p.level.lookback_bars,
+            DetectorParams::PeriodExtreme(p) => {
+                let days: i64 = match p.period {
+                    ExtremePeriod::Day => 1,
+                    ExtremePeriod::PrevDay => 2,
+                    ExtremePeriod::Week => 7,
+                    ExtremePeriod::PrevWeek => 14,
+                };
+                // `TfId::ms` is a positive constant for every variant, so the division is safe;
+                // the ceiling keeps a timeframe that does not divide the period from coming short.
+                let tf_ms = tf.ms().max(1);
+                let bars = (days * DAY_MS + tf_ms - 1) / tf_ms + 1;
+                u32::try_from(bars).unwrap_or(u32::MAX)
+            }
         }
     }
 }
@@ -318,7 +374,10 @@ pub enum TakeOrder {
     /// Closest to the current price first.
     #[default]
     Nearest,
-    /// Highest detector strength first (touches, age, volume — the detector's own score).
+    /// Highest detector strength first. For the pivot detectors (`Swing`, `Trend`, `Squeeze`) the
+    /// strength is the touch count plus the fraction of the searched window the touches span — the
+    /// fraction is below one, so one more touch always outranks a longer life. A period extreme's
+    /// strength is a constant 1, so its lines tie and fall back to nearest first.
     Strongest,
 }
 

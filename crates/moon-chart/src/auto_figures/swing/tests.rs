@@ -14,7 +14,14 @@ fn params(min_touches: u8, broken: BrokenPolicy) -> DetectorParams {
 }
 
 fn run(bars: &[ChartCandle], p: &DetectorParams) -> Vec<Found> {
-    Swing.detect(bars, p, &DetectCtx { tf_ms: M5_MS })
+    Swing.detect(
+        bars,
+        p,
+        &DetectCtx {
+            tf_ms: M5_MS,
+            now_ms: 0.0,
+        },
+    )
 }
 
 /// Three highs at 99.8, 100, 100.2 under a 0.5 % tolerance — every bar between them lower.
@@ -148,6 +155,7 @@ fn real_candles_keep_the_structural_invariants() {
             &DetectorParams::Swing(sp),
             &DetectCtx {
                 tf_ms: i64::from(kind) * 60_000,
+                now_ms: 0.0,
             },
         );
         assert!(
@@ -176,4 +184,29 @@ fn real_candles_keep_the_structural_invariants() {
             assert!(f.touches.windows(2).all(|w| w[0].t_ms < w[1].t_ms));
         }
     }
+}
+
+/// A level that broke, came back and broke again reports the SECOND break: `Keep{3}` counts its
+/// bars from there, so the level is still kept two bars after the new break even though the first
+/// one was six bars ago.
+///
+/// Breakage: reporting the first-ever break, which would count six bars and drop the level, and
+/// would call the fresh break "returned".
+#[test]
+fn a_second_break_restarts_the_keep_countdown() {
+    let mut bars = three_tops();
+    let n = bars.len();
+    bars.push(bar(n, 99.0, 103.0, 99.0, 102.0)); // first break
+    bars.push(bar(n + 1, 101.0, 101.0, 97.0, 98.0)); // back under 100
+    bars.push(bar(n + 2, 98.0, 99.0, 96.0, 97.5));
+    bars.push(bar(n + 3, 97.5, 99.0, 96.5, 98.0));
+    bars.push(bar(n + 4, 99.0, 103.5, 99.0, 102.5)); // second break
+    bars.push(bar(n + 5, 102.5, 104.0, 101.5, 103.0));
+    bars.push(bar(n + 6, 103.0, 104.5, 102.0, 103.5));
+    let found = run(&bars, &params(3, BrokenPolicy::Keep { bars: 3 }));
+    assert_eq!(found.len(), 1, "{found:?}");
+    let broken = found[0].broken.expect("flagged broken");
+    assert_eq!(broken.at_ms, bars[n + 4].t_open_ms);
+    assert_eq!(broken.bars_since, 2);
+    assert!(!broken.returned);
 }

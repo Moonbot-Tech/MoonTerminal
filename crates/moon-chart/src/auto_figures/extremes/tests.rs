@@ -14,7 +14,10 @@ fn run(bars: &[ChartCandle], period: ExtremePeriod, which: ExtremeWhich) -> Vec<
     PeriodExtreme.detect(
         bars,
         &DetectorParams::PeriodExtreme(PeriodExtremeParams { period, which }),
-        &DetectCtx { tf_ms: 3_600_000 },
+        &DetectCtx {
+            tf_ms: 3_600_000,
+            now_ms: 0.0,
+        },
     )
 }
 
@@ -137,4 +140,53 @@ fn real_candles_match_an_independent_scan() {
             "{period:?}"
         );
     }
+}
+
+/// "Today" is the reference time's day, not the last bar's: ten minutes after UTC midnight, with
+/// no bar of the new day closed yet, `Day` has nothing and `PrevDay` is the day that just ended. A
+/// stale reference earlier than the last bar falls back to that bar.
+///
+/// Breakage: reading "today" from the last closed bar, which keeps drawing yesterday's range as
+/// today's until the first bar of the new day closes.
+#[test]
+fn today_follows_the_reference_time() {
+    let monday: Vec<ChartCandle> = (0..24)
+        .map(|h| {
+            let high = if h == 7 { 130.0 } else { 110.0 };
+            at(
+                MONDAY_2024_01_01_MS + f64::from(h) * HOUR_MS,
+                high,
+                100.0,
+                105.0,
+            )
+        })
+        .collect();
+    let run_at = |period, now_ms| {
+        PeriodExtreme.detect(
+            &monday,
+            &DetectorParams::PeriodExtreme(PeriodExtremeParams {
+                period,
+                which: ExtremeWhich::High,
+            }),
+            &DetectCtx {
+                tf_ms: 3_600_000,
+                now_ms,
+            },
+        )
+    };
+    let tuesday_0010 = MONDAY_2024_01_01_MS + 24.0 * HOUR_MS + 600_000.0;
+    assert!(run_at(ExtremePeriod::Day, tuesday_0010).is_empty());
+    assert_eq!(
+        prices(&run_at(ExtremePeriod::PrevDay, tuesday_0010)),
+        vec![130.0]
+    );
+    // Monday afternoon as the reference — and a stale one from before the series — both read
+    // Monday as today.
+    let monday_1500 = MONDAY_2024_01_01_MS + 15.0 * HOUR_MS;
+    assert_eq!(
+        prices(&run_at(ExtremePeriod::Day, monday_1500)),
+        vec![130.0]
+    );
+    assert_eq!(prices(&run_at(ExtremePeriod::Day, 1.0)), vec![130.0]);
+    assert_eq!(prices(&run_at(ExtremePeriod::Day, f64::NAN)), vec![130.0]);
 }
