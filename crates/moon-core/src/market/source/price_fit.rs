@@ -2,8 +2,7 @@
 //!
 //! The cursor feeds every trade row it copies or drains into a [`PriceFitIndex`]; a price query
 //! then folds whole blocks that sit inside the window and scans only the rows of blocks that
-//! straddle an edge. Nothing assumes the rows are sorted by time: a block's own time bounds decide
-//! whether it is inside, outside or straddling.
+//! straddle an edge. A complete index is time-ordered, so it can skip blocks outside the window.
 
 use moonproto::state::TradeHistoryRow;
 
@@ -163,19 +162,20 @@ impl PriceFitIndex {
         let mut hi = f32::MIN;
         let mut count = 0usize;
         if from_ms < to_ms {
-            for (i, block) in self.blocks.iter().enumerate().skip(self.dead / BLOCK) {
+            let first_live = self.dead / BLOCK;
+            let live = &self.blocks[first_live..];
+            let first = live.partition_point(|block| block.t_max < from_ms);
+            let end = live.partition_point(|block| block.t_min < to_ms);
+            for (offset, block) in live[first..end].iter().enumerate() {
                 #[cfg(test)]
                 PRICE_FIT_VISITED.with(|n| n.set(n.get() + 1));
-                if block.count == 0 || block.t_max < from_ms || block.t_min >= to_ms {
-                    continue;
-                }
                 if block.t_min >= from_ms && block.t_max < to_ms {
                     lo = lo.min(block.p_min);
                     hi = hi.max(block.p_max);
                     count += block.count;
                     continue;
                 }
-                for &(t, p) in &self.rows[self.block_span(i)] {
+                for &(t, p) in &self.rows[self.block_span(first_live + first + offset)] {
                     #[cfg(test)]
                     PRICE_FIT_VISITED.with(|n| n.set(n.get() + 1));
                     if t >= from_ms && t < to_ms {

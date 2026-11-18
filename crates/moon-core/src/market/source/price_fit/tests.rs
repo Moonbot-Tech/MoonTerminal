@@ -157,3 +157,24 @@ fn reset_then_trim_right_then_query_left_refuses() {
     index.clear();
     assert_eq!(index.range(mid, end), None);
 }
+
+/// Small pans at either edge of a large reset must skip blocks outside the scan.
+#[test]
+fn narrow_pans_after_large_reset_skip_offscreen_blocks() {
+    let mut rng = Rng(42);
+    let rows = fixture(&mut rng, 100_000);
+    let first = rows[0].unix_millis();
+    let end = rows.last().unwrap().unix_millis() + 1;
+    let mut index = PriceFitIndex::default();
+    index.replace_from(&rows, true, first);
+    for (left, right) in [(first, first + 128), (end - 128, end), (end, end + 128)] {
+        take_price_fit_visited();
+        assert_eq!(index.range(left, right), Some(linear(&rows, left, right)));
+        assert!(take_price_fit_visited() < 2 * BLOCK as u64);
+    }
+    // Returning live after panning must still include the full last window.
+    assert_eq!(
+        index.range(end - 10_000, end),
+        Some(linear(&rows, end - 10_000, end))
+    );
+}

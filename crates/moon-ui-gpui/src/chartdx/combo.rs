@@ -255,12 +255,7 @@ impl ComboLayer {
 
     /// Reuploads the complete tick set after reloading market history and discards pending appends.
     pub fn reset(&mut self, data: Vec<ChartCross>) {
-        self.tick_time_order = TickTimeOrder::default();
-        self.tick_time_order.extend(
-            data.iter()
-                .skip(data.len().saturating_sub(self.cross_capacity as usize))
-                .map(|c| c.time_rel),
-        );
+        self.tick_time_order = TickTimeOrder::for_reset(&data, self.cross_capacity as usize);
         self.pending_reset = Some(data);
         self.pending_append.clear();
     }

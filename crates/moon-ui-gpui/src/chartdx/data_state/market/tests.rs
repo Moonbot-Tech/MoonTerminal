@@ -1287,3 +1287,41 @@ fn bench_s_chart_frame_zoom() {
         .join()
         .expect("bench result");
 }
+
+/// Isolate the frozen history materialization and backend-neutral reset preparation.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_chart_replay_cpu_stages() {
+    use moon_core::market::{CandleReadParams, ChartHistoryBuffers};
+
+    let replay = scale_replay();
+    let epoch = replay.window.from_ms as f64;
+    let right = (replay.window.to_ms as f64 - epoch) as f32;
+    let mut buffers = ChartHistoryBuffers::default();
+    let params = CandleReadParams {
+        tf_ms: replay.tf_ms,
+        trades_from_rel_ms: 0.0,
+        trades_limit: usize::MAX,
+        shipped_revision: u64::MAX,
+        series_reset: true,
+    };
+    crate::test_support::bench::measure("chart_replay_read_100k_full_fit", 12, || {
+        let result = replay.read_with_price_window(
+            epoch,
+            0.0,
+            right,
+            Some((0.0, right)),
+            Some(&params),
+            &mut buffers,
+        );
+        assert_eq!(buffers.ticks.len(), 100_000);
+        assert!(result.tick_price_range.is_some());
+    });
+    let mut upload = Vec::new();
+    crate::test_support::bench::measure("chart_replay_cross_reset_prep_100k", 12, || {
+        moon_chart::layers::fill_cross_upload(&buffers.ticks, epoch, &mut upload);
+        let order = moon_chart::tick_volume::TickTimeOrder::for_reset(&upload, 100_000);
+        assert_eq!(upload.len(), 100_000);
+        assert_eq!(order.max_lateness(), 0.0);
+    });
+}

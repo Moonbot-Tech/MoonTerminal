@@ -209,6 +209,14 @@ pub struct TickTimeOrder {
 }
 
 impl TickTimeOrder {
+    /// Build the ordering evidence for a contiguous reset payload using the retained tail only.
+    pub fn for_reset(crosses: &[crate::layers::ChartCross], capacity: usize) -> Self {
+        let mut order = Self::default();
+        let start = crosses.len().saturating_sub(capacity);
+        order.extend(crosses[start..].iter().map(|cross| cross.time_rel));
+        order
+    }
+
     /// Track max(prefix maximum before each row - row time, 0) in O(batch).
     /// Non-finite input permanently forces a full walk until the evidence is reset.
     pub fn extend(&mut self, times: impl IntoIterator<Item = f32>) {
