@@ -70,6 +70,100 @@ impl MainChartStack {
             .map(|entry| entry.panel.read(cx).focus_handle(cx))
     }
 
+    /// Hand the keyboard to the full-bleed chart when a chart this frame no longer draws holds it.
+    ///
+    /// Fullscreen draws ONE chart, yet every other chart's panel stays alive in `charts`. Once the
+    /// shown chart changes without a click — the `switch_charts` hotkey, a detect retargeting Main —
+    /// the chart that was clicked last keeps the focus while its element leaves the frame. Its handle
+    /// still resolves, so the window reads as focused, but GPUI finds no node for it and dispatches
+    /// every key to the bare root: no window-root listener runs, and every hotkey (the switch key
+    /// itself included) stays dead until the user clicks a chart again. `restore_root_focus` cannot
+    /// see this — it acts only when nothing holds focus — so the host that stops drawing the element
+    /// is the one that must move the focus, as `hotkeys::restore_root_focus` documents.
+    ///
+    /// Called from `render`, the first thing to run after the change, and before the body is built,
+    /// so the frame that paints the new chart is also the one whose dispatch path holds it. It only
+    /// moves a focus that was already inside one of this stack's hidden charts, so it never takes the
+    /// keyboard from a field elsewhere. Stack mode is not decided here: which tiles it draws is
+    /// known only after layout, so [`Self::hand_focus_into_range`] repairs it from the virtual
+    /// list's range report.
+    ///
+    /// Args:
+    ///     window: Window whose focus may be moved.
+    ///     cx: Application context used to read the panels' focus handles.
+    pub(super) fn hand_focus_to_shown_chart(&self, window: &mut Window, cx: &mut App) {
+        if self.show_stack || self.charts.is_empty() {
+            return;
+        }
+        // The same index `render_body` draws, so the target is the chart actually on screen.
+        let shown = self.active.unwrap_or(0).min(self.charts.len() - 1);
+        self.rescue_stranded_focus(|ix| ix == shown, shown, window, cx);
+    }
+
+    /// The stack-mode half of [`Self::hand_focus_to_shown_chart`]: a focused tile the virtual list
+    /// scrolled out of `range` stops being drawn while its panel lives on, which strands the window
+    /// keyboard exactly as a hidden fullscreen chart does.
+    ///
+    /// Runs from the list's `on_visible_range`, the one place that knows which tiles this frame
+    /// draws; the list contract names evicting focus outside the range as that observer's use. The
+    /// keyboard goes to the active chart when it is drawn, otherwise to the first drawn tile.
+    ///
+    /// Args:
+    ///     range: Chart indexes the virtual list draws this frame.
+    ///     window: Window whose focus may be moved.
+    ///     cx: Application context used to read the panels' focus handles.
+    pub(super) fn hand_focus_into_range(
+        &self,
+        range: &Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !self.show_stack || range.is_empty() {
+            return;
+        }
+        let target = self
+            .active
+            .filter(|ix| range.contains(ix))
+            .unwrap_or(range.start);
+        self.rescue_stranded_focus(|ix| range.contains(&ix), target, window, cx);
+    }
+
+    /// Move the focus to chart `target` when it sits inside a chart for which `drawn` is false.
+    ///
+    /// Only a focus already inside one of this stack's undrawn charts is moved, so a field anywhere
+    /// else keeps the keyboard. `contains_focused` also covers an input inside the chart; it reads
+    /// the PREVIOUS frame, the one that still drew the chart now leaving, and a chart's own handle
+    /// matches whatever that frame held.
+    ///
+    /// Args:
+    ///     drawn: Whether the chart at an index is drawn this frame.
+    ///     target: Index of the drawn chart that takes the keyboard.
+    ///     window: Window whose focus may be moved.
+    ///     cx: Application context used to read the panels' focus handles.
+    fn rescue_stranded_focus(
+        &self,
+        drawn: impl Fn(usize) -> bool,
+        target: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if window.focused(cx).is_none() {
+            return;
+        }
+        let stranded = self.charts.iter().enumerate().any(|(ix, entry)| {
+            !drawn(ix)
+                && entry
+                    .panel
+                    .read(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+        });
+        if stranded && let Some(entry) = self.charts.get(target) {
+            let focus = entry.panel.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+    }
+
     #[cfg(any(debug_assertions, moon_profile_debug, feature = "debug-tools"))]
     pub(crate) fn debug_data_handle(&self, cx: &App) -> Option<crate::chartdx::ChartDataHandle> {
         self.active
