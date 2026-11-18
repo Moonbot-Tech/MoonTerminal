@@ -1476,9 +1476,8 @@ pub fn open(
     );
     opts.display_id = display_id;
     let b = backend.clone();
-    if let Ok(handle) = cx.open_window(opts, move |window, cx| {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "screener")
-            .with_window(|| window.window_handle().window_id().as_u64());
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "screener");
+    let opened = cx.open_window(opts, move |window, cx| {
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| ScreenerView::new(b, window, cx));
         cx.new(|cx| {
@@ -1486,7 +1485,9 @@ pub fn open(
                 Root::new(view, window, cx).background_policy(MoonBackgroundPolicy::Opaque),
             )
         })
-    }) {
+    });
+    drop(open_span);
+    if let Ok(handle) = opened {
         backend.update(cx, |bk, _| bk.screener_window = Some(handle));
         crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
         crate::window::windowing::activate_new_window(handle.into(), cx);

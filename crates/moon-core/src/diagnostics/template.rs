@@ -209,6 +209,7 @@ ENV: MOON_RENDER_DIAG=1",
         doc: "\
 UI stall probe -> `logs/ui_stall.log`: every UI-thread frame, window open, panel switch or
 handler that took longer than `limits.ui_stall_ms`, with the panel/window/action it was doing.
+Chart-frame contributors are matched by time and are not bound to a window.
 Answers \"the terminal hitched when I opened X\".
 COST: low. One relaxed atomic load per probed site while off; when on, a clock read per site and
 one write per second.

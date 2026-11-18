@@ -215,6 +215,7 @@ impl PreparedTradeHistory {
         core: CoreId,
         axis: moon_core::db::ReportAxis,
     ) -> Self {
+        debug_assert!(records.iter().all(|record| record.core_uid == core));
         let marks = records
             .iter()
             .map(|record| trade_mark_with(record, &axis, true, true))

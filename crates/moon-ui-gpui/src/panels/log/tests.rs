@@ -79,6 +79,43 @@ async fn named_page_rejects_out_of_order_completion(cx: &mut gpui::TestAppContex
     assert_eq!(selected.page.total(), 2);
 }
 
+/// Indexing a different file must hide the previous file's rows and preserve the clipboard.
+#[gpui::test]
+async fn pending_named_file_clears_display_and_copy_rows(cx: &mut gpui::TestAppContext) {
+    let (_temp, a, b) = named_page_fixture();
+    let mut page = NamedPage::default();
+    let mut buf = super::buffer::RowBuffer::new(chrono_tz::UTC);
+    let filters = super::buffer::Filters {
+        errors_only: false,
+        query: "",
+        coin: None,
+    };
+    let executor = cx.executor();
+
+    let (generation, opened) =
+        LogPanel::request_named_page(&mut page, &mut buf, &a, &executor).unwrap();
+    assert!(page.publish(generation, opened.await));
+    buf.ingest(page.page.lines().to_vec(), super::VIEW_LIMIT, filters);
+    assert_eq!(buf.visible(), 1);
+    cx.update(|app| LogPanel::copy_view_rows(&buf, 0..1, app));
+    let before = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert!(before.contains("first"));
+
+    let (generation, opened) =
+        LogPanel::request_named_page(&mut page, &mut buf, &b, &executor).unwrap();
+    assert_eq!(buf.total(), 0);
+    assert_eq!(buf.visible(), 0);
+    cx.update(|app| LogPanel::copy_view_rows(&buf, 0..1, app));
+    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), before);
+
+    assert!(page.publish(generation, opened.await));
+    buf.ingest(page.page.lines().to_vec(), super::VIEW_LIMIT, filters);
+    assert_eq!(buf.visible(), 2);
+    cx.update(|app| LogPanel::copy_view_rows(&buf, 0..2, app));
+    let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert!(copied.contains("second") && copied.contains("third") && !copied.contains("first"));
+}
+
 /// Open an isolated 50 MB named file repeatedly, including indexing and parsing the tail.
 #[test]
 #[ignore = "bench: S-smooth"]

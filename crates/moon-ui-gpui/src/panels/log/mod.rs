@@ -263,9 +263,6 @@ impl LogPanel {
         let workspace_revision = backend.read(cx).workspace_revision();
         cx.observe(&workspace_revision, |this, _revision, cx| {
             let (source, file, _) = this.effective_selection(this.backend.read(cx));
-            if matches!(file, LogFile::Live) {
-                this.named_page.invalidate();
-            }
             if this.loaded_selection.as_ref() == Some(&(source, file)) {
                 return;
             }
@@ -583,14 +580,14 @@ impl LogPanel {
     /// Copies the current selection, or row `ix` alone when it sits outside one.
     pub(super) fn copy_row_or_selection(&mut self, ix: usize, cx: &mut Context<Self>) {
         let rows = self.selection.range_for(ix);
-        self.copy_view_rows(rows, cx);
+        Self::copy_view_rows(&self.buf, rows, cx);
     }
 
     /// Copies a range of the VISIBLE list, resolving each position through `view`.
-    fn copy_view_rows(&self, rows: std::ops::Range<usize>, cx: &mut App) {
-        let all = self.buf.rows();
+    fn copy_view_rows(buf: &buffer::RowBuffer, rows: std::ops::Range<usize>, cx: &mut App) {
+        let all = buf.rows();
         line_list::copy_rows(
-            self.buf.visible_rows(),
+            buf.visible_rows(),
             rows,
             |&ix| all.get(ix).map(row::row_copy_text).unwrap_or_default(),
             cx,
@@ -611,7 +608,7 @@ impl LogPanel {
         }
         match line_list::handle_list_key(&mut self.selection, ev, self.buf.visible()) {
             Some(line_list::ListKey::Copy(rows)) => {
-                self.copy_view_rows(rows, cx);
+                Self::copy_view_rows(&self.buf, rows, cx);
             }
             Some(line_list::ListKey::SelectedAll) => {
                 // Selecting everything holds the tail the way a press does.
@@ -862,14 +859,21 @@ impl LogPanel {
             .record_reload(render::log_sig(b, &self.group, &source));
         match &file {
             LogFile::Named(name) => {
-                if let Some((generation, opened)) =
-                    self.named_page.request(name, cx.background_executor())
-                {
+                let opened = Self::request_named_page(
+                    &mut self.named_page,
+                    &mut self.buf,
+                    name,
+                    cx.background_executor(),
+                );
+                if let Some((generation, opened)) = opened {
                     self.publish_named_page(generation, opened, cx);
-                    record_work_us(timer);
-                    return;
                 }
                 if !self.named_page.shows(name) {
+                    self.loaded_selection = None;
+                    self.selection.clear();
+                    self.cursors.clear();
+                    self.after_view_change();
+                    record_work_us(timer);
                     return;
                 }
             }
@@ -904,6 +908,19 @@ impl LogPanel {
             self.after_view_change();
         }
         record_work_us(timer);
+    }
+
+    /// Keep rows unavailable to render and copy while the selected file's index is pending.
+    fn request_named_page(
+        page: &mut paging::NamedPage,
+        buf: &mut buffer::RowBuffer,
+        name: &str,
+        executor: &BackgroundExecutor,
+    ) -> Option<(u64, Task<paging::FilePage>)> {
+        if !page.shows(name) {
+            buf.clear();
+        }
+        page.request(name, executor)
     }
 
     /// Apply a worker's named page only to the panel and selection that still want it.

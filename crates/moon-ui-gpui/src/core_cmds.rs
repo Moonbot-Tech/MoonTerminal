@@ -72,9 +72,8 @@ pub(crate) fn open_on(
         owner,
     );
     opts.display_id = display;
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "core-cmds");
     let created = cx.open_window(opts, move |window, cx| {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "core-cmds")
-            .with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| CoreCmdsView::new(backend.clone(), uid, cmd, window, cx));
         let weak = view.downgrade();
@@ -95,6 +94,7 @@ pub(crate) fn open_on(
             )
         })
     });
+    drop(open_span);
     match created {
         Ok(handle) => {
             crate::window::titles::track(handle.into(), owner.is_some(), title, cx);

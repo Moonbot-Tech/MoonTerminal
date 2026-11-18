@@ -194,10 +194,9 @@ fn open_window(
                 )),
             );
             let view_backend = backend.clone();
+            let open_span =
+                crate::diag::stall::span(crate::diag::stall::StallKind::Open, "profit-monitor");
             let opened = cx.open_window(options, move |window, cx| {
-                let _stall =
-                    crate::diag::stall::span(crate::diag::stall::StallKind::Open, "profit-monitor")
-                        .with_window(|| window.window_handle().window_id().as_u64());
                 crate::window::windowing::configure_shell_clear_color(window, cx);
                 crate::window::windowing::set_group_window_icon(window, 0);
                 let view = cx.new(|cx| ProfitMonitorView::new(view_backend, window, cx));
@@ -207,6 +206,7 @@ fn open_window(
                     )
                 })
             });
+            drop(open_span);
             backend.update(cx, |backend, _| {
                 backend.profit_monitor_open_pending = None;
                 backend.profit_monitor_window = opened.as_ref().ok().copied();

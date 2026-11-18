@@ -30,7 +30,7 @@ mod template;
 mod upgrade;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 pub use config::DiagCfg;
@@ -294,9 +294,21 @@ impl ChannelWriter {
     }
 }
 
-/// Process-wide channel writers; the finite set of named channels shares no per-line file opens.
-static CHANNEL_WRITERS: OnceLock<Mutex<std::collections::HashMap<String, ChannelWriter>>> =
-    OnceLock::new();
+/// Registry of retained writers. Each channel serializes only its own filesystem operations.
+type ChannelWriters = Mutex<std::collections::HashMap<String, Arc<Mutex<ChannelWriter>>>>;
+
+static CHANNEL_WRITERS: OnceLock<ChannelWriters> = OnceLock::new();
+
+/// Get a channel's writer without carrying the registry lock into file I/O.
+fn channel_writer(writers: &ChannelWriters, file: &str) -> Arc<Mutex<ChannelWriter>> {
+    let mut writers = writers.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(writer) = writers.get(file) {
+        return Arc::clone(writer);
+    }
+    let writer = Arc::new(Mutex::new(ChannelWriter::new(file)));
+    writers.insert(file.to_owned(), Arc::clone(&writer));
+    writer
+}
 
 /// Append one line to a channel's own file under `logs/`.
 pub fn channel_line(file: &str, line: &str) {
@@ -311,13 +323,9 @@ pub fn channel_lines(file: &str, lines: &[String]) -> bool {
 
 /// Write through one shared channel handle, with a UTC date only for channels that rotate.
 fn channel_lines_at(file: &str, date: Option<&str>, lines: &[String]) -> bool {
-    let mut writers = CHANNEL_WRITERS
-        .get_or_init(Mutex::default)
+    channel_writer(CHANNEL_WRITERS.get_or_init(Mutex::default), file)
         .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    writers
-        .entry(file.to_owned())
-        .or_insert_with(|| ChannelWriter::new(file))
+        .unwrap_or_else(|error| error.into_inner())
         .write_lines(channel_dir(), date, lines)
 }
 

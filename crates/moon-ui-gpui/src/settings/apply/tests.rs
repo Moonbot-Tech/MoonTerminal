@@ -532,29 +532,53 @@ fn bench_s_settings_close() {
     );
 }
 
-/// Time repeated Settings candidate saves under one process-wide temporary data root.
+/// Remove the isolated fixture even if the benchmark child fails.
+struct SettingsSaveFixture(std::path::PathBuf);
+
+impl Drop for SettingsSaveFixture {
+    /// Delete the temporary root after the child has exited.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Time repeated Settings candidate saves without changing the rest of the test executable's root.
 #[test]
 #[ignore = "bench: S-smooth"]
 fn bench_s_settings_save() {
-    use std::path::PathBuf;
-    use std::sync::OnceLock;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static ROOT: OnceLock<PathBuf> = OnceLock::new();
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let root = ROOT.get_or_init(|| {
-        std::env::temp_dir().join(format!(
+    const ROOT: &str = "MOON_TEST_SETTINGS_SAVE_ROOT";
+    let Some(root) = std::env::var_os(ROOT) else {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
             "moonterminal-s-bench-settings-{}-{stamp}",
             std::process::id()
-        ))
-    });
-    std::fs::create_dir_all(root).expect("temporary config root");
-    assert!(moon_core::config::paths::set_data_dir_override(
-        root.clone()
-    ));
+        ));
+        std::fs::create_dir(&root).expect("temporary config root");
+        let fixture = SettingsSaveFixture(root);
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "settings::apply::tests::bench_s_settings_save",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(ROOT, &fixture.0)
+            .output()
+            .expect("run isolated Settings benchmark");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("BENCH bench_s_settings_save "),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        print!("{stdout}");
+        return;
+    };
+    // Path and save singletons belong only to the child, which runs no other tests.
+    assert!(moon_core::config::paths::set_data_dir_override(root.into()));
     let saved = crate::test_support::fixtures::app_config(20);
     crate::test_support::bench::measure(
         "bench_s_settings_save stimulus=cold_candidate_save servers=20 partial_(no_Backend_apply)",
@@ -566,5 +590,4 @@ fn bench_s_settings_save() {
             candidate
         },
     );
-    std::fs::remove_dir_all(root).expect("temporary config cleanup");
 }

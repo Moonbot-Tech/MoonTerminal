@@ -1,6 +1,6 @@
 //! Fixture coverage for the period neighbours a trade window is opened with.
 
-use super::{RecordOpenGeneration, period_history, prepare_history};
+use super::{RecordKey, RecordOpenGeneration, period_history, prepare_history};
 use crate::chartdx::{ChartEngine, trade_history_sync::PreparedTradeHistory};
 use gpui::{Bounds, GpuFrameInfo, point, px, size};
 use moon_core::config::{ChartGraphicsCfg, ChartTheme, TradeHistoryStyle};
@@ -173,7 +173,7 @@ fn chart(
     engine
 }
 
-/// Make the old and prepared paths draw identical ordered marks, connectors and hit targets.
+/// Prepared and synchronous history must draw the same marks for mixed real and emulator trades.
 #[test]
 fn prepared_trade_window_matches_synchronous_history() {
     chart_thread(|| {
@@ -193,6 +193,9 @@ fn prepared_trade_window_matches_synchronous_history() {
                 period_history(&conn, 7, "BTC", &ReportFilter::default()).expect("period history");
             if let Some(count) = count {
                 assert_eq!(rows.len(), count);
+            } else {
+                assert!(rows.iter().any(|record| record.emulator));
+                assert!(rows.iter().any(|record| !record.emulator));
             }
             let history = Rc::new(rows);
             let focus = history
@@ -282,17 +285,32 @@ fn prepared_trade_window_matches_synchronous_history() {
     });
 }
 
-/// A slower Report click must not open a window over the newer clicked record.
+/// Two distinct pending records can both open even if their reads finish out of order.
 #[test]
-fn out_of_order_record_opens_keep_the_latest_record() {
-    let history = period_history(&fixture(), 7, "BTC", &ReportFilter::default()).unwrap();
+fn distinct_pending_records_both_open() {
     let mut pending = RecordOpenGeneration::default();
-    let older = pending.next();
-    let latest = pending.next();
-    let mut shown = None;
-    pending.publish(latest, || shown = Some(history[1].record_id));
-    pending.publish(older, || shown = Some(history[0].record_id));
-    assert_eq!(shown, Some(history[1].record_id));
+    let a = (7, RecordKey::RecordId(1));
+    let b = (7, RecordKey::RecordId(2));
+    let first = pending.next(a);
+    let second = pending.next(b);
+
+    assert!(pending.complete(b, second));
+    assert!(pending.complete(a, first));
+    assert!(pending.pending.is_empty());
+}
+
+/// An older completion cannot open or consume a newer click for the same record.
+#[test]
+fn repeated_record_open_supersedes_its_previous_request() {
+    let mut pending = RecordOpenGeneration::default();
+    let key = (7, RecordKey::RecordId(1));
+    let older = pending.next(key);
+    let latest = pending.next(key);
+
+    assert!(!pending.complete(key, older));
+    assert!(pending.complete(key, latest));
+    assert!(!pending.complete(key, latest));
+    assert!(pending.pending.is_empty());
 }
 
 /// Time the independent background stages and the retained publication plus first frame.

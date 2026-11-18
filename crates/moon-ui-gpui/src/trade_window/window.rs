@@ -119,9 +119,8 @@ pub(crate) fn open_trade_window(backend: &Entity<Backend>, seed: TradeSeed, cx: 
     // Kept for the failure log below, which the move into the window builder would otherwise take.
     let (coin, record_id) = (record.coin.clone(), record.record_id);
     let owner = backend.clone();
+    let open_span = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "trade-window");
     let opened = cx.open_window(opts, move |window, cx| {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "trade-window")
-            .with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_chart_clear_color(window, cx);
         let host = Host::Window {
             window_id: window.window_handle().window_id(),
@@ -135,6 +134,7 @@ pub(crate) fn open_trade_window(backend: &Entity<Backend>, seed: TradeSeed, cx: 
             )
         })
     });
+    drop(open_span);
     match opened {
         Ok(handle) => {
             backend.update(cx, |b, _| b.trade_windows.push((key, handle)));

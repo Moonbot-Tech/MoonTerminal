@@ -214,6 +214,11 @@ pub struct FrameSample {
     pub draw_end: Instant,
 }
 
+/// A draw belongs to a capture only if it began while that capture was enabled.
+pub fn frame_started_since(draw_start: Instant, enabled_at: Option<Instant>) -> bool {
+    enabled_at.is_some_and(|enabled_at| draw_start >= enabled_at)
+}
+
 /// Report slow draws using the labels captured on this foreground thread.
 pub fn note_frames(frames: impl IntoIterator<Item = FrameSample>) {
     record_frames(frames, moon_core::diagnostics::ui_stall_threshold());
@@ -222,11 +227,7 @@ pub fn note_frames(frames: impl IntoIterator<Item = FrameSample>) {
 /// Fold frame samples with an explicit threshold so interval edges are testable.
 fn record_frames(frames: impl IntoIterator<Item = FrameSample>, threshold: Duration) {
     CAPTURE.with_borrow_mut(|capture| {
-        let mut oldest_draw_start: Option<Instant> = None;
         for sample in frames {
-            oldest_draw_start = Some(
-                oldest_draw_start.map_or(sample.draw_start, |oldest| oldest.min(sample.draw_start)),
-            );
             if sample.draw_end.duration_since(sample.draw_start) >= threshold {
                 let contributors = frame_contributors(sample, &capture.recent);
                 capture.output.push(Record::Frame {
@@ -234,9 +235,6 @@ fn record_frames(frames: impl IntoIterator<Item = FrameSample>, threshold: Durat
                     contributors,
                 });
             }
-        }
-        if let Some(oldest) = oldest_draw_start {
-            capture.recent.retain(|span| span.end >= oldest);
         }
     });
 }

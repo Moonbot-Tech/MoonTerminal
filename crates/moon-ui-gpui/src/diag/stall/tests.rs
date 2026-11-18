@@ -129,10 +129,10 @@ fn busy_second_preserves_slow_output_and_early_frame_attribution() {
         THRESHOLD,
     );
     CAPTURE.with_borrow(|capture| {
-        assert_eq!(capture.recent.len(), 601);
-        assert_eq!(capture.recent.front().unwrap().name, "early");
+        assert_eq!(capture.recent.len(), 602);
     });
     let lines = format(&drain(), now, SystemTime::UNIX_EPOCH);
+    CAPTURE.with_borrow(|capture| assert!(capture.recent.is_empty()));
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0], "ts=20 kind=open name=slow ms=16.0 depth=0");
     assert_eq!(
@@ -256,12 +256,33 @@ fn gpui_collector_sees_first_draw_after_trace_is_reenabled() {
 #[test]
 fn boot_folds_frames_before_draining_and_recreates_collector_on_enable() {
     let boot = include_str!("../../startup/boot.rs");
-    let (_, after_transition) = boot.split_once("&& trace_wanted").unwrap();
-    let (enable_branch, after_collect) = after_transition.split_once("if trace_wanted {").unwrap();
+    let (_, after_poll) = boot.split_once("moon_core::diagnostics::poll()").unwrap();
+    let (_, after_await) = after_poll.split_once(".await;").unwrap();
+    let (before_enable, after_transition) = after_await
+        .split_once("gpui::set_frame_trace_enabled(true)")
+        .unwrap();
+    assert!(before_enable.contains("let render_enabled = crate::diag::is_enabled()"));
+    assert!(before_enable.contains("let stall_enabled = stall::enabled()"));
+    let (enable_branch, after_collect) = after_transition.split_once("collect_unseen()").unwrap();
     assert!(enable_branch.contains("frame_timings = gpui::FrameTimingCollector::new()"));
-    let (fold, flush) = after_collect.split_once("stall::drain()").unwrap();
+    let (fold, after_disable) = after_collect
+        .split_once("gpui::set_frame_trace_enabled(false)")
+        .unwrap();
     assert!(fold.contains("stall::note_frames("));
+    let (_, flush) = after_disable.split_once("stall::drain()").unwrap();
     assert!(flush.contains("stall_writer.submit(&executor, drained)"));
+}
+
+/// Enabling a capture while another was tracing must exclude draws that already started.
+#[test]
+fn a_capture_skips_draws_started_before_it_was_enabled() {
+    let before = Instant::now();
+    let enabled_at = before + Duration::from_millis(1);
+    let after = enabled_at + Duration::from_millis(1);
+    assert!(!frame_started_since(before, Some(enabled_at)));
+    assert!(frame_started_since(enabled_at, Some(enabled_at)));
+    assert!(frame_started_since(after, Some(enabled_at)));
+    assert!(!frame_started_since(after, None));
 }
 
 /// Catch a dropped probe when editing any instrumented UI entry point.

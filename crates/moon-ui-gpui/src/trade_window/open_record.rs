@@ -11,6 +11,7 @@
 use chrono::TimeZone;
 use gpui::*;
 use moon_core::db::{self, ChartTradeRecord, ReportFilter};
+use std::collections::HashMap;
 
 use crate::Backend;
 use crate::chartdx::trade_history_sync::PreparedTradeHistory;
@@ -22,22 +23,30 @@ const HISTORY_LIMIT: usize = (i64::MAX - 1) as usize;
 #[cfg(test)]
 mod tests;
 
-/// Generation of standalone opens still resolving their record; open windows remain independent.
-#[derive(Clone, Copy, Default)]
-struct RecordOpenGeneration(u64);
+/// The most recent pending standalone open for each record.
+#[derive(Default)]
+struct RecordOpenGeneration {
+    next: u64,
+    pending: HashMap<(u64, RecordKey), u64>,
+}
 
 impl Global for RecordOpenGeneration {}
 
 impl RecordOpenGeneration {
-    /// Supersede any pending standalone open and return the new request's token.
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(1);
-        self.0
+    /// Supersede an older request for this record and return the new request's token.
+    fn next(&mut self, key: (u64, RecordKey)) -> u64 {
+        self.next = self.next.wrapping_add(1);
+        self.pending.insert(key, self.next);
+        self.next
     }
 
-    /// Run the standalone open callback only for the newest pending click.
-    fn publish(self, generation: u64, open: impl FnOnce()) {
-        super::apply_current_selection(self.0, generation, open);
+    /// Consume the newest request even if its read failed or the owning backend disappeared.
+    fn complete(&mut self, key: (u64, RecordKey), generation: u64) -> bool {
+        if self.pending.get(&key) != Some(&generation) {
+            return false;
+        }
+        self.pending.remove(&key);
+        true
     }
 }
 
@@ -66,7 +75,7 @@ pub(crate) struct RecordTarget {
 /// in for each other ([`ChartTradeRecord::report_uid`] says so): the Report table addresses its
 /// rows by the replica's own `newrecid`/row id, the tuner's deal table by the core's `ReportUID`,
 /// the key the order traces and the tape coverage are filed under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RecordKey {
     /// [`ChartTradeRecord::record_id`].
     RecordId(i64),
@@ -132,15 +141,15 @@ pub(crate) fn open_trade_record(
     target: RecordTarget,
     cx: &mut App,
 ) {
-    let generation = cx.default_global::<RecordOpenGeneration>().next();
+    let key = (target.core, target.record);
+    let generation = cx.default_global::<RecordOpenGeneration>().next(key);
     let backend = backend.downgrade();
     resolve_trade_record(axis, target, cx, move |seed, cx| {
-        let current = *cx.global::<RecordOpenGeneration>();
-        current.publish(generation, || {
-            if let (Some(backend), Some(seed)) = (backend.upgrade(), seed) {
-                super::open_trade_window(&backend, seed, cx);
-            }
-        });
+        if cx.default_global::<RecordOpenGeneration>().complete(key, generation)
+            && let (Some(backend), Some(seed)) = (backend.upgrade(), seed)
+        {
+            super::open_trade_window(&backend, seed, cx);
+        }
     });
 }
 
