@@ -388,7 +388,7 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
         for width in WIDTHS {
             let floors = cx.update(|app| super::content_floors(&rows, app));
             let keys = projected_column_keys(&hidden, &[], width, &floors);
-            if width >= 1_640.0 || width < 1_000.0 {
+            if !(1_000.0..1_640.0).contains(&width) {
                 assert_eq!(keys, expected_keys(width), "{code} @ {width}");
             } else {
                 // 1100 sits at the edge of the first tier: its startup cells carry each
