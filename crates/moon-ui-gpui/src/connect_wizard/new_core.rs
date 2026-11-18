@@ -282,9 +282,10 @@ impl ConnectWizardView {
             .with_log()
     }
 
-    /// The outgoing-address choice of a server with more than one address: a select, or why the
-    /// server cannot bind a core. A single-address server shows nothing. The select's items always
-    /// follow this check, so a pick made for another server is never carried into this install.
+    /// The outgoing-address choice: on a server with more than one address a select, or why the
+    /// server cannot bind a core; on a single-address server how a bought address shows up (or
+    /// nothing, with an old systemd). The select's items always follow this check, so a pick made
+    /// for another server is never carried into this install.
     fn egress_choice(&mut self, check: &ServerCheck, cx: &mut Context<Self>) -> Option<AnyElement> {
         let alternatives = check.egress.alternatives();
         let offered: Vec<Option<std::net::Ipv4Addr>> = if check.egress.supported() {

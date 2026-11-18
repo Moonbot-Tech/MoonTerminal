@@ -116,7 +116,7 @@ connect_wizard.check.egress_primary_unknown: "主地址"
 connect_wizard.check.egress_note: "核心将从此地址连接交易所。终端照常通过服务器地址连接核心。"
 connect_wizard.check.egress_old: "服务器有多个地址，但将核心绑定到自己的地址需要 systemd %{min} 或更新版本（服务器上是 %{found}）"
 connect_wizard.check.egress_single: "核心的出站 IP 即服务器主地址：服务器上没有其他地址。"
-connect_wizard.check.egress_more: "买了新地址却不在列表中？请在服务商面板中重启服务器，点“返回”后再检查一次服务器：服务器配置好后地址就会出现。"
+connect_wizard.check.egress_more: "买了新地址却不在列表中？请在服务商面板中重启服务器，点“上一步”后再检查一次服务器：服务器配置好后地址就会出现。"
 connect_wizard.check.outside: "外部访问将在安装后通过终端连接来检查。服务商的防火墙从这里无法看到。"
 connect_wizard.check.install: "安装核心"
 
