@@ -97,8 +97,6 @@ fn same_label(key: &str) -> String {
     match key {
         "tz_off" => t!("core_status.same.tz_off").to_string(),
         "cpus" => t!("core_status.same.cpus").to_string(),
-        "api_key" => t!("core_status.same.api_key").to_string(),
-        "api_quota" => t!("core_status.same.api_quota").to_string(),
         "version" => t!("core_status.same.version").to_string(),
         other => other.to_string(),
     }

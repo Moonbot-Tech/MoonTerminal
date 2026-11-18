@@ -14,6 +14,7 @@
 
 mod cache;
 mod chart;
+mod chart_follow;
 mod columns_fit;
 mod config_popup;
 mod core_bar;
@@ -96,12 +97,9 @@ pub struct CoreStatusView {
     detached: bool,
     /// Selected chart X-axis span in the detached window (or an Auto tab's chart).
     chart_window: ChartWindow,
-    /// Server whose chart the detached window shows; clicking a server row selects it. `None` falls
-    /// back to the first server.
-    chart_server: Option<ServerKey>,
-    /// A specific core to chart instead of the server aggregate; set by clicking a core in the
-    /// expanded list, cleared when a server row is clicked. Takes precedence over `chart_server`.
-    chart_core: Option<CoreId>,
+    /// What the bottom chart follows: a picked core, else a server's aggregate. Moved by server
+    /// and core clicks and by the Auto rail; see [`chart_follow`].
+    chart: chart_follow::ChartFollow,
     cached_rows: Rc<Vec<CoreStatusRow>>,
     cached_groups: Rc<Vec<ServerStatusGroup>>,
     /// Episode start times, Unix milliseconds, from the scoped warnings list.
@@ -195,6 +193,10 @@ pub struct CoreStatusView {
     /// does not flash a stripped table. [`render`] writes it from a measuring canvas and only
     /// when it moves by more than half a pixel.
     flat_measured_w: f32,
+    /// The Flat column the last frame drew as the filler ([`table::fill_target`]), or `None`
+    /// before the Flat table was drawn. [`Self::forget_fill_width`] keeps it free of a retained
+    /// width.
+    flat_fill: Option<&'static str>,
     /// Last measured Servers grid width. `0` means not measured yet, and cards keep the design minimum.
     servers_measured_w: f32,
     /// Last measured toolbar width. `0` means not measured yet, and the mode strip keeps full labels.
@@ -350,6 +352,11 @@ impl CoreStatusView {
             s
         });
         cx.observe(&table_state, |this, state, cx| {
+            // The removal notifies again and this observer persists on that pass, so the filler's
+            // transient width never reaches the saved layout.
+            if this.forget_fill_width(&state, cx) {
+                return;
+            }
             crate::persistence::table_persist::persist(&this.backend, &this.widths_id, &state, cx);
             let id = this.widths_id.clone();
             crate::persistence::table_persist::persist_order(
@@ -429,8 +436,7 @@ impl CoreStatusView {
             has_warn: false,
             detached,
             chart_window: ChartWindow::default(),
-            chart_server: None,
-            chart_core: None,
+            chart: chart_follow::ChartFollow::default(),
             cached_rows: Rc::new(Vec::new()),
             rows_generation: 0,
             flat_cache: std::cell::RefCell::new(cache::FlatViewCache::default()),
@@ -460,6 +466,7 @@ impl CoreStatusView {
             unseen_problems: 0,
             problems_mark_sig: 0,
             flat_measured_w: 0.0,
+            flat_fill: None,
             servers_measured_w: 0.0,
             toolbar_measured_w: 0.0,
             widths_id,
@@ -570,6 +577,36 @@ impl CoreStatusView {
     pub(super) fn chart_visible(&self, b: &Backend) -> bool {
         self.detached
             || b.workspace_mode(&self.group) == moon_core::config::WorkspaceMode::AutoTrading
+    }
+
+    /// Drop a retained width the Flat filler picked up, so it keeps taking the leftover.
+    ///
+    /// Why the filler must not keep one is on [`table::strip_fill_width`]. Removing it on the
+    /// state change itself — never while rendering — keeps the saved layout untouched by a
+    /// paint. The filler is the one the LAST frame drew; a hide or a move that changes it is
+    /// caught on the next state change, which the first pointer move of any drag is.
+    ///
+    /// Args:
+    ///     state: The Flat table state that just changed.
+    ///     cx: View context used to update that state.
+    ///
+    /// Returns:
+    ///     Whether a width was removed; the removal notifies the state again.
+    fn forget_fill_width(
+        &self,
+        state: &Entity<MoonDataTableState>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let fill = self.flat_fill;
+        if !fill.is_some_and(|fill| state.read(cx).column_widths.contains_key(fill)) {
+            return false;
+        }
+        state.update(cx, |state, cx| {
+            if table::strip_fill_width(&mut state.column_widths, fill) {
+                cx.notify();
+            }
+        });
+        true
     }
 
     /// Return the table state used by the detached window's auto-width reset button.

@@ -99,8 +99,8 @@ pub(super) fn shown_server_groups(
 ///     ip_masked: Whether addresses are hidden for the whole panel.
 ///     editing: Server whose name is being renamed, if any.
 ///     edit_input: The rename field, present only while `editing` is set.
-///     chart_server: Server the detached chart follows.
-///     chart_core: Core the detached chart follows, when a chip is selected.
+///     chart_server: Server the bottom chart follows (highlighted heading).
+///     chart_core: Core the bottom chart follows, when one is picked.
 ///     cpu_history: CPU series already read off `core_chart_hist`, keyed by address.
 ///     cx: Panel context. Used to downgrade a callback handle and to read the palette.
 ///         Never to read the view.
@@ -179,8 +179,8 @@ pub(super) fn servers_measure_host(
 ///     ip_masked: Whether addresses are hidden for the whole panel.
 ///     editing: Server whose name is being renamed, if any.
 ///     edit_input: The rename field, present only while `editing` is set.
-///     chart_server: Server the detached chart follows.
-///     chart_core: Core the detached chart follows, when a chip is selected.
+///     chart_server: Server the bottom chart follows (highlighted heading).
+///     chart_core: Core the bottom chart follows, when one is picked.
 ///     cpu_history: CPU series already read off `core_chart_hist`, keyed by address.
 ///     selection: Core-row selection the chips tint.
 ///     available_w: Measured grid width, `0` before the first measure.
@@ -523,7 +523,6 @@ fn core_chips(
     weak_view: &WeakEntity<CoreStatusView>,
     cx: &App,
 ) -> impl IntoElement + use<> {
-    let group_key = group.key;
     let chips = group.cores.iter().map(|core| {
         let id = core.id;
         let offline = matches!(status_level(&core.status), LoadLevel::Critical);
@@ -588,8 +587,6 @@ fn core_chips(
                         &this.search_query,
                         this.ip_masked,
                     ));
-                    this.chart_server = Some(group_key);
-                    this.chart_core = Some(id);
                     this.select_core_row(Some(id), &order, modifiers, cx);
                 });
             })

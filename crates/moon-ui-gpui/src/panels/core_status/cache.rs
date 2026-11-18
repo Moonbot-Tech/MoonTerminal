@@ -740,6 +740,10 @@ impl CoreStatusView {
         // Workspace changes refresh active panels immediately; hidden panels catch up on
         // activation. Rebuild the marker with the same rows so both share one scope.
         self.cached_scope_marker = self.scope_marker(backend.read(cx));
+        // After the groups are replaced, so the rail's core resolves to its current server.
+        if self.follow_rail_core(backend.read(cx)) {
+            cx.notify();
+        }
     }
 
     /// Reuse the sorted snapshot and refresh exchange lines from current venues and locale.
@@ -832,7 +836,6 @@ impl CoreStatusView {
             Some(columns) => columns.as_ref().clone(),
             None => {
                 let built = table::projected_column_keys(
-                    &self.cached_rows,
                     hidden,
                     &uniform_keys,
                     &columns_key.dragged,
@@ -908,9 +911,8 @@ impl CoreStatusView {
 
     /// Column keys the user has unchecked in the Columns menu.
     ///
-    /// No stored entry means nothing is hidden: the table's own data rules still drop an API
-    /// column that no row reports. The stored list is the columns the user left checked, so a
-    /// column that later gains data stays visible until the user hides it.
+    /// No stored entry means nothing is hidden. The stored list is the columns the user left
+    /// checked, and a checked column is drawn whether or not any core reports a value for it.
     ///
     /// Args:
     ///     cx: Application context used to read the layout.

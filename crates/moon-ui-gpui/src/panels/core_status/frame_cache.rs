@@ -507,8 +507,9 @@ impl CoreStatusView {
             })
     }
 
-    /// Chart inputs of the detached window: a picked core's own rings, else the followed (or
-    /// first addressed) server's aggregate rings.
+    /// Inputs of the bottom chart (a detached window, or an Auto tab): the followed core's own
+    /// rings, else the followed (or first addressed) server's aggregate rings. What is followed
+    /// is [`super::chart_follow::ChartFollow`].
     ///
     /// Args:
     ///     b: Backend snapshot, read only on a miss.
@@ -517,7 +518,7 @@ impl CoreStatusView {
     ///     The chart inputs, or `None` when nothing can be charted.
     pub(super) fn frame_chart(&self, b: &Backend) -> Rc<Option<ChartModel>> {
         let groups = self.cached_groups.clone();
-        let (chart_core, chart_server) = (self.chart_core, self.chart_server);
+        let (chart_core, chart_server) = (self.chart.core(), self.chart.server());
         let key = (self.rows_generation, chart_core, chart_server);
         self.frame.borrow_mut().chart.get_or_build(key, || {
             // A selected core, if it is still in scope, charts ITS OWN samples — CPU/RAM plus its

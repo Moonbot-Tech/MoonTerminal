@@ -10,7 +10,7 @@ use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{ApiKeyState, CoreStatusRow};
 
 fn row(name: &str, status: ConnStatus) -> CoreStatusRow {
-    // The facts translate "no expiry" and "not set"; the first lookup must not run on the
+    // `uniform_columns` translates the clock tooltip; the first lookup must not run on the
     // 2 MiB test stack.
     crate::test_locale::warm();
     CoreStatusRow {
@@ -87,18 +87,10 @@ fn each_candidate_is_detected_and_unknown_rows_are_ignored() {
         .iter()
         .map(|fact| (fact.key, fact.text.as_str()))
         .collect();
-    assert_eq!(
-        got,
-        vec![
-            ("tz_off", "UTC+02:00"),
-            ("cpus", "2"),
-            ("api_key", "45"),
-            ("api_quota", "1000"),
-        ]
-    );
+    assert_eq!(got, vec![("tz_off", "UTC+02:00"), ("cpus", "2"),]);
 }
 
-/// One core with a different clock brings only that column back. The other three stay on the
+/// One core with a different clock brings only that column back. The CPU count stays on the
 /// line, which is the whole point of comparing per column.
 #[test]
 fn a_differing_core_brings_that_column_back() {
@@ -109,7 +101,7 @@ fn a_differing_core_brings_that_column_back() {
         .into_iter()
         .map(|fact| fact.key)
         .collect();
-    assert_eq!(keys, vec!["cpus", "api_key", "api_quota"]);
+    assert_eq!(keys, vec!["cpus"]);
 }
 
 /// A measured zero is a real offset. Folding it into "never measured" would hide a UTC fleet
@@ -190,7 +182,6 @@ fn matching_builds_keep_the_version_column() {
         assert!(!uniform.contains(&"version"));
         for width in [300.0, 720.0, 1920.0] {
             let keys = projected_column_keys(
-                &rows,
                 &HashSet::new(),
                 &uniform,
                 &HashMap::new(),
@@ -216,87 +207,26 @@ fn a_failed_update_keeps_version_visible() {
         .map(|fact| fact.key)
         .collect();
     assert!(!keys.contains(&"version"));
-    assert_eq!(keys, vec!["tz_off", "cpus", "api_key", "api_quota"]);
+    assert_eq!(keys, vec!["tz_off", "cpus"]);
 }
 
-/// Unknown is not a third API-key value. Two perpetual keys agree, and the line says "no
-/// expiry" rather than the bare infinity glyph; a dated key beside them brings the column back.
+/// The API columns never move to the line, however many cores agree: a perpetual key on every
+/// core, or the same dated key and quota everywhere. Breaks when either key returns to the
+/// candidates and a checked API column disappears from the table again.
 #[test]
-fn api_key_ignores_unknown_and_compares_the_classified_state() {
-    // The expected text is translated; hold one locale for the whole test.
-    let _locale = crate::test_locale::force("en");
-    let mut a = row("CORE-A1", ConnStatus::Ready);
-    let mut b = row("CORE-A2", ConnStatus::Ready);
-    let unknown = row("CORE-A3", ConnStatus::Ready);
-    a.api_key = ApiKeyState::Perpetual;
-    b.api_key = ApiKeyState::Perpetual;
-    let facts = uniform_columns(&[a.clone(), b, unknown]);
-    assert_eq!(facts.len(), 1);
-    assert_eq!(facts[0].key, "api_key");
-    assert_eq!(
-        facts[0].text,
-        rust_i18n::t!("core_status.same.no_expiry").to_string()
-    );
-
-    let mut dated = row("CORE-A2", ConnStatus::Ready);
-    dated.api_key = ApiKeyState::Days(1);
-    assert!(uniform_columns(&[a, dated]).is_empty());
-}
-
-/// The key cell keeps its text on a dropped core, so a dated key there is on screen and keeps
-/// the column, while a dropped core with the same perpetual key still agrees.
-#[test]
-fn api_key_compares_what_a_dropped_core_still_displays() {
-    let mut a = row("CORE-A1", ConnStatus::Ready);
-    let mut b = row("CORE-A2", ConnStatus::Ready);
-    a.api_key = ApiKeyState::Perpetual;
-    b.api_key = ApiKeyState::Perpetual;
-    let mut dropped = row("CORE-A3", ConnStatus::Disconnected);
-    dropped.api_key = ApiKeyState::Days(5);
+fn api_columns_never_join_the_line() {
+    let mut a = reporting("CORE-A1");
+    let mut b = reporting("CORE-A2");
     let keys = |rows: &[CoreStatusRow]| -> Vec<&'static str> {
         uniform_columns(rows)
             .into_iter()
             .map(|fact| fact.key)
             .collect()
     };
-    assert!(!keys(&[a.clone(), b.clone(), dropped.clone()]).contains(&"api_key"));
-    dropped.api_key = ApiKeyState::Perpetual;
-    assert!(keys(&[a, b, dropped]).contains(&"api_key"));
-}
-
-/// Answered cores that publish no quota put "not set" on the line, so the vanished quota column
-/// is explained. Cores that have not answered yet say nothing about a quota.
-#[test]
-fn an_absent_quota_on_answered_cores_reads_not_set() {
-    // The expected text is translated; hold one locale for the whole test.
-    let _locale = crate::test_locale::force("en");
-    let mut a = reporting("CORE-A1");
-    let mut b = reporting("CORE-A2");
+    assert_eq!(keys(&[a.clone(), b.clone()]), vec!["tz_off", "cpus"]);
+    a.api_key = ApiKeyState::Perpetual;
+    b.api_key = ApiKeyState::Perpetual;
     a.api_quota = None;
     b.api_quota = None;
-    let facts = uniform_columns(&[a.clone(), b.clone()]);
-    let quota = facts
-        .iter()
-        .find(|fact| fact.key == "api_quota")
-        .expect("quota fact");
-    assert_eq!(
-        quota.text,
-        rust_i18n::t!("core_status.same.not_set").to_string()
-    );
-
-    let silent = row("CORE-A2", ConnStatus::Ready);
-    assert!(
-        uniform_columns(&[a.clone(), silent])
-            .iter()
-            .all(|fact| fact.key != "api_quota"),
-        "one answered core is not a consensus"
-    );
-    let mut quoted = reporting("CORE-A3");
-    quoted.api_quota = Some(10);
-    assert!(
-        uniform_columns(&[a, b, quoted])
-            .iter()
-            .all(|fact| fact.key != "api_quota"),
-        "a core with a quota keeps the column"
-    );
+    assert_eq!(keys(&[a, b]), vec!["tz_off", "cpus"]);
 }
