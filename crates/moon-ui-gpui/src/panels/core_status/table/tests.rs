@@ -1083,6 +1083,9 @@ fn a_width_change_moves_only_the_columns_right_of_the_divider(cx: &mut gpui::Tes
 /// resize handle back.
 #[test]
 fn the_filler_keeps_no_width_and_no_resize_handle() {
+    // `filled_columns` translates the column titles; the first lookup must not run on the
+    // 2 MiB test stack (nextest runs this test in a process of its own, with nothing warmed).
+    crate::test_locale::warm();
     let keys = visible_column_keys(&HashSet::new(), &[]);
     let mut state = MoonDataTableState::new();
     for key in &keys {
