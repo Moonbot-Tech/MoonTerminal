@@ -943,7 +943,8 @@ impl SettingsView {
         // Closing with unsaved work asks first; see `SettingsView::should_close`.
         let view = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, app| {
-            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Close, "settings").with_window(|| window.window_handle().window_id().as_u64());
+            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Close, "settings")
+                .with_window(|| window.window_handle().window_id().as_u64());
             view.update(app, |this, cx| this.should_close(window, cx))
                 .unwrap_or(true)
         });
@@ -951,7 +952,8 @@ impl SettingsView {
         // Dropping the window view discards the draft and restores the saved theme, cancelling
         // unsaved live-preview changes as in the egui implementation.
         cx.on_release(|this, app| {
-            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Close, "settings:release");
+            let _stall =
+                crate::diag::stall::span(crate::diag::stall::StallKind::Close, "settings:release");
             this.backend.update(app, |b, cx| {
                 crate::install_moon_theme_for_config(&b.config, cx);
                 b.preview = None;
@@ -1540,7 +1542,8 @@ pub fn open_on_tab(
     opts.display_id = display_id;
     let b = backend.clone();
     match cx.open_window(opts, move |window, cx| {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "settings").with_window(|| window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "settings")
+            .with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| SettingsView::new(b, tab, window, cx));
         cx.new(|cx| {

@@ -292,7 +292,9 @@ impl ChartTabs {
         let restore_size = restored_chart_size(restored, geom);
         let host_bucket = bucket.clone();
         let opened = cx.open_window(opts, move |window, cx| {
-            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "chart:detach").with_window(|| window.window_handle().window_id().as_u64());
+            let _stall =
+                crate::diag::stall::span(crate::diag::stall::StallKind::Open, "chart:detach")
+                    .with_window(|| window.window_handle().window_id().as_u64());
             crate::window::windowing::configure_chart_clear_color(window, cx);
             let host = cx.new(|cx| {
                 DetachedChartHost::new(

@@ -1215,7 +1215,8 @@ impl Render for NewsView {
     /// Returns:
     ///     The complete News panel element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "news").with_window(|| window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "news")
+            .with_window(|| window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::NEWS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::NEWS_RENDER_US);
         // Drawing the feed IS reading it, and this is the one place that means the same thing on

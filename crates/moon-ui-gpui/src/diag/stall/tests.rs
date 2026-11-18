@@ -21,8 +21,10 @@ fn disabled_span_skips_clock_and_ring() {
     assert!(!enabled());
     drop(span(StallKind::Open, "disabled"));
     drop(
-        start_span(StallKind::Render, "disabled", false, || panic!("disabled clock read"))
-            .with_window(|| panic!("disabled window lookup")),
+        start_span(StallKind::Render, "disabled", false, || {
+            panic!("disabled clock read")
+        })
+        .with_window(|| panic!("disabled window lookup")),
     );
     assert!(drain().is_empty());
     DEPTH.with(|depth| assert_eq!(depth.get(), 0));
@@ -60,24 +62,29 @@ fn capture_and_pending_batches_drop_oldest_at_capacity() {
     let mut batch = drain();
     assert_eq!(batch.records.len(), 512);
     assert_eq!(batch.dropped, 1);
+    for _ in 0..513 {
+        capture(now, 16, StallKind::Render, "later");
+    }
     capture(now, 17, StallKind::Resize, "newest");
-    batch.merge(drain());
+    let later = drain();
+    assert_eq!(later.dropped, 2);
+    batch.merge(later);
     let lines = format(&batch, now, SystemTime::UNIX_EPOCH);
     assert_eq!(lines.len(), 513);
-    assert!(lines.iter().all(|line| !line.contains("oldest")));
+    assert!(lines[..511].iter().all(|line| line.contains("name=later")));
     assert!(lines[511].contains("name=newest"));
-    assert_eq!(lines[512], "dropped=2");
+    assert_eq!(lines[512], "dropped=515");
 }
 
-/// Retain at most 256 short contributors and reset the attribution window on drain.
+/// Evict excess short contributors without reporting lost log records.
 #[test]
 fn recent_ring_is_bounded_and_cleared_by_drain() {
     let now = Instant::now();
     capture(now, 8, StallKind::Render, "evicted");
-    for _ in 0..256 {
+    for _ in 0..1024 {
         capture(now, 1, StallKind::Observe, "kept");
     }
-    CAPTURE.with_borrow(|capture| assert_eq!(capture.recent.len(), 256));
+    CAPTURE.with_borrow(|capture| assert_eq!(capture.recent.len(), 1024));
     let frame = FrameSample {
         window_id: 4,
         draw_start: now,
@@ -86,13 +93,66 @@ fn recent_ring_is_bounded_and_cleared_by_drain() {
     record_frames([frame], THRESHOLD);
     let lines = format(&drain(), now, SystemTime::UNIX_EPOCH);
     assert!(lines[0].contains("in=[observe:kept:1.0,"));
-    assert_eq!(lines[1], "dropped=1");
+    assert_eq!(lines.len(), 1);
     record_frames([frame], THRESHOLD);
     let lines = format(&drain(), now, SystemTime::UNIX_EPOCH);
     assert_eq!(
         lines,
         ["ts=0 kind=frame name=window:4 ms=16.0 in=[unattributed]"]
     );
+}
+
+/// Preserve a slow span and the first draw's contributor throughout a busy reporting interval.
+#[test]
+fn busy_second_preserves_slow_output_and_early_frame_attribution() {
+    let now = Instant::now();
+    let at = |ms| now + Duration::from_millis(ms);
+    capture(now, 1, StallKind::Render, "before_draw");
+    capture(at(2), 3, StallKind::Render, "early");
+    capture(at(20), 16, StallKind::Open, "slow");
+    for ms in 400..1000 {
+        capture(at(ms), 1, StallKind::Observe, "later");
+    }
+    record_frames(
+        [
+            FrameSample {
+                window_id: 4,
+                draw_start: at(984),
+                draw_end: at(1000),
+            },
+            FrameSample {
+                window_id: 3,
+                draw_start: at(2),
+                draw_end: at(18),
+            },
+        ],
+        THRESHOLD,
+    );
+    CAPTURE.with_borrow(|capture| {
+        assert_eq!(capture.recent.len(), 601);
+        assert_eq!(capture.recent.front().unwrap().name, "early");
+    });
+    let lines = format(&drain(), now, SystemTime::UNIX_EPOCH);
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], "ts=20 kind=open name=slow ms=16.0 depth=0");
+    assert_eq!(
+        lines[2],
+        "ts=2 kind=frame name=window:3 ms=16.0 in=[render:early:3.0]"
+    );
+}
+
+/// Carry prior loss forward without treating its summary line as another failed record.
+#[test]
+fn failed_write_counts_records_and_prior_drops() {
+    let now = Instant::now();
+    capture(now, 16, StallKind::Open, "first");
+    capture(now, 20, StallKind::Close, "second");
+    let mut batch = drain();
+    let lines = format(&batch, now, SystemTime::UNIX_EPOCH);
+    assert_eq!(lost_on_failure(&batch, &lines), 2);
+    batch.dropped = 7;
+    let lines = format(&batch, now, SystemTime::UNIX_EPOCH);
+    assert_eq!(lost_on_failure(&batch, &lines), 9);
 }
 
 /// A slow window draw keeps only its four longest overlaps, even when all labels are short.
@@ -133,7 +193,11 @@ fn frames_use_the_draw_interval_and_rank_overlaps() {
         THRESHOLD,
     );
     assert_eq!(
-        format(&drain(), at(90), SystemTime::UNIX_EPOCH + Duration::from_secs(30)),
+        format(
+            &drain(),
+            at(90),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(30)
+        ),
         [
             "ts=29920 kind=frame name=window:3 ms=16.0 in=[render:first:7.0,chartframe:second:6.0,observe:third:5.0,input:fourth:4.0]",
             "ts=29950 kind=frame name=window:4 ms=25.0 in=[unattributed]",
@@ -246,6 +310,7 @@ fn ui_stall_spans_cover_instrumented_sources() {
     assert_covered!("settings/apply.rs", 1);
     assert_covered!("settings/mod.rs", 3);
     assert_covered!("settings/render.rs", 2);
+    assert_covered!("shell/init.rs", 1);
     assert_covered!("shell/workspace.rs", 1);
     assert_covered!("strategies/mod.rs", 1);
     assert_covered!("strategies/window.rs", 1);

@@ -114,7 +114,7 @@ fn bench_report_page() -> BenchReportPage {
                 Value::Integer(deal.close_ms / 1000),
                 Value::Real(deal.spent),
                 Value::Text(deal.sell_reason),
-                Value::Integer(deal.strategy_id as i64),
+                Value::Integer(deal.strategy_id),
             ]
         })
         .collect();

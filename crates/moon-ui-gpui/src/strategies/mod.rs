@@ -322,7 +322,8 @@ pub struct StrategiesView {
 impl Render for StrategiesView {
     /// Render the window with responsive first-run panels and cached structural tree state.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "strategies").with_window(|| window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "strategies")
+            .with_window(|| window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::STRAT_RENDER);
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         // A cross-core cut is settled HERE as well as from the store observer, so a destination

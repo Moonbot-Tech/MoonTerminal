@@ -21,7 +21,8 @@ impl Render for AnalyticsView {
     /// Returns:
     ///     Complete Analytics surface.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "analytics").with_window(|| window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "analytics")
+            .with_window(|| window.window_handle().window_id().as_u64());
         crate::hotkeys::restore_root_focus(&self.focus, window, cx);
         if self.display_zone_fields_dirty {
             self.display_zone_fields_dirty = false;

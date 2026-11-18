@@ -3,7 +3,9 @@
 use moon_core::config::{AppConfig, Secret, ServerConfig};
 use moon_core::db::tuner::ticks::Deal;
 use moon_core::db::{ChartTradeRecord, QuoteCurrency};
-use moon_core::feed::{AssetRow, AssetsSnapshot, ConnStatus, DetectRow, FeedMsg, OrderRow, StrategyRow};
+use moon_core::feed::{
+    AssetRow, AssetsSnapshot, ConnStatus, DetectRow, FeedMsg, OrderRow, StrategyRow,
+};
 use moon_core::market::ChartCandle;
 use moon_core::session::CoreStore;
 

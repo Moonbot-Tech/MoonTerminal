@@ -558,7 +558,8 @@ impl ChartDataState {
     /// Returns:
     ///     `Skip` when this chart must not prepare, otherwise the render state's decision.
     pub(crate) fn frame(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::ChartFrame, "chart:frame");
+        let _stall =
+            crate::diag::stall::span(crate::diag::stall::StallKind::ChartFrame, "chart:frame");
         if !self.scene_visible || !info.presentable || info.bounds.is_empty() {
             self.last_frame_tick_at = None;
             // Same counter `RenderState::frame` bumps for a direct caller. This path no

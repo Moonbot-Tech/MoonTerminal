@@ -47,7 +47,8 @@ impl Render for SettingsView {
     /// Returns:
     ///     The complete Settings window element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "settings").with_window(|| window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "settings")
+            .with_window(|| window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::SETTINGS_RENDER);
         // The dropdowns hold their captions as finished text, unlike the labels beside them.
         self.captions_sync(cx);
@@ -263,7 +264,8 @@ impl SettingsView {
     ///     page: The page to show.
     ///     cx: Settings context notified after the page changes.
     pub(super) fn show_page(&mut self, page: Tab, cx: &mut Context<Self>) {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "settings:page");
+        let _stall =
+            crate::diag::stall::span(crate::diag::stall::StallKind::Input, "settings:page");
         self.active = page;
         if page == Tab::StMcp {
             self.mcp_admin(moon_core::station_api::mcp::AdminRequest::Status, cx);

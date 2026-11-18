@@ -12,7 +12,8 @@ impl Focusable for AssetsView {
 impl Panel for AssetsView {
     /// Coalesces hidden-tab work into one rebuild when the panel becomes visible.
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "assets").with_window(|| _window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "assets")
+            .with_window(|| _window.window_handle().window_id().as_u64());
         if self.gate.set_active(active) {
             let backend = self.backend.clone();
             self.rebuild_cache(backend.read(cx));
@@ -97,7 +98,8 @@ impl Panel for AssetsView {
 impl Render for AssetsView {
     /// Render the always-present table and footer plus the optional Wallets section.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "assets").with_window(|| window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "assets")
+            .with_window(|| window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::ASSETS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::ASSETS_RENDER_US);
         // Keep the shared Assets-view activity marker fresh. While any view renders at least once

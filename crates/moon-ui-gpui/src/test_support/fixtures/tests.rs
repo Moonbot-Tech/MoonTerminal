@@ -82,12 +82,12 @@ fn store_retains_the_requested_fleet_and_neutral_rows() {
 #[test]
 fn uneven_totals_and_large_core_names_are_preserved() {
     let store = core_store(3, 0, 7, 5, 2);
+    assert_eq!(store.cores().map(|(_, c)| c.orders.len()).sum::<usize>(), 7);
     assert_eq!(
-        store.cores().map(|(_, c)| c.orders.len()).sum::<usize>(),
-        7
-    );
-    assert_eq!(
-        store.cores().map(|(_, c)| c.assets.rows.len()).sum::<usize>(),
+        store
+            .cores()
+            .map(|(_, c)| c.assets.rows.len())
+            .sum::<usize>(),
         5
     );
     assert_eq!(
@@ -117,7 +117,11 @@ fn replay_inputs_keep_their_counts_ordering_and_neutral_names() {
     let history = history(50_000);
     assert_eq!(history.len(), 50_000);
     assert!(history.iter().all(|row| is_coin(&row.coin)));
-    assert!(history.windows(2).all(|w| w[0].close_date > w[1].close_date));
+    assert!(
+        history
+            .windows(2)
+            .all(|w| w[0].close_date > w[1].close_date)
+    );
 
     let candles = candles(100_000);
     assert_eq!(candles.len(), 100_000);

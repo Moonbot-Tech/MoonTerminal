@@ -5,19 +5,15 @@ use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, TryRecvError, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
 
 const RECORD_CAPACITY: usize = 512;
-const RECENT_CAPACITY: usize = 256;
+const RECENT_CAPACITY: usize = 1024;
 const MIN_CONTRIBUTOR: Duration = Duration::from_millis(1);
 
 /// What the UI thread was doing during a timing span.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "panel and chart labels are wired in the next batch")
-)]
 pub enum StallKind {
     Open,
     Close,
@@ -50,7 +46,10 @@ impl StallKind {
 
     /// Identify work that can explain a slow draw even below the stall threshold.
     fn contributes_to_frame(self) -> bool {
-        matches!(self, Self::Render | Self::ChartFrame | Self::Observe | Self::Input)
+        matches!(
+            self,
+            Self::Render | Self::ChartFrame | Self::Observe | Self::Input
+        )
     }
 }
 
@@ -77,7 +76,6 @@ enum Record {
     Span {
         timing: TimedSpan,
         depth: usize,
-        slow: bool,
     },
     Frame {
         sample: FrameSample,
@@ -139,10 +137,6 @@ pub fn span(kind: StallKind, name: &'static str) -> StallSpan {
 
 impl StallSpan {
     /// Bind a window-scoped operation to its draw even if another draw's interval overlaps.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "window-scoped labels are wired in the next batch")
-    )]
     pub fn with_window(mut self, id: impl FnOnce() -> u64) -> Self {
         if let Some(active) = &mut self.active {
             active.window_id = Some(id());
@@ -191,13 +185,14 @@ impl ActiveSpan {
         };
         CAPTURE.with_borrow_mut(|capture| {
             if contributes {
-                capture.output.dropped += push_bounded(&mut capture.recent, RECENT_CAPACITY, timing);
+                push_bounded(&mut capture.recent, RECENT_CAPACITY, timing);
             }
-            capture.output.push(Record::Span {
-                timing,
-                depth: self.depth,
-                slow,
-            });
+            if slow {
+                capture.output.push(Record::Span {
+                    timing,
+                    depth: self.depth,
+                });
+            }
         });
     }
 }
@@ -227,7 +222,11 @@ pub fn note_frames(frames: impl IntoIterator<Item = FrameSample>) {
 /// Fold frame samples with an explicit threshold so interval edges are testable.
 fn record_frames(frames: impl IntoIterator<Item = FrameSample>, threshold: Duration) {
     CAPTURE.with_borrow_mut(|capture| {
+        let mut oldest_draw_start: Option<Instant> = None;
         for sample in frames {
+            oldest_draw_start = Some(
+                oldest_draw_start.map_or(sample.draw_start, |oldest| oldest.min(sample.draw_start)),
+            );
             if sample.draw_end.duration_since(sample.draw_start) >= threshold {
                 let contributors = frame_contributors(sample, &capture.recent);
                 capture.output.push(Record::Frame {
@@ -236,11 +235,17 @@ fn record_frames(frames: impl IntoIterator<Item = FrameSample>, threshold: Durat
                 });
             }
         }
+        if let Some(oldest) = oldest_draw_start {
+            capture.recent.retain(|span| span.end >= oldest);
+        }
     });
 }
 
 /// Rank the four longest overlaps with this window's draw on the foreground thread.
-fn frame_contributors(sample: FrameSample, recent: &VecDeque<TimedSpan>) -> [Option<Contributor>; 4] {
+fn frame_contributors(
+    sample: FrameSample,
+    recent: &VecDeque<TimedSpan>,
+) -> [Option<Contributor>; 4] {
     let mut top: [Option<Contributor>; 4] = [None; 4];
     for span in recent {
         if span.window_id.is_some_and(|id| id != sample.window_id) {
@@ -329,28 +334,18 @@ impl Writer {
             return;
         }
 
-        let (send_batch, receive_batch) = sync_channel(1);
-        if let Err(TrySendError::Full(batch) | TrySendError::Disconnected(batch)) =
-            send_batch.try_send(std::mem::take(&mut self.pending))
-        {
-            self.pending = batch;
-            return;
-        }
+        let batch = std::mem::take(&mut self.pending);
         let (completed, done) = sync_channel(1);
         self.done = Some(done);
         executor
             .spawn(async move {
-                let Ok(batch) = receive_batch.try_recv() else {
-                    return;
-                };
                 let lines = format(&batch, Instant::now(), SystemTime::now());
                 let dropped = if lines.is_empty()
                     || moon_core::diagnostics::channel_lines("ui_stall.log", &lines)
                 {
                     0
                 } else {
-                    // Count the loss without duplicating lines after a partial write.
-                    batch.dropped + lines.len() - usize::from(batch.dropped != 0)
+                    lost_on_failure(&batch, &lines)
                 };
                 let _ = completed.try_send(dropped);
             })
@@ -358,15 +353,17 @@ impl Writer {
     }
 }
 
+/// Count lost records after a failed write without counting the loss summary as a record.
+fn lost_on_failure(batch: &Drained, lines: &[String]) -> usize {
+    batch.dropped + lines.len() - usize::from(batch.dropped != 0)
+}
+
 /// Convert raw timings into ASCII lines using one wall/monotonic clock pair.
 pub fn format(drained: &Drained, now: Instant, wall_now: SystemTime) -> Vec<String> {
     let mut lines = Vec::with_capacity(drained.records.len() + usize::from(drained.dropped != 0));
     for record in &drained.records {
         let start = match record {
-            Record::Span {
-                timing, slow: true, ..
-            } => timing.start,
-            Record::Span { slow: false, .. } => continue,
+            Record::Span { timing, .. } => timing.start,
             Record::Frame { sample, .. } => sample.draw_start,
         };
         let wall_start = if start <= now {
@@ -379,13 +376,16 @@ pub fn format(drained: &Drained, now: Instant, wall_now: SystemTime) -> Vec<Stri
             .map_or(0, |since_epoch| since_epoch.as_millis());
         let mut line = format!("ts={ms} ");
         match record {
-            Record::Span { timing, depth, .. } => {
+            Record::Span { timing, depth } => {
                 let _ = write!(line, "kind={} name=", timing.kind.as_str());
                 push_label(&mut line, timing.name);
                 let elapsed_ms = millis(timing.end.duration_since(timing.start));
                 let _ = write!(line, " ms={elapsed_ms:.1} depth={depth}");
             }
-            Record::Frame { sample, contributors } => {
+            Record::Frame {
+                sample,
+                contributors,
+            } => {
                 let kind = StallKind::Frame.as_str();
                 let elapsed_ms = millis(sample.draw_end.duration_since(sample.draw_start));
                 let _ = write!(

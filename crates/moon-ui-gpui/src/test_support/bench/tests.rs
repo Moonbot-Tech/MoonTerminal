@@ -27,6 +27,9 @@ fn nearest_rank_rounds_up_to_the_correct_sample() {
         );
     }
     for percent in [50, 95, 100] {
-        assert_eq!(nearest_rank(&samples[..1], percent), Duration::from_millis(1));
+        assert_eq!(
+            nearest_rank(&samples[..1], percent),
+            Duration::from_millis(1)
+        );
     }
 }

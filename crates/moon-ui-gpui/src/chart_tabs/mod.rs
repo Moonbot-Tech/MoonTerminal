@@ -1376,7 +1376,9 @@ impl Panel for ChartTabs {
     /// Returns:
     ///     Nothing.
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "chart-tabs").with_window(|| _window.window_handle().window_id().as_u64());
+        let _stall =
+            crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "chart-tabs")
+                .with_window(|| _window.window_handle().window_id().as_u64());
         if self.host_visible == active {
             return;
         }

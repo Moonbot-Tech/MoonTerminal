@@ -1080,7 +1080,8 @@ impl Panel for LogPanel {
     }
     /// Enables live refresh only for the front dock tab and catches up when it becomes visible.
     fn set_active(&mut self, active: bool, _window: &mut Window, cx: &mut Context<Self>) {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "log").with_window(|| _window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Activate, "log")
+            .with_window(|| _window.window_handle().window_id().as_u64());
         self.set_refresh_active(active, cx);
     }
     fn panel_name(&self) -> &'static str {

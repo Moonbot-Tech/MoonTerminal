@@ -195,7 +195,10 @@ impl DiagCfg {
             .limits
             .log_ring_lines
             .clamp(MIN_RING_LINES, MAX_RING_LINES);
-        self.limits.ui_stall_ms = self.limits.ui_stall_ms.clamp(MIN_UI_STALL_MS, MAX_UI_STALL_MS);
+        self.limits.ui_stall_ms = self
+            .limits
+            .ui_stall_ms
+            .clamp(MIN_UI_STALL_MS, MAX_UI_STALL_MS);
     }
 }
 

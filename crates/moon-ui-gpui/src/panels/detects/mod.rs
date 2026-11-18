@@ -217,7 +217,8 @@ impl DetectsPanel {
     pub fn new(backend: Entity<Backend>, group: String, cx: &mut Context<Self>) -> Self {
         let initial_sig = detects_sig(backend.read(cx), &group);
         cx.observe(&backend, |this, backend, cx| {
-            let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Observe, "detects:feed");
+            let _stall =
+                crate::diag::stall::span(crate::diag::stall::StallKind::Observe, "detects:feed");
             let now = now_unix_ms();
             let sig = detects_sig(backend.read(cx), &this.group);
             let mut changed = false;
@@ -479,7 +480,10 @@ impl DetectsPanel {
             executor.timer(Duration::from_millis(1000)).await;
             let alive = cx.update(|cx| {
                 this.update(cx, |this, cx| {
-                    let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Observe, "detects:prune");
+                    let _stall = crate::diag::stall::span(
+                        crate::diag::stall::StallKind::Observe,
+                        "detects:prune",
+                    );
                     this.prune_timer_armed = false;
                     let pruned = this.prune(now_unix_ms());
                     // Refresh countdowns while cards remain, and paint the transition to empty
@@ -596,7 +600,8 @@ impl Render for DetectsPanel {
     ///     Toolbar and filtered card grid without discarding out-of-scope retained cards, or the
     ///     toolbar above one centred sentence naming why the feed is empty.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "detects").with_window(|| _window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Render, "detects")
+            .with_window(|| _window.window_handle().window_id().as_u64());
         crate::diag::bump(&crate::diag::DETECTS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::DETECTS_RENDER_US);
         let p = MoonPalette::active(cx);

@@ -150,7 +150,10 @@ impl ScreenerView {
         let dvol_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("500k"));
         for input in [&coin_input, &dvol_input] {
             cx.subscribe(input, |this: &mut Self, _, ev: &MoonInputEvent, cx| {
-                let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "screener:input");
+                let _stall = crate::diag::stall::span(
+                    crate::diag::stall::StallKind::Input,
+                    "screener:input",
+                );
                 if matches!(ev, MoonInputEvent::Change) {
                     this.rebuild(cx);
                     cx.notify();
@@ -348,7 +351,8 @@ impl ScreenerView {
 
     /// Prepare a coherent feed publication off-thread; the current controls remain immediate.
     fn rebuild(&mut self, cx: &mut Context<Self>) {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "screener:rebuild");
+        let _stall =
+            crate::diag::stall::span(crate::diag::stall::StallKind::Input, "screener:rebuild");
         self.refresh_task = None;
         crate::diag::bump(&crate::diag::SCREENER_REBUILD);
         self.filter_cached(cx);
@@ -1473,7 +1477,8 @@ pub fn open(
     opts.display_id = display_id;
     let b = backend.clone();
     if let Ok(handle) = cx.open_window(opts, move |window, cx| {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "screener").with_window(|| window.window_handle().window_id().as_u64());
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "screener")
+            .with_window(|| window.window_handle().window_id().as_u64());
         crate::window::windowing::configure_shell_clear_color(window, cx);
         let view = cx.new(|cx| ScreenerView::new(b, window, cx));
         cx.new(|cx| {
