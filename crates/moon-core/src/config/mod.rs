@@ -21,6 +21,7 @@
 //! - `station_cores` selects enabled credentials and names keyless omissions before installation.
 
 pub mod arb_view;
+pub mod auto_figures;
 pub mod badges;
 pub mod chart_defaults;
 pub mod chart_labels;
