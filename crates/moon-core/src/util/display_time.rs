@@ -302,13 +302,20 @@ pub fn format_date(secs: i64, zone: Tz) -> String {
 
 /// Format UTC Unix seconds as `YYYY-MM-DD HH:MM:SS` in the selected zone.
 ///
+/// Shares [`format_minute`]'s unknown rule on purpose: the Report prints one stamp in either form
+/// depending on the column's width, and a zero that is blank at minute precision must not turn
+/// into `1970-01-01 00:00:00` the moment the column is wide enough for seconds.
+///
 /// Args:
-///     secs: UTC Unix timestamp in seconds.
+///     secs: UTC Unix timestamp in seconds; non-positive values mean unknown.
 ///     zone: Selected display zone.
 ///
 /// Returns:
-///     Formatted civil time or an empty string outside chrono's representable range.
+///     Formatted civil time or an empty string for an unknown/out-of-range value.
 pub fn format_second(secs: i64, zone: Tz) -> String {
+    if secs <= 0 {
+        return String::new();
+    }
     at(secs, zone)
         .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_default()

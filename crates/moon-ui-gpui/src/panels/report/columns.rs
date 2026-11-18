@@ -21,6 +21,65 @@ struct RowCellCtx<'a> {
     axis: &'a ReportAxis,
     core_uid: u64,
     display_zone: Tz,
+    /// Second-resolution date columns that paint their minute form in this frame, because their
+    /// stored width (a drag, the first drag's snapshot, or an older build's saved width) is
+    /// narrower than their seconds need. Resolved once per render by
+    /// `widths.rs::NaturalWidthsCache::dates_without_room_for_seconds`.
+    minute_dates: &'a [&'static str],
+}
+
+/// Report date columns whose complete text carries seconds (#1391).
+///
+/// The two stamps a trader reads to tell fills apart inside one minute, and the two MoonBot's own
+/// report prints with seconds. `sellsetdate` and `last_update_at` stay on minutes: nobody asked
+/// for them, and seconds would only make two more columns wider.
+pub(super) const SECOND_DATE_COLUMNS: [&str; 2] = ["buydate", "closedate"];
+
+/// How much of its clock one Report date cell prints.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DateForm {
+    /// The column's complete text: `YYYY-MM-DD HH:MM:SS` for [`SECOND_DATE_COLUMNS`],
+    /// `YYYY-MM-DD HH:MM` for every other date column. What the cell paints when it has the room,
+    /// what the hover always says, and what the exports and the clipboard copy carry.
+    Full,
+    /// `YYYY-MM-DD HH:MM` for every date column: what a cell too narrow for its seconds paints
+    /// instead of an ellipsis running through them.
+    Minute,
+}
+
+/// Format one Report date column's stored value in the requested form.
+///
+/// The single place the grid, the natural-width measurement, CSV, XLSX and the clipboard copy
+/// turn a stored stamp into text, so none of them can disagree about the zone, the missing-close
+/// sentinel, or which columns carry seconds.
+///
+/// Args:
+///     col: Runtime report column name.
+///     v: Database value from the row.
+///     axis: Time axis for the replicated columns.
+///     core_uid: The row's owning core, needed by the axis conversion.
+///     display_zone: User-selected zone for the terminal-authored column.
+///     form: Complete text, or the minute form of a narrow cell.
+///
+/// Returns:
+///     The formatted stamp; empty for a non-date column, an unreadable value, a missing close or a
+///     non-positive instant.
+pub(super) fn date_text(
+    col: &str,
+    v: &Value,
+    axis: &ReportAxis,
+    core_uid: u64,
+    display_zone: Tz,
+    form: DateForm,
+) -> String {
+    let Some((secs, zone)) = date_cell_instant(col, v, axis, core_uid, display_zone) else {
+        return String::new();
+    };
+    if form == DateForm::Full && SECOND_DATE_COLUMNS.contains(&col) {
+        moon_core::util::display_time::format_second(secs, zone)
+    } else {
+        moon_core::util::display_time::format_minute(secs, zone)
+    }
 }
 
 /// Exact Report row identity needed to open its chart and durable history.
@@ -197,6 +256,8 @@ pub(super) fn report_columns(
 ///     axis: Time axis for REPLICATED timestamp columns, whose stored seconds are the core's own
 ///         wall clock rather than UTC.
 ///     display_zone: User-selected zone for columns this terminal wrote itself.
+///     minute_dates: Second-resolution date columns too narrow for their seconds in this frame;
+///         their cells paint the minute form and keep the seconds in the hover.
 ///
 /// Returns:
 ///     A MoonDataTable row whose highlight mirrors the controlled selection.
@@ -212,6 +273,7 @@ pub(super) fn report_data_row(
     p: MoonPalette,
     axis: &ReportAxis,
     display_zone: Tz,
+    minute_dates: &[&'static str],
 ) -> MoonDataRow {
     let mut cells = Vec::with_capacity(vis.len());
     if let Some(r) = data.rows.get(ri) {
@@ -225,6 +287,7 @@ pub(super) fn report_data_row(
             axis,
             core_uid,
             display_zone,
+            minute_dates,
         };
         for &i in vis {
             let cname = cols[i].as_str();
@@ -621,10 +684,14 @@ fn side_cell(ri: usize, val: &Value, p: MoonPalette) -> MoonDataCell {
 /// Every non-empty cell now truncates and tooltips its complete text, not only the free-text
 /// columns: `.truncate()` in this pinned GPUI fork already draws the ellipsis for any clipped
 /// cell (`MoonUI crates/moon-gpui/src/styled.rs:149-151`), so the ellipsis was never missing —
-/// only the tooltip coverage was. A date column shows its full `YYYY-MM-DD HH:MM` form in the
-/// cell itself (the owner rejected a today-collapsed clock form) and repeats it in the tooltip
-/// like every other column. The tooltip repeats the CELL text, so a market delta hovers in its
-/// two-place form too (#1338); its stored value is in the export and the clipboard copy.
+/// only the tooltip coverage was. A date column shows its full dated form in the cell itself (the
+/// owner rejected a today-collapsed clock form) and repeats it in the tooltip like every other
+/// column. The tooltip repeats the CELL text, so a market delta hovers in its two-place form too
+/// (#1338); its stored value is in the export and the clipboard copy.
+///
+/// The one cell whose text and hover may differ is a second-resolution date in a column whose
+/// stored width is too narrow (`ctx.minute_dates`, #1391): it paints `YYYY-MM-DD HH:MM` whole rather than
+/// an ellipsis through the seconds, and the hover keeps the complete `…:SS` stamp.
 ///
 /// Args:
 ///     row: Visible row index used to give the hover target a stable identity.
@@ -639,10 +706,12 @@ fn report_data_cell(row: usize, col: &str, val: &Value, ctx: &RowCellCtx<'_>) ->
     // MoonDataTable also protects cell boundaries at the container level. Every other column's
     // font styling comes from the cell style through MoonUI cascading.
     let right = is_numeric_report_column(col);
-    // The SharedString is built exactly ONCE and shared between the child and the tooltip via a
-    // cheap clone (a refcount bump) rather than `text.clone()`'s heap allocation — the difference
-    // matters at 50 000 rows. A date column takes the same path: `cell()` resolves its instant
-    // once and returns the full form, which is also what `widths.rs::natural_widths` measures.
+    // The full text is built ONCE and shared between the child and the tooltip via a cheap clone
+    // (a refcount bump) rather than `text.clone()`'s heap allocation. A date column takes the same
+    // path: `cell()` resolves its instant and returns the full form, which is also what
+    // `widths.rs::natural_widths` measures. The one exception is a date in `ctx.minute_dates`,
+    // which formats a second, shorter text for the cell: two formats per visible row of a column
+    // the user froze too narrow, paid only by the rows the virtual list actually draws.
     let (text, color) = cell(
         col,
         val,
@@ -653,8 +722,20 @@ fn report_data_cell(row: usize, col: &str, val: &Value, ctx: &RowCellCtx<'_>) ->
         ctx.display_zone,
     );
     let color = color.unwrap_or_else(|| cell_color(col, ctx.p));
-    let display: SharedString = text.into();
-    let tooltip = (!display.is_empty()).then(|| display.clone());
+    let full: SharedString = text.into();
+    let tooltip = (!full.is_empty()).then(|| full.clone());
+    let display = if ctx.minute_dates.contains(&col) {
+        SharedString::from(date_text(
+            col,
+            val,
+            ctx.axis,
+            ctx.core_uid,
+            ctx.display_zone,
+            DateForm::Minute,
+        ))
+    } else {
+        full
+    };
     let inner = div()
         .id(SharedString::from(format!("report-cell-{row}-{col}")))
         .flex()
@@ -828,10 +909,11 @@ pub(crate) fn cell(
         // Replicated columns are on the CORE's own wall clock (the axis owns both halves of that
         // projection) while `last_update_at` is genuine UTC this terminal wrote itself — see
         // `date_cell_instant`'s docstring for why the two must never share a zone step.
+        // Always the FULL form, seconds included where the column carries them: this is the text
+        // `widths.rs::natural_widths` measures, so the column is sized for its seconds. Only the
+        // render path may fall back to minutes, for a column whose stored width is narrower.
         "buydate" | "closedate" | "sellsetdate" | "last_update_at" => (
-            date_cell_instant(col, v, axis, core_uid, display_zone)
-                .map(|(secs, zone)| moon_core::util::display_time::format_minute(secs, zone))
-                .unwrap_or_default(),
+            date_text(col, v, axis, core_uid, display_zone, DateForm::Full),
             None,
         ),
         // The badge word, not the localized word: this is what `side_cell`'s badge actually paints, and
