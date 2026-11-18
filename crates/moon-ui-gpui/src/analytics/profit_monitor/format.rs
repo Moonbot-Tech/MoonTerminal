@@ -426,8 +426,8 @@ fn decimals(unit: Option<ProfitUnit>) -> usize {
 ///     Characters in the full and abbreviated spellings, then whether the rounded magnitude
 ///     reaches [`SI_FLOOR`].
 fn spelling_lengths(value: f64, decimals: usize) -> (usize, usize, bool) {
-    // ASCII throughout — sign, digits, separator and the K/M/B/T marker — so the byte length is
-    // the character count without walking the string a second time.
+    // ASCII throughout — sign, digits, separator and the unit with its optional space — so the
+    // byte length is the character count without walking the string a second time.
     let plain = fmt::signed_fixed(value, decimals)
         .or_else(|| fmt::signed_fixed(0.0, decimals))
         .expect("zero is always a finite fixed amount")
@@ -458,7 +458,10 @@ fn abbreviated(value: f64, decimals: usize) -> Option<String> {
     }
     let sign = fmt::signed_fixed(value, decimals)?.1;
     let prefix = sign.pick("+", "-", "");
-    Some(format!("{prefix}{}", fmt::compact_si(rounded.abs())))
+    Some(format!(
+        "{prefix}{}",
+        fmt::short(rounded.abs(), fmt::Form::Label)
+    ))
 }
 
 /// Format profit in the column's chosen form, optionally carrying the newest closed trade.

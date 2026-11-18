@@ -212,7 +212,10 @@ impl ChartDataState {
                 }
             }
         }
-        sig
+        // Order-line sizes and position captions bake the number notation into their text, so a
+        // saved Settings change has to wake this sync on its own: no order revision moves with it.
+        sig.wrapping_mul(31)
+            .wrapping_add(moon_core::util::fmt::notation() as u64)
     }
 
     /// Whether this engine's captions may read the LIVE market at all.

@@ -91,6 +91,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
         host(|_, cx| {
             let controls = GeneralControls {
                 language: stub("probe-language", 220.0, 28.0),
+                notation: stub("probe-notation", 260.0, 28.0),
                 valuation: stub("probe-valuation", 260.0, 28.0),
                 tab_per_core: stub("probe-split", 18.0, 18.0),
                 book_pan: stub("probe-pan", 18.0, 18.0),
@@ -107,6 +108,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
             inside.extend(
                 [
                     "probe-language",
+                    "probe-notation",
                     "probe-valuation",
                     "probe-live-scope",
                     "probe-idle-secs",
@@ -115,6 +117,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 .map(String::from),
             );
             let wraps = [
+                ("general-notation", "general.notation.more"),
                 ("general-valuation", "general.valuation.more"),
                 ("general-tab-per-core", "general.charts_split_by_core_hint"),
                 ("general-book-pan", "general.book_pan.more"),
@@ -152,6 +155,7 @@ fn general_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
 
     let keys = [
         "general.language",
+        "general.notation.label",
         "general.valuation.label",
         "general.charts_split_by_core",
         "general.book_pan.label",
@@ -164,6 +168,7 @@ fn general_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
     let make = host(|_, cx| {
         let controls = GeneralControls {
             language: stub("probe-language", 220.0, 28.0),
+            notation: stub("probe-notation", 260.0, 28.0),
             valuation: stub("probe-valuation", 260.0, 28.0),
             tab_per_core: stub("probe-split", 18.0, 18.0),
             book_pan: stub("probe-pan", 18.0, 18.0),

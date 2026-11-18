@@ -1282,7 +1282,11 @@ fn assert_ticks_column_fits(cx: &mut gpui::TestAppContext, theme: UiThemeMode) {
                             false,
                         ),
                         ("kpi-unclosed-0".into(), "—".to_string(), true),
-                        ("kpi-unclosed-1".into(), "1.23M · ≈ +988K".to_string(), true),
+                        (
+                            "kpi-unclosed-1".into(),
+                            "1.23 m · ≈ +988 k".to_string(),
+                            true,
+                        ),
                     ];
                     for (row, key) in [
                         "analytics.kpi.trades",

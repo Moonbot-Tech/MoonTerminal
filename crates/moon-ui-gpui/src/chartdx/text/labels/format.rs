@@ -159,10 +159,7 @@ pub(super) fn volume_amount(
         VolumeUnits::Base if !readout.base_known() => return not_measured(),
         VolumeUnits::Base => (base, readout.base_exact),
     };
-    (
-        marked(fmt::compact_si(value), readout.complete && exact),
-        None,
-    )
+    (marked(short_label(value), readout.complete && exact), None)
 }
 
 /// Mark a figure that covers less than the caption's own heading claims.

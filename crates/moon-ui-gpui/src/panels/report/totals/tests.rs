@@ -554,9 +554,10 @@ fn a_loaded_empty_result_promotes_no_figure() {
     );
 }
 
-/// Breakage 1: `totals.rs:native_volume` replaces `compact_si` with the exact decimal formatter,
-/// leaving a seven-digit raw amount unreadable in the fixed-height footer. Breakage 2: the same
-/// helper reuses `compact_si` for the recovery representation, so hover can no longer reveal the
+/// Breakage 1: `totals.rs:native_volume` replaces the shortened label form with the exact decimal
+/// formatter, leaving a seven-digit raw amount unreadable in the fixed-height footer. Breakage 2:
+/// the same helper reuses the label form for the recovery representation, so hover can no longer
+/// reveal the
 /// exact full numeric amount. The remaining assertions keep unsigned accounting, complete mixed
 /// scopes, the separator and clipping-tooltip reachability pinned alongside those representations.
 #[test]
@@ -582,7 +583,7 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
     );
     let facts = historical_facts(Some(&single), false, &ValuationStatus::default(), T0);
     let volume = facts.tail.last().expect("volume closes the clipping tail");
-    assert_eq!(volume.text, "Volume: 1.62M USDT");
+    assert_eq!(volume.text, "Volume: 1.62 m USDT");
     assert_eq!(volume.tone, FactTone::Soft);
     assert!(!volume.bold, "volume must not borrow profit emphasis");
     assert!(
@@ -601,7 +602,7 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
     let tooltip = footer_tooltip(&facts);
     assert!(tooltip.contains(spelled));
     assert!(
-        !tooltip.contains("1.62M USDT"),
+        !tooltip.contains("1.62 m USDT"),
         "the recovery tooltip must retain the exact amount, got {tooltip:?}"
     );
 
@@ -632,14 +633,14 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
     let facts = historical_facts(Some(&mixed), false, &ValuationStatus::default(), T0);
     assert_eq!(
         facts.tail.last().expect("unified volume").text,
-        "Volume: 1.62M USDT",
+        "Volume: 1.62 m USDT",
         "mixed scopes prefer their complete active-mode USDT amount"
     );
     mixed.valuation = ValuationMode::Current;
     let facts = footer_facts(Some(&mixed), false, &ValuationStatus::default(), T0, None);
     assert_eq!(
         facts.tail.last().expect("current unified volume").text,
-        "Volume at the current rate: 1.62M USDT",
+        "Volume at the current rate: 1.62 m USDT",
         "the loaded current-rate mode must remain visible on a unified conversion"
     );
 
@@ -649,7 +650,7 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
     let facts = historical_facts(Some(&native_mixed), false, &ValuationStatus::default(), T0);
     assert_eq!(
         facts.tail.last().expect("native mixed volume").text,
-        "Volume: 12.3K USDT + 2.35B USDC",
+        "Volume: 12.3 k USDT + 2.35 b USDC",
         "every native bucket remains explicit and SI-compacted when unified valuation is unavailable"
     );
     assert_eq!(
@@ -829,7 +830,7 @@ fn partial_single_currency_volume_is_stated_and_marked_rather_than_withheld() {
         .iter()
         .find(|fact| fact.section_start)
         .expect("one unreconstructable trade may not erase the only bucket's volume");
-    assert_eq!(volume.text, "Volume (partial): 1.23M USDT");
+    assert_eq!(volume.text, "Volume (partial): 1.23 m USDT");
     assert_eq!(
         volume.tone,
         FactTone::Warn,

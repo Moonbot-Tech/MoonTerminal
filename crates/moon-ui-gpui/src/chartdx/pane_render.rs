@@ -394,6 +394,9 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) pan_reset_cam_px: i64,
     /// Last observed combo device generation; device loss requires history reupload.
     pub(in crate::chartdx) last_device_gen: u64,
+    /// Number notation the order-line labels were last built in. A change forces their rebuild the
+    /// way a device loss does: the sizes are baked into the label text (#1390).
+    pub(in crate::chartdx) last_notation: moon_core::util::fmt::Notation,
     /// Last order-book build: data revision plus visible price window.
     pub(in crate::chartdx) last_book_rev: u64,
     pub(in crate::chartdx) last_book_lo: f32,
@@ -504,6 +507,9 @@ pub(in crate::chartdx) struct PaneRender {
     /// The grid the resident ladder was built on; `None` while the zone draws the glass. A
     /// different grid — a zoom that moved the step, a tick that arrived — rebuilds the rows at once.
     pub(in crate::chartdx) ladder_grid: Option<moon_core::data::LadderGrid>,
+    /// Number notation the ladder's volume texts were formatted in. A change rebuilds the ladder
+    /// the way a new grid does, without waiting for the book to move (#1390).
+    pub(in crate::chartdx) ladder_notation: moon_core::util::fmt::Notation,
     /// Ladder rows over the emitted window, for the row text. Empty while the zone draws the glass.
     pub(in crate::chartdx) ladder_rows: Vec<moon_core::data::LadderRow>,
     /// Each row's printed volume and price, formatted when the rows are rebuilt rather than on
@@ -757,6 +763,7 @@ impl PaneRender {
             combo_left_rel: f32::NAN,
             pan_reset_cam_px: i64::MIN,
             last_device_gen: 0,
+            last_notation: moon_core::util::fmt::notation(),
             last_book_rev: u64::MAX,
             last_label_book_rev: u64::MAX,
             last_book_lo: f32::NAN,
@@ -799,6 +806,7 @@ impl PaneRender {
             book_best: None,
             price_tick: moon_chart::ladder::LadderTick::default(),
             ladder_grid: None,
+            ladder_notation: moon_core::util::fmt::notation(),
             ladder_rows: Vec::new(),
             ladder_labels: Vec::new(),
             ladder_runs: Vec::new(),

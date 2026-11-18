@@ -347,9 +347,9 @@ fn a_one_sided_book_reads_the_same_from_either_direction() {
 /// Replacing the shared formatter with fixed hundredths makes these literal display contracts red.
 #[test]
 fn prospective_order_size_label_uses_shared_compact_formatter() {
-    assert_eq!(fmt_prospective_order_size(1_500.0), "1.5k");
-    assert_eq!(fmt_prospective_order_size(10_000.0), "10k");
-    assert_eq!(fmt_prospective_order_size(1_000_000.0), "1m");
+    assert_eq!(fmt_prospective_order_size(1_500.0), "1.5 k");
+    assert_eq!(fmt_prospective_order_size(10_000.0), "10 k");
+    assert_eq!(fmt_prospective_order_size(1_000_000.0), "1 m");
     assert_eq!(fmt_prospective_order_size(50.0), "50");
 }
 
@@ -359,7 +359,7 @@ fn prospective_order_size_label_uses_shared_compact_formatter() {
 /// helper's direct tests remain green. The value now reaches the crosshair through
 /// `text::cursor_labels`, which places it, so the wiring is the order-size field's formatter.
 #[test]
-fn prepare_wires_compact_order_size_label() {
+fn prepare_wires_prospective_order_size_label() {
     let source = include_str!("prepare.rs");
 
     assert!(source.contains("order_size: prospective_usd.map(fmt_prospective_order_size)"));

@@ -19,6 +19,7 @@ use super::servers::{
 use super::toml_io::ConfigLoad;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
+use crate::util::fmt::Notation;
 
 /// Current `settings.toml` schema version.
 ///
@@ -423,6 +424,13 @@ pub struct SettingsFile {
     /// older file that omits it keeps today's behaviour, and a newer code degrades to it.
     #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub live_scope: LiveScope,
+    /// How a shortened figure spells its unit: `moonbot` (`12.3 k`) or `compact` (`12.3K`).
+    ///
+    /// No schema bump: an older file that omits it reads as `MoonBot`, which is the intended
+    /// default — the user chose MoonBot's spelling for everyone who never touched the setting —
+    /// and an unknown code degrades to it.
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
+    pub number_notation: Notation,
     /// Next uid to issue, persisted so deleted identities are not reused.
     ///
     /// Zero falls back to one past the highest surviving uid. This field is the only durable

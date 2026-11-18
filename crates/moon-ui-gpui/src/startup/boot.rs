@@ -74,6 +74,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     }
     // Apply the configured UI language to the global rust-i18n locale used by t! here and in MoonUI.
     rust_i18n::set_locale(cfg.language.code());
+    // The same for the spelling of shortened figures, read by every `fmt::short` call (#1390).
+    moon_core::util::fmt::set_notation(cfg.number_notation);
     // Configure file logging from the config and purge old log files once at startup.
     moon_core::applog::set_file_logging(cfg.log_to_file, cfg.log_retention_days);
     // Per-market closed-order keep. One call, beside the other process-wide config

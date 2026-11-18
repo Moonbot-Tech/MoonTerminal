@@ -196,6 +196,7 @@ pub(super) fn draft_number(
 /// The controls of the General page, built by the view and laid out by [`general_body`].
 pub(super) struct GeneralControls {
     pub(super) language: AnyElement,
+    pub(super) notation: AnyElement,
     pub(super) valuation: AnyElement,
     pub(super) tab_per_core: AnyElement,
     pub(super) book_pan: AnyElement,
@@ -280,6 +281,13 @@ pub(super) fn general_body(
                     c.language,
                 ),
                 row(
+                    "general-notation",
+                    s("general.notation.label"),
+                    s("general.notation.hint"),
+                    Some(s("general.notation.more")),
+                    c.notation,
+                ),
+                row(
                     "general-valuation",
                     s("general.valuation.label"),
                     s("general.valuation.hint"),
@@ -347,8 +355,9 @@ pub(super) fn general_body(
 
 /// Every row id of the General page, top to bottom.
 #[cfg(test)]
-const GENERAL_ROWS: [&str; 8] = [
+const GENERAL_ROWS: [&str; 9] = [
     "general-language",
+    "general-notation",
     "general-valuation",
     "general-tab-per-core",
     "general-book-pan",
@@ -426,8 +435,8 @@ impl SettingsView {
         (open, toggle)
     }
 
-    /// Build the General page body: locale, the USDT valuation, chart grouping, book-zone pan,
-    /// Main-window idle closing, and file logging with its retention.
+    /// Build the General page body: locale, number notation, the USDT valuation, chart grouping,
+    /// book-zone pan, Main-window idle closing, and file logging with its retention.
     ///
     /// Args:
     ///     cx: Settings context that supplies the active draft and palette.
@@ -453,6 +462,9 @@ impl SettingsView {
         let ui = &self.general_ui;
         let controls = GeneralControls {
             language: select_control(&self.lang, "general-language:field", 220.0, cx),
+            // How shortened figures spell their unit everywhere (#1390). As wide as the valuation
+            // select: its captions carry their own example (`12.3 k · 1.23 m`).
+            notation: select_control(&self.notation, "general-notation:field", 260.0, cx),
             // Which rate converts quote money to USDT, for Report and Analytics.
             valuation: select_control(&self.valuation, "general-valuation:field", 260.0, cx),
             // Whether a pan on one chart pauses every chart or only itself (#688).

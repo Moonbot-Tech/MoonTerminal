@@ -98,7 +98,7 @@ enum MoneyForm {
     /// The bare signed amount plus `$`, no trade count — used when the full sentence does not fit
     /// beside the stamp on one line.
     Compact,
-    /// An SI-abbreviated signed amount (`compact_si`) — used when even the bare figure still
+    /// A shortened signed amount (`fmt::Form::Label`) — used when even the bare figure still
     /// exceeds the pane's character budget. Still a whole, honest number, never a clipped one.
     Si,
 }
@@ -171,7 +171,7 @@ fn money_fact(v: &VersionInfo, form: MoneyForm) -> VersionFact {
         },
         MoneyForm::Si => {
             // `amount` already carries the correct sign prefix from `signed_fixed` ("+"/"-", or
-            // none for an exact zero); `compact_si` itself is unsigned, so the prefix is lifted
+            // none for an exact zero); the shortened magnitude is unsigned, so the prefix is lifted
             // off `amount` rather than re-derived from `sign` to avoid a second, divergent rule.
             let sign_prefix = if amount.starts_with('+') {
                 "+"
@@ -180,7 +180,7 @@ fn money_fact(v: &VersionInfo, form: MoneyForm) -> VersionFact {
             } else {
                 ""
             };
-            let si = fmt::compact_si(v.profit.abs());
+            let si = fmt::short(v.profit.abs(), fmt::Form::Label);
             VersionFact {
                 text: format!("{sign_prefix}{si}$"),
                 spelled: Some(full),

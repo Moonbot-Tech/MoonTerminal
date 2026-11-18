@@ -305,16 +305,16 @@ impl MaxOrderReadout {
 
     /// Format the figure for a WIDTH-CONSTRAINED surface: `$` for a dollar quote, the token otherwise.
     ///
-    /// The toolbar row competes for width with every trading control, and `496K USDT` is the longest
-    /// readout on it. `$` buys that width back — but ONLY where the substitution is factually true.
+    /// The toolbar row competes for width with every trading control, and `496 k USDT` is the
+    /// longest readout on it. `$` buys that width back — but ONLY where the substitution is factually true.
     /// [`Self::format`]'s doc records why this surface must never print a plausible-but-wrong unit:
     /// a figure that sizes a real order is read and believed. So the dollar sign is gated on
     /// [`moon_core::symbol::is_usd_stable`] rather than applied blanket, and a BTC-quoted market
     /// still reads `0.8 BTC` here. That gate is deliberately the SHARED one: a quote-currency list
     /// owned by a panel is banned outright by `tests/theme_contract/naming.rs`, because two copies
     /// of the rule are how one surface starts disagreeing with another about the same order. The
-    /// space is dropped with the token because `496K$` reads as one figure while `496K $` reads as
-    /// two.
+    /// space before the token is dropped with it because `496 k$` reads as one figure while
+    /// `496 k $` reads as two.
     ///
     /// Args:
     ///     value_text: Formatter for a present cap, so each surface picks its own precision.

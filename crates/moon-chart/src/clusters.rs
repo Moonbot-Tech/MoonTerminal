@@ -356,7 +356,8 @@ pub fn merge_overlapping(
 
 /// A volume printed short enough to sit inside its disc: at most three digits and an SI suffix —
 /// one decimal below ten of a unit (`2.3M`), whole above it (`11K`, `906`) — where the chart's
-/// usual format (`10.8K`) costs the glyph that decides whether the label fits. Below one it keeps
+/// caption form (`10.8 k`, `moon_core::util::fmt::Form::Label`) costs the glyphs that decide
+/// whether the label fits, so the disc keeps its own tighter spelling. Below one it keeps
 /// a decimal, and a volume that rounds to nothing prints `<0.1` rather than a `0.0` that reads as
 /// an empty disc.
 pub fn short_volume(v: f32) -> String {

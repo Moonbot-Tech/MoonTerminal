@@ -79,9 +79,10 @@ pub(super) const W_COIN: f32 = 64.0;
 /// unrelated numbers; over one point they read as a column. That only holds if the two halves are
 /// a fixed number of characters wide, which is a measurement of the FONT and not a design token.
 ///
-/// Five before the point and four after, which is what the figures actually reach: anything from
-/// a thousand up carries a suffix, so the whole part is at most three digits and a sign
-/// ("+999.99K"), and the fraction is always exactly two digits plus that suffix.
+/// Five before the point and four after, which is what the column form ([`dollars`]) reaches: a
+/// figure under ten thousand prints whole with one place, so the whole part is at most four digits
+/// and a sign ("-9999.9"), and a unit adds at most a space and a letter to a one-place fraction
+/// (".3 k").
 pub(super) const INT_CHARS: f32 = 5.0;
 pub(super) const FRAC_CHARS: f32 = 4.0;
 /// And the minute's count of trades beside it: "(999)". A minute of one coin does not reach four
@@ -273,7 +274,7 @@ impl Look {
 
     /// Width of one figure in that board, being whatever is left of a half after the ticker.
     ///
-    /// The day's figures are short — "+6.69K", "-619.75" — where the minute's carry a count in
+    /// The day's figures are short — "+19.5 k", "-619.8" — where the minute's carry a count in
     /// brackets too, so the narrower column is not a compromise: it is the room the figures
     /// actually need, spent on making the two boards line up.
     pub(super) fn w_day(&self) -> Pixels {
@@ -457,26 +458,20 @@ pub(super) fn rows_box(seats: usize, width: Pixels, look: &Look) -> Div {
         .h(px((seats as f32 + SINK) * f32::from(look.row_h)))
 }
 
-/// Dollars, always to the hundredth, with an SI suffix once they run past a thousand.
+/// Dollars in the shared column form: always a point, a unit from ten thousand up.
 ///
-/// ALWAYS two decimals, and that is the point: a column where one row prints `2`, the next `0.1`
-/// and the next `10K` gives the eye three different shapes to compare, and the shape is what it
-/// compares first. Two decimals and one point make every row the same shape, so what differs
-/// between them is the number.
+/// ALWAYS a point, and that is the point: a column where one row prints `2`, the next `0.1` and
+/// the next `10K` gives the eye three different shapes to compare, and the shape is what it
+/// compares first. [`figure`] lays every row out around its point, so what differs between rows
+/// is the number.
 ///
-/// The suffix keeps the column narrow — the day's figures reach six digits — and it is chosen the
-/// way [`fmt::compact_si`] chooses it, at the same thresholds, so a figure here and the same
-/// figure anywhere else in the terminal name the same magnitude.
+/// The unit keeps the column narrow — the day's figures reach six digits — and it is the one every
+/// other table in the terminal prints (`fmt::Form::Column`), in the notation the user chose.
 ///
 /// Args:
 ///     value: Dollars, sign already spent or about to be added by the caller.
 pub(super) fn dollars(value: f64) -> String {
-    const UNITS: [(f64, &str); 4] = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")];
-    let size = value.abs();
-    match UNITS.iter().find(|(scale, _)| size >= *scale) {
-        Some((scale, suffix)) => format!("{:.2}{suffix}", size / scale),
-        None => format!("{size:.2}"),
-    }
+    moon_core::util::fmt::short(value.abs(), moon_core::util::fmt::Form::Column)
 }
 
 /// A money figure with the sign the crowd earned, and the sign the colour follows.

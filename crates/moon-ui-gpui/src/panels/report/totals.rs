@@ -148,11 +148,15 @@ fn exact_native(amount: f64, currency: db::QuoteCurrency) -> String {
 ///     currency: Exact persisted quote identity.
 ///
 /// Returns:
-///     SI-compacted footer text and full quote-precision tooltip text, both unsigned and followed
-///     by the ticker.
+///     Shortened footer text (`fmt::Form::Label`) and full quote-precision tooltip text, both
+///     unsigned and followed by the ticker.
 fn native_volume(amount: f64, currency: db::QuoteCurrency) -> (String, String) {
     (
-        format!("{} {}", fmt::compact_si(amount), currency.ticker()),
+        format!(
+            "{} {}",
+            fmt::short(amount, fmt::Form::Label),
+            currency.ticker()
+        ),
         exact_native(amount, currency),
     )
 }

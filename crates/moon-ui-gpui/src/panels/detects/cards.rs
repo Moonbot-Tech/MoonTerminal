@@ -393,15 +393,16 @@ fn soft(text: String, p: MoonPalette, cx: &App) -> MoonText {
         .uppercase(false)
 }
 
-/// Build a frozen turnover figure: its short muted key, then the value in the Screener's own
-/// compact (`320k`, `1.7m`, `1.0b`).
+/// Build a frozen turnover figure: its short muted key, then the value in the label form the
+/// Screener's volume columns print (`320 k`, `1.7 m`, `1 b`).
 ///
 /// The key stays because two volumes side by side are otherwise indistinguishable. A volume has no
 /// direction, so the value takes the plain text tone rather than a delta colour; zero is the
 /// muted `0`, as in the Screener's table.
 fn volume_text(key: &str, v: f64, p: MoonPalette, cx: &App) -> Div {
+    use moon_core::util::fmt::{Form, short};
     let color = if v > 0.0 { p.text } else { p.text_muted };
-    let value = MoonText::new(crate::screener::vol_fmt(v))
+    let value = MoonText::new(short(v, Form::Label))
         .color(color)
         .rendered_metrics(design::text_metrics(cx, -2.0, 11.0))
         .mono(true)

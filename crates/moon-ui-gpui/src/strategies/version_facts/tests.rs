@@ -66,7 +66,7 @@ fn version_row_facts_degrade_money_before_adding_or_shortening_lines() {
     let version = populated_version();
     let full = t!("strat.version_profit", amount = "+12.50", n = 3).to_string();
     let compact = "+12.50$".to_string();
-    let si = format!("+{}$", fmt::compact_si(12.5));
+    let si = format!("+{}$", fmt::short(12.5, fmt::Form::Label));
 
     let full_beside = version_row_facts(
         &version,

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::secrets::Secret;
+use crate::util::fmt::Notation;
 
 /// Number of manual-strategy quick-select slots, matching Moonbot's `ManualStratsConfig` and the
 /// terminal's own `HotkeysConfig::manual_strategy` key array.
@@ -664,6 +665,22 @@ impl<'de> Deserialize<'de> for LiveScope {
     /// Read a live-scope code; anything else becomes the default (see [`forgiving_code`]).
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         forgiving_code(d, "a live scope (all / each)", Self::from_code)
+    }
+}
+
+// The notation is defined beside the formatter that reads it (`util::fmt`); only its file
+// encoding lives here, beside the other settings codes and their shared forgiving reader.
+impl Serialize for Notation {
+    /// Serialize the stable lowercase code used by `settings.toml`.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for Notation {
+    /// Read a notation code; anything else becomes the default (see [`forgiving_code`]).
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        forgiving_code(d, "a number notation (moonbot / compact)", Self::from_code)
     }
 }
 

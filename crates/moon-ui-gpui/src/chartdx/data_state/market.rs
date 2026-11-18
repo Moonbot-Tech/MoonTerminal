@@ -1829,11 +1829,15 @@ impl ChartDataState {
                 text_changed = true;
             }
             // A new grid is a new picture: rebuild and bake now rather than on the next revision.
-            let ladder_grid_changed = pr.ladder_grid != ladder_grid;
+            // So is a new number notation: the ladder bakes its volumes into text (#1390).
+            let notation = moon_core::util::fmt::notation();
+            let ladder_grid_changed =
+                pr.ladder_grid != ladder_grid || pr.ladder_notation != notation;
             // The rebuild rides on the flag, not on resetting `last_book_rev`: the clean-up paths
             // below read `u64::MAX` as "nothing uploaded" and would leave the old rows in the layer.
             if ladder_grid_changed {
                 pr.ladder_grid = ladder_grid;
+                pr.ladder_notation = notation;
                 pr.ladder_rows.clear();
                 pr.ladder_labels.clear();
                 pr.ladder_max_notional = 0.0;
