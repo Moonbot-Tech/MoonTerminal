@@ -69,6 +69,8 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
                 .push(Block::Text(t!("core_cmds.egress.single").to_string()));
         } else {
             page.body.push(Block::EgressChoices(choices));
+            page.body
+                .push(Block::Text(t!("core_cmds.egress.more").to_string()));
         }
     }
     if let Some(Confirm::Egress(address)) = &view.confirm {

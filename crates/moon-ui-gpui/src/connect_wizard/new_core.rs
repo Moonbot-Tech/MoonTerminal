@@ -317,8 +317,19 @@ impl ConnectWizardView {
                 }
             });
         }
+        // One address only: the core leaves from it, and a bought second address that is not set
+        // up on the server yet is the usual reason the list is missing — say how it appears.
         if alternatives.is_empty() {
-            return None;
+            if !check.egress.supported() {
+                return None;
+            }
+            return Some(
+                v_flex()
+                    .gap(design::ui_px(cx, 4.0))
+                    .child(note(t!("connect_wizard.check.egress_single"), cx))
+                    .child(note(t!("connect_wizard.check.egress_more"), cx))
+                    .into_any_element(),
+            );
         }
         if !check.egress.supported() {
             return Some(
@@ -357,6 +368,7 @@ impl ConnectWizardView {
                         ),
                 )
                 .child(note(t!("connect_wizard.check.egress_note"), cx))
+                .child(note(t!("connect_wizard.check.egress_more"), cx))
                 .into_any_element(),
         )
     }
