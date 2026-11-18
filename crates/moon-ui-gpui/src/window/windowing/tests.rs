@@ -1,10 +1,49 @@
-//! Regression tests for native-window taskbar suppression lifetime.
+//! Regression tests for native-window geometry and taskbar suppression lifetime.
 
 use std::sync::{Arc, atomic::AtomicBool};
 
 use gpui::{Bounds, WindowBounds, point, px, size};
 
-use super::{TaskbarHideTask, window_bounds_for};
+use super::{TaskbarHideTask, bounds_for_persistence, window_bounds_for};
+
+/// Persisting the normal placement for an arranged window loses the snap zone on restart.
+#[test]
+fn snapped_window_saves_its_current_rectangle() {
+    let normal = gpui::bounds(point(px(120.0), px(80.0)), size(px(1500.0), px(1100.0)));
+    let snapped = gpui::bounds(point(px(0.0), px(0.0)), size(px(2076.0), px(1390.0)));
+    assert_eq!(
+        bounds_for_persistence(WindowBounds::Windowed(normal), Some(snapped)),
+        (snapped, false, false),
+    );
+}
+
+/// An ordinary window keeps its placement, including when no live rectangle is available.
+#[test]
+fn ordinary_window_keeps_its_placement() {
+    let normal = gpui::bounds(point(px(-160.0), px(50.0)), size(px(900.0), px(700.0)));
+    for current in [Some(normal), None] {
+        assert_eq!(
+            bounds_for_persistence(WindowBounds::Windowed(normal), current),
+            (normal, false, false),
+        );
+    }
+}
+
+/// Substituting the live screen-sized bounds would lose the unmaximize/fullscreen exit geometry.
+#[test]
+fn expanded_windows_save_restore_geometry_and_flags() {
+    let normal = gpui::bounds(point(px(100.0), px(60.0)), size(px(1000.0), px(700.0)));
+    let expanded = gpui::bounds(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+    for (placement, maximized, fullscreen) in [
+        (WindowBounds::Maximized(normal), true, false),
+        (WindowBounds::Fullscreen(normal), false, true),
+    ] {
+        assert_eq!(
+            bounds_for_persistence(placement, Some(expanded)),
+            (normal, maximized, fullscreen),
+        );
+    }
+}
 
 /// Removing the minimum-size cap lets native validation regrow fitted windows past small displays.
 #[test]
