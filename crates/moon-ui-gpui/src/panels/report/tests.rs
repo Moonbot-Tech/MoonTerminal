@@ -20,6 +20,7 @@ use std::path::PathBuf;
 struct BenchReportPage {
     cols: std::rc::Rc<Vec<String>>,
     pages: [std::rc::Rc<Vec<Vec<rusqlite::types::Value>>>; 2],
+    width_rows: [Vec<std::sync::Arc<super::widths::RowIdentity>>; 2],
     command: std::rc::Rc<std::cell::Cell<Option<(usize, bool)>>>,
     visited: std::rc::Rc<std::cell::Cell<usize>>,
     scroll: moon_ui::MoonVirtualListScrollHandle,
@@ -46,7 +47,7 @@ impl gpui::Render for BenchReportPage {
             if cold {
                 self.widths = Default::default();
             }
-            let identities = super::widths::row_identities(&self.pages[next], &cores);
+            let identities = self.width_rows[next].clone();
             assert_eq!(identities.len(), 500);
             self.widths.publish(identities, false);
         }
@@ -120,9 +121,13 @@ fn bench_report_page() -> BenchReportPage {
         .collect();
     let mut changed = rows.clone();
     changed[7][2] = Value::Text("UNIT_02 updated synthetic trade".into());
+    // The Report reader prepares row identities before handing a page to the UI.
+    let cores = vec![1; rows.len()];
+    let width_rows = [&rows, &changed].map(|rows| super::widths::row_identities(rows, &cores));
     BenchReportPage {
         cols: Rc::new(cols),
         pages: [Rc::new(rows), Rc::new(changed)],
+        width_rows,
         command: Rc::new(std::cell::Cell::new(Some((0, true)))),
         visited: Rc::new(std::cell::Cell::new(0)),
         scroll: moon_ui::MoonVirtualListScrollHandle::new(),
