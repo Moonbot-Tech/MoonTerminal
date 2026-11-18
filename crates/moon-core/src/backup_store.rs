@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime};
 
+pub(crate) mod sqlite;
+
 /// Prefix that keeps incomplete directories outside every completed-name grammar.
 pub(crate) const STAGING_PREFIX: &str = ".incoming-";
 /// Inactivity required before a staging directory can be treated as a crash leftover.

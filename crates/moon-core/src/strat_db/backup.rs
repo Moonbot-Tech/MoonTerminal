@@ -6,9 +6,9 @@
 //! then publishes the completed snapshot without exposing a partial database.
 
 use std::path::{Path, PathBuf};
-use std::{fs::File, io::Read as _};
 
-use crate::backup_store::{ExactPublication, SnapshotStore, timestamp_prefix};
+use crate::backup_store::sqlite::{self, snapshot_stamp};
+use crate::backup_store::{ExactPublication, SnapshotStore};
 use crate::backups::{DAY_MS, DueOutcome, RETAIN_PERIODS, due_slot_ms};
 use crate::config::paths;
 use crate::util::utc_stamp_compact;
@@ -44,49 +44,9 @@ fn latest_snapshot_ms_in(backups: &Path) -> Option<i64> {
         })
         .max()
 }
-/// Return the fixed timestamp portion of an application-owned snapshot directory name.
-fn snapshot_stamp(name: &str) -> Option<&str> {
-    let stamp = timestamp_prefix(name)?;
-    let digits = |s: &str| s.bytes().all(|byte| byte.is_ascii_digit());
-    let valid_suffix = match name.len() {
-        15 => true,
-        22 => name.get(15..) == Some("-manual"),
-        25 => name.get(15..23) == Some("-manual-") && name.get(23..).is_some_and(digits),
-        _ => false,
-    };
-    valid_suffix.then_some(stamp)
-}
-
-/// Return whether a regular file begins with SQLite's fixed 16-byte format signature.
-fn has_sqlite_header(path: &Path) -> bool {
-    let mut header = [0u8; 16];
-    File::open(path)
-        .and_then(|mut file| file.read_exact(&mut header))
-        .is_ok()
-        && &header == b"SQLite format 3\0"
-}
-
 /// Return whether `dir` is a completed snapshot with a nonempty regular database file.
 fn is_completed_snapshot(dir: &Path) -> bool {
-    let Ok(dir_meta) = std::fs::symlink_metadata(dir) else {
-        return false;
-    };
-    if !dir_meta.is_dir() || dir_meta.file_type().is_symlink() {
-        return false;
-    }
-    let database = dir.join(DATABASE_NAME);
-    let valid_database = std::fs::symlink_metadata(&database)
-        .map(|meta| meta.is_file() && !meta.file_type().is_symlink() && meta.len() >= 16)
-        .unwrap_or(false)
-        && has_sqlite_header(&database);
-    let marker = dir.join(COMPLETION_NAME);
-    let valid_marker = std::fs::symlink_metadata(&marker)
-        .map(|meta| meta.is_file() && !meta.file_type().is_symlink())
-        .unwrap_or(false)
-        && std::fs::read(marker)
-            .map(|bytes| bytes == COMPLETION_CONTENT)
-            .unwrap_or(false);
-    valid_database && valid_marker
+    sqlite::is_completed_snapshot(dir, DATABASE_NAME, COMPLETION_NAME, COMPLETION_CONTENT)
 }
 
 /// Assemble one SQLite snapshot in a unique staging directory.
