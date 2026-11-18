@@ -57,6 +57,8 @@ pub struct ServiceInfo {
     pub uptime_s: Option<u64>,
     /// Current service memory in bytes, when systemd reports it.
     pub memory: Option<u64>,
+    /// The core's outgoing address and what another one can be chosen from.
+    pub egress: crate::egress::EgressInfo,
 }
 
 /// A supported systemd service state change.
@@ -160,6 +162,9 @@ pub enum Cmd {
     UpdateCore,
     /// List the core's daily trading logs, or pull one of them onto this computer.
     LogDay,
+    /// Read or change the server address the core's outgoing connections leave from. Bound to
+    /// the core's systemd unit, not its folder, so a hand-installed core can be bound too.
+    Egress,
 }
 
 /// Why a located core cannot perform a requested command.
@@ -237,6 +242,7 @@ pub fn parse_info(text: &str) -> Option<ServiceInfo> {
         active,
         uptime_s: number("INFO_UPTIME"),
         memory: number("INFO_MEMORY"),
+        egress: crate::egress::EgressInfo::parse(text),
     })
 }
 

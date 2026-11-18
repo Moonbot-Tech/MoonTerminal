@@ -31,8 +31,23 @@
 #   mb      <instance dir> <arguments…>         — one command of the core's own CLI; stdin passes
 #                                                 through; runs as the account the core runs as
 #   remove  <instance dir>                      — stop and delete an instance this script made
+#   egress  <udp port> <ipv4|off>               — bind the located core's outgoing connections to
+#                                                 one of the server's addresses, or unbind them;
+#                                                 a running core is restarted on it, a stopped one
+#                                                 stays stopped and takes it on its next start
 # The work dir holds state.zip (settings archive), key (MoonProto connection packet) and, when
 # the move added it, ini-flag; install deletes it.
+# install and install-fresh take `egress=<ipv4>` after their arguments: the core is bound before
+# its first start. check and info print the EGRESS_* lines the choice is made from.
+#
+# A bound core: a drop-in of its unit records the address and names an nftables set through
+# systemd's NFTSet= (systemd 255+), which systemd fills with the unit's cgroup on every start —
+# a cgroup ID changes with each restart, so no static rule could name it. Our own table marks
+# that set's sockets and SNATs their new connections to the address; replies to connections
+# the core accepted (MoonProto from the terminal) are conntrack replies and stay as they are.
+# The table is loaded by our oneshot unit, part of nftables.service: a firewall reload that
+# flushes the ruleset reloads it too, and its daemon-reload puts the running cores back into
+# their sets.
 set -eu
 # dash, /bin/sh on Debian and Ubuntu, skips the EXIT trap when a signal kills it; exiting from
 # the signal runs it, so a dropped connection still cleans up.
@@ -41,6 +56,13 @@ trap 'exit 1' HUP INT TERM PIPE
 marker=.moonterminal-move
 PROC=${MB_PROC_ROOT:-/proc}
 UFW_CONF=${MB_UFW_CONF:-/etc/ufw/ufw.conf}
+SYSTEMD_DIR=${MB_SYSTEMD_DIR:-/etc/systemd/system}
+EGRESS_NFT=${MB_EGRESS_NFT:-/etc/moonbot-egress.nft}
+EGRESS_UNIT=moonbot-egress.service
+EGRESS_TABLE=moonbot_egress
+EGRESS_DROPIN=moonterminal-egress.conf
+# NFTSet= first shipped in systemd 255.
+EGRESS_MIN_SYSTEMD=255
 
 # The service unit of an instance directory.
 unit_of() {
@@ -315,6 +337,309 @@ ufw_delete_marked() {
     fi
 }
 
+# The running systemd's major version, 0 when it cannot be read.
+systemd_version() {
+    v=$(systemctl --version 2>/dev/null | awk 'NR == 1 { print $2 + 0 }') || v=0
+    case $v in ''|*[!0-9]*) v=0 ;; esac
+    printf '%s\n' "$v"
+}
+
+# Field $1 of the default IPv4 route ("dev" or "src"); empty without one. `route get` sends
+# nothing: it only asks the kernel which way such a packet would leave.
+default_route() {
+    command -v ip >/dev/null 2>&1 || return 0
+    ip -4 route get 1.1.1.1 2>/dev/null | awk -v key="$1" '{
+        for (i = 1; i < NF; i++) if ($i == key) { print $(i + 1); exit }
+    }'
+}
+
+# The global IPv4 addresses of interface $1, one per line.
+dev_ipv4() {
+    ip -4 -o addr show dev "$1" scope global 2>/dev/null | awk '{ split($4, a, "/"); print a[1] }'
+}
+
+# What a core's outgoing address is chosen from: the systemd version, the primary address and
+# every address of the interface the default route leaves through. Addresses of other interfaces
+# (a provider's private network) are not offered: they do not reach an exchange.
+print_egress_options() {
+    printf 'EGRESS_SYSTEMD=%s\n' "$(systemd_version)"
+    primary=$(default_route src)
+    test -z "$primary" || printf 'EGRESS_PRIMARY=%s\n' "$primary"
+    dev=$(default_route dev)
+    test -n "$dev" || return 0
+    for address in $(dev_ipv4 "$dev"); do
+        printf 'EGRESS_ADDRESS=%s\n' "$address"
+    done
+}
+
+# Whether $1 is a dotted IPv4 address without leading zeros.
+valid_ipv4() {
+    case $1 in ''|*[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+    old_ifs=$IFS
+    IFS=.
+    # Word splitting on dots is the point here; the case above admits only digits and dots.
+    # shellcheck disable=SC2086
+    set -- $1
+    IFS=$old_ifs
+    test $# = 4 || return 1
+    for part in "$@"; do
+        case $part in 0?*) return 1 ;; esac
+        test "${#part}" -le 3 && test "$part" -le 255 || return 1
+    done
+}
+
+# The nftables set of outgoing address $1.
+egress_set() {
+    printf 'e%s\n' "$1" | tr . _
+}
+
+# The drop-in of unit $1 that binds it.
+egress_dropin() {
+    printf '%s\n' "$SYSTEMD_DIR/$1.d/$EGRESS_DROPIN"
+}
+
+# The outgoing address recorded for unit $1, empty when it has none.
+egress_of() {
+    f=$(egress_dropin "$1")
+    test -f "$f" || return 0
+    sed -n 's/^# MOONTERMINAL_EGRESS=//p' "$f" | head -n 1
+}
+
+# Refuse, before anything changes, unless a core can be bound to address $1 here: systemd new
+# enough for NFTSet=, the address on the default route's interface, and nft (installed through
+# apt when missing).
+egress_require() {
+    v=$(systemd_version)
+    test "$v" -ge "$EGRESS_MIN_SYSTEMD" || {
+        echo "Binding a core to its own outgoing address needs systemd $EGRESS_MIN_SYSTEMD or newer (Debian 13, Ubuntu 24.04 or newer); this server has systemd $v" >&2
+        exit 1
+    }
+    valid_ipv4 "$1" || { echo "Not an IPv4 address: $1" >&2; exit 1; }
+    dev=$(default_route dev)
+    { test -n "$dev" && dev_ipv4 "$dev" | grep -qx -F "$1"; } || {
+        echo "The address $1 is not on this server's main network interface" >&2
+        exit 1
+    }
+    if ! command -v nft >/dev/null 2>&1; then
+        command -v apt-get >/dev/null 2>&1 || { echo 'Install on the server: nftables' >&2; exit 1; }
+        echo 'Installing: nftables'
+        # Both wait out an unattended upgrade holding apt's locks, as bootstrap.sh does.
+        apt-get -o DPkg::Lock::Timeout=300 update >/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y \
+            --no-install-recommends nftables >/dev/null
+        # The package's own service loads /etc/nftables.conf, whose stock first line flushes the
+        # whole ruleset — ufw's tables with it — at the next boot. Only the nft tool was wanted:
+        # left enabled by the install, it is disabled again, never stopped (its stop flushes too).
+        if systemctl is-enabled --quiet nftables.service 2>/dev/null; then
+            systemctl disable nftables.service >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
+# Serialize every change of the outgoing-address rules on this server: two steps for two cores
+# of one host would otherwise write the table and the drop-ins over each other. The descriptor
+# stays open, and the lock held, until the step ends.
+egress_lock() {
+    test -z "${egress_locked:-}" || return 0
+    exec 9>"${MB_EGRESS_LOCK:-/run/moonbot-egress.lock}"
+    if command -v flock >/dev/null 2>&1; then
+        flock -w 120 9 || {
+            echo 'Another change of outgoing addresses is still running on this server' >&2
+            exit 1
+        }
+    fi
+    egress_locked=1
+}
+
+# Write our table from every bound core's address and (re)load it through its unit; with no core
+# bound any more, the table, its file and its unit go. An address no longer on the server drops
+# its cores' connections instead of letting them out through the primary address unnoticed.
+#
+# A reload never empties a set: the file declares the sets (an existing one keeps its elements),
+# flushes only our two chains and writes their rules again, all in one transaction. Deleting and
+# recreating the table would leave every other bound core outside its rules until systemd refilled
+# the sets, and its new connections would leave from the primary address meanwhile.
+egress_reload() {
+    list=$(
+        for f in "$SYSTEMD_DIR"/*.service.d/"$EGRESS_DROPIN"; do
+            test -f "$f" || continue
+            sed -n 's/^# MOONTERMINAL_EGRESS=//p' "$f" | head -n 1
+        done | sort -u
+    )
+    if test -z "$list"; then
+        if test -f "${SYSTEMD_DIR:?}/${EGRESS_UNIT:?}"; then
+            systemctl disable --now -- "$EGRESS_UNIT" >/dev/null 2>&1 || true
+            rm -f -- "${SYSTEMD_DIR:?}/${EGRESS_UNIT:?}"
+        fi
+        rm -f -- "${EGRESS_NFT:?}"
+        if command -v nft >/dev/null 2>&1; then
+            nft delete table inet "$EGRESS_TABLE" >/dev/null 2>&1 || true
+        fi
+        systemctl daemon-reload
+        return 0
+    fi
+    dev=$(default_route dev)
+    here=''
+    test -z "$dev" || here=$(dev_ipv4 "$dev")
+    new=$(mktemp "$EGRESS_NFT.XXXXXX")
+    {
+        echo '# Written by MoonTerminal: the outgoing address of each bound MoonBot core.'
+        echo "table inet $EGRESS_TABLE {"
+        for address in $list; do
+            printf '    set %s { type cgroupsv2; }\n' "$(egress_set "$address")"
+        done
+        echo '    chain egress_mark { type filter hook output priority mangle; policy accept; }'
+        echo '    chain egress_snat { type nat hook postrouting priority srcnat; policy accept; }'
+        echo '}'
+        echo "flush chain inet $EGRESS_TABLE egress_mark"
+        echo "flush chain inet $EGRESS_TABLE egress_snat"
+        echo "table inet $EGRESS_TABLE {"
+        echo '    chain egress_mark {'
+        echo '        oifname "lo" accept'
+        n=0
+        for address in $list; do
+            n=$((n + 1))
+            set_name=$(egress_set "$address")
+            # The set holds unit cgroups, and `level` names the depth of the socket's ancestor
+            # compared with it: a plain service sits at 2 (system.slice/x.service), an instance of
+            # a template at 3 (system.slice/system-moonbot.slice/moonbot@….service), a unit in a
+            # nested slice at 4. Every depth is asked: an ancestor matches only when it is the
+            # bound unit's own cgroup, so a deeper rule never catches anything else.
+            for level in 2 3 4; do
+                # IPv6 would leave through the primary address whatever the IPv4 rule says;
+                # refused locally, a connection fails at once and a dual-stack client falls back.
+                printf '        socket cgroupv2 level %s @%s meta nfproto ipv6 counter drop\n' "$level" "$set_name"
+                if printf '%s\n' "$here" | grep -qx -F "$address"; then
+                    printf '        socket cgroupv2 level %s @%s meta mark set 0x4d54%04x\n' "$level" "$set_name" "$n"
+                else
+                    printf '        socket cgroupv2 level %s @%s counter drop\n' "$level" "$set_name"
+                fi
+            done
+        done
+        echo '    }'
+        echo '    chain egress_snat {'
+        n=0
+        for address in $list; do
+            n=$((n + 1))
+            if printf '%s\n' "$here" | grep -qx -F "$address"; then
+                printf '        meta mark 0x4d54%04x oifname "%s" counter snat ip to %s\n' "$n" "$dev" "$address"
+            fi
+        done
+        echo '    }'
+        echo '}'
+    } > "$new"
+    chmod 644 "$new"
+    mv -f -- "$new" "$EGRESS_NFT"
+    cat > "$SYSTEMD_DIR/$EGRESS_UNIT" <<EOF
+# Written by MoonTerminal: loads the outgoing addresses of bound MoonBot cores.
+[Unit]
+Description=MoonTerminal: outgoing addresses of MoonBot cores
+After=nftables.service
+# nftables.service's start, restart and reload flush the whole ruleset, ours with it: each of
+# them loads our table again.
+PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=nft -f $EGRESS_NFT
+# After a flush the sets come back empty; a reload of systemd puts every running bound core back
+# into its own.
+ExecStartPost=-systemctl daemon-reload
+ExecReload=nft -f $EGRESS_NFT
+ExecReload=-systemctl daemon-reload
+
+[Install]
+WantedBy=multi-user.target nftables.service
+EOF
+    systemctl daemon-reload
+    systemctl enable -- "$EGRESS_UNIT" >/dev/null 2>&1
+    systemctl reload-or-restart -- "$EGRESS_UNIT" >/dev/null 2>&1 || {
+        journalctl -u "$EGRESS_UNIT" -n 30 --no-pager >&2 || true
+        echo 'The outgoing-address rules did not load' >&2
+        exit 1
+    }
+}
+
+# Record address $2 as unit $1's outgoing address ("off": none) and reload the rules. The core
+# takes it on its next start.
+egress_write() {
+    egress_lock
+    f=$(egress_dropin "$1")
+    if test "$2" = off; then
+        test -f "$f" || return 0
+        rm -f -- "${f:?}"
+        rmdir -- "${f%/*}" 2>/dev/null || true
+    else
+        mkdir -p -- "${f%/*}"
+        set_name=$(egress_set "$2")
+        cat > "$f" <<EOF
+# Written by MoonTerminal: this core's outgoing connections leave from one address.
+# MOONTERMINAL_EGRESS=$2
+[Unit]
+Wants=$EGRESS_UNIT
+After=$EGRESS_UNIT
+
+[Service]
+NFTSet=cgroup:inet:$EGRESS_TABLE:$set_name
+# systemd ignores a set it cannot fill: without the table the core would start unbound and leave
+# from the primary address. It does not start instead. Run as root ("+"), whoever the core runs as.
+ExecStartPre=+nft list set inet $EGRESS_TABLE $set_name
+EOF
+    fi
+    egress_reload
+}
+
+# Whether unit $1, started, sits in the set of its recorded address; true for an unbound unit.
+# The listing quotes each element as its cgroup path, so the unit is matched as the path's last
+# component, never as the tail of another unit's name.
+egress_bound() {
+    address=$(egress_of "$1")
+    test -n "$address" || return 0
+    nft list set inet "$EGRESS_TABLE" "$(egress_set "$address")" 2>/dev/null | grep -q -F "/$1\""
+}
+
+# Unbind unit $1 on a failure path: never fails, so the cleanup that calls it goes on.
+egress_undo() {
+    (egress_write "$1" off) >/dev/null 2>&1 || true
+}
+
+# The INFO_EGRESS_* lines of unit $1: its address, whether the server still has that address,
+# whether the core sits in its set, and how many connections the address has carried since the
+# rules were last loaded (every core bound to it).
+print_egress_info() {
+    address=$(egress_of "$1")
+    printf 'INFO_EGRESS=%s\n' "$address"
+    test -n "$address" || return 0
+    present=0
+    dev=$(default_route dev)
+    if test -n "$dev" && dev_ipv4 "$dev" | grep -qx -F "$address"; then
+        present=1
+    fi
+    bound=0
+    ! egress_bound "$1" || bound=1
+    connections=$(nft list chain inet "$EGRESS_TABLE" egress_snat 2>/dev/null | awk -v address="$address" '
+        $NF == address { for (i = 1; i < NF; i++) if ($i == "packets") { print $(i + 1); exit } }
+    ') || connections=''
+    printf 'INFO_EGRESS_PRESENT=%s\nINFO_EGRESS_BOUND=%s\nINFO_EGRESS_CONNECTIONS=%s\n' \
+        "$present" "$bound" "$connections"
+}
+
+# Set settings ("settings" when given) and egress (the address of `egress=<ipv4>`) from an install
+# step's trailing options; anything else is refused before the step changes a thing.
+install_options() {
+    settings=''
+    egress=''
+    for option in "$@"; do
+        case $option in
+        settings) settings=settings ;;
+        egress=*) egress=${option#egress=} ;;
+        *) echo "Unknown install option $option" >&2; exit 1 ;;
+        esac
+    done
+}
+
 # The absolute instance directory for $1: a relative name lives under /root. Every step resolves
 # it the same way, so finish and remove find what install made.
 resolve_dir() {
@@ -398,6 +723,7 @@ check)
     awk '/^MemTotal:/ { printf "CHECK_MEM_TOTAL_MB=%d\n", $2 / 1024 }
          /^MemAvailable:/ { printf "CHECK_MEM_AVAILABLE_MB=%d\n", $2 / 1024 }' "$PROC/meminfo"
     if ufw_active; then echo CHECK_UFW=active; else echo CHECK_UFW=off; fi
+    print_egress_options
     echo CHECK_OK
     ;;
 install)
@@ -407,6 +733,10 @@ install)
     url=$4
     # The work dir carries the exchange API keys: it goes on every exit from here on.
     trap 'rm -rf -- "$work"' EXIT
+    shift 4
+    install_options "$@"
+    test -z "$settings" || { echo "Unknown install option $settings" >&2; exit 1; }
+    test -z "$egress" || egress_require "$egress"
     base=$(resolve_dir "$base")
     test "$base" != / || { echo 'Choose an instance directory, not /' >&2; exit 1; }
     dest=$base
@@ -422,11 +752,13 @@ install)
     mkdir -- "$dest"
     new_ufw4=0
     new_ufw6=0
+    egress_made=''
     cleanup() {
         code=$?
         if test "$code" != 0; then
             test "$new_ufw4" = 0 || ufw_delete_family "$port" 4 "$dest"
             test "$new_ufw6" = 0 || ufw_delete_family "$port" 6 "$dest"
+            test -z "$egress_made" || egress_undo "$unit"
             rm -rf -- "$dest"
         fi
         rm -rf -- "$work"
@@ -453,6 +785,11 @@ install)
         test "$new_ufw6" = 0 || echo ufw6 >> "$dest/$marker"
     fi
     systemctl daemon-reload
+    # Bound before its first start: `start` then confirms the core sits in its set.
+    if test -n "$egress"; then
+        egress_made=1
+        egress_write "$unit" "$egress"
+    fi
     # Not started here: the old core must be down first, or two cores trade one account.
     trap - EXIT
     rm -rf -- "$work"
@@ -462,8 +799,9 @@ install-fresh)
     base=$1
     port=$2
     url=$3
-    settings=${4:-}
-    test -z "$settings" || test "$settings" = settings || { echo "Unknown install option $settings" >&2; exit 1; }
+    shift 3
+    install_options "$@"
+    test -z "$egress" || egress_require "$egress"
     base=$(resolve_dir "$base")
     test "$base" != / || { echo 'Choose an instance directory, not /' >&2; exit 1; }
     dest=$base
@@ -480,6 +818,7 @@ install-fresh)
     new_ufw4=0
     new_ufw6=0
     started=''
+    egress_made=''
     cleanup() {
         code=$?
         if test "$code" != 0; then
@@ -489,6 +828,7 @@ install-fresh)
             fi
             test "$new_ufw4" = 0 || ufw_delete_family "$port" 4 "$dest"
             test "$new_ufw6" = 0 || ufw_delete_family "$port" 6 "$dest"
+            test -z "$egress_made" || egress_undo "$unit"
             if test -n "$made"; then
                 rm -rf -- "$dest"
             fi
@@ -527,6 +867,11 @@ install-fresh)
         test "$new_ufw6" = 0 || echo ufw6 >> "$dest/$marker"
     fi
     systemctl daemon-reload
+    # Bound before the first start, so not one connection of the core leaves from elsewhere.
+    if test -n "$egress"; then
+        egress_made=1
+        egress_write "$unit" "$egress"
+    fi
     started=1
     systemctl enable --now -- "$unit" >/dev/null 2>&1
     # A fresh core writes its default settings on the first start, or starts on the settings
@@ -538,6 +883,7 @@ install-fresh)
         test "$(date +%s)" -lt "$deadline" || { echo 'The core does not answer its commands within 90 s' >&2; exit 1; }
         sleep 1
     done
+    egress_bound "$unit" || { echo "The core started outside its outgoing address $egress" >&2; exit 1; }
     trap - EXIT
     rm -rf -- "$work"
     printf 'MOVE_DIRECTORY=%s\nMOVE_SERVICE=%s\n' "$dest" "$unit"
@@ -572,6 +918,71 @@ info)
     fi
     case $memory in ''|*[!0-9]*) memory='';; esac
     printf 'INFO_ACTIVE=%s\nINFO_UPTIME=%s\nINFO_MEMORY=%s\n' "$active" "$uptime" "$memory"
+    print_egress_info "$unit"
+    print_egress_options
+    ;;
+egress)
+    validate_port "${1:-}"
+    wanted=${2:-}
+    test -n "$wanted" || exit 2
+    locate_port "$p" || { echo "No core is installed for UDP $p" >&2; exit 1; }
+    current=$(egress_of "$unit")
+    running=0
+    ! systemctl is-active --quiet -- "$unit" || running=1
+    # Asked for what it already has: a trading core is not restarted for nothing. The rules are
+    # still rewritten — a table from an older script is replaced — and the reload keeps the
+    # running core in its set.
+    if test "$wanted" = off && test -z "$current"; then
+        printf 'EGRESS_OK=%s\n' "$wanted"
+        exit 0
+    fi
+    if test "$wanted" = "$current" && { test "$running" = 0 || egress_bound "$unit"; }; then
+        # Under the lock like every write: a reload from a stale drop-in list, racing a step that
+        # binds another core, would flush that core's fresh rules.
+        egress_lock
+        egress_reload
+        test "$running" = 0 || egress_bound "$unit" ||
+            { echo "The core left its outgoing address $wanted on a reload" >&2; exit 1; }
+        printf 'EGRESS_OK=%s\n' "$wanted"
+        exit 0
+    fi
+    test "$wanted" = off || egress_require "$wanted"
+    # A failure from here on puts the previous binding back: a drop-in whose rules never loaded
+    # would let the core's next start leave from the primary address while it reads as bound.
+    restore_egress() {
+        code=$?
+        if test "$code" != 0; then
+            (egress_write "$unit" "${current:-off}") >/dev/null 2>&1 || true
+        fi
+        exit "$code"
+    }
+    trap restore_egress EXIT
+    egress_write "$unit" "$wanted"
+    # A stopped core stays stopped — it may be the old core of a move, or one its user stopped on
+    # purpose: it takes the address on its next start, and the drop-in refuses that start without
+    # the rules.
+    if test "$running" = 0; then
+        trap - EXIT
+        printf 'EGRESS_OK=%s\n' "$wanted"
+        exit 0
+    fi
+    # Connections already open keep the address they have: only a restart moves all of them.
+    # The journal goes first and the reason last: the terminal shows the last line.
+    restart_failed() {
+        journalctl -u "$unit" -n 30 --no-pager >&2 || true
+        echo "The core did not come back up after its restart on the outgoing address $wanted" >&2
+        exit 1
+    }
+    systemctl restart -- "$unit" >/dev/null 2>&1 || restart_failed
+    deadline=$(($(date +%s) + 60))
+    until udp_bound "$p"; do
+        systemctl is-active --quiet -- "$unit" || restart_failed
+        test "$(date +%s)" -lt "$deadline" || restart_failed
+        sleep 1
+    done
+    egress_bound "$unit" || { echo "The core restarted outside its outgoing address $wanted" >&2; exit 1; }
+    trap - EXIT
+    printf 'EGRESS_OK=%s\n' "$wanted"
     ;;
 service)
     action=${1:-}
@@ -761,6 +1172,7 @@ start)
         test "$i" -le 30 || { echo "The core does not listen on UDP $port" >&2; exit 1; }
         sleep 1
     done
+    egress_bound "$unit" || { echo "The core started outside its outgoing address $(egress_of "$unit")" >&2; exit 1; }
     trap - EXIT
     echo START_OK
     ;;
@@ -793,6 +1205,8 @@ remove)
     if ufw_active; then
         ufw_delete_marked "$dest/$marker" "$port" "$dest"
     fi
+    # Never fails: a rule reload that breaks for other cores must not leave this one half-removed.
+    egress_undo "$unit"
     rm -rf -- "$dest"
     echo REMOVE_OK
     ;;

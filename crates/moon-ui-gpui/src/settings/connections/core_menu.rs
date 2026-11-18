@@ -56,6 +56,8 @@ pub(crate) fn core_menu_rows(form: MenuForm, active: Option<bool>) -> Vec<MenuRo
             ("restart", "core_cmds.menu.restart", Cmd::Restart),
             ("stop", "core_cmds.menu.stop", Cmd::Stop),
             ("start", "core_cmds.menu.start", Cmd::Start),
+            // Bound through the core's systemd unit, so a hand-installed core can be bound too.
+            ("egress", "core_cmds.menu.egress", Cmd::Egress),
         ][..],
         &[
             ("exchange", "core_cmds.menu.exchange", Cmd::SwitchExchange),

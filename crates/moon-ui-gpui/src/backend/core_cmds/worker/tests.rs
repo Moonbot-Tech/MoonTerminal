@@ -115,6 +115,7 @@ impl Runner for FakeRunner {
                 .into(),
                 uptime_s: self.info_active.then_some(60),
                 memory: self.info_active.then_some(1024),
+                egress: Default::default(),
             }
         }))
     }
@@ -236,6 +237,11 @@ impl Runner for FakeRunner {
             return Err(std::io::Error::other("disk full"));
         }
         Ok(format!("{date}_{label}.server.log"))
+    }
+
+    fn egress(&self, port: u16, address: Option<Ipv4Addr>) -> anyhow::Result<()> {
+        self.record(format!("egress:{port}:{address:?}"));
+        Ok(())
     }
 }
 
@@ -460,6 +466,13 @@ fn every_command_reaches_its_runner_method() {
             "set_moonproto_address:",
         ),
         (Cmd::UpdateCore, CmdArgs::None, "status:"),
+        // Opening the page only reads; a pick reaches the egress step.
+        (Cmd::Egress, CmdArgs::None, "info:"),
+        (
+            Cmd::Egress,
+            CmdArgs::Egress(Some("203.0.113.12".parse().expect("address"))),
+            "egress:",
+        ),
         (Cmd::LogDay, CmdArgs::None, "log_days:"),
         (
             Cmd::LogDay,
@@ -759,6 +772,7 @@ fn info_refreshes_cached_active_state_and_unit() {
             active: "inactive".into(),
             uptime_s: None,
             memory: None,
+            egress: Default::default(),
         }),
         false,
     );
@@ -902,6 +916,7 @@ fn retarget_recovery_preserves_ownership_and_refreshes_active_state() {
             active: "inactive".into(),
             uptime_s: None,
             memory: None,
+            egress: Default::default(),
         }),
         true,
     );

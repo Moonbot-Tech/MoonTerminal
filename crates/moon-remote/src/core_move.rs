@@ -115,6 +115,9 @@ pub struct Install<'a> {
     pub key_packet: &'a str,
     /// Whether the archive added the first-start INI switch, which [`finish`] then removes.
     pub ini_flag_added: bool,
+    /// The server address the core's outgoing connections leave from; `None`: the primary one.
+    /// Bound at install, so [`start`] fails if the started core is not bound.
+    pub egress: Option<std::net::Ipv4Addr>,
 }
 
 /// Where [`install`] put the core.
@@ -148,6 +151,8 @@ pub struct ServerCheck {
     pub mem_available_mb: u64,
     /// ufw is installed and active: the install opens the core's UDP port in it.
     pub ufw_active: bool,
+    /// What the core's outgoing address can be chosen from.
+    pub egress: crate::egress::EgressOptions,
 }
 
 impl ServerCheck {
@@ -169,6 +174,7 @@ impl ServerCheck {
             mem_total_mb: number("CHECK_MEM_TOTAL_MB"),
             mem_available_mb: number("CHECK_MEM_AVAILABLE_MB"),
             ufw_active: script::value(text, "CHECK_UFW") == Some("active"),
+            egress: crate::egress::EgressOptions::parse(text),
         }
     }
 }
@@ -240,12 +246,10 @@ pub fn install(
     }
     say(MoveStep::Uploaded);
     let port = install.proto_port.to_string();
-    let out = match privilege.run(
-        conn,
-        &command("install", &[&work, install.dir, &port, install.package_url]),
-        &[],
-        INSTALL_TIMEOUT,
-    ) {
+    let egress = crate::egress::install_option(install.egress);
+    let mut args = vec![work.as_str(), install.dir, &port, install.package_url];
+    args.extend(egress.as_deref());
+    let out = match privilege.run(conn, &command("install", &args), &[], INSTALL_TIMEOUT) {
         Ok(out) => out,
         Err(e) => {
             drop_work();

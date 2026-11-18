@@ -128,9 +128,17 @@ impl ConnectWizardView {
             |this: &mut Self, window, cx| this.browse_key(window, cx),
             cx,
         );
+        let egress = super::server::field(
+            "cw-move-egress",
+            t!("connect_wizard.move.egress"),
+            &self.move_egress,
+            false,
+            cx,
+        );
         Screen::new(t!("connect_wizard.server.title"))
             .sub(t!("connect_wizard.move.server_sub"))
-            .child(form)
+            .child(form.child(egress))
+            .child(note(t!("connect_wizard.move.egress_note"), cx))
             .child(note(t!("connect_wizard.server.probe_note"), cx))
             .left(
                 MoonButton::new("cw-move-back")
@@ -183,6 +191,14 @@ impl ConnectWizardView {
                 return;
             }
         };
+        let egress = match parse_egress(&self.move_egress.read(cx).value()) {
+            Ok(egress) => egress,
+            Err(()) => {
+                self.error = Some(t!("connect_wizard.move.need_egress").to_string());
+                cx.notify();
+                return;
+            }
+        };
         self.error = None;
         // The login is in the move's hands now; the fields forget it.
         self.server.forget_secrets(window, cx);
@@ -194,6 +210,7 @@ impl ConnectWizardView {
             dir: access.dir,
             proto_port: access.proto_port,
             close_password: access.close_password,
+            egress,
         };
         self.backend
             .update(cx, |b, bcx| b.core_move_start(uid, form, bcx));
@@ -555,6 +572,15 @@ pub(super) fn default_dir(name: &str) -> String {
         .map(|c| c.to_ascii_lowercase())
         .collect();
     format!("mb{tail}")
+}
+
+/// The typed outgoing address: empty is the primary one (`None`), anything else must be IPv4.
+fn parse_egress(text: &str) -> Result<Option<std::net::Ipv4Addr>, ()> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse().map(Some).map_err(|_| ())
 }
 
 #[cfg(test)]

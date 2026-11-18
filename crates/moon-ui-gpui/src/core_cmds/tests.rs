@@ -255,8 +255,10 @@ pub(super) fn record(selector: String, text: String, size: f32, weight: FontWeig
 /// Required state or confirmation text for each scenario that promises it.
 fn required_text_selectors(scenario: usize) -> &'static [&'static str] {
     match scenario {
-        13 | 17 | 25 => &["cc-confirm-title", "cc-confirm-why"],
-        0 | 1 | 2 | 4 | 6 | 7 | 9 | 16 | 20 | 40 | 43 | 44 => &["cc-state-title", "cc-state-why"],
+        13 | 17 | 25 | 46 => &["cc-confirm-title", "cc-confirm-why"],
+        0 | 1 | 2 | 4 | 6 | 7 | 9 | 16 | 20 | 40 | 43 | 44 | 47 | 48 => {
+            &["cc-state-title", "cc-state-why"]
+        }
         3 | 8 | 11 | 14 | 15 | 18 | 19 | 22 | 23 | 26 | 29 | 30 | 33 | 35 | 36 => {
             &["cc-state-title"]
         }
@@ -285,7 +287,7 @@ fn all_command_states_fit_locales_themes_and_window_sizes(cx: &mut gpui::TestApp
                 )
             });
             for (w, h) in [MIN_SIZE, DEFAULT_SIZE] {
-                for scenario in 0..45 {
+                for scenario in 0..49 {
                     TEXTS.with(|texts| texts.borrow_mut().clear());
                     let handle = cx.open_window(gpui::size(px(w), px(h)), |window, cx| {
                         let (cmd, facts, confirm, revealed) = scenario_facts(scenario);
@@ -357,7 +359,7 @@ fn all_command_states_fit_locales_themes_and_window_sizes(cx: &mut gpui::TestApp
                             rail.right() <= body.origin.x,
                             "{context}: rail overlaps page"
                         );
-                        for i in [1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13] {
+                        for i in [1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13, 14] {
                             let selector = Box::leak(format!("cc-rail-{i}").into_boxed_str());
                             let item = visual.debug_bounds(selector).expect("rail item");
                             assert!(
@@ -480,6 +482,7 @@ fn scenario_facts(
         active: "active".into(),
         uptime_s: Some(47_040),
         memory: Some(26 * 1024 * 1024),
+        egress: Default::default(),
     });
     facts.log = Some(LogTail {
         lines: vec![
@@ -519,8 +522,31 @@ fn scenario_facts(
         39 | 40 => Cmd::Status,
         41 | 43 => Cmd::ApiKeys,
         42 | 44 => Cmd::MoonProtoAddress,
+        45..=48 => Cmd::Egress,
         _ => Cmd::UpdateCore,
     };
+    // The outgoing-address page on a two-address server: picking, confirming, a lost address and
+    // a server too old to bind at all.
+    if (45..=48).contains(&n) {
+        let egress = &mut facts.info.as_mut().expect("info").egress;
+        egress.options = moon_remote::egress::EgressOptions {
+            systemd: if n == 48 { 252 } else { 257 },
+            primary: Some("203.0.113.11".parse().expect("primary")),
+            addresses: vec![
+                "203.0.113.11".parse().expect("primary"),
+                "203.0.113.12".parse().expect("second"),
+            ],
+        };
+        if n == 47 {
+            egress.address = Some("203.0.113.40".parse().expect("lost"));
+            egress.bound = true;
+        }
+        if n == 46 {
+            confirm = Some(Confirm::Egress(Some(
+                "203.0.113.12".parse().expect("second"),
+            )));
+        }
+    }
     match n {
         1 => {
             let s = facts.status.as_mut().expect("status");

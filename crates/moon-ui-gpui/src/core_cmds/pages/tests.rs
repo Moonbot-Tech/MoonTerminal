@@ -321,3 +321,167 @@ fn status_surfaces_moonproto_disabled_and_listener_errors() {
         }));
     }
 }
+
+/// Info of a running core on a server with `systemd`, a primary and one more address, bound to
+/// `bound_to` and, when bound, in its set as `in_set` says.
+fn egress_facts(systemd: u32, bound_to: Option<&str>, in_set: bool) -> CoreFacts {
+    use moon_remote::core_cmds::ServiceInfo;
+    use moon_remote::egress::{EgressInfo, EgressOptions};
+    let mut facts = facts();
+    facts.info = Some(ServiceInfo {
+        located: facts.located.clone().expect("located"),
+        active: "active".into(),
+        uptime_s: Some(60),
+        memory: None,
+        egress: EgressInfo {
+            address: bound_to.map(|a| a.parse().expect("address")),
+            present: true,
+            bound: in_set,
+            connections: Some(7),
+            options: EgressOptions {
+                systemd,
+                primary: Some("203.0.113.11".parse().expect("primary")),
+                addresses: vec![
+                    "203.0.113.11".parse().expect("primary"),
+                    "203.0.113.12".parse().expect("second"),
+                ],
+            },
+        },
+    });
+    facts
+}
+
+/// The choices of a two-address server.
+fn egress_choices(
+    page: &super::Page,
+) -> Option<&Vec<(Option<std::net::Ipv4Addr>, String, bool, bool)>> {
+    page.body.iter().find_map(|block| match block {
+        Block::EgressChoices(choices) => Some(choices),
+        _ => None,
+    })
+}
+
+/// An unbound core is offered the primary address as current and the second address to pick.
+#[test]
+fn egress_offers_the_primary_as_current_and_the_other_address() {
+    let _locale = crate::test_locale::force("en");
+    let page = build(&egress_facts(257, None, false), &state(Cmd::Egress));
+    assert_eq!(page.kind, Kind::Egress);
+    let choices = egress_choices(&page).expect("choices");
+    assert_eq!(choices.len(), 2);
+    assert_eq!((choices[0].0, choices[0].2), (None, true));
+    assert_eq!(
+        (choices[1].0, choices[1].2),
+        (Some("203.0.113.12".parse().expect("second")), false)
+    );
+}
+
+/// systemd before 255 offers no choice at all, only why.
+#[test]
+fn egress_on_an_old_systemd_offers_nothing_to_pick() {
+    let _locale = crate::test_locale::force("en");
+    let page = build(&egress_facts(252, None, false), &state(Cmd::Egress));
+    assert!(egress_choices(&page).is_none());
+    assert!(
+        page.body
+            .iter()
+            .any(|block| matches!(block, Block::State(super::Tone::Warn, _, _)))
+    );
+}
+
+/// A bound running core outside its set is flagged: it leaves from the primary address.
+#[test]
+fn egress_flags_a_bound_core_outside_its_set() {
+    let _locale = crate::test_locale::force("en");
+    let lost = build(
+        &egress_facts(257, Some("203.0.113.12"), false),
+        &state(Cmd::Egress),
+    );
+    assert!(
+        lost.body
+            .iter()
+            .any(|block| matches!(block, Block::State(super::Tone::Bad, _, _)))
+    );
+    let fine = build(
+        &egress_facts(257, Some("203.0.113.12"), true),
+        &state(Cmd::Egress),
+    );
+    assert!(
+        !fine
+            .body
+            .iter()
+            .any(|block| matches!(block, Block::State(super::Tone::Bad, _, _)))
+    );
+}
+
+/// A pick is applied only through its confirmation, whose button runs it.
+#[test]
+fn egress_pick_waits_for_its_confirmation() {
+    let _locale = crate::test_locale::force("en");
+    let mut view = state(Cmd::Egress);
+    view.confirm = Some(Confirm::Egress(Some(
+        "203.0.113.12".parse().expect("second"),
+    )));
+    let page = build(&egress_facts(257, None, false), &view);
+    let confirm = page.body.iter().find_map(|block| match block {
+        Block::Confirm { buttons, .. } => Some(buttons),
+        _ => None,
+    });
+    assert!(
+        confirm
+            .expect("confirmation")
+            .iter()
+            .any(|b| b.primary && b.action == Action::Confirm)
+    );
+}
+
+/// A bound core outside its rules can pick its own address again to repair them; a fine one cannot.
+#[test]
+fn egress_current_row_is_pickable_only_to_repair() {
+    let _locale = crate::test_locale::force("en");
+    let repair = build(
+        &egress_facts(257, Some("203.0.113.12"), false),
+        &state(Cmd::Egress),
+    );
+    let current = |page: &super::Page| {
+        egress_choices(page)
+            .expect("choices")
+            .iter()
+            .find(|row| row.2)
+            .map(|row| row.3)
+    };
+    assert_eq!(current(&repair), Some(true));
+    let fine = build(
+        &egress_facts(257, Some("203.0.113.12"), true),
+        &state(Cmd::Egress),
+    );
+    assert_eq!(current(&fine), Some(false));
+}
+
+/// Info without server facts (made up for a core that did not answer) is not an old systemd.
+#[test]
+fn egress_without_server_facts_is_unread_not_old() {
+    let _locale = crate::test_locale::force("en");
+    let page = build(&egress_facts(0, None, false), &state(Cmd::Egress));
+    assert!(egress_choices(&page).is_none());
+    assert!(
+        !page
+            .body
+            .iter()
+            .any(|block| matches!(block, Block::State(super::Tone::Warn, _, _)))
+    );
+}
+
+/// A recorded address the server lost is reported, even though the core sits in its set.
+#[test]
+fn egress_reports_a_lost_address() {
+    let _locale = crate::test_locale::force("en");
+    let mut facts = egress_facts(257, Some("203.0.113.40"), true);
+    facts.info.as_mut().expect("info").egress.present = false;
+    let page = build(&facts, &state(Cmd::Egress));
+    assert!(
+        page.body
+            .iter()
+            .any(|block| matches!(block, Block::State(super::Tone::Bad, _, _)))
+    );
+}

@@ -40,6 +40,9 @@ pub(crate) struct MoveForm {
     /// Turn the server's password logins off once the new core is installed; set only with a
     /// key login in `first`.
     pub(crate) close_password: bool,
+    /// The server address the new core's outgoing connections leave from; `None`: the primary
+    /// one. Checked against the server's addresses before anything is installed.
+    pub(crate) egress: Option<Ipv4Addr>,
 }
 
 /// The user's answer to an old core that refuses to stop.
@@ -255,7 +258,33 @@ fn run_move(
         },
     );
     progress.mark(StepId::Server, StepState::Running, StepNote::CheckingServer);
-    core_move::check(&conn, &privilege, form.proto_port, say)?;
+    let check = core_move::check(&conn, &privilege, form.proto_port, say)?;
+    // The primary address is no binding: the core leaves from it anyway, and a binding would only
+    // add rules (and drop its IPv6) for nothing — the other pickers do not offer it either.
+    let egress = form
+        .egress
+        .filter(|address| Some(*address) != check.egress.primary);
+    // Refused here, in the user's language, before the install would refuse it in the script's.
+    if let Some(address) = egress {
+        if !check.egress.supported() {
+            progress.fail_at(StepId::Server);
+            anyhow::bail!(
+                "{}",
+                t!(
+                    "core_move.egress_old_systemd",
+                    found = check.egress.systemd,
+                    min = moon_remote::egress::MIN_SYSTEMD
+                )
+            );
+        }
+        if !check.egress.addresses.contains(&address) {
+            progress.fail_at(StepId::Server);
+            anyhow::bail!(
+                "{}",
+                t!("core_move.egress_missing", address = address.to_string())
+            );
+        }
+    }
     progress.mark(
         StepId::Server,
         StepState::Done,
@@ -274,6 +303,7 @@ fn run_move(
             archive: &plan.archive.bytes,
             key_packet: &plan.packet_text,
             ini_flag_added: plan.archive.ini_flag_added,
+            egress,
         },
         say,
     )?;

@@ -233,8 +233,10 @@ impl CoreCmdsView {
             self.port_input
                 .update(cx, |s, cx| s.set_value(port, window, cx));
         }
-        if matches!(cmd, Cmd::Status | Cmd::Log | Cmd::SwitchExchange)
-            || (start && cmd == Cmd::RetryLogin)
+        if matches!(
+            cmd,
+            Cmd::Status | Cmd::Log | Cmd::SwitchExchange | Cmd::Egress
+        ) || (start && cmd == Cmd::RetryLogin)
         {
             self.run(window, cx);
         }
@@ -440,12 +442,18 @@ impl CoreCmdsView {
                 {
                     return;
                 }
+                if matches!(self.confirm, Some(Confirm::Egress(_)))
+                    && self.command_running(Cmd::Egress, cx)
+                {
+                    return;
+                }
                 let Some(confirm) = self.confirm.take() else {
                     return;
                 };
                 let (cmd, args) = match confirm {
                     Confirm::Service(cmd) => (cmd, CmdArgs::None),
                     Confirm::Exchange { id, .. } => (Cmd::SwitchExchange, CmdArgs::Exchange(id)),
+                    Confirm::Egress(address) => (Cmd::Egress, CmdArgs::Egress(address)),
                 };
                 if matches!(cmd, Cmd::Start | Cmd::Stop | Cmd::Restart) {
                     self.service_attempt = Some(cmd);
@@ -489,6 +497,11 @@ impl CoreCmdsView {
             }
             Action::OpenUpdates => self.on_open_updates(window, cx),
             Action::AddLogin => self.on_add_login(window, cx),
+            Action::Egress(address) => {
+                if !self.command_running(Cmd::Egress, cx) {
+                    self.confirm = Some(Confirm::Egress(address));
+                }
+            }
         }
         cx.notify();
     }
@@ -771,6 +784,57 @@ impl CoreCmdsView {
                                                 .text_size(px(12.0))
                                                 .text_color(rgba_from(p.text_muted, 1.0))
                                                 .child(hint),
+                                        )
+                                    })
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .into_any_element()
+            }
+            Block::EgressChoices(choices) => {
+                let p = MoonPalette::active(cx);
+                let running = matches!(
+                    facts.phases.get(&Cmd::Egress),
+                    Some(CmdPhase::Running { .. })
+                );
+                v_flex()
+                    .id("cc-egress")
+                    .w_full()
+                    .gap(px(1.0))
+                    .children(
+                        choices
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (address, label, current, enabled))| {
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(8.0))
+                                    .w_full()
+                                    .bg(rgba_from(
+                                        if current { p.accent } else { p.panel },
+                                        if current { 0.11 } else { 1.0 },
+                                    ))
+                                    .child(
+                                        MoonButton::new(SharedString::from(format!(
+                                            "cc-egress-{i}"
+                                        )))
+                                        .label(label)
+                                        .variant(MoonButtonVariant::Ghost)
+                                        .mono(false)
+                                        .disabled(!enabled || running)
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.act(Action::Egress(address), window, cx)
+                                        }))
+                                        .render(),
+                                    )
+                                    .when(current, |row| {
+                                        row.child(
+                                            div()
+                                                .px(px(12.0))
+                                                .text_size(px(12.0))
+                                                .text_color(rgba_from(p.text_muted, 1.0))
+                                                .child(t!("core_cmds.egress.current").to_string()),
                                         )
                                     })
                             })

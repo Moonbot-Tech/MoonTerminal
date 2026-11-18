@@ -19,6 +19,8 @@ pub(super) const RAIL: &[Row] = &[
     Row::Command(Cmd::Restart, "core_cmds.rail.restart"),
     Row::Command(Cmd::Stop, "core_cmds.rail.stop"),
     Row::Command(Cmd::Start, "core_cmds.rail.start"),
+    // A service-level change: it works for any located core, hand-installed ones too.
+    Row::Command(Cmd::Egress, "core_cmds.rail.egress"),
     Row::Caption("core_cmds.rail.cap_settings"),
     Row::Command(Cmd::SwitchExchange, "core_cmds.rail.exchange"),
     Row::Command(Cmd::ApiKeys, "core_cmds.rail.keys"),

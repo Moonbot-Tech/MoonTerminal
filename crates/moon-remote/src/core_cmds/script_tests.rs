@@ -10,6 +10,9 @@ static NEXT_SANDBOX: AtomicU64 = AtomicU64::new(0);
 const SYSTEMCTL_STUB: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MB_TEST_ROOT/systemctl_calls"
 case ${1:-} in
+--version)
+    cat "$MB_TEST_ROOT/systemd_version"
+    ;;
 list-units)
     cat "$MB_TEST_ROOT/systemctl_list_units"
     ;;
@@ -188,6 +191,23 @@ status)
 esac
 "#;
 
+/// `nft` lists the set and chain a fixture describes; every call is recorded.
+const NFT_STUB: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$MB_TEST_ROOT/nft_calls"
+case "$*" in
+"list set"*) cat "$MB_TEST_ROOT/nft_set" ;;
+"list chain"*) cat "$MB_TEST_ROOT/nft_chain" ;;
+esac
+"#;
+
+/// `ip` answers the default route and the interface's addresses from the fixture.
+const IP_STUB: &str = r#"#!/bin/sh
+case "$*" in
+*"route get"*) cat "$MB_TEST_ROOT/ip_route" ;;
+*"addr show"*) cat "$MB_TEST_ROOT/ip_addr" ;;
+esac
+"#;
+
 const SUDO_STUB: &str = r#"#!/bin/sh
 exit 0
 "#;
@@ -264,6 +284,8 @@ impl Sandbox {
             ("ufw", UFW_STUB),
             ("sudo", SUDO_STUB),
             ("setpriv", SETPRIV_STUB),
+            ("nft", NFT_STUB),
+            ("ip", IP_STUB),
         ] {
             sandbox.executable(&sandbox.bin.join(name), body);
         }
@@ -292,10 +314,28 @@ impl Sandbox {
             "readlink_exe",
             "owners",
             "setpriv_calls",
+            "nft_calls",
+            "nft_set",
+            "nft_chain",
         ] {
             sandbox.answer(name, "");
         }
         sandbox.answer("ufw_active", "0\n");
+        sandbox.answer(
+            "systemd_version",
+            "systemd 257 (257.9-1~deb13u1)\n+PAM +AUDIT\n",
+        );
+        sandbox.answer(
+            "ip_route",
+            "1.1.1.1 via 203.0.113.1 dev eth0 src 203.0.113.11 uid 0\n    cache\n",
+        );
+        sandbox.answer(
+            "ip_addr",
+            "2: eth0    inet 203.0.113.11/24 brd 203.0.113.255 scope global dynamic eth0\\       \
+             valid_lft 86000sec preferred_lft 86000sec\n\
+             2: eth0    inet 203.0.113.12/32 scope global eth0\\       \
+             valid_lft forever preferred_lft forever\n",
+        );
         sandbox.answer("ufw.conf", "IPV6=yes\n");
         sandbox.answer_at(&sandbox.proc.join("uptime"), "100.00 0.00\n");
         Some(sandbox)
@@ -370,8 +410,22 @@ impl Sandbox {
             .env("MB_TEST_ROOT", self.posix(&self.root))
             .env("MB_PROC_ROOT", self.posix(&self.proc))
             .env("MB_UFW_CONF", self.posix(&self.root.join("ufw.conf")))
+            .env("MB_SYSTEMD_DIR", self.posix(&self.systemd_dir()))
+            .env(
+                "MB_EGRESS_NFT",
+                self.posix(&self.root.join("moonbot-egress.nft")),
+            )
+            .env(
+                "MB_EGRESS_LOCK",
+                self.posix(&self.root.join("moonbot-egress.lock")),
+            )
             .output()
             .expect("run embedded core command script")
+    }
+
+    /// Where the fixture's systemd unit files and drop-ins live.
+    fn systemd_dir(&self) -> PathBuf {
+        self.root.join("systemd")
     }
 
     /// Read a fixture file as UTF-8.
@@ -1337,3 +1391,5 @@ fn retarget_skips_ipv6_when_ufw_disables_it() {
             .contains("::/0")
     );
 }
+
+mod egress;

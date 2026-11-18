@@ -265,7 +265,7 @@ impl Backend {
             return;
         }
         let busy = match &command {
-            NewCommand::Install => NewPhase::Installing,
+            NewCommand::Install { .. } => NewPhase::Installing,
             NewCommand::SetKeys { .. } | NewCommand::Retry => NewPhase::LoggingIn,
             NewCommand::Remove => NewPhase::Removing,
         };

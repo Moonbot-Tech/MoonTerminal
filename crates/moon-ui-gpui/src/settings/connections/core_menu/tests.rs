@@ -13,6 +13,7 @@ fn installed_forms_keep_exact_order_and_guards() {
         ("restart", "core_cmds.menu.restart", Cmd::Restart),
         ("stop", "core_cmds.menu.stop", Cmd::Stop),
         ("start", "core_cmds.menu.start", Cmd::Start),
+        ("egress", "core_cmds.menu.egress", Cmd::Egress),
         ("exchange", "core_cmds.menu.exchange", Cmd::SwitchExchange),
         ("keys", "core_cmds.menu.keys", Cmd::ApiKeys),
         ("mpkey", "core_cmds.menu.mpkey", Cmd::ConnectionKey),
@@ -22,16 +23,16 @@ fn installed_forms_keep_exact_order_and_guards() {
     for form in [MenuForm::Ours, MenuForm::Hand, MenuForm::Checking] {
         for active in [None, Some(true), Some(false)] {
             let rows = core_menu_rows(form, active);
-            assert_eq!(rows.len(), if form == MenuForm::Hand { 16 } else { 13 });
+            assert_eq!(rows.len(), if form == MenuForm::Hand { 17 } else { 14 });
             assert_eq!(rows[3], MenuRow::Separator);
-            assert_eq!(rows[7], MenuRow::Separator);
+            assert_eq!(rows[8], MenuRow::Separator);
             for (index, &(id, label_key, cmd)) in commands.iter().enumerate() {
-                let row_index = index + usize::from(index >= 3) + usize::from(index >= 6);
+                let row_index = index + usize::from(index >= 3) + usize::from(index >= 7);
                 let hint = if index == 5 && active == Some(true) {
                     Some("core_cmds.menu.running_hint")
                 } else if [3, 4].contains(&index) && active == Some(false) {
                     Some("core_cmds.menu.stopped_hint")
-                } else if index >= 6 && form == MenuForm::Checking {
+                } else if index >= 7 && form == MenuForm::Checking {
                     Some("core_cmds.menu.checking_hint")
                 } else {
                     None
@@ -42,7 +43,7 @@ fn installed_forms_keep_exact_order_and_guards() {
                         id,
                         label_key,
                         action: MenuCmd::Run(cmd),
-                        enabled: hint.is_none() && (index < 6 || form == MenuForm::Ours),
+                        enabled: hint.is_none() && (index < 7 || form == MenuForm::Ours),
                         hint_key: hint,
                         accent: false,
                     },

@@ -1,6 +1,7 @@
 //! Pure page models: command facts select content and actions before GPUI lays them out.
 
 mod addr;
+mod egress;
 mod errors;
 mod exchange;
 mod keys;
@@ -40,7 +41,12 @@ pub(super) struct ViewState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Confirm {
     Service(Cmd),
-    Exchange { id: String, name: String },
+    Exchange {
+        id: String,
+        name: String,
+    },
+    /// Bind the core to this outgoing address (`None`: the primary one), restarting it.
+    Egress(Option<std::net::Ipv4Addr>),
 }
 
 /// User intent; only the window turns an intent into a backend request.
@@ -51,7 +57,10 @@ pub(super) enum Action {
     Run,
     Confirm,
     CancelConfirm,
-    Exchange { id: String, name: String },
+    Exchange {
+        id: String,
+        name: String,
+    },
     LogLines(LogLines),
     CopyLog,
     ShowKey,
@@ -59,6 +68,8 @@ pub(super) enum Action {
     CopyKey,
     OpenUpdates,
     AddLogin,
+    /// Pick an outgoing address; it is applied only through its confirmation.
+    Egress(Option<std::net::Ipv4Addr>),
 }
 
 /// Semantic severity mapped to palette tokens by the chrome module.
@@ -123,6 +134,9 @@ pub(super) enum Block {
         buttons: Vec<Button>,
     },
     Exchanges(Vec<(String, String, bool, bool)>),
+    /// The outgoing addresses to pick from: the address (`None`: primary), its label, whether it
+    /// is the current one, and whether it can be picked.
+    EgressChoices(Vec<(Option<std::net::Ipv4Addr>, String, bool, bool)>),
     Buttons(Vec<Button>),
     Keys,
     Secret,
@@ -147,6 +161,7 @@ pub(super) enum Kind {
     Update,
     NoLogin,
     NotOurs,
+    Egress,
 }
 
 /// Complete page content and footer from one immutable facts snapshot.
@@ -207,6 +222,7 @@ pub(super) fn build(facts: &CoreFacts, view: &ViewState) -> Page {
         Cmd::ConnectionKey => mpkey::build(facts, view),
         Cmd::MoonProtoAddress => addr::build(facts, view),
         Cmd::UpdateCore => update::build(facts, view),
+        Cmd::Egress => egress::build(facts, view),
     }
 }
 
@@ -258,5 +274,6 @@ pub(super) fn title(cmd: Cmd) -> &'static str {
         Cmd::ConnectionKey => "core_cmds.mpkey.title",
         Cmd::MoonProtoAddress => "core_cmds.addr.title",
         Cmd::UpdateCore => "core_cmds.update.title",
+        Cmd::Egress => "core_cmds.egress.title",
     }
 }
