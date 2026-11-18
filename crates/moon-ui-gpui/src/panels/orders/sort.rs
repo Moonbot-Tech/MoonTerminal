@@ -170,20 +170,18 @@ pub(super) fn sort_entries(
         });
         return;
     }
-    entries.sort_by(|a, b| {
-        let ka = primary_key(view.primary, &a.row);
-        let kb = primary_key(view.primary, &b.row);
-        ka.cmp(&kb)
-            .then_with(|| {
-                let c = a.row.uid.cmp(&b.row.uid);
-                if view.newest_first { c.reverse() } else { c }
-            })
-            .then_with(|| a.core.cmp(&b.core))
+    entries.sort_by_cached_key(|entry| {
+        let uid = entry.row.uid;
+        (
+            primary_key(view.primary, &entry.row),
+            if view.newest_first { !uid } else { uid },
+            entry.core,
+        )
     });
 }
 
 /// Reuse the previous permutation when row membership and the active sort keys are unchanged.
-/// Return the new rows' signature for the next revision without hashing the old rows again.
+/// Return the new rows' signature for the next revision, or zero for a direct scalar sort.
 pub(super) fn sort_or_reuse_entries(
     entries: &mut Vec<OrderEntry>,
     previous: &[OrderEntry],
@@ -191,8 +189,13 @@ pub(super) fn sort_or_reuse_entries(
     view: &OrdersViewState,
     stop_overlay: &std::collections::HashMap<(CoreId, u64, u8), (bool, std::time::Instant)>,
 ) -> u64 {
+    if view.header_sort.is_none() && view.primary != PrimarySort::ProfitFirst {
+        // The scalar keys are cheaper to sort than building and draining a reverse lookup.
+        sort_entries(entries, view, stop_overlay);
+        return 0;
+    }
     let signature = sort_signature(entries, view, stop_overlay);
-    if !previous.is_empty() && previous_signature == Some(signature) {
+    if signature != 0 && !previous.is_empty() && previous_signature == Some(signature) {
         let expected = entries.len();
         let mut by_id: HashMap<_, _> = entries
             .drain(..)
@@ -323,10 +326,8 @@ fn sort_signature(
                     .then_some(&entry.row.strat_name)
                     .hash(&mut h),
             }
-        } else if view.primary == PrimarySort::ProfitFirst {
-            entry.pnl.map(f64::to_bits).hash(&mut h);
         } else {
-            primary_key(view.primary, &entry.row).hash(&mut h);
+            entry.pnl.map(f64::to_bits).hash(&mut h);
         }
         let hash = h.finish();
         rows = rows.wrapping_add(hash);
@@ -360,12 +361,12 @@ pub(super) fn apply_main_lift(
     match view.main_on_top {
         MainOnTop::Off => {}
         MainOnTop::Highlighted => {
-            entries.sort_by_key(|e| u8::from(!highlight.contains(&(e.core, e.row.uid))));
+            entries.sort_by_cached_key(|e| u8::from(!highlight.contains(&(e.core, e.row.uid))));
         }
         MainOnTop::AllTicker => {
             let markets: std::collections::HashSet<&str> =
                 main_open.iter().map(|(_, m)| m.as_str()).collect();
-            entries.sort_by_key(|e| u8::from(!markets.contains(e.row.market.as_str())));
+            entries.sort_by_cached_key(|e| u8::from(!markets.contains(e.row.market.as_str())));
         }
     }
 }

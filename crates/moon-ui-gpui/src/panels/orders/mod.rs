@@ -59,7 +59,7 @@ use moon_core::session::core_order::{CoreOrder, OrderedCores};
 #[derive(Clone)]
 pub(super) struct OrderEntry {
     pub(super) core: CoreId,
-    pub(super) core_name: String,
+    pub(super) core_name: SharedString,
     pub(super) row: Arc<OrderRow>,
     pub(super) pnl: Option<f64>,
     pub(super) pnl_pct: Option<f64>,
@@ -68,10 +68,10 @@ pub(super) struct OrderEntry {
 
 impl OrderEntry {
     /// Associate one shared row with its source and precompute every PnL comparator key once.
-    fn new(core: CoreId, core_name: &str, row: Arc<OrderRow>) -> Self {
+    fn new(core: CoreId, core_name: SharedString, row: Arc<OrderRow>) -> Self {
         Self {
             core,
-            core_name: core_name.to_owned(),
+            core_name,
             pnl: moon_core::feed::order_math::order_pnl(&row),
             pnl_pct: moon_core::feed::order_math::order_pnl_pct(&row),
             pnl_tp: moon_core::feed::order_math::order_pnl_at_tp(&row),
@@ -136,16 +136,17 @@ fn collect_scoped<'a>(
     )
 }
 
-/// Share rows by per-core revision, comparing contents only when that core published a change.
+/// Share entries and their calculated keys, comparing row contents only after a core update.
 fn collect_scoped_shared<'a>(
     cores: impl Iterator<Item = (CoreId, &'a str, &'a [OrderRow])>,
     keep: impl Fn(CoreId, &OrderRow) -> bool,
-    previous: &HashMap<(CoreId, u64), Arc<OrderRow>>,
+    previous: &HashMap<(CoreId, u64), &OrderEntry>,
     revisions: &HashMap<CoreId, u64>,
     previous_revisions: &HashMap<CoreId, u64>,
 ) -> Vec<OrderEntry> {
-    let mut entries = Vec::new();
+    let mut entries = Vec::with_capacity(previous.len());
     for (core, name, rows) in cores {
+        let name = SharedString::from(name.to_owned());
         let unchanged_core = revisions
             .get(&core)
             .is_some_and(|revision| previous_revisions.get(&core) == Some(revision));
@@ -153,12 +154,17 @@ fn collect_scoped_shared<'a>(
             if !keep(core, row) {
                 continue;
             }
-            let row = previous
+            let old = previous
                 .get(&(core, row.uid))
-                .filter(|old| unchanged_core || order_rows_equal(old, row))
-                .cloned()
-                .unwrap_or_else(|| Arc::new(row.clone()));
-            entries.push(OrderEntry::new(core, name, row));
+                .filter(|old| unchanged_core || order_rows_equal(&old.row, row));
+            let entry = match old {
+                Some(&old) => OrderEntry {
+                    core_name: name.clone(),
+                    ..old.clone()
+                },
+                None => OrderEntry::new(core, name.clone(), Arc::new(row.clone())),
+            };
+            entries.push(entry);
         }
     }
     entries
@@ -781,7 +787,7 @@ impl OrdersPanel {
         let previous: HashMap<_, _> = self
             .cached_entries
             .iter()
-            .map(|entry| ((entry.core, entry.row.uid), entry.row.clone()))
+            .map(|entry| ((entry.core, entry.row.uid), entry))
             .collect();
         let entries = collect_scoped_shared(
             cores,
