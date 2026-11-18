@@ -430,6 +430,28 @@ diag_counters!(
     // is inside its last hour — which for a 1м/5м/30м/1ч timeframe is always. Higher than that
     // means the clock quantum stopped working.
     CHART_COUNTDOWN_TICK => "chart_countdown_tick",
+    // Auto figures (`chartdx::auto_figures_sync`, driven by `panels::chart::auto_figures`).
+    //
+    //   * `autofigures_detect` — detector RUNS, one per row whose recompute key moved: a candle of
+    //     that row's timeframe closed, its parameters or timeframe changed, or the pane switched
+    //     market. Summed over every chart. A Main chart with the four shipped rows legitimately
+    //     prints 1 every five minutes (the M5 row), 2 every quarter hour, 3 every hour, 4 every four
+    //     hours, plus one burst of 4 on opening a coin. ANY reading during a mouse storm, a pan or a
+    //     zoom of a Fixed-timeframe chart is a defect: nothing on those paths is in the key.
+    //   * `autofigures_detect_us` — microseconds those runs took on the background executor, bar
+    //     assembly (cache read, resample) included. Off the UI thread by construction, so this is
+    //     CPU, not frame time; divide by `autofigures_detect` for the cost of one run.
+    //   * `autofigures_lines` — auto-figure lines emitted into the userdata buffers per second. It
+    //     moves with every userdata REBUILD of a pane that shows auto figures (an order revision or
+    //     an order-line hover rebuilds the whole layer, auto lines included), so it reads as
+    //     "rebuilds × lines": a steady rate on a quiet chart means something rebuilds the layer
+    //     without cause. It never moves on a frame that rebuilds nothing.
+    //   * `autofigures_events` — events derived on the lines (approach, squeeze, breakout, false
+    //     break, bounce). Reserved: events land in a later stage, and until then it stays 0.
+    AUTOFIGURES_DETECT => "autofigures_detect",
+    AUTOFIGURES_DETECT_US => "autofigures_detect_us",
+    AUTOFIGURES_LINES => "autofigures_lines",
+    AUTOFIGURES_EVENTS => "autofigures_events",
     FIRETEST_MOUSE_SENT => "firetest_mouse_sent",
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",

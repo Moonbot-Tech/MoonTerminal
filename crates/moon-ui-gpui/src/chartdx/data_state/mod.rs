@@ -121,6 +121,15 @@ pub(in crate::chartdx) struct ChartDataState {
     /// This panel's figure interaction state for drawing preview, hover, and selection plus its revision.
     pub(in crate::chartdx) figure_visual: figures_sync::FigureVisual,
     pub(in crate::chartdx) figure_visual_rev: u64,
+    /// This panel's auto figures by pane target, published by the panel once a detector run
+    /// completes; see `auto_figures_sync`. A short list rather than a map: one entry per pane, and
+    /// a stack holds a handful.
+    pub(in crate::chartdx) auto_figures: Vec<(
+        (CoreId, String),
+        Rc<super::auto_figures_sync::AutoPaneFigures>,
+    )>,
+    /// Advances on every publication; folded into `figures_sig`.
+    pub(in crate::chartdx) auto_figures_rev: u64,
     /// This panel's news marks (tag-coloured gems on the plot's bottom edge) plus their revision;
     /// see `news_sync`. Shared with the panel, which hit-tests the same list.
     pub(in crate::chartdx) news_marks: std::rc::Rc<Vec<moon_chart::news_marks::NewsMark>>,

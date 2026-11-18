@@ -34,6 +34,7 @@ mod pane_render;
 mod userdata_diff;
 use filter_headers::{ColumnBand, FilterHeaderHit, FilterLineHit};
 mod archived_lines;
+pub(crate) mod auto_figures_sync;
 mod figures_sync;
 mod news_sync;
 pub(crate) mod trade_history_sync;

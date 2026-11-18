@@ -1,0 +1,409 @@
+//! The auto figures' recompute policy for one chart panel (`docs-internal/AUTO_FIGURES.md` §7).
+//!
+//! The engine half (`chartdx::auto_figures_sync`) only stores and draws what it is handed; this
+//! half decides WHEN a row's detector runs. The rule is one key per row
+//! ([`RowKey`]: detector parameters, resolved timeframe, open time of the last closed bar of that
+//! timeframe, chart-history presence) and a run only when it moved. Concretely the causal chain is:
+//!
+//! - a bar of the row's timeframe closes → the key's time part moves at the next evaluation →
+//!   ONE job for that pane, carrying only the rows whose key moved;
+//! - the tab's auto-figure configuration changes → the keys of the edited rows move (a style edit
+//!   moves no key and only re-publishes);
+//! - the pane switches market → its slots are dropped and every drawn row runs once;
+//! - an `Auto` row's visible span crosses a hysteresis threshold → that row's timeframe moves.
+//!
+//! The keys are evaluated on the panel's existing wakes — the backend observer, the render path
+//! after a settings or camera change — and on ONE timer armed for the earliest moment a key can
+//! next move, so a quiet market still recomputes on its candle close. Evaluating is a few integer
+//! divisions per row; the detectors never run on that path. A mouse move reaches none of it.
+//!
+//! The job runs on the GPUI background executor (cache read, resample, detect), its completion
+//! comes back through the task itself, and the publication bumps the engine's figure revision, so
+//! the pane's userdata is rebuilt once — not the scene. Superseded results are recognised by key
+//! and dropped, so a job outliving a newer one cannot overwrite it.
+
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use gpui::Context;
+use moon_chart::auto_figures::take;
+use moon_chart::auto_figures::tf::{self, AutoTf};
+use moon_core::config::auto_figures::{AutoFiguresCfg, DetectorParams};
+use moon_core::session::CoreId;
+
+use super::ChartPanel;
+use crate::chartdx::auto_figures_sync::job::{
+    self, AutoRowOutcome, CacheAddr, PaneJob, RowKey, last_closed_open_ms, next_key_change_ms,
+};
+use crate::chartdx::auto_figures_sync::{AutoPaneFigures, AutoRowDrawn};
+use crate::chartdx::now_unix_ms;
+
+/// How long a row whose cache read did not happen waits before it is tried again.
+const READ_RETRY: Duration = Duration::from_secs(10);
+
+/// One panel's auto-figure state: the configuration it last applied, the per-pane row slots and
+/// the one timer waiting for the next candle close.
+#[derive(Default)]
+pub(super) struct AutoFiguresState {
+    /// The configuration the slots were evaluated against.
+    cfg: Option<AutoFiguresCfg>,
+    /// One entry per pane target this panel shows auto figures for.
+    panes: Vec<PaneSlots>,
+    /// The armed wake: the Unix ms it fires at and its generation.
+    timer: Option<(i64, u64)>,
+    /// Generation of the most recently armed wake.
+    timer_gen: u64,
+}
+
+/// One pane target's rows.
+struct PaneSlots {
+    target: (CoreId, String),
+    /// Indexed like the configuration's rows.
+    rows: Vec<RowSlot>,
+}
+
+/// One row of one pane.
+#[derive(Default)]
+struct RowSlot {
+    /// `Auto`'s memory of the timeframe it settled on, for its hysteresis.
+    auto_tf: AutoTf,
+    /// The last accepted run. Its key is what "unchanged" is measured against.
+    done: Option<Arc<AutoRowOutcome>>,
+    /// The key of a run in flight.
+    pending: Option<RowKey>,
+    /// Do not retry before this, after a cache read that did not happen.
+    retry_at: Option<Instant>,
+}
+
+/// Whether a row with `key` has to run: not already answered for it, not already running for it,
+/// and not inside a retry back-off.
+fn needs_run(slot: &RowSlot, key: &RowKey, now: Instant) -> bool {
+    if slot.done.as_ref().is_some_and(|d| d.key == *key) || slot.pending.as_ref() == Some(key) {
+        return false;
+    }
+    slot.retry_at.is_none_or(|at| now >= at)
+}
+
+/// The figures a row keeps: `take::select` against `ref_price`, each with its side of that price.
+fn kept_lines(
+    outcome: &AutoRowOutcome,
+    take: &moon_core::config::auto_figures::Take,
+    ref_price: f64,
+    at_ms: f64,
+) -> Vec<(usize, bool)> {
+    take::select(&outcome.found, take, ref_price, at_ms)
+        .into_iter()
+        .filter_map(|i| {
+            let price = outcome.found.get(i)?.shape.price_at(at_ms)?;
+            Some((i, price >= ref_price))
+        })
+        .collect()
+}
+
+/// The touch tolerance a row's zone band shows, in % of price; `0` for a detector without one.
+fn tolerance_pct(params: &DetectorParams) -> f32 {
+    match params {
+        DetectorParams::Swing(p) => p.tolerance_pct,
+        DetectorParams::Squeeze(p) => p.level.tolerance_pct,
+        DetectorParams::Trend(p) => p.tolerance_pct,
+        DetectorParams::PeriodExtreme(_) => 0.0,
+    }
+}
+
+impl ChartPanel {
+    /// Evaluate every row key of every pane, start a job for the rows whose key moved, and keep
+    /// the wake for the next candle close armed. Cheap and idempotent: called from every wake the
+    /// panel already has.
+    pub(super) fn sync_auto_figures(&mut self, cx: &mut Context<Self>) {
+        if !self.scene_visible {
+            return;
+        }
+        let now_ms = now_unix_ms();
+        let now = Instant::now();
+        let cfg_changed = {
+            let b = self.backend.read(cx);
+            let cfg = b.layout.auto_figures_for(self.default_kind);
+            if self.auto_figures.cfg.as_ref() != Some(cfg) {
+                self.auto_figures.cfg = Some(cfg.clone());
+                true
+            } else {
+                false
+            }
+        };
+        // A frozen trade window describes a closed interval; lines computed from today's candles
+        // would describe a different picture.
+        let active = !self.historical
+            && self
+                .auto_figures
+                .cfg
+                .as_ref()
+                .is_some_and(AutoFiguresCfg::is_active);
+        let targets: Vec<(usize, (CoreId, String))> = (0..self.chart.pane_count())
+            .filter_map(|idx| self.chart.pane_target(idx).map(|t| (idx, t)))
+            .collect();
+
+        // Panes that left (or the whole feature switched off) take their lines with them.
+        let gone: Vec<(CoreId, String)> = self
+            .auto_figures
+            .panes
+            .iter()
+            .filter(|p| !active || !targets.iter().any(|(_, t)| *t == p.target))
+            .map(|p| p.target.clone())
+            .collect();
+        let mut republish = false;
+        for target in &gone {
+            self.auto_figures.panes.retain(|p| p.target != *target);
+            republish |= self.chart.set_auto_figures(target.0, &target.1, None);
+        }
+        if !active {
+            self.auto_figures.timer = None;
+            if republish {
+                self.resync_userdata(cx);
+            }
+            return;
+        }
+        let Some(cfg) = self.auto_figures.cfg.clone() else {
+            return;
+        };
+
+        let mut next_wake: Option<i64> = None;
+        for (idx, target) in targets {
+            let Some(view) = self.chart.auto_pane_view(idx, target.0, &target.1) else {
+                // Not stamped with this target yet; the next sync after the market sync will be.
+                continue;
+            };
+            let at = match self
+                .auto_figures
+                .panes
+                .iter()
+                .position(|p| p.target == target)
+            {
+                Some(at) => at,
+                None => {
+                    self.auto_figures.panes.push(PaneSlots {
+                        target: target.clone(),
+                        rows: Vec::new(),
+                    });
+                    self.auto_figures.panes.len() - 1
+                }
+            };
+            let pane = &mut self.auto_figures.panes[at];
+            pane.rows.resize_with(cfg.rows.len(), RowSlot::default);
+            let mut jobs: Vec<(usize, RowKey)> = Vec::new();
+            for (ix, (row, slot)) in cfg.rows.iter().zip(pane.rows.iter_mut()).enumerate() {
+                let Some(params) = row.detector.known().filter(|_| row.is_drawn()) else {
+                    // A hidden or unknown row keeps nothing: showing it again runs it afresh.
+                    *slot = RowSlot::default();
+                    continue;
+                };
+                let visible = view.visible_ms.map_or(0.0, |v| v as f64);
+                let tf = tf::resolve(row.tf, &mut slot.auto_tf, visible).min(params.coarsest_tf());
+                let key = RowKey {
+                    detector: *params,
+                    tf,
+                    last_closed_ms: last_closed_open_ms(now_ms, tf),
+                    chart_ready: view.chart_ready,
+                };
+                let wake = next_key_change_ms(now_ms, tf);
+                next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
+                if let Some(at) = slot.retry_at.filter(|at| *at > now) {
+                    let retry = now_ms as i64 + at.duration_since(now).as_millis() as i64;
+                    next_wake = Some(next_wake.map_or(retry, |w| w.min(retry)));
+                }
+                if needs_run(slot, &key, now) {
+                    slot.pending = Some(key);
+                    slot.retry_at = None;
+                    jobs.push((ix, key));
+                }
+            }
+            if !jobs.is_empty() {
+                self.spawn_auto_job(idx, target.clone(), jobs, view.chart_tf_ms, now_ms, cx);
+            }
+            if cfg_changed {
+                // A style or selection edit moves no key; the lines still have to follow it.
+                republish |= self.publish_auto_figures(&target);
+            }
+        }
+        if republish {
+            self.resync_userdata(cx);
+        }
+        self.arm_auto_figures_timer(next_wake, now_ms, cx);
+    }
+
+    /// Start one background run for pane `idx`'s `rows`.
+    fn spawn_auto_job(
+        &mut self,
+        idx: usize,
+        target: (CoreId, String),
+        rows: Vec<(usize, RowKey)>,
+        chart_tf_ms: i64,
+        now_ms: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let chart: Arc<[_]> = self
+            .chart
+            .auto_pane_candles(idx, target.0, &target.1, now_ms)
+            .into();
+        let cache = self
+            .backend
+            .read(cx)
+            .session
+            .market_source()
+            .kline_address(target.0, &target.1)
+            .map(|(cache, exchange)| CacheAddr {
+                cache,
+                exchange,
+                market: target.1.clone(),
+            });
+        let job = PaneJob {
+            rows,
+            chart_tf_ms,
+            chart,
+            cache,
+            now_ms,
+        };
+        // Detached on purpose: replacing a handle would CANCEL a run whose rows are still marked
+        // pending, and they would never be retried. A late result is recognised by its key.
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let outcomes = executor
+                .spawn(async move {
+                    let cache = job.cache.as_ref().map(|c| c as &dyn job::BarCache);
+                    job::run(&job, cache)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| this.auto_job_done(target, outcomes, cx));
+        })
+        .detach();
+    }
+
+    /// Accept a finished run's outcomes whose key is still the one asked for, then republish.
+    fn auto_job_done(
+        &mut self,
+        target: (CoreId, String),
+        outcomes: Vec<(usize, AutoRowOutcome)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self
+            .auto_figures
+            .panes
+            .iter_mut()
+            .find(|p| p.target == target)
+        else {
+            return;
+        };
+        let mut accepted = false;
+        let mut retry = false;
+        for (ix, outcome) in outcomes {
+            let Some(slot) = pane.rows.get_mut(ix) else {
+                continue;
+            };
+            if slot.pending != Some(outcome.key) {
+                continue;
+            }
+            slot.pending = None;
+            if outcome.read_failed {
+                slot.retry_at = Some(Instant::now() + READ_RETRY);
+                retry = true;
+                continue;
+            }
+            slot.done = Some(Arc::new(outcome));
+            accepted = true;
+        }
+        if accepted && self.publish_auto_figures(&target) {
+            self.resync_userdata(cx);
+        }
+        if retry {
+            // Re-arms the timer for the back-off; the run itself starts when it expires.
+            self.sync_auto_figures(cx);
+        }
+    }
+
+    /// Hand one pane target's accepted outcomes to the engine, selected against its current price.
+    fn publish_auto_figures(&mut self, target: &(CoreId, String)) -> bool {
+        let (Some(cfg), Some(pane)) = (
+            self.auto_figures.cfg.as_ref(),
+            self.auto_figures.panes.iter().find(|p| p.target == *target),
+        ) else {
+            return false;
+        };
+        let idx = (0..self.chart.pane_count())
+            .find(|&i| self.chart.pane_target(i).as_ref() == Some(target));
+        let last_price = idx
+            .and_then(|i| self.chart.auto_pane_view(i, target.0, &target.1))
+            .and_then(|v| v.last_price);
+        let now_ms = now_unix_ms();
+        let mut set = AutoPaneFigures::default();
+        for (row_ix, (row, slot)) in cfg.rows.iter().zip(&pane.rows).enumerate() {
+            let (Some(params), Some(outcome)) = (row.detector.known(), slot.done.as_ref()) else {
+                continue;
+            };
+            if !row.is_drawn() {
+                continue;
+            }
+            let ref_price = last_price.or(outcome.last_close).unwrap_or(f64::NAN);
+            set.rows.push(AutoRowDrawn {
+                row_ix,
+                style: row.style,
+                tolerance_pct: tolerance_pct(params),
+                kept: kept_lines(outcome, &row.take, ref_price, now_ms),
+                outcome: outcome.clone(),
+            });
+        }
+        // One line per publication — a run completing or a configuration edit, never a frame — so
+        // the app log says which source each row read and whether its history was short.
+        log::info!("auto figures {}: {}", target.1, set.summary());
+        self.chart
+            .set_auto_figures(target.0, &target.1, Some(Rc::new(set)))
+    }
+
+    /// Rebuild the userdata the published lines live in — the path news and figures take.
+    fn resync_userdata(&mut self, cx: &mut Context<Self>) {
+        let b = self.backend.read(cx);
+        self.chart.sync_orders_if_visible(&b.session, true);
+    }
+
+    /// Keep a wake armed for `at_ms`, the earliest moment a row key can move.
+    ///
+    /// An already armed wake that fires no later is kept: when it fires it evaluates the keys and
+    /// arms the next one. A later one is superseded by generation rather than cancelled — the
+    /// timers are detached, because dropping a task handle from inside that task's own callback
+    /// (which is where re-arming happens) is not something to rely on — and a superseded wake that
+    /// fires does nothing.
+    fn arm_auto_figures_timer(&mut self, at_ms: Option<i64>, now_ms: f64, cx: &mut Context<Self>) {
+        let Some(at_ms) = at_ms else {
+            self.auto_figures.timer = None;
+            return;
+        };
+        if self
+            .auto_figures
+            .timer
+            .is_some_and(|(armed, _)| armed <= at_ms)
+        {
+            return;
+        }
+        self.auto_figures.timer_gen = self.auto_figures.timer_gen.wrapping_add(1);
+        let generation = self.auto_figures.timer_gen;
+        self.auto_figures.timer = Some((at_ms, generation));
+        let delay = Duration::from_millis((at_ms as f64 - now_ms).max(0.0) as u64);
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                if this
+                    .auto_figures
+                    .timer
+                    .is_some_and(|(_, g)| g == generation)
+                {
+                    this.auto_figures.timer = None;
+                    this.sync_auto_figures(cx);
+                }
+            });
+        })
+        .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests;

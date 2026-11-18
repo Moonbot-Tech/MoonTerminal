@@ -22,6 +22,7 @@
 use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams};
 use moon_core::market::candles::ChartCandle;
 
+pub mod draw;
 pub mod events;
 pub mod extremes;
 pub mod pivots;

@@ -472,6 +472,32 @@ impl MarketDataSource {
             .clone()
     }
 
+    /// The local kline cache and the exchange key one chart market's rows are filed under, or
+    /// `None` while either is unknown.
+    ///
+    /// For a reader that turns the terminal's OWN candles into something else off the UI thread —
+    /// the chart's auto figures — and must never ask a core for history to do it. Both answers come
+    /// from one lock, for the reason [`Self::replay_address`] gives: a provider election between two
+    /// reads would pair one exchange's key with another's rows.
+    ///
+    /// The bench (`--fixture`) files its candles under its own key and has no provider, so a market
+    /// it covers answers with that key — the same branch `read_chart_history_into` takes.
+    pub fn kline_address(
+        &self,
+        core: CoreId,
+        market: &str,
+    ) -> Option<(crate::market::kline_cache::KlineCache, String)> {
+        let inner = self.inner.read().expect("market source poisoned");
+        let cache = inner.kline_cache.clone()?;
+        if let Some(fixture) = crate::fixture::active().filter(|f| f.covers(market)) {
+            return Some((cache, fixture.exchange().to_owned()));
+        }
+        let provider = inner.market_provider(core, market)?;
+        let exchange = inner.provider_exchange.get(&provider)?;
+        // The exact spelling the live history path writes and reads (`history.rs`).
+        Some((cache, format!("{}:{:08x}", exchange.code, exchange.dex)))
+    }
+
     /// The catalog-verified market a report row's `coin` names on `core`, or `None`.
     ///
     /// Supports both historical formats of the stored value: a base (`M`) and an already complete

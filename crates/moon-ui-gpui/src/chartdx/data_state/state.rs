@@ -65,6 +65,8 @@ impl ChartDataState {
             figures: None,
             figure_visual: figures_sync::FigureVisual::default(),
             figure_visual_rev: 0,
+            auto_figures: Vec::new(),
+            auto_figures_rev: 0,
             news_marks: std::rc::Rc::new(Vec::new()),
             news_hovered: None,
             trade_history: std::rc::Rc::new(Vec::new()),

@@ -491,6 +491,20 @@ impl ChartDataState {
                             labels: &mut pr.figure_labels,
                         },
                     );
+                    // The chart's own auto figures, through the same layers and BEFORE the zone
+                    // hash below for the same reason: a zone band is a fill in the base cache.
+                    self.append_auto_figure_geometry(
+                        pane.core,
+                        &pane.market,
+                        pane.view.epoch_ms,
+                        &mut moon_chart::figures::FigureBuffers {
+                            zones,
+                            hlines,
+                            segs,
+                            markers,
+                            labels: &mut pr.figure_labels,
+                        },
+                    );
                     // News marks, then trade history, then warning badges ride the same layer
                     // after the orders, so none of them is hidden under an order line's cross.
                     // The order among these three is their stacking order, last one on top.

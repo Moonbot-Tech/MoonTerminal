@@ -42,6 +42,42 @@ impl ChartEngine {
         self.data.borrow_mut().set_figure_visual(visual)
     }
 
+    /// Publishes one pane target's auto figures, or removes them with `None`; see
+    /// `auto_figures_sync`. The caller forces the userdata rebuild afterwards.
+    pub(crate) fn set_auto_figures(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        set: Option<std::rc::Rc<super::auto_figures_sync::AutoPaneFigures>>,
+    ) -> bool {
+        self.data.borrow_mut().set_auto_figures(core, market, set)
+    }
+
+    /// What pane `idx` currently shows, for evaluating its auto-figure keys without copying
+    /// candles. `None` until the pane is stamped with that target.
+    pub(crate) fn auto_pane_view(
+        &self,
+        idx: usize,
+        core: CoreId,
+        market: &str,
+    ) -> Option<super::auto_figures_sync::AutoPaneView> {
+        self.data.borrow().auto_pane_view(idx, core, market)
+    }
+
+    /// Pane `idx`'s closed candles of the chart's own timeframe — the snapshot a detector job
+    /// takes with it.
+    pub(crate) fn auto_pane_candles(
+        &self,
+        idx: usize,
+        core: CoreId,
+        market: &str,
+        now_ms: f64,
+    ) -> Vec<moon_core::market::ChartCandle> {
+        self.data
+            .borrow()
+            .auto_pane_candles(idx, core, market, now_ms)
+    }
+
     /// Sets this panel's news marks and the mark under the cursor. Returns whether anything changed,
     /// so the caller can skip the userdata resync.
     pub(crate) fn set_news_marks(

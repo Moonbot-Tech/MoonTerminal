@@ -415,6 +415,50 @@ pub fn build_figure_geometry<'a>(
     }
 }
 
+/// A filled band drawn beside passive figures: a price range over a time span, in figure
+/// coordinates (Unix ms, price). An infinite time bound means "to that plot edge".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FigureBand {
+    pub t0_ms: f64,
+    pub t1_ms: f64,
+    pub p0: f64,
+    pub p1: f64,
+    /// RGBA in `0..=1`; zero alpha draws nothing.
+    pub color: [f32; 4],
+}
+
+/// Builds the geometry of figures NOBODY interacts with — the chart's own auto figures — into the
+/// same buffers, through the same tools, as [`build_figure_geometry`].
+///
+/// A separate entry rather than more figures in the store's iterator, because these figures have
+/// no interaction state at all: no id the hover or the selection could name, no draft, no drag.
+/// Every figure is drawn in its idle style, so it emits no readout (`hot` is never set) and adds
+/// nothing to `out.labels`. Bands go to the zone layer through the same sanity checks as a figure's
+/// own fill — and, like one, into the base cache's signature, which is why the caller rebuilds
+/// them only when the set of lines changes, never per frame.
+///
+/// APPENDS, like the rest of this module: call it after the interactive figures.
+pub fn build_passive_figure_geometry<'a>(
+    figures: impl IntoIterator<Item = &'a Figure>,
+    bands: &[FigureBand],
+    epoch_ms: f64,
+    out: &mut FigureBuffers<'_>,
+) {
+    let mut sink = Sink {
+        epoch_ms,
+        fills: true,
+        draft: false,
+        out,
+    };
+    for band in bands {
+        sink.band(band.t0_ms, band.t1_ms, band.p0, band.p1, band.color);
+    }
+    for fig in figures {
+        let ctx = fig_ctx(fig, false, false);
+        sink.figure(fig, &ctx);
+    }
+}
+
 /// Build context for a figure by state:
 /// - idle — thin base style from `fig.line_kind`;
 /// - hovered/selected — thick base-style line, plus knots when selected;

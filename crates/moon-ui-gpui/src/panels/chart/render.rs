@@ -184,9 +184,12 @@ impl Render for ChartPanel {
             self.view_dirty = false;
             self.camera_dirty = false;
             self.sync_orders_if_visible(cx, true);
+            self.sync_auto_figures(cx);
         } else if self.camera_dirty {
             self.camera_dirty = false;
             self.sync_orders_if_visible(cx, false);
+            // A zoom can move an `Auto` row's timeframe; a `Fixed` row's key ignores the camera.
+            self.sync_auto_figures(cx);
         }
 
         // Snapshot visible pane layout once and reuse its rectangles for pane-positioned GPUI
