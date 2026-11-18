@@ -1,5 +1,28 @@
 use super::*;
 
+/// A roster that omits a configured core silently shrinks session-first benchmark work.
+#[test]
+fn panel_fixture_aligns_session_config_and_store_ids() {
+    let input = PanelFixture::new(20, 100, 5000, 3000, 300);
+    let session_ids: Vec<_> = input.sessions.iter().map(|session| session.id).collect();
+    let config_ids: Vec<_> = input
+        .config
+        .servers
+        .iter()
+        .map(|server| server.id)
+        .collect();
+    let mut store_ids: Vec<_> = input.store.cores().map(|(id, _)| id).collect();
+    store_ids.sort_unstable();
+    assert_eq!(session_ids, (1..=20).collect::<Vec<_>>());
+    assert_eq!(session_ids, config_ids);
+    assert_eq!(session_ids, store_ids);
+    for (session, config) in input.sessions.iter().zip(&input.config.servers) {
+        assert_eq!(session.name, config.name);
+        assert_eq!(session.group, config.group);
+        assert_eq!(session.group, "UNIT_01");
+    }
+}
+
 /// An account or strategy name must be a numbered synthetic unit.
 fn is_unit(name: &str) -> bool {
     name.strip_prefix("UNIT_")

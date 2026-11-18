@@ -8,8 +8,8 @@ use moon_core::feed::OrderRow;
 
 use super::sort::orders_signatures_from;
 use super::{
-    ObserveAction, OrderEntry, OrdersCacheKey, OrdersInputs, OrdersViewState, apply_main_lift,
-    collect_scoped, collect_scoped_shared, main_highlights, orders_observe_action,
+    CoreId, ObserveAction, OrdCol, OrderEntry, OrdersCacheKey, OrdersInputs, OrdersViewState,
+    apply_main_lift, collect_scoped, collect_scoped_shared, main_highlights, orders_observe_action,
     orders_observe_step, prepare_entries,
 };
 
@@ -523,6 +523,115 @@ fn rejected_scoped_session_names<'a>(
         names.entry(core).or_insert(name);
     }
     names
+}
+
+/// Resolve the same core-and-order inputs used by the session-first collector.
+fn bench_order_inputs(
+    fixture: &crate::test_support::fixtures::PanelFixture,
+) -> impl Iterator<Item = (CoreId, &str, &[OrderRow])> {
+    fixture.sessions.iter().map(|session| {
+        let core = fixture.store.core(session.id).unwrap();
+        (session.id, session.name.as_str(), core.orders.as_slice())
+    })
+}
+
+/// Measure cold collection and a changed first core against the prior populated cache.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_orders_rebuild_5k() {
+    use crate::test_support::{bench, fixtures::PanelFixture};
+    let mut fixture = PanelFixture::new(20, 100, 5000, 0, 0);
+    let view = OrdersViewState {
+        kind: super::OrderKind::All,
+        ..OrdersViewState::default()
+    };
+    let overlays = HashMap::new();
+    let main_open: HashSet<_> = fixture
+        .sessions
+        .iter()
+        .map(|session| (session.id, "XALPHAUSDT".to_owned()))
+        .collect();
+    bench::measure("orders_rebuild_5k_cold", 24, || {
+        let entries = collect_scoped(bench_order_inputs(&fixture), |_, _| true);
+        let (mut entries, real, emulated, _) =
+            prepare_entries(entries, &view, &overlays, &[], None);
+        let highlights = main_highlights(&entries, &main_open);
+        apply_main_lift(&mut entries, &view, &highlights, &main_open);
+        assert_eq!(
+            (entries.len(), real, emulated, highlights.len()),
+            (5000, 2500, 2500, 20)
+        );
+        (entries, highlights)
+    });
+    let (base, _, _, signature) = prepare_entries(
+        collect_scoped(bench_order_inputs(&fixture), |_, _| true),
+        &view,
+        &overlays,
+        &[],
+        None,
+    );
+    let old_revisions: HashMap<_, _> = fixture
+        .store
+        .cores()
+        .map(|(id, core)| (id, core.orders_table_rev))
+        .collect();
+    let core = fixture.store.core_mut(1).unwrap();
+    let mut rows = core.orders.clone();
+    rows[0].price += 1.0;
+    core.apply(moon_core::feed::FeedMsg::Orders(rows.into()));
+    let revisions: HashMap<_, _> = fixture
+        .store
+        .cores()
+        .map(|(id, core)| (id, core.orders_table_rev))
+        .collect();
+    assert_ne!(revisions[&1], old_revisions[&1]);
+    bench::measure("orders_rebuild_5k_revision_change", 24, || {
+        let previous = base
+            .iter()
+            .map(|entry| ((entry.core, entry.row.uid), entry.row.clone()))
+            .collect();
+        let entries = collect_scoped_shared(
+            bench_order_inputs(&fixture),
+            |_, _| true,
+            &previous,
+            &revisions,
+            &old_revisions,
+        );
+        let (mut entries, real, emulated, _) =
+            prepare_entries(entries, &view, &overlays, &base, Some(signature));
+        let highlights = main_highlights(&entries, &main_open);
+        apply_main_lift(&mut entries, &view, &highlights, &main_open);
+        assert_eq!(
+            (entries.len(), real, emulated, highlights.len()),
+            (5000, 2500, 2500, 20)
+        );
+        (entries, highlights)
+    });
+}
+
+/// Measure header sorting of a populated table, with each sample starting in feed order.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_orders_sort_5k() {
+    use crate::test_support::{bench, fixtures::PanelFixture};
+    let fixture = PanelFixture::new(20, 100, 5000, 0, 0);
+    let entries = collect_scoped(bench_order_inputs(&fixture), |_, _| true);
+    assert_eq!(entries.len(), 5000);
+    let view = OrdersViewState {
+        header_sort: Some((OrdCol::CurP, false)),
+        ..OrdersViewState::default()
+    };
+    let overlays = HashMap::new();
+    let mut unsorted = (0..26)
+        .map(|_| entries.clone())
+        .collect::<Vec<_>>()
+        .into_iter();
+    bench::measure("orders_sort_5k_populated_header_change", 24, || {
+        let mut rows = unsorted.next().unwrap();
+        super::sort::sort_entries(&mut rows, &view, &overlays);
+        assert_eq!(rows.len(), 5000);
+        rows
+    });
 }
 
 /// Measure the real clone, sort, highlight, and lift work avoided by each unchanged due tick.

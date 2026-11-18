@@ -186,6 +186,11 @@ fn detect_row(index: usize) -> DetectRow {
 
 /// Build a file-free config with ids matching the store fixture and blank credentials.
 pub(crate) fn app_config(cores: usize) -> AppConfig {
+    app_config_with_groups(cores, |index| unit_name(index / 10))
+}
+
+/// Build config for a chosen group layout without reading persisted settings.
+fn app_config_with_groups(cores: usize, group: impl Fn(usize) -> String) -> AppConfig {
     let servers = (0..cores)
         .map(|index| {
             let uid = (index + 1) as u64;
@@ -198,7 +203,7 @@ pub(crate) fn app_config(cores: usize) -> AppConfig {
                 key: Secret::new(""),
                 endpoint_override: String::new(),
                 endpoint_to_station: false,
-                group: unit_name(index / 10),
+                group: group(index),
                 market: "XALPHAUSDT".into(),
                 color: [1, 2, 3],
                 synthetic: false,
@@ -316,6 +321,75 @@ pub(crate) fn candles(n: usize) -> Vec<ChartCandle> {
             }
         })
         .collect()
+}
+
+/// Session metadata consumed by pure collectors when there are no live feed handles.
+pub(crate) struct SessionInput {
+    pub(crate) id: u64,
+    pub(crate) name: String,
+    pub(crate) group: String,
+}
+
+/// Aligned inputs for panel builders that start at the session roster.
+pub(crate) struct PanelFixture {
+    pub(crate) sessions: Vec<SessionInput>,
+    pub(crate) config: AppConfig,
+    pub(crate) store: CoreStore,
+}
+
+impl PanelFixture {
+    /// Build the roster from the same configured identities that populate the store.
+    pub(crate) fn new(
+        cores: usize,
+        strategies: usize,
+        orders: usize,
+        assets: usize,
+        detects: usize,
+    ) -> Self {
+        let config = app_config_with_groups(cores, |_| unit_name(0));
+        let sessions = config
+            .servers
+            .iter()
+            .map(|server| SessionInput {
+                id: server.id,
+                name: server.name.clone(),
+                group: server.group.clone(),
+            })
+            .collect();
+        Self {
+            sessions,
+            config,
+            store: core_store(cores, strategies, orders, assets, detects),
+        }
+    }
+}
+
+/// Run a visual benchmark with room for GPUI draw and cold localization on Windows.
+pub(crate) fn on_visual_stack(work: impl FnOnce() + Send + 'static) {
+    if let Err(panic) = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(work)
+        .expect("start visual benchmark thread")
+        .join()
+    {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Create a headless app with the normal presentation theme installed.
+pub(crate) fn visual_app() -> gpui::TestAppContext {
+    crate::test_locale::warm();
+    let cx = gpui::TestAppContext::single();
+    cx.update(|cx| {
+        moon_ui::MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(
+                moon_core::config::UiThemeMode::Dark,
+                1.0,
+            ),
+            cx,
+        );
+    });
+    cx
 }
 
 #[cfg(test)]

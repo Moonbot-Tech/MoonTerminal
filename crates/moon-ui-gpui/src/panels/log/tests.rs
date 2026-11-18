@@ -5,6 +5,41 @@
 // ("recursion limit reached").
 use super::{LogFile, LogPanel, LogSource, LogSourceItem, resolve_workspace_log_selection};
 
+/// Open an isolated 50 MB named file repeatedly, including indexing and parsing the tail.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_log_open_named() {
+    use crate::test_support::bench;
+    use std::io::Write;
+
+    let temp = std::env::temp_dir().join(format!(
+        "moon-bench-log-{}-{}",
+        std::process::id(),
+        moon_core::util::time::now_unix_ms_i64(),
+    ));
+    std::fs::create_dir_all(&temp).unwrap();
+    let path = temp.join("2023-11-14_CORE_A.log");
+    let mut out = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+    const ROWS: usize = 500_000;
+    let line = format!("12:00:00\tI\tCORE_A\t{:0<81}\n", "UNIT_01 ");
+    assert_eq!(line.len() * ROWS, 50_000_000);
+    for _ in 0..ROWS {
+        out.write_all(line.as_bytes()).unwrap();
+    }
+    out.flush().unwrap();
+    drop(out);
+    bench::measure("log_open_named_50mb_cold_index_warm_file_cache", 12, || {
+        let mut page = super::paging::FilePage::default();
+        // An absolute path stays inside the fixture without changing the process-wide data root.
+        page.open(path.to_str().unwrap());
+        assert_eq!(page.total(), ROWS);
+        assert_eq!(page.lines().len(), super::VIEW_LIMIT);
+        page
+    });
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(temp).unwrap();
+}
+
 /// `mod.rs:resolve_workspace_log_selection` must overlay rather than assign retained selectors.
 ///
 /// Mutation: return `retained_file` while `workspace_owned` is true, or replace either retained

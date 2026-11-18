@@ -2,6 +2,37 @@
 
 use std::collections::{HashMap, HashSet};
 
+/// Measure the cold market-row ownership and default sort for 3000 visible holdings.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_assets_collect_3k() {
+    use super::AssetEntry;
+    use super::collect::{market_rows, sort_by_value};
+    use crate::test_support::{bench, fixtures::PanelFixture};
+
+    let fixture = PanelFixture::new(20, 100, 0, 3000, 0);
+    bench::measure("assets_collect_3k_cold_market_rows", 24, || {
+        let mut rows: Vec<_> = fixture
+            .sessions
+            .iter()
+            .flat_map(|session| {
+                let core = fixture.store.core(session.id).unwrap();
+                market_rows(&core.assets.rows, false, 0.0).map(move |row| AssetEntry {
+                    core: session.id,
+                    core_name: session.name.clone(),
+                    value: row.value_usdt,
+                    display_value: row.value_usdt,
+                    market_exists: true,
+                    row,
+                })
+            })
+            .collect();
+        sort_by_value(&mut rows);
+        assert_eq!(rows.len(), 3000);
+        rows
+    });
+}
+
 use super::{
     global_query_cores, global_wallet_core, reconcile_retained_assets_state,
     resolve_workspace_wallet_core, roster_width, wallets::wallet_count_label,
