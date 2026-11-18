@@ -1,4 +1,7 @@
-//! Shared isolation for tests that read or change the process-wide tape window.
+//! Shared test fixtures, timing, and isolation for the process-wide tape window.
+
+pub(crate) mod bench;
+pub(crate) mod fixtures;
 
 /// All tests reading or mutating the shared trade window hold this lock through restoration.
 pub(crate) static SHARED_WINDOW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

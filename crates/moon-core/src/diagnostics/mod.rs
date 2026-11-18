@@ -42,6 +42,8 @@ pub use filter::{
 use crate::config::paths;
 
 static RENDER: AtomicBool = AtomicBool::new(false);
+static UI_STALL: AtomicBool = AtomicBool::new(false);
+static UI_STALL_MS: AtomicU64 = AtomicU64::new(config::DEFAULT_UI_STALL_MS);
 static DETECT: AtomicBool = AtomicBool::new(false);
 static ASSETS: AtomicBool = AtomicBool::new(false);
 static MARKETS: AtomicBool = AtomicBool::new(false);
@@ -79,6 +81,18 @@ fn active_cell() -> &'static Mutex<DiagCfg> {
 #[inline]
 pub fn render() -> bool {
     RENDER.load(Ordering::Relaxed)
+}
+
+/// Whether the UI stall channel is enabled (`logs/ui_stall.log`).
+#[inline]
+pub fn ui_stall() -> bool {
+    UI_STALL.load(Ordering::Relaxed)
+}
+
+/// Duration at which UI-thread work counts as a stall.
+#[inline]
+pub fn ui_stall_threshold() -> Duration {
+    Duration::from_millis(UI_STALL_MS.load(Ordering::Relaxed))
 }
 
 /// Detect-pipeline channel (`logs/detect_diag.log`).
@@ -379,6 +393,8 @@ fn load() -> (DiagCfg, Option<String>) {
 /// [`poll`] applies later changes.
 fn apply(cfg: &DiagCfg) {
     RENDER.store(cfg.channels.render, Ordering::Relaxed);
+    UI_STALL_MS.store(cfg.limits.ui_stall_ms, Ordering::Relaxed);
+    UI_STALL.store(cfg.channels.ui_stall, Ordering::Relaxed);
     DETECT.store(cfg.channels.detect, Ordering::Relaxed);
     ASSETS.store(cfg.channels.assets, Ordering::Relaxed);
     MARKETS.store(cfg.channels.markets, Ordering::Relaxed);

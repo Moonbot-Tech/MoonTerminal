@@ -51,6 +51,8 @@ pub struct LogAreas {
 #[serde(default)]
 pub struct Channels {
     pub render: bool,
+    /// Report slow UI-thread work to the UI stall channel.
+    pub ui_stall: bool,
     pub detect: bool,
     /// Order-pipeline SELECTOR, not a flag: `""` off, `"1"` everything, `"BTC"` or `"CORE/MARKET"`
     /// to narrow. Preserved verbatim from `MOON_ORDER_DIAG`; see `crate::order_diag`.
@@ -75,13 +77,15 @@ pub struct Channels {
     pub tape_recorder: bool,
 }
 
-/// `[limits]` — sizes and collapse windows, in effect whether or not anything above is on.
+/// `[limits]` — sizes, collapse windows, and probe thresholds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Limits {
     pub log_ring_lines: usize,
     pub balance_repeat_window_sec: u64,
     pub market_trace_min_interval_ms: u64,
+    /// Duration at which UI-thread work counts as a stall, in milliseconds.
+    pub ui_stall_ms: u64,
 }
 
 /// Lines the Log panel keeps in memory when the file says nothing.
@@ -96,13 +100,21 @@ pub const MAX_RING_LINES: usize = 1_000_000;
 pub const DEFAULT_BALANCE_WINDOW_SEC: u64 = 5;
 /// Default floor between two market-trace lines about the same subject.
 pub const DEFAULT_MARKET_FLOOR_MS: u64 = 1000;
+/// Default threshold for a slow UI operation, approximately one frame at 60 Hz.
+pub const DEFAULT_UI_STALL_MS: u64 = 16;
+/// Lowest accepted UI stall threshold.
+pub const MIN_UI_STALL_MS: u64 = 4;
+/// Highest accepted UI stall threshold.
+pub const MAX_UI_STALL_MS: u64 = 1000;
 
 impl Default for Limits {
+    /// Defaults used when the diagnostics file omits the limits.
     fn default() -> Self {
         Self {
             log_ring_lines: DEFAULT_RING_LINES,
             balance_repeat_window_sec: DEFAULT_BALANCE_WINDOW_SEC,
             market_trace_min_interval_ms: DEFAULT_MARKET_FLOOR_MS,
+            ui_stall_ms: DEFAULT_UI_STALL_MS,
         }
     }
 }
@@ -120,6 +132,7 @@ impl DiagCfg {
             || l.hotkeys
             || !l.filter.trim().is_empty()
             || c.render
+            || c.ui_stall
             || c.detect
             || c.assets
             || c.markets
@@ -151,6 +164,7 @@ impl DiagCfg {
         flag("log.chart_input", self.log.chart_input);
         flag("log.hotkeys", self.log.hotkeys);
         flag("channels.render", self.channels.render);
+        flag("channels.ui_stall", self.channels.ui_stall);
         flag("channels.detect", self.channels.detect);
         flag("channels.assets", self.channels.assets);
         flag("channels.markets", self.channels.markets);
@@ -175,12 +189,13 @@ impl DiagCfg {
         Some(on.join(", "))
     }
 
-    /// Clamp values that would otherwise break a surface rather than configure it.
+    /// Bound the log ring capacity and keep the UI stall threshold within its supported range.
     fn sanitize(&mut self) {
         self.limits.log_ring_lines = self
             .limits
             .log_ring_lines
             .clamp(MIN_RING_LINES, MAX_RING_LINES);
+        self.limits.ui_stall_ms = self.limits.ui_stall_ms.clamp(MIN_UI_STALL_MS, MAX_UI_STALL_MS);
     }
 }
 
@@ -207,6 +222,7 @@ pub fn apply_env(cfg: &mut DiagCfg, get: impl Fn(&str) -> Option<String>) {
     on("MOON_DIAG_CHART_INPUT", &mut cfg.log.chart_input);
     on("MOON_DIAG_HOTKEYS", &mut cfg.log.hotkeys);
     on("MOON_RENDER_DIAG", &mut cfg.channels.render);
+    on("MOON_UI_STALL_DIAG", &mut cfg.channels.ui_stall);
     on("MOON_DETECT_DIAG", &mut cfg.channels.detect);
     on("MOON_ASSETS_DIAG", &mut cfg.channels.assets);
     on("MOON_MARKET_DIAG", &mut cfg.channels.markets);
