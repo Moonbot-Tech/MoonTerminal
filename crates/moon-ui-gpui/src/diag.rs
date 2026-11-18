@@ -16,6 +16,8 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
+pub mod stall;
+
 macro_rules! diag_counters {
     ($($name:ident => $label:literal),* $(,)?) => {
         $( pub static $name: AtomicU64 = AtomicU64::new(0); )*

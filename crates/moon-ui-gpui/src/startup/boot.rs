@@ -696,14 +696,15 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let coord_report_revision = report_revision;
     let coord_persistence = persistence.clone();
     cx.spawn(async move |cx| {
+        use crate::diag::stall::{self, FrameSample, StallKind};
+
         let executor = cx.update(|cx| cx.background_executor().clone());
         let mut report_revision_gate = ReportRevisionGate::new(Instant::now());
         let mut recovery_notice_shown = None;
         let mut last_report = Instant::now();
-        // GPUI times every `Window::draw` itself when frame tracing is on; the collector
-        // hands over the ones recorded since the previous poll. Created before tracing is
-        // enabled, which is harmless — it simply sees nothing until it is.
+        // GPUI times every `Window::draw`; the collector follows the active trace's cursor.
         let mut frame_timings = gpui::FrameTimingCollector::new();
+        let mut stall_writer = stall::Writer::default();
         // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
         let mut last_assets_rev_sum: u64 = 0;
         loop {
@@ -727,6 +728,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                 &crate::diag::COORD_TICK_SLOW,
                 20_000,
             );
+            let stall_tick = stall::span(StallKind::Tick, "coord_tick");
             cx.update(|cx| {
                 if let Some(guard) = &coord_instance
                     && super::instance::poll_activation(guard) {
@@ -968,24 +970,42 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     );
                 }
             });
+            drop(stall_tick);
             drop(tick_us);
             if last_report.elapsed().as_millis() >= 1000 {
                 let ms = last_report.elapsed().as_secs_f64() * 1000.0;
                 last_report = Instant::now();
-                // Follow the render channel, which is live: turning tracing off also clears
-                // GPUI's buffer, so a switch flipped back on cannot report stale frames.
-                let trace_wanted = crate::diag::is_enabled();
-                if gpui::frame_trace_enabled() != trace_wanted {
-                    gpui::set_frame_trace_enabled(trace_wanted);
+                let render_enabled = crate::diag::is_enabled();
+                let stall_enabled = stall::enabled();
+                let trace_wanted = render_enabled || stall_enabled;
+                if gpui::frame_trace_enabled() != trace_wanted
+                    && gpui::set_frame_trace_enabled(trace_wanted)
+                    && trace_wanted
+                {
+                    // Disabling tracing cleared the buffer and reset its sequence counter.
+                    frame_timings = gpui::FrameTimingCollector::new();
                 }
                 if trace_wanted {
-                    for frame in frame_timings.collect_unseen() {
-                        crate::diag::note_frame_draw(
-                            frame.draw_duration(),
-                            frame.dirty_to_draw_duration(),
-                        );
+                    let frames = frame_timings.collect_unseen();
+                    if render_enabled {
+                        for frame in &frames {
+                            crate::diag::note_frame_draw(
+                                frame.draw_duration(),
+                                frame.dirty_to_draw_duration(),
+                            );
+                        }
+                    }
+                    if stall_enabled {
+                        stall::note_frames(frames.into_iter().map(|frame| FrameSample {
+                            window_id: frame.window_id.as_u64(),
+                            draw_start: frame.draw_start,
+                            draw_end: frame.draw_end,
+                        }));
                     }
                 }
+                // The capture is thread-local. Only the owned batch crosses to the writer.
+                let drained = stall::drain();
+                stall_writer.submit(&executor, drained);
                 // Pick up an edit to `cfg/diagnostics.toml` without a restart — the state worth
                 // observing is usually the one a restart would destroy.
                 //

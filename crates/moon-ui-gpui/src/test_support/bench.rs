@@ -1,7 +1,7 @@
 //! Wall-clock timings in milliseconds for the ignored UI scale tests.
 
 use std::hint::black_box;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Nearest-rank percentiles and the slowest measured iteration, in milliseconds.
 pub(crate) struct BenchStats {
@@ -24,6 +24,12 @@ impl BenchStats {
     }
 }
 
+/// Select the nearest-rank percentile of nonempty samples sorted by duration.
+fn nearest_rank(sorted: &[Duration], percent: u64) -> Duration {
+    let rank = (sorted.len() as u64 * percent).div_ceil(100);
+    sorted[rank as usize - 1]
+}
+
 /// Warm up twice, then time each invocation and print one summary.
 /// Callers supply an ASCII name and at least one iteration.
 pub(crate) fn measure<T>(name: &str, iterations: u32, mut work: impl FnMut() -> T) -> BenchStats {
@@ -41,10 +47,7 @@ pub(crate) fn measure<T>(name: &str, iterations: u32, mut work: impl FnMut() -> 
     }
     elapsed.sort_unstable();
 
-    let percentile_ms = |percent: u64| {
-        let rank = (u64::from(iterations) * percent).div_ceil(100);
-        elapsed[rank as usize - 1].as_secs_f64() * 1_000.0
-    };
+    let percentile_ms = |percent| nearest_rank(&elapsed, percent).as_secs_f64() * 1_000.0;
     let stats = BenchStats {
         p50_ms: percentile_ms(50),
         p95_ms: percentile_ms(95),
