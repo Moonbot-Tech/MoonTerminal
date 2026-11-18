@@ -47,7 +47,8 @@ fn bench_s_detects_ingest_300() {
 
 /// Headless grid of capped Detects cards with populated chart vectors and a fixture clock.
 struct BenchDetectGrid {
-    items: Vec<super::DetectItem>,
+    items: std::collections::VecDeque<super::DetectItem>,
+    visible: Option<super::VisibleCards>,
     config: moon_core::config::AppConfig,
     now: std::rc::Rc<std::cell::Cell<f64>>,
     prune: bool,
@@ -65,16 +66,18 @@ impl gpui::Render for BenchDetectGrid {
         let p = moon_ui::MoonPalette::active(cx);
         let now = self.now.get();
         if self.prune {
-            self.items
-                .retain(|item| !detect_expired(now, item.born_ms, item.ttl_ms));
+            super::VisibleCards::prune(&mut self.visible, &mut self.items, now);
         }
-        assert_eq!(self.items.len(), 48);
+        let indices =
+            super::VisibleCards::get(&mut self.visible, &self.items, (1..=20).collect(), false);
+        assert_eq!(indices.len(), 48);
         moon_ui::h_flex()
             .size_full()
             .flex_wrap()
             .gap_1p5()
             .content_start()
-            .children(self.items.iter().rev().map(|item| {
+            .children(indices.iter().map(|&index| {
+                let item = &self.items[index];
                 let secs = ((item.ttl_ms - (now - item.born_ms)) / 1000.0)
                     .ceil()
                     .max(0.0) as u32;
@@ -123,6 +126,7 @@ fn bench_detects_draw(name: &'static str, tick: bool) {
             gpui::size(gpui::px(1280.0), gpui::px(900.0)),
             move |_, _| BenchDetectGrid {
                 items,
+                visible: None,
                 config: cfg,
                 now: clock,
                 prune: tick,
@@ -153,6 +157,39 @@ fn bench_s_detects_draw_48() {
 #[ignore = "bench: S-smooth"]
 fn bench_s_detects_tick_1s() {
     bench_detects_draw("detects_tick_1s_expiry_and_countdown_draw", true);
+}
+
+/// An expired core card must release a retained crowd card, and changing scope does the same.
+#[test]
+fn visible_queue_reveals_crowd_in_reverse_order_after_scope_change_or_expiry() {
+    use super::VisibleCards;
+    use std::collections::VecDeque;
+
+    let mut items = VecDeque::from([
+        detect_item(None, "XALPHA", 30_000.0, 0),
+        detect_item(Some(1), "XALPHA", 0.0, 0),
+        detect_item(Some(2), "XBETA", 30_000.0, 0),
+    ]);
+    let mut cache = None;
+    assert_eq!(
+        VisibleCards::get(&mut cache, &items, vec![1, 2], true),
+        [2, 1]
+    );
+    assert_eq!(VisibleCards::get(&mut cache, &items, vec![2], true), [2, 0]);
+    assert_eq!(
+        VisibleCards::get(&mut cache, &items, vec![1, 2], true),
+        [2, 1]
+    );
+    assert!(VisibleCards::prune(&mut cache, &mut items, 61_000.0));
+    let indices = VisibleCards::get(&mut cache, &items, vec![1, 2], true);
+    assert_eq!(
+        indices
+            .iter()
+            .map(|&i| items[i].market.as_str())
+            .collect::<Vec<_>>(),
+        ["XBETA", "XALPHA"]
+    );
+    assert!(items[indices[1]].crowd().is_some());
 }
 
 /// Build a synthetic card without an application or market-data connection.
@@ -314,7 +351,8 @@ fn presentation_scope_keeps_hidden_detection_cards_retained() {
         .nth(1)
         .expect("Detects render must exist");
     assert!(render.contains("effective_workspace_scope"));
-    assert!(render.contains("detection_core_visible(item.core(), &visible_cores)"));
+    assert!(render.contains("VisibleCards::get(") && render.contains("visible_cores,"));
+    assert!(src.contains("detection_core_visible(item.core(), &cores)"));
 }
 
 /// The AddToChart setting gates BOTH ends. Ingestion skips a chart-routed row while the setting is
@@ -344,7 +382,8 @@ fn add_to_chart_cards_are_gated_at_ingest_and_at_presentation() {
         .split("impl Render for DetectsPanel")
         .nth(1)
         .expect("Detects render must exist");
-    assert!(render.contains("detection_route_visible(item.add_to_chart, cfg.show_add_to_chart)"));
+    assert!(render.contains("VisibleCards::get(") && render.contains("cfg.show_add_to_chart,"));
+    assert!(src.contains("detection_route_visible(item.add_to_chart, show_routed)"));
 }
 
 /// The setting must work in BOTH directions. Ingestion drops chart-routed rows while it is off and
@@ -672,7 +711,8 @@ fn the_card_carries_the_cross_exchange_key_and_not_the_local_one() {
         "a core card must freeze the catalog's cross-exchange identity"
     );
     assert!(
-        src.contains(".map(|it| it.identity.as_str())"),
+        src.contains(".map(|item| item.identity.as_str())")
+            && src.contains("crowd_card_yields(&item.identity, &cored)"),
         "the duplicate rule must compare the identity the card froze"
     );
     let crowd = include_str!("crowd.rs");
