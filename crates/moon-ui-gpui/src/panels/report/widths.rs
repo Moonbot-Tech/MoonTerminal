@@ -80,6 +80,10 @@ const NATURAL_SLACK: f32 = 8.0;
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NaturalWidthsEnvironment {
     locale: String,
+    /// The spelling the volume cells were measured in: `12.3 k` is a character wider than `12.3K`,
+    /// and widths only ever grow within one environment, so without it a respelled column would
+    /// keep the other notation's width (#1390).
+    notation: moon_core::util::fmt::Notation,
     font: design::MonoBodyFontSignature,
 }
 
@@ -87,16 +91,19 @@ struct NaturalWidthsEnvironment {
 ///
 /// Args:
 ///     locale: Active translation locale used by Report headers and cells.
+///     notation: Number notation the shortened cells are printed in.
 ///     font: Resolved normal/semibold font identity and rendered size.
 ///
 /// Returns:
 ///     Comparable cache environment.
 fn natural_widths_environment(
     locale: &str,
+    notation: moon_core::util::fmt::Notation,
     font: design::MonoBodyFontSignature,
 ) -> NaturalWidthsEnvironment {
     NaturalWidthsEnvironment {
         locale: locale.to_string(),
+        notation,
         font,
     }
 }
@@ -240,7 +247,11 @@ impl NaturalWidthsCache {
         cx: &App,
     ) {
         let mut measurer = design::MonoBodyTextMeasurer::new(cx);
-        let environment = natural_widths_environment(&rust_i18n::locale(), measurer.signature());
+        let environment = natural_widths_environment(
+            &rust_i18n::locale(),
+            moon_core::util::fmt::notation(),
+            measurer.signature(),
+        );
         if self.environment.as_ref() != Some(&environment) {
             self.clear();
             self.environment = Some(environment);

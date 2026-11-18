@@ -320,3 +320,28 @@ fn live_scope_defaults_to_all_charts_and_round_trips_each_chart() {
     let reread: SettingsFile = toml::from_str(&text).expect("reload settings");
     assert_eq!(reread.live_scope, LiveScope::EachChart);
 }
+
+/// Catches the number-notation default drifting off MoonBot's spelling (#1390): a profile written
+/// before the setting existed must print `12.3 k`, the spelling the owner chose for everyone who
+/// never touched it, and a code only a newer build knows must degrade to it rather than fail the
+/// whole file. A stored `compact` must survive a save and reload.
+#[test]
+fn number_notation_defaults_to_moonbot_and_round_trips_compact() {
+    let old: SettingsFile = toml::from_str("ui_scale = 1.25\n").expect("pre-#1390 settings");
+    assert_eq!(old.number_notation, Notation::MoonBot);
+
+    let unknown: SettingsFile =
+        toml::from_str("number_notation = \"scientific\"\nui_scale = 1.25\n")
+            .expect("an unknown notation must not fail the settings file");
+    assert_eq!(unknown.number_notation, Notation::MoonBot);
+    assert_eq!(unknown.ui_scale, 1.25);
+
+    let stored = SettingsFile {
+        number_notation: Notation::Compact,
+        ..SettingsFile::default()
+    };
+    let text = toml::to_string(&stored).expect("save settings");
+    assert!(text.contains("number_notation = \"compact\""), "{text}");
+    let reread: SettingsFile = toml::from_str(&text).expect("reload settings");
+    assert_eq!(reread.number_notation, Notation::Compact);
+}

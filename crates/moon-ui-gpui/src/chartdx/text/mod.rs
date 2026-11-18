@@ -174,9 +174,9 @@ pub(in crate::chartdx) fn rough_label_width(text: &str, label_font_delta: f32) -
     text.chars().count() as f32 * label_font_px(label_font_delta)
 }
 
-/// Formats cumulative order-book notional compactly with a K/M/B/T SI suffix for cursor labels.
+/// Formats cumulative order-book notional for the cursor labels and the ladder, as a lone label.
 fn fmt_amount(v: f32) -> String {
-    moon_core::util::fmt::compact_si(v as f64)
+    moon_core::util::fmt::short(f64::from(v), moon_core::util::fmt::Form::Label)
 }
 
 /// The scale's quote-turnover spelling, with no layout opinion.
@@ -187,12 +187,12 @@ fn fmt_amount(v: f32) -> String {
 ///
 /// Returns:
 ///     `None` when `quote` is empty — a unitless figure would read as a coin count.
-///     Otherwise the scale format (`compact_scale`: `1.6 k$`, `875.3 m BTC`).
+///     Otherwise the scale form (`Form::Scale`: `1.6 k$`, `875.3 m BTC`).
 pub(in crate::chartdx) fn quote_turnover_label(value: f32, quote: &str) -> Option<String> {
     if quote.is_empty() {
         return None;
     }
-    let amount = moon_core::util::fmt::compact_scale(f64::from(value));
+    let amount = moon_core::util::fmt::short(f64::from(value), moon_core::util::fmt::Form::Scale);
     Some(if moon_core::symbol::is_usd_stable(quote) {
         format!("{amount}$")
     } else {
@@ -206,8 +206,8 @@ pub(in crate::chartdx) fn quote_turnover_label(value: f32, quote: &str) -> Optio
 /// than `available_width` are omitted whole: truncating a currency could misidentify the scale.
 /// `measure_width` must use the volume-scale face and size used to draw the returned text.
 ///
-/// The figure is the scale's own format (`compact_scale`: `1.6 k$`, `875.3 m BTC`), not the
-/// caption/cursor `compact_si` — the two labels on one bracket are compared by eye, so they print
+/// The figure is the scale's own form (`Form::Scale`: `1.6 k$`, `875.3 m BTC`), not the
+/// caption/cursor `Form::Label` — the two labels on one bracket are compared by eye, so they print
 /// at one density (issue #579). The cursor readout in the band stays exact and is untouched.
 /// The horizontal-volume crosshair does not use this gate: its line is already on screen, and
 /// dropping the longer tiers left that line bare. See [`hvol_value_caption`].
@@ -309,9 +309,11 @@ fn hvol_value_caption(
     Some(HvolValueCaption { text, x, y, ax, ay })
 }
 
-/// Formats a prospective order size with compact lowercase SI suffixes for the cursor label.
+/// Formats a prospective order size for the cursor label, as a lone label (`1.5 k`) — the unit the
+/// size buttons print. The order line it becomes cuts to two places below a thousand and adds `$`
+/// (`data_state::orders::fmt_size_2dp`), so the two agree on the unit, not on every digit.
 fn fmt_prospective_order_size(usd: f64) -> String {
-    moon_core::util::fmt::compact_order_size(usd)
+    moon_core::util::fmt::short(usd, moon_core::util::fmt::Form::Label)
 }
 
 /// Returns the current chart theme's positive or negative color for a signed percentage.

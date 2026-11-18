@@ -873,7 +873,7 @@ fn a_narrow_profit_column_drops_the_ticker_before_the_suffix() {
             }
         )
         .0,
-        "+1.23M USDT"
+        "+1.23 m USDT"
     );
 }
 
@@ -1043,7 +1043,7 @@ fn an_abbreviated_amount_keeps_its_rounded_sign_and_its_small_digits() {
     );
     assert_eq!(
         format_profit(-2_300_000.0, None, usdt, si),
-        ("-2.3M USDT".to_string(), DeltaSign::Negative)
+        ("-2.3 m USDT".to_string(), DeltaSign::Negative)
     );
     assert_eq!(
         format_profit(12.345_678_91, None, btc, si).0,

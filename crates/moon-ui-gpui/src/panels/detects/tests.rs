@@ -716,23 +716,27 @@ fn volume_labels_fit_the_76_wide_closed_slot(cx: &mut gpui::TestAppContext) {
     );
 }
 
-/// The card prints a volume with the Screener's own compact, lowercase, muted zero included.
+/// The card prints a volume in the same form as the Screener's volume columns, muted zero included.
 ///
-/// Breakage: routing the card through the chart caption's `1.5K` compact makes the card and the
-/// `Vol.` column disagree on the same figure.
+/// Breakage: routing the card through the column form (`163.4 k`) or a local formatter makes the
+/// card and the `Vol.` column disagree on the same figure.
 #[test]
-fn card_volume_uses_the_screener_compact() {
-    let fmt = crate::screener::vol_fmt;
-    assert_eq!(fmt(0.0), "0");
-    assert_eq!(fmt(320_000.0), "320k");
-    assert_eq!(fmt(1_700_000.0), "1.7m");
-    assert_eq!(fmt(1_000_000_000.0), "1.0b");
+fn card_volume_uses_the_screener_form() {
     let body = include_str!("cards.rs")
         .split("fn volume_text(")
         .nth(1)
         .and_then(|tail| tail.split("\n}").next())
         .expect("volume_text must exist");
-    assert!(body.contains("crate::screener::vol_fmt("));
+    let screener = include_str!("../../screener/table.rs")
+        .split("let vol_cell = ")
+        .nth(1)
+        .and_then(|tail| tail.split("};").next())
+        .expect("the Screener's vol_cell must exist");
+    assert!(body.contains("short(v, Form::Label)"), "{body}");
+    assert!(
+        screener.contains("fmt::short(v, fmt::Form::Label)"),
+        "{screener}"
+    );
     assert!(body.contains("p.text_muted"), "zero is not the muted 0");
     assert!(
         !body.contains("pos_col") && !body.contains("neg_col"),

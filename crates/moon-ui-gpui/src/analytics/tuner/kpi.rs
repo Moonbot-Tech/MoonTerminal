@@ -17,7 +17,15 @@ use super::shared::{card, card_with_wrapping_caption, collapse_caret};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::VarStats;
-use moon_core::util::fmt::compact_si;
+use moon_core::util::fmt::{Form, short};
+
+/// A KPI figure past the SI threshold, shortened as a lone label (`1.23 k`, `12.3 m`).
+///
+/// The matrix cell is fixed-width, so the label form — three significant digits — rather than
+/// the column form, which keeps four digits under ten thousand and would not shorten `1234` at all.
+fn kpi_short(value: f64) -> String {
+    short(value, Form::Label)
+}
 
 /// Numeric presentation contract for one KPI matrix row.
 #[derive(Clone, Copy)]
@@ -251,7 +259,7 @@ fn plain_factor(value: f64) -> KpiCellText {
     let exact = format!("{value:.2}");
     if value.abs() >= 1_000.0 {
         KpiCellText {
-            display: compact_si(value),
+            display: kpi_short(value),
             tooltip: Some(exact),
         }
     } else {
@@ -274,7 +282,7 @@ struct KpiCellText {
 /// Format one KPI value for a fixed-width cell without losing access to its full value.
 ///
 /// Values below the SI threshold retain the existing formatter exactly. Larger finite values use
-/// the shared K/M/B/T formatter, while the former full text becomes the hover tooltip. The active
+/// the shared label form ([`kpi_short`]), while the former full text becomes the hover tooltip. The active
 /// percent suffix remains exclusive to profit rows.
 ///
 /// Args:
@@ -289,7 +297,7 @@ fn format_kpi_cell(format: CellFormat, value: f64) -> KpiCellText {
         CellFormat::Profit => fmt_signed(value),
     };
     let (display, tooltip) = if value.is_finite() && value.abs() >= 1_000.0 {
-        let compact = compact_si(value);
+        let compact = kpi_short(value);
         let display = match format {
             CellFormat::Integer => compact,
             CellFormat::Profit => {

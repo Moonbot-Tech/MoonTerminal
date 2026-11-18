@@ -36,7 +36,7 @@ fn local_schedule_rescore_reads_only_variant_kpis() {
 fn polish_hour_money_is_compact() {
     crate::analytics::set_pnl_unit(None);
     assert_eq!(super::hour_profit(462.79), "+463");
-    assert_eq!(super::hour_profit(1400.0), "+1.4K");
+    assert_eq!(super::hour_profit(1400.0), "+1.4 k");
     assert_eq!(super::hour_profit(-462.79), "-463");
 }
 

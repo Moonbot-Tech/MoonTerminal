@@ -689,9 +689,10 @@ fn side_cell(ri: usize, val: &Value, p: MoonPalette) -> MoonDataCell {
 /// column. The tooltip repeats the CELL text, so a market delta hovers in its two-place form too
 /// (#1338); its stored value is in the export and the clipboard copy.
 ///
-/// The one cell whose text and hover may differ is a second-resolution date in a column whose
-/// stored width is too narrow (`ctx.minute_dates`, #1391): it paints `YYYY-MM-DD HH:MM` whole rather than
-/// an ellipsis through the seconds, and the hover keeps the complete `…:SS` stamp.
+/// Two cells' text and hover may differ. A second-resolution date in a column whose stored width
+/// is too narrow (`ctx.minute_dates`, #1391) paints `YYYY-MM-DD HH:MM` whole rather than an
+/// ellipsis through the seconds, and the hover keeps the complete `…:SS` stamp. A shortened
+/// turnover (`hvol`/`hvolf`/`dvol`, #1390) paints `188.8 m` and hovers with the stored figure.
 ///
 /// Args:
 ///     row: Visible row index used to give the hover target a stable identity.
@@ -723,7 +724,12 @@ fn report_data_cell(row: usize, col: &str, val: &Value, ctx: &RowCellCtx<'_>) ->
     );
     let color = color.unwrap_or_else(|| cell_color(col, ctx.p));
     let full: SharedString = text.into();
-    let tooltip = (!full.is_empty()).then(|| full.clone());
+    // A shortened turnover (`188.8 m`) hovers with the stored figure, the one export and the row
+    // copy carry (#1390): the cell is the only place left on screen that could show it.
+    let tooltip = (!full.is_empty()).then(|| match col {
+        "hvol" | "hvolf" | "dvol" => SharedString::from(cell_display_text(val)),
+        _ => full.clone(),
+    });
     let display = if ctx.minute_dates.contains(&col) {
         SharedString::from(date_text(
             col,
@@ -941,6 +947,18 @@ pub(crate) fn cell(
         _ if is_delta_report_column(col) && as_f64(v).is_some() => {
             (as_f64(v).map(delta_text).unwrap_or_default(), None)
         }
+        // The coin's hourly, fast-hourly and daily turnover at entry, shortened to thousands and
+        // millions the way MoonBot's report SELECT prints them (#1390): `12.3 k`, `188.8 m`. The
+        // generic path's `188790000` was the widest cell of the row. Table text only — sort,
+        // CSV, Excel and the row copy keep the stored number, as the delta columns do, because a
+        // column of `12.3 k` cannot be summed and sorts `9.0 k` after `10.0`. A text value keeps
+        // the generic path.
+        "hvol" | "hvolf" | "dvol" if as_f64(v).is_some() => (
+            as_f64(v)
+                .map(|x| moon_core::util::fmt::short(x, moon_core::util::fmt::Form::Column))
+                .unwrap_or_default(),
+            None,
+        ),
         // `valuation_rate` deliberately has no arm: applied rates span roughly 1e5 (BTC) down to
         // 1e-2 (IDR), and the generic numeric path already answers that with eight significant
         // digits, where the two decimals the profit cells use would flatten most rates to `0.00`.
@@ -994,7 +1012,8 @@ pub(crate) fn cell(
 ///
 /// Prices, quantities, money, the valuation rate and the hourly/daily volumes are NOT here: two
 /// places would print a real `0.00001234` price or a `-0.00041380` BTC profit as zero, and the
-/// volumes are shortened with `k` / `m` in MoonBot rather than cut to two places.
+/// volumes are shortened with `k` / `m` in MoonBot rather than cut to two places — they have an
+/// arm of their own in [`cell`], the column form.
 ///
 /// Args:
 ///     col: Runtime report column name.

@@ -301,22 +301,6 @@ pub(super) fn parse_vol(s: &str) -> f64 {
         * mult
 }
 
-/// Format volume in Moonbot's compact form, such as `1.7m` or `320k`.
-pub(crate) fn vol_fmt(v: f64) -> String {
-    let a = v.abs();
-    if a >= 1e9 {
-        format!("{:.1}b", v / 1e9)
-    } else if a >= 1e6 {
-        format!("{:.1}m", v / 1e6)
-    } else if a >= 1e3 {
-        format!("{:.0}k", v / 1e3)
-    } else if a > 0.0 {
-        format!("{v:.0}")
-    } else {
-        "0".to_string()
-    }
-}
-
 /// Stable index sorting preserves the source order within equal keys without moving row data.
 pub(super) fn sort_indices(entries: &[Entry], order: &mut [usize], key: &str, desc: bool) {
     let direction = |ord: std::cmp::Ordering| if desc { ord.reverse() } else { ord };
@@ -486,9 +470,11 @@ pub(super) fn screener_row(
     // Every Screener delta is an unsigned retained-range magnitude. One formatter keeps all six
     // periods free of a misleading forced sign while preserving the shared zero rounding.
     let delta_cell = |v: f64| pct_cell(fmt::pct(v, 1));
+    // Volumes are lone figures beside a coin, MoonBot's markets-table spelling: the label form,
+    // the same one the detect cards print the same volume in.
     let vol_cell = |v: f64| {
         if v > 0.0 {
-            MoonDataCell::text(vol_fmt(v))
+            MoonDataCell::text(fmt::short(v, fmt::Form::Label))
         } else {
             MoonDataCell::text("0").tone(MoonTone::Muted)
         }

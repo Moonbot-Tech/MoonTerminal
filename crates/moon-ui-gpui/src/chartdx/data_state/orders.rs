@@ -206,10 +206,20 @@ impl ChartDataState {
             }
             let device_gen = pr.layers.device_gen();
             let device_lost = pr.last_device_gen != device_gen;
-            if device_lost {
+            // A respelled notation reaches the label text only through a rebuild, and no order
+            // revision moves with it, so it forces one the way a lost device does.
+            let notation = moon_core::util::fmt::notation();
+            let respelled = pr.last_notation != notation;
+            pr.last_notation = notation;
+            if device_lost || respelled {
                 pr.last_order_lines_rev = u64::MAX;
                 pr.gpu_prepare_dirty = true;
                 pixels_changed = true;
+            }
+            // The order-book ladder respells on the market path (`ladder_notation` there), which is
+            // gated on `view_dirty`: wake it, or a quiet market keeps the old spelling.
+            if respelled {
+                self.view_dirty = true;
             }
 
             // An engine holding a FROZEN REPLAY draws no LIVE orders, and this is the only place
@@ -817,26 +827,18 @@ fn pct_color(theme: &ChartTheme, v: f32) -> u32 {
     }
 }
 
-/// Formats a compact base-unit count with a K/M/B/T SI suffix and at most two fractional digits,
-/// trimming trailing zeros. This intentionally does not use shared `compact_si`, which can emit
-/// three fractional digits for tens. Examples: 50 becomes "50", 49.744 becomes "49.74", 1234
-/// becomes "1.23K", and 49744 becomes "49.74K".
+/// Formats an order-line size: at most two places below a thousand, the shared label form above.
+///
+/// Below a thousand the label form keeps five significant digits (`49.744`), one more than an
+/// order line has room for beside its `[N]` tag, so the line keeps its own cut there: `50`,
+/// `49.74`. From a thousand up — including a figure the two places round up to one (`999.996`) —
+/// the unit is the one every other surface prints (`1 k`, `1.23 k`).
 fn fmt_size_2dp(v: f64) -> String {
-    let a = v.abs();
-    let (n, suffix) = if a >= 1e12 {
-        (v / 1e12, "T")
-    } else if a >= 1e9 {
-        (v / 1e9, "B")
-    } else if a >= 1e6 {
-        (v / 1e6, "M")
-    } else if a >= 1e3 {
-        (v / 1e3, "K")
-    } else {
-        (v, "")
-    };
-    let s = format!("{n:.2}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    format!("{s}{suffix}")
+    if moon_core::util::fmt::round_to(v.abs(), 2).unwrap_or(v.abs()) >= 1000.0 {
+        return moon_core::util::fmt::short(v, moon_core::util::fmt::Form::Label);
+    }
+    let s = format!("{v:.2}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn fmt_amount(v: f32) -> String {
@@ -880,7 +882,7 @@ pub(super) fn refresh_orderbook_label_notionals(
     }
 }
 
-/// Formats a dollar amount with an SI suffix, for example 1234 as "$1.23K".
+/// Formats a dollar amount through [`fmt_size_2dp`], for example 1234 as "$1.23 k".
 fn fmt_usd(v: f64) -> String {
     format!("${}", fmt_size_2dp(v))
 }

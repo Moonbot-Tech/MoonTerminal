@@ -177,19 +177,10 @@ impl AnalyticsView {
     }
 }
 
+/// A bucket's lower bound under its bar, in the shared column form (`3.46`, `950.0`, `12.3 k`).
+///
+/// The bounds stand in a row and are compared against each other, which is the column form's job:
+/// every one carries a point and the units are the ones the report prints for the same field.
 fn short_num(v: f64) -> String {
-    let a = v.abs();
-    if a >= 1e9 {
-        format!("{:.1}B", v / 1e9)
-    } else if a >= 1e6 {
-        format!("{:.1}M", v / 1e6)
-    } else if a >= 1e3 {
-        format!("{:.1}k", v / 1e3)
-    } else if a >= 100.0 {
-        format!("{v:.0}")
-    } else if a >= 10.0 {
-        format!("{v:.1}")
-    } else {
-        format!("{v:.2}")
-    }
+    moon_core::util::fmt::short(v, moon_core::util::fmt::Form::Column)
 }

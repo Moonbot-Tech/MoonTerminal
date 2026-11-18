@@ -127,13 +127,16 @@ fn free_text_columns_have_larger_but_bounded_widths() {
     );
 }
 
-/// Removing locale from `report/widths.rs:NaturalWidthsEnvironment` must make this assertion fail:
-/// a live language change would otherwise reuse widths measured for the previous translated headers.
+/// Removing locale or the notation from `report/widths.rs:NaturalWidthsEnvironment` must make this
+/// fail: a live language or notation change would otherwise reuse widths measured for the previous
+/// headers or the previous spelling of the volume cells.
 #[test]
-fn natural_width_environment_changes_with_locale_or_resolved_font() {
-    let environment = |locale: &str, normal: usize| {
+fn natural_width_environment_changes_with_locale_notation_or_resolved_font() {
+    use moon_core::util::fmt::Notation;
+    let environment = |locale: &str, notation: Notation, normal: usize| {
         natural_widths_environment(
             locale,
+            notation,
             MonoBodyFontSignature {
                 normal: FontId(normal),
                 semibold: FontId(2),
@@ -142,8 +145,10 @@ fn natural_width_environment_changes_with_locale_or_resolved_font() {
         )
     };
 
-    assert_ne!(environment("ru", 1), environment("en", 1));
-    assert_ne!(environment("ru", 1), environment("ru", 3));
+    let base = environment("ru", Notation::MoonBot, 1);
+    assert_ne!(base, environment("en", Notation::MoonBot, 1));
+    assert_ne!(base, environment("ru", Notation::Compact, 1));
+    assert_ne!(base, environment("ru", Notation::MoonBot, 3));
 }
 
 use super::super::{columns, query};

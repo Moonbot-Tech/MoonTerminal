@@ -50,7 +50,9 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::media::icons::IconSet;
-use moon_core::config::{AppConfig, CoreSortMode, GroupConfig, Language, LiveScope, UiThemeMode};
+use moon_core::config::{
+    AppConfig, CoreSortMode, GroupConfig, Language, LiveScope, Notation, UiThemeMode,
+};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::market::MarketDataMode;
 use moon_core::session::CoreId;
@@ -346,6 +348,31 @@ const LIVE_SCOPE_LABELS: [(&str, LiveScope); 2] = [
     ("general.live_scope.each", LiveScope::EachChart),
 ];
 
+/// Labels and values for the number-notation selector, MoonBot's spelling first: it is the
+/// default (#1390).
+const NOTATION_LABELS: [(&str, Notation); 2] = [
+    ("general.notation.moonbot", Notation::MoonBot),
+    ("general.notation.compact", Notation::Compact),
+];
+
+/// Dropdown items for the number-notation selector, each captioned with what it prints.
+///
+/// The example is FORMATTED, not written into the dictionary: printed through the same function
+/// every surface uses, it cannot show a spelling the terminal does not produce, and the locale
+/// files stay free of glyphs (`locales/README.md`).
+fn notation_items() -> Vec<MoonSelectItem<Notation>> {
+    use moon_core::util::fmt::{Form, short_in};
+    NOTATION_LABELS
+        .iter()
+        .map(|(key, notation)| {
+            let example = [12_345.0, 1_234_567.0]
+                .map(|v| short_in(v, Form::Label, *notation))
+                .join(" · ");
+            MoonSelectItem::new(*notation, format!("{} — {example}", t!(*key)))
+        })
+        .collect()
+}
+
 /// Labels and values for the interface-theme selector, ordered light to dark so the list reads
 /// as a brightness ramp rather than as the order the themes happened to be written in, with
 /// Obsidian, the second dark theme, after Dark. The experimental colour-role modes follow the
@@ -444,6 +471,8 @@ pub struct SettingsView {
     valuation: Entity<MoonSelectState<ValuationMode>>,
     /// Live-scope selector for the General tab's charts section (#688).
     live_scope: Entity<MoonSelectState<LiveScope>>,
+    /// Number-notation selector for the General tab's language section (#1390).
+    notation: Entity<MoonSelectState<Notation>>,
     /// Data-source selector for the Connections tab.
     mode: Entity<MoonSelectState<MarketDataMode>>,
     /// Order selector shared by every core list on the Connections tab.
@@ -745,6 +774,38 @@ impl SettingsView {
         )
         .detach();
 
+        // Number notation (#1390). Written to the draft only: the process-wide copy every surface
+        // prints with moves on Save (`apply_settings`), so an unsaved pick previews nothing outside
+        // the dropdown's own captions, which show each spelling already.
+        let cur_notation = {
+            let b = backend.read(cx);
+            b.preview.as_ref().unwrap_or(&b.config).number_notation
+        };
+        let notation_idx = NOTATION_LABELS
+            .iter()
+            .position(|(_, n)| *n == cur_notation)
+            .unwrap_or(0);
+        let notation = cx.new(|cx| {
+            MoonSelectState::new(
+                notation_items(),
+                Some(IndexPath::new(notation_idx)),
+                window,
+                cx,
+            )
+        });
+        cx.subscribe(&notation, |this, _e, ev: &MoonSelectEvent<Notation>, cx| {
+            if let MoonSelectEvent::Confirm(Some(picked)) = ev {
+                let picked = *picked;
+                this.backend.update(cx, |b, bcx| {
+                    if let Some(p) = b.preview.as_mut() {
+                        p.number_notation = picked;
+                        bcx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+
         // Build the data-source dropdown, ported from egui's ComboBox.
         let mode_items = localized_items(&MODE_LABELS);
         let mode_idx = MODE_LABELS
@@ -915,6 +976,7 @@ impl SettingsView {
             lang,
             valuation,
             live_scope,
+            notation,
             mode,
             core_sort,
             captions_locale: rust_i18n::locale().to_string(),
@@ -970,6 +1032,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.core_sort.hash(&mut h);
     cfg.report_valuation_mode.hash(&mut h);
     cfg.live_scope.hash(&mut h);
+    cfg.number_notation.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
     cfg.charts_stack_compress.hash(&mut h);
@@ -1187,6 +1250,7 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     cfg.core_sort.hash(&mut h);
     cfg.report_valuation_mode.hash(&mut h);
     cfg.live_scope.hash(&mut h);
+    cfg.number_notation.hash(&mut h);
     cfg.ui_theme_mode.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
@@ -1269,6 +1333,7 @@ fn page_sig(cfg: &AppConfig, tab: Tab) -> Option<u64> {
         Tab::Badges => hash_json(&mut h, &cfg.badges),
         Tab::General => {
             cfg.language.code().hash(&mut h);
+            cfg.number_notation.hash(&mut h);
             cfg.report_valuation_mode.hash(&mut h);
             cfg.live_scope.hash(&mut h);
             cfg.charts_split_by_core.hash(&mut h);

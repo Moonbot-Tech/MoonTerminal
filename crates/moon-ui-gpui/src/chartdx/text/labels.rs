@@ -48,6 +48,15 @@ pub(in crate::chartdx) use inputs::{ActionInputs, BasisStats, LabelInputs, basis
 pub(in crate::chartdx) use pnl::collect_open_stats;
 pub(crate) use preview::preview_row;
 
+/// A figure in a chart caption, shortened as a lone label (`12.3 k`, `1.23 m`).
+///
+/// Every caption that prints an amount, a volume or a count goes through this one spelling, so the
+/// Volume24h caption and the window volume beside it can never disagree about `1M` against
+/// `1000K`.
+fn short_label(v: f64) -> String {
+    fmt::short(v, fmt::Form::Label)
+}
+
 /// One caption ready to draw.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::chartdx) struct LabelText {
@@ -209,6 +218,9 @@ pub(in crate::chartdx) struct LabelState {
     /// BAKED into the stored string: without this a live language switch would leave the previous
     /// language on the chart until some unrelated input happened to move.
     locale: String,
+    /// Number notation the current [`Self::texts`] were formatted in — the locale's twin: every
+    /// shortened figure is BAKED into its stored string the same way (#1390).
+    notation: fmt::Notation,
     /// Formatted captions in draw order — row by row, caption by caption — skipping everything
     /// that resolved to nothing.
     pub texts: Vec<LabelText>,
@@ -269,10 +281,17 @@ impl LabelState {
             .arb_view
             .as_ref()
             .is_some_and(|held| Rc::ptr_eq(held, arb_view));
-        if same_cfg && same_view && !inputs_changed && self.locale == locale {
+        let notation = fmt::notation();
+        if same_cfg
+            && same_view
+            && !inputs_changed
+            && self.locale == locale
+            && self.notation == notation
+        {
             return false;
         }
         self.locale = locale;
+        self.notation = notation;
         self.cfg = Some(cfg.clone());
         self.arb_view = Some(arb_view.clone());
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -587,7 +606,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         }
         ChartLabelField::Exposure => stats
             .has_exposure
-            .then(|| (plain(&fmt::compact_si(stats.exposure)), None)),
+            .then(|| (plain(&short_label(stats.exposure)), None)),
         // Expanded before this point, into its own run range: one caption, a dozen lines. Reaching
         // here would mean the expansion was skipped, and a single line saying "arbitrage" is not
         // what the caption is for.
@@ -617,7 +636,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         }
         ChartLabelField::PriceStep => figure(inputs, |f| f.price_step).map(price_label),
         ChartLabelField::Volume24h => {
-            figure(inputs, |f| f.vol_24h).map(|v| (plain(&fmt::compact_si(v)), None))
+            figure(inputs, |f| f.vol_24h).map(|v| (plain(&short_label(v)), None))
         }
         ChartLabelField::WindowDelta => window(inputs, part)
             .and_then(|w| w.delta_pct)
@@ -632,7 +651,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .map(|v| {
                 let (quote, whole) = v.total_quote_stated();
                 match part.units {
-                    VolumeUnits::Quote => (marked(fmt::compact_si(quote), whole), None),
+                    VolumeUnits::Quote => (marked(short_label(quote), whole), None),
                     // The coin total has no deep source — the candle ring carries value only — so
                     // it is stated on the sides' own terms.
                     VolumeUnits::Base => volume_amount(part, v, quote, v.total_base()),
@@ -655,10 +674,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .or_else(|| no_cursor_dash(part)),
         ChartLabelField::WindowTrades => volume(inputs, part)
             .map(|v| match v.trades_known() {
-                true => (
-                    marked(fmt::compact_si(f64::from(v.trades)), v.complete),
-                    None,
-                ),
+                true => (marked(short_label(f64::from(v.trades)), v.complete), None),
                 false => not_measured(),
             })
             .or_else(|| no_cursor_dash(part)),
@@ -668,7 +684,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
                     VolumeUnits::Quote => liq.quote,
                     VolumeUnits::Base => liq.base,
                 };
-                let text = fmt::compact_si(value);
+                let text = short_label(value);
                 let text = match liq.complete {
                     true => text,
                     false => format!("~{text}"),
@@ -697,14 +713,14 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .as_ref()
             .map(|f| f.max_order)
             .filter(|m| m.value.is_finite() && m.value > 0.0)
-            .map(|m| (plain(&fmt::compact_si(m.value)), None)),
+            .map(|m| (plain(&short_label(m.value)), None)),
         ChartLabelField::ExchPosSize => inputs.figures.as_ref().and_then(|f| f.pos_size).map(|v| {
             let sign = if v >= 0.0 {
                 DeltaSign::Positive
             } else {
                 DeltaSign::Negative
             };
-            (plain(&fmt::compact_si(v)), Some(sign))
+            (plain(&short_label(v)), Some(sign))
         }),
         ChartLabelField::LiqPrice => figure(inputs, |f| f.liq_price).map(price_label),
         ChartLabelField::Leverage => inputs
@@ -753,7 +769,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             })
         }
         ChartLabelField::CoinBalance => {
-            figure(inputs, |f| f.coin_balance).map(|v| (plain(&fmt::compact_si(v)), None))
+            figure(inputs, |f| f.coin_balance).map(|v| (plain(&short_label(v)), None))
         }
         ChartLabelField::PosSize => (stats.pos_size != 0.0).then(|| {
             let sign = if stats.pos_size >= 0.0 {
@@ -761,7 +777,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             } else {
                 DeltaSign::Negative
             };
-            (plain(&fmt::compact_si(stats.pos_size)), Some(sign))
+            (plain(&short_label(stats.pos_size)), Some(sign))
         }),
     }
 }

@@ -329,16 +329,16 @@ pub(super) fn split_i18n(s: String) -> Vec<String> {
 
 // ── Money and duration formatting ───────────────────────────────────────────
 
-/// Format traded turnover: SI-compact, unsigned, unitless.
+/// Format traded turnover: shortened as a lone label, unsigned, unitless.
 ///
-/// Turnover is large and always positive, so it reads as "1.5M" rather than as an exact figure.
+/// Turnover is large and always positive, so it reads as "1.5 m" rather than as an exact figure.
 /// The quote ticker is NOT appended: the navigation bar already carries the scope's quote badge,
 /// and repeating it on every card would spend the width the numbers need.
 pub(super) fn fmt_volume(v: f64) -> String {
     if !v.is_finite() {
         return "—".to_string();
     }
-    moon_core::util::fmt::compact_si(v)
+    moon_core::util::fmt::short(v, moon_core::util::fmt::Form::Label)
 }
 
 /// Format an unsigned money amount the way profit is formatted, marking it approximate when it

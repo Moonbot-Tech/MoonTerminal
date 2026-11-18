@@ -338,21 +338,21 @@ fn all_period_large_values_use_compact_text_and_keep_exact_tooltips() {
     assert_eq!(
         format_kpi_cell(CellFormat::Integer, 454_520_257_399.0),
         KpiCellText {
-            display: "455B".to_string(),
+            display: "455 b".to_string(),
             tooltip: Some("454520257399".to_string()),
         }
     );
     assert_eq!(
         format_kpi_cell(CellFormat::Profit, 4_175_275_332_081.0),
         KpiCellText {
-            display: "+4.18T".to_string(),
+            display: "+4.18 t".to_string(),
             tooltip: Some("+4175275332081".to_string()),
         }
     );
     assert_eq!(
         plain_factor(392_964_096.0),
         KpiCellText {
-            display: "393M".to_string(),
+            display: "393 m".to_string(),
             tooltip: Some("392964096.00".to_string()),
         }
     );
@@ -383,7 +383,7 @@ fn all_period_large_values_use_compact_text_and_keep_exact_tooltips() {
     assert_eq!(
         format_kpi_cell(CellFormat::Profit, 1_234_567.0),
         KpiCellText {
-            display: "+1.23M%".to_string(),
+            display: "+1.23 m%".to_string(),
             tooltip: Some("+1234567%".to_string()),
         }
     );

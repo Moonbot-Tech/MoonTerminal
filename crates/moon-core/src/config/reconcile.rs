@@ -17,6 +17,7 @@ use super::servers::{self, CoreSortMode, LiveScope};
 use super::uid_counter::UidCounter;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
+use crate::util::fmt::Notation;
 
 /// Result of merging the two files into runtime state.
 pub struct Merged {
@@ -60,6 +61,8 @@ pub struct Merged {
     pub report_valuation_mode: ValuationMode,
     /// Whether a pan reaches every chart or only its own.
     pub live_scope: LiveScope,
+    /// How a shortened figure spells its unit.
+    pub number_notation: Notation,
     /// Durable uid counter, already advanced past any uid handed out during this merge.
     pub next_uid: UidCounter,
     /// Legacy hotkeys from settings.toml (schema < v13), used only for one-time migration
@@ -107,6 +110,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let core_sort = meta.core_sort;
     let report_valuation_mode = meta.report_valuation_mode;
     let live_scope = meta.live_scope;
+    let number_notation = meta.number_notation;
     let hotkeys = meta.hotkeys;
     let mut telegram = sf.telegram;
     dirty |= telegram.adopt_legacy_owner();
@@ -225,6 +229,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         core_sort,
         report_valuation_mode,
         live_scope,
+        number_notation,
         next_uid,
         hotkeys,
         dirty,
@@ -261,6 +266,7 @@ pub fn split(
     core_sort: CoreSortMode,
     report_valuation_mode: ValuationMode,
     live_scope: LiveScope,
+    number_notation: Notation,
     next_uid: u64,
     telegram: TelegramConfig,
 ) -> (ServersFile, SettingsFile) {
@@ -299,6 +305,7 @@ pub fn split(
         core_sort,
         report_valuation_mode,
         live_scope,
+        number_notation,
         next_uid,
         servers: servers
             .iter()

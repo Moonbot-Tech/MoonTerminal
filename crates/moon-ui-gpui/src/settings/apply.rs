@@ -264,6 +264,8 @@ impl SettingsView {
         });
         self.live_scope
             .update(cx, |s, _| s.set_selected_value(&saved.live_scope));
+        self.notation
+            .update(cx, |s, _| s.set_selected_value(&saved.number_notation));
         self.mode
             .update(cx, |s, _| s.set_selected_value(&saved.market_mode));
         self.core_sort
@@ -362,6 +364,8 @@ impl SettingsView {
         self.live_scope.update(cx, |state, cx| {
             state.set_items(localized_items(&LIVE_SCOPE_LABELS), cx)
         });
+        self.notation
+            .update(cx, |state, cx| state.set_items(super::notation_items(), cx));
         self.mode.update(cx, |state, cx| {
             state.set_items(localized_items(&MODE_LABELS), cx)
         });
@@ -380,16 +384,23 @@ impl SettingsView {
         // without recreating windows or sessions.
         let lang_changed = before.language != after.language;
         let sort_changed = before.core_sort != after.core_sort;
+        // Every shortened figure in every window respells at once, the way a language change
+        // retranslates every caption: the same one-off redraw, and the caches that hold formatted
+        // text fold `fmt::notation()` into their keys the way they fold the locale.
+        let notation_changed = before.number_notation != after.number_notation;
         if lang_changed {
             rust_i18n::set_locale(after.language.code());
             crate::window::titles::follow_locale(cx);
+        }
+        if notation_changed {
+            moon_core::util::fmt::set_notation(after.number_notation);
         }
         self.backend.update(cx, |b, bcx| {
             b.core_cmds_reconcile(before);
             b.reconcile_telegram(&before.telegram);
             bcx.notify();
         });
-        if lang_changed || sort_changed {
+        if lang_changed || sort_changed || notation_changed {
             // Notify Backend before redrawing so signature-gated panels recompute their order.
             self.backend.update(cx, |b, bcx| {
                 // An order change can replace the canonical first core while the cached core is

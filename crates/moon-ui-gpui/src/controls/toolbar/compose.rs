@@ -296,7 +296,7 @@ pub fn toolbar(
     } else {
         max_order
     };
-    let max_order_value = max_order.format_compact(fmt::compact_si, quote);
+    let max_order_value = max_order.format_compact(|v| fmt::short(v, fmt::Form::Label), quote);
     let max_order_tip = t!(max_order.tooltip_key()).to_string();
     let analytics_label = t!("toolbar.analytics").to_string();
     let strategies_label = t!("toolbar.strategies").to_string();

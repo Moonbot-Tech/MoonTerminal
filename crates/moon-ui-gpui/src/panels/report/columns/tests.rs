@@ -449,3 +449,27 @@ fn market_deltas_print_at_most_two_places() {
     assert_eq!(text("buyprice", Value::Real(0.00001234)), "0.00001234");
     assert_eq!(text("quantity", Value::Real(12.3456)), "12.3456");
 }
+
+/// H. Vol, HVolFast and D. Vol print MoonBot's report ladder in the table (#1390), and nothing else
+/// is shortened with them.
+///
+/// Breakage this pins: dropping the volume arm brings back the generic `188790000`; widening it to
+/// every numeric column turns a `0.001` quantity into `0.0`; a text value must keep the generic
+/// path rather than print as an empty cell.
+#[test]
+fn turnover_columns_print_moonbots_report_ladder() {
+    let axis = ReportAxis::identity_core_local();
+    let text = |col: &str, value: Value| {
+        cell(col, &value, None, MoonPalette::default(), &axis, 0, Tz::UTC).0
+    };
+    for col in ["hvol", "hvolf", "dvol"] {
+        assert_eq!(text(col, Value::Real(188_790_000.0)), "188.8 m", "{col}");
+        assert_eq!(text(col, Value::Real(12_345.0)), "12.3 k", "{col}");
+        assert_eq!(text(col, Value::Real(1_234.56)), "1234.6", "{col}");
+        assert_eq!(text(col, Value::Real(3.456)), "3.46", "{col}");
+        assert_eq!(text(col, Value::Integer(9)), "9.0", "{col}");
+        assert_eq!(text(col, Value::Text("n/a".into())), "n/a", "{col}");
+    }
+    assert_eq!(text("quantity", Value::Real(0.001)), "0.001");
+    assert_eq!(text("spentbtc", Value::Real(188_790_000.0)), "188790000.00");
+}

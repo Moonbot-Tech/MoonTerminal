@@ -94,7 +94,7 @@ fn order_size_labels_use_shared_compact_formatter() {
 
     assert_eq!(
         size_labels(values),
-        ["50", "100", "250", "500", "10k", "1m"].map(str::to_string)
+        ["50", "100", "250", "500", "10 k", "1 m"].map(str::to_string)
     );
     assert_eq!(values, [50.0, 100.0, 250.0, 500.0, 10_000.0, 1_000_000.0]);
 }

@@ -70,6 +70,7 @@ mod wire_id;
 #[cfg(test)]
 mod tests;
 
+pub use crate::util::fmt::Notation;
 pub use arb_view::{
     ARB_MAX_ROWS, ArbRow, ArbShow, ArbVenueCfg, ArbViewCfg, LABEL_SCROLL_TAIL,
     label_scroll_first_max,
@@ -339,6 +340,11 @@ pub struct AppConfig {
     /// Whether a pan reaches every chart or only its own (`settings.toml`). Defaults to
     /// `AllCharts`, the original application-wide Live flag (#688).
     pub live_scope: LiveScope,
+    /// How a shortened figure spells its unit (`settings.toml`). Defaults to MoonBot's `12.3 k`.
+    ///
+    /// Stored here; PRINTED through the process-wide copy `util::fmt::set_notation` holds, which
+    /// the application writes at startup and after a saved change.
+    pub number_notation: Notation,
     /// Next uid candidate after config entries and the supplied durable-store floor are reconciled.
     ///
     /// Private to `config`: a `pub` field could be overwritten with a stale counter from
@@ -403,6 +409,7 @@ impl AppConfig {
             core_sort: Default::default(),
             report_valuation_mode: Default::default(),
             live_scope: Default::default(),
+            number_notation: Default::default(),
             hotkeys: Default::default(),
             theme: Default::default(),
             orders: Default::default(),
@@ -522,6 +529,7 @@ impl AppConfig {
                 core_sort: merged.core_sort,
                 report_valuation_mode: merged.report_valuation_mode,
                 live_scope: merged.live_scope,
+                number_notation: merged.number_notation,
                 next_uid: merged.next_uid,
                 hotkeys,
                 theme,
@@ -843,6 +851,7 @@ impl AppConfig {
             core_sort: settings.core_sort,
             report_valuation_mode: settings.report_valuation_mode,
             live_scope: settings.live_scope,
+            number_notation: settings.number_notation,
             // The counter starts above the highest uid issued above, before applying the optional
             // store floor. This mode can share `data/` with encrypted-config runs.
             next_uid: UidCounter::new(next, uid_floor),
@@ -968,6 +977,7 @@ impl AppConfig {
             self.core_sort,
             self.report_valuation_mode,
             self.live_scope,
+            self.number_notation,
             self.next_uid.get(),
             self.telegram.clone(),
         );
@@ -1114,6 +1124,8 @@ impl AppConfig {
             ValuationMode::default(),
             // Live scope is input behaviour on charts already open: no session or window.
             LiveScope::default(),
+            // The notation only respells figures already on screen: no session or window.
+            Notation::default(),
             // The uid counter advances on save and does not describe structure by itself.
             0,
             // Telegram credentials are not a session/window reconnect trigger, and the token

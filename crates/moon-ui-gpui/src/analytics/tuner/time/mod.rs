@@ -414,13 +414,13 @@ fn hour_card(
 /// Height of a column's bar area (px before font scaling); the bar grows from the center by ≤ half.
 const BAR_H: f32 = 108.0;
 
-/// Keep hourly money labels within one bar slot using the matrix's shared SI formatter.
+/// Keep hourly money labels within one bar slot, shortened as a lone label like the matrix's.
 fn hour_profit(profit: f64) -> String {
     if crate::analytics::pnl_is_pct() || !profit.is_finite() {
         return fmt_signed(profit);
     }
     let rounded = profit.round();
-    let compact = moon_core::util::fmt::compact_si(rounded);
+    let compact = moon_core::util::fmt::short(rounded, moon_core::util::fmt::Form::Label);
     if rounded > 0.0 {
         format!("+{compact}")
     } else {

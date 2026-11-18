@@ -208,9 +208,9 @@ fn day_window_keeps_thirty_existing_rows_across_a_skipped_date() {
 /// Turnover lands on round hundreds constantly, and the SI formatter used to eat their zeros.
 #[test]
 fn volume_keeps_the_magnitude_it_was_given() {
-    assert_eq!(fmt_volume(100_000.0), "100K");
-    assert_eq!(fmt_volume(1_500_000.0), "1.5M");
-    assert_eq!(fmt_volume(73_000.0), "73K");
+    assert_eq!(fmt_volume(100_000.0), "100 k");
+    assert_eq!(fmt_volume(1_500_000.0), "1.5 m");
+    assert_eq!(fmt_volume(73_000.0), "73 k");
     assert_eq!(fmt_volume(f64::NAN), "—");
 }
 

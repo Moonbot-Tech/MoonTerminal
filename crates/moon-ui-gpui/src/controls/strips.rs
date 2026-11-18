@@ -3,7 +3,7 @@
 
 use gpui::*;
 use moon_core::feed::ClientSettingsEdit;
-use moon_core::util::fmt::compact_order_size;
+use moon_core::util::fmt::{Form, short};
 use moon_ui::{MoonAccent, MoonInput, MoonInputState, MoonSegmentItem, MoonSegmentedControl};
 use rust_i18n::t;
 
@@ -140,7 +140,10 @@ fn labels(values: [f64; 6], fmt: impl Fn(f64) -> String) -> [String; 6] {
     values.map(fmt)
 }
 
-/// Return the group's complete order-size labels.
+/// Return the group's complete order-size labels, each a lone label (`500`, `1.5 k`).
+///
+/// The same spelling the chart prints the order in once it is placed, so a button and the line
+/// it creates never name one size two ways.
 ///
 /// Args:
 ///     values: Complete group-local USD-equivalent order-size values.
@@ -148,7 +151,7 @@ fn labels(values: [f64; 6], fmt: impl Fn(f64) -> String) -> [String; 6] {
 /// Returns:
 ///     Six formatted order-size labels.
 pub(super) fn size_labels(values: [f64; 6]) -> [String; 6] {
-    labels(values, compact_order_size)
+    labels(values, |v| short(v, Form::Label))
 }
 
 /// Return the group's complete fixed-sell percentage labels.
