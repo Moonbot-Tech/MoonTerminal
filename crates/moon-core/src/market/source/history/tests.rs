@@ -559,3 +559,90 @@ fn deep_request_lifecycle_scale_probe() {
     );
     assert!(gate.is_empty());
 }
+
+/// Warm up twice, then print nearest-rank timings for one ignored scale benchmark.
+fn bench_measure<T>(name: &str, iterations: u32, mut work: impl FnMut() -> T) {
+    assert!(iterations > 0);
+    for _ in 0..2 {
+        std::hint::black_box(work());
+    }
+    let mut elapsed = Vec::with_capacity(iterations as usize);
+    for _ in 0..iterations {
+        let started = Instant::now();
+        let result = std::hint::black_box(work());
+        elapsed.push(started.elapsed());
+        drop(result);
+    }
+    elapsed.sort_unstable();
+    let percentile = |percent: u64| {
+        let rank = (u64::from(iterations) * percent).div_ceil(100);
+        elapsed[rank as usize - 1].as_secs_f64() * 1_000.0
+    };
+    println!(
+        "BENCH {name} n={iterations} p50_ms={:.2} p95_ms={:.2} max_ms={:.2}",
+        percentile(50),
+        percentile(95),
+        percentile(100),
+    );
+}
+
+/// Time a full 100,000-trade reset copy, tick conversion, and price-fit rebuild.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_history_reset_100k() {
+    use moonproto::{MoonTime, state::TradeHistoryRow};
+
+    let rows: Vec<_> = (0..100_000)
+        .map(|index| TradeHistoryRow {
+            time: MoonTime::from_unix_millis(index * 100),
+            price: 100.0 + (index % 100) as f32 / 100.0,
+            qty: if index % 2 == 0 { 1.0 } else { -1.0 },
+        })
+        .collect();
+    let mut cursor = ChartHistoryCursor::default();
+    let mut out = ChartHistoryBuffers::default();
+    bench_measure(
+        "bench_s_history_reset_100k stimulus=full_trade_reset rows=100000",
+        5,
+        || {
+            cursor.trade_rows.clear();
+            cursor.trade_rows.extend_from_slice(&rows);
+            cursor.price_fit.replace_from(&cursor.trade_rows, true, 0);
+            rows_to_ticks(&cursor.trade_rows, &mut out.ticks);
+            assert_eq!(out.ticks.len(), 100_000);
+            out.ticks.len()
+        },
+    );
+}
+
+/// Time a full 100,000-candle series reset through the production rebuild path.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_candle_reset_100k() {
+    use crate::market::candles::CandleSeries;
+
+    let candles: Vec<_> = (0..100_000)
+        .map(|index| {
+            let open = 100.0 + (index % 100) as f32 / 100.0;
+            ChartCandle {
+                t_open_ms: (index as i64 * 60_000) as f64,
+                open,
+                high: open + 0.25,
+                low: open - 0.25,
+                close: open + 0.1,
+                volume: 1.0,
+                quote_volume: open,
+            }
+        })
+        .collect();
+    let mut series = CandleSeries::default();
+    bench_measure(
+        "bench_s_candle_reset_100k stimulus=full_candle_reset rows=100000",
+        5,
+        || {
+            series.rebuild(60_000, &candles, 60_000, &[]);
+            assert_eq!(series.candles().len(), 100_000);
+            series.revision()
+        },
+    );
+}

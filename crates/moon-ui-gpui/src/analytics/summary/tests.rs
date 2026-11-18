@@ -155,3 +155,49 @@ fn non_finite_stays_a_bare_em_dash() {
     )));
     assert_eq!(fmt_signed_unit(f64::INFINITY), "—");
 }
+
+/// Headless host for the production Analytics KPI model and element builder.
+struct AnalyticsOpenBench {
+    band: super::model::KpiBand,
+}
+
+impl gpui::Render for AnalyticsOpenBench {
+    /// Draw the KPI band produced from the synthetic Analytics snapshot.
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let p = MoonPalette::active(cx);
+        super::kpi::kpi_band_el(&self.band, super::kpi::kpi_cols(1_200.0, 1.0), p, cx)
+    }
+}
+
+/// Time a cold populated Summary derivation and its first headless KPI draw.
+#[gpui::test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_analytics_open(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    cx.update(moon_ui::init);
+    let data = std::sync::Arc::new(synthetic_summary());
+    crate::test_support::bench::measure(
+        "bench_s_analytics_open stimulus=cold_open_first_draw cores=200 buckets=400 partial_(no_Backend_wiring)",
+        3,
+        || {
+            let derived = cx.update(|cx| {
+                super::derived::derive_for_test(data.clone(), MoonPalette::active(cx))
+            });
+            assert_eq!(derived.data().core_days.len(), 200);
+            let band = super::model::KpiBand::new(derived.data(), derived.pts.clone(), true);
+            let window = cx.open_window(gpui::size(gpui::px(1_200.0), gpui::px(900.0)), |_, _| {
+                AnalyticsOpenBench { band }
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            visual.update(|window, _| window.remove_window());
+            derived
+        },
+    );
+}

@@ -132,3 +132,29 @@ fn the_cores_own_quote_decides_between_its_markets() {
         name("SOLUSDT", "SOL")
     );
 }
+
+/// Time the pure catalog-selection half of opening a coin menu over 50,000 labelled markets.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_coin_menu_open() {
+    let mut catalog: Vec<_> = (0..50_000)
+        .map(|index| {
+            row(
+                &format!("XA{index:05}USDT"),
+                &format!("XA{index:05}"),
+                &format!("XA{index:05}"),
+                USDT,
+            )
+        })
+        .collect();
+    catalog.push(row("XALPHAUSDT", "XALPHA", "XALPHA", USDT));
+    crate::test_support::bench::measure(
+        "bench_s_coin_menu_open stimulus=cold_catalog_pick rows=50001 partial_(no_Backend_wiring)",
+        7,
+        || {
+            let picked = pick_core_name(&catalog, "XALPHA", "XALPHAUSDT", USDT, USDT, None);
+            assert_eq!(picked, name("XALPHAUSDT", "XALPHA"));
+            picked
+        },
+    );
+}

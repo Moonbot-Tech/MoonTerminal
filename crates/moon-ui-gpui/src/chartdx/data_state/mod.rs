@@ -4,6 +4,14 @@
 
 use super::*;
 
+#[cfg(test)]
+impl ChartEngine {
+    /// Prepare one app-owned CPU frame from sibling-module benchmark fixtures.
+    pub(crate) fn prepare_frame_for_tests(&mut self, info: GpuFrameInfo) -> GpuFrameDecision {
+        self.data.borrow_mut().frame(info)
+    }
+}
+
 pub(in crate::chartdx) struct ChartDataState {
     pub(in crate::chartdx) container: Rc<RefCell<Container>>,
     pub(in crate::chartdx) render: Rc<RefCell<RenderState>>,

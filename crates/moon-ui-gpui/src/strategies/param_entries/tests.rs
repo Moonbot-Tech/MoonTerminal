@@ -127,3 +127,37 @@ fn full_mode_section_headers_use_the_section_title_seam() {
     assert_eq!(flat.heading_at, HashMap::from([(0, 0)]));
     assert_eq!(flat.field_count, 1);
 }
+
+/// Time the production full-parameter model over 2,000 schema fields.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_strategies_param_model() {
+    let sections: Vec<_> = (0..20)
+        .map(|section| SchemaSection {
+            title: format!("SECTION_{section:02}"),
+            fields: (0..100)
+                .map(|field_index| field(&format!("Field_{section:02}_{field_index:03}")))
+                .collect(),
+        })
+        .collect();
+    crate::test_support::bench::measure(
+        "bench_s_strategies_param_model stimulus=warm_full_model fields=2000",
+        7,
+        || {
+            let flat = flatten_params(
+                &sections,
+                None,
+                false,
+                None,
+                false,
+                ParamLabels {
+                    orphans: "Other fields",
+                    section_title: &|title| title.to_string(),
+                },
+            );
+            assert_eq!(flat.field_count, 2_000);
+            assert_eq!(flat.heading_at.len(), 20);
+            flat
+        },
+    );
+}

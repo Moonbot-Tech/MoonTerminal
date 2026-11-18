@@ -512,3 +512,59 @@ fn save_and_close_waits_for_the_station_answer() {
         rust_i18n::t!("settings.close.station_pending").to_string()
     );
 }
+
+/// Time the reachable close-decision and localized dirty-page body without a Backend entity.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_settings_close() {
+    use crate::settings::apply::{CloseDecision, close_body, close_decision};
+    let _locale = crate::test_locale::force("en");
+    let pages = crate::settings::Tab::ALL;
+    crate::test_support::bench::measure(
+        "bench_s_settings_close stimulus=dirty_close_request pages=18 partial_(no_Backend_wiring)",
+        7,
+        || {
+            assert_eq!(close_decision(true, false), CloseDecision::Ask);
+            let body = close_body(&pages, true, false);
+            assert!(!body.is_empty());
+            body
+        },
+    );
+}
+
+/// Time repeated Settings candidate saves under one process-wide temporary data root.
+#[test]
+#[ignore = "bench: S-smooth"]
+fn bench_s_settings_save() {
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let root = ROOT.get_or_init(|| {
+        std::env::temp_dir().join(format!(
+            "moonterminal-s-bench-settings-{}-{stamp}",
+            std::process::id()
+        ))
+    });
+    std::fs::create_dir_all(root).expect("temporary config root");
+    assert!(moon_core::config::paths::set_data_dir_override(
+        root.clone()
+    ));
+    let saved = crate::test_support::fixtures::app_config(20);
+    crate::test_support::bench::measure(
+        "bench_s_settings_save stimulus=cold_candidate_save servers=20 partial_(no_Backend_apply)",
+        3,
+        || {
+            let mut candidate = super::reverted(&saved);
+            candidate.save().expect("temporary Settings save");
+            assert_eq!(candidate.servers.len(), 20);
+            candidate
+        },
+    );
+    std::fs::remove_dir_all(root).expect("temporary config cleanup");
+}
