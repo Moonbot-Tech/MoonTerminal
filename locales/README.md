@@ -83,7 +83,12 @@ cargo test -p moon-ui-gpui --test theme_contract locales
 Add `locales/<code>/`, copy each English area file to
 `<area>.<code>.yml` (the stem must end in `.<code>`), add a `Language`
 variant whose code is that folder name (`crates/moon-core/src/config/lang.rs`,
-including `Language::ALL`), then re-run the contract test above.
+including `Language::ALL`), add the language to the Telegram crate's split
+dictionaries in `crates/moon-tg/src/i18n.rs` (a `mod <code>` with its own
+`i18n!("../../locales/<code>")`, plus its arm in `for_locale` and its entry in
+`available_locales`; without the module and its arm the bot's lookups fall
+back to English), then
+re-run the contract test above and `cargo test -p moon-tg i18n::`.
 
 ## Deliberately NOT translated
 
@@ -148,6 +153,10 @@ The dictionaries are wired in `crates/moon-ui-gpui/src/main.rs` through:
 ```rust
 rust_i18n::i18n!("../../locales", fallback = "en");
 ```
+
+The Telegram crate (`moon-tg`) reads the same folders through its own
+`i18n!`, one invocation per language in `crates/moon-tg/src/i18n.rs`, behind a
+facade that dispatches by locale code.
 
 In the terminal code use `rust_i18n::t`. Add new strings to the area file in
 every language folder (`locales/<lang>/<area>.<lang>.yml`).
