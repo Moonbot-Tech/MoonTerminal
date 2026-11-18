@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -52,6 +53,49 @@ const SCREENER_HEADER_H: f32 = 32.0;
 /// itself lives beside the columns it counts.
 const SCREENER_COLUMNS_MIGRATION: u32 = super::table::COLUMNS_MIGRATION;
 
+/// Owned counts reused across publications until the corresponding core receives new orders.
+type OrderCounts = Arc<HashMap<String, u32>>;
+
+/// Order totals signed by the core's table revision under the current fleet incarnation.
+#[derive(Default)]
+struct OrderCountMemo {
+    fleet_epoch: u64,
+    cores: HashMap<CoreId, (Option<u64>, OrderCounts)>,
+}
+
+impl OrderCountMemo {
+    /// Retire counts when a removed core can reappear with a previously seen table revision.
+    fn update_fleet_epoch(&mut self, epoch: u64) {
+        if self.fleet_epoch != epoch {
+            self.fleet_epoch = epoch;
+            self.cores.clear();
+        }
+    }
+
+    /// Return an owned snapshot for the publisher, scanning only a core with a new order batch.
+    fn counts(
+        &mut self,
+        core: CoreId,
+        table_revision: u64,
+        orders: &[moon_core::feed::OrderRow],
+    ) -> OrderCounts {
+        let (revision, counts) = self.cores.entry(core).or_default();
+        if *revision != Some(table_revision) {
+            let mut next: HashMap<&str, u32> = HashMap::new();
+            for order in orders {
+                *next.entry(order.market.as_str()).or_default() += 1;
+            }
+            *counts = Arc::new(
+                next.into_iter()
+                    .map(|(market, count)| (market.to_owned(), count))
+                    .collect(),
+            );
+            *revision = Some(table_revision);
+        }
+        Arc::clone(counts)
+    }
+}
+
 impl crate::controls::CoreComboHost for ScreenerView {
     /// The Screener is a group-less singleton: no Auto workspace owns its selector.
     fn core_selection_pinned(&self, _cx: &App) -> bool {
@@ -85,6 +129,7 @@ pub struct ScreenerView {
     prepare_task: Option<Task<()>>,
     /// Publication identity independent of user controls, which apply to either snapshot.
     prepare_seq: u64,
+    order_counts: OrderCountMemo,
     /// Distinct markets after source grouping but before the coin and volume filters, the footer's
     /// "total". Markets, not rows: a market has one row per core sharing its exchange.
     total: usize,
@@ -307,6 +352,7 @@ impl ScreenerView {
             prepared: Default::default(),
             prepare_task: None,
             prepare_seq: 0,
+            order_counts: OrderCountMemo::default(),
             total: 0,
             shown: 0,
             scope_marker: None,
@@ -366,22 +412,18 @@ impl ScreenerView {
         let mut venues: HashMap<CoreId, EntryVenue> = HashMap::new();
         let core_venues = b.session.core_venues();
         let store = b.session.store();
+        self.order_counts
+            .update_fleet_epoch(store.time_offset_epoch());
         for session in b.session.sessions() {
             names.insert(session.id, SharedString::from(session.name.clone()));
             if let Some(venue) = core_venues.get(&session.id).filter(|v| v.is_nameable()) {
                 venues.insert(session.id, entry_venue(venue));
             }
             if let Some(data) = store.core(session.id) {
-                let mut counts: HashMap<&str, u32> = HashMap::new();
-                for order in &data.orders {
-                    *counts.entry(order.market.as_str()).or_default() += 1;
-                }
                 orders.insert(
                     session.id,
-                    counts
-                        .into_iter()
-                        .map(|(market, count)| (market.to_string(), count))
-                        .collect::<HashMap<_, _>>(),
+                    self.order_counts
+                        .counts(session.id, data.orders_table_rev, &data.orders),
                 );
             }
             let Some(provider) = source.provider_of(session.id) else {

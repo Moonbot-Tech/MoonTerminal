@@ -107,6 +107,33 @@ fn latest_controls_apply_to_both_publications() {
     }
 }
 
+/// Narrowing and widening must retain the original stable sort and restore matching rows.
+#[test]
+fn keystrokes_match_the_full_filter_and_sort_in_both_directions() {
+    use super::super::view::{CoinQuery, tests::filter_and_sort};
+
+    let prepared = Prepared::new(entries(4, 20), "vol24", true);
+    let ranks = [Some(0), Some(1), Some(2), Some(3)];
+    for input in [
+        "X", "XA", "XALPHA", "XALPHA1", "XALPHA10", "XALPHA1", "XA", "",
+    ] {
+        let query = CoinQuery::new(input);
+        let (selected, total, shown) = prepared.select(&ranks, &query, 0.0, "vol24", true);
+        let (expected, old_total, old_shown) =
+            filter_and_sort(entries(4, 20), &query, 0.0, "vol24", true);
+        let key = |entry: &Entry| (entry.row.core, entry.row.market.clone());
+        assert_eq!((total, shown), (old_total, old_shown), "{input}");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|&i| key(&prepared.entries[i]))
+                .collect::<Vec<_>>(),
+            expected.iter().map(key).collect::<Vec<_>>(),
+            "{input}",
+        );
+    }
+}
+
 /// Hiding a provider's first member must move its tied rows behind an earlier visible group.
 #[test]
 fn hidden_first_member_does_not_reorder_visible_group_ties() {

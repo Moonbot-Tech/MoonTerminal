@@ -1,6 +1,7 @@
 //! Immutable market rows and compact identities prepared away from the UI thread.
 
 use super::table::{Entry, sort_indices};
+use moon_core::market::listing::Listing;
 use moon_core::session::CoreId;
 use std::collections::HashMap;
 
@@ -9,7 +10,8 @@ use std::collections::HashMap;
 pub(super) struct Prepared {
     pub entries: Vec<Entry>,
     pub cores: Vec<CoreId>,
-    slots: Vec<(usize, usize)>,
+    slots: Vec<SelectionRow>,
+    search_rows: Vec<usize>,
     core_rows: Vec<Vec<usize>>,
     groups: Vec<Vec<usize>>,
     markets: usize,
@@ -23,15 +25,27 @@ pub(super) struct Prepared {
     pub listing_settles_ms: Option<i64>,
 }
 
+/// Fields used by selection, kept together to avoid chasing market data in sorted order.
+struct SelectionRow {
+    core: usize,
+    market: usize,
+    search: usize,
+    volume: f64,
+    listing: Listing,
+}
+
 impl Prepared {
     /// Prepare identities and the current sort once; repeated member rows share a market slot.
     pub fn new(entries: Vec<Entry>, sort_key: &str, sort_desc: bool) -> Self {
         let mut cores = Vec::new();
         let mut core_slots = HashMap::new();
         let mut market_slots = HashMap::new();
-        let slots: Vec<(usize, usize)> = entries
+        let mut searches = HashMap::new();
+        let mut search_rows = Vec::new();
+        let slots: Vec<_> = entries
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(index, entry)| {
                 let next = cores.len();
                 let core = *core_slots.entry(entry.row.core).or_insert_with(|| {
                     cores.push(entry.row.core);
@@ -41,13 +55,29 @@ impl Prepared {
                 let market = *market_slots
                     .entry((entry.row.provider, entry.row.market.as_str()))
                     .or_insert(next);
-                (core, market)
+                let search = *searches
+                    .entry((
+                        entry.market_uc.as_ref(),
+                        entry.coin_uc.as_ref(),
+                        entry.row.identity.as_str(),
+                    ))
+                    .or_insert_with(|| {
+                        search_rows.push(index);
+                        search_rows.len() - 1
+                    });
+                SelectionRow {
+                    core,
+                    market,
+                    search,
+                    volume: entry.row.vol_24h,
+                    listing: entry.row.listing,
+                }
             })
             .collect();
         let markets = market_slots.len();
         let mut core_rows = vec![Vec::new(); cores.len()];
-        for (index, &(core, _)) in slots.iter().enumerate() {
-            core_rows[core].push(index);
+        for (index, row) in slots.iter().enumerate() {
+            core_rows[row.core].push(index);
         }
         let mut providers = HashMap::new();
         let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -69,6 +99,7 @@ impl Prepared {
             entries,
             cores,
             slots,
+            search_rows,
             markets,
             core_rows,
             groups,
@@ -97,18 +128,13 @@ impl Prepared {
         coin: &super::view::CoinQuery,
         min_vol: f64,
     ) -> bool {
-        use moon_core::market::listing::Listing;
         self.listing_pending
-            && self
-                .entries
-                .iter()
-                .zip(&self.slots)
-                .any(|(entry, &(core, _))| {
-                    ranks[core].is_some()
-                        && entry.row.listing == Listing::Pending
-                        && !coin.admits_listing(entry.row.listing)
-                        && passes_text_and_volume(entry, coin, min_vol)
-                })
+            && self.entries.iter().zip(&self.slots).any(|(entry, row)| {
+                ranks[row.core].is_some()
+                    && entry.row.listing == Listing::Pending
+                    && !coin.admits_listing(entry.row.listing)
+                    && passes_text_and_volume(entry, coin, min_vol)
+            })
     }
 
     /// Apply the latest controls immediately, sorting indices rather than moving market rows.
@@ -120,9 +146,6 @@ impl Prepared {
         key: &str,
         desc: bool,
     ) -> (Vec<usize>, usize, usize) {
-        let mut total = vec![false; self.markets];
-        let mut shown = vec![false; self.markets];
-        let mut indices = Vec::with_capacity(self.entries.len());
         // A group's position comes from its FIRST VISIBLE member, not a hidden provider.
         // Rebuild only this small core ordering; walking each core's indices keeps market order.
         let mut groups: Vec<_> = self
@@ -147,34 +170,40 @@ impl Prepared {
         let cached_sort = key == self.sort_key
             && desc == self.sort_desc
             && core_order.windows(2).all(|pair| pair[0] < pair[1]);
-        for (_, members) in groups {
-            for (_, core) in members {
-                for &index in &self.core_rows[core] {
-                    let entry = &self.entries[index];
-                    let market = self.slots[index].1;
-                    total[market] = true;
-                    if !passes_text_and_volume(entry, coin, min_vol)
-                        || !coin.admits_listing(entry.row.listing)
-                    {
-                        continue;
-                    }
-                    shown[market] = true;
-                    indices.push(index);
+        let mut total = vec![false; self.markets];
+        let mut shown = vec![false; self.markets];
+        let mut indices = Vec::with_capacity(self.entries.len());
+        let text_matches: Vec<_> = self
+            .search_rows
+            .iter()
+            .map(|&index| {
+                coin.is_empty() || super::view::matches_coin_filter(&self.entries[index], coin)
+            })
+            .collect();
+        let volume_active = min_vol > 0.0;
+        let mut admit = |index: usize| {
+            let row = &self.slots[index];
+            total[row.market] = true;
+            if text_matches[row.search]
+                && (!volume_active || row.volume >= min_vol)
+                && coin.admits_listing(row.listing)
+            {
+                shown[row.market] = true;
+                indices.push(index);
+            }
+        };
+        if cached_sort {
+            for &index in &self.sorted {
+                if ranks[self.slots[index].core].is_some() {
+                    admit(index);
                 }
             }
-        }
-        if cached_sort {
-            let mut selected = vec![false; self.entries.len()];
-            for &index in &indices {
-                selected[index] = true;
-            }
-            indices = self
-                .sorted
-                .iter()
-                .copied()
-                .filter(|&index| selected[index])
-                .collect();
         } else {
+            for core in core_order {
+                for &index in &self.core_rows[core] {
+                    admit(index);
+                }
+            }
             sort_indices(&self.entries, &mut indices, key, desc);
         }
         (

@@ -51,6 +51,27 @@ fn bench_s_screener_keystroke() {
     });
 }
 
+/// The same revision reuses its snapshot; changing a core or replacing it retires that snapshot.
+#[test]
+fn order_count_memo_tracks_table_revision_and_fleet_epoch() {
+    use std::sync::Arc;
+
+    let mut memo = super::OrderCountMemo::default();
+    let store = crate::test_support::fixtures::core_store(1, 0, 1, 0, 0);
+    let orders = &store.core(1).unwrap().orders;
+    let market = orders[0].market.as_str();
+    let old = memo.counts(1, 1, orders);
+    let other = memo.counts(2, 1, orders);
+    assert_eq!(old[market], 1);
+    assert!(Arc::ptr_eq(&old, &memo.counts(1, 1, orders)));
+    let empty = memo.counts(1, 2, &[]);
+    assert!(empty.is_empty());
+    assert_eq!(old[market], 1);
+    assert!(Arc::ptr_eq(&other, &memo.counts(2, 1, orders)));
+    memo.update_fleet_epoch(1);
+    assert_eq!(memo.counts(1, 2, orders)[market], 1);
+}
+
 /// Cached-only control handlers would miss market-only feed updates until another backend event.
 /// Pin the refresh wiring as a source contract because these handlers require a native GPUI window.
 #[test]
