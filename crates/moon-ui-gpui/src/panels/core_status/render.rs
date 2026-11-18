@@ -56,8 +56,8 @@ impl Render for CoreStatusView {
                         self.ip_masked,
                         self.editing,
                         self.edit_input.clone(),
-                        self.chart_server,
-                        self.chart_core,
+                        self.chart.server(),
+                        self.chart.core(),
                         &cpu_history,
                         self.core_selection.clone(),
                         self.servers_measured_w,
@@ -90,6 +90,8 @@ impl Render for CoreStatusView {
                         .flat_sort
                         .as_ref()
                         .is_none_or(|(key, _)| column_keys.contains(&key.as_str()));
+                    // Recorded for the table-state observer: the filler must not keep a width.
+                    self.flat_fill = table::fill_target(&column_keys, self.table_state.read(cx));
                     let table = table::core_status_table(
                         "core-status-table",
                         flat_rows,

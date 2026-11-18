@@ -142,7 +142,6 @@ fn a_second_render_with_unchanged_revisions_recomputes_nothing() {
         frame.columns.get_or_build(columns_key, || {
             builds.set(builds.get() + 1);
             table::projected_column_keys(
-                &rows,
                 &HashSet::new(),
                 &[],
                 &HashMap::new(),
@@ -276,7 +275,6 @@ fn bench_body() {
     });
     time("flat: projected_column_keys (before)", &mut || {
         std::hint::black_box(table::projected_column_keys(
-            &rows,
             &HashSet::new(),
             &[],
             &HashMap::new(),

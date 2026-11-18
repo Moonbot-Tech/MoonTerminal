@@ -16,6 +16,7 @@ use moon_ui::{
 use super::health::HealthFilter;
 use super::model::{CoreStatusRow, ServerKey};
 use super::{ChartWindow, CoreStatusMode, CoreStatusView, ordering};
+use crate::Backend;
 use crate::controls::core_update;
 use crate::design;
 use crate::display_text::plural_key;
@@ -166,11 +167,42 @@ impl CoreStatusView {
     ///     Nothing; only the selection and a repaint change.
     pub(super) fn select_chart_server(&mut self, key: ServerKey, cx: &mut Context<Self>) {
         // A server-row click charts the machine aggregate, so any per-core selection is cleared.
-        if self.chart_server != Some(key) || self.chart_core.is_some() {
-            self.chart_server = Some(key);
-            self.chart_core = None;
+        if self.chart.pick_server(key) {
             cx.notify();
         }
+    }
+
+    /// Server one in-scope core sits on, from the last rebuilt groups.
+    ///
+    /// Args:
+    ///     core: Core to look up.
+    ///
+    /// Returns:
+    ///     Its server key, or `None` when the core is not in the current groups.
+    fn server_of_core(&self, core: CoreId) -> Option<ServerKey> {
+        self.cached_groups
+            .iter()
+            .find(|group| group.cores.iter().any(|member| member.id == core))
+            .map(|group| group.key)
+    }
+
+    /// Move the chart to the Auto rail's core when the rail changed since the last sample.
+    ///
+    /// Called from every cache rebuild, which every rail switch and every reconnect reaches: the
+    /// rail's core is only valid while it is available, so a pinned core that connects late
+    /// becomes the rail pick on a telemetry sample, not on a workspace change.
+    ///
+    /// Args:
+    ///     b: Backend snapshot holding the group's workspace mode and rail pick.
+    ///
+    /// Returns:
+    ///     Whether the chart subject changed.
+    pub(super) fn follow_rail_core(&mut self, b: &Backend) -> bool {
+        let rail = (b.workspace_mode(&self.group) == moon_core::config::WorkspaceMode::AutoTrading)
+            .then(|| b.valid_auto_workspace_core(&self.group))
+            .flatten();
+        let server = rail.and_then(|core| self.server_of_core(core));
+        self.chart.follow_rail(rail, server)
     }
 
     /// Apply a flat-table header sort from a column click.
@@ -613,6 +645,10 @@ impl CoreStatusView {
     /// second click, Ctrl and Shift toggle and range — the reading this panel and the expert
     /// settings window share, and the one written up on that method.
     ///
+    /// A click that leaves its core selected also moves the bottom chart to that core, from the
+    /// Flat table and the Servers chips alike. A Ctrl-click that deselects a core does not: the
+    /// chart must not settle on the one core the operator just took out.
+    ///
     /// Args:
     ///     clicked: The clicked core, or `None` for a line that is not a core row.
     ///     order: Rendered row order from [`Self::visible_order`].
@@ -627,6 +663,10 @@ impl CoreStatusView {
     ) {
         self.core_selection
             .press(clicked, order, modifiers.shift, modifiers.secondary());
+        if let Some(core) = clicked.filter(|core| self.core_selection.contains(Some(*core))) {
+            let server = self.server_of_core(core);
+            self.chart.pick_core(core, server);
+        }
         cx.notify();
     }
 

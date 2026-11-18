@@ -8,7 +8,7 @@ use moon_core::session::core_order;
 use std::collections::{HashMap, HashSet};
 
 use super::columns_fit;
-use super::model::{ApiKeyState, ServerKey};
+use super::model::ServerKey;
 use super::ordering::{self, FlatLine, FlatSection};
 use super::presentation::{
     LoadLevel, api_expiry_level, api_expiry_text, api_expiry_tooltip, api_quota_level,
@@ -33,7 +33,8 @@ use moon_ui::{
     MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonProgress, v_flex,
 };
 
-/// Canonical Flat column order before data-only API columns are filtered.
+/// Canonical Flat column order before the Columns menu, the same-for-all line and the width drop
+/// filter it.
 const COLUMN_KEYS: [&str; 14] = [
     "core",
     "server",
@@ -51,10 +52,11 @@ const COLUMN_KEYS: [&str; 14] = [
     "tz_off",
 ];
 
-/// Every Flat column id, in source order, including columns hidden until a core reports them.
+/// Every Flat column id, in source order, including columns the panel is not drawing right now.
 ///
-/// Persistence merges against this full set. Merging against only the columns on screen would drop
-/// `api_key` while no row has one, then append it the next time a key appears.
+/// Persistence merges against this full set. Merging against only the columns on screen would
+/// drop a column the width drop or the same-for-all line removed, then append it at the end the
+/// next time it comes back.
 ///
 /// Returns:
 ///     The canonical Flat column ids.
@@ -62,42 +64,26 @@ pub(super) fn order_keys() -> &'static [&'static str] {
     &COLUMN_KEYS
 }
 
-/// Decide whether one Flat column has information to display in the visible rows.
-///
-/// Args:
-///     key: Canonical Flat column key.
-///     rows: Current visible-core snapshots.
-///
-/// Returns:
-///     Whether the column belongs in the rendered table.
-fn column_visible(key: &str, rows: &[CoreStatusRow]) -> bool {
-    match key {
-        "api_key" => rows
-            .iter()
-            .any(|row| matches!(row.api_key, ApiKeyState::Days(_))),
-        "api_quota" => rows.iter().any(|row| row.api_quota.is_some()),
-        _ => true,
-    }
-}
-
 /// Return the canonical Flat column keys that still belong in the table.
 ///
+/// A column the Columns menu keeps checked is drawn whether or not any core has a value for it:
+/// the menu is the operator's word on what the table shows. The API columns used to vanish
+/// while no core reported a dated key or a quota, and a fleet of perpetual keys then read as a
+/// checked column that never appeared; their cells now say ∞ or a dash instead.
+///
 /// Args:
-///     rows: Current visible-core snapshots. Data-empty API columns are decided from these.
-///     hidden_by_user: Column ids unchecked in the Columns menu. Empty keeps the data rules only.
+///     hidden_by_user: Column ids unchecked in the Columns menu. Empty keeps every column.
 ///     uniform: Column ids every reporting core agrees on. Those move to the same-for-all line.
-///         Empty keeps every key the other two rules kept.
+///         Empty keeps every key the menu kept.
 ///
 /// Returns:
 ///     Ordered keys shared by column descriptors and every rendered row.
 pub(super) fn visible_column_keys(
-    rows: &[CoreStatusRow],
     hidden_by_user: &HashSet<String>,
     uniform: &[&str],
 ) -> Vec<&'static str> {
     COLUMN_KEYS
         .into_iter()
-        .filter(|key| column_visible(key, rows))
         .filter(|key| !hidden_by_user.contains(*key))
         .filter(|key| !uniform.contains(key))
         .collect()
@@ -105,13 +91,12 @@ pub(super) fn visible_column_keys(
 
 /// Column keys the Flat table draws, after the width drop.
 ///
-/// Data rules, the Columns menu and the same-for-all line run first. The measured dock width
+/// The Columns menu and the same-for-all line run first. The measured dock width
 /// then removes [`columns_fit::DROP_TIERS`] from that list. Header and rows both take this vec,
 /// so they cannot disagree. A width of `0.5` or less means the canvas has not measured yet and
 /// drops nothing: the first frame would otherwise flash a stripped table.
 ///
 /// Args:
-///     rows: Current visible-core snapshots.
 ///     hidden_by_user: Column ids unchecked in the Columns menu.
 ///     uniform: Column ids every reporting core agrees on.
 ///     dragged: User-dragged widths keyed by column id. Missing keys use the defaults.
@@ -122,14 +107,13 @@ pub(super) fn visible_column_keys(
 /// Returns:
 ///     Ordered keys shared by column descriptors and every rendered row.
 pub(super) fn projected_column_keys(
-    rows: &[CoreStatusRow],
     hidden_by_user: &HashSet<String>,
     uniform: &[&str],
     dragged: &HashMap<String, f32>,
     available: f32,
     floors: &HashMap<String, f32>,
 ) -> Vec<&'static str> {
-    let keys = visible_column_keys(rows, hidden_by_user, uniform);
+    let keys = visible_column_keys(hidden_by_user, uniform);
     if available <= 0.5 {
         return keys;
     }
@@ -470,13 +454,18 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
 
 /// Column that takes the width the others leave, so the header and rows end at the panel edge.
 ///
-/// The core name whenever it is visible, dragged or not, so the extra width lands after the
-/// left-aligned name and the numeric columns stay packed together at their own widths. Only
-/// when the name is hidden does the last column in DISPLAY order (after the user's column
-/// moves) take it. `fill` renders a column as `min_w(width) + flex_1`, so that column's
-/// persisted width becomes its minimum: it absorbs the leftover only while the others leave
-/// some, and nothing is written back to the table state, so rendering never changes the saved
-/// layout.
+/// Always the LAST column in display order (after the user's column moves), the way Orders,
+/// Problems and Warnings place theirs. `MoonDataTable` sizes a dragged column as "cursor minus
+/// the column's left edge", which holds only while nothing LEFT of the divider changes width
+/// during the drag. A filling column to the left — the core name used to be one — gave back or
+/// took exactly what the drag moved, so the dragged column's left edge slid the other way and
+/// every pointer move compounded it: dragging a divider left collapsed the column under a
+/// divider that never moved.
+///
+/// `fill` renders a column as `min_w(width) + flex_1`. The panel keeps no retained width for
+/// this column (see [`strip_fill_width`]), so its minimum is the declared width
+/// and a wider neighbour takes the leftover first instead of shrinking the whole table. Nothing
+/// is written back while rendering, so a paint never changes the saved layout.
 ///
 /// Args:
 ///     keys: Visible column keys, in source order.
@@ -484,17 +473,36 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
 ///
 /// Returns:
 ///     The column to mark `fill`, or `None` when no column is visible.
-fn fill_target(keys: &[&'static str], state: &MoonDataTableState) -> Option<&'static str> {
-    if keys.contains(&"core") {
-        return Some("core");
-    }
+pub(super) fn fill_target(
+    keys: &[&'static str],
+    state: &MoonDataTableState,
+) -> Option<&'static str> {
     let last = MoonDataTable::ordered_columns(columns(keys), state).pop()?;
     keys.iter().copied().find(|key| *key == last.key.as_ref())
 }
 
+/// Remove the filler's retained width, if it has one.
+///
+/// `MoonDataTable` records every header's current width on the first drag of ANY column, the
+/// filler's leftover share included. Kept, that share would become the filler's minimum:
+/// widening a neighbour by one pixel would overflow the table, shrink every column at once and,
+/// through the width drop, take a whole tier of columns off mid-drag.
+///
+/// Args:
+///     widths: The Flat table's retained widths.
+///     fill: The filler from [`fill_target`], or `None` when nothing fills.
+///
+/// Returns:
+///     Whether a width was removed.
+pub(super) fn strip_fill_width(widths: &mut HashMap<String, f32>, fill: Option<&str>) -> bool {
+    fill.is_some_and(|fill| widths.remove(fill).is_some())
+}
+
 /// Keys and descriptors whose widths reach the panel edge.
 ///
-/// [`fill_target`] gets `fill`; every other descriptor keeps its declared width.
+/// [`fill_target`] gets `fill` and loses its resize handle, as the filling columns of Problems
+/// and Warnings do: its width is whatever the others leave, so a drag on it would have nothing
+/// to set. Every other descriptor keeps its declared width.
 ///
 /// Args:
 ///     keys: Visible column keys, in source order.
@@ -511,7 +519,9 @@ pub(super) fn filled_columns(
         .into_iter()
         .map(|column| {
             if Some(column.key.as_ref()) == fill {
-                column.fill()
+                let mut column = column.fill();
+                column.resizable = false;
+                column
             } else {
                 column
             }

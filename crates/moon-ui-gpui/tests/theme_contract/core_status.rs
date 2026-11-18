@@ -77,31 +77,30 @@ fn core_status_section_row_derives_its_cell_count_from_declared_columns() {
     );
 }
 
-/// `table.rs:column_visible` must omit API placeholders, and the direct row constructor must
-/// project its cells through the same filtered canonical keys. Treating `Unknown`, `Perpetual`,
-/// or an absent quota as real wastes wide-panel space; a different direct projection renders
-/// values under the wrong headers.
+/// The Flat columns are decided by the Columns menu and the same-for-all line only — no data
+/// rule — and the direct row constructor projects its cells through the same keys as the headers.
+/// A data rule hid checked API columns from a fleet of perpetual keys (a column that was ticked
+/// and never appeared); a different direct projection renders values under the wrong headers.
 ///
-/// Mutation: make `Unknown`/`Perpetual` or `None` satisfy the visibility predicate, or make the
-/// direct row constructor use a different key projection. A table with no real API values would
-/// regain two useless wide columns, or direct cells would appear under the wrong headers.
+/// Mutation: filter `visible_column_keys` on row data again (it takes no rows for that reason),
+/// or make the direct row constructor use a different key projection.
 #[test]
 fn core_status_flat_visibility_contract_has_one_shared_visible_key_projection() {
     let table = read_src("panels/core_status/table.rs");
-    let predicate = code_only(braced_body(&table, "fn column_visible("));
     let visible_keys = code_only(braced_body(&table, "pub(super) fn visible_column_keys("));
     let row = code_only(braced_body(&table, "fn core_status_row("));
 
     assert!(
-        predicate.contains("matches!(row.api_key, ApiKeyState::Days(_))")
-            && !predicate.contains("ApiKeyState::Unknown")
-            && !predicate.contains("ApiKeyState::Perpetual")
-            && predicate.contains("row.api_quota.is_some()"),
-        "only dated API keys and present quotas may make their columns visible"
+        !table.contains("fn column_visible(")
+            && table.contains(
+                "pub(super) fn visible_column_keys(\n    hidden_by_user: &HashSet<String>,\n    uniform: &[&str],\n)"
+            ),
+        "a checked Flat column may not be hidden by what the rows report"
     );
     assert!(
         visible_keys.contains("COLUMN_KEYS")
-            && visible_keys.contains(".filter(|key| column_visible(key, rows))")
+            && visible_keys.contains(".filter(|key| !hidden_by_user.contains(*key))")
+            && visible_keys.contains(".filter(|key| !uniform.contains(key))")
             && row.contains("MoonDataRow::new(column_keys.iter().map(|key| match *key {"),
         "the direct row constructor must use the same filtered canonical key projection as headers"
     );
@@ -248,5 +247,72 @@ fn core_status_alarms_table_has_an_always_visible_vertical_bar() {
     let bar = code_only(braced_body(&warnings, "fn vertical_bar("));
     assert!(
         bar.contains("MoonScrollAxis::Vertical") && bar.contains("MoonScrollbarVisibility::Always")
+    );
+}
+
+/// The bottom chart follows every core pick, and the Flat filler never keeps a width.
+///
+/// The view itself cannot be built in a test (this crate has no library target and the panel
+/// needs a live backend), so the wiring is pinned here and the rules behind it are unit-tested
+/// in `chart_follow/tests.rs` and `table/tests.rs`.
+///
+/// Mutation: drop the chart pick from `select_core_row` (a Flat row click leaves the chart on
+/// the previous subject), drop the rail follow from `rebuild_cache` or run it before the groups
+/// are replaced (an Auto rail switch leaves it, or resolves the core to a stale server), or drop
+/// the filler strip from the table-state observer or the filler record from render (the first
+/// drag's leftover share becomes the filler's minimum and the width drop fires mid-drag).
+#[test]
+fn core_status_chart_follows_picks_and_the_filler_keeps_no_width() {
+    let interactions = read_src("panels/core_status/interactions.rs");
+    let press = code_only(braced_body(&interactions, "pub(super) fn select_core_row("));
+    assert!(
+        press.contains(".press(clicked, order")
+            && press.contains("self.core_selection.contains(Some(*core))")
+            && press.contains("self.chart.pick_core(core, server)"),
+        "a core-row press that leaves its core selected must move the chart to it"
+    );
+    let rail = code_only(braced_body(
+        &interactions,
+        "pub(super) fn follow_rail_core(",
+    ));
+    assert!(
+        rail.contains("WorkspaceMode::AutoTrading")
+            && rail.contains("valid_auto_workspace_core(&self.group)")
+            && rail.contains("self.chart.follow_rail(rail, server)"),
+        "the chart follows the Auto rail's core, and only in Auto mode"
+    );
+
+    let cache = read_src("panels/core_status/cache.rs");
+    let rebuild = code_only(braced_body(&cache, "pub(super) fn rebuild_cache("));
+    let replaced = rebuild
+        .find("replace_snapshots(")
+        .expect("snapshot replacement");
+    let followed = rebuild.find("self.follow_rail_core(").expect("rail follow");
+    assert!(
+        followed > replaced,
+        "the rail is followed after the groups are replaced, so its core resolves to its server"
+    );
+
+    let module = read_src("panels/core_status/mod.rs");
+    let observer = code_only(
+        module
+            .split_once("cx.observe(&table_state, |this, state, cx| {")
+            .expect("Flat table-state observer")
+            .1,
+    );
+    let strip = observer
+        .find("this.forget_fill_width(&state, cx)")
+        .expect("filler strip");
+    let persist = observer
+        .find("table_persist::persist(")
+        .expect("width persistence");
+    assert!(
+        strip < persist,
+        "the filler's width is removed before the layout is persisted"
+    );
+    let render = code_only(&read_src("panels/core_status/render.rs"));
+    assert!(
+        render.contains("self.flat_fill =") && render.contains("table::fill_target(&column_keys,"),
+        "render records the filler it draws, so the observer strips the right column"
     );
 }

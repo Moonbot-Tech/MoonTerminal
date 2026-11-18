@@ -35,7 +35,7 @@ use crate::panels::core_status::model::{ApiKeyState, CoreStatusRow, ServerKey};
 #[test]
 fn visible_column_keys_drops_uniform_keys_and_keeps_them_when_none_are_uniform() {
     let hidden = HashSet::new();
-    let kept = visible_column_keys(&[], &hidden, &[]);
+    let kept = visible_column_keys(&hidden, &[]);
     assert!(kept.contains(&"cpus"), "an empty uniform list keeps cpus");
     assert!(
         kept.contains(&"version"),
@@ -43,7 +43,7 @@ fn visible_column_keys_drops_uniform_keys_and_keeps_them_when_none_are_uniform()
     );
     assert!(kept.contains(&"ping"), "an empty uniform list keeps ping");
 
-    let dropped = visible_column_keys(&[], &hidden, &["cpus", "version"]);
+    let dropped = visible_column_keys(&hidden, &["cpus", "version"]);
     assert!(
         !dropped.contains(&"cpus"),
         "cpus leaves while it is uniform"
@@ -63,41 +63,40 @@ fn visible_column_keys_drops_uniform_keys_and_keeps_them_when_none_are_uniform()
     );
 }
 
-/// The API-key column leaves the table when every core in scope shows the same key text, and
-/// stays when one core has a different dated key, in every locale.
+/// A checked API column is drawn whatever the fleet reports: every key perpetual, no core
+/// answered, every core on the same dated key, no quota anywhere. Unchecking it in the Columns
+/// menu is the one way to take it off. Breaks when a data rule or the same-for-all line hides
+/// a checked API column again — the "checked but never shown" report this replaced.
 #[test]
-fn api_key_column_follows_the_displayed_key_text() {
-    let fleet = |days: [i32; 3]| -> Vec<CoreStatusRow> {
-        days.iter()
-            .enumerate()
-            .map(|(index, days)| {
+fn checked_api_columns_stay_in_the_table() {
+    let fleet = |key: ApiKeyState| -> Vec<CoreStatusRow> {
+        (1..=3)
+            .map(|id| {
                 let mut row = sample_row(ConnStatus::Ready);
-                row.id = index as u64 + 1;
-                row.api_key = ApiKeyState::Days(*days);
+                row.id = id;
+                row.api_key = key;
+                row.api_quota = None;
                 row
             })
             .collect()
     };
-    let hidden = HashSet::new();
-    for code in LOCALES {
-        let _locale = crate::test_locale::force(code);
-        for (days, shown) in [([30, 30, 30], false), ([30, 30, 9], true)] {
-            let rows = fleet(days);
-            let facts = super::super::uniform::uniform_columns(&rows);
-            let uniform: Vec<&str> = facts.iter().map(|fact| fact.key).collect();
-            let keys = visible_column_keys(&rows, &hidden, &uniform);
-            assert_eq!(
-                keys.contains(&"api_key"),
-                shown,
-                "{code}: api_key column for {days:?}"
-            );
-            assert_eq!(
-                uniform.contains(&"api_key"),
-                !shown,
-                "{code}: same-for-all line for {days:?}"
-            );
+    let shown = HashSet::new();
+    for key in [
+        ApiKeyState::Perpetual,
+        ApiKeyState::Unknown,
+        ApiKeyState::Days(30),
+    ] {
+        let rows = fleet(key);
+        let facts = super::super::uniform::uniform_columns(&rows);
+        let uniform: Vec<&str> = facts.iter().map(|fact| fact.key).collect();
+        let keys = visible_column_keys(&shown, &uniform);
+        for column in ["api_key", "api_quota"] {
+            assert!(keys.contains(&column), "{column} for a fleet of {key:?}");
         }
     }
+    let unchecked: HashSet<String> = ["api_key".to_string()].into_iter().collect();
+    let keys = visible_column_keys(&unchecked, &[]);
+    assert!(!keys.contains(&"api_key") && keys.contains(&"api_quota"));
 }
 
 /// Offline and failed cores show an em dash for every numeric column. A ready core shows the
@@ -157,8 +156,8 @@ fn projected_column_keys_follow_drop_tiers_at_a_narrow_width() {
     let hidden = HashSet::new();
     let dragged = HashMap::new();
     let floors = HashMap::new();
-    let wide = projected_column_keys(&[], &hidden, &[], &dragged, 100_000.0, &floors);
-    let unmeasured = projected_column_keys(&[], &hidden, &[], &dragged, 0.0, &floors);
+    let wide = projected_column_keys(&hidden, &[], &dragged, 100_000.0, &floors);
+    let unmeasured = projected_column_keys(&hidden, &[], &dragged, 0.0, &floors);
     assert_eq!(unmeasured, wide);
 
     let sum: f32 = wide.iter().map(|key| default_column_width(key)).sum();
@@ -171,7 +170,7 @@ fn projected_column_keys_follow_drop_tiers_at_a_narrow_width() {
         .map(default_column_width)
         .sum();
     let available = sum - tier0 - tier1 + 1.0;
-    let narrow = projected_column_keys(&[], &hidden, &[], &dragged, available, &floors);
+    let narrow = projected_column_keys(&hidden, &[], &dragged, available, &floors);
     let expected: Vec<&str> = wide
         .iter()
         .copied()
@@ -347,16 +346,6 @@ fn shared_facts() -> Vec<UniformFact> {
             tip: None,
         },
         UniformFact {
-            key: "api_key",
-            text: "45".to_string(),
-            tip: None,
-        },
-        UniformFact {
-            key: "api_quota",
-            text: "1200".to_string(),
-            tip: None,
-        },
-        UniformFact {
             key: "version",
             text: "7.71".to_string(),
             tip: None,
@@ -378,14 +367,14 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
     let hidden = HashSet::new();
     let dragged = HashMap::new();
     let empty_floors = HashMap::new();
-    let wide = projected_column_keys(&rows, &hidden, &[], &dragged, 100_000.0, &empty_floors);
+    let wide = projected_column_keys(&hidden, &[], &dragged, 100_000.0, &empty_floors);
     let mut line_h: HashMap<(&str, i32), f32> = HashMap::new();
 
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
         for width in WIDTHS {
             let floors = cx.update(|app| super::content_floors(&rows, app));
-            let keys = projected_column_keys(&rows, &hidden, &[], &dragged, width, &floors);
+            let keys = projected_column_keys(&hidden, &[], &dragged, width, &floors);
             assert_eq!(keys, expected_keys(width), "{code} @ {width}");
             let ping_text = cell_text_for(
                 rows.iter().find(|row| row.id == 2).expect("ready core"),
@@ -451,13 +440,13 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
         }
     }
 
-    // Caption text fits the five facts on one line at 720. A 480-wide host is still narrower
-    // than that line, so the row has to wrap instead of clipping a fact.
+    // Caption text fits the three facts on one line at 720. A 260-wide host is narrower than
+    // that line in every locale, so the row has to wrap instead of clipping a fact.
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
         let floors = cx.update(|app| super::content_floors(&rows, app));
-        let keys = projected_column_keys(&rows, &hidden, &[], &dragged, 480.0, &floors);
-        let mut visual = layout_fixture::open(cx, 480.0, 420.0, {
+        let keys = projected_column_keys(&hidden, &[], &dragged, 260.0, &floors);
+        let mut visual = layout_fixture::open(cx, 260.0, 420.0, {
             let rows = rows.clone();
             let floors = floors.clone();
             let facts = shared_facts();
@@ -465,7 +454,7 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
                 rows,
                 keys,
                 floors,
-                width: 480.0,
+                width: 260.0,
                 facts,
             }
         });
@@ -474,7 +463,7 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
         let line_host = visual.debug_bounds("cs-same-host").expect("same host");
         assert!(
             layout_fixture::inside(line, line_host),
-            "{code}: same line left its host at 480px: {line:?} / {line_host:?}"
+            "{code}: same line left its host at 260px: {line:?} / {line_host:?}"
         );
         for fact in shared_facts() {
             let bounds = visual
@@ -482,10 +471,10 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
                     "cs-same-{}",
                     fact.key
                 )))
-                .unwrap_or_else(|| panic!("fact {} at 480 {code}", fact.key));
+                .unwrap_or_else(|| panic!("fact {} at 260 {code}", fact.key));
             assert!(
                 layout_fixture::inside(bounds, line),
-                "{code}: fact {} clipped at 480px: {bounds:?} / {line:?}",
+                "{code}: fact {} clipped at 260px: {bounds:?} / {line:?}",
                 fact.key
             );
         }
@@ -493,7 +482,7 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
         let wide_h = line_h[&(code, 1640)];
         assert!(
             wrapped > wide_h + 2.0,
-            "{code}: the same-for-all line did not wrap at 480px ({wrapped} vs {wide_h})"
+            "{code}: the same-for-all line did not wrap at 260px ({wrapped} vs {wide_h})"
         );
     }
 
@@ -677,7 +666,7 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
     assert_eq!(sections, 2, "fixture must span two exchanges");
     let rows = Rc::new(rows);
     let lines = Rc::new(lines);
-    let keys = visible_column_keys(&rows, &HashSet::new(), &[]);
+    let keys = visible_column_keys(&HashSet::new(), &[]);
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
         for (width, all_dragged) in WIDTHS
@@ -758,8 +747,7 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
                 "status dot is not an 8 px disc inside the slot at {at}: {dot:?}"
             );
             // The columns reach the panel edge: the last cell plus its right padding ends where
-            // the row does, whether the name column fills or every column is dragged and the
-            // last one does.
+            // the row does, dragged or not, because the last column fills.
             let last = visual
                 .debug_bounds(layout_fixture::leak_selector(format!(
                     "cs-tz-off-{first_core}"
@@ -799,7 +787,7 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
                 .unwrap_or_else(|| panic!("reason text at {at}"));
             let reason_w =
                 visual.update(|_, app| design::ui_caption_text_width(app, &reason_text, 400.0));
-            // Whole wherever the name column has room; at 720 px or dragged narrow it may ellipsize.
+            // Whole at the name's declared width; at 720 px or dragged narrow it may ellipsize.
             assert!(
                 (all_dragged
                     || width < 1_000.0
@@ -843,21 +831,20 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
 
 /// A persisted layout narrower than the panel must still reach the panel's right edge.
 ///
-/// Every column carries a saved drag. The name column absorbs the leftover whenever it is
-/// visible, so the numeric columns keep their saved widths and stay packed together; only with
-/// the name hidden does the last VISIBLE column in display order take it. Mutations this
-/// catches: filling the last column while the name is shown, filling the last SOURCE column
-/// after the user moved another one to the end, stretching a column away from its saved width,
-/// and writing the rendered width back into the table state, which would mark the saved layout
-/// dirty on every render.
+/// Every column carries a saved drag. The last VISIBLE column in display order absorbs the
+/// leftover, as in Orders, Problems and Warnings; every other column, the name included, keeps
+/// its saved width. Mutations this catches: filling the name (or any column left of the edge),
+/// filling the last SOURCE column after the user moved another one to the end, stretching a
+/// column away from its saved width, and writing the rendered width back into the table state,
+/// which would mark the saved layout dirty on every render.
 #[gpui::test]
-fn persisted_layout_name_column_absorbs_the_leftover(cx: &mut gpui::TestAppContext) {
+fn persisted_layout_last_column_absorbs_the_leftover(cx: &mut gpui::TestAppContext) {
     crate::test_locale::warm();
     layout_fixture::install_dark(cx);
     let (rows, lines) = dock_fixture();
     let rows = Rc::new(rows);
     let lines = Rc::new(lines);
-    let all_keys = visible_column_keys(&rows, &HashSet::new(), &[]);
+    let all_keys = visible_column_keys(&HashSet::new(), &[]);
     let first_core = match &lines[1] {
         FlatLine::Core(index) => rows[*index].id,
         FlatLine::Section(_) => panic!("a heading must be followed by its members"),
@@ -874,49 +861,43 @@ fn persisted_layout_name_column_absorbs_the_leftover(cx: &mut gpui::TestAppConte
     let tz = format!("cs-tz-off-{first_core}");
     let startup = format!("cs-startup-{first_core}");
     let name = format!("cs-core-cell-{first_core}");
-    // (case, visible keys, column order, (key, selector) of the cell reaching the edge,
-    // (key, selector) of the cell that fills, or `None` when it is the edge cell itself)
+    // (case, visible keys, column order, (key, selector) of the edge cell that fills,
+    // (key, selector) of a cell left of it that must keep its saved width)
     type Cell = (&'static str, String);
-    let cases: [(
-        &str,
-        Vec<&'static str>,
-        Vec<&'static str>,
-        Cell,
-        Option<Cell>,
-    ); 4] = [
+    let cases: [(&str, Vec<&'static str>, Vec<&'static str>, Cell, Cell); 4] = [
         (
             "source order",
             all_keys.clone(),
             Vec::new(),
             ("tz_off", tz.clone()),
-            Some(("core", name.clone())),
+            ("core", name.clone()),
         ),
         (
             "tz_off hidden",
             without("tz_off"),
             Vec::new(),
-            ("startup", startup),
-            Some(("core", name.clone())),
+            ("startup", startup.clone()),
+            ("core", name.clone()),
         ),
         (
             "core moved last",
             all_keys.clone(),
             core_last,
             ("core", name.clone()),
-            None,
+            ("tz_off", tz.clone()),
         ),
         (
             "core hidden",
             without("core"),
             Vec::new(),
             ("tz_off", tz),
-            None,
+            ("startup", startup),
         ),
     ];
     let width = WIDTHS[0];
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
-        for (case, keys, order, (last_key, last_selector), filler) in &cases {
+        for (case, keys, order, (last_key, last_selector), (kept_key, kept_selector)) in &cases {
             // Saved widths at 60% of the defaults: well under the panel, like a layout saved
             // on a narrower monitor.
             let mut seeded = MoonDataTableState::new();
@@ -974,21 +955,19 @@ fn persisted_layout_name_column_absorbs_the_leftover(cx: &mut gpui::TestAppConte
                     .unwrap_or_else(|| panic!("{selector} at {at}"));
                 layout_fixture::width_of(cell) + super::CELL_PAD_LEFT + super::CELL_PAD_RIGHT
             };
-            // The edge cell keeps its saved width unless it is the one that fills.
-            if let Some((fill_key, fill_selector)) = filler {
-                let rendered = drawn(last_selector);
-                let saved_last = saved[*last_key];
-                assert!(
-                    (rendered - saved_last).abs() <= 1.0,
-                    "{last_key} drew {rendered} px instead of its saved {saved_last} at {at}"
-                );
-                let grown = drawn(fill_selector);
-                let saved_fill = saved[*fill_key];
-                assert!(
-                    grown > saved_fill + 2.0,
-                    "{fill_key} drew {grown} px, not wider than its saved {saved_fill} at {at}"
-                );
-            }
+            // The edge cell is the one that fills; a column left of it keeps its saved width.
+            let kept = drawn(kept_selector);
+            let saved_kept = saved[*kept_key];
+            assert!(
+                (kept - saved_kept).abs() <= 1.0,
+                "{kept_key} drew {kept} px instead of its saved {saved_kept} at {at}"
+            );
+            let grown = drawn(last_selector);
+            let saved_last = saved[*last_key];
+            assert!(
+                grown > saved_last + 2.0,
+                "{last_key} drew {grown} px, not wider than its saved {saved_last} at {at}"
+            );
             // Rendering wrote nothing back: the saved layout is not dirtied by a paint.
             let state = state_slot.borrow().clone().expect("probe state");
             visual.update(|_, app| {
@@ -1003,5 +982,127 @@ fn persisted_layout_name_column_absorbs_the_leftover(cx: &mut gpui::TestAppConte
                 );
             });
         }
+    }
+}
+
+/// A width change on one column moves only what lies RIGHT of its divider.
+///
+/// `MoonDataTable` sizes a dragged column as "cursor minus the column's left edge", so that left
+/// edge must hold still while the drag changes the width. The ping column is narrowed and then
+/// widened by 30 px: its left edge must not move and its right edge must move by exactly those
+/// 30 px. Both edges are read off resize strips, which sit flush with a cell's right edge — the
+/// titles are centred and move with the width on their own. Two layouts: every column carrying
+/// a saved width — what `MoonDataTable` writes on the first drag of any column — and the same
+/// with the filler's width removed by
+/// [`super::strip_fill_width`], which is what the panel keeps. Breaks when a column LEFT of ping
+/// fills the leftover (the first layout then fails): that column gives back or takes the 30 px
+/// itself, ping's left edge slides the other way, and every pointer move in a real drag
+/// compounds it — the "columns fly the wrong way" report this pins.
+#[gpui::test]
+fn a_width_change_moves_only_the_columns_right_of_the_divider(cx: &mut gpui::TestAppContext) {
+    crate::test_locale::warm();
+    layout_fixture::install_dark(cx);
+    let (rows, lines) = dock_fixture();
+    let rows = Rc::new(rows);
+    let lines = Rc::new(lines);
+    let keys = visible_column_keys(&HashSet::new(), &[]);
+    let dragged = "ping";
+    let prev = keys[keys.iter().position(|key| *key == dragged).expect("ping") - 1];
+    for strip in [false, true] {
+        // Ping sits at its full default, so the 30 px narrowing stays above MoonDataTable's
+        // 40 px column minimum; everything else at 60%, so the filler has leftover to give.
+        let mut seeded = MoonDataTableState::new();
+        for key in &keys {
+            seeded.set_column_width(*key, (default_column_width(key) * 0.6).round());
+        }
+        seeded.set_column_width(dragged, default_column_width(dragged));
+        if strip {
+            let fill = super::fill_target(&keys, &seeded);
+            assert!(super::strip_fill_width(&mut seeded.column_widths, fill));
+        }
+        let start = seeded.column_widths[dragged];
+        let state_slot: Rc<std::cell::RefCell<Option<Entity<MoonDataTableState>>>> = Rc::default();
+        let mut visual = layout_fixture::open(cx, WIDTHS[0], 420.0, {
+            let state_slot = state_slot.clone();
+            let rows = rows.clone();
+            let lines = lines.clone();
+            let keys = keys.clone();
+            move |_, cx| {
+                let state = cx.new(|_| seeded);
+                *state_slot.borrow_mut() = Some(state.clone());
+                DockProbe {
+                    rows,
+                    lines,
+                    keys,
+                    state,
+                }
+            }
+        });
+        let state = state_slot.borrow().clone().expect("probe state");
+        let lefts = |visual: &mut gpui::VisualTestContext| -> (f32, f32) {
+            layout_fixture::draw(visual);
+            let mut right_edge = |key: &str| {
+                let selector = layout_fixture::leak_selector(format!("cs-dock-table:resize:{key}"));
+                f32::from(
+                    visual
+                        .debug_bounds(selector)
+                        .unwrap_or_else(|| panic!("{key} resize strip"))
+                        .right(),
+                )
+            };
+            (right_edge(prev), right_edge(dragged))
+        };
+        let (left_before, right_before) = lefts(&mut visual);
+        for delta in [-30.0_f32, 30.0] {
+            visual.update(|_, app| {
+                state.update(app, |state, cx| {
+                    state.set_column_width(dragged, start + delta);
+                    cx.notify();
+                });
+            });
+            let (left_after, right_after) = lefts(&mut visual);
+            assert!(
+                (left_after - left_before).abs() <= 0.5,
+                "strip={strip}: ping's left edge moved from {left_before} to {left_after} \
+                 for {delta:+} px"
+            );
+            assert!(
+                (right_after - right_before - delta).abs() <= 1.0,
+                "strip={strip}: ping's right edge moved by {} instead of {delta:+} px",
+                right_after - right_before
+            );
+        }
+    }
+}
+
+/// The filler loses its saved width and its resize handle; nothing else does.
+///
+/// Breaks when the filler keeps a width (the first drag's leftover share would become its
+/// minimum: one more pixel on a neighbour overflows the table and the width drop takes a tier
+/// off mid-drag), when the strip removes another column's width, or when the filler gets a
+/// resize handle back.
+#[test]
+fn the_filler_keeps_no_width_and_no_resize_handle() {
+    let keys = visible_column_keys(&HashSet::new(), &[]);
+    let mut state = MoonDataTableState::new();
+    for key in &keys {
+        state.set_column_width(*key, 77.0);
+    }
+    let fill = super::fill_target(&keys, &state);
+    assert_eq!(fill, Some("tz_off"), "the last column in source order");
+    assert!(super::strip_fill_width(&mut state.column_widths, fill));
+    assert!(!state.column_widths.contains_key("tz_off"));
+    assert_eq!(state.column_widths.len(), keys.len() - 1);
+    assert!(
+        !super::strip_fill_width(&mut state.column_widths, fill),
+        "a second pass has nothing to remove"
+    );
+    assert!(!super::strip_fill_width(&mut state.column_widths, None));
+
+    let (_, columns) = super::filled_columns(&keys, &state);
+    for column in &columns {
+        let is_fill = column.key.as_ref() == "tz_off";
+        assert_eq!(column.fill, is_fill, "{} fill", column.key);
+        assert_eq!(column.resizable, !is_fill, "{} resize handle", column.key);
     }
 }
