@@ -143,6 +143,8 @@ pub(super) struct LogSourceItem {
 /// Stateful dock, detached-window, or group-window Log panel.
 pub struct LogPanel {
     pub(super) backend: Entity<Backend>,
+    /// A named-file job can finish after the tab or window it served has closed.
+    weak_self: WeakEntity<Self>,
     pub(super) group: String,
     pub(super) source: LogSource,
     pub(super) file: LogFile,
@@ -152,10 +154,8 @@ pub struct LogPanel {
     /// Coin substring filter set by clicking a detected ticker; `None` disables it.
     coin_filter: Option<String>,
     query: Entity<MoonInputState>,
-    /// Named-file cache, avoiding disk reads during rendering and repeated backend observations.
-    loaded_name: Option<String>,
-    /// The window of the named file on screen; see [`paging`].
-    file_page: paging::FilePage,
+    /// The last displayed named page and its in-flight replacement.
+    named_page: paging::NamedPage,
     /// Time of day to move a named file's window to.
     page_time: Entity<MoonInputState>,
     /// This panel's side of pulling a day of a core's log from its server; see [`server_day`].
@@ -263,6 +263,9 @@ impl LogPanel {
         let workspace_revision = backend.read(cx).workspace_revision();
         cx.observe(&workspace_revision, |this, _revision, cx| {
             let (source, file, _) = this.effective_selection(this.backend.read(cx));
+            if matches!(file, LogFile::Live) {
+                this.named_page.invalidate();
+            }
             if this.loaded_selection.as_ref() == Some(&(source, file)) {
                 return;
             }
@@ -291,6 +294,7 @@ impl LogPanel {
         .detach();
         Self {
             backend,
+            weak_self: cx.weak_entity(),
             group,
             source: LogSource::Aggregate,
             file: LogFile::Live,
@@ -298,8 +302,7 @@ impl LogPanel {
             errors_only: true,
             coin_filter: None,
             query,
-            loaded_name: None,
-            file_page: paging::FilePage::default(),
+            named_page: paging::NamedPage::default(),
             page_time,
             day_sync: server_day::DaySync::default(),
             available_files_label: None,
@@ -433,7 +436,7 @@ impl LogPanel {
     /// Reads the current selection in full, for the first load and after any change of source.
     ///
     /// Live reads the local ring, one core ring, every scoped core, or the selected exchange's
-    /// current membership. Named reads and then caches at most `VIEW_LIMIT` rows from disk.
+    /// current membership. Named takes at most `VIEW_LIMIT` rows from the prepared page.
     ///
     /// Args:
     ///     b: Backend providing live core stores and file-independent source state.
@@ -453,41 +456,32 @@ impl LogPanel {
         exchange_membership: Option<&HashSet<CoreId>>,
     ) -> Vec<LogLine> {
         match file {
-            LogFile::Live => {
-                self.loaded_name = None;
-                match source {
-                    LogSource::Local => {
-                        // Rows and cursor under ONE lock: feed threads push into this ring, so
-                        // taking the cursor separately would mark a line that landed in between as
-                        // already delivered and lose it for good.
-                        let (lines, cursor) = applog::snapshot_with_cursor(VIEW_LIMIT);
-                        self.cursors.set_local(cursor);
-                        lines
-                    }
-                    LogSource::Core(id) => b
-                        .session
-                        .store()
-                        .core(*id)
-                        .map(|c| c.log_snapshot(VIEW_LIMIT))
-                        .unwrap_or_default(),
-                    LogSource::Aggregate => render::aggregate(b.session.store(), sources, None),
-                    LogSource::Exchange(_) => render::aggregate(
-                        b.session.store(),
-                        sources,
-                        Some(
-                            exchange_membership
-                                .expect("exchange source reload must resolve membership"),
-                        ),
+            LogFile::Live => match source {
+                LogSource::Local => {
+                    // Rows and cursor under ONE lock: feed threads push into this ring, so
+                    // taking the cursor separately would mark a line that landed in between as
+                    // already delivered and lose it for good.
+                    let (lines, cursor) = applog::snapshot_with_cursor(VIEW_LIMIT);
+                    self.cursors.set_local(cursor);
+                    lines
+                }
+                LogSource::Core(id) => b
+                    .session
+                    .store()
+                    .core(*id)
+                    .map(|c| c.log_snapshot(VIEW_LIMIT))
+                    .unwrap_or_default(),
+                LogSource::Aggregate => render::aggregate(b.session.store(), sources, None),
+                LogSource::Exchange(_) => render::aggregate(
+                    b.session.store(),
+                    sources,
+                    Some(
+                        exchange_membership
+                            .expect("exchange source reload must resolve membership"),
                     ),
-                }
-            }
-            LogFile::Named(name) => {
-                if self.loaded_name.as_deref() != Some(name.as_str()) {
-                    self.file_page.open(name);
-                    self.loaded_name = Some(name.clone());
-                }
-                self.file_page.lines().to_vec()
-            }
+                ),
+            },
+            LogFile::Named(_) => self.named_page.page.lines().to_vec(),
         }
     }
 
@@ -856,7 +850,7 @@ impl LogPanel {
     ///
     /// Args:
     ///     b: Backend providing source revisions, live memberships, and log rows.
-    ///     cx: Application context used to rebuild the filtered view.
+    ///     cx: Application context used to index files and rebuild the filtered view.
     ///
     /// Returns:
     ///     Nothing.
@@ -866,6 +860,21 @@ impl LogPanel {
         let (source, file, workspace_owned) = self.effective_selection(b);
         self.refresh
             .record_reload(render::log_sig(b, &self.group, &source));
+        match &file {
+            LogFile::Named(name) => {
+                if let Some((generation, opened)) =
+                    self.named_page.request(name, cx.background_executor())
+                {
+                    self.publish_named_page(generation, opened, cx);
+                    record_work_us(timer);
+                    return;
+                }
+                if !self.named_page.shows(name) {
+                    return;
+                }
+            }
+            LogFile::Live => self.named_page.invalidate(),
+        }
         let sources = self.data_sources(b, &source, workspace_owned);
         let is_agg = matches!(source, LogSource::Aggregate | LogSource::Exchange(_));
         if !is_agg {
@@ -895,6 +904,28 @@ impl LogPanel {
             self.after_view_change();
         }
         record_work_us(timer);
+    }
+
+    /// Apply a worker's named page only to the panel and selection that still want it.
+    fn publish_named_page(&self, generation: u64, opened: Task<paging::FilePage>, cx: &App) {
+        let weak = self.weak_self.clone();
+        cx.spawn(async move |cx| {
+            let page = opened.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.named_page.publish(generation, page) {
+                    let backend = this.backend.clone();
+                    this.reload_rows(backend.read(cx), cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Paging actions belong only to the file whose index is actually displayed.
+    fn shows_selected_page(&self, cx: &App) -> bool {
+        let (_, file, _) = self.effective_selection(self.backend.read(cx));
+        matches!(file, LogFile::Named(name) if self.named_page.shows(&name))
     }
 
     /// Identity of the source list: which cores it holds and what they are called.
@@ -1032,10 +1063,8 @@ impl LogPanel {
         }
         if self.source != s {
             self.source = s;
-            // A source change returns to Live and invalidates both named-file caches.
+            // A source change returns to Live and forgets the cached file list.
             self.file = LogFile::Live;
-            self.loaded_name = None;
-            self.file_page.close();
             self.available_files_label = None;
             self.available_files.clear();
             self.reset_to_live();
@@ -1058,6 +1087,7 @@ impl LogPanel {
         }
         if self.file != f {
             self.file = f;
+            self.named_page.invalidate();
             self.reset_to_live();
             self.reload_rows(backend.read(cx), cx);
             cx.notify();

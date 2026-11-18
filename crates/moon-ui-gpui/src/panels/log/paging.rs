@@ -40,11 +40,6 @@ impl FilePage {
         self.pager = Some(pager);
     }
 
-    /// Forgets the file, so the next selection of the same name reads it again.
-    pub(super) fn close(&mut self) {
-        *self = Self::default();
-    }
-
     /// The lines of the current window, oldest first.
     pub(super) fn lines(&self) -> &[LogLine] {
         &self.lines
@@ -101,6 +96,59 @@ impl FilePage {
     /// Whether lines exist after the window.
     pub(super) fn has_later(&self) -> bool {
         self.first + self.lines.len() < self.total()
+    }
+}
+
+/// A named page and the identity of the request allowed to replace it.
+#[derive(Default)]
+pub(super) struct NamedPage {
+    pub(super) page: FilePage,
+    loaded: Option<String>,
+    pending: Option<String>,
+    generation: u64,
+}
+
+impl NamedPage {
+    /// Returns whether the page on screen belongs to the requested file.
+    pub(super) fn shows(&self, name: &str) -> bool {
+        self.loaded.as_deref() == Some(name)
+    }
+
+    /// Starts a new index request unless this file is already loaded or pending.
+    pub(super) fn request(
+        &mut self,
+        name: &str,
+        executor: &BackgroundExecutor,
+    ) -> Option<(u64, Task<FilePage>)> {
+        if self.shows(name) || self.pending.as_deref() == Some(name) {
+            return None;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.pending = Some(name.to_owned());
+        let name = name.to_owned();
+        let opened = executor.spawn(async move {
+            let mut page = FilePage::default();
+            page.open(&name);
+            page
+        });
+        Some((self.generation, opened))
+    }
+
+    /// Forgets cache ownership without discarding the page while its replacement is pending.
+    pub(super) fn invalidate(&mut self) {
+        self.loaded = None;
+        self.pending = None;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Installs only the latest requested index and its tail.
+    pub(super) fn publish(&mut self, generation: u64, page: FilePage) -> bool {
+        if generation != self.generation || self.pending.is_none() {
+            return false;
+        }
+        self.loaded = self.pending.take();
+        self.page = page;
+        true
     }
 }
 
@@ -168,7 +216,7 @@ impl LogPanel {
     /// window, and after a jump to a time the line asked for is the window's FIRST. Stepping earlier
     /// lands on the bottom of the earlier screen, which is where the eye left the one after it.
     pub(super) fn move_file_page(&mut self, target: PageTarget, cx: &mut Context<Self>) {
-        if !self.file_page.seek(target) {
+        if !self.shows_selected_page(cx) || !self.named_page.page.seek(target) {
             return;
         }
         self.live = false;
@@ -198,7 +246,7 @@ impl LogPanel {
         };
         let zone =
             moon_core::util::display_time::zone_or_utc(self.backend.read(cx).header_clock_zone());
-        let clock = stored_clock(shown, self.file_page.date(), zone);
+        let clock = stored_clock(shown, self.named_page.page.date(), zone);
         self.move_file_page(PageTarget::Clock(clock), cx);
     }
 
@@ -206,12 +254,12 @@ impl LogPanel {
     ///
     /// A file that fits the view whole needs none: every line of it is already in the list.
     pub(super) fn page_controls(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let (_, file, _) = self.effective_selection(self.backend.read(cx));
-        if !matches!(file, LogFile::Named(_)) || self.file_page.total() <= VIEW_LIMIT {
+        let page = &self.named_page.page;
+        if !self.shows_selected_page(cx) || page.total() <= VIEW_LIMIT {
             return None;
         }
         let p = MoonPalette::active(cx);
-        let (from, to, total) = self.file_page.range();
+        let (from, to, total) = page.range();
         let step_button = |id: &'static str, label: String, enabled: bool, target: PageTarget| {
             MoonButton::new(id)
                 .variant(MoonButtonVariant::Soft)
@@ -229,13 +277,13 @@ impl LogPanel {
                 .child(step_button(
                     "log-page-earlier",
                     t!("log.page.earlier").to_string(),
-                    self.file_page.has_earlier(),
+                    page.has_earlier(),
                     PageTarget::Earlier,
                 ))
                 .child(step_button(
                     "log-page-later",
                     t!("log.page.later").to_string(),
-                    self.file_page.has_later(),
+                    page.has_later(),
                     PageTarget::Later,
                 ))
                 .child(

@@ -24,6 +24,18 @@ impl PartialEq for ChartDataHandle {
 }
 
 impl ChartDataHandle {
+    /// Stage the worker-built projection for the raw rows the frozen panel is about to publish.
+    pub(crate) fn prepare_frozen_trade_history(
+        &self,
+        records: &Rc<Vec<moon_core::db::ChartTradeRecord>>,
+        prepared: &Rc<super::trade_history_sync::PreparedTradeHistory>,
+    ) {
+        if let Some(data) = self.inner.upgrade() {
+            data.borrow_mut().prepared_trade_rows =
+                Some((Rc::downgrade(records), prepared.clone()));
+        }
+    }
+
     /// Exercise the real chart pass with geometry crossing each gutter, without changing market data.
     #[cfg(windows)]
     pub(crate) fn firetest_request_clip_check(&self) -> Result<(), String> {
