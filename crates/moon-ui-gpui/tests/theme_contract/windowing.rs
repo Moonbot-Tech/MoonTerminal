@@ -1115,6 +1115,47 @@ fn every_window_root_restores_focus_when_nothing_holds_it() {
     );
 }
 
+/// Main's fullscreen hands the keyboard on when the chart holding it stops being drawn.
+///
+/// The one stranded focus `restore_root_focus` cannot repair: a hidden Main chart's panel stays alive,
+/// so its handle still resolves while GPUI dispatches every key to the bare root. Reported from a
+/// user on 2026-11-18 — with `switch_charts` bound to Shift, one press switched the chart and every
+/// later press did nothing until the new chart was clicked. A stack tile scrolled out of the virtual
+/// list strands it the same way. Both presentations must repair it, and the repair must move only a
+/// focus that sits inside a chart the frame does not draw.
+#[test]
+fn main_stack_hands_the_keyboard_off_a_hidden_chart() {
+    let raw = read_src("chart_tabs/main_stack/render.rs");
+    let render = code_only(&raw);
+    // Fullscreen: the handoff must come before the body is built, so the frame that draws the new
+    // chart is the one holding its focus.
+    let call = render
+        .find("self.hand_focus_to_shown_chart(window, cx)")
+        .expect(
+            "MainChartStack::render must hand a hidden fullscreen chart's focus to the shown one",
+        );
+    let body_built = render
+        .find("self.render_body(")
+        .expect("MainChartStack::render builds its body");
+    assert!(
+        call < body_built,
+        "the fullscreen focus handoff must run before the body is built"
+    );
+    assert!(
+        render.contains("this.hand_focus_into_range(&range, window, cx)"),
+        "the stack's on_visible_range must hand a scrolled-out tile's focus to a drawn one"
+    );
+    let raw = read_src("chart_tabs/main_stack/focus.rs");
+    let focus = code_only(&raw);
+    let body = braced_body(&focus, "fn rescue_stranded_focus(");
+    assert!(
+        body.contains("!drawn(ix)")
+            && body.contains("contains_focused(window, cx)")
+            && body.contains("window.focus(&focus, cx)"),
+        "rescue_stranded_focus must move the focus, and only one held inside an undrawn chart"
+    );
+}
+
 /// Every way out of a coin search must hand the keyboard back.
 ///
 /// The field keeps focus after a pick — nothing takes it away, and an input here is deliberately not

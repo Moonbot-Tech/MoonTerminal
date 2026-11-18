@@ -52,6 +52,8 @@ impl Render for MainChartStack {
             );
         }
 
+        // Before the body: a chart hidden since the last frame may still hold the keyboard.
+        self.hand_focus_to_shown_chart(window, cx);
         // The row is built first but composed last: it must know the active chart before the body
         // below borrows `self` for the stack layout's closures.
         let tab_row = self.render_tab_row(window, cx);
@@ -126,7 +128,8 @@ impl MainChartStack {
         let p = palette;
         let title_size = crate::design::t_body(cx);
         let tokens = moon_ui::MoonTheme::active_tokens(cx);
-        let on_visible_range = cx.processor(|this, range: Range<usize>, _window, cx| {
+        let on_visible_range = cx.processor(|this, range: Range<usize>, window, cx| {
+            this.hand_focus_into_range(&range, window, cx);
             this.sync_stack_visible_range(range, cx);
         });
         let columns = self.effective_columns(count, horizontal, cfg_h);
