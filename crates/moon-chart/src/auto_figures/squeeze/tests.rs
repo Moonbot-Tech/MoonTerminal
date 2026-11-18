@@ -241,6 +241,92 @@ fn real_candles_keep_the_structural_invariants() {
     );
 }
 
+/// A resistance at 100 first touched on bar 0, and a lows line from 90 on bar 0 rising `slope` per
+/// bar to its last touch on bar 4.
+fn pairing(bars: &[ChartCandle], slope: f64) -> (Level, Line) {
+    let t = |i: usize| bars[i].t_open_ms;
+    let level = Level {
+        price: 100.0,
+        touches: vec![Touch {
+            t_ms: t(0),
+            price: 100.0,
+        }],
+        first_idx: 0,
+        last_idx: 0,
+        origin: Side::Below,
+        strength: 1.0,
+        broken: None,
+    };
+    let line = Line {
+        t0_ms: t(0),
+        p0: 90.0,
+        t1_ms: t(4),
+        p1: 90.0 + 4.0 * slope,
+        touches: vec![
+            Touch {
+                t_ms: t(0),
+                price: 90.0,
+            },
+            Touch {
+                t_ms: t(4),
+                price: 90.0 + 4.0 * slope,
+            },
+        ],
+        first_idx: 0,
+        last_idx: 4,
+    };
+    (level, line)
+}
+
+/// A rising-lows line that price has CLOSED below after its last touch presses nothing any more,
+/// and is not a squeeze; the same line with every later close above it is.
+///
+/// The oracle is the line itself: 90 + 1 per bar, so on bar 6 it is at 96 and a close of 95 is
+/// below it.
+///
+/// Breakage: accepting any converging line whatever price did after its last touch (the live
+/// defect — a line price had left long ago drawn as a squeeze).
+#[test]
+fn a_line_closed_through_after_its_last_touch_is_no_squeeze() {
+    // Nine bars; closes (midpoints) sit two above the line from bar 5 on: 97, 98, 99, 100.
+    let mut hl: Vec<(f32, f32)> = (0..9).map(|i| (91.0 + i as f32, 89.0 + i as f32)).collect();
+    for (i, h) in hl.iter_mut().enumerate().skip(5) {
+        *h = (i as f32 + 93.0, i as f32 + 91.0);
+    }
+    let bars = from_hl(&hl);
+    let last_t = bars[8].t_open_ms;
+    let (level, line) = pairing(&bars, 1.0);
+    // Line at bar 8 is 98: 2 % under 100.
+    let gap = pair_gap(&bars, &level, &line, last_t, 0.005).expect("a holding line pairs");
+    assert!((gap - 0.02).abs() < 1e-12);
+
+    let mut broken = bars.clone();
+    broken[6] = bar(6, 96.0, 96.5, 94.0, 95.0);
+    assert!(pair_gap(&broken, &level, &line, last_t, 0.005).is_none());
+}
+
+/// A line projected PAST the level by more than `pressed_pct` at the last bar has crossed it — the
+/// formation is over and is not reported; within `pressed_pct` past it, it is a squeeze at its
+/// apex, still pressed.
+///
+/// The oracle: 90 + 2.4 per bar is 109.2 on bar 8, 9.2 % past a level of 100 (its last touch,
+/// 99.6 on bar 4, is still under the level).
+///
+/// Breakage: counting any negative gap as "pressed" (the line drawn long after the two crossed).
+#[test]
+fn a_line_well_past_the_level_is_no_squeeze() {
+    // Every close stays above the steep line, so only the gap can refuse it.
+    let hl: Vec<(f32, f32)> = (0..9)
+        .map(|i| (93.0 + 2.4 * i as f32, 91.0 + 2.4 * i as f32))
+        .collect();
+    let bars = from_hl(&hl);
+    let last_t = bars[8].t_open_ms;
+    let (level, line) = pairing(&bars, 2.4);
+    assert!(pair_gap(&bars, &level, &line, last_t, 0.05).is_none());
+    let gap = pair_gap(&bars, &level, &line, last_t, 0.10).expect("within 10 % it still pairs");
+    assert!((gap + 0.092).abs() < 1e-9, "{gap}");
+}
+
 fn run_tf(bars: &[ChartCandle], p: SqueezeParams, tf_ms: i64) -> Vec<Found> {
     Squeeze.detect(
         bars,

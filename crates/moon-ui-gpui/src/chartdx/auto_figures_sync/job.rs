@@ -13,7 +13,13 @@
 //! The 5-minute cache is written by a recorder on its own cycle, so its newest rows can lag the
 //! chart. When the chart's timeframe divides five minutes its closed bars are folded to 5-minute
 //! bars and appended AFTER the cache's last row — the cache wins wherever both have a bar, the
-//! chart only fills the tail the recorder has not written yet.
+//! chart only fills the tail the recorder has not written yet. Right after a bucket of the row's
+//! timeframe closes, the cache may still hold only part of it; that newest bucket is then left out
+//! and the outcome marked lagging, so the panel rechecks it on a bounded timer instead of keeping a
+//! bar with a wrong high and low until the next one closes ([`LAG_CAP_MS`]).
+//!
+//! A market with no cache address at all gets a definitive empty answer for its cache rows
+//! ([`without_cache`]), which is never retried; only a read that did not happen is.
 //!
 //! ## The recompute key
 //!
@@ -106,6 +112,18 @@ pub(crate) struct PaneJob {
     pub now_ms: f64,
 }
 
+/// How long past a bucket's close a resampled row keeps waiting for the 5-minute cache to fill
+/// that bucket, ms.
+///
+/// The recorder writes on its own cycle, so right after an hour closes the cache can hold fewer
+/// than twelve of its 5-minute rows; a bucket built from them has a wrong high and low, and as the
+/// row's key does not move again until the NEXT hour, that wrong bar would stand for an hour.
+/// Inside this window the incomplete newest bucket is left out and the row is marked
+/// [`AutoRowOutcome::lagging`], which the panel rechecks on a bounded timer. Past it, a bucket
+/// that is still short is taken as it is — an illiquid market may simply have no row for a quiet
+/// five minutes, and waiting for it forever would be a loop with no exit.
+pub(crate) const LAG_CAP_MS: i64 = 5 * 60_000;
+
 /// What one row's run produced. Kept whole for the later stages: the popup reads
 /// [`Self::short_history`], captions and hover read the touches, the timeframe and the break.
 #[derive(Debug, Clone, PartialEq)]
@@ -119,9 +137,13 @@ pub(crate) struct AutoRowOutcome {
     pub needed: u32,
     /// Close of the newest bar read — the reference price when the chart has no last price yet.
     pub last_close: Option<f64>,
-    /// The cache read this row depended on did not happen; the row is retried rather than
-    /// trusted.
+    /// The cache read this row depended on did not happen (worker busy or gone): transient, so the
+    /// row is retried rather than trusted. A market with NO cache address is not this — that is a
+    /// definitive "no cache" answer ([`without_cache`]).
     pub read_failed: bool,
+    /// The newest closed bucket was left out because the 5-minute cache has not filled it yet
+    /// (see [`LAG_CAP_MS`]). The answer is usable but not final for its key.
+    pub lagging: bool,
     /// Every figure the detector found, before `take::select`.
     pub found: Vec<Found>,
 }
@@ -133,26 +155,68 @@ impl AutoRowOutcome {
     }
 }
 
-/// Run every row of `job`. Each cache kind is read at most once, wide enough for every row that
-/// needs it.
-pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowOutcome)> {
-    let chart_tf_ms = if job.chart.is_empty() {
-        0
-    } else {
-        job.chart_tf_ms
-    };
-    let chart_history_ms = match (job.chart.first(), job.chart.last()) {
-        (Some(first), Some(last)) if chart_tf_ms > 0 => {
-            last.t_open_ms + chart_tf_ms as f64 - first.t_open_ms
-        }
+/// The chart series as `bar_source` reads it: its bar length (`0` without candles) and the time it
+/// covers, ms.
+pub(crate) fn chart_extent(chart: &[ChartCandle], chart_tf_ms: i64) -> (i64, f64) {
+    let tf = if chart.is_empty() { 0 } else { chart_tf_ms };
+    let history = match (chart.first(), chart.last()) {
+        (Some(first), Some(last)) if tf > 0 => last.t_open_ms + tf as f64 - first.t_open_ms,
         _ => 0.0,
     };
+    (tf, history)
+}
+
+/// Where a row's bars come from, and how many it needs.
+pub(crate) fn plan_row(key: &RowKey, chart_tf_ms: i64, chart_history_ms: f64) -> (BarSource, u32) {
+    let needed = key.detector.bars_needed(key.tf);
+    (
+        tf::bar_source(key.tf, chart_tf_ms, chart_history_ms, needed),
+        needed,
+    )
+}
+
+/// Whether a source reads the local kline cache.
+pub(crate) fn reads_cache(source: BarSource) -> bool {
+    matches!(source, BarSource::Cache5m | BarSource::CacheDaily)
+}
+
+/// The definitive answer for a row whose bars would come from the cache when the market has none
+/// (no cache open, or no exchange key for it): no bars, nothing found, nothing to retry. The row
+/// runs again only when its key moves.
+pub(crate) fn without_cache(key: RowKey, source: BarSource, needed: u32) -> AutoRowOutcome {
+    AutoRowOutcome {
+        key,
+        source,
+        bars: 0,
+        needed,
+        last_close: None,
+        read_failed: false,
+        lagging: false,
+        found: Vec::new(),
+    }
+}
+
+/// Run every row of `job`. Each cache kind is read at most once, wide enough for every row that
+/// needs it.
+///
+/// Counters: `autofigures_detect` counts detector RUNS only — a row with no bars (unavailable,
+/// failed read, no history) runs nothing and counts nothing; `autofigures_detect_us` is the whole
+/// job's time, the shared cache reads included, recorded once per job.
+pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowOutcome)> {
+    let timer = crate::diag::timer();
+    let out = run_rows(job, cache);
+    crate::diag::record_us(&crate::diag::AUTOFIGURES_DETECT_US, timer);
+    out
+}
+
+/// [`run`] without the job-level stopwatch.
+fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowOutcome)> {
+    let (chart_tf_ms, chart_history_ms) = chart_extent(&job.chart, job.chart_tf_ms);
     let plans: Vec<_> = job
         .rows
         .iter()
         .map(|&(ix, key)| {
-            let needed = key.detector.bars_needed(key.tf);
-            let source = tf::bar_source(key.tf, chart_tf_ms, chart_history_ms, needed);
+            let (source, needed) = plan_row(&key, chart_tf_ms, chart_history_ms);
             (ix, key, needed, source)
         })
         .collect();
@@ -174,37 +238,41 @@ pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, Au
     plans
         .into_iter()
         .map(|(ix, key, needed, source)| {
-            let timer = crate::diag::timer();
+            if reads_cache(source) && cache.is_none() {
+                return (ix, without_cache(key, source, needed));
+            }
             let row_ms = key.tf.ms();
-            let (bars, read_failed) = match source {
+            let (bars, read_failed, lagging) = match source {
                 BarSource::ChartSeries | BarSource::ChartResampled => (
                     closed_bars(&job.chart, chart_tf_ms, row_ms, key.last_closed_ms),
+                    false,
                     false,
                 ),
                 BarSource::Cache5m => match m5.as_ref().and_then(Option::as_ref) {
                     Some(rows) => {
                         let tail_closed = last_closed_open_ms(job.now_ms, TfId::M5);
                         let rows = with_chart_tail(rows, &job.chart, chart_tf_ms, tail_closed);
-                        (
-                            closed_bars(&rows, CACHE_BASE_MS, row_ms, key.last_closed_ms),
-                            false,
-                        )
+                        let (bars, lagging) =
+                            cache_bars(&rows, row_ms, key.last_closed_ms, job.now_ms);
+                        (bars, false, lagging)
                     }
-                    None => (Vec::new(), true),
+                    None => (Vec::new(), true, false),
                 },
                 BarSource::CacheDaily => match d1.as_ref().and_then(Option::as_ref) {
                     Some(rows) => (
                         closed_bars(rows, TfId::D1.ms(), row_ms, key.last_closed_ms),
                         false,
+                        false,
                     ),
-                    None => (Vec::new(), true),
+                    None => (Vec::new(), true, false),
                 },
-                BarSource::Unavailable => (Vec::new(), false),
+                BarSource::Unavailable => (Vec::new(), false, false),
             };
             let bars = tail(&bars, needed);
             let found = if bars.is_empty() {
                 Vec::new()
             } else {
+                crate::diag::bump(&crate::diag::AUTOFIGURES_DETECT);
                 auto_figures::detect(
                     &key.detector,
                     bars,
@@ -214,8 +282,6 @@ pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, Au
                     },
                 )
             };
-            crate::diag::bump(&crate::diag::AUTOFIGURES_DETECT);
-            crate::diag::record_us(&crate::diag::AUTOFIGURES_DETECT_US, timer);
             (
                 ix,
                 AutoRowOutcome {
@@ -225,11 +291,40 @@ pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, Au
                     needed,
                     last_close: bars.last().map(|b| f64::from(b.close)),
                     read_failed,
+                    lagging,
                     found,
                 },
             )
         })
         .collect()
+}
+
+/// The 5-minute rows (cache plus chart tail) as closed bars of `row_ms`, and whether the newest
+/// closed bucket had to be left out because the cache has not filled it yet.
+///
+/// The newest bucket counts its 5-minute rows against the number it holds (`row_ms / 5 min`); one
+/// short, inside [`LAG_CAP_MS`] past the bucket's close, is dropped from the input and reported as
+/// lagging. Past the cap it is used as it is. Only the NEWEST bucket is checked: an older gap is
+/// a market that did not trade, which no wait will fill.
+pub(crate) fn cache_bars(
+    rows: &[ChartCandle],
+    row_ms: i64,
+    last_closed_ms: i64,
+    now_ms: f64,
+) -> (Vec<ChartCandle>, bool) {
+    let expected = (row_ms / CACHE_BASE_MS).max(1) as usize;
+    let (open, close) = (last_closed_ms as f64, (last_closed_ms + row_ms) as f64);
+    let have = rows
+        .iter()
+        .filter(|r| r.t_open_ms >= open && r.t_open_ms < close)
+        .count();
+    let lagging = have < expected && now_ms < (last_closed_ms + row_ms + LAG_CAP_MS) as f64;
+    let through = if lagging {
+        last_closed_ms - row_ms
+    } else {
+        last_closed_ms
+    };
+    (closed_bars(rows, CACHE_BASE_MS, row_ms, through), lagging)
 }
 
 /// The open-time window a row reads from the cache: its `needed` bars ending with the last closed

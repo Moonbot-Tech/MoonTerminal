@@ -8,8 +8,8 @@ use moon_core::config::auto_figures::{DetectorParams, SwingParams, TfId};
 use moon_core::market::ChartCandle;
 
 use super::job::{
-    BarCache, PaneJob, RowKey, closed_bars, last_closed_open_ms, next_key_change_ms, run,
-    with_chart_tail,
+    BarCache, PaneJob, RowKey, cache_bars, closed_bars, last_closed_open_ms, next_key_change_ms,
+    run, with_chart_tail,
 };
 use super::{native_closed_candles, resolve_rgb};
 use crate::chartdx::types::CandleGpu;
@@ -103,6 +103,30 @@ fn the_chart_fills_only_the_tail_the_cache_has_not_written() {
     assert_eq!(merged[1], cache[1]);
     // A chart whose timeframe does not divide five minutes adds nothing.
     assert_eq!(with_chart_tail(&cache, &chart, 30 * MIN, i64::MAX).len(), 3);
+}
+
+/// An hour the cache has written only nine of its twelve 5-minute rows for is left out — and the
+/// row reported lagging — until five minutes past its close; after that it is used as it is.
+///
+/// Breakage: building the newest bucket from a half-written cache (a wrong high/low kept for the
+/// whole next hour), or waiting for the missing rows with no cap.
+#[test]
+fn a_half_written_newest_bucket_waits_for_the_cache_but_not_forever() {
+    let ten = DAY0 + 10 * 3_600_000;
+    // 09:00 through 10:40: a whole 09:00 hour, then nine rows of the 10:00 one.
+    let rows = series(DAY0 + 9 * 3_600_000, 5 * MIN, 21);
+    let one_minute_after_close = (ten + 3_600_000 + MIN) as f64;
+    let (bars, lagging) = cache_bars(&rows, 60 * MIN, ten, one_minute_after_close);
+    assert!(lagging);
+    let opens: Vec<i64> = bars.iter().map(|b| b.t_open_ms as i64).collect();
+    assert_eq!(opens, vec![DAY0 + 9 * 3_600_000]);
+    let past_the_cap = (ten + 3_600_000 + 6 * MIN) as f64;
+    let (bars, lagging) = cache_bars(&rows, 60 * MIN, ten, past_the_cap);
+    assert!(!lagging);
+    assert_eq!(bars.len(), 2);
+    // A complete newest hour is never lagging, however early.
+    let full = series(DAY0 + 9 * 3_600_000, 5 * MIN, 24);
+    assert!(!cache_bars(&full, 60 * MIN, ten, one_minute_after_close).1);
 }
 
 /// A cache that counts its reads and answers from fixed rows.

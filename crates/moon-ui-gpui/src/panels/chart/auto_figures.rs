@@ -39,8 +39,20 @@ use crate::chartdx::auto_figures_sync::job::{
 use crate::chartdx::auto_figures_sync::{AutoPaneFigures, AutoRowDrawn};
 use crate::chartdx::now_unix_ms;
 
-/// How long a row whose cache read did not happen waits before it is tried again.
-const READ_RETRY: Duration = Duration::from_secs(10);
+/// Back-off after consecutive cache reads that did not happen (worker busy or gone), by failure
+/// count: 10 s, 30 s, then 60 s for every further failure. Bounded both ways — a dead worker costs
+/// one attempt a minute per row, never a loop, and a row still retries until the cache answers. A
+/// market with NO cache address is not a failure and never enters this ladder.
+const READ_RETRY: [Duration; 3] = [
+    Duration::from_secs(10),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+];
+
+/// How often a row whose newest bucket the cache had not filled yet is rechecked. The job stops
+/// reporting it as lagging [`job::LAG_CAP_MS`] after the bucket's close, which bounds the rechecks
+/// to about twenty per bar.
+const LAG_RECHECK: Duration = Duration::from_secs(15);
 
 /// One panel's auto-figure state: the configuration it last applied, the per-pane row slots and
 /// the one timer waiting for the next candle close.
@@ -72,17 +84,84 @@ struct RowSlot {
     done: Option<Arc<AutoRowOutcome>>,
     /// The key of a run in flight.
     pending: Option<RowKey>,
-    /// Do not retry before this, after a cache read that did not happen.
-    retry_at: Option<Instant>,
+    /// A rerun of THIS key is held off until the instant: a failed read's back-off, or a lagging
+    /// bucket's recheck. Tied to the key so a newer bar never waits on an older one's back-off.
+    retry: Option<(RowKey, Instant)>,
+    /// Consecutive failed reads, indexing [`READ_RETRY`].
+    failures: usize,
 }
 
-/// Whether a row with `key` has to run: not already answered for it, not already running for it,
-/// and not inside a retry back-off.
+/// Whether a row with `key` has to run: not already answered FINALLY for it (a lagging answer is
+/// not final), not already running for it, and not held off for it.
 fn needs_run(slot: &RowSlot, key: &RowKey, now: Instant) -> bool {
-    if slot.done.as_ref().is_some_and(|d| d.key == *key) || slot.pending.as_ref() == Some(key) {
+    let final_answer = slot
+        .done
+        .as_ref()
+        .is_some_and(|d| d.key == *key && !d.lagging);
+    if final_answer || slot.pending.as_ref() == Some(key) {
         return false;
     }
-    slot.retry_at.is_none_or(|at| now >= at)
+    if slot.done.as_ref().is_some_and(|d| d.key == *key) && slot.retry.is_none() {
+        // Lagging with no recheck armed cannot happen through `accept`; never spin on it.
+        return false;
+    }
+    slot.retry
+        .as_ref()
+        .is_none_or(|(k, at)| k != key || now >= *at)
+}
+
+/// Take a finished run's outcome into `slot` if it answers the key still pending. Returns whether
+/// the drawable answer changed.
+///
+/// A definitive answer (bars, or none because the market has no cache) is kept and clears the
+/// failure count. A failed read keeps the previous answer and backs off along [`READ_RETRY`]. A
+/// lagging answer is kept — it is the best there is — and rechecked after [`LAG_RECHECK`].
+fn accept(slot: &mut RowSlot, outcome: AutoRowOutcome, now: Instant) -> bool {
+    if slot.pending != Some(outcome.key) {
+        return false;
+    }
+    slot.pending = None;
+    if outcome.read_failed {
+        let wait = READ_RETRY[slot.failures.min(READ_RETRY.len() - 1)];
+        slot.failures = slot.failures.saturating_add(1);
+        slot.retry = Some((outcome.key, now + wait));
+        return false;
+    }
+    slot.failures = 0;
+    slot.retry = outcome.lagging.then_some((outcome.key, now + LAG_RECHECK));
+    slot.done = Some(Arc::new(outcome));
+    true
+}
+
+/// Split `rows` into those a job has to run and the definitive empty answers of rows that would
+/// read the cache of a market that has none (`has_cache == false`).
+fn split_no_cache(
+    rows: Vec<(usize, RowKey)>,
+    chart: &[moon_core::market::ChartCandle],
+    chart_tf_ms: i64,
+    has_cache: bool,
+) -> (Vec<(usize, RowKey)>, Vec<(usize, AutoRowOutcome)>) {
+    if has_cache {
+        return (rows, Vec::new());
+    }
+    let (tf_ms, history_ms) = job::chart_extent(chart, chart_tf_ms);
+    let mut run = Vec::new();
+    let mut resolved = Vec::new();
+    for (ix, key) in rows {
+        let (source, needed) = job::plan_row(&key, tf_ms, history_ms);
+        if job::reads_cache(source) {
+            resolved.push((ix, job::without_cache(key, source, needed)));
+        } else {
+            run.push((ix, key));
+        }
+    }
+    (run, resolved)
+}
+
+/// When a held-off rerun is due, as Unix ms, for the wake timer.
+fn retry_due_ms(slot: &RowSlot, now: Instant, now_ms: f64) -> Option<i64> {
+    let (_, at) = slot.retry.as_ref()?;
+    Some(now_ms as i64 + at.saturating_duration_since(now).as_millis() as i64)
 }
 
 /// The figures a row keeps: `take::select` against `ref_price`, each with its side of that price.
@@ -207,14 +286,11 @@ impl ChartPanel {
                 };
                 let wake = next_key_change_ms(now_ms, tf);
                 next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
-                if let Some(at) = slot.retry_at.filter(|at| *at > now) {
-                    let retry = now_ms as i64 + at.duration_since(now).as_millis() as i64;
-                    next_wake = Some(next_wake.map_or(retry, |w| w.min(retry)));
-                }
                 if needs_run(slot, &key, now) {
                     slot.pending = Some(key);
-                    slot.retry_at = None;
                     jobs.push((ix, key));
+                } else if let Some(retry) = retry_due_ms(slot, now, now_ms) {
+                    next_wake = Some(next_wake.map_or(retry, |w| w.min(retry)));
                 }
             }
             if !jobs.is_empty() {
@@ -256,6 +332,16 @@ impl ChartPanel {
                 exchange,
                 market: target.1.clone(),
             });
+        // A market with no cache address is a definitive "no cache", not a failed read: its cache
+        // rows are answered here, empty and final — no job, no detector, no retry — and run again
+        // only when their key moves.
+        let (rows, no_cache) = split_no_cache(rows, &chart, chart_tf_ms, cache.is_some());
+        if !no_cache.is_empty() {
+            self.auto_job_done(target.clone(), no_cache, cx);
+        }
+        if rows.is_empty() {
+            return;
+        }
         let job = PaneJob {
             rows,
             chart_tf_ms,
@@ -293,23 +379,18 @@ impl ChartPanel {
         else {
             return;
         };
+        let now = Instant::now();
         let mut accepted = false;
         let mut retry = false;
         for (ix, outcome) in outcomes {
             let Some(slot) = pane.rows.get_mut(ix) else {
                 continue;
             };
-            if slot.pending != Some(outcome.key) {
-                continue;
-            }
-            slot.pending = None;
-            if outcome.read_failed {
-                slot.retry_at = Some(Instant::now() + READ_RETRY);
-                retry = true;
-                continue;
-            }
-            slot.done = Some(Arc::new(outcome));
-            accepted = true;
+            // Only an outcome that arms a hold-off needs the wake re-armed; a definitive answer
+            // (the synchronous no-cache path included) must not re-enter the key evaluation.
+            let holds = outcome.read_failed || outcome.lagging;
+            accepted |= accept(slot, outcome, now);
+            retry |= holds;
         }
         if accepted && self.publish_auto_figures(&target) {
             self.resync_userdata(cx);
@@ -348,6 +429,7 @@ impl ChartPanel {
                 style: row.style,
                 tolerance_pct: tolerance_pct(params),
                 kept: kept_lines(outcome, &row.take, ref_price, now_ms),
+                ref_ms: now_ms,
                 outcome: outcome.clone(),
             });
         }

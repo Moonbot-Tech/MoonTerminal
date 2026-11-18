@@ -142,7 +142,7 @@ const CACHE_BASE_MS: i64 = 5 * 60_000;
 /// Returns:
 ///     In order: the chart series on an equal timeframe; the daily cache for `D1`; the chart series
 ///     resampled when the row is a multiple of the chart's timeframe and the series covers
-///     `lookback_bars` row bars; the 5-minute cache for any multiple of 5 minutes; otherwise
+///     `lookback_bars + 1` row bars (the first, partial bucket is dropped); the 5-minute cache for any multiple of 5 minutes; otherwise
 ///     [`BarSource::Unavailable`].
 pub fn bar_source(
     row: TfId,
@@ -157,7 +157,11 @@ pub fn bar_source(
     if row == TfId::D1 {
         return BarSource::CacheDaily;
     }
-    let needed_ms = f64::from(lookback_bars) * row_ms as f64;
+    // One bucket more than the lookback: a series that does not start on a bucket boundary yields
+    // a PARTIAL first bucket, which the bar assembly drops (a partial high or low would place a
+    // level where the market never turned). Asking for exactly `lookback` buckets of history would
+    // then deliver `lookback - 1` bars and report a short history the cache could have filled.
+    let needed_ms = (f64::from(lookback_bars) + 1.0) * row_ms as f64;
     if chart_tf_ms > 0
         && row_ms > chart_tf_ms
         && row_ms % chart_tf_ms == 0

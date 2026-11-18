@@ -8,10 +8,14 @@
 //! `Trend` line search with `trend_tolerance_pct` and `min_trend_touches`, which must:
 //! - rise toward a resistance / fall toward a support (converge, not diverge);
 //! - have every touch strictly on the level's original side;
-//! - overlap the level in time (its last touch after the level's first touch).
+//! - overlap the level in time (its last touch after the level's first touch);
+//! - still hold: no valid close after its last touch on the wrong side of it (below rising lows,
+//!   above falling highs) — a line price has already left presses nothing;
+//! - not have passed through the level by more than `pressed_pct` at the last bar — past that the
+//!   formation is over.
 //!
 //! `pressed` is set when the sloped line, projected to the last valid bar, is within `pressed_pct`
-//! of the level — measured as a fraction of the LEVEL price — or already past it.
+//! of the level — measured as a fraction of the LEVEL price — on either side of it.
 //!
 //! Each level and each sloped line takes part in at most one formation: valid pairs are taken
 //! greedily, the one whose projected gap to the level is smallest first.
@@ -30,7 +34,8 @@ use super::pivots::{PivotKind, find_pivots};
 use super::swing::{Level, levels_from};
 use super::trend::{Line, LineSpec, find_lines};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, pct_frac, touch_strength, window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, pct_frac, scan_break,
+    touch_strength, window,
 };
 
 /// Bodies allowed to cross the sloped half between its first and last touch. One, not zero: a
@@ -95,7 +100,7 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
     for (li, level) in levels.iter().enumerate() {
         let lines = lines_for(level.origin);
         for (si, line) in lines.iter().enumerate() {
-            if let Some(gap) = pair_gap(level, line, last_t) {
+            if let Some(gap) = pair_gap(win, level, line, last_t, pressed_frac) {
                 pairs.push((
                     level.origin,
                     Pair {
@@ -169,8 +174,25 @@ fn merge_touches(level: &[Touch], line: &[Touch]) -> Vec<Touch> {
 /// The gap between `line` projected to `last_t` and `level`, as a fraction of the level price —
 /// positive while the line is still on the level's original side — or `None` when the two do not
 /// form a squeeze (see the module doc).
-fn pair_gap(level: &Level, line: &Line, last_t: f64) -> Option<f64> {
+///
+/// Two ways a formation is OVER and is refused here, both seen live on the bench: a valid close
+/// after the line's last touch on the wrong side of the line (price left the pressing line, so it
+/// presses nothing — `scan_break` on the line, from its last touch), and a line projected past the
+/// level by more than `pressed_frac` (the two crossed a while ago; what remains is two unrelated
+/// lines). A gap in `[-pressed_frac, 0]` is a squeeze at its apex and still counts as pressed.
+fn pair_gap(
+    win: &[ChartCandle],
+    level: &Level,
+    line: &Line,
+    last_t: f64,
+    pressed_frac: f64,
+) -> Option<f64> {
     if level.price <= 0.0 || line.t1_ms <= level.touches.first()?.t_ms {
+        return None;
+    }
+    // Price sits on the line's side opposite the level: above rising lows, below falling highs.
+    let line_origin = level.origin.opposite();
+    if scan_break(win, line.last_idx, line_origin, |t| line.price_at(t)).is_some() {
         return None;
     }
     let converging = match level.origin {
@@ -189,7 +211,7 @@ fn pair_gap(level: &Level, line: &Line, last_t: f64) -> Option<f64> {
         Side::Below => (level.price - projected) / level.price,
         Side::Above => (projected - level.price) / level.price,
     };
-    gap.is_finite().then_some(gap)
+    (gap.is_finite() && gap >= -pressed_frac).then_some(gap)
 }
 
 #[cfg(test)]

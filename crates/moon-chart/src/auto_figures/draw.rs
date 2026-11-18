@@ -15,7 +15,7 @@ use moon_core::config::auto_figures::{Extend, LineStyle};
 use moon_core::figures::tools::{HLine, HorizontalRay, Ray, Segment};
 use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind, LineKind};
 
-use super::{Found, FoundShape, pct_frac, positive};
+use super::{Found, FoundShape, pct_frac, positive, within};
 use crate::figures::FigureBand;
 
 /// A row's line style with its colour already resolved, ready to stamp onto figures.
@@ -54,6 +54,8 @@ impl ResolvedStyle {
 ///     style: Its row's resolved style.
 ///     tolerance_pct: The row's touch tolerance, in % of price — the band a zone shows. `0` draws
 ///         the band from the touches' spread alone.
+///     ref_ms: The reference time (the detector run's "now"): where a squeeze's sloped half stops
+///         when its apex lies further ahead.
 ///     figures: Receives the lines, in draw order.
 ///     bands: Receives the zone bands.
 ///
@@ -63,6 +65,7 @@ pub fn append_shapes(
     found: &Found,
     style: &ResolvedStyle,
     tolerance_pct: f32,
+    ref_ms: f64,
     figures: &mut Vec<Figure>,
     bands: &mut Vec<FigureBand>,
 ) {
@@ -106,7 +109,13 @@ pub fn append_shapes(
                 return;
             };
             horizontal(level, found, style.extend, &mut push);
-            sloped(t0_ms, p0, t1_ms, p1, style.extend, &mut push);
+            squeeze_slope(
+                (t0_ms, p0, t1_ms, p1),
+                level,
+                ref_ms,
+                style.extend,
+                &mut push,
+            );
             zone(level, found, style, tolerance_pct, bands);
         }
     }
@@ -179,10 +188,58 @@ fn sloped(t0: f64, p0: f64, t1: f64, p1: f64, extend: Extend, push: &mut impl Fn
     }
 }
 
+/// A squeeze's sloped half: a segment from its first touch to where it stops pressing — the apex,
+/// where it meets the level, or the reference time `ref_ms`, whichever comes first.
+///
+/// Never a ray. A ray runs on past the apex to the plot's edge and, on a long chart, far through
+/// prices the formation never claimed — that is the line a reader then takes for a trend that
+/// price has "broken". `BetweenTouches` keeps its meaning: the segment between the two touches.
+fn squeeze_slope(
+    (t0, p0, t1, p1): (f64, f64, f64, f64),
+    level: f64,
+    ref_ms: f64,
+    extend: Extend,
+    push: &mut impl FnMut(FigureKind),
+) {
+    if !(t0.is_finite() && t1.is_finite() && t1 > t0) {
+        return;
+    }
+    let (Some(p0), Some(p1)) = (positive(p0), positive(p1)) else {
+        return;
+    };
+    let end = match extend {
+        Extend::BetweenTouches => t1,
+        Extend::RightEdge | Extend::BothEdges => {
+            // Never short of the last touch: a stale reference must not cut off what was found.
+            let now = if ref_ms.is_finite() {
+                ref_ms.max(t1)
+            } else {
+                t1
+            };
+            let apex = t0 + (level - p0) / (p1 - p0) * (t1 - t0);
+            if apex.is_finite() && apex > t0 {
+                now.min(apex)
+            } else {
+                now
+            }
+        }
+    };
+    let Some(p_end) = super::line_price_at(t0, p0, t1, p1, end).filter(|_| end > t0) else {
+        return;
+    };
+    push(FigureKind::Segment(Segment {
+        a: FigNode::new(t0, p0),
+        b: FigNode::new(end, p_end),
+    }));
+}
+
 /// The tolerance band around a level, when the row draws one.
 ///
-/// It spans every touch, and at least `tolerance_pct` of the level centred on it: what "the level"
-/// meant to the detector, since a pivot anywhere in it counted. Same time span as the line.
+/// It spans the level's own touches — those within `tolerance_pct` of it, which is every pivot the
+/// detector grouped into the level — and at least `tolerance_pct` of the level centred on it:
+/// what "the level" meant to the detector. A squeeze's sloped-line pivots lie outside that
+/// tolerance by construction and never stretch the band toward the converging line. Same time
+/// span as the line.
 fn zone(
     price: f64,
     found: &Found,
@@ -193,10 +250,11 @@ fn zone(
     let Some(alpha) = style.zone_alpha.filter(|a| a.is_finite() && *a > 0.0) else {
         return;
     };
-    let half = price * pct_frac(tolerance_pct) / 2.0;
+    let frac = pct_frac(tolerance_pct);
+    let half = price * frac / 2.0;
     let (mut lo, mut hi) = (price - half, price + half);
     for t in &found.touches {
-        if let Some(p) = positive(t.price) {
+        if let Some(p) = positive(t.price).filter(|&p| within(p, price, frac)) {
             lo = lo.min(p);
             hi = hi.max(p);
         }

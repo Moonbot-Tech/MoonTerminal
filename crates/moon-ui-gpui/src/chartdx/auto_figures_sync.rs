@@ -62,6 +62,9 @@ pub(crate) struct AutoRowDrawn {
     /// Indices into `outcome.found` of the kept figures, each with whether it lies ABOVE the
     /// reference price it was selected against (what a `BySign` colour reads).
     pub kept: Vec<(usize, bool)>,
+    /// The moment the selection was made, Unix ms: where a squeeze's sloped half stops when its
+    /// apex lies further ahead.
+    pub ref_ms: f64,
 }
 
 /// Everything one pane's auto figures draw.
@@ -72,7 +75,8 @@ pub(crate) struct AutoPaneFigures {
 
 impl AutoPaneFigures {
     /// One line describing every row for the app log: its index, timeframe, bar source, bars read
-    /// against bars needed (`short` when fewer), figures found and lines kept.
+    /// against bars needed (`short` when fewer, `lagging` when the cache had not filled the newest
+    /// bucket yet), figures found and lines kept.
     pub(crate) fn summary(&self) -> String {
         if self.rows.is_empty() {
             return "no rows".to_owned();
@@ -82,13 +86,14 @@ impl AutoPaneFigures {
             .map(|r| {
                 let o = &r.outcome;
                 format!(
-                    "row {} {:?} {:?} {}/{} bars{} found {} kept {}",
+                    "row {} {:?} {:?} {}/{} bars{}{} found {} kept {}",
                     r.row_ix,
                     o.key.tf,
                     o.source,
                     o.bars,
                     o.needed,
                     if o.short_history() { " short" } else { "" },
+                    if o.lagging { " lagging" } else { "" },
                     o.found.len(),
                     r.kept.len(),
                 )
@@ -187,6 +192,7 @@ impl ChartDataState {
                     found,
                     &ResolvedStyle::new(&row.style, rgb),
                     row.tolerance_pct,
+                    row.ref_ms,
                     &mut figures,
                     &mut bands,
                 );

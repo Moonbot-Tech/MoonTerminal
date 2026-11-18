@@ -101,3 +101,33 @@ fn bar_sources() {
         BarSource::ChartSeries
     );
 }
+
+/// A chart series exactly `lookback` row bars deep does not yield `lookback` COMPLETE row bars
+/// when it starts mid-bucket, so it must not be chosen; one bucket more must.
+///
+/// The oracle counts complete hours of a 5-minute series directly: 200 h of bars starting five
+/// minutes past an hour cover 199 whole hours (the first and the last hour are each one bar
+/// short of twelve).
+///
+/// Breakage: sizing the resample's depth as `lookback × row` (the partial first bucket is dropped
+/// by the bar assembly and the row silently runs on `lookback - 1` bars).
+#[test]
+fn a_resampled_chart_must_cover_one_bucket_more_than_the_lookback() {
+    let m5 = TfId::M5.ms();
+    let hour = TfId::H1.ms();
+    let start = hour + m5; // five minutes past an hour
+    let n = (200 * hour / m5) as usize; // exactly 200 h of 5-minute bars
+    let mut per_hour = std::collections::BTreeMap::<i64, usize>::new();
+    for i in 0..n {
+        *per_hour
+            .entry((start + i as i64 * m5).div_euclid(hour))
+            .or_default() += 1;
+    }
+    let complete = per_hour.values().filter(|&&c| c == 12).count();
+    assert_eq!(complete, 199);
+    assert_eq!(bar_source(TfId::H1, m5, 200.0 * H, 200), BarSource::Cache5m);
+    assert_eq!(
+        bar_source(TfId::H1, m5, 201.0 * H, 200),
+        BarSource::ChartResampled
+    );
+}

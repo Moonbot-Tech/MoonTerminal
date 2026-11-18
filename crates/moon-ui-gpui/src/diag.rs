@@ -432,15 +432,21 @@ diag_counters!(
     CHART_COUNTDOWN_TICK => "chart_countdown_tick",
     // Auto figures (`chartdx::auto_figures_sync`, driven by `panels::chart::auto_figures`).
     //
-    //   * `autofigures_detect` — detector RUNS, one per row whose recompute key moved: a candle of
-    //     that row's timeframe closed, its parameters or timeframe changed, or the pane switched
-    //     market. Summed over every chart. A Main chart with the four shipped rows legitimately
-    //     prints 1 every five minutes (the M5 row), 2 every quarter hour, 3 every hour, 4 every four
-    //     hours, plus one burst of 4 on opening a coin. ANY reading during a mouse storm, a pan or a
-    //     zoom of a Fixed-timeframe chart is a defect: nothing on those paths is in the key.
-    //   * `autofigures_detect_us` — microseconds those runs took on the background executor, bar
-    //     assembly (cache read, resample) included. Off the UI thread by construction, so this is
-    //     CPU, not frame time; divide by `autofigures_detect` for the cost of one run.
+    //   * `autofigures_detect` — detector RUNS: a row whose recompute key moved (a candle of its
+    //     timeframe closed, its parameters or timeframe changed, the pane switched market) AND that
+    //     had bars to run on. A row with none — no source for its timeframe, a cache read that did
+    //     not happen, a market with no cache — runs no detector and counts nothing. Summed over
+    //     every chart. A Main chart with the four shipped rows legitimately prints 1 every five
+    //     minutes (the M5 row), 2 every quarter hour, 3 every hour, 4 every four hours, a burst of 4
+    //     on opening a coin and another when its candles arrive, plus at most one per 15 s per row
+    //     while the 5-minute cache has not yet filled a just-closed bucket (capped at five minutes
+    //     past the close). ANY reading during a mouse storm, a pan or a zoom of a Fixed-timeframe
+    //     chart is a defect: nothing on those paths is in the key.
+    //   * `autofigures_detect_us` — microseconds whole JOBS took on the background executor: the
+    //     shared cache reads, the resample and every detector run of the job, recorded once per
+    //     job. Off the UI thread by construction, so this is CPU (and cache-worker wait), not frame
+    //     time. It can move while `autofigures_detect` stays 0 — a job whose rows all lacked bars
+    //     still paid for its reads.
     //   * `autofigures_lines` — auto-figure lines emitted into the userdata buffers per second. It
     //     moves with every userdata REBUILD of a pane that shows auto figures (an order revision or
     //     an order-line hover rebuilds the whole layer, auto lines included), so it reads as
