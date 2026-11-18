@@ -343,6 +343,110 @@ fn widths_refresh_cache_matches_full_measurement(cx: &mut gpui::TestAppContext) 
     });
 }
 
+/// Putting a pixel ceiling back on the date columns in `width_bounds` must fail this: the text is
+/// measured under the live font while a ceiling is a constant, so the column would be sized under
+/// its own stamp and print `12:50:3…` (#1391). Checked at the default body and with the font
+/// slider raised, because a ceiling that happens to clear one size cuts the next.
+#[gpui::test]
+fn a_date_column_is_always_as_wide_as_its_own_stamp(cx: &mut gpui::TestAppContext) {
+    let _locale = crate::test_locale::force("en");
+    let (cols, rows) = page();
+    let cores = vec![1; rows.len()];
+    let axis = ReportAxis::from_measured(Default::default(), Tz::UTC);
+    let visible = (0..cols.len()).collect::<Vec<_>>();
+    for font_delta in [design::DESIGN_FONT_DELTA, design::DESIGN_FONT_DELTA + 6.0] {
+        cx.update(|cx| {
+            moon_ui::MoonTheme::install_config(
+                crate::startup::moon_theme_config_for_presentation(
+                    moon_core::config::UiThemeMode::Light,
+                    1.0,
+                )
+                .with_font_delta(font_delta),
+                cx,
+            );
+            let mut cache = super::NaturalWidthsCache::default();
+            cache.publish(super::row_identities(&rows, &cores), true);
+            cache.refresh(
+                &cols,
+                &rows,
+                &cores,
+                &visible,
+                MoonPalette::default(),
+                &axis,
+                Tz::UTC,
+                cx,
+            );
+            let mut measurer = design::MonoBodyTextMeasurer::new(cx);
+            // The first fixture row opens at 2023-11-14 22:13:20 UTC; the fixed format makes every
+            // other row the same length.
+            let stamp = measurer.text_width("2023-11-14 22:13:20", FontWeight::NORMAL);
+            assert!(stamp > 0.0, "the test font must measure real glyphs");
+            for column in ["buydate", "closedate"] {
+                let natural = cache.widths[column];
+                assert!(
+                    natural >= stamp + 20.0,
+                    "{column} at font delta {font_delta}: natural width {natural} cannot hold a \
+                     {stamp} px stamp inside the table's 20 px cell padding"
+                );
+                // A column the first drag froze at its natural width keeps its seconds; the 150
+                // every date column was capped at before does not.
+                let frozen = std::collections::HashMap::from([(column.to_string(), natural)]);
+                assert!(cache.dates_without_room_for_seconds(&frozen).is_empty());
+                let old_cap = std::collections::HashMap::from([(column.to_string(), 150.0)]);
+                assert_eq!(cache.dates_without_room_for_seconds(&old_cap), [column]);
+            }
+        });
+    }
+}
+
+/// Mutations in `NaturalWidthsCache::dates_without_room_for_seconds`: comparing against the
+/// natural width with no slack flips a column to minutes when a fractional display scale rounds
+/// its frozen width one pixel under; treating an undragged column as narrow drops the seconds from
+/// a table nobody resized; and testing a column other than the two that carry seconds would let a
+/// narrow `coin` change the dates.
+#[test]
+fn only_a_dragged_date_column_narrower_than_its_seconds_falls_back_to_minutes() {
+    let mut cache = super::NaturalWidthsCache::default();
+    cache.widths.insert("buydate".into(), 188.0);
+    cache.widths.insert("closedate".into(), 188.0);
+    cache.widths.insert("coin".into(), 90.0);
+    let dragged = |pairs: &[(&str, f32)]| {
+        pairs
+            .iter()
+            .map(|(column, width)| (column.to_string(), *width))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+
+    assert!(
+        cache
+            .dates_without_room_for_seconds(&dragged(&[]))
+            .is_empty(),
+        "an untouched table is rendered at its natural widths or wider"
+    );
+    assert!(
+        cache
+            .dates_without_room_for_seconds(&dragged(&[("buydate", 187.0), ("closedate", 400.0)]))
+            .is_empty(),
+        "a pixel of rounding under the natural width still holds the text"
+    );
+    assert_eq!(
+        cache.dates_without_room_for_seconds(&dragged(&[("buydate", 160.0), ("coin", 40.0)])),
+        ["buydate"],
+        "the dragged date falls back; the untouched one and the narrow coin do not"
+    );
+    assert_eq!(
+        cache.dates_without_room_for_seconds(&dragged(&[("buydate", 120.0), ("closedate", 120.0)])),
+        ["buydate", "closedate"]
+    );
+    cache.clear();
+    assert!(
+        cache
+            .dates_without_room_for_seconds(&dragged(&[("buydate", 120.0)]))
+            .is_empty(),
+        "a hidden, unmeasured column has no cell to decide for"
+    );
+}
+
 /// Hash collisions cannot reuse a width token for different cell contents.
 #[test]
 fn width_row_identity_resolves_hash_collisions_exactly() {

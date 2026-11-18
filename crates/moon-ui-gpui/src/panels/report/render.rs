@@ -63,6 +63,12 @@ impl ReportPanel {
             cx,
         );
         let cols = columns::report_columns(&self.cols, vis, &self.natural_widths.widths);
+        // Resolved here, once per render, from the two numbers that decide it: the width stored
+        // for a date column and the width its seconds measured at under the live font. A drag or
+        // a divider double-click notifies `table_state`, which re-renders this panel.
+        let minute_dates = self
+            .natural_widths
+            .dates_without_room_for_seconds(&self.table_state.read(cx).column_widths);
         let selection = self.selection.clone();
         // Clip resized columns at the shared table host; an empty successful
         // result keeps the header and uses the panel overlay.
@@ -91,6 +97,7 @@ impl ReportPanel {
                     p,
                     axis.as_ref(),
                     display_zone,
+                    &minute_dates,
                 )
             })
             .state(&table_state)

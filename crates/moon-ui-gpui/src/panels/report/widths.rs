@@ -62,6 +62,20 @@ pub(super) fn row_identities(rows: &[Vec<Value>], cores: &[u64]) -> Vec<Arc<RowI
         .collect()
 }
 
+/// What the natural-width pass adds to the widest measured text: `MoonDataTable`'s own cell
+/// padding (12 left + 8 right — MoonUI `moon/table.rs`, `MoonTableColumn::new`) plus
+/// [`NATURAL_SLACK`]. Logical pixels that no font or UI setting scales, unlike the text beside
+/// them, which is why they are added to a measurement instead of being folded into a fixed width.
+const NATURAL_PAD: f32 = 28.0;
+
+/// The part of [`NATURAL_PAD`] that is breathing room rather than cell padding.
+///
+/// A column narrower than its natural width by no more than this still holds its widest text, so
+/// this is also the tolerance [`NaturalWidthsCache::dates_without_room_for_seconds`] allows a
+/// stored width: the first drag snapshots every column at its RENDERED width, which a fractional
+/// display scale may round a pixel under the natural one.
+const NATURAL_SLACK: f32 = 8.0;
+
 /// Rendering identity for one content-derived Report width batch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NaturalWidthsEnvironment {
@@ -110,6 +124,51 @@ impl NaturalWidthsCache {
     pub(super) fn clear(&mut self) {
         self.widths.clear();
         self.measured.clear();
+    }
+
+    /// Second-resolution date columns too narrow, at their stored width, to print their seconds.
+    ///
+    /// Only a column with a STORED width can be. The Report table runs
+    /// `MoonDataTableWidthPolicy::Preserve`, which never renders a column without one below its
+    /// natural width, and that width measured the full `…:SS` text under the live font with no
+    /// ceiling (`width_bounds`). A stored width is what the table renders the column at exactly
+    /// (MoonUI `column_layout::ordered_columns` marks every entry `user_sized`), so comparing that
+    /// authoritative number with the natural one answers "do the seconds fit" at every font size,
+    /// UI zoom and display scale — both sides are logical pixels of the same frame, and the text
+    /// side was measured, not assumed.
+    ///
+    /// A stored width is not only a column the user dragged: the table's first drag snapshots
+    /// EVERY column at its rendered width, `complete_widths` fills a column the saved map lacked
+    /// with `columns::width_for`, and an older build saved these two under the minute form's
+    /// 150 px ceiling. All of those are frozen until the divider is double-clicked, and #1391
+    /// settles that case: the frozen column paints whole minutes and the hover keeps the seconds,
+    /// rather than an ellipsis through them.
+    ///
+    /// The natural width also covers the header and the readable floor, so a column whose
+    /// translated header is wider than its stamps falls back a little earlier than its text alone
+    /// would need. That errs toward whole minutes and never toward an ellipsis through the seconds.
+    ///
+    /// Args:
+    ///     user_widths: `MoonDataTableState::column_widths`, empty until the first resize.
+    ///
+    /// Returns:
+    ///     The columns whose cells paint the minute form in this frame; the hover keeps the
+    ///     seconds. Empty while the table has no stored widths at all.
+    pub(super) fn dates_without_room_for_seconds(
+        &self,
+        user_widths: &std::collections::HashMap<String, f32>,
+    ) -> Vec<&'static str> {
+        columns::SECOND_DATE_COLUMNS
+            .into_iter()
+            .filter(|column| {
+                match (user_widths.get(*column), self.widths.get(*column)) {
+                    (Some(stored), Some(natural)) => *stored < natural - NATURAL_SLACK,
+                    // No stored width: rendered at its natural width or wider. Not measured:
+                    // hidden, so there is no cell to decide for.
+                    _ => false,
+                }
+            })
+            .collect()
     }
 
     /// Reconcile exact background row identities without formatting unchanged rows on the UI thread.
@@ -276,7 +335,7 @@ fn natural_widths(
             let (floor, ceiling) = width_bounds(column);
             let mut width = bases.get(column).map_or_else(
                 || measurer.text_width(&columns::header_label(column), FontWeight::SEMIBOLD),
-                |base| base - 28.0,
+                |base| base - NATURAL_PAD,
             );
             // Generic cells use the same predicate in the renderer, so the two emphasized profit
             // columns cannot be measured light and then clip the wider glyphs they paint. Resolve it
@@ -284,7 +343,7 @@ fn natural_widths(
             let weight = columns::cell_weight(column);
             for &row_index in row_indices {
                 // No remaining row can increase an already ceiling-clamped width.
-                if (width + 28.0).ceil() >= ceiling {
+                if (width + NATURAL_PAD).ceil() >= ceiling {
                     break;
                 }
                 let Some(row) = rows.get(row_index) else {
@@ -305,16 +364,45 @@ fn natural_widths(
                 )
                 .0;
                 width = width.max(measurer.text_width(&text, weight));
+                // A date prints one fixed pattern of digits and separators in the monospaced
+                // body font, so every non-empty stamp is exactly as wide as the first. This is the
+                // early exit the 150 px ceiling used to give these columns for free; without it a
+                // full page would format and measure every row of all four date columns.
+                if fixed_width_date(column) && !text.is_empty() {
+                    break;
+                }
             }
-            Some((column.clone(), (width + 28.0).ceil().clamp(floor, ceiling)))
+            Some((
+                column.clone(),
+                (width + NATURAL_PAD).ceil().clamp(floor, ceiling),
+            ))
         })
         .collect()
 }
 
+/// Whether every non-empty cell of a Report column renders text of one identical width.
+///
+/// True for the date columns: `columns::date_text` prints a fixed `%Y-%m-%d %H:%M[:%S]` pattern,
+/// and the Report body font is monospaced, so a column's stamps differ only in which digits they
+/// hold. Must name exactly the columns `columns::cell` formats through `date_text`.
+fn fixed_width_date(column: &str) -> bool {
+    matches!(
+        column,
+        "buydate" | "closedate" | "sellsetdate" | "last_update_at"
+    )
+}
+
 /// Return the readable floor and anti-domination ceiling for one Report column.
+///
+/// The ceiling exists for free text, where one long comment could take the whole viewport. A date
+/// has no such failure: its text is a fixed format a few characters long, so its measured width
+/// IS its bound. A pixel ceiling there only clips, and it clips differently on every machine —
+/// the text scales with the font slider and the theme's mono size while the ceiling does not, so
+/// `150` already cut the old minute form at the default 14 px body and cut it harder at every
+/// larger setting (#1391: `12:50:3…` is worse than no seconds at all).
 fn width_bounds(column: &str) -> (f32, f32) {
     match column {
-        "buydate" | "closedate" | "sellsetdate" | "last_update_at" => (116.0, 150.0),
+        "buydate" | "closedate" | "sellsetdate" | "last_update_at" => (116.0, f32::INFINITY),
         "comment" => (110.0, 360.0),
         "sellreason" => (120.0, 280.0),
         "channelname" | "signaltype" | "fname" | "exorderid" => (90.0, 240.0),

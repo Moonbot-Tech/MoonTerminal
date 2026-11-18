@@ -16,8 +16,9 @@
 //! Cell values retain their RAW database
 //! representation (`isshort` and `emulator` remain 0/1, and numbers receive no presentation
 //! formatting or localized value labels), making this a machine-readable extract rather than a
-//! snapshot of the table. Date columns are formatted as `YYYY-MM-DD HH:MM` text in the selected
-//! display zone, matching the table. In XLSX, large identifiers in `strategyid`, `exorderid`,
+//! snapshot of the table. Date columns are formatted as text in the selected display zone,
+//! matching the table's full form: `YYYY-MM-DD HH:MM:SS` for `buydate` and `closedate`,
+//! `YYYY-MM-DD HH:MM` for the other date columns. In XLSX, large identifiers in `strategyid`, `exorderid`,
 //! `taskid`, and `newrecid` are also
 //! written as text so Excel preserves every digit.
 
@@ -269,10 +270,16 @@ pub(super) fn field_text(
     display_zone: Tz,
 ) -> String {
     if date_col(col) {
-        // Share the grid's missing-close sentinel and clock projection with CSV, XLSX, and TSV.
-        return columns::date_cell_instant(col, v, axis, core_uid, display_zone)
-            .map(|(secs, zone)| moon_core::util::display_time::format_minute(secs, zone))
-            .unwrap_or_default();
+        // Share the grid's missing-close sentinel, clock projection and precision with CSV, XLSX,
+        // and TSV. Always the full form: a file has no column width to fall back from.
+        return columns::date_text(
+            col,
+            v,
+            axis,
+            core_uid,
+            display_zone,
+            columns::DateForm::Full,
+        );
     }
     match v {
         Value::Null => String::new(),

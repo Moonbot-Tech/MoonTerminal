@@ -3,8 +3,9 @@
 // Explicit imports on purpose: the parent re-exports `gpui::*`, whose `test` would
 // shadow the built-in attribute and make `#[test]` expand recursively.
 use super::{
-    basecurrency_text, cell, cell_display_text, effective_visible_columns, header_for,
-    header_label, is_numeric_report_column, report_columns, toggled_all_columns, value_to_string,
+    DateForm, basecurrency_text, cell, cell_display_text, date_text, effective_visible_columns,
+    header_for, header_label, is_numeric_report_column, report_columns, toggled_all_columns,
+    value_to_string,
 };
 use crate::panels::common::side_word;
 use chrono_tz::Tz;
@@ -64,11 +65,11 @@ fn open_position_close_is_blank_in_grid_and_exports_before_clock_projection() {
                 Tz::UTC
             )
             .0,
-            "2026-09-10 14:00"
+            "2026-09-10 14:00:00"
         );
         assert_eq!(
             crate::panels::report::export::field_text("closedate", &closed, &axis, 7, Tz::UTC),
-            "2026-09-10 14:00"
+            "2026-09-10 14:00:00"
         );
     }
 }
@@ -333,9 +334,74 @@ fn cell_keeps_the_long_date_form_even_for_a_row_from_today() {
 
     assert_eq!(
         text,
-        moon_core::util::display_time::format_minute(now, axis.zone()),
+        moon_core::util::display_time::format_second(now, axis.zone()),
         "cell() must always render the full timestamp; compaction belongs to the render path"
     );
+}
+
+/// Breakage: printing seconds on every date column, on none of them, or letting the grid and the
+/// files disagree (#1391). Opened and Closed carry the second MoonBot's own report prints;
+/// `sellsetdate` and `last_update_at` stay on minutes, because seconds there would only widen two
+/// columns nobody asked about. The minute form is what a too-narrow cell paints, so it must be the
+/// same stamp with the seconds dropped, not a different instant.
+#[test]
+fn only_opened_and_closed_print_seconds_and_the_exports_follow_the_grid() {
+    let axis = ReportAxis::identity_core_local();
+    let p = MoonPalette::default();
+    // 2023-11-14 22:13:20 UTC.
+    let stamp = Value::Integer(1_700_000_000);
+    let grid = |col: &str| cell(col, &stamp, None, p, &axis, 0, Tz::UTC).0;
+    let file =
+        |col: &str| crate::panels::report::export::field_text(col, &stamp, &axis, 0, Tz::UTC);
+
+    for col in ["buydate", "closedate"] {
+        assert_eq!(grid(col), "2023-11-14 22:13:20", "{col} in the grid");
+        assert_eq!(
+            file(col),
+            "2023-11-14 22:13:20",
+            "{col} in CSV, XLSX and the copy"
+        );
+        assert_eq!(
+            date_text(col, &stamp, &axis, 0, Tz::UTC, DateForm::Minute),
+            "2023-11-14 22:13",
+            "{col} in a column too narrow for seconds"
+        );
+    }
+    for col in ["sellsetdate", "last_update_at"] {
+        assert_eq!(grid(col), "2023-11-14 22:13", "{col} in the grid");
+        assert_eq!(
+            file(col),
+            "2023-11-14 22:13",
+            "{col} in CSV, XLSX and the copy"
+        );
+    }
+}
+
+/// Breakage: formatting the second form without `format_minute`'s unknown rule. A zero open time
+/// would paint `1970-01-01 00:00:00` in the grid and in every exported file, where the minute form
+/// it replaces printed nothing.
+#[test]
+fn an_unknown_open_time_stays_blank_in_the_second_form() {
+    let axis = ReportAxis::identity_core_local();
+    for value in [Value::Null, Value::Integer(0), Value::Integer(-5)] {
+        assert_eq!(
+            cell(
+                "buydate",
+                &value,
+                None,
+                MoonPalette::default(),
+                &axis,
+                0,
+                Tz::UTC
+            )
+            .0,
+            ""
+        );
+        assert_eq!(
+            crate::panels::report::export::field_text("buydate", &value, &axis, 0, Tz::UTC),
+            ""
+        );
+    }
 }
 
 /// Breakage: the shared badge word changes (`common::side_word`) without `cell()`'s `"isshort"`

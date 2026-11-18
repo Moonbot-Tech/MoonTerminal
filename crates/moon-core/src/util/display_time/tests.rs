@@ -207,3 +207,23 @@ fn chart_date_caption_names_the_year_on_new_years_day() {
         .timestamp_millis();
     assert_eq!(format_chart_date(spring, Warsaw), "05.03");
 }
+
+/// Regression target: dropping `format_second`'s non-positive guard, or formatting it in UTC.
+/// The Report prints one stamp through `format_minute` or `format_second` depending on the
+/// column's width, so an unknown time that is blank at minute precision would otherwise turn into
+/// `1970-01-01 01:00:00` the moment the column is wide enough for seconds.
+#[test]
+fn second_form_is_blank_for_an_unknown_time_and_follows_the_zone() {
+    assert_eq!(format_second(0, Warsaw), "");
+    assert_eq!(format_second(-1, Warsaw), "");
+    assert_eq!(format_minute(0, Warsaw), "");
+
+    // Warsaw is UTC+1 in November, so 11:50:33 UTC reads 12:50:33 there.
+    let utc = Utc
+        .with_ymd_and_hms(2026, 11, 18, 11, 50, 33)
+        .single()
+        .expect("valid UTC instant")
+        .timestamp();
+    assert_eq!(format_second(utc, Warsaw), "2026-11-18 12:50:33");
+    assert_eq!(format_minute(utc, Warsaw), "2026-11-18 12:50");
+}

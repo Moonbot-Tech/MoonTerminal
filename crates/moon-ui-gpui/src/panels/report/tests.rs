@@ -99,7 +99,7 @@ fn csv_export_uses_parallel_core_uid_without_correcting_terminal_utc_stamps() {
     let rendered = std::fs::read_to_string(&path).expect("the CSV fixture must be readable");
     assert_eq!(
         rendered,
-        "\u{FEFF}closedate;last_update_at\r\n2023-11-14 10:13;2023-11-14 14:13\r\n"
+        "\u{FEFF}closedate;last_update_at\r\n2023-11-14 10:13:20;2023-11-14 14:13\r\n"
     );
 }
 
