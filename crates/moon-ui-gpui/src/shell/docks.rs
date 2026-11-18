@@ -525,15 +525,10 @@ impl Shell {
             .update(cx, |area, cx| area.set_center(center, window, cx));
     }
 
+    /// Remember where this group was left so it can reopen with the same geometry and state.
     pub(super) fn persist_group_geometry(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let (bounds, maximized, fullscreen) = match window.window_bounds() {
-            WindowBounds::Windowed(bounds) => (Some(bounds), false, false),
-            WindowBounds::Maximized(bounds) => (Some(bounds), true, false),
-            WindowBounds::Fullscreen(bounds) => (Some(bounds), false, true),
-        };
-        let Some(bounds) = bounds else {
-            return;
-        };
+        let (bounds, maximized, fullscreen) =
+            crate::window::windowing::window_persisted_bounds(window);
         // Identify the window's display by stable UUID. On macOS, x/y are relative to each screen
         // and cannot identify the display during restoration; see `GroupLayout::display_uuid`.
         // An unknown display means "unknown", not "moved to nowhere": macOS reports none for a

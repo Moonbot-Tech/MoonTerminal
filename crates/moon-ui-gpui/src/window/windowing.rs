@@ -737,6 +737,8 @@ pub(crate) fn display_identity(display: Option<DisplayId>, cx: &App) -> Option<u
 /// the state rides beside it as a flag. Reading `window.bounds()` here instead would remember the
 /// screen-sized rectangle and the window would never un-maximize to anything else again.
 ///
+/// In Windows windowed mode, capture the current geometry so snapped windows retain their zone.
+///
 /// One platform does not hold up its end: the X11 backend reports the CURRENT bounds inside
 /// `WindowBounds::Maximized`, keeping no restore rectangle of its own, so there a maximized window
 /// remembers its maximized size. Windows, macOS and Wayland all carry the restore rectangle. The
@@ -746,11 +748,7 @@ pub(crate) fn display_identity(display: Option<DisplayId>, cx: &App) -> Option<u
 ///
 /// The persistable rectangle, for every window state.
 pub(crate) fn window_geom_rect(window: &Window, cx: &App) -> moon_core::config::layout::GeomRect {
-    let (bounds, maximized, fullscreen) = match window.window_bounds() {
-        WindowBounds::Windowed(bounds) => (bounds, false, false),
-        WindowBounds::Maximized(bounds) => (bounds, true, false),
-        WindowBounds::Fullscreen(bounds) => (bounds, false, true),
-    };
+    let (bounds, maximized, fullscreen) = window_persisted_bounds(window);
     let (x, y, w, h) = int_rect(bounds);
     moon_core::config::layout::GeomRect {
         x,
@@ -761,6 +759,88 @@ pub(crate) fn window_geom_rect(window: &Window, cx: &App) -> moon_core::config::
         fullscreen,
         display_uuid: window_display_uuid(window, cx),
     }
+}
+
+/// Capture the shared rectangle and native state used by group and tool window saves.
+pub(crate) fn window_persisted_bounds(window: &Window) -> (Bounds<Pixels>, bool, bool) {
+    let placement = window.window_bounds();
+    #[cfg(target_os = "windows")]
+    let current = match placement {
+        WindowBounds::Windowed(_) => windows_current_bounds(window),
+        _ => None,
+    };
+    #[cfg(not(target_os = "windows"))]
+    let current = None;
+    bounds_for_persistence(placement, current)
+}
+
+/// Prefer current windowed geometry because Windows Snap can leave the normal placement stale.
+/// Expanded windows retain their restore rectangle so they can unmaximize or exit fullscreen.
+fn bounds_for_persistence(
+    placement: WindowBounds,
+    current: Option<Bounds<Pixels>>,
+) -> (Bounds<Pixels>, bool, bool) {
+    match placement {
+        WindowBounds::Windowed(bounds) => (current.unwrap_or(bounds), false, false),
+        WindowBounds::Maximized(bounds) => (bounds, true, false),
+        WindowBounds::Fullscreen(bounds) => (bounds, false, true),
+    }
+}
+
+/// Read the current outer position and client size in GPUI's logical placement coordinates.
+/// Win32 supplies both rectangles together, even while GPUI is processing separate move and
+/// resize notifications. Minimized windows and failed reads fall back to the normal placement.
+#[cfg(target_os = "windows")]
+fn windows_current_bounds(window: &Window) -> Option<Bounds<Pixels>> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    };
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowInfo, USER_DEFAULT_SCREEN_DPI, WINDOWINFO, WS_EX_TOOLWINDOW, WS_MINIMIZE,
+    };
+
+    let hwnd = HWND(window_hwnd(window)? as *mut _);
+    let mut info = WINDOWINFO {
+        cbSize: size_of::<WINDOWINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: The GPUI window keeps the HWND alive and the output buffer has the required size.
+    unsafe { GetWindowInfo(hwnd, &mut info) }.ok()?;
+    let client_width = info.rcClient.right - info.rcClient.left;
+    let client_height = info.rcClient.bottom - info.rcClient.top;
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if info.dwStyle.contains(WS_MINIMIZE) || client_width <= 0 || client_height <= 0 || dpi == 0 {
+        return None;
+    }
+    let mut x = info.rcWindow.left;
+    let mut y = info.rcWindow.top;
+    if !info.dwExStyle.contains(WS_EX_TOOLWINDOW) {
+        // SetWindowPlacement expects workspace coordinates for top-level non-tool windows.
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let mut monitor_info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }.as_bool() {
+            return None;
+        }
+        x -= monitor_info.rcWork.left - monitor_info.rcMonitor.left;
+        y -= monitor_info.rcWork.top - monitor_info.rcMonitor.top;
+    }
+    // GPUI adds half the frame delta on save and subtracts it on open. Keep that convention
+    // so invisible resize borders do not shift an ordinary or snapped window on every restart.
+    x += (info.rcWindow.right - info.rcWindow.left - client_width) / 2;
+    y += (info.rcWindow.bottom - info.rcWindow.top - client_height) / 2;
+    let scale = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
+    Some(Bounds {
+        origin: point(px(x as f32 / scale), px(y as f32 / scale)),
+        size: size(
+            px(client_width as f32 / scale),
+            px(client_height as f32 / scale),
+        ),
+    })
 }
 
 /// The logical width a window currently OCCUPIES, for responsive chrome.
