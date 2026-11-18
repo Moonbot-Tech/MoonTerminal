@@ -22,8 +22,8 @@ use serde_compat::{
     de_candle_volume_alpha, de_candle_volume_height, de_candle_volume_scale,
     de_candle_volume_style, de_candle_volume_tf_s, de_clock_zone, de_connector_thickness,
     de_hvol_price_frame_pct, de_hvol_side, de_hvol_tf_s, de_hvol_width, de_ladder_big_pct,
-    de_lenient_chart_labels, de_lenient_false, de_lenient_graphics, de_lenient_map,
-    de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
+    de_lenient_auto_figures, de_lenient_chart_labels, de_lenient_false, de_lenient_graphics,
+    de_lenient_map, de_lenient_seed, de_lenient_true, de_lenient_u32, de_marker_scale,
     de_strategies_tree_text_step, de_table_order_map, de_table_sort_map, de_tick_ranges,
     de_trade_history_style, de_trade_kind, de_trade_merge_ms, de_trade_small_pct,
     de_trade_volume_alpha,
@@ -49,7 +49,7 @@ pub use panels::*;
 pub use table_prefs::*;
 pub use warnings::*;
 
-use super::{ProfileAge, chart_defaults, chart_labels};
+use super::{ProfileAge, auto_figures, chart_defaults, chart_labels};
 
 fn def_true() -> bool {
     true
@@ -781,6 +781,11 @@ pub struct WindowLayout {
     /// written before this key existed opens on exactly the corner it had.
     #[serde(default, deserialize_with = "de_lenient_chart_labels")]
     pub chart_labels: super::chart_labels::ChartLabelsCfg,
+    /// Auto figures — the levels, sloped lines and squeezes the chart finds by itself — MAIN kind
+    /// default. A profile written before this key existed opens with the shipped set, switched on;
+    /// see [`super::auto_figures`].
+    #[serde(default, deserialize_with = "de_lenient_auto_figures")]
+    pub auto_figures: super::auto_figures::AutoFiguresCfg,
     /// Defaults for tabs torn off into their own windows — empty means "follow the fields above".
     ///
     /// The three fields above are the MAIN kind's defaults and keep their keys, so a profile

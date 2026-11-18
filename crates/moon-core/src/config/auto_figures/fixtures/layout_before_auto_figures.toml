@@ -1,0 +1,923 @@
+[candle_view]
+tf_min = 5
+mode = 0
+trade_candles = 2
+hide_candles = 1
+trades_limit = 50000
+outline_px = 1.0
+wicks_in_zone = true
+neutral_in_zone = true
+
+[chart_graphics]
+trade_arrow_scale = 0.6000000238418579
+connector_thickness_px = 1.0
+show_real_trades = true
+show_emulator_trades = false
+trade_history_style = "marks"
+history_all_cores = false
+hide_closed_sell_line = false
+hide_order_move_history = false
+last_price_line = false
+mark_price_line = false
+moonshot_zone = false
+liquidations = true
+marker_scale = 0.699999988079071
+trade_volume_alpha = 0.3499999940395355
+trade_kind = "crosses"
+trade_merge_ms = 100
+trade_small_pct = 50
+candle_volume_style = 0
+candle_volume_height = 0.18000000715255737
+candle_volume_alpha = 0.30000001192092896
+candle_volume_scale = [
+    110,
+    110,
+    110,
+]
+candle_volume_sides = false
+candle_volume_stacked = false
+candle_volume_tf_s = 0
+candle_volume_scale_right = false
+candle_volume_labels_over = false
+hvol_enabled = false
+hvol_tf_s = 0
+hvol_price_frame_pct = 0.10000000149011612
+hvol_width = 0.20000000298023224
+hvol_side = "right"
+hvol_stacked = false
+hvol_overlay = false
+hvol_hide_captions = false
+book_kind = "bars"
+ladder_big_pct = 50
+book_width_px = 220.0
+
+[chart_graphics.cursor_labels]
+order_size = "chart-above"
+depth = "book-above"
+percent = "book-below"
+order = [
+    "order-size",
+    "depth",
+    "percent",
+]
+
+[chart_labels]
+rev = 1
+
+[[chart_labels.rows]]
+name = "Инструмент"
+zone = "zone_top"
+align = "right"
+flow = "column"
+
+[[chart_labels.rows.parts]]
+field = "coin"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+
+[[chart_labels.rows.parts]]
+field = "core"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+
+[[chart_labels.rows.parts]]
+field = "venue"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.0
+
+[[chart_labels.rows]]
+name = "Масштаб"
+zone = "chart_top"
+align = "right"
+
+[[chart_labels.rows.parts]]
+field = "scale_badge"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.7000000476837158
+
+[[chart_labels.rows]]
+name = "Дельты монеты"
+zone = "chart_top"
+align = "right"
+visible = false
+flow = "column"
+placement = "row"
+gap = 24
+
+[[chart_labels.rows.parts]]
+field = "delta1h"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+
+[[chart_labels.rows.parts]]
+field = "delta24h"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+
+[[chart_labels.rows]]
+preset = "volumes"
+zone = "chart_top"
+align = "right"
+flow = "column"
+gap = 6
+
+[[chart_labels.rows.parts]]
+field = "window_span_name"
+pnl_basis = "all"
+window = "m1"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows.parts]]
+field = "window_buy_volume"
+pnl_basis = "all"
+window = "m1"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[[chart_labels.rows.parts]]
+field = "window_sell_volume"
+pnl_basis = "all"
+window = "m1"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[chart_labels.rows.parts.style.color]
+mode = "theme"
+
+[[chart_labels.rows]]
+name = "Курсор"
+zone = "chart_top"
+align = "right"
+visible = false
+flow = "column"
+gap = 6
+
+[[chart_labels.rows.parts]]
+field = "window_span_name"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[chart_labels.rows.parts.span]
+seconds = 10
+
+[[chart_labels.rows.parts]]
+field = "window_buy_volume"
+pnl_basis = "all"
+window = "m1"
+anchor = "cursor"
+bar = false
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[chart_labels.rows.parts.span]
+seconds = 10
+
+[[chart_labels.rows.parts]]
+field = "window_sell_volume"
+pnl_basis = "all"
+window = "m1"
+anchor = "cursor"
+bar = false
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[chart_labels.rows.parts.span]
+seconds = 10
+
+[[chart_labels.rows.parts]]
+field = "window_liquidations"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[chart_labels.rows.parts.span]
+seconds = 10
+
+[[chart_labels.rows]]
+name = "Открытые ордера"
+zone = "chart_top"
+align = "left"
+placement = "row"
+
+[[chart_labels.rows.parts]]
+field = "open_orders"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows.parts]]
+field = "open_pnl_money"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows.parts]]
+field = "open_pnl_pct"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[[chart_labels.rows.parts]]
+field = "exposure"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows]]
+name = "История"
+zone = "chart_top"
+align = "left"
+gap = 4
+
+[[chart_labels.rows.parts]]
+field = "session_pnl"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows.parts]]
+field = "session_profit"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows]]
+name = "Фандинг"
+zone = "chart_top"
+align = "left"
+gap = 8
+
+[[chart_labels.rows.parts]]
+field = "funding"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows.parts]]
+field = "funding_in"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[[chart_labels.rows]]
+preset = "arbitrage"
+zone = "chart_top"
+align = "left"
+flow = "column"
+gap = 8
+
+[[chart_labels.rows.parts]]
+field = "arb_column"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+color_min_pct = 0.5
+size_mult = 1.0
+
+[chart_labels.rows.parts.style.color]
+mode = "by_sign"
+
+[[chart_labels.rows]]
+name = "Детект"
+zone = "chart_top"
+align = "center"
+flow = "column"
+
+[[chart_labels.rows.parts]]
+field = "detect_strategy"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[[chart_labels.rows.parts]]
+field = "detect_msg"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows.parts]]
+field = "order_strategy"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+
+[[chart_labels.rows]]
+zone = "zone_bottom"
+align = "right"
+
+[[chart_labels.rows.parts]]
+field = "tf_close_in"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+size_mult = 1.25
+caption = false
+
+[[chart_labels.rows]]
+zone = "chart_bottom"
+align = "right"
+
+[[chart_labels.rows.parts]]
+field = "act_panic_sell"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+
+[[chart_labels.rows]]
+zone = "chart_bottom"
+align = "right"
+placement = "row"
+
+[[chart_labels.rows.parts]]
+field = "act_cancel_buy"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+
+[[chart_labels.rows]]
+preset = "strategy_filters"
+zone = "chart_top"
+align = "left"
+flow = "column"
+gap = 8
+
+[[chart_labels.rows.parts]]
+field = "strategy_filters"
+pnl_basis = "all"
+
+[chart_labels.rows.parts.style]
+
+[chart_defaults_addto.candle_view]
+tf_min = 1
+mode = 0
+trade_candles = 0
+hide_candles = 0
+trades_limit = 50000
+outline_px = 1.0
+wicks_in_zone = true
+neutral_in_zone = false
+
+[chart_defaults_addto.chart_graphics]
+trade_arrow_scale = 0.6000000238418579
+connector_thickness_px = 1.0
+show_real_trades = true
+show_emulator_trades = false
+trade_history_style = "marks"
+history_all_cores = false
+hide_closed_sell_line = false
+hide_order_move_history = false
+last_price_line = false
+mark_price_line = false
+moonshot_zone = false
+liquidations = true
+marker_scale = 0.699999988079071
+trade_volume_alpha = 0.3499999940395355
+trade_kind = "crosses"
+trade_merge_ms = 100
+trade_small_pct = 50
+candle_volume_style = 2
+candle_volume_height = 0.18000000715255737
+candle_volume_alpha = 0.30000001192092896
+candle_volume_scale = [
+    110,
+    110,
+    110,
+]
+candle_volume_sides = true
+candle_volume_stacked = false
+candle_volume_tf_s = 0
+candle_volume_scale_right = false
+candle_volume_labels_over = false
+hvol_enabled = false
+hvol_tf_s = 0
+hvol_price_frame_pct = 0.10000000149011612
+hvol_width = 0.20000000298023224
+hvol_side = "right"
+hvol_stacked = false
+hvol_overlay = false
+hvol_hide_captions = false
+book_kind = "bars"
+ladder_big_pct = 50
+book_width_px = 220.0
+
+[chart_defaults_addto.chart_graphics.cursor_labels]
+order_size = "chart-above"
+depth = "book-above"
+percent = "book-below"
+order = [
+    "order-size",
+    "depth",
+    "percent",
+]
+
+[chart_defaults_addto.chart_labels]
+rev = 1
+
+[[chart_defaults_addto.chart_labels.rows]]
+name = "Инструмент"
+zone = "zone_top"
+align = "right"
+flow = "column"
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "coin"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "core"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "venue"
+visible = false
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+size_mult = 1.0
+
+[[chart_defaults_addto.chart_labels.rows]]
+name = "Масштаб"
+zone = "zone_top"
+align = "left"
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "scale_badge"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+size_mult = 1.7000000476837158
+
+[[chart_defaults_addto.chart_labels.rows]]
+name = "Дельты монеты"
+zone = "chart_top"
+align = "right"
+visible = false
+flow = "column"
+placement = "row"
+gap = 24
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "delta1h"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "delta24h"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows]]
+name = "Открытые ордера"
+zone = "chart_top"
+align = "left"
+visible = false
+placement = "row"
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "open_orders"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "open_pnl_money"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "open_pnl_pct"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "exposure"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows]]
+name = "Фандинг"
+zone = "chart_top"
+align = "left"
+visible = false
+gap = 8
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "funding"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "funding_in"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+caption = false
+
+[[chart_defaults_addto.chart_labels.rows]]
+preset = "arbitrage"
+zone = "chart_top"
+align = "left"
+visible = false
+flow = "column"
+gap = 8
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "arb_column"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+color_min_pct = 0.5
+
+[chart_defaults_addto.chart_labels.rows.parts.style.color]
+mode = "by_sign"
+
+[[chart_defaults_addto.chart_labels.rows]]
+name = "Детект"
+zone = "chart_top"
+align = "center"
+visible = false
+flow = "column"
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "detect_strategy"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "detect_msg"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[[chart_defaults_addto.chart_labels.rows]]
+preset = "strategy_filters"
+zone = "chart_top"
+align = "left"
+visible = false
+flow = "column"
+gap = 8
+
+[[chart_defaults_addto.chart_labels.rows.parts]]
+field = "strategy_filters"
+pnl_basis = "all"
+
+[chart_defaults_addto.chart_labels.rows.parts.style]
+
+[chart_defaults_compare.candle_view]
+tf_min = 1
+mode = 0
+trade_candles = 0
+hide_candles = 0
+trades_limit = 50000
+outline_px = 1.0
+wicks_in_zone = true
+neutral_in_zone = false
+
+[chart_defaults_compare.chart_graphics]
+trade_arrow_scale = 0.6000000238418579
+connector_thickness_px = 1.0
+show_real_trades = true
+show_emulator_trades = false
+trade_history_style = "marks"
+history_all_cores = false
+hide_closed_sell_line = false
+hide_order_move_history = false
+last_price_line = false
+mark_price_line = false
+moonshot_zone = true
+liquidations = true
+marker_scale = 0.699999988079071
+trade_volume_alpha = 0.3499999940395355
+trade_kind = "crosses"
+trade_merge_ms = 100
+trade_small_pct = 50
+candle_volume_style = 0
+candle_volume_height = 0.18000000715255737
+candle_volume_alpha = 0.30000001192092896
+candle_volume_scale = [
+    110,
+    110,
+    110,
+]
+candle_volume_sides = false
+candle_volume_stacked = false
+candle_volume_tf_s = 0
+candle_volume_scale_right = false
+candle_volume_labels_over = false
+hvol_enabled = false
+hvol_tf_s = 0
+hvol_price_frame_pct = 0.10000000149011612
+hvol_width = 0.20000000298023224
+hvol_side = "right"
+hvol_stacked = false
+hvol_overlay = false
+hvol_hide_captions = false
+book_kind = "bars"
+ladder_big_pct = 50
+book_width_px = 220.0
+
+[chart_defaults_compare.chart_graphics.cursor_labels]
+order_size = "chart-above"
+depth = "book-above"
+percent = "book-below"
+order = [
+    "order-size",
+    "depth",
+    "percent",
+]
+
+[chart_defaults_compare.chart_labels]
+rev = 1
+
+[[chart_defaults_compare.chart_labels.rows]]
+name = "Инструмент"
+zone = "zone_top"
+align = "right"
+flow = "column"
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "coin"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "core"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "venue"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+size_mult = 1.0
+
+[[chart_defaults_compare.chart_labels.rows]]
+name = "Масштаб"
+zone = "chart_top"
+align = "right"
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "scale_badge"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+size_mult = 1.7000000476837158
+
+[[chart_defaults_compare.chart_labels.rows]]
+name = "Дельты монеты"
+zone = "chart_top"
+align = "right"
+visible = false
+flow = "column"
+placement = "row"
+gap = 24
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "delta1h"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "delta24h"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows]]
+name = "Открытые ордера"
+zone = "chart_top"
+align = "left"
+placement = "row"
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "open_orders"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "open_pnl_money"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "open_pnl_pct"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "exposure"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows]]
+name = "Фандинг"
+zone = "chart_top"
+align = "left"
+visible = false
+gap = 8
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "funding"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "funding_in"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+caption = false
+
+[[chart_defaults_compare.chart_labels.rows]]
+preset = "arbitrage"
+zone = "chart_top"
+align = "left"
+flow = "column"
+gap = 8
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "arb_column"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+color_min_pct = 0.5
+size_mult = 1.25
+
+[chart_defaults_compare.chart_labels.rows.parts.style.color]
+mode = "by_sign"
+
+[[chart_defaults_compare.chart_labels.rows]]
+name = "Детект"
+zone = "chart_top"
+align = "center"
+visible = false
+flow = "column"
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "detect_strategy"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "detect_msg"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "order_strategy"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows]]
+zone = "zone_bottom"
+align = "right"
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "compare_delta"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows]]
+zone = "chart_bottom"
+align = "right"
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "act_panic_sell"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[[chart_defaults_compare.chart_labels.rows]]
+zone = "chart_bottom"
+align = "right"
+placement = "row"
+
+[[chart_defaults_compare.chart_labels.rows.parts]]
+field = "act_cancel_buy"
+pnl_basis = "all"
+
+[chart_defaults_compare.chart_labels.rows.parts.style]
+
+[chart_defaults_trade.candle_view]
+tf_min = 5
+mode = 0
+trade_candles = 2
+hide_candles = 1
+trades_limit = 50000
+outline_px = 1.0
+wicks_in_zone = true
+neutral_in_zone = true
+
+[chart_defaults_trade.chart_graphics]
+trade_arrow_scale = 2.0
+connector_thickness_px = 1.0
+show_real_trades = true
+show_emulator_trades = false
+trade_history_style = "moonbot-lines"
+history_all_cores = false
+hide_closed_sell_line = false
+hide_order_move_history = false
+last_price_line = true
+mark_price_line = true
+moonshot_zone = false
+liquidations = true
+marker_scale = 0.699999988079071
+trade_volume_alpha = 0.3499999940395355
+trade_kind = "crosses"
+trade_merge_ms = 100
+trade_small_pct = 50
+candle_volume_style = 0
+candle_volume_height = 0.18000000715255737
+candle_volume_alpha = 0.30000001192092896
+candle_volume_scale = [
+    110,
+    110,
+    110,
+]
+candle_volume_sides = false
+candle_volume_stacked = false
+candle_volume_tf_s = 0
+candle_volume_scale_right = false
+candle_volume_labels_over = false
+hvol_enabled = false
+hvol_tf_s = 0
+hvol_price_frame_pct = 0.10000000149011612
+hvol_width = 0.20000000298023224
+hvol_side = "right"
+hvol_stacked = false
+hvol_overlay = false
+hvol_hide_captions = false
+book_kind = "bars"
+ladder_big_pct = 50
+book_width_px = 220.0
+
+[chart_defaults_trade.chart_graphics.cursor_labels]
+order_size = "chart-above"
+depth = "book-above"
+percent = "book-below"
+order = [
+    "order-size",
+    "depth",
+    "percent",
+]
+

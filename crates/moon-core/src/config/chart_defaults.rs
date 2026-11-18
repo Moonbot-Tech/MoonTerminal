@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::auto_figures::AutoFiguresCfg;
 use super::chart_labels::ChartLabelsCfg;
 use super::layout::ChartGraphicsCfg;
 use crate::market::candles::CandleViewCfg;
@@ -127,6 +128,27 @@ impl ChartTabKind {
         }
     }
 
+    /// The auto figures this kind opens with when NOTHING has been stored for it, or `None` to
+    /// follow the Main default.
+    ///
+    /// Every kind but Main ships the shipped rows switched OFF (LinKvo, 18.11.2026: auto figures
+    /// show on Main only for now). Shipping it per kind, through the same mechanism as
+    /// [`Self::builtin_labels`], keeps the model per kind: turning a window's figures on later is a
+    /// stored value for that kind rather than a new branch — and no kind is ever frozen on a copy of
+    /// Main, because a kind that ships its own set has nothing to be separated from.
+    ///
+    /// Returns:
+    ///     The built-in set, shared and already repaired, or `None`.
+    pub fn builtin_auto_figures(self) -> Option<&'static AutoFiguresCfg> {
+        match self {
+            ChartTabKind::Main => None,
+            ChartTabKind::AddTo | ChartTabKind::Compare | ChartTabKind::Trade => {
+                static OFF: std::sync::OnceLock<AutoFiguresCfg> = std::sync::OnceLock::new();
+                Some(OFF.get_or_init(AutoFiguresCfg::shipped_off))
+            }
+        }
+    }
+
     /// The kind of a tab that is `detached` and/or `comparing`.
     ///
     /// The lock is asked FIRST: a comparison torn off into its own window is a comparison, and
@@ -177,6 +199,10 @@ pub struct ChartTabDefaults {
     /// Chart captions, from the labels popup.
     #[serde(deserialize_with = "de_lenient_field")]
     pub chart_labels: Option<ChartLabelsCfg>,
+    /// Auto figures, from the auto-figures popup. Absent follows this kind's built-in set —
+    /// [`ChartTabKind::builtin_auto_figures`] — and never Main's.
+    #[serde(deserialize_with = "de_lenient_field")]
+    pub auto_figures: Option<AutoFiguresCfg>,
 }
 
 /// Read one stored default, discarding only what cannot be read.

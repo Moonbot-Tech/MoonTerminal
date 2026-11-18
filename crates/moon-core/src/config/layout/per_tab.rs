@@ -238,6 +238,79 @@ impl WindowLayout {
         }
     }
 
+    /// The auto figures a tab of this kind opens with.
+    ///
+    /// Stored, else the kind's own shipped set, else Main's — the chain [`Self::chart_labels_for`]
+    /// walks. Today every kind but Main ships its own (switched off), so only Main ever falls
+    /// through to the base field; the chain is kept whole so that a kind which stops shipping one
+    /// costs an arm in `builtin_auto_figures` and nothing here.
+    pub fn auto_figures_for(
+        &self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> &super::auto_figures::AutoFiguresCfg {
+        self.kind_defaults(kind)
+            .and_then(|d| d.auto_figures.as_ref())
+            .or_else(|| kind.builtin_auto_figures())
+            .unwrap_or(&self.auto_figures)
+    }
+
+    /// The auto figures one kind holds OF ITS OWN, or `None` while it follows its built-in set.
+    ///
+    /// `None` for Main as well, exactly as [`Self::stored_chart_labels`] answers: Main's value is
+    /// the base field, which a migration reads directly.
+    pub fn stored_auto_figures(
+        &self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> Option<&super::auto_figures::AutoFiguresCfg> {
+        self.kind_defaults(kind)?.auto_figures.as_ref()
+    }
+
+    /// Store the auto-figures default for one kind, reporting whether it actually moved.
+    ///
+    /// The separation pass runs as it does for the captions and skips every kind that ships its
+    /// own set — today all of them but Main — so setting Main's default never freezes another kind
+    /// on a copy.
+    pub fn set_auto_figures_default(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: super::auto_figures::AutoFiguresCfg,
+    ) -> bool {
+        let split = self.split_defaults(
+            |d| &mut d.auto_figures,
+            |l, k| l.auto_figures_for(k).clone(),
+            |k| k.builtin_auto_figures().is_some(),
+        );
+        // `|` rather than `||`, for the reason `set_chart_labels_default` gives.
+        split | self.store_auto_figures(kind, value)
+    }
+
+    /// Store one kind's auto figures and NOTHING else; see [`Self::store_chart_labels`].
+    pub fn store_auto_figures(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+        value: super::auto_figures::AutoFiguresCfg,
+    ) -> bool {
+        match self.kind_defaults_mut(kind) {
+            Some(d) => d.auto_figures.replace(value.clone()) != Some(value),
+            None => std::mem::replace(&mut self.auto_figures, value.clone()) != value,
+        }
+    }
+
+    /// Put one kind's auto figures back to the shipped set; see
+    /// [`Self::reset_candle_view_default`]. A non-Main kind's slot is emptied, which hands it its
+    /// own built-in set back rather than Main's.
+    pub fn reset_auto_figures_default(
+        &mut self,
+        kind: super::chart_defaults::ChartTabKind,
+    ) -> bool {
+        match self.kind_defaults_mut(kind) {
+            Some(d) => d.auto_figures.take().is_some(),
+            None => {
+                self.set_auto_figures_default(kind, super::auto_figures::AutoFiguresCfg::shipped())
+            }
+        }
+    }
+
     /// This kind's own defaults, or `None` for Main, whose defaults are the base fields.
     pub(super) fn kind_defaults(
         &self,
