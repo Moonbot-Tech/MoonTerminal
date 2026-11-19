@@ -37,9 +37,7 @@ use std::time::{Duration, Instant};
 
 use gpui::Context;
 use moon_chart::auto_figures::tf::AutoTf;
-use moon_core::config::auto_figures::{
-    AutoFigureRow, AutoFiguresCfg, DetectorParams, RowDetector, TfId, TfSource,
-};
+use moon_core::config::auto_figures::{AutoFigureRow, AutoFiguresCfg, RowDetector, TfId, TfSource};
 use moon_core::session::CoreId;
 
 use super::ChartPanel;
@@ -342,16 +340,6 @@ fn realign(slots: &mut Vec<RowSlot>, map: &[Option<usize>]) {
         .collect();
 }
 
-/// The touch tolerance a row's zone band shows, in % of price; `0` for a detector without one.
-fn tolerance_pct(params: &DetectorParams) -> f32 {
-    match params {
-        DetectorParams::Swing(p) => p.tolerance_pct,
-        DetectorParams::Squeeze(p) => p.level.tolerance_pct,
-        DetectorParams::Trend(p) => p.tolerance_pct,
-        DetectorParams::PeriodExtreme(_) => 0.0,
-    }
-}
-
 impl ChartPanel {
     /// Evaluate every row key of every pane, start a job for the rows whose key moved, and keep
     /// the wake for the next candle close armed. Cheap and idempotent: called from every wake the
@@ -648,7 +636,6 @@ impl ChartPanel {
                 take: row.take,
                 marks: row.events,
                 policy: params.broken_policy(),
-                tolerance_pct: tolerance_pct(params),
                 outcome: outcome.clone(),
                 kept: Vec::new(),
                 ref_ms: now_ms,

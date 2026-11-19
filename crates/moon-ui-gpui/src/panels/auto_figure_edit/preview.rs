@@ -63,7 +63,10 @@ pub(super) fn preview_tf(row: &AutoFigureRow, params: &DetectorParams) -> TfId {
         TfSource::Auto => TfId::M15.min(cap),
     };
     match params {
-        DetectorParams::PeriodExtreme(_) => TfId::ALL
+        // The calendar kinds read whole days or weeks, so they step up the same way.
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_) => TfId::ALL
             .into_iter()
             .filter(|tf| *tf >= wanted && *tf <= cap)
             .find(|tf| params.bars_needed(*tf) as usize <= MAX_BARS)
@@ -118,17 +121,6 @@ pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64) -> Vec<ChartCandle> {
         .collect()
 }
 
-/// The touch tolerance a row's zone band shows, in % of price — the same reading the chart's
-/// publication makes (`panels::chart::auto_figures`), which keeps its own copy private.
-fn tolerance_pct(params: &DetectorParams) -> f32 {
-    match params {
-        DetectorParams::Swing(p) => p.tolerance_pct,
-        DetectorParams::Squeeze(p) => p.level.tolerance_pct,
-        DetectorParams::Trend(p) => p.tolerance_pct,
-        DetectorParams::PeriodExtreme(_) => 0.0,
-    }
-}
-
 /// Run the row over the demo candles and build what it draws. `row` must already be sanitized:
 /// the preview shows what the chart would draw, and the chart only ever sees sanitized rows.
 ///
@@ -153,10 +145,10 @@ pub(super) fn compute(row: &AutoFigureRow, now_ms: f64, theme: &ChartTheme) -> O
         };
         let above = f.shape.price_at(now_ms).is_some_and(|p| p >= ref_price);
         let rgb = resolve_rgb(row.style.color, above, theme);
+        // The zone band comes from the tolerance the detector reports with each figure.
         append_shapes(
             f,
             &ResolvedStyle::new(&row.style, rgb),
-            tolerance_pct(params),
             now_ms,
             &mut figures,
             &mut bands,

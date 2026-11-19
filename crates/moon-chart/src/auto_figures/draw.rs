@@ -15,7 +15,7 @@ use moon_core::config::auto_figures::{Extend, LineStyle};
 use moon_core::figures::tools::{HLine, HorizontalRay, Ray, Segment};
 use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind, LineKind};
 
-use super::{Found, FoundShape, pct_frac, positive, within};
+use super::{Found, FoundShape, positive, within};
 use crate::figures::FigureBand;
 
 /// A row's line style with its colour already resolved, ready to stamp onto figures.
@@ -52,19 +52,19 @@ impl ResolvedStyle {
 /// Args:
 ///     found: The detector's figure.
 ///     style: Its row's resolved style.
-///     tolerance_pct: The row's touch tolerance, in % of price — the band a zone shows. `0` draws
-///         the band from the touches' spread alone.
 ///     ref_ms: The reference time (the detector run's "now"): where a squeeze's sloped half stops
 ///         when its apex lies further ahead.
 ///     figures: Receives the lines, in draw order.
 ///     bands: Receives the zone bands.
 ///
-/// A figure whose geometry is not finite and positive draws nothing: these come from market data,
-/// and a NaN reaching the instance buffers would poison the whole draw call, not just this line.
+/// A zone band is as wide as the tolerance the detector grouped the touches by
+/// ([`Found::tolerance_frac`]) — not one re-read from the row's parameters, which under an ATR
+/// tolerance would be the wrong unit. A figure whose geometry is not finite and positive draws
+/// nothing: these come from market data, and a NaN reaching the instance buffers would poison the
+/// whole draw call, not just this line.
 pub fn append_shapes(
     found: &Found,
     style: &ResolvedStyle,
-    tolerance_pct: f32,
     ref_ms: f64,
     figures: &mut Vec<Figure>,
     bands: &mut Vec<FigureBand>,
@@ -87,7 +87,7 @@ pub fn append_shapes(
                 return;
             };
             horizontal(price, found, style.extend, &mut push);
-            zone(price, found, style, tolerance_pct, bands);
+            zone(price, found, style, bands);
         }
         FoundShape::Sloped {
             t0_ms,
@@ -116,7 +116,7 @@ pub fn append_shapes(
                 style.extend,
                 &mut push,
             );
-            zone(level, found, style, tolerance_pct, bands);
+            zone(level, found, style, bands);
         }
     }
 }
@@ -238,22 +238,22 @@ fn squeeze_slope(
 
 /// The tolerance band around a level, when the row draws one.
 ///
-/// It spans the level's own touches — those within `tolerance_pct` of it, which is every pivot the
-/// detector grouped into the level — and at least `tolerance_pct` of the level centred on it:
-/// what "the level" meant to the detector. A squeeze's sloped-line pivots lie outside that
-/// tolerance by construction and never stretch the band toward the converging line. Same time
-/// span as the line.
-fn zone(
-    price: f64,
-    found: &Found,
-    style: &ResolvedStyle,
-    tolerance_pct: f32,
-    bands: &mut Vec<FigureBand>,
-) {
+/// It spans the level's own touches — those within the found tolerance (`Found::tolerance_frac`) of
+/// it, which is every pivot the detector grouped into the level — and at least that tolerance of
+/// the level centred on it: what "the level" meant to the detector. A squeeze's sloped-line pivots
+/// lie outside that tolerance by construction and never stretch the band toward the converging
+/// line. A tolerance of `0` (a detector without one) draws the band from the touches' spread
+/// alone. Same time span as the line.
+fn zone(price: f64, found: &Found, style: &ResolvedStyle, bands: &mut Vec<FigureBand>) {
     let Some(alpha) = style.zone_alpha.filter(|a| a.is_finite() && *a > 0.0) else {
         return;
     };
-    let frac = pct_frac(tolerance_pct);
+    // Not a positive finite fraction: no band beyond the touches, never a widened or NaN one.
+    let frac = if found.tolerance_frac.is_finite() && found.tolerance_frac > 0.0 {
+        found.tolerance_frac
+    } else {
+        0.0
+    };
     let half = price * frac / 2.0;
     let (mut lo, mut hi) = (price - half, price + half);
     for t in &found.touches {

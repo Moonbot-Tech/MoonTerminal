@@ -4,13 +4,15 @@
 //! ordinary row. The row remembers which preset it came from only so its name can be translated.
 //!
 //! The shipped set is LinKvo's decision of 18.11.2026: on by default, four rows — 1h levels, 4h
-//! levels in another colour and heavier, the squeeze, and the day's extremes.
+//! levels in another colour and heavier, the squeeze, and the day's extremes. The volume, period
+//! and round-price presets of 19.11.2026 are offered in the "Add" menu only and never join it.
 
 use serde::{Deserialize, Serialize};
 
 use super::{
     AutoFigureRow, DetectorParams, ExtremePeriod, ExtremeWhich, LineStyle, PeriodExtremeParams,
-    SqueezeParams, SwingParams, TfId, TfSource, TrendParams,
+    PeriodLevelParams, ProfilePeriod, RoundLevelsParams, SqueezeParams, SwingParams, TfId,
+    TfSource, TrendParams, VolumeProfileParams,
 };
 use crate::config::chart_labels::LabelColor;
 use crate::figures::LineKind;
@@ -50,17 +52,31 @@ pub enum AutoFigurePreset {
     PrevDayExtremes,
     /// Sloped support and resistance lines through pivots. Offered, not shipped.
     TrendLines,
+    /// Yesterday's volume profile (UTC): its POC and the two edges of its value area. Offered, not
+    /// shipped.
+    PrevDayProfile,
+    /// The POCs of the last five UTC days that price has not traded at since — and nothing else.
+    /// Offered, not shipped.
+    NakedPoc,
+    /// Yesterday's close and this week's open (UTC). Offered, not shipped.
+    PeriodLevels,
+    /// Round prices on the half-order grid within 10 % of the last close. Offered, not shipped.
+    RoundLevels,
 }
 
 impl AutoFigurePreset {
     /// Every preset, in "Add" menu order.
-    pub const ALL: [AutoFigurePreset; 6] = [
+    pub const ALL: [AutoFigurePreset; 10] = [
         AutoFigurePreset::Levels1h,
         AutoFigurePreset::Levels4h,
         AutoFigurePreset::Squeeze,
         AutoFigurePreset::DayExtremes,
         AutoFigurePreset::PrevDayExtremes,
         AutoFigurePreset::TrendLines,
+        AutoFigurePreset::PrevDayProfile,
+        AutoFigurePreset::NakedPoc,
+        AutoFigurePreset::PeriodLevels,
+        AutoFigurePreset::RoundLevels,
     ];
 
     /// The rows a chart ships with, in draw order.
@@ -81,6 +97,10 @@ impl AutoFigurePreset {
             AutoFigurePreset::DayExtremes => "auto_figures.preset.day_extremes",
             AutoFigurePreset::PrevDayExtremes => "auto_figures.preset.prev_day_extremes",
             AutoFigurePreset::TrendLines => "auto_figures.preset.trend_lines",
+            AutoFigurePreset::PrevDayProfile => "auto_figures.preset.prev_day_profile",
+            AutoFigurePreset::NakedPoc => "auto_figures.preset.naked_poc",
+            AutoFigurePreset::PeriodLevels => "auto_figures.preset.period_levels",
+            AutoFigurePreset::RoundLevels => "auto_figures.preset.round_levels",
         }
     }
 
@@ -152,6 +172,60 @@ impl AutoFigurePreset {
                 TfSource::Auto,
                 LineStyle {
                     color: LabelColor::BySign,
+                    ..LineStyle::default()
+                },
+            ),
+            AutoFigurePreset::PrevDayProfile => (
+                DetectorParams::VolumeProfile(VolumeProfileParams {
+                    period: ProfilePeriod::PrevDay,
+                    ..VolumeProfileParams::default()
+                }),
+                // A profile spreads each bar's volume over its range, so its resolution is the
+                // bar: five-minute bars put 288 of them into the day's 100 bins, fifteen-minute
+                // ones fewer than one per bin. Two days of them is 577 bars.
+                TfSource::Fixed(TfId::M5),
+                LineStyle {
+                    color: LabelColor::Fixed(rgb(palette::ORANGE)),
+                    line_kind: LineKind::Dash,
+                    ..LineStyle::default()
+                },
+            ),
+            AutoFigurePreset::NakedPoc => (
+                DetectorParams::VolumeProfile(VolumeProfileParams {
+                    period: ProfilePeriod::Day,
+                    poc: false,
+                    vah: false,
+                    val: false,
+                    naked_poc_days: 5,
+                    ..VolumeProfileParams::default()
+                }),
+                // The same resolution as the day's profile; six days of five-minute bars (1 729)
+                // fit the 15-day cache with room.
+                TfSource::Fixed(TfId::M5),
+                LineStyle {
+                    color: LabelColor::Fixed(rgb(palette::ORANGE)),
+                    line_kind: LineKind::Dot,
+                    thickness: 1.5,
+                    ..LineStyle::default()
+                },
+            ),
+            AutoFigurePreset::PeriodLevels => (
+                DetectorParams::PeriodLevel(PeriodLevelParams::default()),
+                // The prices are facts of the calendar; the timeframe only sets how fast a break
+                // of them is read, the same one-bar lag as the day's extremes.
+                TfSource::Fixed(TfId::M5),
+                LineStyle {
+                    line_kind: LineKind::DashDotDot,
+                    ..LineStyle::default()
+                },
+            ),
+            AutoFigurePreset::RoundLevels => (
+                DetectorParams::RoundLevels(RoundLevelsParams::default()),
+                // The grid comes from the price alone; the timeframe only feeds the events, so it
+                // follows the chart's zoom.
+                TfSource::Auto,
+                LineStyle {
+                    line_kind: LineKind::Dot,
                     ..LineStyle::default()
                 },
             ),

@@ -25,12 +25,15 @@ use moon_core::market::candles::ChartCandle;
 pub mod draw;
 pub mod events;
 pub mod extremes;
+pub mod period_levels;
 pub mod pivots;
+pub mod round_levels;
 pub mod squeeze;
 pub mod swing;
 pub mod take;
 pub mod tf;
 pub mod trend;
+pub mod volume_profile;
 
 #[cfg(test)]
 mod test_bars;
@@ -138,6 +141,17 @@ pub struct Found {
     /// level's break. A previous period's extreme reports it informationally and is never
     /// dropped: a period's high is a fact, not a hypothesis a break disproves.
     pub broken: Option<Broken>,
+    /// Quote volume traded on the bars that touched the figure — the sum of their
+    /// `ChartCandle::quote_volume`, each touching bar ONCE even when it touched twice (a squeeze's
+    /// level and its line on one bar). What `StrengthBasis::Volume` ranks by. `0` for a figure
+    /// without touches, and for bars whose source reports no turnover.
+    pub touch_volume: f64,
+    /// The tolerance the detector actually grouped touches by, as a FRACTION of price (`0.0025` =
+    /// 0.25 %) — under `ToleranceUnit::Atr` the ATR share already converted with this run's ATR.
+    /// The zone band is drawn from this, never re-derived from the row's parameters, so it shows
+    /// the band the detector used whatever the unit. A squeeze reports its LEVEL's tolerance (the
+    /// band is drawn around the level); `0` for a detector without a tolerance.
+    pub tolerance_frac: f64,
 }
 
 /// What a detector legitimately needs beyond its bars and parameters.
@@ -184,6 +198,9 @@ pub static REGISTRY: &[&dyn Detector] = &[
     &extremes::PeriodExtreme,
     &trend::Trend,
     &squeeze::Squeeze,
+    &volume_profile::VolumeProfile,
+    &period_levels::PeriodLevel,
+    &round_levels::RoundLevels,
 ];
 
 /// Run the detector `params` names over `bars`.
@@ -259,6 +276,24 @@ pub(crate) fn pct_frac(pct: f32) -> f64 {
     } else {
         0.0
     }
+}
+
+/// Quote volume of the bars `touches` were stamped on: each touch's bar found by its open time in
+/// `bars` (sorted ascending, as every detector's input is), each bar counted once. A touch whose
+/// bar is not in `bars`, and a volume that is not a non-negative finite number, add nothing.
+/// Cost O(T log n).
+pub(crate) fn touch_volume(bars: &[ChartCandle], touches: &[Touch]) -> f64 {
+    let mut times: Vec<f64> = touches.iter().map(|t| t.t_ms).collect();
+    times.sort_by(f64::total_cmp);
+    times.dedup();
+    times
+        .into_iter()
+        .filter_map(|t| {
+            let ix = bars.binary_search_by(|b| b.t_open_ms.total_cmp(&t)).ok()?;
+            let v = f64::from(bars[ix].quote_volume);
+            (v.is_finite() && v > 0.0).then_some(v)
+        })
+        .sum()
 }
 
 /// `price` lies within `frac` of `line`, measured as a fraction of the LINE's price.

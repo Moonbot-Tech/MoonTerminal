@@ -5,7 +5,7 @@
 //! ([`super::FoundShape::price_at`]: the level of a horizontal or squeeze, the projection of a sloped
 //! line). A line exactly at the reference price counts as above it. Cost O(F log F).
 
-use moon_core::config::auto_figures::{Take, TakeOrder, TakeSide};
+use moon_core::config::auto_figures::{StrengthBasis, Take, TakeOrder, TakeSide};
 
 use super::Found;
 
@@ -28,16 +28,23 @@ pub fn select(found: &[Found], take: &Take, ref_price: f64, at_ms: f64) -> Vec<u
     }
     let count = usize::from(take.count);
     // (index, distance to the reference, strength) per side.
-    let mut above: Vec<(usize, f64, f32)> = Vec::new();
-    let mut below: Vec<(usize, f64, f32)> = Vec::new();
+    let mut above: Vec<(usize, f64, f64)> = Vec::new();
+    let mut below: Vec<(usize, f64, f64)> = Vec::new();
     for (i, f) in found.iter().enumerate() {
         let Some(price) = f.shape.price_at(at_ms) else {
             continue;
         };
-        let strength = if f.strength.is_finite() {
-            f.strength
+        // What "strongest" means for this row: the detector's own rank, or the money traded on
+        // the touching bars. Widened to f64 so a large volume keeps its digits; a non-finite
+        // value ranks last rather than poisoning the sort.
+        let strength = match take.strength {
+            StrengthBasis::Touches => f64::from(f.strength),
+            StrengthBasis::Volume => f.touch_volume,
+        };
+        let strength = if strength.is_finite() {
+            strength
         } else {
-            f32::NEG_INFINITY
+            f64::NEG_INFINITY
         };
         let row = (i, (price - ref_price).abs(), strength);
         if price >= ref_price {
@@ -46,7 +53,7 @@ pub fn select(found: &[Found], take: &Take, ref_price: f64, at_ms: f64) -> Vec<u
             below.push(row);
         }
     }
-    let rank = |v: &mut Vec<(usize, f64, f32)>| {
+    let rank = |v: &mut Vec<(usize, f64, f64)>| {
         v.sort_by(|a, b| match take.order {
             TakeOrder::Nearest => a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)),
             TakeOrder::Strongest => {

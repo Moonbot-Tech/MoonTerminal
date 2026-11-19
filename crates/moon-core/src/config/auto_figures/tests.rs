@@ -190,9 +190,12 @@ fn an_edited_row_writes_only_what_changed() {
 
 /// A detector a newer build wrote is kept and written back as it was, every parameter included,
 /// and the row it sits in is listed but never drawn.
+///
+/// The kind is an invented one (`density_level`, the planned order-book levels): this test used
+/// `volume_profile` until that kind became known, and a kind this build runs is read, not kept.
 #[test]
 fn an_unknown_detector_kind_round_trips_verbatim() {
-    let detector = "kind = \"volume_profile\"\nbins = 48\nedge_pct = 0.75\n\
+    let detector = "kind = \"density_level\"\nbins = 48\nedge_pct = 0.75\n\
                     sides = [\"buy\", \"sell\"]\nnested = { depth = 3 }\n";
     let file = format!(
         "[[auto_figures.rows]]\nname = \"From a newer build\"\n\
@@ -206,7 +209,7 @@ fn an_unknown_detector_kind_round_trips_verbatim() {
             row.detector
         );
     };
-    assert_eq!(unknown.kind(), "volume_profile");
+    assert_eq!(unknown.kind(), "density_level");
     assert!(!row.is_drawn());
     assert!(!doc.auto_figures.is_active());
 
@@ -307,7 +310,9 @@ fn hostile() -> AutoFiguresCfg {
         lookback_bars: 0,
         pivot_left: 0,
         pivot_right: 255,
+        tolerance_unit: ToleranceUnit::Atr,
         tolerance_pct: f32::NAN,
+        tolerance_atr: f32::NAN,
         min_touches: 0,
         broken: BrokenPolicy::Keep { bars: u16::MAX },
     }));
@@ -316,6 +321,8 @@ fn hostile() -> AutoFiguresCfg {
     swing.style.thickness = f32::NAN;
     swing.style.zone = Some(5.0);
     swing.events.approach_pct = -1.0;
+    swing.events.stop_hunt_pct = f32::NAN;
+    swing.events.confluence_pct = 1e9;
     swing.caption.parts = vec![
         CaptionPart::Price,
         CaptionPart::Tf,
@@ -328,20 +335,60 @@ fn hostile() -> AutoFiguresCfg {
         min_slope_pct_per_bar: 5.0,
         max_slope_pct_per_bar: -1.0,
         tolerance_pct: f32::INFINITY,
+        tolerance_atr: 1e9,
         ..TrendParams::default()
     }));
     trend.style.thickness = -4.0;
     trend.style.zone = Some(f32::NAN);
     trend.events.approach_pct = f32::NAN;
+    trend.events.stop_hunt_pct = -1.0;
+    trend.events.confluence_pct = f32::INFINITY;
 
     let squeeze = AutoFigureRow::new(DetectorParams::Squeeze(SqueezeParams {
         min_trend_touches: 0,
         trend_tolerance_pct: -3.0,
+        trend_tolerance_atr: -1.0,
         pressed_pct: 1e9,
         ..SqueezeParams::default()
     }));
 
-    let mut rows = vec![swing, trend, squeeze];
+    let profile = AutoFigureRow::new(DetectorParams::VolumeProfile(VolumeProfileParams {
+        value_area_pct: f32::NAN,
+        naked_poc_days: u8::MAX,
+        bins: 1,
+        ..VolumeProfileParams::default()
+    }));
+    let mut profile_wide = AutoFigureRow::new(DetectorParams::VolumeProfile(VolumeProfileParams {
+        value_area_pct: 400.0,
+        bins: u16::MAX,
+        ..VolumeProfileParams::default()
+    }));
+    // A profile cannot answer on four-hour bars; sanitize pulls the pin down to H1.
+    profile_wide.tf = TfSource::Fixed(TfId::H4);
+    let round = AutoFigureRow::new(DetectorParams::RoundLevels(RoundLevelsParams {
+        grid: RoundGrid::Minor,
+        range_pct: f32::NEG_INFINITY,
+    }));
+    let round_wide = AutoFigureRow::new(DetectorParams::RoundLevels(RoundLevelsParams {
+        grid: RoundGrid::Major,
+        range_pct: 1e6,
+    }));
+    let mut day_open = AutoFigureRow::new(DetectorParams::PeriodLevel(PeriodLevelParams {
+        day_open: true,
+        ..PeriodLevelParams::default()
+    }));
+    day_open.tf = TfSource::Fixed(TfId::D1);
+
+    let mut rows = vec![
+        swing,
+        trend,
+        squeeze,
+        profile,
+        profile_wide,
+        round,
+        round_wide,
+        day_open,
+    ];
     rows.extend(std::iter::repeat_n(AutoFigurePreset::Levels1h.row(), 100));
     AutoFiguresCfg {
         enabled: true,
@@ -415,7 +462,335 @@ fn sanitize_repairs_impossible_values() {
     };
     assert_eq!(squeeze.min_trend_touches, 2);
     assert_eq!(squeeze.trend_tolerance_pct, 0.01);
+    assert_eq!(squeeze.trend_tolerance_atr, AF_TOLERANCE_ATR_MIN);
     assert_eq!(squeeze.pressed_pct, 10.0);
+}
+
+/// What `sanitize` repairs each impossible value of the fields added on 19.11.2026 TO: the ATR
+/// shares, the new event distances, and the volume-profile and round-price parameters — NaN to
+/// the default, the rest into the documented bounds — and the timeframe pins the new kinds cannot
+/// answer on.
+///
+/// Breakage: a new field left out of the repair (a NaN tolerance reaching a detector), a NaN
+/// clamped instead of replaced (`f32::clamp` passes it through), or a bound swapped.
+#[test]
+fn sanitize_repairs_the_new_fields() {
+    let mut cfg = hostile();
+    cfg.sanitize();
+
+    let swing_row = &cfg.rows[0];
+    assert_eq!(swing_row.events.stop_hunt_pct, 0.3);
+    assert_eq!(swing_row.events.confluence_pct, AF_PCT_MAX);
+    let Some(DetectorParams::Swing(swing)) = swing_row.detector.known() else {
+        panic!();
+    };
+    assert_eq!(swing.tolerance_unit, ToleranceUnit::Atr);
+    assert_eq!(swing.tolerance_atr, 0.5);
+
+    let trend_row = &cfg.rows[1];
+    assert_eq!(trend_row.events.stop_hunt_pct, AF_TOLERANCE_MIN);
+    assert_eq!(trend_row.events.confluence_pct, 0.3);
+    let Some(DetectorParams::Trend(trend)) = trend_row.detector.known() else {
+        panic!();
+    };
+    assert_eq!(trend.tolerance_atr, AF_TOLERANCE_ATR_MAX);
+
+    let Some(DetectorParams::VolumeProfile(narrow)) = cfg.rows[3].detector.known() else {
+        panic!("{:?}", cfg.rows[3].detector);
+    };
+    assert_eq!(narrow.value_area_pct, 70.0);
+    assert_eq!(narrow.naked_poc_days, AF_NAKED_POC_DAYS_MAX);
+    assert_eq!(narrow.bins, AF_PROFILE_BINS_MIN);
+    let Some(DetectorParams::VolumeProfile(wide)) = cfg.rows[4].detector.known() else {
+        panic!("{:?}", cfg.rows[4].detector);
+    };
+    assert_eq!(wide.value_area_pct, AF_VALUE_AREA_MAX);
+    assert_eq!(wide.bins, AF_PROFILE_BINS_MAX);
+    assert_eq!(cfg.rows[4].tf, TfSource::Fixed(TfId::H1));
+
+    let Some(DetectorParams::RoundLevels(round)) = cfg.rows[5].detector.known() else {
+        panic!("{:?}", cfg.rows[5].detector);
+    };
+    assert_eq!(round.range_pct, 10.0);
+    assert_eq!(round.grid, RoundGrid::Minor);
+    let Some(DetectorParams::RoundLevels(round)) = cfg.rows[6].detector.known() else {
+        panic!("{:?}", cfg.rows[6].detector);
+    };
+    assert_eq!(round.range_pct, AF_ROUND_RANGE_MAX);
+
+    // A day's open is never a closed daily bar: the pin comes down to H4.
+    assert_eq!(cfg.rows[7].tf, TfSource::Fixed(TfId::H4));
+}
+
+/// A row as the previous build wrote it — `take` and `events` whole, a swing detector without a
+/// tolerance unit — loads with every field added since at its default, keeps what it stated, and
+/// is written back stating only what differs.
+///
+/// Spelled out by hand rather than produced by today's writer, which already knows the new fields
+/// and would prove nothing. Breakage: a new field without a default (the old row fails to load or
+/// is dropped), or the take and event tables written whole again, freezing today's defaults of
+/// the new fields into every edited row.
+#[test]
+fn a_row_written_before_the_new_fields_loads_with_their_defaults() {
+    let file = r#"
+[[auto_figures.rows]]
+name = "old"
+
+[auto_figures.rows.take]
+count = 3
+side = "above"
+order = "strongest"
+
+[auto_figures.rows.events]
+approach = true
+squeeze = true
+breakout = false
+false_break = true
+bounce = true
+approach_pct = 0.5
+
+[auto_figures.rows.detector]
+kind = "swing"
+tolerance_pct = 0.375
+"#;
+    let doc: Doc = toml::from_str(file).expect("an old row loads");
+    let row = &doc.auto_figures.rows[0];
+    assert_eq!(row.name, "old");
+    assert_eq!(
+        row.take,
+        Take {
+            count: 3,
+            side: TakeSide::Above,
+            order: TakeOrder::Strongest,
+            strength: StrengthBasis::Touches,
+        }
+    );
+    assert!(!row.events.breakout);
+    assert_eq!(row.events.approach_pct, 0.5);
+    assert!(row.events.role_flip && row.events.stop_hunt && row.events.confluence);
+    assert_eq!(row.events.stop_hunt_pct, 0.3);
+    assert_eq!(row.events.confluence_pct, 0.3);
+    let Some(DetectorParams::Swing(swing)) = row.detector.known() else {
+        panic!("{:?}", row.detector);
+    };
+    assert_eq!(swing.tolerance_pct, 0.375);
+    assert_eq!(swing.tolerance_unit, ToleranceUnit::Pct);
+    assert_eq!(swing.tolerance_atr, 0.5);
+
+    let (text, back) = round_trip(&doc.auto_figures);
+    assert_eq!(back, doc.auto_figures);
+    let written = &written_table(&text)["rows"][0];
+    let table = |s: &str| toml::Value::Table(toml::from_str(s).unwrap());
+    assert_eq!(
+        written["take"],
+        table(
+            r#"count = 3
+side = "above"
+order = "strongest""#
+        )
+    );
+    assert_eq!(
+        written["events"],
+        table("breakout = false\napproach_pct = 0.5")
+    );
+    assert_eq!(
+        written["detector"],
+        table(
+            r#"kind = "swing"
+tolerance_pct = 0.375"#
+        )
+    );
+}
+
+/// A value of a take or event field this build cannot read costs that field alone — the reason
+/// "strongest by volume" is a field and not a third order. Breakage: `take` read as one struct
+/// again, where a newer build's `strength` would reset the row's count and side too.
+#[test]
+fn an_unreadable_take_or_event_field_costs_only_itself() {
+    let file = r#"
+[[auto_figures.rows]]
+take = { count = 4, side = "below", strength = "liquidity" }
+events = { stop_hunt = false, confluence_pct = "near", approach_pct = 0.75 }
+detector = { kind = "swing" }
+"#;
+    let doc: Doc = toml::from_str(file).expect("loads");
+    let row = &doc.auto_figures.rows[0];
+    assert_eq!(row.take.count, 4);
+    assert_eq!(row.take.side, TakeSide::Below);
+    assert_eq!(row.take.strength, StrengthBasis::Touches);
+    assert!(!row.events.stop_hunt);
+    assert_eq!(row.events.confluence_pct, 0.3);
+    assert_eq!(row.events.approach_pct, 0.75);
+}
+
+/// Every new detector kind, and every new option of the old ones, survives a save and a load —
+/// and each table states only what differs from its defaults.
+///
+/// Breakage: a kind missing from `DetectorParams` (the row would be kept as unknown and never
+/// drawn), a renamed serde tag (an existing profile would lose its rows' kind), or a new field
+/// that does not round-trip. The values are exact in `f32`, so the written numbers compare
+/// exactly.
+#[test]
+fn the_new_kinds_and_options_round_trip() {
+    let mut swing_atr = AutoFigureRow::new(DetectorParams::Swing(SwingParams {
+        tolerance_unit: ToleranceUnit::Atr,
+        tolerance_atr: 0.75,
+        ..SwingParams::default()
+    }));
+    swing_atr.take.order = TakeOrder::Strongest;
+    swing_atr.take.strength = StrengthBasis::Volume;
+    swing_atr.events.role_flip = false;
+    swing_atr.events.stop_hunt_pct = 0.625;
+    swing_atr.events.confluence_pct = 0.125;
+    let mut squeeze = SqueezeParams::default();
+    squeeze.level.tolerance_unit = ToleranceUnit::Atr;
+    squeeze.trend_tolerance_atr = 0.25;
+    let profile = DetectorParams::VolumeProfile(VolumeProfileParams {
+        period: ProfilePeriod::PrevDay,
+        vah: false,
+        value_area_pct: 68.0,
+        naked_poc_days: 3,
+        bins: 150,
+        ..VolumeProfileParams::default()
+    });
+    let level = DetectorParams::PeriodLevel(PeriodLevelParams {
+        prev_day_close: false,
+        day_open: true,
+        week_open: true,
+        prev_week_close: true,
+    });
+    let round = DetectorParams::RoundLevels(RoundLevelsParams {
+        grid: RoundGrid::Major,
+        range_pct: 4.0,
+    });
+    let cfg = AutoFiguresCfg {
+        enabled: true,
+        rows: vec![
+            swing_atr,
+            AutoFigureRow::new(DetectorParams::Squeeze(squeeze)),
+            AutoFigureRow::new(profile),
+            AutoFigureRow::new(level),
+            AutoFigureRow::new(round),
+            AutoFigureRow::new(DetectorKind::RoundLevels.default_params()),
+        ],
+    };
+    let mut sanitized = cfg.clone();
+    sanitized.sanitize();
+    assert_eq!(sanitized, cfg, "the test values are already in range");
+
+    let (text, back) = round_trip(&cfg);
+    assert_eq!(back, cfg);
+    let rows = written_table(&text)["rows"].clone();
+    let detector = |ix: usize| rows[ix]["detector"].clone();
+    let table = |s: &str| toml::Value::Table(toml::from_str(s).unwrap());
+    assert_eq!(
+        detector(0),
+        table(
+            r#"kind = "swing"
+tolerance_unit = "atr"
+tolerance_atr = 0.75"#
+        )
+    );
+    assert_eq!(
+        detector(2),
+        table(
+            r#"kind = "volume_profile"
+period = "prev_day"
+vah = false
+value_area_pct = 68.0
+naked_poc_days = 3
+bins = 150"#
+        )
+    );
+    assert_eq!(
+        detector(3),
+        table(
+            r#"kind = "period_level"
+prev_day_close = false
+day_open = true
+prev_week_close = true"#
+        )
+    );
+    assert_eq!(
+        detector(4),
+        table(
+            r#"kind = "round_levels"
+grid = "major"
+range_pct = 4.0"#
+        )
+    );
+    // A kind at its defaults states nothing but itself.
+    assert_eq!(detector(5), table(r#"kind = "round_levels""#));
+    assert_eq!(
+        rows[0]["take"],
+        table(
+            r#"order = "strongest"
+strength = "volume""#
+        )
+    );
+    assert_eq!(
+        rows[0]["events"],
+        table("role_flip = false\nstop_hunt_pct = 0.625\nconfluence_pct = 0.125")
+    );
+}
+
+/// A new kind's table with one unreadable field is repaired field by field like an old kind's:
+/// the bad field takes its default, its readable neighbours stay.
+///
+/// Breakage: the new kinds missing from `DetectorKind`'s serde names, which would send the table
+/// to "unknown" and keep it undrawn instead of repairing it.
+#[test]
+fn a_new_kind_with_a_broken_field_is_repaired_not_dropped() {
+    let file = r#"
+[[auto_figures.rows]]
+detector = { kind = "volume_profile", bins = "many", naked_poc_days = 3 }
+[[auto_figures.rows]]
+detector = { kind = "round_levels", grid = "tiny", range_pct = 5.0 }
+"#;
+    let doc: Doc = toml::from_str(file).expect("loads");
+    let Some(DetectorParams::VolumeProfile(p)) = doc.auto_figures.rows[0].detector.known() else {
+        panic!("{:?}", doc.auto_figures.rows[0].detector);
+    };
+    assert_eq!(p.bins, 100);
+    assert_eq!(p.naked_poc_days, 3);
+    let Some(DetectorParams::RoundLevels(r)) = doc.auto_figures.rows[1].detector.known() else {
+        panic!("{:?}", doc.auto_figures.rows[1].detector);
+    };
+    assert_eq!(r.grid, RoundGrid::Half);
+    assert_eq!(r.range_pct, 5.0);
+}
+
+/// None of the presets added on 19.11.2026 joins the shipped set (LinKvo's four rows), and each
+/// runs the detector its name promises.
+///
+/// Breakage: a new preset slipped into `DEFAULT_SET`, which would switch it on for every profile
+/// that never edited its rows; a naked-POC preset that also draws the day's own profile.
+#[test]
+fn the_new_presets_are_offered_not_shipped() {
+    let new = [
+        (
+            AutoFigurePreset::PrevDayProfile,
+            DetectorKind::VolumeProfile,
+        ),
+        (AutoFigurePreset::NakedPoc, DetectorKind::VolumeProfile),
+        (AutoFigurePreset::PeriodLevels, DetectorKind::PeriodLevel),
+        (AutoFigurePreset::RoundLevels, DetectorKind::RoundLevels),
+    ];
+    for (preset, kind) in new {
+        assert!(AutoFigurePreset::ALL.contains(&preset), "{preset:?}");
+        assert!(
+            !AutoFigurePreset::DEFAULT_SET.contains(&preset),
+            "{preset:?}"
+        );
+        let row = preset.row();
+        assert_eq!(row.detector.known().map(DetectorParams::kind), Some(kind));
+    }
+    let Some(DetectorParams::VolumeProfile(naked)) =
+        AutoFigurePreset::NakedPoc.row().detector.known().copied()
+    else {
+        panic!();
+    };
+    assert!(naked.naked_poc_days > 0 && !naked.poc && !naked.vah && !naked.val);
 }
 
 /// The 4h levels are told apart from the 1h ones at a glance: another colour and a heavier line.
@@ -566,6 +941,154 @@ fn bars_needed_per_kind() {
         ..TrendParams::default()
     });
     assert_eq!(trend.bars_needed(TfId::M1), 77);
+}
+
+/// The bars the kinds added on 19.11.2026 need, and the ATR's floor under a short lookback.
+///
+/// Breakage: an ATR row fetching fewer than `ATR_PERIOD + 1` bars (the ATR never forms and the row
+/// draws nothing for ever); the naked-POC days left out of a profile's count; a period level sized
+/// by its first flag instead of its longest.
+#[test]
+fn bars_needed_for_the_new_kinds() {
+    let short = |unit| SwingParams {
+        lookback_bars: 10,
+        tolerance_unit: unit,
+        ..SwingParams::default()
+    };
+    assert_eq!(
+        DetectorParams::Swing(short(ToleranceUnit::Pct)).bars_needed(TfId::H1),
+        10
+    );
+    assert_eq!(
+        DetectorParams::Swing(short(ToleranceUnit::Atr)).bars_needed(TfId::H1),
+        ATR_PERIOD + 1
+    );
+    let squeeze = SqueezeParams {
+        level: short(ToleranceUnit::Atr),
+        ..SqueezeParams::default()
+    };
+    assert_eq!(
+        DetectorParams::Squeeze(squeeze).bars_needed(TfId::M5),
+        ATR_PERIOD + 1
+    );
+    let trend = DetectorParams::Trend(TrendParams {
+        lookback_bars: 12,
+        tolerance_unit: ToleranceUnit::Atr,
+        ..TrendParams::default()
+    });
+    assert_eq!(trend.bars_needed(TfId::M5), ATR_PERIOD + 1);
+    // A long lookback is not cut down to the ATR's.
+    let long = DetectorParams::Swing(SwingParams {
+        lookback_bars: 300,
+        tolerance_unit: ToleranceUnit::Atr,
+        ..SwingParams::default()
+    });
+    assert_eq!(long.bars_needed(TfId::H1), 300);
+
+    let profile = |period, naked_poc_days| {
+        DetectorParams::VolumeProfile(VolumeProfileParams {
+            period,
+            naked_poc_days,
+            ..VolumeProfileParams::default()
+        })
+    };
+    // 288 five-minute bars a day, 24 hourly.
+    assert_eq!(profile(ProfilePeriod::Day, 0).bars_needed(TfId::M5), 289);
+    assert_eq!(
+        profile(ProfilePeriod::PrevDay, 0).bars_needed(TfId::M5),
+        577
+    );
+    assert_eq!(profile(ProfilePeriod::Day, 5).bars_needed(TfId::H1), 145);
+
+    let level = |prev_day_close, day_open, week_open, prev_week_close| {
+        DetectorParams::PeriodLevel(PeriodLevelParams {
+            prev_day_close,
+            day_open,
+            week_open,
+            prev_week_close,
+        })
+    };
+    assert_eq!(level(false, true, false, false).bars_needed(TfId::H1), 25);
+    assert_eq!(level(true, true, false, false).bars_needed(TfId::H1), 49);
+    assert_eq!(level(true, false, true, false).bars_needed(TfId::H4), 43);
+    assert_eq!(level(false, false, false, true).bars_needed(TfId::D1), 15);
+    assert_eq!(level(false, false, false, false).bars_needed(TfId::M5), 1);
+
+    assert_eq!(
+        DetectorKind::RoundLevels
+            .default_params()
+            .bars_needed(TfId::M1),
+        1
+    );
+}
+
+/// The new kinds have no break policy of their own and answer the default, and each caps the
+/// timeframe it can answer on: a profile at H1, a day's open at H4, the rest not at all.
+///
+/// Breakage: a profile allowed on D1 (one bar a day is no profile), or a day-open row on D1, whose
+/// current day never closes.
+#[test]
+fn the_new_kinds_policy_and_coarsest_timeframe() {
+    for kind in [
+        DetectorKind::VolumeProfile,
+        DetectorKind::PeriodLevel,
+        DetectorKind::RoundLevels,
+    ] {
+        assert_eq!(
+            kind.default_params().broken_policy(),
+            BrokenPolicy::Keep { bars: 3 }
+        );
+    }
+    assert_eq!(
+        DetectorKind::VolumeProfile.default_params().coarsest_tf(),
+        TfId::H1
+    );
+    assert_eq!(
+        DetectorKind::PeriodLevel.default_params().coarsest_tf(),
+        TfId::D1
+    );
+    let day_open = DetectorParams::PeriodLevel(PeriodLevelParams {
+        day_open: true,
+        ..PeriodLevelParams::default()
+    });
+    assert_eq!(day_open.coarsest_tf(), TfId::H4);
+    assert_eq!(
+        DetectorKind::RoundLevels.default_params().coarsest_tf(),
+        TfId::D1
+    );
+}
+
+/// `marks` answers each event from its own switch. Breakage: a new event wired to a neighbour's
+/// switch, so hiding "stop hunt" hides "role flip" instead.
+#[test]
+fn every_event_reads_its_own_switch() {
+    let all = [
+        AutoEvent::Approach,
+        AutoEvent::Squeeze,
+        AutoEvent::Breakout,
+        AutoEvent::FalseBreak,
+        AutoEvent::Bounce,
+        AutoEvent::RoleFlip,
+        AutoEvent::StopHunt,
+        AutoEvent::Confluence,
+    ];
+    for off in all {
+        let mut marks = EventMarks::default();
+        let switch = match off {
+            AutoEvent::Approach => &mut marks.approach,
+            AutoEvent::Squeeze => &mut marks.squeeze,
+            AutoEvent::Breakout => &mut marks.breakout,
+            AutoEvent::FalseBreak => &mut marks.false_break,
+            AutoEvent::Bounce => &mut marks.bounce,
+            AutoEvent::RoleFlip => &mut marks.role_flip,
+            AutoEvent::StopHunt => &mut marks.stop_hunt,
+            AutoEvent::Confluence => &mut marks.confluence,
+        };
+        *switch = false;
+        for event in all {
+            assert_eq!(marks.marks(event), event != off, "{off:?} off, {event:?}");
+        }
+    }
 }
 
 /// A `Day` extreme on D1 reads only closed bars and so could never see the forming day; sanitize

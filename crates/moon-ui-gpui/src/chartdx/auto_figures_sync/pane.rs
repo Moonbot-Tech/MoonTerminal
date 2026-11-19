@@ -207,10 +207,10 @@ pub(crate) fn append_auto_geometry(
             };
             let rgb = resolve_rgb(row.style.color, kept.above, theme);
             let start = drawn.figures.len();
+            // The zone band is the tolerance the detector reports with the figure.
             append_shapes(
                 found,
                 &ResolvedStyle::new(&row.style, rgb),
-                row.tolerance_pct,
                 row.ref_ms,
                 &mut drawn.figures,
                 &mut bands,

@@ -80,8 +80,6 @@ pub(crate) struct AutoRowDrawn {
     pub marks: EventMarks,
     /// The row's broken-line policy, for the false-break window of its events.
     pub policy: BrokenPolicy,
-    /// The row's touch tolerance in % of price, for the zone band.
-    pub tolerance_pct: f32,
     /// Everything the detector run produced, shared with the panel that holds it.
     pub outcome: Arc<job::AutoRowOutcome>,
     /// The drawn lines, ranked: indices into `outcome.found` with their side and events.

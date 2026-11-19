@@ -11,7 +11,8 @@
 
 use super::{
     AutoFigureRow, AutoFiguresCfg, BrokenPolicy, DetectorParams, EventMarks, LineCaption,
-    LineStyle, RowDetector, SqueezeParams, SwingParams, Take, TfSource, TrendParams,
+    LineStyle, RoundLevelsParams, RowDetector, SqueezeParams, SwingParams, Take, TfSource,
+    TrendParams, VolumeProfileParams,
 };
 
 /// Most rows one configuration keeps. Every visible row is a detector run, so an unbounded list —
@@ -46,6 +47,25 @@ pub const AF_TOLERANCE_MIN: f32 = 0.01;
 pub const AF_SLOPE_MAX: f32 = 100.0;
 /// Longest a broken level may be kept, in bars.
 pub const AF_BROKEN_KEEP_MAX: u16 = 1_000;
+/// A touch tolerance in ATR, bounds. Under a twentieth of an ATR a band is narrower than the
+/// noise of one bar; past five ATRs it swallows a week of swings into one level.
+pub const AF_TOLERANCE_ATR_MIN: f32 = 0.05;
+pub const AF_TOLERANCE_ATR_MAX: f32 = 5.0;
+/// A volume profile's value area, % of the period's volume. Below a tenth it is the POC alone; at
+/// 100 it is the whole range.
+pub const AF_VALUE_AREA_MIN: f32 = 10.0;
+pub const AF_VALUE_AREA_MAX: f32 = 100.0;
+/// Most past days a row looks for naked POCs on. The days come from the local 5-minute cache,
+/// which keeps 15 days; ten leaves room for the profiled day and a cache a few days short.
+pub const AF_NAKED_POC_DAYS_MAX: u8 = 10;
+/// A volume profile's bin count, bounds: under 20 the POC is a fifth of the range wide; past 500 a
+/// day of five-minute bars leaves most bins empty and the POC lands on noise.
+pub const AF_PROFILE_BINS_MIN: u16 = 20;
+pub const AF_PROFILE_BINS_MAX: u16 = 500;
+/// How far from the last close round prices are looked for, % of price. Under half a percent a
+/// `Major` grid can hold none; past 50 % the "nearby" round numbers are another market.
+pub const AF_ROUND_RANGE_MIN: f32 = 0.5;
+pub const AF_ROUND_RANGE_MAX: f32 = 50.0;
 
 impl AutoFiguresCfg {
     /// Repair whatever a hand-edited or older file can state. Idempotent.
@@ -119,6 +139,11 @@ fn sanitize_detector(params: &mut DetectorParams) {
         DetectorParams::PeriodExtreme(_) => {}
         DetectorParams::Trend(p) => sanitize_trend(p),
         DetectorParams::Squeeze(p) => sanitize_squeeze(p),
+        DetectorParams::VolumeProfile(p) => sanitize_profile(p),
+        // Four switches: every combination is meaningful, all off included (the row draws nothing,
+        // like a hidden one).
+        DetectorParams::PeriodLevel(_) => {}
+        DetectorParams::RoundLevels(p) => sanitize_round(p),
     }
 }
 
@@ -129,6 +154,7 @@ fn sanitize_swing(p: &mut SwingParams) {
     p.pivot_right = p.pivot_right.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
     p.lookback_bars = lookback(p.lookback_bars, p.pivot_left, p.pivot_right);
     p.tolerance_pct = pct(p.tolerance_pct, d.tolerance_pct, AF_TOLERANCE_MIN);
+    p.tolerance_atr = atr_share(p.tolerance_atr, d.tolerance_atr);
     p.min_touches = p.min_touches.clamp(1, AF_TOUCHES_MAX);
     sanitize_broken(&mut p.broken);
 }
@@ -148,6 +174,7 @@ fn sanitize_trend(p: &mut TrendParams) {
     p.pivot_right = p.pivot_right.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
     p.lookback_bars = lookback(p.lookback_bars, p.pivot_left, p.pivot_right);
     p.tolerance_pct = pct(p.tolerance_pct, d.tolerance_pct, AF_TOLERANCE_MIN);
+    p.tolerance_atr = atr_share(p.tolerance_atr, d.tolerance_atr);
     // Two pivots define a line; a "trend" through one is any line at all.
     p.min_touches = p.min_touches.clamp(2, AF_TOUCHES_MAX);
     // The bounds are by absolute value, so a negative one is read as its magnitude.
@@ -171,7 +198,23 @@ fn sanitize_squeeze(p: &mut SqueezeParams) {
         d.trend_tolerance_pct,
         AF_TOLERANCE_MIN,
     );
+    p.trend_tolerance_atr = atr_share(p.trend_tolerance_atr, d.trend_tolerance_atr);
     p.pressed_pct = pct(p.pressed_pct, d.pressed_pct, AF_TOLERANCE_MIN);
+}
+
+/// The value area, the naked-POC days and the bin count into their ranges.
+fn sanitize_profile(p: &mut VolumeProfileParams) {
+    let d = VolumeProfileParams::default();
+    p.value_area_pct =
+        finite_or(p.value_area_pct, d.value_area_pct).clamp(AF_VALUE_AREA_MIN, AF_VALUE_AREA_MAX);
+    p.naked_poc_days = p.naked_poc_days.min(AF_NAKED_POC_DAYS_MAX);
+    p.bins = p.bins.clamp(AF_PROFILE_BINS_MIN, AF_PROFILE_BINS_MAX);
+}
+
+/// The search range around the last close into its bounds.
+fn sanitize_round(p: &mut RoundLevelsParams) {
+    let d = RoundLevelsParams::default();
+    p.range_pct = finite_or(p.range_pct, d.range_pct).clamp(AF_ROUND_RANGE_MIN, AF_ROUND_RANGE_MAX);
 }
 
 /// At least one line: a row that keeps none is a hidden row, and the eye switch says that.
@@ -179,9 +222,14 @@ fn sanitize_take(take: &mut Take) {
     take.count = take.count.clamp(1, AF_TAKE_MAX);
 }
 
-/// The approach distance: zero is allowed (a mark only on an exact touch), negative is not.
+/// The approach distance: zero is allowed (a mark only on an exact touch), negative is not. The
+/// stop-hunt pierce and the confluence distance are touch-like bands: zero would make every wick
+/// a hunt and only identical prices one place, so both keep the touch tolerance's floor.
 fn sanitize_events(events: &mut EventMarks) {
-    events.approach_pct = pct(events.approach_pct, EventMarks::default().approach_pct, 0.0);
+    let d = EventMarks::default();
+    events.approach_pct = pct(events.approach_pct, d.approach_pct, 0.0);
+    events.stop_hunt_pct = pct(events.stop_hunt_pct, d.stop_hunt_pct, AF_TOLERANCE_MIN);
+    events.confluence_pct = pct(events.confluence_pct, d.confluence_pct, AF_TOLERANCE_MIN);
 }
 
 /// A lookback long enough to confirm one pivot of the given widths, within the global bounds.
@@ -194,6 +242,12 @@ fn lookback(bars: u32, left: u8, right: u8) -> u32 {
 /// `min..=AF_PCT_MAX`.
 fn pct(v: f32, default: f32, min: f32) -> f32 {
     finite_or(v, default).clamp(min, AF_PCT_MAX)
+}
+
+/// A share of the ATR: a non-finite value takes `default`, the rest is clamped to
+/// `AF_TOLERANCE_ATR_MIN..=AF_TOLERANCE_ATR_MAX`.
+fn atr_share(v: f32, default: f32) -> f32 {
+    finite_or(v, default).clamp(AF_TOLERANCE_ATR_MIN, AF_TOLERANCE_ATR_MAX)
 }
 
 /// `v`, or `default` when `v` is NaN or infinite. `f32::clamp` passes NaN straight through, so

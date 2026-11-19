@@ -33,6 +33,8 @@ fn level(price: f64, first_ms: f64, last_ms: f64) -> Found {
         first_ms,
         last_ms,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     }
 }
 
@@ -46,8 +48,12 @@ fn draw_at(
     tol: f32,
     ref_ms: f64,
 ) -> (Vec<Figure>, Vec<FigureBand>) {
+    // The band is drawn from the tolerance the detector reports, as a fraction of price; these
+    // tests state it in % of price, the unit the rows are written in.
+    let mut found = found.clone();
+    found.tolerance_frac = f64::from(tol) / 100.0;
     let (mut figures, mut bands) = (Vec::new(), Vec::new());
-    append_shapes(found, style, tol, ref_ms, &mut figures, &mut bands);
+    append_shapes(&found, style, ref_ms, &mut figures, &mut bands);
     (figures, bands)
 }
 
@@ -85,6 +91,8 @@ fn falling_squeeze() -> Found {
         first_ms: 500.0,
         last_ms: 3_000.0,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     }
 }
 
@@ -216,6 +224,8 @@ fn a_sloped_line_is_a_ray_and_both_edges_adds_the_mirror_without_overlap() {
         first_ms: 1_000.0,
         last_ms: 3_000.0,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     };
     let a = FigNode::new(1_000.0, 100.0);
     let (right, _) = draw(&found, &style(Extend::RightEdge), 0.0);
@@ -254,6 +264,8 @@ fn a_squeeze_draws_its_level_and_its_sloped_line() {
         first_ms: 500.0,
         last_ms: 3_000.0,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     };
     let (figs, _) = draw(&found, &style(Extend::BetweenTouches), 0.0);
     assert_eq!(figs.len(), 2);
@@ -281,6 +293,8 @@ fn unusable_geometry_draws_nothing() {
         first_ms: 3_000.0,
         last_ms: 3_000.0,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     };
     assert!(
         draw(&degenerate, &style(Extend::RightEdge), 0.0)

@@ -35,6 +35,7 @@ fn params() -> TrendParams {
         min_slope_pct_per_bar: 0.005,
         max_slope_pct_per_bar: 2.0,
         broken: BrokenPolicy::Keep { bars: 3 },
+        ..TrendParams::default()
     }
 }
 

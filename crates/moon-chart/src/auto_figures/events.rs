@@ -18,6 +18,11 @@
 //!   crossing, so the same bar does not also report a `Breakout`.
 //! - **Bounce** — the last closed bar's range reached the line and it closed on the same side as
 //!   the nearest earlier close that had a side.
+//! - **RoleFlip**, **StopHunt** — defined on `AutoEvent`; not detected yet (filled by the event
+//!   stage), so never set here. Their bits and their `EventMarks` switches already work.
+//! - **Confluence** — judged ACROSS rows by the caller, which alone sees the lines of every
+//!   timeframe; never set by this per-line pass. The caller inserts it into the line's set and
+//!   filters it through the same `EventMarks::marks`.
 
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks};
 use moon_core::market::candles::ChartCandle;
@@ -25,19 +30,27 @@ use moon_core::market::candles::ChartCandle;
 use super::{Found, Side, bar_ok, pct_frac, side_of};
 
 /// The events one line shows, as a bit set — no allocation per line.
+///
+/// A `u8` holds all eight events there are; a ninth widens it to `u16` (the set never leaves the
+/// process, so its width is free to change).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct EventSet(u8);
 
 impl EventSet {
-    /// Every event in its display order, the order [`EventSet::iter`] yields them in.
-    const ALL: [AutoEvent; 5] = [
+    /// Every event in its display order, the order [`EventSet::iter`] yields them in. Confluence
+    /// last: it is a property of the place, not of what the price just did there.
+    const ALL: [AutoEvent; 8] = [
         AutoEvent::Approach,
         AutoEvent::Squeeze,
         AutoEvent::Breakout,
         AutoEvent::FalseBreak,
         AutoEvent::Bounce,
+        AutoEvent::RoleFlip,
+        AutoEvent::StopHunt,
+        AutoEvent::Confluence,
     ];
 
+    /// The event's bit, one per event.
     fn bit(event: AutoEvent) -> u8 {
         match event {
             AutoEvent::Approach => 1,
@@ -45,6 +58,9 @@ impl EventSet {
             AutoEvent::Breakout => 1 << 2,
             AutoEvent::FalseBreak => 1 << 3,
             AutoEvent::Bounce => 1 << 4,
+            AutoEvent::RoleFlip => 1 << 5,
+            AutoEvent::StopHunt => 1 << 6,
+            AutoEvent::Confluence => 1 << 7,
         }
     }
 

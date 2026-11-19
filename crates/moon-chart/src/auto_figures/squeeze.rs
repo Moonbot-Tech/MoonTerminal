@@ -35,7 +35,7 @@ use super::swing::{Level, levels_from};
 use super::trend::{Line, LineSpec, find_lines};
 use super::{
     DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, pct_frac, scan_break,
-    touch_strength, window,
+    touch_strength, touch_volume, window,
 };
 
 /// Bodies allowed to cross the sloped half between its first and last touch. One, not zero: a
@@ -150,8 +150,11 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
             first_ms: touches.first().map_or(0.0, |t| t.t_ms),
             last_ms: touches.last().map_or(0.0, |t| t.t_ms),
             strength: touch_strength(touches.len(), first_idx, last_idx, win.len()),
+            touch_volume: touch_volume(win, &touches),
             touches,
             broken: level.broken,
+            // The band is drawn around the level, so it is the level's tolerance.
+            tolerance_frac: pct_frac(p.level.tolerance_pct),
         });
     }
     out

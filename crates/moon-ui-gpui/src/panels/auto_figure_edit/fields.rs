@@ -306,14 +306,18 @@ pub(super) fn parse_number(text: &str, integer: bool) -> Option<f64> {
     normalized.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-/// The broken-line policy a detector carries, if it has one of its own. A period extreme has none:
-/// its line is a fact of the calendar.
+/// The broken-line policy a detector carries, if it has one of its own. A period extreme, a
+/// period level, a volume level and a round price have none: each line is a fact of the calendar,
+/// the profile or the price grid.
 pub(super) fn broken_of(d: &DetectorParams) -> Option<BrokenPolicy> {
     match d {
         DetectorParams::Swing(p) => Some(p.broken),
         DetectorParams::Trend(p) => Some(p.broken),
         DetectorParams::Squeeze(p) => Some(p.level.broken),
-        DetectorParams::PeriodExtreme(_) => None,
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::RoundLevels(_) => None,
     }
 }
 
@@ -323,6 +327,9 @@ pub(super) fn broken_of_mut(d: &mut DetectorParams) -> Option<&mut BrokenPolicy>
         DetectorParams::Swing(p) => Some(&mut p.broken),
         DetectorParams::Trend(p) => Some(&mut p.broken),
         DetectorParams::Squeeze(p) => Some(&mut p.level.broken),
-        DetectorParams::PeriodExtreme(_) => None,
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::RoundLevels(_) => None,
     }
 }

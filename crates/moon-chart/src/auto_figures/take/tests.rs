@@ -12,11 +12,18 @@ fn level(price: f64, strength: f32) -> Found {
         first_ms: 0.0,
         last_ms: 0.0,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     }
 }
 
 fn take(count: u8, side: TakeSide, order: TakeOrder) -> Take {
-    Take { count, side, order }
+    Take {
+        count,
+        side,
+        order,
+        ..Take::default()
+    }
 }
 
 /// Levels at 90, 95, 99 below and 101, 110, 120 above a price of 100.
@@ -88,6 +95,41 @@ fn degenerate_inputs() {
         level(106.0, 1.0),
     ];
     assert_eq!(select(&odd, &both, 100.0, 0.0), vec![2, 1]);
+}
+
+/// "Strongest by volume" ranks by the money traded on the touching bars, not by the touch count:
+/// the level touched most is NOT the one kept when another took more volume. Ties fall back to
+/// nearest first.
+///
+/// Breakage: `strength` ignored (the touch rank wins), the volume read from the wrong field, or
+/// the sort direction reversed.
+#[test]
+fn strongest_by_volume_ranks_by_touch_volume() {
+    let with_volume = |price: f64, strength: f32, touch_volume: f64| Found {
+        touch_volume,
+        ..level(price, strength)
+    };
+    let found = vec![
+        // Most touches, least money.
+        with_volume(101.0, 9.0, 10.0),
+        with_volume(110.0, 2.0, 5_000.0),
+        with_volume(105.0, 3.0, 800.0),
+        // Ties with the next on volume; nearer, so it goes first.
+        with_volume(103.0, 1.0, 800.0),
+    ];
+    let by_touches = take(2, TakeSide::Above, TakeOrder::Strongest);
+    assert_eq!(select(&found, &by_touches, 100.0, 0.0), vec![0, 2]);
+    let by_volume = Take {
+        strength: StrengthBasis::Volume,
+        ..by_touches
+    };
+    assert_eq!(select(&found, &by_volume, 100.0, 0.0), vec![1, 3]);
+    // Under `Nearest` the basis changes nothing.
+    let nearest = Take {
+        order: TakeOrder::Nearest,
+        ..by_volume
+    };
+    assert_eq!(select(&found, &nearest, 100.0, 0.0), vec![0, 3]);
 }
 
 /// A sloped line is sided by its projection at the moment asked for, not by its endpoints.

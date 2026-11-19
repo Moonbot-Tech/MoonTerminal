@@ -1,6 +1,98 @@
 use super::test_bars::{M5_MS, from_hl};
 use super::*;
-use moon_core::config::auto_figures::SwingParams;
+use moon_core::config::auto_figures::{SqueezeParams, SwingParams};
+
+/// A found level reports the money traded on its touching bars and the tolerance it grouped them
+/// by: three equal highs at 100, with the touching bars' turnover set apart from the rest, give
+/// the sum of exactly those three bars and `tolerance_pct / 100`.
+///
+/// Breakage: `touch_volume` summing the whole window (or the pivot's neighbours), counting a bar
+/// twice, or `tolerance_frac` left in % — the zone band would be a hundred times too wide.
+#[test]
+fn a_level_reports_its_touch_volume_and_tolerance() {
+    let mut bars = from_hl(&[
+        (90.0, 85.0),
+        (100.0, 95.0),
+        (90.0, 85.0),
+        (91.0, 86.0),
+        (100.0, 95.0),
+        (91.0, 86.0),
+        (92.0, 87.0),
+        (100.0, 95.0),
+        (92.0, 87.0),
+    ]);
+    for b in &mut bars {
+        b.quote_volume = 1.0;
+    }
+    bars[1].quote_volume = 100.0;
+    bars[4].quote_volume = 200.0;
+    bars[7].quote_volume = 400.0;
+    let ctx = DetectCtx {
+        tf_ms: M5_MS,
+        now_ms: 0.0,
+    };
+    let swing = DetectorParams::Swing(SwingParams {
+        pivot_left: 1,
+        pivot_right: 1,
+        min_touches: 3,
+        tolerance_pct: 0.5,
+        ..SwingParams::default()
+    });
+    let found = detect(&swing, &bars, &ctx);
+    let level = found
+        .iter()
+        .find(|f| f.shape == FoundShape::Horizontal { price: 100.0 })
+        .expect("the three highs make a level");
+    assert_eq!(level.touch_volume, 700.0);
+    assert_eq!(level.tolerance_frac, 0.005);
+
+    // A touch on a bar the input does not hold adds nothing; one bar touched twice counts once.
+    let touches = [
+        Touch {
+            t_ms: bars[1].t_open_ms,
+            price: 100.0,
+        },
+        Touch {
+            t_ms: bars[1].t_open_ms,
+            price: 95.0,
+        },
+        Touch {
+            t_ms: bars[8].t_open_ms + 1.0,
+            price: 92.0,
+        },
+    ];
+    assert_eq!(touch_volume(&bars, &touches), 100.0);
+}
+
+/// A squeeze reports its LEVEL's tolerance — the band drawn around the level — not its sloped
+/// half's. Breakage: the trend tolerance reported instead, drawing the zone at the line's width.
+#[test]
+fn a_squeeze_reports_its_level_tolerance() {
+    let p = SqueezeParams::default();
+    assert_ne!(p.level.tolerance_pct, p.trend_tolerance_pct);
+    // The default squeeze's search on the committed bench finds formations (the squeeze module's
+    // own bench test pins that); each must carry the level's band.
+    let params = DetectorParams::Squeeze(SqueezeParams {
+        level: SwingParams {
+            lookback_bars: 2_000,
+            ..p.level
+        },
+        ..p
+    });
+    let mut formations = 0;
+    for kind in [1u32, 5] {
+        let bars = test_bars::ace(kind);
+        let ctx = DetectCtx {
+            tf_ms: i64::from(kind) * 60_000,
+            now_ms: bars.last().map_or(0.0, |b| b.t_open_ms),
+        };
+        for f in detect(&params, &bars, &ctx) {
+            assert_eq!(f.tolerance_frac, f64::from(p.level.tolerance_pct) / 100.0);
+            formations += 1;
+        }
+    }
+    assert!(formations > 0, "the bench holds a squeeze");
+}
 
 /// Breakage: a detector missing from the table makes `detect` silently return nothing for a whole
 /// kind; a duplicate row makes the second one unreachable.

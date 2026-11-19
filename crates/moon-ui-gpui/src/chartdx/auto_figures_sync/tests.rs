@@ -312,6 +312,8 @@ fn level_row(levels: &[f64]) -> AutoRowDrawn {
                 first_ms: (DAY0 + i as i64 * 3_600_000) as f64,
                 last_ms: (DAY0 + 10 * 3_600_000) as f64,
                 broken: None,
+                touch_volume: 0.0,
+                tolerance_frac: 0.0,
             })
             .collect(),
         recent: Vec::new(),
@@ -325,10 +327,10 @@ fn level_row(levels: &[f64]) -> AutoRowDrawn {
             count: 1,
             side: TakeSide::Both,
             order: TakeOrder::Nearest,
+            ..Take::default()
         },
         marks: EventMarks::default(),
         policy: BrokenPolicy::default(),
-        tolerance_pct: 0.0,
         outcome: Arc::new(outcome),
         kept: Vec::new(),
         ref_ms: 0.0,
@@ -449,6 +451,8 @@ fn a_periods_high_and_low_are_different_lines() {
         first_ms: DAY0 as f64,
         last_ms: (DAY0 + 3_600_000) as f64,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     };
     let high = bar(DAY0 + 600_000, 2.0);
     let low = bar(DAY0 + 1_200_000, 1.0);
@@ -523,7 +527,10 @@ fn redrawing_the_segment_equals_a_full_rebuild() {
     };
     let mut band = level_row(&[95.0, 105.0]);
     band.style.zone = Some(0.2);
-    band.tolerance_pct = 0.5;
+    // A 0.5 % band, as the detector would report it with each level.
+    for f in &mut Arc::make_mut(&mut band.outcome).found {
+        f.tolerance_frac = 0.005;
+    }
     band.kept = select_kept(&band.outcome, &band.rules(&[]), 100.0, 0.0, &mut Vec::new());
     let before = Rc::new(AutoPaneFigures::new(vec![band.clone()], Vec::new()));
     let after = Rc::new(
@@ -598,6 +605,8 @@ fn two_trend_lines_from_one_pivot_are_different_lines() {
         first_ms: 0.0,
         last_ms: t1,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     };
     assert_ne!(
         LineKey::of(0, &line(3_600_000.0, 101.0)),

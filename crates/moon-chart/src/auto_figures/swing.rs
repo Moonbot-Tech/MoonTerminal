@@ -20,7 +20,7 @@ use moon_core::market::candles::ChartCandle;
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
     Broken, DetectCtx, Detector, Found, FoundShape, Side, Touch, pct_frac, scan_break, survives,
-    touch_strength, window,
+    touch_strength, touch_volume, window,
 };
 
 /// The `Swing` registry row.
@@ -43,6 +43,7 @@ impl Detector for Swing {
         let win = window(bars, p.lookback_bars);
         let mut pivots = Vec::new();
         find_pivots(win, p.pivot_left, p.pivot_right, &mut pivots);
+        let tolerance_frac = pct_frac(p.tolerance_pct);
         levels_from(win, &pivots, p)
             .into_iter()
             .map(|l| Found {
@@ -50,8 +51,10 @@ impl Detector for Swing {
                 first_ms: l.touches.first().map_or(0.0, |t| t.t_ms),
                 last_ms: l.touches.last().map_or(0.0, |t| t.t_ms),
                 strength: l.strength,
+                touch_volume: touch_volume(win, &l.touches),
                 touches: l.touches,
                 broken: l.broken,
+                tolerance_frac,
             })
             .collect()
     }

@@ -37,7 +37,7 @@ use moon_core::market::candles::ChartCandle;
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
     DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, line_price_at, pct_frac,
-    scan_break, survives, touch_strength, window,
+    scan_break, survives, touch_strength, touch_volume, window,
 };
 
 /// Most pivots of one kind a line search considers: the most recent ones. Bounds the O(P³) pair
@@ -103,7 +103,9 @@ impl Detector for Trend {
                         win.len(),
                     ),
                     broken,
+                    touch_volume: touch_volume(win, &line.touches),
                     touches: line.touches,
+                    tolerance_frac: spec.tol_frac,
                 });
             }
         }

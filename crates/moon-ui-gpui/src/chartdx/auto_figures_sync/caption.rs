@@ -59,6 +59,9 @@ pub(crate) fn kind_key(kind: DetectorKind) -> &'static str {
         DetectorKind::PeriodExtreme => "auto_figures.kind.period_extreme",
         DetectorKind::Trend => "auto_figures.kind.trend",
         DetectorKind::Squeeze => "auto_figures.kind.squeeze",
+        DetectorKind::VolumeProfile => "auto_figures.kind.volume_profile",
+        DetectorKind::PeriodLevel => "auto_figures.kind.period_level",
+        DetectorKind::RoundLevels => "auto_figures.kind.round_levels",
     }
 }
 
@@ -84,6 +87,9 @@ pub(crate) fn event_key(event: AutoEvent) -> &'static str {
         AutoEvent::Breakout => "auto_figures.event.breakout",
         AutoEvent::FalseBreak => "auto_figures.event.false_break",
         AutoEvent::Bounce => "auto_figures.event.bounce",
+        AutoEvent::RoleFlip => "auto_figures.event.role_flip",
+        AutoEvent::StopHunt => "auto_figures.event.stop_hunt",
+        AutoEvent::Confluence => "auto_figures.event.confluence",
     }
 }
 

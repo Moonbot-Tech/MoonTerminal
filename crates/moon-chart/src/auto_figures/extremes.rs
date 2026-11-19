@@ -23,7 +23,9 @@ use moon_core::config::auto_figures::{
 };
 use moon_core::market::candles::ChartCandle;
 
-use super::{DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, scan_break};
+use super::{
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, scan_break, touch_volume,
+};
 
 /// One UTC day, ms.
 pub const DAY_MS: i64 = 86_400_000;
@@ -106,12 +108,17 @@ fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: 
     let previous = matches!(p.period, ExtremePeriod::PrevDay | ExtremePeriod::PrevWeek);
     let make = |(idx, price): (usize, f32), origin: Side| -> Found {
         let price = f64::from(price);
+        let touches = vec![Touch {
+            t_ms: bars[idx].t_open_ms,
+            price,
+        }];
         Found {
             shape: FoundShape::Horizontal { price },
-            touches: vec![Touch {
-                t_ms: bars[idx].t_open_ms,
-                price,
-            }],
+            // The one bar that set the extreme is its one touch.
+            touch_volume: touch_volume(bars, &touches),
+            touches,
+            // A period's extreme is a price, not a cluster: there is no band.
+            tolerance_frac: 0.0,
             strength: 1.0,
             first_ms,
             last_ms,

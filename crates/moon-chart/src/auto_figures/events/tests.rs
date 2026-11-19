@@ -13,6 +13,8 @@ fn line(shape: FoundShape) -> Found {
         first_ms: 0.0,
         last_ms: 0.0,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
     }
 }
 

@@ -490,7 +490,13 @@ fn search_pane(
                 },
             ));
         }
-        DetectorParams::Swing(_) | DetectorParams::Squeeze(_) => {}
+        // No choice fields of their own yet: the volume, period-level and round-price editors come
+        // with their detectors, and until then those kinds show the common fields only.
+        DetectorParams::Swing(_)
+        | DetectorParams::Squeeze(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::RoundLevels(_) => {}
     }
     for field in NumField::DETECTOR {
         if field.get(row).is_some()
