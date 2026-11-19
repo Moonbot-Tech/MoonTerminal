@@ -29,6 +29,7 @@ pub mod extremes;
 pub mod period_levels;
 pub mod pivots;
 pub mod round_levels;
+pub mod scan;
 pub mod squeeze;
 pub mod swing;
 pub mod take;
