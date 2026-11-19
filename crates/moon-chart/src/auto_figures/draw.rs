@@ -52,8 +52,10 @@ impl ResolvedStyle {
 /// Args:
 ///     found: The detector's figure.
 ///     style: Its row's resolved style.
-///     ref_ms: The reference time (the detector run's "now"): where a squeeze's sloped half stops
-///         when its apex lies further ahead.
+///     ref_ms: The reference time (the detector run's "now"): where a squeeze's sloped half, and
+///         each side of a converging formation (a triangle, a wedge, a flag or pennant), stops
+///         when its apex lies further ahead. A channel's sides and a horizontal pair's levels run
+///         by `extend` alone and do not read it.
 ///     figures: Receives the lines, in draw order.
 ///     bands: Receives the zone bands.
 ///
@@ -69,17 +71,7 @@ pub fn append_shapes(
     figures: &mut Vec<Figure>,
     bands: &mut Vec<FigureBand>,
 ) {
-    let kind = if found.broken.is_some() {
-        style.broken_kind
-    } else {
-        style.line_kind
-    };
-    let draw = DrawStyle {
-        color: [style.rgb[0], style.rgb[1], style.rgb[2], u8::MAX],
-        thickness: style.thickness,
-        kind,
-        fill: [0; 4],
-    };
+    let draw = draw_style(found, style);
     let mut push = |kind: FigureKind| figures.push(Figure::new(kind, draw, 0.0));
     match found.shape {
         FoundShape::Horizontal { price } => {
@@ -124,6 +116,82 @@ pub fn append_shapes(
     }
 }
 
+/// The figures PINNING `found` copies into the figure store ("Pin as figure"): what the user then
+/// owns, moves and arms as an alert.
+///
+/// A two-line formation pins as exactly TWO figures, one per side: two levels for a pair that is
+/// drawn as levels (a double, a range — each as [`append_shapes`] draws it), two segments
+/// otherwise. A converging side is the segment it is drawn as (to the apex or `ref_ms`); a channel
+/// side runs from its first touch to `ref_ms` (to its last touch under `BetweenTouches`) — the
+/// store has no line unbounded at both ends, and a channel drawn `BothEdges` is two rays a side,
+/// which would pin as four figures for two lines. Every other shape pins as the figures it draws;
+/// the zone band is never pinned (it is a property of the auto line, not a figure).
+///
+/// Args:
+///     found: The detector's figure.
+///     style: Its row's resolved style.
+///     ref_ms: The reference time the figure was drawn against.
+///     figures: Receives the figures to pin, in draw order.
+pub fn pin_figures(found: &Found, style: &ResolvedStyle, ref_ms: f64, figures: &mut Vec<Figure>) {
+    let FoundShape::Pair { upper, lower } = found.shape else {
+        let mut bands = Vec::new();
+        append_shapes(found, style, ref_ms, figures, &mut bands);
+        return;
+    };
+    let draw = draw_style(found, style);
+    let mut push = |kind: FigureKind| figures.push(Figure::new(kind, draw, 0.0));
+    if drawn_as_levels(found, &upper, &lower) {
+        for p in [upper.p0, lower.p0] {
+            if let Some(p) = positive(p) {
+                horizontal(p, found, style.extend, &mut push);
+            }
+        }
+        return;
+    }
+    let apex = if found.tag == Some(LineTag::Channel) {
+        f64::NAN
+    } else {
+        apex_ms(&upper, &lower)
+    };
+    for s in [upper, lower] {
+        capped_slope(
+            (s.t0_ms, s.p0, s.t1_ms, s.p1),
+            apex,
+            ref_ms,
+            style.extend,
+            &mut push,
+        );
+    }
+}
+
+/// The line style a found figure is stamped with: the row's colour and thickness, and its broken
+/// dash pattern once a close beyond has been seen.
+fn draw_style(found: &Found, style: &ResolvedStyle) -> DrawStyle {
+    let kind = if found.broken.is_some() {
+        style.broken_kind
+    } else {
+        style.line_kind
+    };
+    DrawStyle {
+        color: [style.rgb[0], style.rgb[1], style.rgb[2], u8::MAX],
+        thickness: style.thickness,
+        kind,
+        fill: [0; 4],
+    }
+}
+
+/// Whether a pair is drawn as two levels and a box ([`pair`]): both sides flat, and the pattern is
+/// one that IS two levels (a double, a range) — a flag or a triangle that happens to come out flat
+/// is still a short pattern, capped like a sloped one.
+fn drawn_as_levels(found: &Found, upper: &Seg, lower: &Seg) -> bool {
+    let flat = |s: &Seg| s.p0 == s.p1;
+    !matches!(
+        found.tag,
+        Some(LineTag::Triangle | LineTag::Wedge | LineTag::Flag)
+    ) && flat(upper)
+        && flat(lower)
+}
+
 /// A two-line formation: its two sides in the row's style, and for a horizontal pair the box
 /// between them as its zone.
 ///
@@ -150,14 +218,7 @@ fn pair(
     mut push: impl FnMut(FigureKind),
     bands: &mut Vec<FigureBand>,
 ) {
-    let flat = |s: &Seg| s.p0 == s.p1;
-    // The level-and-box reading is for the patterns that ARE two levels (a double, a range): a
-    // flag or a triangle that happens to come out flat is still a short pattern, capped below.
-    let levels = !matches!(
-        found.tag,
-        Some(LineTag::Triangle | LineTag::Wedge | LineTag::Flag)
-    );
-    if levels && flat(upper) && flat(lower) {
+    if drawn_as_levels(found, upper, lower) {
         let (Some(hi), Some(lo)) = (positive(upper.p0), positive(lower.p0)) else {
             return;
         };

@@ -50,8 +50,9 @@ pub struct Touch {
     pub price: f64,
 }
 
-/// A figure — a horizontal level, a squeeze's level or a sloped trend line — that a bar has
-/// CLOSED beyond after its last touch.
+/// A figure — a horizontal level, a squeeze's level, a sloped trend line or a side of a two-line
+/// formation (`FoundShape::Pair`: a close above its upper side or below its lower one) — that a
+/// bar has CLOSED beyond after its last touch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Broken {
     /// Open time of the first bar of the LATEST break episode: a close back on the original side
@@ -149,20 +150,51 @@ impl FoundShape {
     /// channel is near the boundary it will meet first, and that boundary is what the reader
     /// watches. A side with no usable price at `t_ms` is skipped; `None` when neither has one.
     pub fn price_near(&self, t_ms: f64, ref_price: f64) -> Option<f64> {
+        self.side_price_at(t_ms, self.near_side(t_ms, ref_price))
+    }
+
+    /// Which side of a pair [`FoundShape::price_near`] answers with at `t_ms` for `ref_price`: the
+    /// nearer one, the upper on a tie or a non-finite `ref_price`, the only one with a usable
+    /// price when the other has none. `None` for every shape that is not a pair, and for a pair
+    /// neither side of which has a price at `t_ms`.
+    ///
+    /// Public so a caller that SELECTED a pair against one price can keep the side it selected by
+    /// and read that same side later ([`FoundShape::side_price_at`]) — the chart's caption, event
+    /// mark and confluence then name the boundary `take` kept the pair by, not whichever side a
+    /// later moment happens to be nearer.
+    pub fn near_side(&self, t_ms: f64, ref_price: f64) -> Option<PairSide> {
         let FoundShape::Pair { upper, lower } = self else {
-            return self.price_at(t_ms);
+            return None;
         };
         match (upper.price_at(t_ms), lower.price_at(t_ms)) {
-            (Some(u), Some(l)) => {
+            (Some(u), Some(l)) => Some(
                 if ref_price.is_finite() && (l - ref_price).abs() < (u - ref_price).abs() {
-                    Some(l)
+                    PairSide::Lower
                 } else {
-                    Some(u)
-                }
-            }
-            (u, l) => u.or(l),
+                    PairSide::Upper
+                },
+            ),
+            (Some(_), None) => Some(PairSide::Upper),
+            (None, Some(_)) => Some(PairSide::Lower),
+            (None, None) => None,
         }
     }
+
+    /// Price at `t_ms` of `side` of a pair; [`FoundShape::price_at`] for every other shape and for
+    /// `side = None` (a pair's upper side).
+    pub fn side_price_at(&self, t_ms: f64, side: Option<PairSide>) -> Option<f64> {
+        match (self, side) {
+            (FoundShape::Pair { lower, .. }, Some(PairSide::Lower)) => lower.price_at(t_ms),
+            _ => self.price_at(t_ms),
+        }
+    }
+}
+
+/// One side of a [`FoundShape::Pair`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PairSide {
+    Upper,
+    Lower,
 }
 
 /// Price of the line through `(t0_ms, p0)` and `(t1_ms, p1)` at `t_ms`, interpolated or

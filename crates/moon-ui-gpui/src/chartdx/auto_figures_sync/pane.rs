@@ -25,9 +25,9 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use moon_chart::auto_figures::draw::{ResolvedStyle, append_shapes, time_span};
+use moon_chart::auto_figures::draw::{ResolvedStyle, append_shapes, pin_figures, time_span};
 use moon_chart::auto_figures::events::EventSet;
-use moon_chart::auto_figures::{Found, FoundShape, LineTag};
+use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide};
 use moon_chart::figures::{FigureBand, FigureBuffers};
 use moon_chart::layers::{MARKER_SHAPE_KNOT, MarkerInstance};
 use moon_core::config::ChartTheme;
@@ -60,6 +60,9 @@ pub(crate) struct SegmentBase {
 pub(crate) struct AutoLineRec {
     pub key: LineKey,
     pub shape: FoundShape,
+    /// For a two-line formation, the side it was kept by (`KeptLine::side`): the one its caption is
+    /// placed on and prices; `None` for every other shape.
+    pub side: Option<PairSide>,
     /// The drawn stretch, Unix ms, `±∞` for "to that plot edge" — where the caption may sit.
     pub span: (f64, f64),
     pub touches: usize,
@@ -158,12 +161,53 @@ impl AutoPaneDrawn {
         self.lines.iter().find(|l| l.key == key)
     }
 
-    /// The figure-tool values line `key` is drawn as — what pinning copies into the store.
+    /// The figure-tool values pinning line `key` copies into the store
+    /// (`moon_chart::auto_figures::draw::pin_figures`): one per side for a two-line formation —
+    /// two levels or two segments — and what the line is drawn as for every other shape.
+    ///
+    /// Rebuilt from the published figure the line was drawn from, with the row's style, the line's
+    /// own colour and the run's reference time, so a pinned pair is the pair on screen. Empty when
+    /// the line, or the figure it came from, is no longer in the published set.
     pub(crate) fn line_figures(&self, key: LineKey) -> Vec<Figure> {
-        self.line(key)
-            .and_then(|l| self.figures.get(l.figs.clone()))
-            .map(<[Figure]>::to_vec)
-            .unwrap_or_default()
+        let Some(line) = self.line(key) else {
+            return Vec::new();
+        };
+        let drawn = || {
+            self.figures
+                .get(line.figs.clone())
+                .map(<[Figure]>::to_vec)
+                .unwrap_or_default()
+        };
+        if !matches!(line.shape, FoundShape::Pair { .. }) {
+            return drawn();
+        }
+        let Some((row, found)) = self.set.as_ref().and_then(|set| {
+            set.rows
+                .iter()
+                .filter(|r| r.row_ix == key.row_ix)
+                .find_map(|r| {
+                    r.outcome
+                        .found
+                        .iter()
+                        .find(|f| LineKey::of(r.row_ix, f) == key)
+                        .map(|f| (r, f))
+                })
+        }) else {
+            return Vec::new();
+        };
+        let rgb = [
+            (line.color >> 16) as u8,
+            (line.color >> 8) as u8,
+            line.color as u8,
+        ];
+        let mut out = Vec::new();
+        pin_figures(
+            found,
+            &ResolvedStyle::new(&row.style, rgb),
+            row.ref_ms,
+            &mut out,
+        );
+        out
     }
 }
 
@@ -173,10 +217,16 @@ fn rgb_u32(rgb: [u8; 3]) -> u32 {
 }
 
 /// Where a line's event mark sits: at the close of the last closed bar of its timeframe — the
-/// moment the bar events are about, and close to the live edge for the approach — on the line.
-fn event_mark_at(found: &Found, last_closed_ms: i64, tf: TfId) -> Option<(f64, f64)> {
+/// moment the bar events are about, and close to the live edge for the approach — on the line, or
+/// for a two-line formation on the side it was kept by (`side`).
+fn event_mark_at(
+    found: &Found,
+    side: Option<PairSide>,
+    last_closed_ms: i64,
+    tf: TfId,
+) -> Option<(f64, f64)> {
     let t = (last_closed_ms + tf.ms()) as f64;
-    Some((t, found.shape.price_at(t)?))
+    Some((t, found.shape.side_price_at(t, side)?))
 }
 
 /// Append `set`'s geometry to `out` and record what was drawn in `drawn`.
@@ -219,7 +269,8 @@ pub(crate) fn append_auto_geometry(
             );
             let tf = row.outcome.key.tf;
             if !kept.events.is_empty()
-                && let Some((t, price)) = event_mark_at(found, row.outcome.key.last_closed_ms, tf)
+                && let Some((t, price)) =
+                    event_mark_at(found, kept.side, row.outcome.key.last_closed_ms, tf)
             {
                 let c = |v: u8| f32::from(v) / 255.0;
                 marks.push(MarkerInstance::at_price(
@@ -234,6 +285,7 @@ pub(crate) fn append_auto_geometry(
             drawn.lines.push(AutoLineRec {
                 key: LineKey::of(row.row_ix, found),
                 shape: found.shape,
+                side: kept.side,
                 span: time_span(found, row.style.extend),
                 touches: found.touches.len(),
                 tf,
@@ -266,7 +318,7 @@ fn caption_values(
     CaptionValues {
         title: &line.title,
         tag: line.tag,
-        line_now: line.shape.price_at(now_ms),
+        line_now: line.shape.side_price_at(now_ms, line.side),
         price,
         touches: line.touches,
         tf: line.tf,

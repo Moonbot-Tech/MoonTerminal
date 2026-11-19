@@ -12,7 +12,7 @@
 
 use moon_chart::auto_figures::confluence::{ConfluenceScratch, PlacedLine, confluence_in};
 use moon_chart::auto_figures::events::{EventSet, line_events};
-use moon_chart::auto_figures::{Found, FoundShape, LineTag, take};
+use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide, take};
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks, Take};
 
 use super::AutoRowDrawn;
@@ -39,17 +39,28 @@ use super::job::AutoRowOutcome;
 /// bits: wide enough apart that no two round levels collide (they are at least a tenth of the
 /// price's order of magnitude apart), and immune to the last-digit noise of the same level
 /// computed from a different order of magnitude.
+///
+/// A two-line formation (`FoundShape::Pair`) is ONE key — hiding it hides both sides — and it is
+/// keyed by the first touch of EACH side (in the two touch slots) rather than by its merged touch
+/// list: one more swing on either side moves the formation's last touch on every bar close, while
+/// the bar each side starts at stays until the pattern itself changes. Its tag is keyed as its
+/// family ([`key_tag`]): a flag that outgrows the flag cap becomes the channel it is, a channel
+/// whose sides start converging a triangle — the same stretch, the same formation to a reader who
+/// hid it. A double top and a double bottom stay apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct LineKey {
     /// The row's index in its kind's configuration.
     pub row_ix: usize,
-    /// 0 horizontal, 1 sloped, 2 squeeze: a level and a trend line of one row may share a touch.
+    /// 0 horizontal, 1 sloped, 2 squeeze, 3 pair: a level and a trend line of one row may share a
+    /// touch.
     shape: u8,
     /// `first_ms` as bits: compared for identity, never for order.
     first_ms: u64,
-    /// The first touch's time as bits; what tells a period's high from its low.
+    /// The first touch's time as bits; what tells a period's high from its low. For a pair, its
+    /// upper side's first touch.
     touch_ms: u64,
-    /// The last touch's time as bits; what tells two trend lines from one shared pivot apart.
+    /// The last touch's time as bits; what tells two trend lines from one shared pivot apart. For a
+    /// pair, its lower side's first touch.
     last_touch_ms: u64,
     /// What the line is, for the detectors that draw several kinds of line from one anchor; a
     /// naked POC is keyed as the POC it is ([`key_tag`]).
@@ -66,6 +77,14 @@ impl LineKey {
             FoundShape::Horizontal { .. } => 0,
             FoundShape::Sloped { .. } => 1,
             FoundShape::Squeeze { .. } => 2,
+            FoundShape::Pair { .. } => 3,
+        };
+        let (touch_ms, last_touch_ms) = match found.shape {
+            FoundShape::Pair { upper, lower } => (upper.t0_ms.to_bits(), lower.t0_ms.to_bits()),
+            _ => (
+                found.touches.first().map_or(0, |t| t.t_ms.to_bits()),
+                found.touches.last().map_or(0, |t| t.t_ms.to_bits()),
+            ),
         };
         let price = match found.shape {
             FoundShape::Horizontal { price } if found.touches.is_empty() && found.tag.is_none() => {
@@ -77,8 +96,8 @@ impl LineKey {
             row_ix,
             shape,
             first_ms: found.first_ms.to_bits(),
-            touch_ms: found.touches.first().map_or(0, |t| t.t_ms.to_bits()),
-            last_touch_ms: found.touches.last().map_or(0, |t| t.t_ms.to_bits()),
+            touch_ms,
+            last_touch_ms,
             tag: found.tag.map(key_tag),
             price,
         }
@@ -91,9 +110,14 @@ impl LineKey {
 /// the volume profile retags the same line between runs (`LineTag::NakedPoc` ↔ `LineTag::Poc`),
 /// so a key with the raw tag would lose a hidden POC to that flip and draw it again. Both are
 /// "the POC of that day"; the day itself is told apart by `first_ms`, its first bar.
+///
+/// A two-line formation is retagged between runs too: a flag past the flag cap is a channel, a
+/// channel whose width starts shrinking a triangle or a wedge. All four are keyed as `Channel`,
+/// "the two-line formation on that stretch" (see [`LineKey`]); a double keeps its own tag.
 fn key_tag(tag: LineTag) -> LineTag {
     match tag {
         LineTag::NakedPoc => LineTag::Poc,
+        LineTag::Triangle | LineTag::Wedge | LineTag::Flag => LineTag::Channel,
         other => other,
     }
 }
@@ -106,6 +130,11 @@ pub(crate) struct KeptLine {
     /// Whether the line lies ABOVE the reference price it was selected against — what a `BySign`
     /// colour reads.
     pub above: bool,
+    /// For a two-line formation, the side it was selected by — the one nearer the reference price
+    /// (`FoundShape::near_side`); `None` for every other shape. What the line's caption, event
+    /// mark and confluence read (`FoundShape::side_price_at`), so all of them name the boundary
+    /// `take` kept it by and agree with its `above`.
+    pub side: Option<PairSide>,
     /// The events the row marks that this line shows now.
     pub events: EventSet,
 }
@@ -151,7 +180,9 @@ pub(crate) fn select_kept(
         if rules.hidden.contains(&LineKey::of(rules.row_ix, found)) {
             continue;
         }
-        let Some(price) = found.shape.price_at(at_ms) else {
+        // The side `take` measured a pair by; every other shape has one line.
+        let side = found.shape.near_side(at_ms, ref_price);
+        let Some(price) = found.shape.side_price_at(at_ms, side) else {
             continue;
         };
         line_events(
@@ -166,6 +197,7 @@ pub(crate) fn select_kept(
         out.push(KeptLine {
             ix,
             above: price >= ref_price,
+            side,
             events: scratch.first().copied().unwrap_or_default(),
         });
     }
@@ -194,7 +226,9 @@ pub(crate) struct ConfluenceBufs {
 /// Judged across the rows of ONE pane, which is the only place every timeframe's lines meet: no
 /// detector run sees another row. Every kept line takes part as a partner, whether or not its own
 /// row marks the event — a 4h level is a place the 1h row agrees with even when the 4h row shows
-/// no mark of its own. Hidden lines are not kept, so they neither get nor give a mark.
+/// no mark of its own. Hidden lines are not kept, so they neither get nor give a mark. A two-line
+/// formation takes part at the side it was kept by ([`KeptLine::side`]), its far side not at all —
+/// one placed price per kept line.
 ///
 /// Cost: O(n log n) in the kept lines of the pane, nothing at all when no row marks the event,
 /// and no allocation once `bufs` has grown.
@@ -222,7 +256,7 @@ pub(crate) fn mark_confluence(
                 .outcome
                 .found
                 .get(line.ix)
-                .and_then(|f| f.shape.price_at(at_ms))
+                .and_then(|f| f.shape.side_price_at(at_ms, line.side))
             else {
                 continue;
             };

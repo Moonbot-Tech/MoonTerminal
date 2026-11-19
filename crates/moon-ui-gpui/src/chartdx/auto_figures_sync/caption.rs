@@ -63,6 +63,7 @@ pub(crate) fn kind_key(kind: DetectorKind) -> &'static str {
         DetectorKind::VolumeProfile => "auto_figures.kind.volume_profile",
         DetectorKind::PeriodLevel => "auto_figures.kind.period_level",
         DetectorKind::RoundLevels => "auto_figures.kind.round_levels",
+        DetectorKind::Formation => "auto_figures.kind.formation",
     }
 }
 
@@ -110,6 +111,12 @@ pub(crate) fn tag_key(tag: LineTag) -> &'static str {
         LineTag::PrevDayClose => "auto_figures.tag.prev_day_close",
         LineTag::WeekOpen => "auto_figures.tag.week_open",
         LineTag::PrevWeekClose => "auto_figures.tag.prev_week_close",
+        LineTag::Triangle => "auto_figures.tag.triangle",
+        LineTag::Wedge => "auto_figures.tag.wedge",
+        LineTag::Channel => "auto_figures.tag.channel",
+        LineTag::Flag => "auto_figures.tag.flag",
+        LineTag::DoubleTop => "auto_figures.tag.double_top",
+        LineTag::DoubleBottom => "auto_figures.tag.double_bottom",
     }
 }
 

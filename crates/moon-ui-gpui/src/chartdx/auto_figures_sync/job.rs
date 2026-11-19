@@ -189,6 +189,7 @@ pub(crate) fn full_history_pct(detector: &DetectorParams) -> u64 {
         DetectorParams::Swing(_)
         | DetectorParams::Trend(_)
         | DetectorParams::Squeeze(_)
+        | DetectorParams::Formation(_)
         // One bar needed: 90 % and 100 % of it are the same test.
         | DetectorParams::RoundLevels(_) => FULL_HISTORY_PCT,
         DetectorParams::PeriodExtreme(_)

@@ -11,8 +11,9 @@ use moon_chart::auto_figures::LineTag;
 use moon_core::config::LabelColor;
 use moon_core::config::auto_figures::{
     AutoEvent, AutoFigureRow, BrokenPolicy, CaptionPart, CaptionPlace, CaptionShow, DetectorKind,
-    DetectorParams, EventMarks, Extend, ExtremePeriod, ExtremeWhich, ProfilePeriod, RoundGrid,
-    RowDetector, StrengthBasis, TakeOrder, TakeSide, TfId, TfSource, ToleranceUnit, TrendSide,
+    DetectorParams, EventMarks, Extend, ExtremePeriod, ExtremeWhich, FormationParams,
+    ProfilePeriod, RoundGrid, RowDetector, StrengthBasis, TakeOrder, TakeSide, TfId, TfSource,
+    ToleranceUnit, TrendSide,
 };
 use moon_core::figures::LineKind;
 use moon_ui::{
@@ -427,6 +428,92 @@ pub(super) fn dialog_body(
         .into_any_element()
 }
 
+/// One kind a formation row can look for: its checkbox's id suffix, its label key, and the
+/// switch it reads and writes.
+struct FormationKind {
+    id: &'static str,
+    label: &'static str,
+    get: fn(&FormationParams) -> bool,
+    set: fn(&mut FormationParams, bool),
+}
+
+/// The formation kinds in the order the editor lists them. The two-line kinds are named by the
+/// same word their caption prints ([`tag_key`]); the doubles are one switch for tops and bottoms,
+/// so they carry a label of their own.
+const FORMATION_KINDS: [FormationKind; 5] = [
+    FormationKind {
+        id: "triangle",
+        label: "auto_figures.tag.triangle",
+        get: |p| p.triangle,
+        set: |p, v| p.triangle = v,
+    },
+    FormationKind {
+        id: "wedge",
+        label: "auto_figures.tag.wedge",
+        get: |p| p.wedge,
+        set: |p, v| p.wedge = v,
+    },
+    FormationKind {
+        id: "channel",
+        label: "auto_figures.tag.channel",
+        get: |p| p.channel,
+        set: |p, v| p.channel = v,
+    },
+    FormationKind {
+        id: "flag",
+        label: "auto_figures.tag.flag",
+        get: |p| p.flag,
+        set: |p, v| p.flag = v,
+    },
+    FormationKind {
+        id: "double",
+        label: "auto_figures.edit.formation_double",
+        get: |p| p.double,
+        set: |p, v| p.double = v,
+    },
+];
+
+/// The checkboxes of the formation kinds a row looks for.
+///
+/// A tick RESEEDS the numeric inputs: which numbers the row has depends on these switches (the
+/// pole and the flag cap exist only with flags on, a double's tolerance and depth only with
+/// doubles, the touch tolerance and the per-side touches only with a two-line kind — `fields`).
+/// Ids are snake case (`afe-formation-triangle`), the atlas's names for these controls.
+fn formation_kinds(
+    state: &Entity<AutoFigureEditState>,
+    fp: &FormationParams,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let boxes = FORMATION_KINDS
+        .iter()
+        .map(|kind| {
+            let state = state.clone();
+            let set = kind.set;
+            checkbox(
+                format!("afe-formation-{}", kind.id),
+                t!(kind.label).to_string(),
+                (kind.get)(fp),
+                move |v, window, cx| {
+                    write_row_reseed(&state, window, cx, |r| {
+                        edit_params(r, |d| {
+                            if let DetectorParams::Formation(x) = d {
+                                set(x, v);
+                            }
+                        })
+                    })
+                },
+            )
+        })
+        .collect();
+    check_group(
+        t!("auto_figures.edit.formation_kinds").to_string(),
+        boxes,
+        p,
+        cx,
+    )
+}
+
 /// What the row looks for: the detector and its numbers, the timeframe, which lines it keeps and
 /// what happens to a broken one.
 fn search_pane(
@@ -697,6 +784,9 @@ fn search_pane(
                     }
                 },
             ));
+        }
+        DetectorParams::Formation(fp) => {
+            col = col.child(formation_kinds(state, &fp, p, cx));
         }
         DetectorParams::Swing(_) | DetectorParams::Squeeze(_) => {}
     }

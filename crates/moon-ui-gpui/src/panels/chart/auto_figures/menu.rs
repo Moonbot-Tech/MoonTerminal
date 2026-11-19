@@ -294,8 +294,9 @@ impl ChartPanel {
     }
 
     /// Copy the line into the figure store as ordinary local figures of the tools and style it is
-    /// drawn with — a squeeze as its level and its sloped line — and select the first, so it can be
-    /// moved, restyled and armed as an alert at once. The auto line itself stays: the next run
+    /// drawn with — a squeeze as its level and its sloped line, a two-line formation as exactly two
+    /// figures, one per side (two levels or two segments, `AutoPaneDrawn::line_figures`) — and
+    /// select the first, so it can be moved, restyled and armed as an alert at once. The auto line itself stays: the next run
     /// draws it again whatever the store holds.
     fn pin_auto_line(&mut self, hit: AutoHover, cx: &mut Context<Self>) {
         let Some((core, market)) = self.fig_pane_key(hit.pane) else {
@@ -328,7 +329,8 @@ impl ChartPanel {
         self.sync_fig_visual(cx);
     }
 
-    /// Hide the line on this pane until it changes market. Not persisted.
+    /// Hide the line on this pane until it changes market. Not persisted. A two-line formation is
+    /// one line here (one `LineKey`): hiding it hides both of its sides.
     fn hide_auto_line(&mut self, hit: AutoHover, cx: &mut Context<Self>) {
         let Some(target) = self.fig_pane_key(hit.pane) else {
             return;

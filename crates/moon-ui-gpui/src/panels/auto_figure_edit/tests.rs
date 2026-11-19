@@ -8,7 +8,9 @@ use moon_core::config::auto_figures::{
 use moon_core::figures::LineKind;
 
 use super::fields::{NumField, parse_number, unit_of_mut};
-use super::preview::{MAX_BARS, compute, dash_pattern, dashes, demo_bars, preview_tf};
+use super::preview::{
+    MAX_BARS, MIN_BARS, compute, dash_pattern, dashes, demo_bars, demo_formation_bars, preview_tf,
+};
 use super::{row_title, switch_detector};
 
 /// A fixed Wednesday noon, UTC: well inside a day and a week, so "today" and "this week" both
@@ -110,6 +112,97 @@ fn each_detector_shows_exactly_its_own_numbers() {
         Vec::<NumField>::new()
     );
     assert_eq!(shown(row_of(DetectorKind::RoundLevels)), vec![RoundRange]);
+    assert_eq!(
+        shown(row_of(DetectorKind::Formation)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            Tolerance,
+            SideTouches,
+            MinBars,
+            ParallelWidth,
+            ImpulsePct,
+            ImpulseBars,
+            FlagMaxBars,
+            DoubleTolerance,
+            DoubleDepth
+        ]
+    );
+    // One unit for the touches and a double's equality alike.
+    assert_eq!(
+        shown(atr_row_of(DetectorKind::Formation)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            ToleranceAtr,
+            SideTouches,
+            MinBars,
+            ParallelWidth,
+            ImpulsePct,
+            ImpulseBars,
+            FlagMaxBars,
+            DoubleToleranceAtr,
+            DoubleDepth
+        ]
+    );
+}
+
+/// A formation row shows the numbers of the kinds it looks for, and only those: the pole and the
+/// flag cap with flags on, a double's tolerance and depth with doubles on, the touch tolerance,
+/// the per-side touches and the parallel band with any two-line kind. The presets are the worked
+/// cases: the double-top row has no touch tolerance, the flag row no double depth.
+///
+/// Mutation: answer `ImpulsePct` without reading `flag`, or the touch tolerance on a row of
+/// doubles alone — a field that then changes nothing the row reads.
+#[test]
+fn a_formation_row_shows_the_numbers_of_its_kinds() {
+    let shown = |row: AutoFigureRow| {
+        NumField::DETECTOR
+            .into_iter()
+            .filter(|f| f.has(&row))
+            .collect::<Vec<_>>()
+    };
+    use NumField::*;
+    assert_eq!(
+        shown(AutoFigurePreset::DoubleTops.row()),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            MinBars,
+            DoubleTolerance,
+            DoubleDepth
+        ]
+    );
+    assert_eq!(
+        shown(AutoFigurePreset::Flags.row()),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            Tolerance,
+            SideTouches,
+            MinBars,
+            ParallelWidth,
+            ImpulsePct,
+            ImpulseBars,
+            FlagMaxBars
+        ]
+    );
+    assert_eq!(
+        shown(AutoFigurePreset::Triangles.row()),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            Tolerance,
+            SideTouches,
+            MinBars,
+            ParallelWidth
+        ]
+    );
 }
 
 /// Every field a row shows writes the number it then reads back, for every kind and both
@@ -261,6 +354,42 @@ fn every_default_detector_finds_something_on_the_demo_candles() {
         assert!(data.found > 0, "{preset:?} found nothing");
         assert!(data.kept > 0 && data.kept <= data.found, "{preset:?}");
         assert!(!data.figures.is_empty(), "{preset:?} drew nothing");
+    }
+}
+
+/// Each formation preset finds its OWN kind on the demo series it previews on — not merely
+/// something — so the preview shows the reader the pattern the row is named for.
+///
+/// Mutation: hand a formation row the ordinary demo series (no channel, no flag, no double top is
+/// current on it), or lay a scenario out so its pattern is broken or past its apex at the last bar.
+#[test]
+fn each_formation_preset_finds_its_own_kind_on_its_demo() {
+    use moon_chart::auto_figures::{DetectCtx, LineTag};
+    for (preset, tag) in [
+        (AutoFigurePreset::Triangles, LineTag::Triangle),
+        (AutoFigurePreset::Channels, LineTag::Channel),
+        (AutoFigurePreset::Flags, LineTag::Flag),
+        (AutoFigurePreset::DoubleTops, LineTag::DoubleTop),
+    ] {
+        let mut row = preset.row();
+        row.sanitize();
+        let params = *row.detector.known().expect("a known detector");
+        let DetectorParams::Formation(fp) = params else {
+            panic!("{preset:?} is not a formation row");
+        };
+        let tf = preview_tf(&row, &params);
+        let n = (params.bars_needed(tf) as usize).clamp(MIN_BARS, MAX_BARS);
+        let bars = demo_formation_bars(&fp, tf, n, NOON);
+        let ctx = DetectCtx {
+            tf_ms: tf.ms(),
+            now_ms: NOON,
+        };
+        let found = moon_chart::auto_figures::detect(&params, &bars, &ctx);
+        assert!(
+            found.iter().any(|f| f.tag == Some(tag)),
+            "{preset:?}: {:?}",
+            found.iter().map(|f| f.tag).collect::<Vec<_>>()
+        );
     }
 }
 

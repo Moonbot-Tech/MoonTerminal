@@ -54,7 +54,7 @@ impl RenderState {
         };
         for li in 0..self.panes[idx].auto.lines.len() {
             // Copied out: the text is an `Arc<str>` (a refcount bump), and drawing needs `&mut self`.
-            let (text, shape, span, place, rgb) = {
+            let (text, shape, side, span, place, rgb) = {
                 let line = &self.panes[idx].auto.lines[li];
                 let Some(text) = line.text.clone() else {
                     continue;
@@ -62,7 +62,14 @@ impl RenderState {
                 if line.hover_only() && hovered != Some(line.key) {
                     continue;
                 }
-                (text, line.shape, line.span, line.place(), line.color)
+                (
+                    text,
+                    line.shape,
+                    line.side,
+                    line.span,
+                    line.place(),
+                    line.color,
+                )
             };
             // The part of the drawn stretch that is on screen.
             let x_lo = if span.0.is_finite() {
@@ -89,7 +96,8 @@ impl RenderState {
                     (mid, 0.5, mid)
                 }
             };
-            let Some(price) = shape.price_at(t_at(at_x)) else {
+            // A formation's caption sits on the side it was kept by, the one it prices.
+            let Some(price) = shape.side_price_at(t_at(at_x), side) else {
                 continue;
             };
             let y = line_y(price as f32);

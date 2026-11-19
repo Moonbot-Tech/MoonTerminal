@@ -1042,3 +1042,140 @@ fn an_unprinted_age_does_not_move_the_caption_key() {
     assert_eq!(key_at(0.0, now), key_at(0.0, day_later));
     assert_ne!(key_at(DAY0 as f64, now), key_at(DAY0 as f64, day_later));
 }
+
+/// A two-line formation of `tag`: an upper side from `(upper_t0, 110)` and a lower one from
+/// `(lower_t0, 100)`, both flat to 10 h, with `extra` touches after the sides' own.
+fn formation(
+    tag: moon_chart::auto_figures::LineTag,
+    upper_t0: f64,
+    lower_t0: f64,
+    extra: usize,
+) -> Found {
+    use moon_chart::auto_figures::Seg;
+    let end = 10.0 * 3_600_000.0;
+    let side = |t0_ms: f64, p: f64| Seg {
+        t0_ms,
+        p0: p,
+        t1_ms: end,
+        p1: p,
+    };
+    let mut touches = vec![
+        Touch {
+            t_ms: upper_t0,
+            price: 110.0,
+        },
+        Touch {
+            t_ms: lower_t0,
+            price: 100.0,
+        },
+    ];
+    touches.extend((0..extra).map(|k| Touch {
+        t_ms: end + k as f64 * 60_000.0,
+        price: 110.0,
+    }));
+    Found {
+        shape: FoundShape::Pair {
+            upper: side(upper_t0, 110.0),
+            lower: side(lower_t0, 100.0),
+        },
+        first_ms: upper_t0.min(lower_t0),
+        last_ms: end,
+        touches,
+        strength: 4.0,
+        broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.002,
+        tag: Some(tag),
+    }
+}
+
+/// A formation keeps its key while it grows — one more touch, a flag outgrowing its cap into the
+/// channel it is — and two formations with different side starts, or a double top beside a
+/// triangle on the same bars, are different lines.
+///
+/// Breakage: the pair keyed by its merged touch list (a hidden formation reappears on the next
+/// swing), by its raw tag (a hidden flag reappears as a channel), or keyed like a level (two
+/// formations of one row collide).
+#[test]
+fn a_formation_keeps_its_key_while_it_grows() {
+    use moon_chart::auto_figures::LineTag;
+    let base = formation(LineTag::Flag, 3_600_000.0, 7_200_000.0, 0);
+    let grown = formation(LineTag::Channel, 3_600_000.0, 7_200_000.0, 2);
+    assert_eq!(LineKey::of(0, &base), LineKey::of(0, &grown));
+    let other = formation(LineTag::Channel, 3_600_000.0, 5_400_000.0, 0);
+    assert_ne!(LineKey::of(0, &base), LineKey::of(0, &other));
+    let double = formation(LineTag::DoubleTop, 3_600_000.0, 7_200_000.0, 0);
+    assert_ne!(LineKey::of(0, &base), LineKey::of(0, &double));
+}
+
+/// A formation is kept, coloured, marked and captioned by its side NEARER the price, is hidden
+/// whole by one key, and pins as exactly two figures.
+///
+/// By hand: a 100..110 range (a channel of two flat sides, drawn as two levels) against a price of
+/// 101 — the lower side is 1 away, the upper 9: kept by the lower side, below price (support), and
+/// its drawn record prices the lower side, 100. Pinning gives two figures, one per side, at 110 and
+/// 100. Hidden by its key, the row keeps nothing.
+///
+/// Breakage: the side read as the upper one wherever a reference price exists (the caption and the
+/// event mark on the far side, `BySign` colouring it as resistance), pinning the drawn figures of
+/// one side only, or a pair needing two keys to hide.
+#[test]
+fn a_formation_is_kept_drawn_and_pinned_by_its_nearer_side() {
+    use moon_chart::auto_figures::{LineTag, PairSide};
+    use moon_core::figures::FigureKind;
+    let mut row = level_row(&[]);
+    Arc::make_mut(&mut row.outcome).found =
+        vec![formation(LineTag::Channel, 3_600_000.0, 7_200_000.0, 0)];
+    let at = 9.0 * 3_600_000.0;
+    row.ref_ms = at;
+    row.kept = select_kept(&row.outcome, &row.rules(&[]), 101.0, at, &mut Vec::new());
+    assert_eq!(row.kept.len(), 1);
+    assert_eq!(row.kept[0].side, Some(PairSide::Lower));
+    assert!(!row.kept[0].above);
+
+    let set = Rc::new(AutoPaneFigures::new(vec![row.clone()], Vec::new()));
+    let mut drawn = AutoPaneDrawn::default();
+    let mut scratch = crate::chartdx::UdScratch::default();
+    let mut no_labels = Vec::new();
+    append_auto_geometry(
+        Some(&set),
+        &ChartTheme::default(),
+        1.0,
+        0.0,
+        &mut FigureBuffers {
+            zones: &mut scratch.zones,
+            hlines: &mut scratch.hlines,
+            segs: &mut scratch.segs,
+            markers: &mut scratch.markers,
+            labels: &mut no_labels,
+        },
+        &mut drawn,
+    );
+    let rec = &drawn.lines[0];
+    assert_eq!(rec.side, Some(PairSide::Lower));
+    assert_eq!(rec.shape.side_price_at(at, rec.side), Some(100.0));
+
+    let pinned: Vec<f64> = drawn
+        .line_figures(rec.key)
+        .iter()
+        .map(|f| match &f.kind {
+            FigureKind::HorizontalRay(r) => r.origin.price,
+            FigureKind::HLine(h) => h.price,
+            FigureKind::Segment(s) => s.a.price,
+            k => panic!("{k:?}"),
+        })
+        .collect();
+    assert_eq!(pinned, [110.0, 100.0]);
+
+    let hidden = [rec.key];
+    assert!(
+        select_kept(
+            &row.outcome,
+            &row.rules(&hidden),
+            101.0,
+            at,
+            &mut Vec::new()
+        )
+        .is_empty()
+    );
+}
