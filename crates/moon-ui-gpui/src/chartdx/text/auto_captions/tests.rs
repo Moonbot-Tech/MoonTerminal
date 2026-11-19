@@ -7,7 +7,7 @@ use moon_chart::auto_figures::draw::drawn_side;
 use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide, Seg};
 use moon_core::config::auto_figures::{CaptionPlace, Extend};
 
-use super::{CaptionMap, CaptionSpot, caption_spot, clear_of_orders};
+use super::{CaptionMap, CaptionSpot, caption_spot, clear_of_orders, line_y_at};
 use crate::chartdx::text::OrderCaption;
 use crate::chartdx::text::{READOUT_PAD_X, READOUT_PAD_Y};
 
@@ -94,9 +94,34 @@ fn a_right_end_caption_sits_at_the_end_of_the_drawn_side() {
         CaptionSpot {
             x: 990.0,
             ax: 1.0,
-            line_y: 180.0
+            line_y: 180.0,
+            drawn: spot.drawn,
         }
     );
+}
+
+/// A caption that slid left along a SLOPED side is read at its new place, not carried over at the
+/// old height, and never left of the side's drawn start.
+///
+/// By hand, under a view from 90: the triangle's top falls 110 → 106 over 1..3 s, 2 units per
+/// second; at x 500 (5 s) it is at 102, y 500 − (102 − 90) · 20 = 260; at its drawn end, x 800
+/// (8 s, the apex), 96 → 380. A slide to x 50 (0.5 s) is left of the drawn start (x 100, 1 s) and
+/// reads the start: 110 → y 100.
+///
+/// Breakage: the slid caption kept at its first height (review finding: it drifted off a sloped
+/// line by slope · dx), or read left of where its line is drawn.
+#[test]
+fn a_slid_caption_follows_its_sloped_line() {
+    let triangle = formation(
+        LineTag::Triangle,
+        (1_000.0, 110.0, 3_000.0, 106.0),
+        (2_000.0, 90.0, 4_000.0, 92.0),
+    );
+    let drawn = [100.0, 800.0];
+    let y = |x| line_y_at(&map(90.0), &triangle.shape, Some(PairSide::Upper), x, drawn);
+    assert_eq!(y(800.0), Some(380.0));
+    assert_eq!(y(500.0), Some(260.0));
+    assert_eq!(y(50.0), Some(100.0));
 }
 
 /// A formation's caption is placed on the side it was kept by.
@@ -187,4 +212,8 @@ fn a_right_end_caption_slides_left_of_the_order_captions() {
         Some(990.0)
     );
     assert_eq!(clear_of_orders(990.0, w, top, h, &both, 800.0), None);
+    // An order caption far to the right in the same row does not touch a caption that needed no
+    // slide, however close its text sits to `min_left`: it stays where it was drawn before.
+    let far = [order(1_200.0, 60.0, Some(100.0))];
+    assert_eq!(clear_of_orders(990.0, w, top, h, &far, 950.0), Some(990.0));
 }

@@ -64,6 +64,9 @@ pub(super) struct CaptionSpot {
     pub ax: f32,
     /// The y of the line at the point the caption names, logical pixels.
     pub line_y: f32,
+    /// The on-screen part of the drawn stretch, `[x_lo, x_hi]` in logical pixels: how far a
+    /// caption sliding aside for the order captions may go and still sit on its own line.
+    pub drawn: [f32; 2],
 }
 
 /// Where a caption of `place` goes on a line of `shape` drawn over `span` (Unix ms, `±∞` = to
@@ -123,18 +126,44 @@ pub(super) fn caption_spot(
     if !(plot_top..=plot_bottom).contains(&line_y) {
         return None;
     }
-    Some(CaptionSpot { x, ax, line_y })
+    Some(CaptionSpot {
+        x,
+        ax,
+        line_y,
+        drawn: [x_lo, x_hi],
+    })
+}
+
+/// The y of `shape`'s line (its `side` for a formation) under logical x `x`, clamped into the
+/// drawn stretch `drawn`; `None` when that price is unusable or falls outside the plot.
+///
+/// What keeps a caption that slid LEFT on its line: a sloped line's price changes along the slide,
+/// so the caption's height is read again where it now ends instead of being carried over.
+fn line_y_at(
+    map: &CaptionMap,
+    shape: &FoundShape,
+    side: Option<PairSide>,
+    x: f32,
+    drawn: [f32; 2],
+) -> Option<f32> {
+    let at_x = x.clamp(drawn[0], drawn[1]);
+    let price = shape.side_price_at(map.t_at(at_x), side)?;
+    let y = map.y_of(price as f32);
+    (map.plot[1]..=map.plot[3]).contains(&y).then_some(y)
 }
 
 /// Where a RIGHT-anchored caption ends once it is clear of the order captions: its anchor `x`
 /// when nothing is in the way, else slid LEFT along its line until its padded box meets none of
 /// the laid-out `orders` (an order caption whose `top` is `None` is hidden and not in the way);
-/// `None` when the text would then start left of `min_left`.
+/// `None` when, after sliding, the text would start left of `min_left`. A caption that needed no
+/// slide keeps its place whatever `min_left` says: an order caption elsewhere in its row is no
+/// reason to drop a caption that was drawn there before.
 ///
 /// Why sliding left rather than the alternatives: moving the text up or down puts it beside a
 /// DIFFERENT price, where it names the wrong line; shortening it to the price still covers the
-/// order's numbers. Along its own line the caption keeps its height and still reads as that
-/// line's. The order captions keep the column: they carry the user's live orders.
+/// order's numbers. Along its own line — the caller reads its height again where it ends, so on a
+/// sloped line it follows the slope — the caption still reads as that line's. The order captions
+/// keep the column: they carry the user's live orders.
 ///
 /// Deterministic, so it cannot flicker on a still picture: the answer depends only on this frame's
 /// order layout, and each step moves the box strictly left of an order caption it met, so it ends
@@ -146,7 +175,8 @@ pub(super) fn caption_spot(
 ///     top: The top of its text.
 ///     h: Its text line height.
 ///     orders: This frame's order captions, after `layout_order_captions`.
-///     min_left: The leftmost x its text may start at (the plot's left edge).
+///     min_left: The leftmost x its text may start at once it slid: where its line's drawn
+///         stretch starts on screen, so it never hangs left of its own line.
 pub(super) fn clear_of_orders(
     x: f32,
     w: f32,
@@ -158,6 +188,7 @@ pub(super) fn clear_of_orders(
     // The same padded box an order caption is laid out by.
     let (y0, y1) = (top - READOUT_PAD_Y, top + h + READOUT_PAD_Y);
     let mut right = x;
+    let mut slid = false;
     for _ in 0..=orders.len() {
         let (x0, x1) = (right - w - READOUT_PAD_X, right + READOUT_PAD_X);
         let block = orders
@@ -169,9 +200,10 @@ pub(super) fn clear_of_orders(
             })
             .reduce(f32::min);
         let Some(block) = block else {
-            return (right - w >= min_left).then_some(right);
+            return (!slid || right - w >= min_left).then_some(right);
         };
         right = block - READOUT_PAD_X;
+        slid = true;
     }
     None
 }
@@ -259,20 +291,34 @@ impl RenderState {
             let Some(spot) = caption_spot(&map, &shape, side, span, place, label_x) else {
                 continue;
             };
-            let (dy, ay) = match place {
-                CaptionPlace::BelowLine => (spot.line_y + LABEL_LINE_GAP, 0.0),
-                _ => (spot.line_y - LABEL_LINE_GAP, 1.0),
+            let offset = |line_y: f32| match place {
+                CaptionPlace::BelowLine => (line_y + LABEL_LINE_GAP, 0.0),
+                _ => (line_y - LABEL_LINE_GAP, 1.0),
             };
+            let (mut dy, ay) = offset(spot.line_y);
             let mut x = spot.x;
             let top = dy - ay * line_h;
             // Measured only when an order caption shares the row: text shaping is the expensive
             // call on this path, and most captions have nothing beside them.
             if spot.ax == 1.0 && row_has_orders(top, line_h, live) {
                 let w = self.measure_label_text(ctx, &text).width.as_f32();
-                let Some(clear) = clear_of_orders(x, w, top, line_h, live, plot[0]) else {
+                let cleared = clear_of_orders(x, w, top, line_h, live, spot.drawn[0]);
+                // Slid along its line: its height is read again where it now ends.
+                let slid_y = match cleared {
+                    Some(clear) if clear != x => {
+                        line_y_at(&map, &shape, side, clear, spot.drawn).map(|y| (clear, y))
+                    }
+                    other => other.map(|clear| (clear, spot.line_y)),
+                };
+                let Some((clear, line_y)) = slid_y else {
+                    // No room left on its own line, or its price there is off the plot. The run
+                    // slot the measurement shaped this text into is left to it, so the next
+                    // caption does not reshape that slot on every frame.
+                    self.text_run_cursor += 1;
                     continue;
                 };
                 x = clear;
+                dy = offset(line_y).0;
             }
             match draw_label_text_run(
                 &mut self.text_runs,
