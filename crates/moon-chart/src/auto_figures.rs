@@ -16,8 +16,40 @@
 //! `f32`. Every `f32` candle price converts to `f64` exactly, so nothing is lost on the way in.
 //!
 //! Input contract for every detector: `bars` are closed candles sorted by `t_open_ms`, ascending.
-//! A bar with a non-finite or non-positive price, or `high < low`, is skipped wherever it would be
-//! read — it never panics a detector and never becomes a touch.
+//! A bar with a non-finite or non-positive high or low, or `high < low`, is skipped wherever it
+//! would be read — it never panics a detector and never becomes a touch.
+//!
+//! # Bars without an open and close
+//!
+//! Much of the 5-minute history comes from the core's own ring, which carries only each bucket's
+//! high and low (`open == high`, `close == low`, the RANGE-ONLY form — measured 19.11.2026, and
+//! kept in that form by the kline cache, `moon_core::market::candles::is_range_only`). Such a
+//! bar's open and close are not prices the market traded at the bucket's edges, and read as
+//! closes they would break every level the bucket's range straddles: a ring bar spanning a line
+//! "closes" below it whenever its low is below it.
+//!
+//! So the bar assembly ([`forget_range_closes`]) turns the range-only form into an UNKNOWN open and
+//! close — `NaN` in both — before anything resamples or detects. The mark is in the bar itself, so
+//! it survives a resample with the meaning it should have: a bucket's open is its first sub-bar's
+//! and its close its last's, so a coarse bar whose last 5 minutes came from the ring has an unknown
+//! close and one ending on a real candle has the real close. Every reader of a close or an open
+//! then asks [`close_of`] / [`open_of`] and leaves an unknown one out:
+//!
+//! - breaks (`scan_break`), the closes outside a formation's span, the bodies a trend line may not
+//!   cross, the bar events (breakout, false break, bounce, role flip, stop hunt) and a flag's pole
+//!   read only known closes and opens — a bar without them neither breaks nor holds anything;
+//! - the ATR takes a bar's own range as its true range when the previous close is unknown;
+//! - a period level (a day's open, yesterday's close) is the first or last bar's own price, and is
+//!   not found when that bar has none — no other bar's price is that one;
+//! - what only needs "about where price is" — the tolerance's reference, round prices, a profile's
+//!   POC tie-break — reads [`last_price`]: the newest bar's close, or the middle of its range when
+//!   the close is unknown;
+//! - highs and lows — pivots, swings, extremes, touches, the profile's ranges — are read as ever.
+//!
+//! A NaN rather than a parallel quality array, because it travels through `resample` and every
+//! slice and copy without any of them knowing, and because a reader that forgets to ask fails
+//! closed: every comparison with a NaN is false, so a forgotten check reads as "no break", never as
+//! a break the market did not make.
 
 use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams, ToleranceUnit};
 use moon_core::market::candles::ChartCandle;
@@ -400,15 +432,63 @@ pub(crate) fn positive(v: f64) -> Option<f64> {
     (v.is_finite() && v > 0.0).then_some(v)
 }
 
-/// A bar every price of which can be read: finite, positive, `high >= low`, finite open time.
+/// A bar whose range can be read: a finite open time, a finite positive high and low, `high >=
+/// low`, and an open and close each either a finite positive price or UNKNOWN (`NaN`, see the
+/// module doc). Whoever reads the open or the close asks [`open_of`] / [`close_of`].
 pub(crate) fn bar_ok(b: &ChartCandle) -> bool {
     let ok = |v: f32| v.is_finite() && v > 0.0;
+    let known_or_unknown = |v: f32| v.is_nan() || ok(v);
     b.t_open_ms.is_finite()
-        && ok(b.open)
         && ok(b.high)
         && ok(b.low)
-        && ok(b.close)
         && b.high >= b.low
+        && known_or_unknown(b.open)
+        && known_or_unknown(b.close)
+}
+
+/// The bar's close when it is known; `None` for a bar whose source carried none (module doc).
+pub(crate) fn close_of(b: &ChartCandle) -> Option<f64> {
+    positive(f64::from(b.close))
+}
+
+/// The bar's open when it is known; `None` for a bar whose source carried none (module doc).
+pub(crate) fn open_of(b: &ChartCandle) -> Option<f64> {
+    positive(f64::from(b.open))
+}
+
+/// Where price was at the end of `bars`, for what needs only "about where": the newest valid bar's
+/// close, or the middle of its range when its close is unknown — the close lies inside that range,
+/// so the middle is off by at most half of one bar. `None` when no bar is valid.
+///
+/// Not for anything a close DECIDES (a break, an event): those read [`close_of`] and skip the bar.
+pub fn last_price(bars: &[ChartCandle]) -> Option<f64> {
+    bars.iter().rev().find(|b| bar_ok(b)).and_then(price_of)
+}
+
+/// One valid bar's [`last_price`]: its close when known, else the middle of its range.
+pub(crate) fn price_of(b: &ChartCandle) -> Option<f64> {
+    close_of(b).or_else(|| positive((f64::from(b.high) + f64::from(b.low)) / 2.0))
+}
+
+/// Turn every range-only bar of `rows` into a bar with an UNKNOWN open and close (`NaN`), its high,
+/// low and volumes kept — the bar assembly's first step for anything the core's ring may have
+/// filled (see the module doc).
+///
+/// A range-only bar is `moon_core::market::candles::is_range_only`'s: `open == high`,
+/// `close == low`, `high > low`, the form the ring and the kline cache keep it in. The form a
+/// chart's display orients ring rows into (`open == low`, `close == high`) is NOT taken: it is
+/// also every real rising candle of two prints, and the cache never stores a ring row in it.
+///
+/// A real candle of the raw shape — two prints, the first at the high and the second at the low —
+/// loses its close too; it is a quiet market's bar, and the cost is one known close the events do
+/// not see, never a break that did not happen.
+pub fn forget_range_closes(rows: &mut [ChartCandle]) {
+    for b in rows.iter_mut() {
+        if moon_core::market::candles::is_range_only(b) {
+            b.open = f32::NAN;
+            b.close = f32::NAN;
+        }
+    }
 }
 
 /// The most recent `lookback` bars — all of them when fewer exist, none for `lookback = 0`.
@@ -449,8 +529,10 @@ pub(crate) fn touch_volume(bars: &[ChartCandle], touches: &[Touch]) -> f64 {
 
 /// The Average True Range over the last `period` true ranges of the valid bars of `bars`: the
 /// SIMPLE mean, a bar's true range being `max(high, prev_close) - min(low, prev_close)` with
-/// `prev_close` the close of the nearest earlier VALID bar. So it reads the last `period + 1` valid
-/// bars and nothing older (see `moon_core::config::auto_figures::ATR_PERIOD` for why a simple mean).
+/// `prev_close` the close of the nearest earlier VALID bar — or the bar's own `high - low` when
+/// that close is unknown (a ring bar, see the module doc): a range-only close would stretch the
+/// range to wherever the ring put it. So it reads the last `period + 1` valid bars and nothing
+/// older (see `moon_core::config::auto_figures::ATR_PERIOD` for why a simple mean).
 ///
 /// Returns `None` for `period = 0`, for fewer than `period + 1` valid bars, and for a result that
 /// is not a positive finite number — a flat series has no range to measure a tolerance in.
@@ -463,10 +545,11 @@ pub fn atr(bars: &[ChartCandle], period: u32) -> Option<f64> {
     let mut sum = 0.0;
     for _ in 0..period {
         let older = valid.next()?;
-        let prev_close = f64::from(older.close);
-        let hi = f64::from(newer.high).max(prev_close);
-        let lo = f64::from(newer.low).min(prev_close);
-        sum += hi - lo;
+        let (high, low) = (f64::from(newer.high), f64::from(newer.low));
+        sum += match close_of(older) {
+            Some(prev_close) => high.max(prev_close) - low.min(prev_close),
+            None => high - low,
+        };
         newer = older;
     }
     positive(sum / period as f64)
@@ -474,9 +557,9 @@ pub fn atr(bars: &[ChartCandle], period: u32) -> Option<f64> {
 
 /// The touch tolerance a row groups by, as a FRACTION of price, in the unit the row chose.
 ///
-/// `Pct` reads `pct` (`pct_frac`); `Atr` reads `atr_share` as a multiple of `atr` divided by the
-/// last valid close of `bars` — once per run, so every touch of the run is grouped by the same
-/// band. `None` under `Atr` when there is no ATR (`atr` is `None`) or no valid close: the detector
+/// `Pct` reads `pct` (`pct_frac`); `Atr` reads `atr_share` as a multiple of `atr` divided by
+/// [`last_price`] of `bars` — once per run, so every touch of the run is grouped by the same
+/// band. `None` under `Atr` when there is no ATR (`atr` is `None`) or no valid bar: the detector
 /// then finds nothing rather than silently falling back to a percentage the row did not ask for.
 /// A share that is not a positive finite number reads as zero, like a bad percentage.
 pub(crate) fn tolerance_frac(
@@ -490,11 +573,7 @@ pub(crate) fn tolerance_frac(
         ToleranceUnit::Pct => Some(pct_frac(pct)),
         ToleranceUnit::Atr => {
             let atr = atr?;
-            let close = bars
-                .iter()
-                .rev()
-                .find(|b| bar_ok(b))
-                .and_then(|b| positive(f64::from(b.close)))?;
+            let close = last_price(bars)?;
             let share = if atr_share.is_finite() && atr_share > 0.0 {
                 f64::from(atr_share)
             } else {
@@ -517,8 +596,9 @@ pub(crate) fn within(price: f64, line: f64, frac: f64) -> bool {
 ///
 /// An episode ends at a close back on `origin`'s side; a close beyond after that starts a new one,
 /// so a level that broke, came back and broke again reports its SECOND break — the one a
-/// `Keep { bars }` countdown must run from. A close exactly on the line neither ends nor starts an
-/// episode. `line_at` gives the line's price at a bar's open time; a bar where it gives `None` is
+/// `Keep { bars }` countdown must run from. A close exactly on the line, and a bar whose close is
+/// unknown (module doc), neither ends nor starts an episode; such a bar still counts in
+/// `bars_since`, which is time passing. `line_at` gives the line's price at a bar's open time; a bar where it gives `None` is
 /// skipped. Cost O(bars after `from_idx`).
 pub(crate) fn scan_break(
     bars: &[ChartCandle],
@@ -536,7 +616,7 @@ pub(crate) fn scan_break(
         let Some(line) = line_at(b.t_open_ms) else {
             continue;
         };
-        let Some(side) = side_of(f64::from(b.close), line) else {
+        let Some(side) = close_of(b).and_then(|close| side_of(close, line)) else {
             continue;
         };
         last_side = Some(side);

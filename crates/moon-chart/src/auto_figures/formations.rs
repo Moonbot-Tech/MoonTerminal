@@ -109,8 +109,8 @@ use super::squeeze::MAX_BODY_BREAKS;
 use super::trend::{Line, LineSpec, MAX_LINE_PIVOTS, find_lines};
 use super::{
     Broken, DetectCtx, Detector, Found, FoundShape, LineTag, Seg, Side, Touch, atr, bar_ok,
-    pct_frac, positive, scan_break, survives, tolerance_frac, touch_strength, touch_volume, window,
-    within,
+    close_of, open_of, pct_frac, positive, scan_break, survives, tolerance_frac, touch_strength,
+    touch_volume, window, within,
 };
 
 /// Closes allowed outside the pair, by more than the touch tolerance, between the formation's first
@@ -432,8 +432,8 @@ fn range_levels(upper: &Line, lower: &Line) -> Option<(f64, f64)> {
 }
 
 /// Valid closes in `win[first..=last]` outside the pair by more than `tol` of the side's price —
-/// above the upper side or below the lower. Counting stops one past [`MAX_SPAN_BREAKS`], which
-/// already rejects the pair.
+/// above the upper side or below the lower; a bar whose close is unknown has none. Counting stops
+/// one past [`MAX_SPAN_BREAKS`], which already rejects the pair.
 fn span_breaks(
     win: &[ChartCandle],
     first: usize,
@@ -447,8 +447,9 @@ fn span_breaks(
     };
     span.iter()
         .filter(|b| bar_ok(b))
-        .filter(|b| {
-            let close = f64::from(b.close);
+        .filter_map(|b| close_of(b).map(|close| (b, close)))
+        .filter(|(b, close)| {
+            let close = *close;
             let above = upper
                 .price_at(b.t_open_ms)
                 .is_some_and(|u| close > u * (1.0 + tol));
@@ -505,26 +506,37 @@ struct Pole {
 /// the window is a swing price passed through, and taking it as the base turned the bounce off a
 /// crash's wick into a rise, and the falling channel after the crash into a "flag" against it.
 ///
-/// `None` when fewer than two valid bars lie in the range (`bars < 2` included): a single bar's
-/// own range is not a move across bars, and the bar of the first touch is part of the pattern.
+/// Only KNOWN prices make a pole (a ring bar's open and close are unknown, see the module doc of
+/// `super`): the base is the open of the first bar that has one, the end the close of the last bar
+/// that has one — normally the touch bar itself; when its close is unknown, the nearest earlier
+/// known close, the furthest the move is known to have gone.
+///
+/// `None` when no two distinct bars of the range give a known open and a later known close
+/// (`bars < 2` included): a single bar's own range is not a move across bars, and the bar of the
+/// first touch is part of the pattern. Without a pole the pair is reported as the channel or
+/// triangle it is, never as a flag.
 fn pole(win: &[ChartCandle], start: usize, bars: u32) -> Option<Pole> {
     let bars = usize::try_from(bars).unwrap_or(usize::MAX);
     let from = (start + 1).saturating_sub(bars);
     let range = win.get(from..=start)?;
-    let first = range.iter().position(bar_ok)?;
-    let last = range.iter().rposition(bar_ok)?;
-    if last == first {
+    let first = range
+        .iter()
+        .position(|b| bar_ok(b) && open_of(b).is_some())?;
+    let last = range
+        .iter()
+        .rposition(|b| bar_ok(b) && close_of(b).is_some())?;
+    if last <= first {
         return None;
     }
-    let base = f64::from(range[first].open);
-    let close = f64::from(range[last].close);
+    let base = open_of(&range[first])?;
+    let close = close_of(&range[last])?;
     let (height, dir) = if close >= base {
         (close - base, 1)
     } else {
         (base - close, -1)
     };
     let frac = height / base;
-    // `bar_ok` keeps every price positive and finite, so `frac` is finite and not negative.
+    // `open_of` and `close_of` give positive finite prices, so `frac` is finite and not negative.
     Some(Pole { frac, height, dir })
 }
 

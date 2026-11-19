@@ -302,22 +302,26 @@ fn a_market_is_scanned_once_whatever_shows_it() {
             ScanTarget {
                 provider: 10,
                 core: 10,
-                market: "ACEUSDT".into()
+                market: "ACEUSDT".into(),
+                price: None
             },
             ScanTarget {
                 provider: 20,
                 core: 20,
-                market: "ACEUSDT".into()
+                market: "ACEUSDT".into(),
+                price: None
             },
             ScanTarget {
                 provider: 10,
                 core: 10,
-                market: "NOCACHEUSDT".into()
+                market: "NOCACHEUSDT".into(),
+                price: None
             },
             ScanTarget {
                 provider: 10,
                 core: 10,
-                market: "LOSTUSDT".into()
+                market: "LOSTUSDT".into(),
+                price: None
             },
         ]
     );
@@ -503,4 +507,40 @@ fn a_lagging_cache_is_not_shown_as_a_current_event() {
         );
     }
     assert!(ScanQuery::new(book, ScanFilter::Any).admits(&entries[0]));
+}
+
+/// The distance is measured from the market's live price when the Screener's row has one: the
+/// 3.5 line under an ask of 3.6 is (3.5 - 3.6) / 3.6 = -2.778 % away, not the -1.408 % from the
+/// cache's last close of 3.55.
+///
+/// Breakage: the target's price dropped on the way to the scan, or the cache's close preferred.
+#[test]
+fn the_live_price_measures_the_distance() {
+    let mut row = entry(1, 1, "AUSDT");
+    row.row = ScreenerRow {
+        provider: 1,
+        core: 1,
+        market: "AUSDT".to_string(),
+        ask: 3.6,
+        ..Default::default()
+    }
+    .into();
+    let targets = scan_targets(&[row]);
+    assert_eq!(targets[0].price, Some(3.6));
+    let mut fake = Fake::default();
+    fake.exchanges
+        .insert((1, "AUSDT".to_string()), "ex".to_string());
+    fake.bars.insert(
+        ("ex".into(), "AUSDT".into()),
+        hourly(&[3.4, 3.4, 3.4, 3.55]),
+    );
+    let now = MONDAY_MS + 4 * HOUR_MS;
+    let mut work = ScanWork::new(targets, vec![round_row(TfId::H1)], now);
+    let answers = work.step(&fake, Duration::MAX);
+    let Some((_, _, MarketScan::Scanned(answer))) = answers.first() else {
+        panic!("scanned: {answers:?}");
+    };
+    assert_eq!(answer.last_price, Some(3.6));
+    let d = answer.nearest.expect("the 3.5 line").distance_pct;
+    assert!((d + 2.777_78).abs() < 1e-4, "{d}");
 }

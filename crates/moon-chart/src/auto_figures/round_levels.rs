@@ -7,15 +7,15 @@
 //!
 //! # Integers, not accumulated floats
 //!
-//! Every level is an INTEGER count `k` of tenths of `major` (the finest grid), `k · 10^(e-1)` with
+//! Every level is an INTEGER count `k` of tenths of `major` (the finest grid), `k В· 10^(e-1)` with
 //! `e = floor(log10 c)`; the close itself is between 10 and 100 such tenths. The price of each `k`
-//! is computed on its own — `k · 10^n` for a non-negative power, `k / 10^-n` for a negative one,
-//! the power built by exact multiplications of ten — so `0.000123`'s grid gives `0.00012`, not
+//! is computed on its own вЂ” `k В· 10^n` for a non-negative power, `k / 10^-n` for a negative one,
+//! the power built by exact multiplications of ten вЂ” so `0.000123`'s grid gives `0.00012`, not
 //! `0.000120000000001`, and no error carries from one level to the next. The exponent is checked
 //! against the exact powers on both sides, because `log10` of an exact power of ten may land just
 //! under the integer.
 //!
-//! # Strength — roundness
+//! # Strength вЂ” roundness
 //!
 //! `1 + (trailing decimal zeros of k) + (0.5 when what is left is a multiple of 5)`: a `Minor`
 //! level scores 1, a `Half` one 1.5, a `Major` one 2 or more, and a level that is round at a
@@ -28,7 +28,7 @@
 use moon_core::config::auto_figures::{DetectorKind, DetectorParams, RoundGrid, RoundLevelsParams};
 use moon_core::market::candles::ChartCandle;
 
-use super::{DetectCtx, Detector, Found, FoundShape, bar_ok, pct_frac, positive};
+use super::{DetectCtx, Detector, Found, FoundShape, last_price, pct_frac};
 
 /// Most levels one run returns. `sanitize` bounds the range to 50 %, which on a `Minor` grid is at
 /// most about a hundred levels; this only guards a range that skipped it.
@@ -51,12 +51,8 @@ impl Detector for RoundLevels {
         let DetectorParams::RoundLevels(p) = params else {
             return Vec::new();
         };
-        let Some(close) = bars
-            .iter()
-            .rev()
-            .find(|b| bar_ok(b))
-            .and_then(|b| positive(f64::from(b.close)))
-        else {
+        // Where price is, roughly: the grid around it does not move within one bar's range.
+        let Some(close) = last_price(bars) else {
             return Vec::new();
         };
         round_levels(close, p)
@@ -68,7 +64,7 @@ fn pow10(n: u32) -> f64 {
     (0..n).fold(1.0, |acc, _| acc * 10.0)
 }
 
-/// `k · 10^n` for an integer `k`, rounded once.
+/// `k В· 10^n` for an integer `k`, rounded once.
 fn scaled(k: i64, n: i32) -> f64 {
     if n >= 0 {
         k as f64 * pow10(n.unsigned_abs())

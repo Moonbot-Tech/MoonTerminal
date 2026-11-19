@@ -1468,3 +1468,55 @@ fn a_twin_leaves_its_rows_count_and_hands_its_marks_to_the_flag() {
     assert_eq!(kept_ix(&moved), [vec![1], vec![0]]);
     assert!(moved.rows[1].kept[0].events.contains(AutoEvent::Approach));
 }
+
+/// Cached ring rows (the core's range-only form) reach the row's bars with an unknown open and
+/// close, and a real cached candle replaces them where it exists: of two cached days the last hour
+/// is real, so the newest H1 bars have their closes and the older ones do not, and the reference
+/// price is the real close.
+///
+/// Breakage: the ring's `close == low` read as a close (the older H1 bars closing at their lows),
+/// or the bar assembly forgetting a real candle.
+#[test]
+fn cached_ring_rows_have_no_close_and_real_rows_keep_theirs() {
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let from = DAY0 - 86_400_000;
+    let mut m5: Vec<ChartCandle> = (0..(288 + 144))
+        .map(|i| {
+            let t = (from + i as i64 * 5 * MIN) as f64;
+            ChartCandle {
+                t_open_ms: t,
+                open: 102.0,
+                high: 102.0,
+                low: 98.0,
+                close: 98.0,
+                volume: 1.0,
+                quote_volume: 1.0,
+            }
+        })
+        .collect();
+    // The last hour before 12:00 is real: opens at 99, closes at 101.
+    for b in m5.iter_mut().rev().take(12) {
+        b.open = 99.0;
+        b.close = 101.0;
+    }
+    let cache = FakeCache {
+        m5: Some(m5),
+        reads: RefCell::new(Vec::new()),
+    };
+    let job = PaneJob {
+        rows: vec![(0, key(TfId::H1, now, 30))],
+        chart_tf_ms: 5 * MIN,
+        chart: Vec::new().into(),
+        cache: None,
+        now_ms: now,
+    };
+    let out = run(&job, Some(&cache));
+    let o = &out[0].1;
+    assert_eq!(o.source, BarSource::Cache5m);
+    let last = o.recent.last().expect("bars");
+    assert_eq!((last.open, last.close), (99.0, 101.0));
+    let older = &o.recent[o.recent.len() - 2];
+    assert!(older.close.is_nan() && older.open.is_nan(), "{older:?}");
+    assert_eq!((older.high, older.low), (102.0, 98.0));
+    assert_eq!(o.last_close, Some(101.0));
+}

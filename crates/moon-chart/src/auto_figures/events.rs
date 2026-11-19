@@ -10,7 +10,9 @@
 //! own, the two answers merged into one story (`pair_events`): leaving the formation through
 //! either side is its breakout, and a bar that crosses both sides tells the story of the side its
 //! close ended up beyond. A close exactly on the line has no side and neither breaks nor
-//! confirms anything. "The previous close" below is the nearest earlier close that HAD a side.
+//! confirms anything, and neither does a bar whose close is unknown (a ring bar, see the module
+//! doc of `super`): when the last closed bar is one, it shows no bar event at all. "The previous
+//! close" below is the nearest earlier close that HAD a side.
 //!
 //! - **Approach** — the current price is within `approach_pct` of the line at `at_ms`, measured as
 //!   a fraction of the LINE's price; for a formation, of its side nearer the price
@@ -52,7 +54,7 @@
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks};
 use moon_core::market::candles::ChartCandle;
 
-use super::{Found, FoundShape, PairSide, Seg, Side, bar_ok, pct_frac, side_of};
+use super::{Found, FoundShape, PairSide, Seg, Side, bar_ok, close_of, pct_frac, side_of};
 
 /// The events one line shows, as a bit set — no allocation per line.
 ///
@@ -264,7 +266,7 @@ fn pair_events(
 /// bar's open time — or `None` when it is inside, on a side, or a side has no price there.
 fn last_close_beyond(bars: &[ChartCandle], upper: &Seg, lower: &Seg) -> Option<PairSide> {
     let last = bars.iter().rev().find(|b| bar_ok(b))?;
-    let close = f64::from(last.close);
+    let close = close_of(last)?;
     if upper.price_at(last.t_open_ms).is_some_and(|u| close > u) {
         Some(PairSide::Upper)
     } else if lower.price_at(last.t_open_ms).is_some_and(|l| close < l) {
@@ -313,7 +315,7 @@ fn bar_events(
         .take(scan_len(window))
         .map(|b| {
             let line = line_at(b.t_open_ms);
-            let side = line.and_then(|l| side_of(f64::from(b.close), l));
+            let side = line.and_then(|l| close_of(b).and_then(|close| side_of(close, l)));
             (b, line, side)
         });
     let Some((last, last_line, Some(last_side))) = recent.next() else {

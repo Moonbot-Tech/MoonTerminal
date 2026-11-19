@@ -109,6 +109,8 @@ fn period_levels(
         .into_iter()
         .filter_map(|(i, close, tag, strength)| {
             let b = &bars[i];
+            // A ring bar's open and close are unknown (`NaN`, see `super`): the level is that
+            // bar's own price, which no other bar's stands in for, so it is not found.
             let price = positive(f64::from(if close { b.close } else { b.open }))?;
             let touches = vec![Touch {
                 t_ms: b.t_open_ms,

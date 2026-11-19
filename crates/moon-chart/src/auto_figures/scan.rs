@@ -12,8 +12,12 @@
 //!
 //! Pure like every detector: no clock (`now_ms` is an argument), no I/O, no market lookup. The
 //! caller reads the market's rows from the local 5-minute kline cache, which the background
-//! recorder keeps for every market (15 days, written only while the terminal runs — holes are
-//! normal); this module never asks a core for anything.
+//! recorder keeps for every market (15 days): real candles from the trade stream while the
+//! terminal runs, and the core's own 5-minute ring where no real candle exists — about the last
+//! 41 hours of every market, refreshed each minute, so recent holes are rare. The ring's rows carry
+//! only their range; this module turns them into bars with an unknown open and close
+//! (`super::forget_range_closes`), which give their highs and lows to pivots and levels and no
+//! close to any break or event. It never asks a core for anything.
 //!
 //! # From 5-minute rows to a row's bars
 //!
@@ -46,7 +50,7 @@ use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
 use super::history::history_full;
 use super::twins::{Twin, twin_winners, union_marks};
-use super::{DetectCtx, Found, bar_ok, detect, take};
+use super::{DetectCtx, Found, bar_ok, detect, forget_range_closes, price_of, take};
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
 ///
@@ -72,12 +76,15 @@ const BASE_MS: i64 = 5 * 60_000;
 /// Longest a market's newest closed 5-minute row may have closed before `now_ms` for its answer to
 /// be CURRENT, ms; past it the answer is marked [`ScanResult::cache_lag_ms`].
 ///
-/// The recorder writes the cache only while the terminal runs, so after a restart (or a stretch the
-/// recorder did not reach the market) the cache ends hours before now. The scan still finds the
-/// lines in those old bars, but an event on them — a breakout, a squeeze — is an event of the
-/// moment the cache stops, not of now, and the column must not present it as today's. Fifteen
-/// minutes is three bars: a live recorder's newest row closed at most five minutes ago plus its
-/// write delay, and an illiquid market can miss a row or two, but not an hour of them.
+/// Judged by the newest bar of the BASE — the cache's real candles and the core's ring rows it
+/// keeps together. The recorder writes both once a minute, and the ring is sealed by the core
+/// every five minutes for every market it carries, so a current base ends at most a bar or two
+/// before now even for a market that did not trade. What still lags is a market neither reaches:
+/// the first minute after start, before a recorder pass; a provider that is down; a market the
+/// core's ring does not carry. The scan still finds the lines in those old bars, but an event on
+/// them is an event of the moment the base stops, not of now, and the column must not present it
+/// as today's. Fifteen minutes is three bars: the ring's newest row is sealed at most five minutes
+/// ago plus the recorder's minute, and an illiquid market can miss a row or two, but not an hour.
 pub const STALE_CACHE_MS: i64 = 15 * 60_000;
 
 /// Events from most to least useful to a trader looking down the screener's column — the order
@@ -204,10 +211,10 @@ pub struct ScanResult {
     /// No row ran, and at least one was short of history: the market has too little cache to say
     /// anything — "not enough history" in the column, rather than "nothing found".
     pub short_history: bool,
-    /// The close of the newest valid 5-minute row opening at or before `now_ms` — the freshest
-    /// price the cache holds (the recorder writes a row once it has closed, so this is normally
-    /// the newest closed row's; a row out of order is not "newest"). What sides and distances are
-    /// measured from.
+    /// The price sides and distances are measured from: the market's LIVE price when the caller
+    /// has one ([`scan_market`]'s `live_price`), else the freshest price the cache holds — the
+    /// close of the newest valid 5-minute row opening at or before `now_ms`, or the middle of its
+    /// range when it is a ring row without a close (`super::last_price`).
     pub last_price: Option<f64>,
     /// How long before `now_ms` the newest closed 5-minute row closed, ms — set only when that is
     /// more than [`STALE_CACHE_MS`]: the cache is behind, and the events found are of the moment
@@ -382,12 +389,21 @@ pub fn matches(result: &ScanResult, filter: &ScanFilter) -> bool {
 /// Args:
 ///     rows: The rows to run ([`ScanRow::from_rows`] of Main's set).
 ///     bars_5m: The market's 5-minute rows, sorted by open time ascending, as the kline cache
-///         returns them. Unreadable rows (non-finite or non-positive prices, `high < low`) and rows
-///         out of order are skipped; nothing in them can panic the scan.
+///         returns them — the core's ring rows among them in their range-only form, whose open and
+///         close are read as unknown. Unreadable rows (non-finite or non-positive prices,
+///         `high < low`) and rows out of order are skipped; nothing in them can panic the scan.
 ///     now_ms: The reference time, Unix ms — what decides which bars are closed and where sloped
 ///         lines are projected to. Not a finite number: no bar is closed and every row is short.
+///     live_price: The market's current price as the screener holds it, when it does; a value that
+///         is not a positive finite number is ignored and the cache's last price used instead.
 ///     out: Overwritten with the answer; its buffers are reused.
-pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: &mut ScanResult) {
+pub fn scan_market(
+    rows: &[ScanRow],
+    bars_5m: &[ChartCandle],
+    now_ms: f64,
+    live_price: Option<f64>,
+    out: &mut ScanResult,
+) {
     out.reset();
     let Scratch {
         m5,
@@ -403,7 +419,10 @@ pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: 
         placed,
         near,
     } = &mut out.scratch;
-    let last_price = closed_5m(bars_5m, now_ms, m5);
+    let cached_price = closed_5m(bars_5m, now_ms, m5);
+    let last_price = live_price
+        .filter(|p| p.is_finite() && *p > 0.0)
+        .or(cached_price);
     runs.clear();
     kept.clear();
     let (mut scanned, mut short) = (0u32, 0u32);
@@ -553,8 +572,10 @@ pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: 
 }
 
 /// The valid 5-minute rows of `bars` that have closed by `now_ms`, in strictly ascending open
-/// time, into `out`; returns the last price — the close of the newest valid row opening at or
-/// before `now_ms`. The recorder writes a row only once it has closed, so that is normally the
+/// time, into `out`, each range-only row (the core's ring) with an unknown open and close
+/// (`super::forget_range_closes`); returns the last price — the close of the newest valid row
+/// opening at or before `now_ms`, or the middle of its range when that row has no close
+/// (`super::price_of`). The recorder writes a row only once it has closed, so that is normally the
 /// newest closed row; a row still forming at `now_ms` (a cache filled by another writer, or a
 /// clock a little behind the recorder's) is read for the price but never resampled into a bar.
 ///
@@ -565,14 +586,22 @@ fn closed_5m(bars: &[ChartCandle], now_ms: f64, out: &mut Vec<ChartCandle>) -> O
     out.clear();
     let mut after = f64::NEG_INFINITY;
     let mut last = None;
+    // The input as the cache stores it: every price a finite positive number. A NaN here is a
+    // broken row, not the "unknown" this module makes of a ring row below.
+    let readable = |b: &ChartCandle| {
+        let ok = |v: f32| v.is_finite() && v > 0.0;
+        ok(b.open) && ok(b.close) && bar_ok(b)
+    };
     for b in bars {
-        if !(bar_ok(b) && b.t_open_ms > after && b.t_open_ms <= now_ms) {
+        if !(readable(b) && b.t_open_ms > after && b.t_open_ms <= now_ms) {
             continue;
         }
+        let mut b = *b;
+        forget_range_closes(std::slice::from_mut(&mut b));
         after = b.t_open_ms;
-        last = Some(f64::from(b.close));
+        last = price_of(&b);
         if b.t_open_ms + BASE_MS as f64 <= now_ms {
-            out.push(*b);
+            out.push(b);
         }
     }
     last

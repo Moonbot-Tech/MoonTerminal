@@ -45,8 +45,8 @@ use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, line_price_at, scan_break,
-    survives, tolerance_frac, touch_strength, touch_volume, window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, close_of, line_price_at,
+    open_of, scan_break, survives, tolerance_frac, touch_strength, touch_volume, window,
 };
 
 /// Most pivots of one kind a line search considers: the most recent ones. Bounds the O(P³) pair
@@ -322,11 +322,14 @@ fn body_breaks(win: &[ChartCandle], line: &Line, spec: &LineSpec) -> usize {
     span.iter()
         .filter(|b| bar_ok(b))
         .filter(|b| {
+            // A bar without a known open and close (a ring bar) has no body to break the line.
+            let (Some(open), Some(close)) = (open_of(b), close_of(b)) else {
+                return false;
+            };
             let Some(at) = line.price_at(b.t_open_ms) else {
                 return false;
             };
-            let top = f64::from(b.open.max(b.close));
-            let bottom = f64::from(b.open.min(b.close));
+            let (top, bottom) = (open.max(close), open.min(close));
             match spec.kind {
                 PivotKind::High => top > at * (1.0 + spec.tol_frac),
                 PivotKind::Low => bottom < at * (1.0 - spec.tol_frac),

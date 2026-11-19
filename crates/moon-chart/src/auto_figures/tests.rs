@@ -512,3 +512,120 @@ fn bench_touch_volume_counts_each_touching_bar_once() {
     }
     assert!(checked > 10, "enough figures with turnover: {checked}");
 }
+
+/// The committed day of `chart-ace` 5-minute candles as the core's ring would carry it: every bar
+/// in the range-only form (`open == high`, `close == low`), then through the bar assembly.
+fn ace_as_ring() -> (Vec<ChartCandle>, Vec<ChartCandle>) {
+    let honest = test_bars::ace(5);
+    let mut ring: Vec<ChartCandle> = honest
+        .iter()
+        .map(|b| ChartCandle {
+            open: b.high,
+            close: b.low,
+            ..*b
+        })
+        .collect();
+    forget_range_closes(&mut ring);
+    (honest, ring)
+}
+
+/// Ring bars give their turns and no closes: swing levels on the ring's H1 bars are the honest
+/// bars' levels (the pivots are the same highs and lows), and none of them is broken — a ring bar
+/// has no close to break anything with — so every level the honest bars keep, the ring keeps.
+///
+/// Breakage: the range-only form read as real closes (ring "closes" at every low break the levels
+/// the honest bars keep, and the ring loses some), or ring bars dropped as unreadable (no levels).
+#[test]
+fn ring_bars_give_their_turns_and_break_nothing() {
+    let (honest, ring) = ace_as_ring();
+    assert!(ring.iter().all(|b| b.open.is_nan() && b.close.is_nan()));
+    let h1 = |rows: &[ChartCandle]| {
+        let mut out = Vec::new();
+        moon_core::market::candles::resample(rows, 3_600_000, &mut out);
+        out
+    };
+    let ctx = DetectCtx {
+        tf_ms: 3_600_000,
+        now_ms: 0.0,
+    };
+    let swing = DetectorParams::Swing(SwingParams {
+        lookback_bars: 200,
+        ..SwingParams::default()
+    });
+    let real = detect(&swing, &h1(&honest), &ctx);
+    let from_ring = detect(&swing, &h1(&ring), &ctx);
+    assert!(!from_ring.is_empty());
+    assert!(
+        from_ring.iter().all(|f| f.broken.is_none()),
+        "{from_ring:?}"
+    );
+    let price = |f: &Found| f.shape.price_at(0.0).expect("a level");
+    for f in &real {
+        assert!(
+            from_ring.iter().any(|r| (price(r) - price(f)).abs() < 1e-9),
+            "the honest level at {} is missing from the ring's",
+            price(f)
+        );
+    }
+}
+
+/// The bar assembly: a range-only bar loses its open and close and keeps its range; a real rising
+/// candle of two prints (open at the low, close at the high), a real and a flat bar are untouched;
+/// and a resampled bucket's close is unknown exactly when its LAST five minutes came from the ring.
+///
+/// Breakage: the rising shape forgotten too (a real candle loses its close), a flat bar's one
+/// price called unknown, or a resample that lets the first sub-bar's unknown close stand for the
+/// bucket's.
+#[test]
+fn the_bar_assembly_forgets_only_range_only_closes() {
+    use super::test_bars::bar;
+    let ring = bar(0, 12.0, 12.0, 8.0, 8.0);
+    let oriented = bar(1, 8.0, 12.0, 8.0, 12.0);
+    let real = bar(2, 9.0, 12.0, 8.0, 11.0);
+    let flat = bar(3, 10.0, 10.0, 10.0, 10.0);
+    let mut rows = [ring, oriented, real, flat];
+    forget_range_closes(&mut rows);
+    assert!(rows[0].close.is_nan() && rows[0].open.is_nan());
+    assert_eq!((rows[0].high, rows[0].low), (12.0, 8.0));
+    assert_eq!(rows[1], oriented);
+    assert_eq!(rows[2], real);
+    assert_eq!(rows[3], flat);
+    assert!(bar_ok(&rows[0]));
+    assert_eq!(close_of(&rows[0]), None);
+    assert_eq!(last_price(&rows[..1]), Some(10.0));
+
+    // Two buckets of 10 minutes: ring then real, and real then ring.
+    let mut five = [
+        bar(0, 12.0, 12.0, 8.0, 8.0),
+        bar(1, 9.0, 12.0, 8.0, 11.0),
+        bar(2, 9.0, 12.0, 8.0, 11.0),
+        bar(3, 12.0, 12.0, 8.0, 8.0),
+    ];
+    forget_range_closes(&mut five);
+    let mut ten = Vec::new();
+    moon_core::market::candles::resample(&five, 600_000, &mut ten);
+    assert_eq!(ten.len(), 2);
+    assert_eq!(close_of(&ten[0]), Some(11.0));
+    assert_eq!(open_of(&ten[0]), None);
+    assert_eq!(close_of(&ten[1]), None);
+    assert_eq!(open_of(&ten[1]), Some(9.0));
+}
+
+/// The true range of a bar after one without a known close is its own range.
+///
+/// By hand: three bars, the middle one with an unknown close; ATR(2) = (6 + 4) / 2 = 5: the newest
+/// bar's true range (13 - 9 = 4) has no previous close, the middle one's (14 - 8 = 6) has the
+/// first bar's close of 12 inside its range.
+///
+/// Breakage: an unknown previous close read as a price (a NaN true range, no ATR at all).
+#[test]
+fn an_unknown_close_leaves_the_true_range_to_the_bar() {
+    use super::test_bars::bar;
+    let bars = [
+        bar(0, 11.0, 12.0, 10.0, 12.0),
+        bar(1, f32::NAN, 14.0, 8.0, f32::NAN),
+        bar(2, 10.0, 13.0, 9.0, 11.0),
+    ];
+    let atr2 = atr(&bars, 2).expect("an ATR");
+    assert!((atr2 - (6.0 + 4.0) / 2.0).abs() < 1e-9, "{atr2}");
+}

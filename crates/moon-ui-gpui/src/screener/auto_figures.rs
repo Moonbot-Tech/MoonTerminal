@@ -12,10 +12,17 @@
 //!
 //! # Where the bars come from
 //!
-//! ONLY the local 5-minute kline cache, which the background recorder keeps for every market
-//! (15 days, written only while the terminal runs — holes are normal). Never a core: a history
-//! request makes the core fetch klines from the exchange, and that is how a user's API key got
-//! banned once. The exchange key a market's rows are read under is the one the chart reads its own
+//! ONLY the local 5-minute kline cache, which the background recorder keeps for every market (15
+//! days): real candles from the trade stream while the terminal runs, and the core's own 5-minute
+//! ring where no real candle exists, written each minute — so the last ~41 hours of every market
+//! the core carries are there without holes, the ring's rows with only their range (the scan
+//! gives them no close, `moon_chart::auto_figures::scan`). The cache is the ONE source: a market
+//! the recorder has not reached yet (the first minute after start) is honestly short of history.
+//! Never a core: a history request makes the core fetch klines from the exchange, and that is how
+//! a user's API key got banned once.
+//!
+//! Sides and distances are measured from the market's live price as the Screener's own row holds
+//! it at the press (its ask), and from the cache's last bar only where the row has none. The exchange key a market's rows are read under is the one the chart reads its own
 //! cache rows under (`MarketDataSource::kline_address`, the same call as
 //! `panels::chart::auto_figures`), so the two see the same rows. A market with no address is
 //! "no cache" in its own cell, not a failure of the run.
@@ -334,12 +341,15 @@ pub(super) fn cell(scan: Option<MarketScan>, running: bool, labels: &ScanLabels)
 }
 
 /// One (provider, market) of the publication, with a core of that provider to resolve the
-/// market's cache address through.
+/// market's cache address through, and the market's live price at the press.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ScanTarget {
     pub(super) provider: CoreId,
     pub(super) core: CoreId,
     pub(super) market: String,
+    /// The publication's ask for the market, when it is a positive price: what the scan measures
+    /// sides and distances from, instead of the cache's last bar.
+    pub(super) price: Option<f64>,
 }
 
 /// Every (provider, market) of the publication once, in publication order. A provider's member
@@ -354,6 +364,7 @@ pub(super) fn scan_targets(entries: &[Entry]) -> Vec<ScanTarget> {
             provider: entry.row.provider,
             core: entry.row.core,
             market: entry.row.market.clone(),
+            price: Some(entry.row.ask).filter(|p| p.is_finite() && *p > 0.0),
         })
         .collect()
 }
@@ -408,11 +419,13 @@ impl ScanSource for CacheSource {
     }
 }
 
-/// One market to read and scan, and the providers that take its answer.
+/// One market to read and scan, the providers that take its answer, and its live price (the first
+/// target's that has one).
 struct Unit {
     exchange: String,
     market: String,
     providers: Vec<CoreId>,
+    price: Option<f64>,
 }
 
 /// One press's work, carried from slice to slice: the targets still to resolve, the markets to
@@ -482,7 +495,7 @@ impl ScanWork {
             let scan = match read {
                 None => MarketScan::Unread,
                 Some(bars) => {
-                    scan_market(rows, &bars, *now_ms as f64, result);
+                    scan_market(rows, &bars, *now_ms as f64, unit.price, result);
                     crate::diag::bump(&crate::diag::AUTOFIGURES_SCAN_MARKETS);
                     MarketScan::Scanned(result.answer())
                 }
@@ -511,7 +524,11 @@ impl ScanWork {
                 continue;
             };
             match at.entry((exchange, target.market)) {
-                MapEntry::Occupied(slot) => self.units[*slot.get()].providers.push(target.provider),
+                MapEntry::Occupied(slot) => {
+                    let unit = &mut self.units[*slot.get()];
+                    unit.providers.push(target.provider);
+                    unit.price = unit.price.or(target.price);
+                }
                 MapEntry::Vacant(slot) => {
                     let (exchange, market) = slot.key().clone();
                     slot.insert(self.units.len());
@@ -519,6 +536,7 @@ impl ScanWork {
                         exchange,
                         market,
                         providers: vec![target.provider],
+                        price: target.price,
                     });
                 }
             }

@@ -89,7 +89,7 @@ fn answer(r: &ScanResult) -> Answer {
 
 fn scan(rows: &[ScanRow], bars: &[ChartCandle], now_ms: f64) -> ScanResult {
     let mut out = ScanResult::default();
-    scan_market(rows, bars, now_ms, &mut out);
+    scan_market(rows, bars, now_ms, None, &mut out);
     out
 }
 
@@ -538,11 +538,12 @@ fn bench_scan_is_stable_and_auto_is_h1() {
         &[round_row(0, TfId::H1, EventMarks::default())],
         &other,
         other_now,
+        None,
         &mut reused,
     );
-    scan_market(&auto_rows, &bars, now, &mut reused);
+    scan_market(&auto_rows, &bars, now, None, &mut reused);
     assert_eq!(answer(&reused), answer(&fresh));
-    scan_market(&auto_rows, &bars, now, &mut reused);
+    scan_market(&auto_rows, &bars, now, None, &mut reused);
     assert_eq!(answer(&reused), answer(&fresh));
 
     let shipped = ScanRow::from_rows(&AutoFiguresCfg::shipped().rows);
@@ -659,4 +660,61 @@ fn a_formation_two_rows_find_is_one_line() {
     let both = scan(&[channels, flags], &bars, now);
     assert_eq!(both.lines, 1, "{both:?}");
     assert_eq!(both.nearest.map(|l| l.row_ix), Some(1), "{both:?}");
+}
+
+/// Twelve 5-minute rows per hour in the core's ring form — `open == high`, `close == low` — each
+/// hour spanning `(high, low)`.
+fn hourly_ring(ranges: &[(f32, f32)]) -> Vec<ChartCandle> {
+    ranges
+        .iter()
+        .enumerate()
+        .flat_map(|(h, &(hi, lo))| (0..12).map(move |j| bar(h * 12 + j, hi, hi, lo, lo)))
+        .collect()
+}
+
+/// A market the cache knows only from the core's ring finds its levels and no break: three hours
+/// spanning 3.38–3.45 and one spanning 3.52–3.58 — read as closes at the lows, 3.38 then 3.52, the
+/// 3.5 level would be "broken" on the last hour. With two ring hours and then two real hours closing
+/// 3.4 and 3.55, the breakout is the real closes' and is found.
+///
+/// By hand: the round level is placed from the last price, the middle of the last ring row's range,
+/// (3.58 + 3.52) / 2 = 3.55, so 3.5 is the only half-order level within 10 %; the scan keeps it
+/// either way. Its distance in the real case is (3.5 - 3.55) / 3.55 = -1.408 %.
+///
+/// Breakage: the range-only rows' lows taken as closes (a breakout made of ring bars), or the rows
+/// dropped (no level, no history).
+#[test]
+fn a_ring_breaks_nothing_and_real_closes_break_the_level() {
+    let rows = [round_row(0, TfId::H1, EventMarks::default())];
+    let now = MONDAY_2024_01_01_MS + 4.0 * HOUR_MS;
+    let ring = hourly_ring(&[(3.45, 3.38), (3.45, 3.38), (3.45, 3.38), (3.58, 3.52)]);
+    let r = scan(&rows, &ring, now);
+    assert_eq!((r.rows_scanned, r.lines), (1, 1), "{r:?}");
+    assert_eq!(r.best, None, "{r:?}");
+    assert_eq!(r.last_price, Some(f64::from((3.58f32 + 3.52f32) / 2.0)));
+
+    let mut mixed = hourly_ring(&[(3.45, 3.38), (3.45, 3.38)]);
+    mixed.extend(hourly(&[3.4, 3.4, 3.4, 3.55]).into_iter().skip(24));
+    let r = scan(&rows, &mixed, now);
+    assert_eq!(r.best.map(|b| b.event), Some(AutoEvent::Breakout), "{r:?}");
+    let d = r.nearest.expect("the 3.5 line").distance_pct;
+    assert!((d + 1.408_45).abs() < 1e-4, "{d}");
+}
+
+/// The market's live price, when the caller has one, is what sides and distances are measured
+/// from: the 3.5 line under a live 3.6 is (3.5 - 3.6) / 3.6 = -2.778 % away; a live price that is
+/// not a positive number falls back to the cache's.
+///
+/// Breakage: the live price ignored, or a zero live price used.
+#[test]
+fn a_live_price_is_the_reference() {
+    let rows = [round_row(0, TfId::H1, EventMarks::default())];
+    let (bars, now) = breakout_series();
+    let mut out = ScanResult::default();
+    scan_market(&rows, &bars, now, Some(3.6), &mut out);
+    assert_eq!(out.last_price, Some(3.6));
+    let d = out.nearest.expect("the 3.5 line").distance_pct;
+    assert!((d + 2.777_78).abs() < 1e-4, "{d}");
+    scan_market(&rows, &bars, now, Some(0.0), &mut out);
+    assert_eq!(out.last_price, Some(f64::from(3.55f32)));
 }

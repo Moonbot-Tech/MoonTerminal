@@ -247,7 +247,8 @@ fn day_profile(
     if !complete(&in_day, start, finished.then_some(end), tf) {
         return None;
     }
-    let last_close = f64::from(in_day.last()?.close);
+    // Only the POC's tie-break reads it, which needs where the day ended, not its exact close.
+    let last_close = super::price_of(in_day.last()?)?;
     Some((build(&in_day, bins)?, last_close))
 }
 
