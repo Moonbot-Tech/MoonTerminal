@@ -173,6 +173,57 @@ fn line_price_is_linear_in_time_and_positive() {
     assert_eq!(squeeze.price_at(1e12), Some(100.0));
 }
 
+/// A pair of an upper side and a lower one, each `(t0, p0, t1, p1)`.
+fn pair(upper: (f64, f64, f64, f64), lower: (f64, f64, f64, f64)) -> FoundShape {
+    let seg = |(t0_ms, p0, t1_ms, p1)| Seg {
+        t0_ms,
+        p0,
+        t1_ms,
+        p1,
+    };
+    FoundShape::Pair {
+        upper: seg(upper),
+        lower: seg(lower),
+    }
+}
+
+/// The side a pair is selected by, and the price read back from it.
+///
+/// By hand: a 100..110 range. Price 101 is 1 from the lower side and 9 from the upper — the lower;
+/// price 109 the upper; 105 is 5 from each, a tie — the upper, as is a NaN price. A pair whose
+/// upper side is degenerate (zero span) has only the lower one to give, at any price; a pair with
+/// neither side usable gives no side and no price. A level is not a pair: no side, and
+/// `side_price_at` reads its own price whatever side it is handed.
+///
+/// Breakage: the tie or a non-finite price resolving to the lower side (the caption flickers
+/// between the two on an exact midpoint), a side with no price chosen over one that has one (the
+/// caption and the event mark vanish), or `side_price_at` reading the upper side for `Lower`.
+#[test]
+fn a_pair_is_read_by_its_nearer_side_and_keeps_it() {
+    let range = pair((0.0, 110.0, 10.0, 110.0), (0.0, 100.0, 10.0, 100.0));
+    assert_eq!(range.near_side(5.0, 101.0), Some(PairSide::Lower));
+    assert_eq!(range.near_side(5.0, 109.0), Some(PairSide::Upper));
+    assert_eq!(range.near_side(5.0, 105.0), Some(PairSide::Upper));
+    assert_eq!(range.near_side(5.0, f64::NAN), Some(PairSide::Upper));
+    assert_eq!(range.price_near(5.0, 101.0), Some(100.0));
+    assert_eq!(range.side_price_at(5.0, Some(PairSide::Lower)), Some(100.0));
+    assert_eq!(range.side_price_at(5.0, Some(PairSide::Upper)), Some(110.0));
+    assert_eq!(range.side_price_at(5.0, None), Some(110.0));
+
+    let no_upper = pair((3.0, 110.0, 3.0, 110.0), (0.0, 100.0, 10.0, 100.0));
+    assert_eq!(no_upper.near_side(5.0, 109.0), Some(PairSide::Lower));
+    assert_eq!(no_upper.price_near(5.0, 109.0), Some(100.0));
+    let no_lower = pair((0.0, 110.0, 10.0, 110.0), (0.0, f64::NAN, 10.0, 100.0));
+    assert_eq!(no_lower.near_side(5.0, 101.0), Some(PairSide::Upper));
+    let neither = pair((3.0, 110.0, 3.0, 110.0), (0.0, f64::NAN, 10.0, 100.0));
+    assert_eq!(neither.near_side(5.0, 101.0), None);
+    assert_eq!(neither.price_near(5.0, 101.0), None);
+
+    let level = FoundShape::Horizontal { price: 100.0 };
+    assert_eq!(level.near_side(5.0, 99.0), None);
+    assert_eq!(level.side_price_at(5.0, Some(PairSide::Lower)), Some(100.0));
+}
+
 /// Empty and too-short input never panics, and finds nothing where one bar cannot answer.
 ///
 /// One bar is not "too short" for every kind. The pivot detectors need neighbours and must find

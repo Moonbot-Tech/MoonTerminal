@@ -25,7 +25,9 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use moon_chart::auto_figures::draw::{ResolvedStyle, append_shapes, pin_figures, time_span};
+use moon_chart::auto_figures::draw::{
+    ResolvedStyle, append_shapes, drawn_side, pin_figures, time_span,
+};
 use moon_chart::auto_figures::events::EventSet;
 use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide};
 use moon_chart::figures::{FigureBand, FigureBuffers};
@@ -63,7 +65,9 @@ pub(crate) struct AutoLineRec {
     /// For a two-line formation, the side it was kept by (`KeptLine::side`): the one its caption is
     /// placed on and prices; `None` for every other shape.
     pub side: Option<PairSide>,
-    /// The drawn stretch, Unix ms, `±∞` for "to that plot edge" — where the caption may sit.
+    /// The drawn stretch, Unix ms, `±∞` for "to that plot edge" — where the caption may sit. For a
+    /// two-line formation, the stretch its kept side is drawn over (`draw::drawn_side`): a
+    /// converging side ends at its apex or the run's reference time, not at the plot edge.
     pub span: (f64, f64),
     pub touches: usize,
     pub tf: TfId,
@@ -286,7 +290,7 @@ pub(crate) fn append_auto_geometry(
                 key: LineKey::of(row.row_ix, found),
                 shape: found.shape,
                 side: kept.side,
-                span: time_span(found, row.style.extend),
+                span: line_span(found, kept.side, row),
                 touches: found.touches.len(),
                 tf,
                 first_ms: found.first_ms,
@@ -308,6 +312,33 @@ pub(crate) fn append_auto_geometry(
     out.markers.extend_from_slice(&marks);
 }
 
+/// The stretch `found` is drawn over: for a two-line formation the one its `side` (the upper when
+/// none was kept) is drawn over, through the same decision that drew it; for every other shape the
+/// span its row's `extend` gives it.
+fn line_span(found: &Found, side: Option<PairSide>, row: &super::AutoRowDrawn) -> (f64, f64) {
+    let side = side.unwrap_or(PairSide::Upper);
+    drawn_side(found, side, row.style.extend, row.ref_ms)
+        .map_or_else(|| time_span(found, row.style.extend), |d| d.span())
+}
+
+/// The moment `line`'s printed price is read at: `now_ms`, clamped into the line's drawn stretch.
+///
+/// A line drawn to the plot edge is read now. A line that ENDS — a formation's side capped at its
+/// apex, a segment between two touches — is read at its end once now is past it: the caption sits
+/// on the drawn line and prints the price where the line is drawn, not a price extrapolated past
+/// the end (where a triangle's sides claim prices the pattern never did). That is also the point
+/// the right-end caption's height is read at, so the printed value and the caption's place agree.
+fn price_ms(line: &AutoLineRec, now_ms: f64) -> f64 {
+    let (lo, hi) = line.span;
+    if now_ms > hi {
+        hi
+    } else if now_ms < lo {
+        lo
+    } else {
+        now_ms
+    }
+}
+
 /// Everything `line`'s caption prints, at `now_ms` against `price`.
 fn caption_values(
     line: &AutoLineRec,
@@ -318,7 +349,7 @@ fn caption_values(
     CaptionValues {
         title: &line.title,
         tag: line.tag,
-        line_now: line.shape.side_price_at(now_ms, line.side),
+        line_now: line.shape.side_price_at(price_ms(line, now_ms), line.side),
         price,
         touches: line.touches,
         tf: line.tf,

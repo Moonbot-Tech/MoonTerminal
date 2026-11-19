@@ -1179,3 +1179,126 @@ fn a_formation_is_kept_drawn_and_pinned_by_its_nearer_side() {
         .is_empty()
     );
 }
+
+/// Draw `set` into fresh buffers, returning what the pane recorded and the event marks appended.
+fn draw_set(set: &Rc<AutoPaneFigures>) -> (AutoPaneDrawn, Vec<moon_chart::layers::MarkerInstance>) {
+    let mut drawn = AutoPaneDrawn::default();
+    let mut scratch = crate::chartdx::UdScratch::default();
+    let mut no_labels = Vec::new();
+    append_auto_geometry(
+        Some(set),
+        &ChartTheme::default(),
+        1.0,
+        0.0,
+        &mut FigureBuffers {
+            zones: &mut scratch.zones,
+            hlines: &mut scratch.hlines,
+            segs: &mut scratch.segs,
+            markers: &mut scratch.markers,
+            labels: &mut no_labels,
+        },
+        &mut drawn,
+    );
+    (drawn, scratch.markers)
+}
+
+/// A formation kept by its LOWER side is read at that side by every consumer of the kept side:
+/// its event mark, its caption's printed price and its confluence with another timeframe's line.
+///
+/// By hand: the 100..110 range of `formation` against a price of 101 is kept by its lower side
+/// (1 away; the upper is 9). Its event mark sits at 100, its `Price` caption prints 100, and a 4h
+/// level at 100.2 — 0.2 % from 100, inside the default 0.3 % — is a confluence with it; the upper
+/// side, 110, would be none of these.
+///
+/// Breakage: any of `event_mark_at`, `caption_values` or `mark_confluence` reading the pair
+/// through `price_at` (its upper side) instead of `side_price_at(.., kept.side)`.
+#[test]
+fn every_reader_of_a_kept_formation_reads_the_side_it_was_kept_by() {
+    use moon_chart::auto_figures::{LineTag, PairSide};
+    let at = 9.0 * 3_600_000.0;
+    let mut row = level_row(&[]);
+    row.take.count = 5;
+    Arc::make_mut(&mut row.outcome).found =
+        vec![formation(LineTag::Channel, 3_600_000.0, 7_200_000.0, 0)];
+    row.ref_ms = at;
+    row.caption = LineCaption {
+        parts: vec![CaptionPart::Price],
+        place: CaptionPlace::RightEnd,
+        show: CaptionShow::Always,
+    };
+    row.kept = select_kept(&row.outcome, &row.rules(&[]), 101.0, at, &mut Vec::new());
+    assert_eq!(row.kept.len(), 1);
+    assert_eq!(row.kept[0].side, Some(PairSide::Lower));
+    // An event to mark, so the mark is drawn.
+    row.kept[0].events.insert(AutoEvent::Approach);
+
+    let (mut drawn, markers) = draw_set(&Rc::new(AutoPaneFigures::new(
+        vec![row.clone()],
+        Vec::new(),
+    )));
+    assert_eq!(markers.last().map(|m| m.price), Some(100.0));
+    assert!(refresh_auto_captions(&mut drawn, Some(101.0), at, None));
+    assert_eq!(
+        drawn.lines[0].text.as_deref(),
+        Some(moon_chart::axes::format_price(100.0, None).as_str())
+    );
+
+    let set = AutoPaneFigures::new(vec![row, tf_row(1, TfId::H4, &[100.2])], Vec::new());
+    let next = set.reselect(101.0, at).expect("the confluence is new");
+    assert!(next.rows[0].kept[0].events.contains(AutoEvent::Confluence));
+    assert!(next.rows[1].kept[0].events.contains(AutoEvent::Confluence));
+}
+
+/// A converging formation's caption is placed and priced on its DRAWN side: the side ends at the
+/// apex, so the line's record spans to the apex and its `Price` caption prints the price there.
+///
+/// By hand: the top falls 110 → 106 over 1..3 h (−2/h), the bottom rises 90 → 92 over 2..4 h
+/// (+1/h); they meet at 8 h at 96. Drawn at a reference of 20 h, each side ends at 8 h, and the
+/// caption read at 20 h prints 96 — where an extrapolated side would print 72 (the top) or 108
+/// (the bottom), far outside the triangle, at the plot edge.
+///
+/// Breakage: the span taken from the row's `extend` alone (`RightEdge` → to the plot edge), or the
+/// printed price read at "now" past the drawn end (review finding F1).
+#[test]
+fn a_triangles_caption_is_placed_and_priced_on_its_drawn_side() {
+    use moon_chart::auto_figures::{LineTag, Seg};
+    let h = 3_600_000.0;
+    let (upper, lower) = (
+        Seg {
+            t0_ms: h,
+            p0: 110.0,
+            t1_ms: 3.0 * h,
+            p1: 106.0,
+        },
+        Seg {
+            t0_ms: 2.0 * h,
+            p0: 90.0,
+            t1_ms: 4.0 * h,
+            p1: 92.0,
+        },
+    );
+    let mut found = formation(LineTag::Triangle, h, 2.0 * h, 0);
+    found.shape = FoundShape::Pair { upper, lower };
+    found.last_ms = 4.0 * h;
+    let now = 20.0 * h;
+    let mut row = level_row(&[]);
+    row.take.count = 5;
+    Arc::make_mut(&mut row.outcome).found = vec![found];
+    row.ref_ms = now;
+    row.caption = LineCaption {
+        parts: vec![CaptionPart::Price],
+        place: CaptionPlace::RightEnd,
+        show: CaptionShow::Always,
+    };
+    row.kept = select_kept(&row.outcome, &row.rules(&[]), 95.0, now, &mut Vec::new());
+    assert_eq!(row.kept.len(), 1);
+
+    let (mut drawn, _) = draw_set(&Rc::new(AutoPaneFigures::new(vec![row], Vec::new())));
+    let (_, end) = drawn.lines[0].span;
+    assert!((end - 8.0 * h).abs() < 1.0, "{end}");
+    assert!(refresh_auto_captions(&mut drawn, Some(95.0), now, None));
+    assert_eq!(
+        drawn.lines[0].text.as_deref(),
+        Some(moon_chart::axes::format_price(96.0, None).as_str())
+    );
+}

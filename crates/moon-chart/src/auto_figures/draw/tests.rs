@@ -442,16 +442,15 @@ fn a_flat_flag_is_capped_not_a_pair_of_levels() {
     }
 }
 
-/// Pinning a formation gives exactly two figures, one per side, whatever it is drawn as: a channel
-/// drawn `BothEdges` (four rays) pins as two segments from each side's first touch to the
-/// reference time; a double top pins as its two levels; a triangle as the two capped segments it
-/// is drawn as. A level pins as what it draws, without its zone.
+/// Pinning a formation gives exactly two figures, one per side, each the figure the side is drawn
+/// as: a channel drawn `RightEdge` pins as its two rays, drawn `BetweenTouches` as its two
+/// segments, and drawn `BothEdges` (four rays) as the right-hand ray of each side; a double top
+/// pins as its two levels; a triangle as the two capped segments it is drawn as. A level pins as
+/// what it draws, without its zone.
 ///
-/// By hand: the channel's top runs 110 → 108 over 1..3 s (−1/s), so at a reference of 5 s it is at
-/// 106; its bottom 99 → 97 over 2..4 s is at 96 at 5 s.
-///
-/// Breakage: pinning the drawn figures of a pair (four rays for a `BothEdges` channel), or a
-/// channel side pinned short of the reference time.
+/// Breakage: a channel side pinned as a segment to the reference time while the screen shows a
+/// ray (the pinned copy stops where the drawn line runs on — review finding F7), pinning the drawn
+/// figures of a pair (four rays for a `BothEdges` channel), or one side pinned twice.
 #[test]
 fn a_formation_pins_as_one_figure_per_side() {
     let pins = |f: &Found, extend: Extend| {
@@ -459,25 +458,36 @@ fn a_formation_pins_as_one_figure_per_side() {
         pin_figures(f, &style(extend), 5_000.0, &mut out);
         out.into_iter().map(|f| f.kind).collect::<Vec<_>>()
     };
+    let drawn = |f: &Found, extend: Extend| {
+        draw_at(f, &style(extend), 0.5, 5_000.0)
+            .0
+            .into_iter()
+            .map(|f| f.kind)
+            .collect::<Vec<_>>()
+    };
     let channel = formation(
         LineTag::Channel,
         (1_000.0, 110.0, 3_000.0, 108.0),
         (2_000.0, 99.0, 4_000.0, 97.0),
     );
-    assert_eq!(draw(&channel, &style(Extend::BothEdges), 0.5).0.len(), 4);
+    let rays = [
+        FigureKind::Ray(Ray {
+            a: FigNode::new(1_000.0, 110.0),
+            b: FigNode::new(3_000.0, 108.0),
+        }),
+        FigureKind::Ray(Ray {
+            a: FigNode::new(2_000.0, 99.0),
+            b: FigNode::new(4_000.0, 97.0),
+        }),
+    ];
+    assert_eq!(drawn(&channel, Extend::RightEdge), rays);
+    assert_eq!(pins(&channel, Extend::RightEdge), rays);
     assert_eq!(
-        pins(&channel, Extend::BothEdges),
-        [
-            FigureKind::Segment(Segment {
-                a: FigNode::new(1_000.0, 110.0),
-                b: FigNode::new(5_000.0, 106.0),
-            }),
-            FigureKind::Segment(Segment {
-                a: FigNode::new(2_000.0, 99.0),
-                b: FigNode::new(5_000.0, 96.0),
-            }),
-        ]
+        pins(&channel, Extend::BetweenTouches),
+        drawn(&channel, Extend::BetweenTouches)
     );
+    assert_eq!(drawn(&channel, Extend::BothEdges).len(), 4);
+    assert_eq!(pins(&channel, Extend::BothEdges), rays);
 
     let double = formation(
         LineTag::DoubleTop,
@@ -497,13 +507,90 @@ fn a_formation_pins_as_one_figure_per_side() {
         (1_000.0, 110.0, 3_000.0, 106.0),
         (2_000.0, 90.0, 4_000.0, 92.0),
     );
-    let drawn: Vec<_> = draw_at(&triangle, &style(Extend::RightEdge), 0.5, 5_000.0)
-        .0
-        .into_iter()
-        .map(|f| f.kind)
-        .collect();
-    assert_eq!(pins(&triangle, Extend::RightEdge), drawn);
+    assert_eq!(
+        pins(&triangle, Extend::RightEdge),
+        drawn(&triangle, Extend::RightEdge)
+    );
 
     let lvl = level(100.0, 1_000.0, 2_000.0);
     assert_eq!(pins(&lvl, Extend::RightEdge).len(), 1);
+}
+
+/// Where each side of a formation is drawn — the span its caption is placed on.
+///
+/// By hand (the triangle of `a_triangle_stops_at_its_apex_or_now`): the sides meet at 8 s. At a
+/// reference of 20 s both sides end at the apex, so each spans its first touch to 8 s — not the
+/// right edge; at 5 s both end at 5 s. A channel side drawn `RightEdge` runs from its first touch
+/// to the edge, `BetweenTouches` between its touches. A double's sides span the formation. Not a
+/// pair: no drawn side.
+///
+/// Breakage: a caption of a capped side placed by the row's `extend` alone (`RightEdge` → the plot
+/// edge, past the apex, at an extrapolated price — review finding F1), or the drawn span and the
+/// drawn segment computed by two rules that drift apart.
+#[test]
+fn a_formation_side_is_drawn_over_the_span_its_caption_uses() {
+    let triangle = formation(
+        LineTag::Triangle,
+        (1_000.0, 110.0, 3_000.0, 106.0),
+        (2_000.0, 90.0, 4_000.0, 92.0),
+    );
+    for (side, t0) in [(PairSide::Upper, 1_000.0), (PairSide::Lower, 2_000.0)] {
+        let (a, b) = drawn_side(&triangle, side, Extend::RightEdge, 20_000.0)
+            .unwrap()
+            .span();
+        assert_eq!(a, t0);
+        assert!((b - 8_000.0).abs() < 1e-6, "{b}");
+        assert_eq!(
+            drawn_side(&triangle, side, Extend::RightEdge, 5_000.0)
+                .unwrap()
+                .span(),
+            (t0, 5_000.0)
+        );
+    }
+    // The span and the segment drawn come from the one decision.
+    let (figs, _) = draw_at(&triangle, &style(Extend::RightEdge), 0.5, 20_000.0);
+    let FigureKind::Segment(s) = figs[1].kind else {
+        panic!("{:?}", figs[1].kind);
+    };
+    assert_eq!(
+        drawn_side(&triangle, PairSide::Lower, Extend::RightEdge, 20_000.0)
+            .unwrap()
+            .span(),
+        (s.a.time_ms, s.b.time_ms)
+    );
+
+    let channel = formation(
+        LineTag::Channel,
+        (1_000.0, 110.0, 3_000.0, 108.0),
+        (2_000.0, 99.0, 4_000.0, 97.0),
+    );
+    let span = |extend| {
+        drawn_side(&channel, PairSide::Lower, extend, 5_000.0)
+            .unwrap()
+            .span()
+    };
+    assert_eq!(span(Extend::RightEdge), (2_000.0, f64::INFINITY));
+    assert_eq!(span(Extend::BetweenTouches), (2_000.0, 4_000.0));
+
+    let double = formation(
+        LineTag::DoubleTop,
+        (1_000.0, 110.0, 3_000.0, 110.0),
+        (1_500.0, 104.0, 3_000.0, 104.0),
+    );
+    assert_eq!(
+        drawn_side(&double, PairSide::Lower, Extend::RightEdge, 5_000.0),
+        Some(DrawnSide::Level {
+            price: 104.0,
+            span: (1_000.0, f64::INFINITY),
+        })
+    );
+    assert_eq!(
+        drawn_side(
+            &level(100.0, 0.0, 1.0),
+            PairSide::Upper,
+            Extend::RightEdge,
+            5.0
+        ),
+        None
+    );
 }

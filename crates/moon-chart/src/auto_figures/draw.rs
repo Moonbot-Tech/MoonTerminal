@@ -15,7 +15,7 @@ use moon_core::config::auto_figures::{Extend, LineStyle};
 use moon_core::figures::tools::{HLine, HorizontalRay, Ray, Segment};
 use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind, LineKind};
 
-use super::{Found, FoundShape, LineTag, Seg, positive, within};
+use super::{Found, FoundShape, LineTag, PairSide, Seg, positive, within};
 use crate::figures::FigureBand;
 
 /// A row's line style with its colour already resolved, ready to stamp onto figures.
@@ -119,13 +119,14 @@ pub fn append_shapes(
 /// The figures PINNING `found` copies into the figure store ("Pin as figure"): what the user then
 /// owns, moves and arms as an alert.
 ///
-/// A two-line formation pins as exactly TWO figures, one per side: two levels for a pair that is
-/// drawn as levels (a double, a range — each as [`append_shapes`] draws it), two segments
-/// otherwise. A converging side is the segment it is drawn as (to the apex or `ref_ms`); a channel
-/// side runs from its first touch to `ref_ms` (to its last touch under `BetweenTouches`) — the
-/// store has no line unbounded at both ends, and a channel drawn `BothEdges` is two rays a side,
-/// which would pin as four figures for two lines. Every other shape pins as the figures it draws;
-/// the zone band is never pinned (it is a property of the auto line, not a figure).
+/// A two-line formation pins as exactly TWO figures, one per side, each the figure that side is
+/// DRAWN as ([`drawn_side`]): two levels for a pair drawn as levels (a double, a range), the capped
+/// segment of a converging side, and a channel side's ray (`RightEdge`) or the segment between its
+/// touches (`BetweenTouches`) — what the reader sees is what lands in the store. The one shape the
+/// store cannot hold is a channel side drawn `BothEdges`, a line unbounded at both ends drawn as two
+/// rays: it pins as its right-hand ray, the half through its touches and on into the future, so a
+/// pair still pins as two figures, not four. Every other shape pins as the figures it draws; the
+/// zone band is never pinned (it is a property of the auto line, not a figure).
 ///
 /// Args:
 ///     found: The detector's figure.
@@ -133,35 +134,100 @@ pub fn append_shapes(
 ///     ref_ms: The reference time the figure was drawn against.
 ///     figures: Receives the figures to pin, in draw order.
 pub fn pin_figures(found: &Found, style: &ResolvedStyle, ref_ms: f64, figures: &mut Vec<Figure>) {
-    let FoundShape::Pair { upper, lower } = found.shape else {
+    if !matches!(found.shape, FoundShape::Pair { .. }) {
         let mut bands = Vec::new();
         append_shapes(found, style, ref_ms, figures, &mut bands);
         return;
-    };
+    }
     let draw = draw_style(found, style);
     let mut push = |kind: FigureKind| figures.push(Figure::new(kind, draw, 0.0));
-    if drawn_as_levels(found, &upper, &lower) {
-        for p in [upper.p0, lower.p0] {
-            if let Some(p) = positive(p) {
-                horizontal(p, found, style.extend, &mut push);
+    for side in [PairSide::Upper, PairSide::Lower] {
+        match drawn_side(found, side, style.extend, ref_ms) {
+            Some(DrawnSide::Level { price, .. }) => {
+                horizontal(price, found, style.extend, &mut push)
             }
+            Some(DrawnSide::Free { seg, extend }) => {
+                let a = FigNode::new(seg.t0_ms, seg.p0);
+                let b = FigNode::new(seg.t1_ms, seg.p1);
+                push(match extend {
+                    Extend::BetweenTouches => FigureKind::Segment(Segment { a, b }),
+                    Extend::RightEdge | Extend::BothEdges => FigureKind::Ray(Ray { a, b }),
+                });
+            }
+            Some(DrawnSide::Capped { a, b }) => push(FigureKind::Segment(Segment { a, b })),
+            None => {}
         }
-        return;
     }
-    let apex = if found.tag == Some(LineTag::Channel) {
-        f64::NAN
-    } else {
-        apex_ms(&upper, &lower)
+}
+
+/// How ONE side of a two-line formation is drawn: the single decision [`append_shapes`] draws the
+/// side by, [`pin_figures`] pins it by and the terminal places the side's caption by
+/// ([`DrawnSide::span`]) — so a caption at the right end sits where the drawn line ends, not where
+/// the line extrapolated past its apex would be.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DrawnSide {
+    /// A level at `price` over `span` (`±∞` = to that plot edge): a pair drawn as two levels.
+    Level { price: f64, span: (f64, f64) },
+    /// A channel side, drawn by `extend` alone through its two touches: a ray to the right edge, a
+    /// ray each way, or the segment between the touches.
+    Free { seg: Seg, extend: Extend },
+    /// A converging side (a triangle, a wedge, a flag or pennant): the segment from its first touch
+    /// `a` to `b`, the apex or the reference time, whichever comes first.
+    Capped { a: FigNode, b: FigNode },
+}
+
+impl DrawnSide {
+    /// The time span the side is drawn over, Unix ms, `±∞` meaning "to that plot edge".
+    pub fn span(&self) -> (f64, f64) {
+        match *self {
+            DrawnSide::Level { span, .. } => span,
+            DrawnSide::Free { seg, extend } => match extend {
+                Extend::RightEdge => (seg.t0_ms, f64::INFINITY),
+                Extend::BothEdges => (f64::NEG_INFINITY, f64::INFINITY),
+                Extend::BetweenTouches => (seg.t0_ms, seg.t1_ms),
+            },
+            DrawnSide::Capped { a, b } => (a.time_ms, b.time_ms),
+        }
+    }
+}
+
+/// How `side` of `found` is drawn under `extend` against the reference time `ref_ms`; `None` for a
+/// shape that is not a pair, and for a side whose geometry draws nothing (not finite, not positive,
+/// or a converging side that would end where it starts).
+///
+/// - Both sides flat and the pattern one that IS two levels (a double, a range): a level over the
+///   span `extend` gives the formation ([`time_span`]).
+/// - A channel: the side's own line, run by `extend` — a channel runs on.
+/// - Everything else (a triangle, a wedge, a flag or pennant): the segment from the side's first
+///   touch to the apex where the two sides meet or `ref_ms`, whichever comes first — the
+///   squeeze's rule, for its reason: past the apex the lines claim prices the pattern never did.
+///   Never short of the side's last touch; `BetweenTouches` is the segment between its touches.
+pub fn drawn_side(found: &Found, side: PairSide, extend: Extend, ref_ms: f64) -> Option<DrawnSide> {
+    let FoundShape::Pair { upper, lower } = found.shape else {
+        return None;
     };
-    for s in [upper, lower] {
-        capped_slope(
-            (s.t0_ms, s.p0, s.t1_ms, s.p1),
-            apex,
-            ref_ms,
-            style.extend,
-            &mut push,
-        );
+    let s = match side {
+        PairSide::Upper => upper,
+        PairSide::Lower => lower,
+    };
+    if drawn_as_levels(found, &upper, &lower) {
+        return positive(s.p0).map(|price| DrawnSide::Level {
+            price,
+            span: time_span(found, extend),
+        });
     }
+    if !(s.t0_ms.is_finite() && s.t1_ms.is_finite() && s.t1_ms > s.t0_ms) {
+        return None;
+    }
+    let (p0, p1) = (positive(s.p0)?, positive(s.p1)?);
+    if found.tag == Some(LineTag::Channel) {
+        return Some(DrawnSide::Free {
+            seg: Seg { p0, p1, ..s },
+            extend,
+        });
+    }
+    let end = capped_end(s.t0_ms, s.t1_ms, apex_ms(&upper, &lower), ref_ms, extend);
+    capped_segment((s.t0_ms, p0, s.t1_ms, p1), end).map(|(a, b)| DrawnSide::Capped { a, b })
 }
 
 /// The line style a found figure is stamped with: the row's colour and thickness, and its broken
@@ -218,8 +284,14 @@ fn pair(
     mut push: impl FnMut(FigureKind),
     bands: &mut Vec<FigureBand>,
 ) {
+    let sides =
+        [PairSide::Upper, PairSide::Lower].map(|s| drawn_side(found, s, style.extend, ref_ms));
     if drawn_as_levels(found, upper, lower) {
-        let (Some(hi), Some(lo)) = (positive(upper.p0), positive(lower.p0)) else {
+        let [
+            Some(DrawnSide::Level { price: hi, .. }),
+            Some(DrawnSide::Level { price: lo, .. }),
+        ] = sides
+        else {
             return;
         };
         horizontal(hi, found, style.extend, &mut push);
@@ -227,21 +299,15 @@ fn pair(
         zone_box(lo, hi, found, style, bands);
         return;
     }
-    if found.tag == Some(LineTag::Channel) {
-        for s in [upper, lower] {
-            sloped(s.t0_ms, s.p0, s.t1_ms, s.p1, style.extend, &mut push);
+    for side in sides.into_iter().flatten() {
+        match side {
+            DrawnSide::Free { seg, extend } => {
+                sloped(seg.t0_ms, seg.p0, seg.t1_ms, seg.p1, extend, &mut push)
+            }
+            DrawnSide::Capped { a, b } => push(FigureKind::Segment(Segment { a, b })),
+            // Only a pair drawn as levels has level sides, and it returned above.
+            DrawnSide::Level { .. } => {}
         }
-        return;
-    }
-    let apex = apex_ms(upper, lower);
-    for s in [upper, lower] {
-        capped_slope(
-            (s.t0_ms, s.p0, s.t1_ms, s.p1),
-            apex,
-            ref_ms,
-            style.extend,
-            &mut push,
-        );
     }
 }
 
@@ -347,9 +413,8 @@ fn squeeze_slope(
 }
 
 /// A sloped line drawn as a segment from its first touch to `apex` or the reference time `ref_ms`,
-/// whichever comes first — never a ray, and never cut short of its last touch by a stale
-/// reference. An `apex` that is not a finite time after the first touch is no apex. `BetweenTouches` is the segment between
-/// the two touches. Shared by a squeeze's sloped half and a converging formation's sides.
+/// whichever comes first ([`capped_end`]). A squeeze's sloped half; a converging formation's sides
+/// take the same two helpers through [`drawn_side`].
 fn capped_slope(
     (t0, p0, t1, p1): (f64, f64, f64, f64),
     apex: f64,
@@ -363,7 +428,18 @@ fn capped_slope(
     let (Some(p0), Some(p1)) = (positive(p0), positive(p1)) else {
         return;
     };
-    let end = match extend {
+    let end = capped_end(t0, t1, apex, ref_ms, extend);
+    if let Some((a, b)) = capped_segment((t0, p0, t1, p1), end) {
+        push(FigureKind::Segment(Segment { a, b }));
+    }
+}
+
+/// Where a capped sloped line through its first touch `t0` and last touch `t1` ends: at `apex` or
+/// the reference time `ref_ms`, whichever comes first — never a ray, and never cut short of its
+/// last touch by a stale reference. An `apex` that is not a finite time after the first touch is
+/// no apex. `BetweenTouches` ends at the last touch.
+fn capped_end(t0: f64, t1: f64, apex: f64, ref_ms: f64, extend: Extend) -> f64 {
+    match extend {
         Extend::BetweenTouches => t1,
         Extend::RightEdge | Extend::BothEdges => {
             // Never short of the last touch: a stale reference must not cut off what was found.
@@ -378,14 +454,14 @@ fn capped_slope(
                 now
             }
         }
-    };
-    let Some(p_end) = super::line_price_at(t0, p0, t1, p1, end).filter(|_| end > t0) else {
-        return;
-    };
-    push(FigureKind::Segment(Segment {
-        a: FigNode::new(t0, p0),
-        b: FigNode::new(end, p_end),
-    }));
+    }
+}
+
+/// The segment from the first touch `(t0, p0)` to the line's point at `end`; `None` when `end` is
+/// not after `t0` or the line has no positive price there.
+fn capped_segment((t0, p0, t1, p1): (f64, f64, f64, f64), end: f64) -> Option<(FigNode, FigNode)> {
+    let p_end = super::line_price_at(t0, p0, t1, p1, end).filter(|_| end > t0)?;
+    Some((FigNode::new(t0, p0), FigNode::new(end, p_end)))
 }
 
 /// The tolerance band around a level, when the row draws one.

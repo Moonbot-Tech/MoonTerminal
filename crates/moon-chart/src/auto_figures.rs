@@ -119,10 +119,13 @@ impl FoundShape {
     /// Price of the figure's primary line at `t_ms`: the level of a horizontal or a squeeze, the
     /// projection of a sloped line, the UPPER side of a pair.
     ///
-    /// A pair has two lines and no primary one; the upper is the answer where no reference price
-    /// says which matters (a caption placed on the line, a sort key). Wherever a reference price
-    /// exists — which side of price a figure is on, how far it is, whether price approaches it —
-    /// the caller asks [`FoundShape::price_near`] instead, which picks the nearer side.
+    /// A pair has two lines and no primary one; the upper is only a default for a caller that has
+    /// no side to go by (a sort key). Wherever a reference price exists — which side of price a
+    /// figure is on, how far it is, whether price approaches it — the caller asks
+    /// [`FoundShape::price_near`] instead, which picks the nearer side; and whoever SELECTED a pair
+    /// against a price keeps the side it selected by ([`FoundShape::near_side`]) and reads that
+    /// side later through [`FoundShape::side_price_at`] — the chart's caption, event mark and
+    /// confluence all do.
     ///
     /// Returns `None` where no usable price exists — a non-finite input, a degenerate line, or a
     /// sloped line extrapolated to zero or below. Callers divide by this price, so a value that is
