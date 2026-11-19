@@ -371,3 +371,65 @@ fn bench_events_are_exclusive_and_bounded() {
     }
     assert!(touched > 20, "the bench touches its midpoints: {touched}");
 }
+
+/// The stop-hunt depth is a strict bound: a wick reaching EXACTLY the threshold is a touch, one a
+/// hair deeper is a hunt — below a support and above a resistance alike.
+///
+/// The threshold here is 0.390625 % (2^-8 of price) rather than the default 0.3 %: the bars are
+/// `f32`, and no `f32` price lies exactly 0.3 % from a line (`0.3f32` as a fraction has more bits
+/// than either side can hold), so a "wick at exactly 0.3 %" is always a little short of it or past
+/// it. With 2^-8 the line at 100 puts the boundary at 99.609375 and 100.390625, both exact.
+///
+/// Breakage: `<=` / `>=` in place of the strict comparison, or the depth measured from the close.
+#[test]
+fn a_wick_exactly_at_the_stop_hunt_depth_is_not_a_hunt() {
+    let l = [level(100.0)];
+    let marks = EventMarks {
+        stop_hunt_pct: 0.390_625,
+        ..EventMarks::default()
+    };
+    let hunt = |bars: &[ChartCandle], price: f64| {
+        let mut out = Vec::new();
+        line_events(&l, bars, price, 0.0, &marks, KEEP3, &mut out);
+        out[0]
+    };
+    let at_support = then_touch(&[101.0; 5], 99.609_375, 101.2, 101.0);
+    let e = hunt(&at_support, 101.0);
+    assert!(!e.contains(AutoEvent::StopHunt));
+    assert_eq!(side_story(e), vec![AutoEvent::Bounce]);
+    let past_support = then_touch(&[101.0; 5], 99.609, 101.2, 101.0);
+    assert!(hunt(&past_support, 101.0).contains(AutoEvent::StopHunt));
+
+    let at_resistance = then_touch(&[99.0; 5], 98.8, 100.390_625, 99.0);
+    assert!(!hunt(&at_resistance, 99.0).contains(AutoEvent::StopHunt));
+    let past_resistance = then_touch(&[99.0; 5], 98.8, 100.391, 99.0);
+    assert!(hunt(&past_resistance, 99.0).contains(AutoEvent::StopHunt));
+}
+
+/// A role flip is a particular bounce: a row that marks bounces but not role flips sees the flip
+/// bar as a bounce; a row that marks neither sees nothing; one that marks only role flips sees the
+/// flip and no bounce.
+///
+/// Breakage: the unmarked role flip filtered away together with the bounce it replaced (the bar
+/// then showed no touch at all), or a bounce added beside a marked flip.
+#[test]
+fn an_unmarked_role_flip_shows_as_a_bounce() {
+    let l = [level(100.0)];
+    let mut cs = vec![99.0f32; 5];
+    cs.extend([101.0, 101.0]);
+    let bars = then_touch(&cs, 99.9, 101.2, 101.0);
+    let story = |role_flip: bool, bounce: bool| {
+        let marks = EventMarks {
+            role_flip,
+            bounce,
+            ..EventMarks::default()
+        };
+        let mut out = Vec::new();
+        line_events(&l, &bars, 101.0, 0.0, &marks, KEEP3, &mut out);
+        side_story(out[0])
+    };
+    assert_eq!(story(true, true), vec![AutoEvent::RoleFlip]);
+    assert_eq!(story(false, true), vec![AutoEvent::Bounce]);
+    assert_eq!(story(true, false), vec![AutoEvent::RoleFlip]);
+    assert_eq!(story(false, false), Vec::<AutoEvent>::new());
+}

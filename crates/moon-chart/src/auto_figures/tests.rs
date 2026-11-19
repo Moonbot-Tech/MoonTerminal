@@ -337,7 +337,9 @@ fn bench_atr(bars: &[ChartCandle]) -> f64 {
 fn bench_atr_tolerances_follow_the_runs_atr() {
     use moon_core::config::auto_figures::{ToleranceUnit, TrendParams};
     let all = test_bars::ace(5);
-    let bars = &all[all.len() - 600..];
+    // 1 000 bars: the last 600 hold trend lines and levels, but no squeeze under the default
+    // touches; a longer stretch holds all three, so every case below is checked, none skipped.
+    let bars = &all[all.len() - 1_000..];
     let close = f64::from(bars[bars.len() - 1].close);
     let atr = bench_atr(bars);
     let ctx = DetectCtx {
@@ -345,12 +347,12 @@ fn bench_atr_tolerances_follow_the_runs_atr() {
         now_ms: 0.0,
     };
     let swing = SwingParams {
-        lookback_bars: 600,
+        lookback_bars: 1_000,
         tolerance_unit: ToleranceUnit::Atr,
         ..SwingParams::default()
     };
     let trend = TrendParams {
-        lookback_bars: 600,
+        lookback_bars: 1_000,
         tolerance_unit: ToleranceUnit::Atr,
         ..TrendParams::default()
     };
@@ -369,9 +371,13 @@ fn bench_atr_tolerances_follow_the_runs_atr() {
     for (params, share) in cases {
         let expected = f64::from(share) * atr / close;
         let found = detect(&params, bars, &ctx);
-        if matches!(params, DetectorParams::Swing(_)) {
-            assert!(!found.is_empty(), "the bench holds ATR levels");
-        }
+        // Every detector, not only the swing: an empty result would pass the band check below
+        // vacuously, and a detector that ignored the ATR unit and found nothing would go unseen.
+        assert!(
+            !found.is_empty(),
+            "{:?}: the bench holds ATR figures",
+            params.kind()
+        );
         for f in &found {
             assert!(
                 (f.tolerance_frac - expected).abs() <= expected * 1e-9,

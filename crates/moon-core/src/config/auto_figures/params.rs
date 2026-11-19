@@ -334,10 +334,12 @@ pub enum ProfilePeriod {
 /// `VolumeProfile`: levels from the volume traded at each price over a UTC day — its point of
 /// control (POC, the price bin with the most volume) and the edges of its value area.
 ///
-/// The profile spreads each bar's `quote_volume` over the bins its `[low, high]` range covers, the
-/// way the chart's own horizontal volume (`moon_chart::hvol`) does. A bar with no volume adds
-/// nothing, so a period whose bars all report zero (a source that does not know) has no profile
-/// and the row draws nothing.
+/// The profile is built by the detector itself (`moon_chart::auto_figures::volume_profile`): the
+/// day's range is cut into `bins` equal bins and each bar's `quote_volume` is spread uniformly over
+/// the bins its `[low, high]` range covers. Nothing else in the tree builds it — the chart's
+/// horizontal volume (`moon_chart::hvol`) only selects and scales the trade-built `HVol` rows the
+/// core sends. A bar with no volume adds nothing, so a period whose bars all report zero (a source
+/// that does not know) has no profile and the row draws nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VolumeProfileParams {
@@ -598,6 +600,16 @@ impl DetectorParams {
     /// - A period level: the longest of its enabled flags — the previous day's close 2 days, the
     ///   day's open 1, the week's open 7, the previous week's close 14. None enabled: one bar.
     /// - Round prices: one bar, the last close they are measured from.
+    ///
+    /// This is the DETECTOR's need only, and it says nothing about the events. The events pass
+    /// (`moon_chart::auto_figures::events::line_events`) reads its own tail of the newest closed
+    /// bars, `moon_chart::auto_figures::events::bars_read` of [`Self::broken_policy`], and that
+    /// tail is the CALLER's to supply on top: the chart's job (`moon-ui-gpui`,
+    /// `chartdx::auto_figures_sync::job`) fetches the larger of the two, hands the detector the
+    /// newest `bars_needed` and keeps the newest `bars_read` (plus slack) for the events. A row
+    /// whose detector needs one bar — round prices — still gets breakouts and bounces that way.
+    /// "Not enough history" is measured against this number alone: a short events tail costs a
+    /// mark, not a line.
     pub fn bars_needed(&self, tf: TfId) -> u32 {
         match self {
             DetectorParams::Swing(p) => with_atr(p.lookback_bars, p.tolerance_unit),

@@ -132,7 +132,7 @@ pub(crate) struct AutoRowOutcome {
     pub key: RowKey,
     /// Where the bars came from.
     pub source: BarSource,
-    /// Closed bars the detector read.
+    /// Closed bars the detector read — at most `needed`, whatever was fetched for the events.
     pub bars: usize,
     /// Bars it needs for a full answer (`DetectorParams::bars_needed`).
     pub needed: u32,
@@ -147,16 +147,30 @@ pub(crate) struct AutoRowOutcome {
     pub lagging: bool,
     /// Every figure the detector found, before `take::select`.
     pub found: Vec<Found>,
-    /// The newest closed bars the detector read, oldest first — only as many as the row's events
-    /// can look at ([`recent_len`]). The events pass runs on every price change and must not
-    /// re-read the cache or re-resample for that; these few bars are all it needs.
+    /// The newest closed bars of the row's timeframe, oldest first — as many as the row's events
+    /// can look at ([`events_tail`]), taken from everything fetched rather than from the detector's
+    /// own `needed` bars, which can be fewer (round prices need one). The events pass runs on
+    /// every price change and must not re-read the cache or re-resample for that; these few bars
+    /// are all it needs.
     pub recent: Vec<ChartCandle>,
 }
 
+/// Share of `bars_needed` a row must have read, in %, before it counts as having its full history
+/// (`docs-internal/AUTO_FIGURES.md` §13.3).
+///
+/// Not 100: the local 5-minute cache is written only while the terminal runs, so holes are
+/// normal, and a row whose resampled bars come out a few short has its answer all the same. On
+/// the scenes' recorded set the 4h levels row reads 68 of its 72 bars — 94 % — and calling that
+/// "not enough history" told the reader something false about a row that found its levels. Below
+/// 90 % a missing day starts to be a missing swing, and the note is worth showing.
+pub(crate) const FULL_HISTORY_PCT: u64 = 90;
+
 impl AutoRowOutcome {
-    /// Whether the row ran on less history than it asks for — "not enough history" in the popup.
+    /// Whether the row ran on less history than it asks for — "not enough history" in the popup:
+    /// fewer than [`FULL_HISTORY_PCT`] % of `needed` bars, measured against the DETECTOR's need
+    /// only (the events tail fetched beside it is not history the answer lacks).
     pub fn short_history(&self) -> bool {
-        self.bars < self.needed as usize
+        (self.bars as u64).saturating_mul(100) < u64::from(self.needed) * FULL_HISTORY_PCT
     }
 }
 
@@ -171,11 +185,20 @@ pub(crate) fn chart_extent(chart: &[ChartCandle], chart_tf_ms: i64) -> (i64, f64
     (tf, history)
 }
 
-/// Where a row's bars come from, and how many it needs.
+/// Where a row's bars come from, and how many its DETECTOR needs.
+///
+/// The source is chosen for [`fetch_len`] bars — the detector's need or the events tail,
+/// whichever is longer — so a row whose detector needs one bar does not settle for a chart series
+/// too short to say whether a bar broke or bounced off its lines.
 pub(crate) fn plan_row(key: &RowKey, chart_tf_ms: i64, chart_history_ms: f64) -> (BarSource, u32) {
     let needed = key.detector.bars_needed(key.tf);
     (
-        tf::bar_source(key.tf, chart_tf_ms, chart_history_ms, needed),
+        tf::bar_source(
+            key.tf,
+            chart_tf_ms,
+            chart_history_ms,
+            fetch_len(&key.detector, needed),
+        ),
         needed,
     )
 }
@@ -202,16 +225,24 @@ pub(crate) fn without_cache(key: RowKey, source: BarSource, needed: u32) -> Auto
     }
 }
 
-/// Spare bars kept beyond the false-break window, so a few unusable bars (skipped by the events
-/// pass) at the tail do not shorten what it can look back over.
+/// Spare bars kept beyond what the events pass reads, so a few unusable bars (skipped by it, and
+/// not counted) at the tail do not shorten what it can look back over.
 const RECENT_SLACK: usize = 4;
 
-/// How many of a row's newest closed bars its events need: the false-break window of its policy,
-/// the bar before the break and the last bar (`events::line_events` reads `window + 2` valid
-/// bars), plus [`RECENT_SLACK`].
-pub(crate) fn recent_len(detector: &DetectorParams) -> usize {
-    let window = usize::from(events::false_break_window(detector.broken_policy()));
-    window.saturating_add(2 + RECENT_SLACK)
+/// How many of a row's newest closed bars its events need: everything `events::line_events`
+/// reads under the row's policy — [`events::bars_read`]: the role-flip lookback, the false-break
+/// window and the bars around them — plus [`RECENT_SLACK`].
+///
+/// Independent of the detector's `bars_needed` on purpose: a row of round prices needs one bar
+/// for its lines and still has breakouts, bounces and role flips to show on them.
+pub(crate) fn events_tail(detector: &DetectorParams) -> usize {
+    events::bars_read(detector.broken_policy()).saturating_add(RECENT_SLACK)
+}
+
+/// How many closed bars a row fetches: the larger of the detector's `needed` and its
+/// [`events_tail`].
+pub(crate) fn fetch_len(detector: &DetectorParams, needed: u32) -> u32 {
+    needed.max(u32::try_from(events_tail(detector)).unwrap_or(u32::MAX))
 }
 
 /// Run every row of `job`. Each cache kind is read at most once, wide enough for every row that
@@ -243,7 +274,7 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
         plans
             .iter()
             .filter(|p| p.3 == want)
-            .map(|&(_, key, needed, _)| read_window(key, needed))
+            .map(|&(_, key, needed, _)| read_window(key, fetch_len(&key.detector, needed)))
             .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
     };
     let read = |kind_min: u32, window: Option<(i64, i64)>| -> Option<Option<Vec<ChartCandle>>> {
@@ -286,6 +317,13 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                 },
                 BarSource::Unavailable => (Vec::new(), false, false),
             };
+            // The events tail comes from everything fetched, the detector's input from its own
+            // need: either may be the longer one (`fetch_len`).
+            let recent = tail(
+                &bars,
+                u32::try_from(events_tail(&key.detector)).unwrap_or(u32::MAX),
+            )
+            .to_vec();
             let bars = tail(&bars, needed);
             let found = if bars.is_empty() {
                 Vec::new()
@@ -311,7 +349,7 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                     read_failed,
                     lagging,
                     found,
-                    recent: bars[bars.len().saturating_sub(recent_len(&key.detector))..].to_vec(),
+                    recent,
                 },
             )
         })
@@ -346,8 +384,9 @@ pub(crate) fn cache_bars(
     (closed_bars(rows, CACHE_BASE_MS, row_ms, through), lagging)
 }
 
-/// The open-time window a row reads from the cache: its `needed` bars ending with the last closed
-/// one, plus one bar of slack on the left for a first bucket the resample has to drop as partial.
+/// The open-time window a row reads from the cache: its `needed` bars (what it fetches,
+/// [`fetch_len`]) ending with the last closed one, plus one bar of slack on the left for a first
+/// bucket the resample has to drop as partial.
 fn read_window(key: RowKey, needed: u32) -> (i64, i64) {
     let row_ms = key.tf.ms();
     let to = key.last_closed_ms + row_ms - 1;

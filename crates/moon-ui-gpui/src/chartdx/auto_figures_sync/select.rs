@@ -11,7 +11,7 @@
 //! ([`super::ChartDataState::auto_figures_on_price`]).
 
 use moon_chart::auto_figures::events::{EventSet, line_events};
-use moon_chart::auto_figures::{Found, FoundShape, take};
+use moon_chart::auto_figures::{Found, FoundShape, LineTag, take};
 use moon_core::config::auto_figures::{BrokenPolicy, EventMarks, Take};
 
 use super::job::AutoRowOutcome;
@@ -27,6 +27,16 @@ use super::job::AutoRowOutcome;
 /// one; two trend lines may share their first pivot (the trend detector allows one shared pivot)
 /// and differ in the last. They stay put until they fall out of the row's lookback (or a new
 /// extreme or a further touch is found), which is when the line itself is a different one.
+///
+/// Anchors are not enough for the detectors whose lines share them. A volume profile's POC, VAH
+/// and VAL all span the profiled day and have no touches; the day's open and the week's open are
+/// the same bar on a Monday. Those lines carry a [`LineTag`], and the tag is part of the key — it
+/// is what the line IS, and it does not move between runs, while their price does (a growing day
+/// moves its POC). Round prices have neither anchors nor a tag, only their price, which is exact
+/// and fixed — so a horizontal line with no touches and no tag is keyed by its price, in `f32`
+/// bits: wide enough apart that no two round levels collide (they are at least a tenth of the
+/// price's order of magnitude apart), and immune to the last-digit noise of the same level
+/// computed from a different order of magnitude.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct LineKey {
     /// The row's index in its kind's configuration.
@@ -39,6 +49,11 @@ pub(crate) struct LineKey {
     touch_ms: u64,
     /// The last touch's time as bits; what tells two trend lines from one shared pivot apart.
     last_touch_ms: u64,
+    /// What the line is, for the detectors that draw several kinds of line from one anchor.
+    tag: Option<LineTag>,
+    /// The price as `f32` bits for a horizontal line with no touches and no tag (a round price);
+    /// `0` for every other line, whose identity is in its anchors and tag.
+    price: u32,
 }
 
 impl LineKey {
@@ -49,12 +64,20 @@ impl LineKey {
             FoundShape::Sloped { .. } => 1,
             FoundShape::Squeeze { .. } => 2,
         };
+        let price = match found.shape {
+            FoundShape::Horizontal { price } if found.touches.is_empty() && found.tag.is_none() => {
+                (price as f32).to_bits()
+            }
+            _ => 0,
+        };
         Self {
             row_ix,
             shape,
             first_ms: found.first_ms.to_bits(),
             touch_ms: found.touches.first().map_or(0, |t| t.t_ms.to_bits()),
             last_touch_ms: found.touches.last().map_or(0, |t| t.t_ms.to_bits()),
+            tag: found.tag,
+            price,
         }
     }
 }

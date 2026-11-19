@@ -45,6 +45,7 @@ fn outcome(key: RowKey, levels: &[f64]) -> AutoRowOutcome {
                 broken: None,
                 touch_volume: 0.0,
                 tolerance_frac: 0.0,
+                tag: None,
             })
             .collect(),
         recent: Vec::new(),

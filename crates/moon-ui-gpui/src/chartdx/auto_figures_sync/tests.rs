@@ -16,7 +16,7 @@ use moon_core::market::ChartCandle;
 use super::caption::price_quantum;
 use super::job::{
     AutoRowOutcome, BarCache, PaneJob, RowKey, cache_bars, closed_bars, last_closed_open_ms,
-    next_key_change_ms, run, with_chart_tail,
+    next_key_change_ms, run, with_chart_tail, without_cache,
 };
 use super::pane::{AutoPaneDrawn, SegmentBase, append_auto_geometry, refresh_auto_captions};
 use super::select::select_kept;
@@ -314,6 +314,7 @@ fn level_row(levels: &[f64]) -> AutoRowDrawn {
                 broken: None,
                 touch_volume: 0.0,
                 tolerance_frac: 0.0,
+                tag: None,
             })
             .collect(),
         recent: Vec::new(),
@@ -453,6 +454,7 @@ fn a_periods_high_and_low_are_different_lines() {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     };
     let high = bar(DAY0 + 600_000, 2.0);
     let low = bar(DAY0 + 1_200_000, 1.0);
@@ -607,9 +609,142 @@ fn two_trend_lines_from_one_pivot_are_different_lines() {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     };
     assert_ne!(
         LineKey::of(0, &line(3_600_000.0, 101.0)),
         LineKey::of(0, &line(7_200_000.0, 103.0))
     );
+}
+
+/// Breakage (B3): a line keyed by its anchors alone — every round level of a row (no touches, no
+/// anchor), the POC, VAH and VAL of one day (one span, no touches), and a Monday's day open and
+/// week open (one bar) each shared a key, so "Hide this line" hid all of them. The key must still
+/// follow a line across runs: the same round price recomputed, a day's POC that moved as the day
+/// grew.
+#[test]
+fn lines_sharing_their_anchors_are_told_apart_by_tag_and_round_price() {
+    use moon_chart::auto_figures::LineTag;
+    let line = |price: f64, first_ms: f64, touch: Option<f64>, tag: Option<LineTag>| Found {
+        shape: FoundShape::Horizontal { price },
+        touches: touch
+            .map(|t| vec![Touch { t_ms: t, price }])
+            .unwrap_or_default(),
+        strength: 1.0,
+        first_ms,
+        last_ms: first_ms,
+        broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
+        tag,
+    };
+    // Round prices: no touches, no anchor, no tag.
+    let a = line(1.0, 0.0, None, None);
+    let b = line(1.5, 0.0, None, None);
+    assert_ne!(LineKey::of(0, &a), LineKey::of(0, &b));
+    // The same level computed from another order of magnitude, a last digit off: the same line.
+    let a_again = line(1.0 + f64::EPSILON, 0.0, None, None);
+    assert_eq!(LineKey::of(0, &a), LineKey::of(0, &a_again));
+
+    // One day's profile: one span, no touches, three tags.
+    let day = DAY0 as f64;
+    let poc = line(100.0, day, None, Some(LineTag::Poc));
+    let vah = line(101.0, day, None, Some(LineTag::Vah));
+    let val = line(99.0, day, None, Some(LineTag::Val));
+    assert_ne!(LineKey::of(0, &poc), LineKey::of(0, &vah));
+    assert_ne!(LineKey::of(0, &poc), LineKey::of(0, &val));
+    assert_ne!(LineKey::of(0, &vah), LineKey::of(0, &val));
+    // The day grew and its POC moved: still the line the reader hid.
+    let poc_later = line(100.4, day, None, Some(LineTag::Poc));
+    assert_eq!(LineKey::of(0, &poc), LineKey::of(0, &poc_later));
+
+    // A Monday: the day's open and the week's open are the same bar.
+    let day_open = line(100.0, day, Some(day), Some(LineTag::DayOpen));
+    let week_open = line(100.0, day, Some(day), Some(LineTag::WeekOpen));
+    assert_ne!(LineKey::of(0, &day_open), LineKey::of(0, &week_open));
+}
+
+/// Breakage (B1, B2): the events read `events::bars_read` bars — the role-flip lookback, the
+/// false-break window and two more — but a row kept only `window + 6`, so a role flip was almost
+/// always reported as a bounce; and the tail was cut from the DETECTOR's bars, so a row of round
+/// prices (one bar needed) had one bar of history and no bar events at all. The tail comes from
+/// everything fetched, the cache read reaches back for it, and "not enough history" still measures
+/// the detector's own need.
+#[test]
+fn the_events_tail_is_independent_of_what_the_detector_needs() {
+    use moon_chart::auto_figures::events;
+    use moon_core::config::auto_figures::RoundLevelsParams;
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let wanted = events::bars_read(BrokenPolicy::default());
+    let round = |tf: TfId| RowKey {
+        detector: DetectorParams::RoundLevels(RoundLevelsParams::default()),
+        tf,
+        last_closed_ms: last_closed_open_ms(now, tf),
+        chart_ready: true,
+    };
+    // Twelve hours of 5-minute chart: the chart series for the 5-minute rows.
+    let chart: Arc<[ChartCandle]> = series(DAY0, 5 * MIN, 144).into();
+    let job = PaneJob {
+        rows: vec![(0, round(TfId::M5)), (1, key(TfId::M5, now, 10))],
+        chart_tf_ms: 5 * MIN,
+        chart: chart.clone(),
+        cache: None,
+        now_ms: now,
+    };
+    let out = run(&job, None);
+    assert_eq!(out[0].1.bars, 1, "round prices read one bar");
+    assert_eq!(out[1].1.bars, 10);
+    for (_, o) in &out {
+        assert!(
+            o.recent.len() >= wanted,
+            "{} recent bars, the events read {wanted}",
+            o.recent.len()
+        );
+        assert_eq!(
+            o.recent.last(),
+            chart.last(),
+            "the tail ends on the newest bar"
+        );
+        assert!(!o.short_history(), "the events tail is not missing history");
+    }
+
+    // An hour row of round prices on that chart: twelve hours cannot hold the hour bars the events
+    // read, so it goes to the cache, and the read reaches back far enough for them.
+    let cache = FakeCache {
+        m5: Some(series(DAY0 - 2 * 86_400_000, 5 * MIN, 2 * 288 + 144)),
+        reads: RefCell::new(Vec::new()),
+    };
+    let job = PaneJob {
+        rows: vec![(0, round(TfId::H1))],
+        chart_tf_ms: 5 * MIN,
+        chart,
+        cache: None,
+        now_ms: now,
+    };
+    let out = run(&job, Some(&cache));
+    assert_eq!(out[0].1.source, BarSource::Cache5m);
+    assert!(out[0].1.recent.len() >= wanted);
+    let last_closed = last_closed_open_ms(now, TfId::H1);
+    let reads = cache.reads.borrow();
+    assert!(reads[0].1 <= last_closed - (wanted as i64 - 1) * 3_600_000);
+}
+
+/// "Not enough history" from 90 % of the detector's need (§13.3): the 4h levels row of the scenes'
+/// set reads 68 of its 72 bars and has its answer; 64 of 72 (88.9 %) is short, 65 (90.3 %) is not.
+///
+/// Breakage: the old `bars < needed` (every hole in the cache read as missing history), or the
+/// threshold measured against the events tail.
+#[test]
+fn a_row_has_its_history_from_ninety_percent_of_what_it_needs() {
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let mut o = without_cache(key(TfId::H4, now, 72), BarSource::Cache5m, 72);
+    for (bars, short) in [(72, false), (68, false), (65, false), (64, true), (0, true)] {
+        o.bars = bars;
+        assert_eq!(o.short_history(), short, "{bars} of 72");
+    }
+    let mut one = without_cache(key(TfId::H4, now, 72), BarSource::Cache5m, 1);
+    one.bars = 1;
+    assert!(!one.short_history());
+    one.bars = 0;
+    assert!(one.short_history());
 }

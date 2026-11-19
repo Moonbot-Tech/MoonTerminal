@@ -28,7 +28,8 @@
 //!   [`ROLE_FLIP_LOOKBACK`] bars, by a run of MORE than `window` closes on the other side: the line
 //!   held price there, price broke through, and the line now holds it from the new side (a broken
 //!   resistance holding as support, or the reverse). Under `Remove` (`window = 0`) any close on the
-//!   other side is a real break, as it is for that policy everywhere.
+//!   other side is a real break, as it is for that policy everywhere. A role flip is a particular
+//!   bounce, so a row that marks bounces but not role flips sees such a bar as a `Bounce`.
 //! - **StopHunt** — the touch-and-hold bar's wick pierced the line by MORE than `stop_hunt_pct` of
 //!   the line's price (below a held support, above a held resistance): the stops behind the line
 //!   were taken and the bar still closed back. A refinement of the touch-and-hold, so it always
@@ -127,6 +128,11 @@ pub const ROLE_FLIP_LOOKBACK: usize = 30;
 /// unreadable bars, which are skipped and do not count): the last bar, a run of up to
 /// [`ROLE_FLIP_LOOKBACK`] bars on its side, and enough of the run before that to tell a false
 /// break (`window` closes or fewer) from a side the line held.
+///
+/// Independent of the detector's own `DetectorParams::bars_needed`, which may be smaller (round
+/// prices need one bar): the caller that holds the series fetches the larger of the two and keeps
+/// this many newest bars for the events, whatever the detector read — on the chart that is
+/// `moon-ui-gpui`'s `chartdx::auto_figures_sync::job`, and any other caller owes the same.
 pub fn bars_read(policy: BrokenPolicy) -> usize {
     scan_len(usize::from(false_break_window(policy)))
 }
@@ -145,7 +151,8 @@ fn scan_len(window: usize) -> usize {
 ///     price: The current price, for `Approach`.
 ///     at_ms: The moment the current price belongs to, for projecting sloped lines.
 ///     marks: Which events the row shows, and the approach and stop-hunt distances; an unmarked
-///         event is never set.
+///         event is never set (an unmarked role flip reads as the bounce it is, when bounces are
+///         marked — see `shown_events`).
 ///     policy: The row's broken policy, for the false-break window — the row's
 ///         `DetectorParams::broken_policy()`, which answers for every detector kind (a period
 ///         extreme, which has no policy of its own, answers the default). Taken as the policy
@@ -175,12 +182,27 @@ pub fn line_events(
             set.insert(AutoEvent::Squeeze);
         }
         bar_events(bars, |t| shape.price_at(t), window, hunt_frac, &mut set);
-        let mut shown = EventSet::default();
-        for e in set.iter().filter(|e| marks.marks(*e)) {
-            shown.insert(e);
-        }
-        out.push(shown);
+        out.push(shown_events(set, marks));
     }
+}
+
+/// The events of `set` a row with `marks` shows.
+///
+/// Every event passes through `marks.marks` — except a `RoleFlip` the row does not mark: it shows
+/// as a `Bounce` when the row marks that. A role flip IS a bounce (a touch held on the line's side),
+/// only one with a known history behind it, and [`bar_events`] picks the more specific name; a row
+/// that switched role flips off without switching bounces off asked for the plain story, not for
+/// silence on that bar.
+fn shown_events(set: EventSet, marks: &EventMarks) -> EventSet {
+    let mut shown = EventSet::default();
+    for e in set.iter() {
+        if marks.marks(e) {
+            shown.insert(e);
+        } else if e == AutoEvent::RoleFlip && marks.marks(AutoEvent::Bounce) {
+            shown.insert(AutoEvent::Bounce);
+        }
+    }
+    shown
 }
 
 /// `Breakout`, `FalseBreak`, `Bounce`, `RoleFlip` and `StopHunt` from the last closed bars, into
