@@ -172,6 +172,33 @@ fn interrupted_family_retirement_resumes_before_replacement() {
     std::fs::remove_dir_all(root).expect("remove pending fixture");
 }
 
+/// Accepting a damage root that is not a plain directory in `retire_store_family` would move the
+/// live family under a path the cache never created; the refusal must leave every member in place.
+#[test]
+fn retirement_refuses_a_damage_root_that_is_not_a_directory() {
+    let (root, files, damage_root, pending) = recovery_fixture("not-a-directory");
+    std::fs::write(&files[0], b"main").expect("seed main member");
+    std::fs::write(&damage_root, b"file").expect("seed a file where the damage root belongs");
+
+    let error = retire_store_family(&files, &damage_root, &pending)
+        .expect_err("a file damage root must be refused");
+    assert_eq!(
+        error,
+        format!(
+            "create {} failed: recovery path is not a plain directory: {}",
+            damage_root.display(),
+            damage_root.display()
+        )
+    );
+    assert_eq!(
+        std::fs::read(&files[0]).expect("read untouched main"),
+        b"main"
+    );
+    assert!(!pending.exists());
+
+    std::fs::remove_dir_all(root).expect("remove not-a-directory fixture");
+}
+
 /// Replacing `read_fail_on` with the generic report classifier would latch healthy report writes
 /// when an attached valuation index is malformed; the cache-specific boundary must prove `main`
 /// healthy and return a non-corruption failure instead.
