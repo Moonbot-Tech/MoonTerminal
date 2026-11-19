@@ -271,7 +271,7 @@ impl RenderState {
         let mut result = Ok(());
         for li in 0..self.panes[idx].auto.lines.len() {
             // Copied out: the text is an `Arc<str>` (a refcount bump), and drawing needs `&mut self`.
-            let (text, shape, side, span, place, rgb) = {
+            let (text, shape, side, span, place, rgb, alpha) = {
                 let line = &self.panes[idx].auto.lines[li];
                 let Some(text) = line.text.clone() else {
                     continue;
@@ -286,6 +286,7 @@ impl RenderState {
                     line.span,
                     line.place(),
                     line.color,
+                    line.opacity,
                 )
             };
             let Some(spot) = caption_spot(&map, &shape, side, span, place, label_x) else {
@@ -330,7 +331,7 @@ impl RenderState {
                 dy,
                 spot.ax,
                 ay,
-                color(rgb),
+                color(rgb).opacity(alpha.clamp(0.0, 1.0)),
             ) {
                 Ok(m) => placed.push(PlacedLabel {
                     x,

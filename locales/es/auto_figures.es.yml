@@ -5,6 +5,7 @@ _version: 1
 auto_figures.title: "Figuras automáticas"
 auto_figures.button_tip: "Figuras automáticas: niveles, líneas de tendencia y compresiones que el gráfico encuentra solo"
 auto_figures.enabled: "Mostrar figuras automáticas"
+auto_figures.opacity: "Opacidad"
 auto_figures.for_kind: "Ajustes para: %{kind}"
 auto_figures.frame_rows: "Filas"
 auto_figures.legend.order: "orden"

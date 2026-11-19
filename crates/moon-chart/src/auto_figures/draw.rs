@@ -21,8 +21,13 @@ use crate::figures::FigureBand;
 /// A row's line style with its colour already resolved, ready to stamp onto figures.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResolvedStyle {
-    /// Line colour, `[r, g, b]`, drawn opaque (the figure layer applies its own idle alpha).
+    /// Line colour, `[r, g, b]`.
     pub rgb: [u8; 3],
+    /// Factor on the alpha of everything drawn — the lines (on top of the figure layer's own idle
+    /// alpha) and the zone bands: the configuration's one opacity for the block
+    /// (`AutoFiguresCfg::opacity`). `1.0` from [`Self::new`], which is also what a pinned figure
+    /// takes: once pinned it is the reader's own figure, drawn like every other.
+    pub opacity: f32,
     pub thickness: f32,
     /// Dash pattern of a live line.
     pub line_kind: LineKind,
@@ -38,6 +43,7 @@ impl ResolvedStyle {
     pub fn new(style: &LineStyle, rgb: [u8; 3]) -> Self {
         Self {
             rgb,
+            opacity: 1.0,
             thickness: style.thickness,
             line_kind: style.line_kind,
             broken_kind: style.broken_kind,
@@ -45,6 +51,20 @@ impl ResolvedStyle {
             zone_alpha: style.zone,
         }
     }
+
+    /// The same style drawn at `opacity` ([`Self::opacity`]); a value that is not a finite number
+    /// in `0..=1` is clamped into it, NaN to fully opaque, so nothing here can poison a colour.
+    pub fn with_opacity(self, opacity: f32) -> Self {
+        Self {
+            opacity: unit_alpha(opacity),
+            ..self
+        }
+    }
+}
+
+/// `a` as an alpha factor in `0..=1`; NaN reads as `1.0`.
+fn unit_alpha(a: f32) -> f32 {
+    if a.is_nan() { 1.0 } else { a.clamp(0.0, 1.0) }
 }
 
 /// Append the figures and bands one found figure draws as.
@@ -239,7 +259,12 @@ fn draw_style(found: &Found, style: &ResolvedStyle) -> DrawStyle {
         style.line_kind
     };
     DrawStyle {
-        color: [style.rgb[0], style.rgb[1], style.rgb[2], u8::MAX],
+        color: [
+            style.rgb[0],
+            style.rgb[1],
+            style.rgb[2],
+            (unit_alpha(style.opacity) * 255.0).round() as u8,
+        ],
         thickness: style.thickness,
         kind,
         fill: [0; 4],
@@ -526,7 +551,7 @@ fn band_color(style: &ResolvedStyle, alpha: f32) -> [f32; 4] {
         c(style.rgb[0]),
         c(style.rgb[1]),
         c(style.rgb[2]),
-        alpha.min(1.0),
+        alpha.min(1.0) * unit_alpha(style.opacity),
     ]
 }
 

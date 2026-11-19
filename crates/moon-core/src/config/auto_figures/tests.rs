@@ -124,6 +124,7 @@ fn an_untouched_configuration_writes_nothing_and_reads_back_equal() {
 #[test]
 fn a_stored_value_survives_a_save_and_load_untouched() {
     let off = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: false,
         ..AutoFiguresCfg::default()
     };
@@ -143,6 +144,7 @@ fn a_stored_value_survives_a_save_and_load_untouched() {
 
     // An emptied table is the reader's choice, not an absent setting.
     let empty = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: true,
         rows: Vec::new(),
     };
@@ -164,6 +166,7 @@ fn an_edited_row_writes_only_what_changed() {
         p.lookback_bars = 400;
     }
     let cfg = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: true,
         rows: vec![row],
     };
@@ -175,7 +178,14 @@ fn an_edited_row_writes_only_what_changed() {
     let row = rows[0].as_table().expect("a row table");
     let mut keys: Vec<&str> = row.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["detector", "name", "preset", "style", "take", "tf"]);
+    // `caption`: a preset row shows its captions on hover, which a file states — absent reads as
+    // the type's `Always`.
+    assert_eq!(
+        keys,
+        [
+            "caption", "detector", "name", "preset", "style", "take", "tf"
+        ]
+    );
     let detector = row["detector"].as_table().unwrap();
     assert_eq!(
         detector,
@@ -293,6 +303,7 @@ fn an_unsanitized_value_still_saves() {
     )
     .expect("a JSON copy of a row reads");
     let cfg = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: true,
         rows: vec![row, from_json],
     };
@@ -414,6 +425,7 @@ fn hostile() -> AutoFiguresCfg {
     ];
     rows.extend(std::iter::repeat_n(AutoFigurePreset::Levels1h.row(), 100));
     AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: true,
         rows,
     }
@@ -424,6 +436,7 @@ fn hostile() -> AutoFiguresCfg {
 #[test]
 fn sanitize_is_idempotent() {
     let mut presets = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: true,
         rows: AutoFigurePreset::ALL.map(AutoFigurePreset::row).to_vec(),
     };
@@ -687,6 +700,7 @@ fn the_new_kinds_and_options_round_trip() {
         range_pct: 4.0,
     });
     let cfg = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: true,
         rows: vec![
             swing_atr,
@@ -913,6 +927,7 @@ fn the_two_level_scales_never_look_alike() {
 fn per_kind_storage_never_freezes_a_follower() {
     let mut layout = WindowLayout::default();
     let off = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: false,
         rows: Vec::new(),
     };
@@ -1294,6 +1309,7 @@ fn a_formation_row_round_trips_and_loads_partially() {
     }));
     row.preset = Some(AutoFigurePreset::Triangles);
     let cfg = AutoFiguresCfg {
+        opacity: AF_OPACITY_DEFAULT,
         enabled: true,
         rows: vec![
             row,
@@ -1423,4 +1439,75 @@ fn the_formation_policy_timeframe_and_bars() {
             .bars_needed(TfId::H1),
         150
     );
+}
+
+/// The block's opacity: absent from a file is the default (60 %), the default is never written,
+/// a stored value comes back exactly, and the repair lands NaN on the default and the rest inside
+/// the bounds — idempotently.
+///
+/// Breakage: the field losing its serde default (an old profile fails or reads 0 — the lines
+/// vanish), the default frozen into every saved file, or a NaN kept (the settings signature then
+/// differs from itself on every notification).
+#[test]
+fn the_block_opacity_defaults_round_trips_and_is_repaired() {
+    let old: Doc = toml::from_str("[auto_figures]\nenabled = true\n").expect("an old table loads");
+    assert_eq!(old.auto_figures.opacity, 0.6);
+    let (text, _) = round_trip(&AutoFiguresCfg::default());
+    assert!(!text.contains("opacity"), "{text}");
+
+    let stored = AutoFiguresCfg {
+        opacity: 0.25,
+        ..AutoFiguresCfg::default()
+    };
+    let (text, back) = round_trip(&stored);
+    assert_eq!(back.opacity, 0.25);
+    assert_eq!(
+        written_table(&text),
+        toml::from_str::<toml::Table>("opacity = 0.25").unwrap()
+    );
+
+    for (raw, repaired) in [
+        (f32::NAN, 0.6),
+        (f32::INFINITY, 0.6),
+        (0.0, 0.1),
+        (-1.0, 0.1),
+        (7.0, 1.0),
+        (0.45, 0.45),
+    ] {
+        let mut cfg = AutoFiguresCfg {
+            opacity: raw,
+            ..AutoFiguresCfg::default()
+        };
+        cfg.sanitize();
+        assert_eq!(cfg.opacity, repaired, "{raw}");
+        let once = cfg.clone();
+        cfg.sanitize();
+        assert_eq!(cfg, once, "{raw}: the repair is idempotent");
+    }
+    // A hand-edited value out of bounds is repaired on read.
+    let hand: Doc = toml::from_str("[auto_figures]\nopacity = 5.0\n").expect("loads");
+    assert_eq!(hand.auto_figures.opacity, 1.0);
+}
+
+/// Every preset prints its captions on hover, and a row stored before that — its caption absent
+/// from the file — keeps printing it always.
+///
+/// Breakage: a preset left on `Always`, or `LineCaption`'s own default moved to `OnHover`, which
+/// would silently switch every stored row the reader never touched.
+#[test]
+fn presets_caption_on_hover_and_stored_rows_keep_theirs() {
+    for preset in AutoFigurePreset::ALL {
+        assert_eq!(
+            preset.row().caption.show,
+            CaptionShow::OnHover,
+            "{preset:?}"
+        );
+    }
+    let file = r#"
+[[auto_figures.rows]]
+preset = "levels_1h"
+detector = { kind = "swing" }
+"#;
+    let doc: Doc = toml::from_str(file).expect("loads");
+    assert_eq!(doc.auto_figures.rows[0].caption.show, CaptionShow::Always);
 }

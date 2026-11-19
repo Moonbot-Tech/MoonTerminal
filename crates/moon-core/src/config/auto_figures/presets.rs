@@ -16,13 +16,19 @@
 //!
 //! Not offered any more: the naked POCs (five whole days of profiles, which the cache has for
 //! almost no market). The variant stays, so a row created from it still loads with its name.
+//!
+//! Every preset row prints its line captions on hover only (`CaptionShow::OnHover`, LinKvo
+//! 19.11.2026): four rows of always-on captions crowd the price column the reader trades from, and
+//! a name is one pointer away. A row already stored keeps whatever its caption said — an absent
+//! caption in a file is the type's default, `Always`, so only a new row takes the hover.
 
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AutoFigureRow, DetectorParams, ExtremePeriod, ExtremeWhich, FormationParams, LineStyle,
-    PeriodExtremeParams, PeriodLevelParams, ProfilePeriod, RoundLevelsParams, SqueezeParams,
-    SwingParams, TfId, TfSource, ToleranceUnit, TrendParams, VolumeProfileParams,
+    AutoFigureRow, CaptionShow, DetectorParams, ExtremePeriod, ExtremeWhich, FormationParams,
+    LineCaption, LineStyle, PeriodExtremeParams, PeriodLevelParams, ProfilePeriod,
+    RoundLevelsParams, SqueezeParams, SwingParams, TfId, TfSource, ToleranceUnit, TrendParams,
+    VolumeProfileParams,
 };
 use crate::config::chart_labels::LabelColor;
 use crate::figures::LineKind;
@@ -396,6 +402,10 @@ impl AutoFigurePreset {
             preset: Some(self),
             tf,
             style,
+            caption: LineCaption {
+                show: CaptionShow::OnHover,
+                ..LineCaption::default()
+            },
             ..AutoFigureRow::new(detector)
         }
     }

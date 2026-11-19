@@ -5,6 +5,7 @@ _version: 1
 auto_figures.title: "Hình tự động"
 auto_figures.button_tip: "Hình tự động: mức giá, đường xu hướng và vùng nén do biểu đồ tự tìm"
 auto_figures.enabled: "Hiện hình tự động"
+auto_figures.opacity: "Độ đục"
 auto_figures.for_kind: "Cài đặt cho: %{kind}"
 auto_figures.frame_rows: "Các dòng"
 auto_figures.legend.order: "thứ tự"

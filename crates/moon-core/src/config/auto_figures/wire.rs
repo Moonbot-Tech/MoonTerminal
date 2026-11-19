@@ -20,9 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
-    AutoFigurePreset, AutoFigureRow, AutoFiguresCfg, CaptionPart, CaptionPlace, CaptionShow,
-    DetectorKind, DetectorParams, EventMarks, Extend, LineCaption, LineStyle, RowDetector,
-    StrengthBasis, Take, TakeOrder, TakeSide, TfSource, UnknownDetector, presets,
+    AF_OPACITY_DEFAULT, AutoFigurePreset, AutoFigureRow, AutoFiguresCfg, CaptionPart, CaptionPlace,
+    CaptionShow, DetectorKind, DetectorParams, EventMarks, Extend, LineCaption, LineStyle,
+    RowDetector, StrengthBasis, Take, TakeOrder, TakeSide, TfSource, UnknownDetector, presets,
 };
 use crate::config::chart_labels::LabelColor;
 use crate::config::layout::de_lenient;
@@ -39,6 +39,8 @@ pub(super) struct CfgRead {
     /// Raw values, parsed one by one, so a row that cannot be read is dropped alone.
     #[serde(default, deserialize_with = "de_lenient")]
     rows: Option<Vec<Value>>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    opacity: Option<f32>,
 }
 
 /// The configuration as WRITTEN.
@@ -49,6 +51,9 @@ pub(super) struct CfgWrite {
     /// Written only when OFF; absent reads as on.
     #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
+    /// Written only when it is not [`AF_OPACITY_DEFAULT`], so a profile follows the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opacity: Option<f32>,
     /// Written only when it is not the shipped set.
     #[serde(skip_serializing_if = "Option::is_none")]
     rows: Option<Vec<RowWire>>,
@@ -73,6 +78,7 @@ impl From<CfgRead> for AutoFiguresCfg {
         let mut cfg = AutoFiguresCfg {
             enabled: wire.enabled.unwrap_or(true),
             rows,
+            opacity: wire.opacity.unwrap_or(AF_OPACITY_DEFAULT),
         };
         cfg.sanitize();
         cfg
@@ -83,6 +89,7 @@ impl From<AutoFiguresCfg> for CfgWrite {
     fn from(cfg: AutoFiguresCfg) -> Self {
         Self {
             enabled: (!cfg.enabled).then_some(false),
+            opacity: (cfg.opacity != AF_OPACITY_DEFAULT).then_some(cfg.opacity),
             rows: (cfg.rows != presets::shipped_rows())
                 .then(|| cfg.rows.into_iter().map(RowWire::from).collect()),
         }

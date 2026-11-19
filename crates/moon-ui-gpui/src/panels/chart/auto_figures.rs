@@ -842,6 +842,7 @@ impl ChartPanel {
         // confluences across them: the same passes the engine's price pass repeats on every price
         // change.
         let mut set = AutoPaneFigures::new(rows, pane.hidden.clone());
+        set.opacity = cfg.opacity;
         set.select_all(&ref_prices, now_ms);
         // One line per publication — a run completing or a configuration edit, never a frame — so
         // the app log says which source each row read and whether its history was short.

@@ -78,10 +78,24 @@ pub const AF_PARALLEL_WIDTH_MAX: f32 = 90.0;
 pub const AF_MOVE_PCT_MAX: f32 = 50.0;
 /// Longest a flag's pole may be looked for, in bars.
 pub const AF_IMPULSE_BARS_MAX: u32 = 100;
+/// The block's opacity ([`AutoFiguresCfg::opacity`]) a configuration that never stated one takes:
+/// LinKvo, 19.11.2026 — the auto lines are a backdrop to price and to the reader's own figures, not
+/// a layer over them.
+pub const AF_OPACITY_DEFAULT: f32 = 0.6;
+/// The block's opacity, bounds. Under a tenth the lines are gone while the feature still runs;
+/// one is the colours exactly as the rows state them.
+pub const AF_OPACITY_MIN: f32 = 0.1;
+pub const AF_OPACITY_MAX: f32 = 1.0;
 
 impl AutoFiguresCfg {
     /// Repair whatever a hand-edited or older file can state. Idempotent.
     pub fn sanitize(&mut self) {
+        // NaN to the default, the rest into the bounds: both land on values this rule keeps.
+        self.opacity = if self.opacity.is_finite() {
+            self.opacity.clamp(AF_OPACITY_MIN, AF_OPACITY_MAX)
+        } else {
+            AF_OPACITY_DEFAULT
+        };
         self.rows.truncate(AF_ROWS_MAX);
         for row in &mut self.rows {
             row.sanitize();

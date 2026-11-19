@@ -8,6 +8,7 @@ const RGB: [u8; 3] = [10, 20, 30];
 fn style(extend: Extend) -> ResolvedStyle {
     ResolvedStyle {
         rgb: RGB,
+        opacity: 1.0,
         thickness: 2.5,
         line_kind: LineKind::Solid,
         broken_kind: LineKind::Dot,
@@ -593,4 +594,34 @@ fn a_formation_side_is_drawn_over_the_span_its_caption_uses() {
         ),
         None
     );
+}
+
+/// The block's opacity scales the alpha of the line and of its zone band, and nothing else; a NaN
+/// opacity draws opaque and an out-of-range one is clamped, so a broken setting never poisons a
+/// colour.
+///
+/// By hand: at half opacity the line's alpha is 255 · 0.5 = 127.5 → 128, and a zone of 0.4 is
+/// drawn at 0.2; the colour itself stays the row's.
+///
+/// Breakage: the factor applied to the line only (zones stay loud) or to the RGB instead of the
+/// alpha, or `with_opacity` letting a NaN through.
+#[test]
+fn the_block_opacity_scales_line_and_zone_alpha() {
+    let mut s = style(Extend::RightEdge);
+    s.zone_alpha = Some(0.4);
+    let found = level(100.0, 1_000.0, 2_000.0);
+    let (figs, bands) = draw(&found, &s.with_opacity(0.5), 0.5);
+    assert!(!figs.is_empty() && !bands.is_empty());
+    assert!(figs.iter().all(|f| f.color == [10, 20, 30, 128]));
+    assert!(bands.iter().all(|b| (b.color[3] - 0.2).abs() < 1e-6));
+    assert_eq!(
+        bands[0].color[..3],
+        [10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0]
+    );
+
+    let (figs, _) = draw(&found, &s.with_opacity(f32::NAN), 0.5);
+    assert!(figs.iter().all(|f| f.color[3] == 255));
+    let (figs, _) = draw(&found, &s.with_opacity(3.0), 0.5);
+    assert!(figs.iter().all(|f| f.color[3] == 255));
+    assert_eq!(s.with_opacity(-1.0).opacity, 0.0);
 }

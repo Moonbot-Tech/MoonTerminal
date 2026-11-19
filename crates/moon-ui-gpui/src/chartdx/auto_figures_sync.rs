@@ -116,6 +116,11 @@ pub(crate) struct AutoPaneFigures {
     /// Lines the user hid on this pane target until it changes market. Owned by the panel,
     /// carried here so the price pass drops them too.
     pub hidden: Vec<LineKey>,
+    /// The block's one opacity (`AutoFiguresCfg::opacity`), copied at publication: the factor on
+    /// the alpha of every line, zone, event mark and caption this set draws ([`pane`]). A change
+    /// of it is a configuration edit, which republishes the set — nothing per frame reads the
+    /// configuration.
+    pub opacity: f32,
     /// The price (`f32` bits) the price pass last evaluated this set at; `None` until it has.
     /// Interior: the pass runs over a shared set and replaces it only when the selection moved.
     eval_price: Cell<Option<u32>>,
@@ -142,12 +147,14 @@ impl Clone for PassBufs {
 }
 
 impl AutoPaneFigures {
-    /// A set of `rows`, with `hidden` lines left out by every later re-selection. The rows' `kept`
-    /// lines and `twins` are taken as they are; [`Self::select_all`] selects them.
+    /// A set of `rows`, with `hidden` lines left out by every later re-selection, drawn opaque
+    /// until the publisher sets [`Self::opacity`]. The rows' `kept` lines and `twins` are taken as
+    /// they are; [`Self::select_all`] selects them.
     pub(crate) fn new(rows: Vec<AutoRowDrawn>, hidden: Vec<LineKey>) -> Self {
         Self {
             rows,
             hidden,
+            opacity: 1.0,
             eval_price: Cell::new(None),
             bufs: RefCell::new(PassBufs::default()),
         }

@@ -5,6 +5,7 @@ _version: 1
 auto_figures.title: "Автофігури"
 auto_figures.button_tip: "Автофігури: рівні, похилі та підтиск, які графік знаходить сам"
 auto_figures.enabled: "Показувати автофігури"
+auto_figures.opacity: "Непрозорість"
 auto_figures.for_kind: "Налаштування для: %{kind}"
 auto_figures.frame_rows: "Рядки"
 auto_figures.legend.order: "порядок"

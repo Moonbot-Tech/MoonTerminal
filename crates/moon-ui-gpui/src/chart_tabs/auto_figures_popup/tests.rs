@@ -112,3 +112,19 @@ fn a_long_name_is_fitted_and_a_short_one_kept() {
     );
     assert_ne!(fitted, long.name);
 }
+
+/// The popup's opacity steps hold the shipped opacity and both bounds the repair keeps, so a
+/// profile that never touched the setting lights its own step, and every stored value lights the
+/// step nearest it rather than a neighbour that misstates it.
+///
+/// Breakage: `AF_OPACITY_DEFAULT` moved off the steps (the popup then lights 40 % or 80 % for a
+/// block drawn at 60 %), or a bound moved past the outermost step.
+#[test]
+fn the_opacity_steps_hold_the_default_and_the_bounds() {
+    use moon_core::config::auto_figures::{AF_OPACITY_DEFAULT, AF_OPACITY_MAX, AF_OPACITY_MIN};
+    let steps = super::OPACITY_STEPS;
+    for v in [AF_OPACITY_DEFAULT, AF_OPACITY_MIN, AF_OPACITY_MAX] {
+        let ix = crate::chart_tabs::graphics_popup::nearest(&steps, v);
+        assert_eq!(steps[ix], v, "{v}");
+    }
+}

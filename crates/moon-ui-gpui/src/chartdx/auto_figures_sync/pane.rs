@@ -75,6 +75,9 @@ pub(crate) struct AutoLineRec {
     pub events: EventSet,
     /// `0xRRGGBB`, the line's own resolved colour.
     pub color: u32,
+    /// The block's opacity the line was drawn at (`AutoPaneFigures::opacity`): its caption prints
+    /// at the same alpha, so a faded line never carries a loud name.
+    pub opacity: f32,
     pub caption: LineCaption,
     pub title: RowTitle,
     /// What the line is, where its detector draws several kinds (`Found::tag`).
@@ -266,7 +269,7 @@ pub(crate) fn append_auto_geometry(
             // The zone band is the tolerance the detector reports with the figure.
             append_shapes(
                 found,
-                &ResolvedStyle::new(&row.style, rgb),
+                &ResolvedStyle::new(&row.style, rgb).with_opacity(set.opacity),
                 row.ref_ms,
                 &mut drawn.figures,
                 &mut bands,
@@ -283,7 +286,7 @@ pub(crate) fn append_auto_geometry(
                     EVENT_MARK_SIZE * ppp,
                     EVENT_MARK_THICKNESS * ppp,
                     MARKER_SHAPE_KNOT,
-                    [c(rgb[0]), c(rgb[1]), c(rgb[2]), 1.0],
+                    [c(rgb[0]), c(rgb[1]), c(rgb[2]), set.opacity.clamp(0.0, 1.0)],
                 ));
             }
             drawn.lines.push(AutoLineRec {
@@ -296,6 +299,7 @@ pub(crate) fn append_auto_geometry(
                 first_ms: found.first_ms,
                 events: kept.events,
                 color: rgb_u32(rgb),
+                opacity: set.opacity,
                 caption: row.caption.clone(),
                 title: row.title.clone(),
                 tag: found.tag,

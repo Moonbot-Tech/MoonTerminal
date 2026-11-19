@@ -12,6 +12,10 @@
 //! captions' ⧉ stores a default for the kinds it names.
 //!
 //! Master switch off keeps every row — dimmed and still editable — and stops the detectors.
+//!
+//! Under the switch, one opacity for the whole block (`AutoFiguresCfg::opacity`): a row of steps,
+//! the graphics popup's control for its own opacities, because every other control here reads its
+//! value straight from the configuration and a slider would need a state entity on each host.
 
 use gpui::*;
 use moon_core::config::ChartTabKind;
@@ -22,7 +26,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::common::LayoutPopupHost;
+use super::common::{LayoutPopupHost, seg_row};
+use super::graphics_popup::{nearest, percent_label};
 use super::popup_slot::ChartPopup;
 use crate::design;
 use crate::panels::{
@@ -52,6 +57,10 @@ const TF_W: f32 = 40.0;
 const ROW_GAP: f32 = 2.0;
 /// Slack over the computed line width, for a trigger that renders wider than asked.
 const ROW_SLACK: f32 = 10.0;
+/// The block opacities offered, in display order. The shipped 60 % is one of them, and so are
+/// both bounds the repair keeps (`AF_OPACITY_MIN`, `AF_OPACITY_MAX`), so every stored value lights
+/// the step nearest it.
+const OPACITY_STEPS: [f32; 6] = [0.1, 0.25, 0.4, 0.6, 0.8, 1.0];
 
 /// Popup CONTENT width, derived from the row line rather than guessed — the captions popup's
 /// lesson: two numbers that have to agree end with only one of them changed.
@@ -286,6 +295,31 @@ fn render_popup<T: AutoFiguresPopupHost>(
                 write_cfg(&entity, app, |c| c.enabled = on);
             })
     };
+    let opacity = {
+        let entity = entity.clone();
+        let current = nearest(&OPACITY_STEPS, cfg.opacity);
+        // The row sits straight in the popup, which is as wide as the row list's frame.
+        let seg_w =
+            (f32::from(content_width(cx)) - popup_group_inset_px(cx)) / OPACITY_STEPS.len() as f32;
+        seg_row(
+            format!("{id}-opacity"),
+            t!("auto_figures.opacity").to_string(),
+            OPACITY_STEPS
+                .iter()
+                .enumerate()
+                .map(|(ix, v)| (percent_label(*v), ix == current))
+                .collect(),
+            seg_w,
+            p,
+            cx,
+            move |ix, app| {
+                if let Some(v) = OPACITY_STEPS.get(ix) {
+                    let v = *v;
+                    write_cfg(&entity, app, |c| c.opacity = v);
+                }
+            },
+        )
+    };
     let scope = div()
         .w_full()
         .text_size(design::t_caption(cx))
@@ -343,6 +377,7 @@ fn render_popup<T: AutoFiguresPopupHost>(
         .child(header)
         .child(scope)
         .child(master)
+        .child(opacity)
         .child(popup_group("af-list", t!("auto_figures.frame_rows")).child(list_group))
         .child(
             h_flex()

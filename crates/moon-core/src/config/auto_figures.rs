@@ -48,6 +48,13 @@ pub struct AutoFiguresCfg {
     pub enabled: bool,
     /// The rows, in draw order: a later row draws over an earlier one.
     pub rows: Vec<AutoFigureRow>,
+    /// One opacity for the whole block, `AF_OPACITY_MIN..=AF_OPACITY_MAX`: a factor on the alpha of
+    /// every row's lines, their captions, their event marks and their zones.
+    ///
+    /// One factor rather than an alpha per row: what the reader turns down is "how loud the auto
+    /// figures are against the chart", and a row's own colour, dash and zone keep telling the rows
+    /// apart at any opacity. Absent from a file reads as [`AF_OPACITY_DEFAULT`].
+    pub opacity: f32,
 }
 
 impl Default for AutoFiguresCfg {
@@ -64,6 +71,7 @@ impl AutoFiguresCfg {
         Self {
             enabled: true,
             rows: presets::shipped_rows(),
+            opacity: AF_OPACITY_DEFAULT,
         }
     }
 

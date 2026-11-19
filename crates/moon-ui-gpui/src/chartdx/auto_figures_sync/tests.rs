@@ -1615,3 +1615,34 @@ fn a_twin_the_flag_row_does_not_keep_stays_with_the_channel_row() {
         assert!(set.reselect(101.0, at).is_none(), "the price pass agrees");
     }
 }
+
+/// The set's one opacity reaches everything it draws: each line's figure alpha and the alpha its
+/// caption prints at — the colour itself stays the row's — and a new set draws opaque until the
+/// publisher sets it.
+///
+/// By hand: at 0.5 a figure's alpha is 255 · 0.5 = 127.5 → 128.
+///
+/// Breakage: the opacity copied into the set but not applied by the geometry, or applied to the
+/// lines and not handed to the captions (a faded line under a loud name).
+#[test]
+fn the_sets_opacity_fades_every_line_and_its_caption() {
+    let opaque = Rc::new(published(&[99.0, 101.0], Vec::new(), 100.0));
+    assert_eq!(opaque.opacity, 1.0);
+    let (drawn, _) = draw_set(&opaque);
+    let full = drawn.line_figures(drawn.lines[0].key);
+    assert!(!full.is_empty() && full.iter().all(|f| f.color[3] == 255));
+
+    let mut faded = published(&[99.0, 101.0], Vec::new(), 100.0);
+    faded.opacity = 0.5;
+    let (drawn, _) = draw_set(&Rc::new(faded));
+    assert!(!drawn.lines.is_empty());
+    for line in &drawn.lines {
+        assert_eq!(line.opacity, 0.5);
+        let figs = drawn.line_figures(line.key);
+        assert!(!figs.is_empty());
+        for (f, o) in figs.iter().zip(&full) {
+            assert_eq!(f.color[3], 128);
+            assert_eq!(f.color[..3], o.color[..3]);
+        }
+    }
+}
