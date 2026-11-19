@@ -311,9 +311,10 @@ impl Render for ChartPanel {
         self.revalidate_trade_hover(cx);
         let trade_card = self.trade_hover_card(sf, palette, cx);
         // Auto lines: same re-validate — the price pass can take a line away from under a resting
-        // cursor. No modifier, like the trade card: a line is found by pointing at it.
+        // cursor. Ctrl-gated like the news card (LinKvo, 19.11.2026): a pointer crossing lines
+        // must not repaint GPUI, and only a held modifier asks for the card.
         self.revalidate_auto_hover(cx);
-        let auto_card = self.auto_hover_card(sf, palette, cx);
+        let auto_card = self.auto_hover_card(sf, news_ctrl, palette, cx);
         // Per-figure settings panel, opened from a right-click on a figure. Rendered here beside
         // the other overlays rather than as a context menu: it holds swatches and switches, which
         // a menu of text items cannot draw.

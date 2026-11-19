@@ -269,10 +269,18 @@ impl ChartPanel {
             return;
         }
         self.news.ctrl = ctrl;
-        // Only a mark under the cursor can produce a card; a bare Ctrl hotkey must not repaint.
-        if self.news.hover.is_some() {
+        // Only a mark or an auto line under the cursor can produce a card; a bare Ctrl hotkey must
+        // not repaint. The auto-line card is gated by this same modifier (`auto_figures::menu`).
+        if self.news.hover.is_some() || self.auto_line_hovered() {
             cx.notify();
         }
+    }
+
+    /// Whether the hover-card modifier — Ctrl, Command on macOS — was held at the last pointer or
+    /// modifier event, as tracked for the news card. The auto-line card reads it to decide whether
+    /// a hover change repaints; the card itself checks the live state at render.
+    pub(super) fn card_modifier_held(&self) -> bool {
+        self.news.ctrl
     }
 
     /// The hover card, or `None` when nothing is hovered or Ctrl (Command on macOS) is not held.
