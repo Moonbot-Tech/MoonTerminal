@@ -728,6 +728,7 @@ fn nearest_orderbook_notional(
 // Split by responsibility: runs contains RenderState draw/measure helpers, FireTest text, and
 // the ghost cursor; prepare contains the main prepare_text implementation.
 mod auto_captions;
+pub(in crate::chartdx) use auto_captions::AutoCaptionScratch;
 mod caption;
 mod captions;
 mod column_scroll;

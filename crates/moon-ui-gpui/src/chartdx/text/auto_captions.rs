@@ -3,11 +3,14 @@
 //! The strings are made on revisions by `auto_figures_sync::pane::refresh_auto_captions` — a
 //! rebuild of the lines, a price change that moved a printed digit, the age clock — so this pass,
 //! which runs on every presented frame, does arithmetic only: where the line's drawn stretch is on
-//! screen, the line's price there, which side of it the text goes, and — for a caption anchored at
-//! its right — whether it has to step aside for the order captions in the price column.
+//! screen, the line's price there, which side of it the text goes, whether lines of several rows
+//! share one price and so one caption ([`group_same_price`]), and whether a caption has to step
+//! aside — for the order captions in the price column, and for the auto captions already drawn.
 //!
-//! The placement itself is pure ([`caption_spot`], [`clear_of_orders`]) so it is tested without a
-//! text context; [`RenderState::draw_auto_captions`] only measures and draws what they decide.
+//! The placement itself is pure ([`caption_spot`], [`group_same_price`], [`clear_of`]) so it is
+//! tested without a text context; [`RenderState::draw_auto_captions`] only measures and draws what
+//! they decide. The one string a frame can need beyond the prepared ones — the merged caption of a
+//! shared price — is joined into a buffer the pass keeps, so a still picture allocates nothing.
 
 use moon_chart::auto_figures::{FoundShape, PairSide};
 use moon_core::config::auto_figures::CaptionPlace;
@@ -152,52 +155,137 @@ fn line_y_at(
     (map.plot[1]..=map.plot[3]).contains(&y).then_some(y)
 }
 
-/// Where a RIGHT-anchored caption ends once it is clear of the order captions: its anchor `x`
-/// when nothing is in the way, else slid LEFT along its line until its padded box meets none of
-/// the laid-out `orders` (an order caption whose `top` is `None` is hidden and not in the way);
-/// `None` when, after sliding, the text would start left of `min_left`. A caption that needed no
-/// slide keeps its place whatever `min_left` says: an order caption elsewhere in its row is no
-/// reason to drop a caption that was drawn there before.
+/// Two captions of DIFFERENT rows whose lines sit at most this far apart on screen, logical
+/// pixels, are one caption ([`group_same_price`]).
 ///
-/// Why sliding left rather than the alternatives: moving the text up or down puts it beside a
+/// One and a half: a line is snapped to a whole physical pixel ([`CaptionMap::y_of`]), so two
+/// lines at one price can still land a pixel apart, and two lines two pixels apart already read as
+/// two lines — while their captions, a text line tall each, would sit on top of each other.
+pub(super) const SAME_PRICE_PX: f32 = 1.5;
+
+/// A padded caption box another caption has to clear: an order caption in the price column, or
+/// an auto caption this frame already drew.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ClearBox {
+    /// Padded horizontal extent, logical pixels.
+    pub x: [f32; 2],
+    /// Top of the text.
+    pub top: f32,
+    /// Height from `top`: the text line, with an order caption's plate insets where it has them.
+    pub height: f32,
+}
+
+impl ClearBox {
+    /// An order caption's box, `None` while it is hidden (its `top` is `None`).
+    pub(super) fn of_order(o: &OrderCaption) -> Option<Self> {
+        Some(Self {
+            x: o.x,
+            top: o.top?,
+            height: o.height,
+        })
+    }
+
+    /// The box of a caption drawn `w` wide and `h` tall with its anchor at `x`, aligned `ax`
+    /// about it (`0` left, `1` right), its text top at `top` — padded the way an order caption's
+    /// is.
+    pub(super) fn drawn(x: f32, ax: f32, w: f32, top: f32, h: f32) -> Self {
+        Self {
+            x: [
+                x - ax * w - READOUT_PAD_X,
+                x + (1.0 - ax) * w + READOUT_PAD_X,
+            ],
+            top,
+            height: h,
+        }
+    }
+}
+
+/// One line's caption in this frame, before it is drawn.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct CaptionCand {
+    /// Index of the line in the pane's drawn lines.
+    pub li: usize,
+    /// The row the line belongs to.
+    pub row: usize,
+    pub place: CaptionPlace,
+    pub spot: CaptionSpot,
+    /// Whether the line's own caption shows now: always, or `OnHover` with the pointer on it.
+    pub shown: bool,
+    /// Index into the candidates of the caption this one is printed in: its own for a caption of
+    /// its own (and for the first of a shared price), the first one's for every other line at that
+    /// price ([`group_same_price`]).
+    pub lead: usize,
+}
+
+/// Decide which candidates share one caption: a candidate joins the earliest caption before it
+/// whose line sits within [`SAME_PRICE_PX`] of its own, at the same place, and which holds no line
+/// of its row yet; otherwise it leads a caption of its own.
+///
+/// Lines of ONE row at one price are left apart: a row's two lines are two answers of its own
+/// detector, and the caption steps aside for the other instead ([`clear_of`]). The candidates come
+/// in draw order — the rows' order — so the first row of a shared price leads it, gives it its
+/// colour and its name first, and the same picture always groups the same way.
+pub(super) fn group_same_price(cands: &mut [CaptionCand]) {
+    for i in 0..cands.len() {
+        cands[i].lead = i;
+        let (row, place, y) = (cands[i].row, cands[i].place, cands[i].spot.line_y);
+        let joined = (0..i).find(|&j| {
+            let lead = &cands[j];
+            lead.lead == j
+                && lead.place == place
+                && (lead.spot.line_y - y).abs() <= SAME_PRICE_PX
+                && !cands[..i].iter().any(|c| c.lead == j && c.row == row)
+        });
+        if let Some(j) = joined {
+            cands[i].lead = j;
+        }
+    }
+}
+
+/// Where a caption ends once it is clear of `boxes`: its right edge `x` when nothing is in the
+/// way, else slid LEFT along its line until its padded box meets none of them; `None` when, after
+/// sliding, the text would start left of `min_left`. A caption that needed no slide keeps its place
+/// whatever `min_left` says: a box elsewhere in its row is no reason to drop a caption that was
+/// drawn there before.
+///
+/// The boxes are this frame's order captions and the auto captions drawn before this one. Why
+/// sliding left rather than the alternatives: moving the text up or down puts it beside a
 /// DIFFERENT price, where it names the wrong line; shortening it to the price still covers the
-/// order's numbers. Along its own line — the caller reads its height again where it ends, so on a
-/// sloped line it follows the slope — the caption still reads as that line's. The order captions
-/// keep the column: they carry the user's live orders.
+/// other caption's numbers. Along its own line — the caller reads its height again where it ends,
+/// so on a sloped line it follows the slope — the caption still reads as that line's. The order
+/// captions keep the column: they carry the user's live orders; an auto caption drawn earlier keeps
+/// its place: it belongs to an earlier row.
 ///
 /// Deterministic, so it cannot flicker on a still picture: the answer depends only on this frame's
-/// order layout, and each step moves the box strictly left of an order caption it met, so it ends
-/// within `orders.len()` steps.
+/// boxes, and each step moves the box strictly left of a box it met, so it ends within
+/// `boxes.len()` steps.
 ///
 /// Args:
-///     x: The caption's right edge (its anchor), logical pixels.
+///     x: The caption's right edge, logical pixels.
 ///     w: The caption's text width.
 ///     top: The top of its text.
 ///     h: Its text line height.
-///     orders: This frame's order captions, after `layout_order_captions`.
+///     boxes: What it must not cover.
 ///     min_left: The leftmost x its text may start at once it slid: where its line's drawn
 ///         stretch starts on screen, so it never hangs left of its own line.
-pub(super) fn clear_of_orders(
+pub(super) fn clear_of(
     x: f32,
     w: f32,
     top: f32,
     h: f32,
-    orders: &[OrderCaption],
+    boxes: &[ClearBox],
     min_left: f32,
 ) -> Option<f32> {
     // The same padded box an order caption is laid out by.
     let (y0, y1) = (top - READOUT_PAD_Y, top + h + READOUT_PAD_Y);
     let mut right = x;
     let mut slid = false;
-    for _ in 0..=orders.len() {
+    for _ in 0..=boxes.len() {
         let (x0, x1) = (right - w - READOUT_PAD_X, right + READOUT_PAD_X);
-        let block = orders
+        let block = boxes
             .iter()
-            .filter_map(|o| {
-                let o_top = o.top?;
-                (o.x[0] < x1 && x0 < o.x[1] && o_top < y1 && y0 < o_top + o.height)
-                    .then_some(o.x[0])
-            })
+            .filter(|b| b.x[0] < x1 && x0 < b.x[1] && b.top < y1 && y0 < b.top + b.height)
+            .map(|b| b.x[0])
             .reduce(f32::min);
         let Some(block) = block else {
             return (!slid || right - w >= min_left).then_some(right);
@@ -208,13 +296,21 @@ pub(super) fn clear_of_orders(
     None
 }
 
-/// Whether any of `orders` shares the rows from `top` to `top + h` — the cheap test that decides
-/// whether a caption is worth measuring for [`clear_of_orders`].
-fn row_has_orders(top: f32, h: f32, orders: &[OrderCaption]) -> bool {
+/// Whether any of `boxes` shares the rows from `top` to `top + h` — the cheap test that decides
+/// whether a caption is worth measuring for [`clear_of`].
+fn row_blocked(top: f32, h: f32, boxes: &[ClearBox]) -> bool {
     let (y0, y1) = (top - READOUT_PAD_Y, top + h + READOUT_PAD_Y);
-    orders
-        .iter()
-        .any(|o| o.top.is_some_and(|t| t < y1 && y0 < t + o.height))
+    boxes.iter().any(|b| b.top < y1 && y0 < b.top + b.height)
+}
+
+/// The text pass's reused buffers for the auto captions, kept between frames so a still picture
+/// allocates nothing once they have grown.
+#[derive(Debug, Default)]
+pub(in crate::chartdx) struct AutoCaptionScratch {
+    cands: Vec<CaptionCand>,
+    boxes: Vec<ClearBox>,
+    /// The merged caption of a shared price, joined here rather than into a new `String`.
+    text: String,
 }
 
 impl RenderState {
@@ -222,9 +318,12 @@ impl RenderState {
     ///
     /// An `OnHover` caption is drawn only for the line under the pointer (`auto_hover`). A line
     /// whose drawn stretch is off screen, or whose price at the anchor is outside the plot, prints
-    /// nothing. A right-anchored caption (`RightEnd`, `AtPriceAxis`) steps aside for this frame's
-    /// order captions ([`clear_of_orders`]): they are the pane's `order_caption_scratch`, laid out
-    /// earlier in the same pass whenever line labels are on.
+    /// nothing. Lines of different rows at one price print ONE caption ([`group_same_price`]): the
+    /// names of all of them, then the first one's other parts (`Double top · Day high · 5.3000`),
+    /// in the first one's colour — shown while any of them would show its own. Every caption steps
+    /// aside ([`clear_of`]) for this frame's order captions — the pane's `order_caption_scratch`,
+    /// laid out earlier in the same pass whenever line labels are on — and for the auto captions
+    /// drawn before it.
     ///
     /// Args:
     ///     ctx: Text context of the frame.
@@ -262,52 +361,95 @@ impl RenderState {
             .auto_hover
             .filter(|(pane, _)| *pane == idx)
             .map(|(_, key)| key);
-        // Taken for the loop and put back after it, so its allocation is reused next frame. The
-        // order captions are this frame's only while line labels are on; the scratch is stale
+        // Taken for the pass and put back after it, so their allocations are reused next frame.
+        // The order captions are this frame's only while line labels are on; the scratch is stale
         // otherwise, and nothing is in the column.
         let orders = std::mem::take(&mut self.panes[idx].order_caption_scratch);
-        let live = if self.line_labels { &orders[..] } else { &[] };
+        let mut sc = std::mem::take(&mut self.auto_caption_scratch);
+        sc.cands.clear();
+        sc.boxes.clear();
+        if self.line_labels {
+            sc.boxes
+                .extend(orders.iter().filter_map(ClearBox::of_order));
+        }
+        for (li, line) in self.panes[idx].auto.lines.iter().enumerate() {
+            if line.text.is_none() {
+                continue;
+            }
+            let Some(spot) = caption_spot(
+                &map,
+                &line.shape,
+                line.side,
+                line.span,
+                line.place(),
+                label_x,
+            ) else {
+                continue;
+            };
+            sc.cands.push(CaptionCand {
+                li,
+                row: line.key.row_ix,
+                place: line.place(),
+                spot,
+                shown: !line.hover_only() || hovered == Some(line.key),
+                lead: li,
+            });
+        }
+        group_same_price(&mut sc.cands);
         let line_h = label_line_px(self.label_font_delta);
         let mut result = Ok(());
-        for li in 0..self.panes[idx].auto.lines.len() {
+        for ci in 0..sc.cands.len() {
+            let cand = sc.cands[ci];
+            // A line printed in an earlier caption, or a caption none of whose lines shows now.
+            if cand.lead != ci || !sc.cands[ci..].iter().any(|m| m.lead == ci && m.shown) {
+                continue;
+            }
             // Copied out: the text is an `Arc<str>` (a refcount bump), and drawing needs `&mut self`.
-            let (text, shape, side, span, place, rgb, alpha) = {
-                let line = &self.panes[idx].auto.lines[li];
-                let Some(text) = line.text.clone() else {
-                    continue;
-                };
-                if line.hover_only() && hovered != Some(line.key) {
-                    continue;
-                }
+            let (own, shape, side, rgb, alpha) = {
+                let line = &self.panes[idx].auto.lines[cand.li];
                 (
-                    text,
+                    line.text.clone(),
                     line.shape,
                     line.side,
-                    line.span,
-                    line.place(),
                     line.color,
                     line.opacity,
                 )
             };
-            let Some(spot) = caption_spot(&map, &shape, side, span, place, label_x) else {
+            let Some(own) = own else {
                 continue;
             };
-            let offset = |line_y: f32| match place {
+            let merged = {
+                let lines = &self.panes[idx].auto.lines;
+                let members = sc.cands[ci..].iter().filter(|m| m.lead == ci);
+                let second = members.clone().nth(1).is_some();
+                second
+                    && crate::chartdx::auto_figures_sync::caption::merged_caption(
+                        &mut sc.text,
+                        members.filter_map(|m| lines[m.li].name.as_deref()),
+                        lines[cand.li].rest.as_deref(),
+                    )
+            };
+            let text: &str = if merged { &sc.text } else { &own };
+            let spot = cand.spot;
+            let offset = |line_y: f32| match cand.place {
                 CaptionPlace::BelowLine => (line_y + LABEL_LINE_GAP, 0.0),
                 _ => (line_y - LABEL_LINE_GAP, 1.0),
             };
             let (mut dy, ay) = offset(spot.line_y);
             let mut x = spot.x;
             let top = dy - ay * line_h;
-            // Measured only when an order caption shares the row: text shaping is the expensive
+            // Measured only when another caption shares the row: text shaping is the expensive
             // call on this path, and most captions have nothing beside them.
-            if spot.ax == 1.0 && row_has_orders(top, line_h, live) {
-                let w = self.measure_label_text(ctx, &text).width.as_f32();
-                let cleared = clear_of_orders(x, w, top, line_h, live, spot.drawn[0]);
-                // Slid along its line: its height is read again where it now ends.
+            if row_blocked(top, line_h, &sc.boxes) {
+                let w = self.measure_label_text(ctx, text).width.as_f32();
+                // The anchor's distance from the text's right edge, by its alignment.
+                let tail = (1.0 - spot.ax) * w;
+                let right = x + tail;
+                let cleared = clear_of(right, w, top, line_h, &sc.boxes, spot.drawn[0]);
+                // Slid along its line: its height is read again where its anchor now is.
                 let slid_y = match cleared {
-                    Some(clear) if clear != x => {
-                        line_y_at(&map, &shape, side, clear, spot.drawn).map(|y| (clear, y))
+                    Some(clear) if clear != right => {
+                        line_y_at(&map, &shape, side, clear - tail, spot.drawn).map(|y| (clear, y))
                     }
                     other => other.map(|clear| (clear, spot.line_y)),
                 };
@@ -318,7 +460,7 @@ impl RenderState {
                     self.text_run_cursor += 1;
                     continue;
                 };
-                x = clear;
+                x = clear - tail;
                 dy = offset(line_y).0;
             }
             match draw_label_text_run(
@@ -326,28 +468,34 @@ impl RenderState {
                 &mut self.text_run_cursor,
                 ctx,
                 self.label_font_delta,
-                &text,
+                text,
                 x,
                 dy,
                 spot.ax,
                 ay,
                 color(rgb).opacity(alpha.clamp(0.0, 1.0)),
             ) {
-                Ok(m) => placed.push(PlacedLabel {
-                    x,
-                    y: dy,
-                    ax: spot.ax,
-                    ay,
-                    w: m.width.as_f32(),
-                    h: m.line_height.as_f32(),
-                    solid: false,
-                }),
+                Ok(m) => {
+                    let (w, h) = (m.width.as_f32(), m.line_height.as_f32());
+                    sc.boxes
+                        .push(ClearBox::drawn(x, spot.ax, w, dy - ay * line_h, line_h));
+                    placed.push(PlacedLabel {
+                        x,
+                        y: dy,
+                        ax: spot.ax,
+                        ay,
+                        w,
+                        h,
+                        solid: false,
+                    });
+                }
                 Err(e) => {
                     result = Err(e);
                     break;
                 }
             }
         }
+        self.auto_caption_scratch = sc;
         self.panes[idx].order_caption_scratch = orders;
         result
     }

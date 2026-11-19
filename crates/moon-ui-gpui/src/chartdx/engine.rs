@@ -89,6 +89,7 @@ impl ChartEngine {
             cursor_badge: None,
             ruler: None,
             auto_hover: None,
+            auto_caption_scratch: Default::default(),
             pixel_scale: 1.0,
             #[cfg(windows)]
             scissor_rs: None,

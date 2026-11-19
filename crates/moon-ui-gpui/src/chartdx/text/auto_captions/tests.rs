@@ -7,7 +7,10 @@ use moon_chart::auto_figures::draw::drawn_side;
 use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide, Seg};
 use moon_core::config::auto_figures::{CaptionPlace, Extend};
 
-use super::{CaptionMap, CaptionSpot, caption_spot, clear_of_orders, line_y_at};
+use super::{
+    CaptionCand, CaptionMap, CaptionSpot, ClearBox, SAME_PRICE_PX, caption_spot, clear_of,
+    group_same_price, line_y_at,
+};
 use crate::chartdx::text::OrderCaption;
 use crate::chartdx::text::{READOUT_PAD_X, READOUT_PAD_Y};
 
@@ -170,6 +173,19 @@ fn order(right: f32, w: f32, top: Option<f32>) -> OrderCaption {
     }
 }
 
+/// [`clear_of`] against order captions, through the conversion the text pass makes of them.
+fn clear_of_orders(
+    x: f32,
+    w: f32,
+    top: f32,
+    h: f32,
+    orders: &[OrderCaption],
+    min_left: f32,
+) -> Option<f32> {
+    let boxes: Vec<ClearBox> = orders.iter().filter_map(ClearBox::of_order).collect();
+    clear_of(x, w, top, h, &boxes, min_left)
+}
+
 /// A right-anchored caption keeps its place with nothing beside it, and slides LEFT along its line
 /// past every order caption it would cover — one after another, as each slide meets the next —
 /// never up or down; an order caption the layout hid, or one in another row, is not in the way;
@@ -216,4 +232,103 @@ fn a_right_end_caption_slides_left_of_the_order_captions() {
     // slide, however close its text sits to `min_left`: it stays where it was drawn before.
     let far = [order(1_200.0, 60.0, Some(100.0))];
     assert_eq!(clear_of_orders(990.0, w, top, h, &far, 950.0), Some(990.0));
+}
+
+/// A right-end caption candidate of `row` whose line sits at `y`.
+fn cand(row: usize, y: f32, place: CaptionPlace) -> CaptionCand {
+    CaptionCand {
+        li: 0,
+        row,
+        place,
+        spot: CaptionSpot {
+            x: 995.0,
+            ax: 1.0,
+            line_y: y,
+            drawn: [0.0, 1_000.0],
+        },
+        shown: true,
+        lead: usize::MAX,
+    }
+}
+
+/// Lines of different rows at one price — within a pixel and a half on screen — share ONE caption,
+/// led by the first of them; a line farther off, a line of a row the caption already holds, and a
+/// line captioned at another place each keep a caption of their own.
+///
+/// By hand: rows 0 and 1 at 100 and 101 (1 px) share row 0's caption; row 2 at 101.5 (1.5 px from
+/// the lead) joins it too; row 0's second line at 100 does not (its row is in already) and leads
+/// its own; row 3 at 102 (2 px) leads its own; row 4 at 100 captioned at the left end leads its
+/// own.
+///
+/// Breakage: two captions printed over each other at one price (the screenshot: a double top and
+/// the day's high at 5.3000), a tolerance that merges neighbouring levels, or one row's two lines
+/// folded into one caption.
+#[test]
+fn lines_of_different_rows_at_one_price_share_one_caption() {
+    let mut cands = [
+        cand(0, 100.0, CaptionPlace::RightEnd),
+        cand(1, 101.0, CaptionPlace::RightEnd),
+        cand(2, 100.0 + SAME_PRICE_PX, CaptionPlace::RightEnd),
+        cand(0, 100.0, CaptionPlace::RightEnd),
+        cand(3, 102.0, CaptionPlace::RightEnd),
+        cand(4, 100.0, CaptionPlace::LeftEnd),
+    ];
+    group_same_price(&mut cands);
+    let leads: Vec<usize> = cands.iter().map(|c| c.lead).collect();
+    assert_eq!(leads, [0, 0, 0, 3, 4, 5]);
+}
+
+/// The shared caption prints every name in the rows' order, then the first line's other parts;
+/// with no name among them it is not merged, and the first line's own caption stands.
+///
+/// Breakage: the price printed once per row, the names out of row order, or an empty merged string
+/// drawn in place of the lead's caption.
+#[test]
+fn a_shared_caption_joins_the_names_then_the_rest() {
+    use crate::chartdx::auto_figures_sync::caption::merged_caption;
+    let mut out = String::from("stale");
+    assert!(merged_caption(
+        &mut out,
+        ["Double top", "Day high"].into_iter(),
+        Some("5.3000"),
+    ));
+    assert_eq!(out, "Double top · Day high · 5.3000");
+    assert!(merged_caption(
+        &mut out,
+        ["Double top", "Day high"].into_iter(),
+        None
+    ));
+    assert_eq!(out, "Double top · Day high");
+    assert!(!merged_caption(
+        &mut out,
+        std::iter::empty(),
+        Some("5.3000")
+    ));
+    assert!(out.is_empty());
+}
+
+/// A caption whose box meets an auto caption already drawn at another price slides LEFT along its
+/// line past it, exactly as it does past an order caption; one in another row stays.
+///
+/// By hand: the first caption, 80 wide, right-anchored at 990 with its text top at 100, has the
+/// box 905..995 (padded by `READOUT_PAD_X`). A 60-wide caption ending at 990 with its top at 106
+/// shares those rows: it must end at 905 − 5 = 900. At top 130 it is in another row and keeps 990.
+///
+/// Breakage: auto captions of neighbouring prices drawn over each other, or the drawn box built
+/// from the wrong side of its anchor.
+#[test]
+fn a_caption_slides_left_of_an_auto_caption_already_drawn() {
+    let (w, h) = (60.0, 12.0);
+    let drawn = [ClearBox::drawn(990.0, 1.0, 80.0, 100.0, h)];
+    assert_eq!(drawn[0].x, [905.0, 995.0]);
+    assert_eq!(
+        clear_of(990.0, w, 106.0, h, &drawn, 0.0),
+        Some(905.0 - READOUT_PAD_X)
+    );
+    assert_eq!(clear_of(990.0, w, 130.0, h, &drawn, 0.0), Some(990.0));
+    // A left-anchored caption's box lies to the right of its anchor.
+    assert_eq!(
+        ClearBox::drawn(10.0, 0.0, 80.0, 100.0, h).x,
+        [10.0 - READOUT_PAD_X, 90.0 + READOUT_PAD_X]
+    );
 }

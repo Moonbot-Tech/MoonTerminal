@@ -227,9 +227,57 @@ fn distance_pct(values: &CaptionValues<'_>) -> Option<f64> {
 /// line nothing touched (a volume-profile line, a round price) and the age of a line with no
 /// moment of birth (a round price).
 pub(crate) fn caption_text(parts: &[CaptionPart], values: &CaptionValues<'_>) -> String {
+    joined_parts(parts, values, true)
+}
+
+/// The two halves the caption of a price several rows share is joined from
+/// ([`merged_caption`]): the line's name when its caption prints one, and its caption without the
+/// name — built on the same revision as [`caption_text`], never on a frame.
+pub(crate) fn caption_halves(
+    parts: &[CaptionPart],
+    values: &CaptionValues<'_>,
+) -> (Option<String>, String) {
+    let name = parts
+        .contains(&CaptionPart::RowName)
+        .then(|| line_title(values.title, values.tag))
+        .filter(|name| !name.is_empty());
+    (name, joined_parts(parts, values, false))
+}
+
+/// Join into `out` the one caption of lines of several rows at one price: every name, in the rows'
+/// order, then the first line's caption without its name (`rest`) — `Double top · Day high ·
+/// 5.3000`. `false`, with `out` empty, when none of them prints a name: the first line's own
+/// caption says everything then.
+///
+/// Into a buffer the caller keeps, because the text pass calls it on a frame.
+pub(crate) fn merged_caption<'a>(
+    out: &mut String,
+    names: impl Iterator<Item = &'a str>,
+    rest: Option<&str>,
+) -> bool {
+    out.clear();
+    for name in names {
+        if !out.is_empty() {
+            out.push_str(PART_SEP);
+        }
+        out.push_str(name);
+    }
+    if out.is_empty() {
+        return false;
+    }
+    if let Some(rest) = rest.filter(|r| !r.is_empty()) {
+        out.push_str(PART_SEP);
+        out.push_str(rest);
+    }
+    true
+}
+
+/// `parts` printed and joined, the row's name among them only `with_name`.
+fn joined_parts(parts: &[CaptionPart], values: &CaptionValues<'_>, with_name: bool) -> String {
     let mut out = String::new();
     for part in parts {
         let piece = match part {
+            CaptionPart::RowName if !with_name => continue,
             CaptionPart::RowName => line_title(values.title, values.tag),
             CaptionPart::Price => match values.line_now {
                 Some(p) => moon_chart::axes::format_price(p, values.tick),

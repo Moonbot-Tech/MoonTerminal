@@ -38,7 +38,7 @@ use moon_core::figures::proj::PxPoint;
 use moon_core::figures::{Figure, Proj};
 use moon_core::session::CoreId;
 
-use super::caption::{CaptionValues, RowTitle, caption_quantum, caption_text};
+use super::caption::{CaptionValues, RowTitle, caption_halves, caption_quantum, caption_text};
 use super::select::LineKey;
 use super::{AutoPaneFigures, resolve_rgb};
 
@@ -86,6 +86,11 @@ pub(crate) struct AutoLineRec {
     figs: Range<usize>,
     /// The caption, built by [`refresh_auto_captions`]; `None` when it prints nothing.
     pub text: Option<Arc<str>>,
+    /// The caption's name, when it prints one, and the caption without it — the halves the text
+    /// pass joins when lines of several rows share a price (`caption::caption_halves`). Built with
+    /// [`Self::text`], so the three always describe the same caption.
+    pub name: Option<Arc<str>>,
+    pub rest: Option<Arc<str>>,
 }
 
 impl AutoLineRec {
@@ -305,6 +310,8 @@ pub(crate) fn append_auto_geometry(
                 tag: found.tag,
                 figs: start..drawn.figures.len(),
                 text: None,
+                name: None,
+                rest: None,
             });
         }
     }
@@ -398,13 +405,15 @@ pub(crate) fn refresh_auto_captions(
     let mut changed = false;
     for i in 0..drawn.lines.len() {
         let line = &drawn.lines[i];
-        let text = caption_text(
-            &line.caption.parts,
-            &caption_values(line, price, now_ms, tick),
-        );
+        let values = caption_values(line, price, now_ms, tick);
+        let text = caption_text(&line.caption.parts, &values);
+        let (name, rest) = caption_halves(&line.caption.parts, &values);
         let next = (!text.is_empty()).then(|| Arc::<str>::from(text));
-        if drawn.lines[i].text != next {
-            drawn.lines[i].text = next;
+        let line = &mut drawn.lines[i];
+        line.name = name.map(Arc::from);
+        line.rest = (!rest.is_empty()).then(|| Arc::from(rest));
+        if line.text != next {
+            line.text = next;
             changed = true;
         }
     }

@@ -1646,3 +1646,38 @@ fn the_sets_opacity_fades_every_line_and_its_caption() {
         }
     }
 }
+
+/// The caption's halves are built with it: the row's name, and the caption without it — what the
+/// text pass joins when another row's line shares the price — and no name for a caption that
+/// prints none.
+///
+/// Breakage: the halves left empty (a shared price would print the lead's caption alone, the other
+/// row's name lost), or the name kept in the rest (printed twice when joined).
+#[test]
+fn a_captions_name_and_rest_are_built_with_it() {
+    let set = Rc::new(published(&[101.0], Vec::new(), 100.0));
+    let (mut drawn, _) = draw_set(&set);
+    assert!(refresh_auto_captions(&mut drawn, Some(100.0), 0.0, None));
+    let price = moon_chart::axes::format_price(101.0, None);
+    let line = &drawn.lines[0];
+    assert_eq!(line.name.as_deref(), Some("Levels"));
+    assert_eq!(line.rest.as_deref(), Some(price.as_str()));
+    assert_eq!(
+        line.text.as_deref(),
+        Some(format!("Levels · {price}").as_str())
+    );
+
+    let mut bare = level_row(&[101.0]);
+    bare.caption.parts = vec![CaptionPart::Price];
+    bare.kept = select_kept(
+        &bare.outcome,
+        &rules(&bare, &[]),
+        100.0,
+        0.0,
+        &mut Vec::new(),
+    );
+    let (mut drawn, _) = draw_set(&Rc::new(AutoPaneFigures::new(vec![bare], Vec::new())));
+    assert!(refresh_auto_captions(&mut drawn, Some(100.0), 0.0, None));
+    assert_eq!(drawn.lines[0].name, None);
+    assert_eq!(drawn.lines[0].rest.as_deref(), Some(price.as_str()));
+}

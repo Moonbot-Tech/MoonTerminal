@@ -202,6 +202,9 @@ pub(in crate::chartdx) struct RenderState {
     /// The auto line under the pointer, by pane: the text pass prints an `OnHover` caption only
     /// for it. Set by the panel's hover hit test; changing it costs a present, never a rebuild.
     pub(in crate::chartdx) auto_hover: Option<(usize, super::auto_figures_sync::LineKey)>,
+    /// The auto-caption pass's reused buffers (`text::auto_captions`): candidates, the boxes a caption
+    /// must clear, and the merged text of a shared price. Scratch, not state.
+    pub(in crate::chartdx) auto_caption_scratch: super::text::AutoCaptionScratch,
     pub(in crate::chartdx) pixel_scale: f32,
     /// Lazily created own-pass scissor rasterizer, recreated on device changes. It clips layers to
     /// the panel so price-positioned order books and orders cannot spill beyond the plot onto
