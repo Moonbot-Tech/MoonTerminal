@@ -12,6 +12,7 @@
 //! - [`report`] queries and filters closed trades from SQLite, plus the positions still open;
 //! - [`core_status`] renders per-core connection and resource telemetry;
 //! - [`order_edit`] opens the active-order editor;
+//! - [`auto_figure_edit`] opens the auto-figure row editor;
 //! - [`common`] contains shared panel controls and rendering helpers;
 //! - [`registry`] is the single source of truth for building each detachable panel docked and
 //!   detached, driving persistence registration, detachment, and the default home strip;
@@ -21,6 +22,7 @@
 mod alerts;
 mod arb_edit;
 mod assets;
+mod auto_figure_edit;
 pub(crate) mod chart;
 /// Shared panel widgets — also reached from `controls`, which builds the same tooltips and chips.
 pub(crate) mod common;
@@ -38,6 +40,10 @@ mod stub;
 pub(crate) mod tab_menu;
 
 pub(crate) use arb_edit::open_arb_edit;
+pub(crate) use auto_figure_edit::{
+    kind_key as auto_figure_kind_key, line_swatch, open_auto_figure_row_editor,
+    open_new_auto_figure_row, row_title, tf_source_label, write_auto_figures,
+};
 pub(crate) use common::{
     COMPACT_CHECKBOX_DISABLED_ALPHA, COMPACT_CHECKBOX_WEIGHT, FooterWeight,
     POPUP_GROUP_CAPTION_FONT, POPUP_GROUP_GAP, POPUP_GROUP_INSET, RadioMark, RenderGate,

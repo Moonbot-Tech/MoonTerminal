@@ -331,6 +331,20 @@ impl super::labels_popup::LabelsPopupHost for ChartTabs {
     }
 }
 
+/// Host for the "Auto figures" popup: it edits the default of the ACTIVE tab's kind, and reads
+/// the per-row status from that tab's chart panels.
+impl super::auto_figures_popup::AutoFiguresPopupHost for ChartTabs {
+    fn auto_figure_panels(&self, cx: &App) -> Vec<Entity<crate::panels::ChartPanel>> {
+        match &self.active {
+            Tab::Main => self.main.read(cx).chart_panels().cloned().collect(),
+            Tab::Add(n, b) | Tab::Custom(n, b) => self
+                .add_stack(*n, b)
+                .map(|p| p.read(cx).chart_panels().cloned().collect())
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// Host for the "Candles and Trades" candlestick popup targeting the ACTIVE tab, like ⚙.
 ///
 /// Application and persistence use `apply_tab_setting(StackSetting::CandleView)`.

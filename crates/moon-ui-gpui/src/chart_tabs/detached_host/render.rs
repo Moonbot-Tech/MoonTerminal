@@ -11,6 +11,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::super::auto_figures_popup;
 use super::super::candle_popup;
 use super::super::common;
 use super::super::common::LayoutPopupHost as _;
@@ -87,6 +88,7 @@ impl Render for DetachedChartHost {
         let graphics_popup_open = self.popup_shows(ChartPopup::Graphics);
         let history_popup_open = self.popup_shows(ChartPopup::History);
         let labels_popup_open = self.popup_shows(ChartPopup::Labels);
+        let auto_figures_open = self.popup_shows(ChartPopup::AutoFigures);
         let volumes_popup_open = self.popup_shows(ChartPopup::Volumes);
         // Header market-search input and matches. Render the list at the `v_flex` level after the
         // body; otherwise the later-painted window body covers the header dropdown.
@@ -363,6 +365,23 @@ impl Render for DetachedChartHost {
                                         MoonButtonVariant::Ghost
                                     })
                                     .selected(labels_popup_open)
+                                    .render(),
+                                cx,
+                            ))
+                            // The auto-figures button edits the rows of THIS window's kind.
+                            .child(auto_figures_popup::auto_figures_popup_host(
+                                self,
+                                "detached-chart-auto-figures",
+                                MoonButton::new("detached-auto-figures-settings")
+                                    .leading_icon(MoonButtonIconSlot::new("icons/trending-up.svg"))
+                                    .tooltip(t!("auto_figures.button_tip").to_string())
+                                    .size(MoonSize::Xs)
+                                    .variant(if auto_figures_open {
+                                        MoonButtonVariant::Blue
+                                    } else {
+                                        MoonButtonVariant::Ghost
+                                    })
+                                    .selected(auto_figures_open)
                                     .render(),
                                 cx,
                             ))

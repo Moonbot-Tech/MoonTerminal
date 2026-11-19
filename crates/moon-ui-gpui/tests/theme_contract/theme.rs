@@ -416,6 +416,11 @@ fn popover_contents_do_not_paint_a_second_surface() {
             "chart_tabs/labels_popup/mod.rs",
             r#".id(SharedString::from(format!("{id}-popup")))"#,
         ),
+        (
+            "chart_tabs/auto_figures_popup/mod.rs",
+            "chart_tabs/auto_figures_popup/mod.rs",
+            r#".id(SharedString::from(format!("{id}-popup")))"#,
+        ),
         // The trade window's one ⚙: the chart popups' rows for a frozen replay, in one place.
         (
             "trade_window/settings.rs",

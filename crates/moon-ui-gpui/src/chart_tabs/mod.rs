@@ -11,6 +11,7 @@ mod add_stack;
 // `pub(crate)` because Backend queues a detached window's ⧉ press as `ApplyAllRequest`.
 pub(crate) mod apply_all;
 pub(crate) mod apply_row;
+mod auto_figures_popup;
 mod candle_popup;
 mod graphics_popup;
 mod history_popup;

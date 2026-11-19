@@ -144,6 +144,24 @@ impl ChartEngine {
             .auto_pane_candles(idx, core, market, now_ms)
     }
 
+    /// Every published auto-figure row of every pane, as `(row index, outcome)` — what the
+    /// auto-figures popup reads to mark a row whose last run had too little history, lagged or
+    /// found no cache. Read-only and cheap: one `Arc` clone per drawn row, only while that popup
+    /// is open.
+    pub(crate) fn auto_row_outcomes(
+        &self,
+    ) -> Vec<(
+        usize,
+        std::sync::Arc<super::auto_figures_sync::job::AutoRowOutcome>,
+    )> {
+        self.data
+            .borrow()
+            .auto_figures
+            .iter()
+            .flat_map(|(_, set)| set.rows.iter().map(|r| (r.row_ix, r.outcome.clone())))
+            .collect()
+    }
+
     /// Sets this panel's news marks and the mark under the cursor. Returns whether anything changed,
     /// so the caller can skip the userdata resync.
     pub(crate) fn set_news_marks(

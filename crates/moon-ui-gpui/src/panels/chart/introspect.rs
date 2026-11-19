@@ -8,6 +8,18 @@ impl ChartPanel {
         self.chart.pane_count()
     }
 
+    /// The last published outcome of each auto-figure row on this panel's panes, as
+    /// `(row index, outcome)`, one entry per pane that drew the row. Read by the auto-figures popup
+    /// for its per-row status mark; hidden and unknown rows publish nothing and are absent.
+    pub(crate) fn auto_row_outcomes(
+        &self,
+    ) -> Vec<(
+        usize,
+        std::sync::Arc<crate::chartdx::auto_figures_sync::job::AutoRowOutcome>,
+    )> {
+        self.chart.auto_row_outcomes()
+    }
+
     /// When this panel's stalest auto-added pane last had a detect, or `None` when no pane of it
     /// may be evicted; see `Container::stalest_detect_ms` for why the cap asks this and not a TTL
     /// deadline.

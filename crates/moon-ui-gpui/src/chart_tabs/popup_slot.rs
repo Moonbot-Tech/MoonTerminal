@@ -27,6 +27,8 @@ pub(crate) enum ChartPopup {
     History,
     /// The chart-labels module list.
     Labels,
+    /// The auto-figure rows of the target's KIND of chart: levels, trend lines, squeezes.
+    AutoFigures,
     /// The volume indicators: the bottom band and the horizontal volumes' zone.
     Volumes,
     /// Defaults for the armed drawing tool. Tab strip only — a detached window draws no tool row.
