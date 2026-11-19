@@ -21,22 +21,35 @@
 //! twins, because a 1h and a 4h reading of a pattern are two readings, which is exactly what a
 //! confluence between them is about.
 //!
-//! # Who calls it, and when
+//! # Among the lines rows KEEP, and in which order
 //!
-//! Both places that put several rows' lines side by side, BEFORE each row's own selection
-//! (`take::select_skipping`) and before the cross-row confluence pass: the chart's publication of
-//! a finished run (the terminal's `chartdx/auto_figures_sync/select.rs`, once per result, never on
-//! a price tick) and the screener's scan ([`super::scan`]). The pass runs over every row's FOUND
-//! formations, not over what each row kept: a twin dropped after the selection would have spent
-//! one of its row's `count` slots and left the row's next line undrawn, and a row whose selection
-//! moved on a tick would bring its twin back under its own name — the caption switching between
-//! "Flag" and "Channel" as price moves. Dropped before, the losing row never sees the twin, and
-//! its `take` fills the slot with its next line.
+//! Twins are judged among what each row's own selection keeps, never among what it merely found
+//! ([`select_rows`]): a formation is somebody's twin only where two rows would both DRAW it. Judged
+//! over the found lines instead, a "Flags" row that finds the flag but does not keep it — the flag
+//! is on the side the row does not take, past its `count`, or there is no reference price — would
+//! still take it away from the "Channels" row that does keep it, and the formation would vanish
+//! from the chart altogether. So:
 //!
-//! A dropped twin is neither drawn nor counted nor a confluence partner, on the chart and in the
-//! screener alike. What its row MARKS is not lost with it: the winner shows the union of the
-//! events every row of its set marks ([`union_marks`]) — a "Channels" row marking breakouts and a
-//! "Flags" row that does not still see the breakout of the flag both found.
+//! 1. every row runs its own `take` as if it were alone;
+//! 2. among the formations so kept, one set of twins is drawn once, by the line with the most
+//!    precise name (`Flag > Wedge = Triangle > Channel`; the upper row on a tie);
+//! 3. a row whose kept twin went to another row takes its next line instead, ONCE — its `take`
+//!    again with the lost line, and every formation another row now draws, out of the running
+//!    (`take::select_skipping`), so the slot is not left empty and the refill cannot bring the
+//!    same formation back;
+//! 4. twins among the refills themselves (two rows refilling with one formation) are drawn once
+//!    the same way, the loser dropped with no further refill.
+//!
+//! The survivor shows the union of the events every row of its set marks ([`union_marks`]) — a
+//! "Channels" row marking breakouts and a "Flags" row that does not still see the breakout of the
+//! flag both keep. A dropped twin is neither drawn nor counted nor a confluence partner, on the
+//! chart and in the screener alike.
+//!
+//! Who calls it: both places that put several rows' lines side by side — the chart's selection
+//! (the terminal's `chartdx/auto_figures_sync/select.rs`, on a publication and on every price
+//! change, since a row's selection follows the price) and the screener's scan ([`super::scan`]).
+//! On a price change it costs O(K²) in the K formations the rows keep — each row keeps a few — plus
+//! one more `take` for a row that lost a twin; it never walks every row's found lines pairwise.
 
 use moon_core::config::auto_figures::{EventMarks, TfId};
 
@@ -112,8 +125,9 @@ fn rank(tag: LineTag) -> u8 {
     }
 }
 
-/// For every entry of `twins` — every FOUND line of the pane's (or the market's) rows, in row order,
-/// `None` for a line that is not a formation — the index of the line that draws it instead, into
+/// For every entry of `twins` — every line put side by side, in row order (the lines the rows KEEP,
+/// [`select_rows`]), `None` for a line that is not a formation — the index of the line that draws
+/// it instead, into
 /// `winner_of` (one entry per line, overwritten): `Some(j)` for a twin that loses to line `j`,
 /// `None` for a line that is drawn (a survivor, or anything but a formation).
 ///
@@ -122,8 +136,8 @@ fn rank(tag: LineTag) -> u8 {
 /// each set of twins survives, and every other member of the set names that one — never a fellow
 /// loser — so a caller can hand the survivor what each loser's row contributes ([`union_marks`]).
 ///
-/// Cost: O(P²) in the formations among `twins` (the other lines are skipped in one pass): a pane
-/// and a market find formations in tens, and a level row adds only its `None`s. Nothing is
+/// Cost: O(P²) in the formations among `twins` (the other lines are skipped in one pass): the rows
+/// of a pane or a market keep a few each, and a level row adds only its `None`s. Nothing is
 /// allocated once `winner_of` and `scratch` have grown.
 pub fn twin_winners(
     twins: &[Option<Twin>],
@@ -188,6 +202,151 @@ pub fn union_marks(winner: &EventMarks, twin: &EventMarks) -> EventMarks {
     out.bounce |= twin.bounce;
     out.role_flip |= twin.role_flip;
     out
+}
+
+/// One row of a cross-row selection ([`select_rows`]): what it found, on which timeframe, and the
+/// marks it shows.
+#[derive(Debug, Clone, Copy)]
+pub struct TwinRow<'a> {
+    pub tf: TfId,
+    pub found: &'a [Found],
+    pub marks: &'a EventMarks,
+}
+
+/// What the cross-row selection decided for one row.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RowPick {
+    /// Indices into the row's found lines that it draws, in the order its selection ranked them.
+    pub kept: Vec<usize>,
+    /// The kept lines that survived a set of twins together with the union of the marks of every
+    /// row of the set ([`union_marks`]): `(index into found, marks)`. A kept line not listed shows
+    /// its row's own marks.
+    pub joined: Vec<(usize, EventMarks)>,
+}
+
+impl RowPick {
+    /// The marks found line `ix` shows when it survived a set of twins; `None` for the row's own.
+    pub fn joined_of(&self, ix: usize) -> Option<&EventMarks> {
+        self.joined.iter().find(|(i, _)| *i == ix).map(|(_, m)| m)
+    }
+}
+
+/// Every row's drawn lines, with one formation two rows KEEP drawn once (the module doc's four
+/// steps).
+///
+/// `select(r, skip)` is row `r`'s own selection: its `take` (and whatever else the caller drops,
+/// such as the lines the user hid) with the found lines where `skip[i]` is `true` out of the
+/// running — `skip` is empty on the first call, and shorter than `found` means the rest are not
+/// skipped (`take::select_skipping`'s contract). It is called once per row, and once more for a row
+/// that lost a kept twin.
+///
+/// Returns one [`RowPick`] per row of `rows`, in order. Cost O(K²) in the formations kept, see the
+/// module doc.
+pub fn select_rows<F>(rows: &[TwinRow<'_>], mut select: F) -> Vec<RowPick>
+where
+    F: FnMut(usize, &[bool]) -> Vec<usize>,
+{
+    let mut picks: Vec<RowPick> = (0..rows.len())
+        .map(|r| RowPick {
+            kept: select(r, &[]),
+            joined: Vec::new(),
+        })
+        .collect();
+    let mut scratch = Vec::new();
+    let first = kept_losers(rows, &picks, &mut scratch);
+    if first.is_empty() {
+        return picks;
+    }
+    // The formations drawn after the first round, by row: what a refill must not bring back.
+    let lost_at = |r: usize, ix: usize| first.iter().any(|l| l.row == r && l.ix == ix);
+    let drawn: Vec<(usize, Twin)> = picks
+        .iter()
+        .enumerate()
+        .flat_map(|(r, p)| p.kept.iter().map(move |&ix| (r, ix)))
+        .filter(|&(r, ix)| !lost_at(r, ix))
+        .filter_map(|(r, ix)| {
+            let row = &rows[r];
+            row.found
+                .get(ix)
+                .and_then(|f| Twin::of(f, row.tf))
+                .map(|t| (r, t))
+        })
+        .collect();
+    for (r, row) in rows.iter().enumerate() {
+        if !first.iter().any(|l| l.row == r) {
+            continue;
+        }
+        let skip: Vec<bool> = row
+            .found
+            .iter()
+            .enumerate()
+            .map(|(ix, f)| {
+                lost_at(r, ix)
+                    || Twin::of(f, row.tf)
+                        .is_some_and(|t| drawn.iter().any(|(dr, d)| *dr != r && d.same(&t)))
+            })
+            .collect();
+        picks[r].kept = select(r, &skip);
+    }
+    let second = kept_losers(rows, &picks, &mut scratch);
+    for l in &second {
+        picks[l.row].kept.retain(|&ix| ix != l.ix);
+    }
+    for l in first.iter().chain(&second) {
+        if !picks[l.winner_row].kept.contains(&l.winner_ix) {
+            continue;
+        }
+        let winner = &mut picks[l.winner_row];
+        let joined = union_marks(
+            winner
+                .joined_of(l.winner_ix)
+                .unwrap_or(rows[l.winner_row].marks),
+            rows[l.row].marks,
+        );
+        match winner.joined.iter_mut().find(|(i, _)| *i == l.winner_ix) {
+            Some(entry) => entry.1 = joined,
+            None => winner.joined.push((l.winner_ix, joined)),
+        }
+    }
+    picks
+}
+
+/// A kept formation that loses to a twin another kept line draws, and that line.
+#[derive(Debug, Clone, Copy)]
+struct Loser {
+    row: usize,
+    ix: usize,
+    winner_row: usize,
+    winner_ix: usize,
+}
+
+/// The losers among the lines `picks` keep: [`twin_winners`] over the kept lines alone.
+fn kept_losers(rows: &[TwinRow<'_>], picks: &[RowPick], scratch: &mut Vec<usize>) -> Vec<Loser> {
+    let owners: Vec<(usize, usize)> = picks
+        .iter()
+        .enumerate()
+        .flat_map(|(r, p)| p.kept.iter().map(move |&ix| (r, ix)))
+        .collect();
+    let twins: Vec<Option<Twin>> = owners
+        .iter()
+        .map(|&(r, ix)| rows[r].found.get(ix).and_then(|f| Twin::of(f, rows[r].tf)))
+        .collect();
+    let mut winner_of = Vec::new();
+    twin_winners(&twins, scratch, &mut winner_of);
+    winner_of
+        .iter()
+        .enumerate()
+        .filter_map(|(flat, w)| {
+            let (row, ix) = owners[flat];
+            let (winner_row, winner_ix) = owners[(*w)?];
+            Some(Loser {
+                row,
+                ix,
+                winner_row,
+                winner_ix,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

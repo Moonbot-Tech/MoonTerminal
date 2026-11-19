@@ -7,8 +7,8 @@
 //! [`super::confluence::confluence`] — on the rows of Main's set (LinKvo, 19.11.2026: the same rows
 //! and parameters, configured in one place), so a coin the screener flags shows the same lines and
 //! marks when it is opened on a chart. The chart's cross-row rule is applied here too, in the
-//! chart's order: a formation two rows both FOUND is one line, under its more precise name, before
-//! either row's `take` runs ([`super::twins`]).
+//! chart's order: each row's `take` first, then a formation two rows both KEEP is one line, under
+//! its more precise name, and the row that lost it takes its next line ([`super::twins`]).
 //!
 //! Pure like every detector: no clock (`now_ms` is an argument), no I/O, no market lookup. The
 //! caller reads the market's rows from the local kline cache, which the background recorder keeps
@@ -34,13 +34,13 @@
 //!
 //! # Cost
 //!
-//! One market is O(rows × (resample of the input + the row's detector)), plus O(P²) for the twin
-//! pass over the P formations the rows found (every other found line is skipped in one pass), plus
+//! One market is O(rows × (resample of the input + the row's detector)), plus O(K²) for the twin
+//! pass over the K formations the rows keep (and one more `take` for a row that lost one), plus
 //! O(L log L) for the confluence pass over the L kept lines. Fifteen days of 5-minute rows is
 //! 4 320 rows, so a few hundred markets per button press is background work, not a stall.
 //! [`ScanResult`] keeps its scratch buffers between calls; what still allocates per row is each
-//! detector's own result and the copy of its events tail, held until the twin pass has seen every
-//! row.
+//! detector's own result, the copy of its events tail, held until the twin pass has seen every
+//! row, and the twin pass's selections.
 
 use moon_core::config::auto_figures::{
     AutoEvent, AutoFigureRow, DetectorParams, EventMarks, Take, TfId, TfSource,
@@ -50,7 +50,7 @@ use moon_core::market::candles::{ChartCandle, resample};
 use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
 use super::history::history_full;
-use super::twins::{Twin, twin_winners, union_marks};
+use super::twins::{TwinRow, select_rows};
 use super::{DetectCtx, Found, bar_ok, detect, price_of, take, with_ring_rows};
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
@@ -240,13 +240,6 @@ struct Scratch {
     events: Vec<EventSet>,
     /// Every scanned row's detector run, before any selection.
     runs: Vec<RowRun>,
-    /// Every found line of every run, flattened in row order: its twin identity ([`Twin`]), the
-    /// survivor it loses to, whether it is out of its row's selection, and the marks it shows.
-    twins: Vec<Option<Twin>>,
-    twin_scratch: Vec<usize>,
-    winner_of: Vec<Option<usize>>,
-    lost: Vec<bool>,
-    marks: Vec<EventMarks>,
     /// Every kept line of every scanned row.
     kept: Vec<Kept>,
     /// The kept lines as the confluence pass reads them, and its answer.
@@ -255,7 +248,7 @@ struct Scratch {
 }
 
 /// A kept line with its events and the marks the confluence pass reads — its row's, joined with
-/// those of the rows whose twin of it was dropped ([`union_marks`]).
+/// those of the rows whose twin of it was dropped (`twins::union_marks`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Kept {
     line: ScanLine,
@@ -377,18 +370,18 @@ pub fn matches(result: &ScanResult, filter: &ScanFilter) -> bool {
     result.answer().matches(filter)
 }
 
-/// Scan one market: every row of `rows` over `bars_5m`, written into `out`.
+/// Scan one market: every row of `rows` over its 5-minute base, written into `out`.
 ///
-/// Per row: its closed bars resampled from `bars_5m` (see the module doc); fewer than
-/// [`history_full`] of `bars_needed` → counted short and skipped (the chart's own rule, so a row
-/// the chart calls short is never scanned here); otherwise the newest `bars_needed` of them go to
-/// `detect`. Then, over every row's FOUND lines, a formation two rows both found is one line
-/// ([`super::twins`]): the twin under the less precise name is out of its row's selection, and the
-/// survivor shows the union of both rows' marks. Then `take::select_skipping` keeps each row's
-/// lines against the last price at `now_ms`, and `line_events` marks each kept line from the
-/// row's closed bars (it reads only the newest `events::bars_read(policy)` valid ones). Then
-/// confluence across every row's kept lines, set where a line's marks ask for it; then the best
-/// event and the nearest line.
+/// The base is `bars_5m` with `ring_5m` in the buckets it leaves empty ([`with_ring_rows`]). Per
+/// row: its closed bars resampled from the base (see the module doc); fewer than [`history_full`]
+/// of `bars_needed` → counted short and skipped (the chart's own rule, so a row the chart calls
+/// short is never scanned here); otherwise the newest `bars_needed` of them go to `detect`. Then
+/// each row's `take` keeps its lines against the last price at `now_ms`, and a formation two rows
+/// both keep is one line ([`super::twins::select_rows`]): the survivor is the more precisely named,
+/// shows the union of both rows' marks, and the row that lost it takes its next line. Then
+/// `line_events` marks each kept line from the row's closed bars (it reads only the newest
+/// `events::bars_read(policy)` valid ones). Then confluence across every row's kept lines, set
+/// where a line's marks ask for it; then the best event and the nearest line.
 ///
 /// Args:
 ///     rows: The rows to run ([`ScanRow::from_rows`] of Main's set).
@@ -418,11 +411,6 @@ pub fn scan_market(
         bars,
         events,
         runs,
-        twins,
-        twin_scratch,
-        winner_of,
-        lost,
-        marks,
         kept,
         placed,
         near,
@@ -461,41 +449,35 @@ pub fn scan_market(
         });
     }
 
-    // One formation found by two rows is one line, as on the chart, and BEFORE either row selects:
-    // the twin under the less precise name is neither counted, nor a confluence partner, nor a
+    // Each row's own `take`, then one formation two rows both keep is one line, as on the chart: the
+    // twin under the less precise name is neither counted, nor a confluence partner, nor a
     // candidate for the best event — so the column never names an event of a line the chart does
-    // not draw — and it does not take a slot of its own row's `count` either.
-    twins.clear();
-    marks.clear();
-    for run in runs.iter() {
-        let row = &rows[run.row];
-        twins.extend(run.found.iter().map(|f| Twin::of(f, row.tf)));
-        marks.extend(run.found.iter().map(|_| row.marks));
-    }
-    twin_winners(twins, twin_scratch, winner_of);
-    lost.clear();
-    lost.extend(winner_of.iter().map(Option::is_some));
-    let mut flat = 0;
-    for run in runs.iter() {
-        let row_marks = rows[run.row].marks;
-        for _ in &run.found {
-            if let Some(winner) = winner_of[flat] {
-                marks[winner] = union_marks(&marks[winner], &row_marks);
-            }
-            flat += 1;
+    // not draw — and its row takes its next line in the slot it leaves.
+    let picks = match last_price {
+        Some(price) => {
+            let twin_rows: Vec<TwinRow<'_>> = runs
+                .iter()
+                .map(|run| TwinRow {
+                    tf: rows[run.row].tf,
+                    found: &run.found,
+                    marks: &rows[run.row].marks,
+                })
+                .collect();
+            select_rows(&twin_rows, |r, skip| {
+                let run = &runs[r];
+                take::select_skipping(&run.found, &rows[run.row].take, price, now_ms, skip)
+            })
         }
-    }
+        None => Vec::new(),
+    };
 
-    let mut offset = 0;
-    for run in runs.iter() {
+    for (run, pick) in runs.iter().zip(&picks) {
         let row = &rows[run.row];
-        let span = offset..offset + run.found.len();
-        offset = span.end;
         let Some(price) = last_price else {
             continue;
         };
         let policy = row.params.broken_policy();
-        for ix in take::select_skipping(&run.found, &row.take, price, now_ms, &lost[span.clone()]) {
+        for &ix in &pick.kept {
             let Some(f) = run.found.get(ix) else {
                 continue;
             };
@@ -503,7 +485,7 @@ pub fn scan_market(
             let Some(line_price) = f.shape.price_near(now_ms, price) else {
                 continue;
             };
-            let line_marks = marks[span.start + ix];
+            let line_marks = pick.joined_of(ix).copied().unwrap_or(row.marks);
             line_events(
                 std::slice::from_ref(f),
                 &run.recent,

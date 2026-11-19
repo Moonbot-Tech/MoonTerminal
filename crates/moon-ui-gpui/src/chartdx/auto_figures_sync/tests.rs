@@ -19,7 +19,7 @@ use super::job::{
     next_key_change_ms, run, with_chart_tail, without_cache,
 };
 use super::pane::{AutoPaneDrawn, SegmentBase, append_auto_geometry, refresh_auto_captions};
-use super::select::select_kept;
+use super::select::{self, KeptLine, RowRules};
 use super::{
     AutoPaneFigures, AutoRowDrawn, LineKey, PriceStep, RowTitle, native_closed_candles, price_step,
     resegment, resolve_rgb,
@@ -27,6 +27,33 @@ use super::{
 use crate::chartdx::types::CandleGpu;
 
 const MIN: i64 = 60_000;
+
+/// One row's rules on its own: the pane's hidden lines and the row's last twin marks, no formation
+/// hidden through another row.
+fn rules<'a>(row: &'a AutoRowDrawn, hidden: &'a [LineKey]) -> RowRules<'a> {
+    RowRules {
+        row_ix: row.row_ix,
+        take: &row.take,
+        marks: &row.marks,
+        policy: row.policy,
+        hidden,
+        hidden_twins: &[],
+        twins: &row.twins,
+    }
+}
+
+/// One row selected on its own — no other row, so no twin — the way the pane's pass selects each
+/// row (`select::pick`, then `select::kept_lines`).
+fn select_kept(
+    outcome: &AutoRowOutcome,
+    rules: &RowRules<'_>,
+    ref_price: f64,
+    at_ms: f64,
+    scratch: &mut Vec<moon_chart::auto_figures::events::EventSet>,
+) -> Vec<KeptLine> {
+    let picked = select::pick(outcome, rules, ref_price, at_ms, &[]);
+    select::kept_lines(outcome, rules, &picked, ref_price, at_ms, scratch)
+}
 /// A UTC midnight (day 20 780 since the epoch), so every grid below — up to D1 — is aligned by
 /// construction.
 const DAY0: i64 = 1_795_392_000_000;
@@ -345,7 +372,7 @@ fn published(levels: &[f64], hidden: Vec<LineKey>, price: f64) -> AutoPaneFigure
     let mut row = level_row(levels);
     row.kept = select_kept(
         &row.outcome,
-        &row.rules(&hidden),
+        &rules(&row, &hidden),
         price,
         0.0,
         &mut Vec::new(),
@@ -407,7 +434,7 @@ fn captions_are_rebuilt_only_when_a_printed_value_moves() {
         place: CaptionPlace::RightEnd,
         show: CaptionShow::Always,
     };
-    row.kept = select_kept(&row.outcome, &row.rules(&[]), 100.0, 0.0, &mut Vec::new());
+    row.kept = select_kept(&row.outcome, &rules(&row, &[]), 100.0, 0.0, &mut Vec::new());
     let set = Rc::new(AutoPaneFigures::new(vec![row], Vec::new()));
     let (mut zones, mut hlines, mut segs, mut markers, mut labels) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -535,7 +562,13 @@ fn redrawing_the_segment_equals_a_full_rebuild() {
     for f in &mut Arc::make_mut(&mut band.outcome).found {
         f.tolerance_frac = 0.005;
     }
-    band.kept = select_kept(&band.outcome, &band.rules(&[]), 100.0, 0.0, &mut Vec::new());
+    band.kept = select_kept(
+        &band.outcome,
+        &rules(&band, &[]),
+        100.0,
+        0.0,
+        &mut Vec::new(),
+    );
     let before = Rc::new(AutoPaneFigures::new(vec![band.clone()], Vec::new()));
     let after = Rc::new(
         before
@@ -655,7 +688,7 @@ fn confluences(set: &AutoPaneFigures) -> Vec<Vec<(f64, bool)>> {
 /// at 100.2 (0.2 % apart, inside the default 0.3 %) both get the mark; a second 1h row's line at
 /// 100.1 is not a confluence with the first 1h row (same timeframe) but is with the 4h one; a 4h
 /// line at 110 has nothing near. A row that does not mark confluence shows none and still gives
-/// one to the others. The publication's own pass (`cross_rows`) agrees with the price pass.
+/// one to the others. The publication's own pass (`select_all`) agrees with the price pass.
 ///
 /// Breakage: confluence never inserted (the per-line events pass never sets it), judged within one
 /// row, the mark filter ignored, an unmarking row dropped as a partner, or the price pass comparing
@@ -688,11 +721,8 @@ fn lines_of_two_timeframes_close_together_are_marked_as_confluence() {
         tf_row(1, TfId::H4, &[100.2, 110.0]),
     ];
     rows[1].marks.confluence = false;
-    for row in &mut rows {
-        row.kept = select_kept(&row.outcome, &row.rules(&[]), 105.0, 0.0, &mut Vec::new());
-    }
     let mut published = AutoPaneFigures::new(rows, Vec::new());
-    published.cross_rows(0.0);
+    published.select_all(&[105.0; 2], 0.0);
     assert_eq!(
         confluences(&published),
         vec![vec![(100.0, true)], vec![(100.2, false), (110.0, false)]]
@@ -779,7 +809,7 @@ fn a_hidden_poc_stays_hidden_when_it_turns_naked() {
     let hidden = [LineKey::of(0, &plain)];
     let kept = select_kept(
         &row.outcome,
-        &row.rules(&hidden),
+        &rules(&row, &hidden),
         99.0,
         0.0,
         &mut Vec::new(),
@@ -1130,7 +1160,7 @@ fn a_formation_is_kept_drawn_and_pinned_by_its_nearer_side() {
         vec![formation(LineTag::Channel, 3_600_000.0, 7_200_000.0, 0)];
     let at = 9.0 * 3_600_000.0;
     row.ref_ms = at;
-    row.kept = select_kept(&row.outcome, &row.rules(&[]), 101.0, at, &mut Vec::new());
+    row.kept = select_kept(&row.outcome, &rules(&row, &[]), 101.0, at, &mut Vec::new());
     assert_eq!(row.kept.len(), 1);
     assert_eq!(row.kept[0].side, Some(PairSide::Lower));
     assert!(!row.kept[0].above);
@@ -1173,7 +1203,7 @@ fn a_formation_is_kept_drawn_and_pinned_by_its_nearer_side() {
     assert!(
         select_kept(
             &row.outcome,
-            &row.rules(&hidden),
+            &rules(&row, &hidden),
             101.0,
             at,
             &mut Vec::new()
@@ -1228,7 +1258,7 @@ fn every_reader_of_a_kept_formation_reads_the_side_it_was_kept_by() {
         place: CaptionPlace::RightEnd,
         show: CaptionShow::Always,
     };
-    row.kept = select_kept(&row.outcome, &row.rules(&[]), 101.0, at, &mut Vec::new());
+    row.kept = select_kept(&row.outcome, &rules(&row, &[]), 101.0, at, &mut Vec::new());
     assert_eq!(row.kept.len(), 1);
     assert_eq!(row.kept[0].side, Some(PairSide::Lower));
     // An event to mark, so the mark is drawn.
@@ -1292,7 +1322,7 @@ fn a_triangles_caption_is_placed_and_priced_on_its_drawn_side() {
         place: CaptionPlace::RightEnd,
         show: CaptionShow::Always,
     };
-    row.kept = select_kept(&row.outcome, &row.rules(&[]), 95.0, now, &mut Vec::new());
+    row.kept = select_kept(&row.outcome, &rules(&row, &[]), 95.0, now, &mut Vec::new());
     assert_eq!(row.kept.len(), 1);
 
     let (mut drawn, _) = draw_set(&Rc::new(AutoPaneFigures::new(vec![row], Vec::new())));
@@ -1313,10 +1343,10 @@ fn kept_tags(set: &AutoPaneFigures) -> Vec<Vec<Option<moon_chart::auto_figures::
         .collect()
 }
 
-/// One formation that a "Channels" row and a "Flags" row both find is drawn ONCE, as the flag —
+/// One formation that a "Channels" row and a "Flags" row both keep is drawn ONCE, as the flag —
 /// although the channel row comes first — while a formation with other sides stays drawn beside
-/// it; hiding the drawn flag hides the channel reading of it too; and the publication's pass
-/// (`cross_rows`) draws what the price pass draws.
+/// it; hiding the drawn flag hides the channel reading of it too (and nothing takes its place);
+/// and the publication's pass (`select_all`) draws what the price pass draws.
 ///
 /// By hand: both rows hold a pair from (1 h, 110) over (2 h, 100), the channel row's grown by two
 /// touches (the same formation, `a_formation_keeps_its_key_while_it_grows`); against 101 at 9 h
@@ -1347,10 +1377,7 @@ fn one_formation_two_rows_find_is_drawn_once_under_the_flags_name() {
 
     // The publication's own pass agrees with the price pass.
     let mut published = AutoPaneFigures::new(rows, Vec::new());
-    for r in &mut published.rows {
-        r.kept = select_kept(&r.outcome, &r.rules(&[]), 101.0, at, &mut Vec::new());
-    }
-    published.cross_rows(at);
+    published.select_all(&[101.0; 2], at);
     assert_eq!(kept_tags(&published), kept_tags(&drawn));
 
     // Other sides: another formation, drawn as well.
@@ -1371,15 +1398,12 @@ fn one_formation_two_rows_find_is_drawn_once_under_the_flags_name() {
         vec![row(0, vec![channel]), row(1, vec![flag])],
         hidden.clone(),
     );
-    for r in &mut set.rows {
-        r.kept = select_kept(&r.outcome, &r.rules(&hidden), 101.0, at, &mut Vec::new());
-    }
-    set.cross_rows(at);
+    set.select_all(&[101.0; 2], at);
     assert_eq!(kept_tags(&set), [vec![], vec![]]);
 }
 
-/// A twin is out of its row's selection BEFORE the count, and the drawn formation shows the
-/// events its twin's row marks.
+/// The row that loses a kept twin takes its next line in the slot, once, and the drawn formation
+/// shows the events its twin's row marks.
 ///
 /// By hand: a "Channels" row keeping one line per side, nearest first, finds the flag's channel
 /// reading (sides 110 / 100) and a lower channel (sides 99 / 90, shifted by 11); against 101 the
@@ -1389,8 +1413,8 @@ fn one_formation_two_rows_find_is_drawn_once_under_the_flags_name() {
 /// empty — the flag row draws the flag, and the flag shows an approach (101 is 1 % from 100, inside
 /// the channel row's 2 %), which its own row does not mark. The same holds after a price pass.
 ///
-/// Breakage: the twin dropped after `take::select` (the channel row keeps only the twin, which is
-/// then removed, and draws nothing below), or the twin's marks dropped with it (the flag shows no
+/// Breakage: the lost twin's slot left empty (the channel row keeps only the twin, which is then
+/// removed, and draws nothing below), or the twin's marks dropped with it (the flag shows no
 /// approach).
 #[test]
 fn a_twin_leaves_its_rows_count_and_hands_its_marks_to_the_flag() {
@@ -1450,11 +1474,7 @@ fn a_twin_leaves_its_rows_count_and_hands_its_marks_to_the_flag() {
         ],
         Vec::new(),
     );
-    for r in &mut set.rows {
-        let kept = select_kept(&r.outcome, &r.rules(&[]), 101.0, at, &mut Vec::new());
-        r.kept = kept;
-    }
-    set.cross_rows(at);
+    set.select_all(&[101.0; 2], at);
     let kept_ix = |set: &AutoPaneFigures| -> Vec<Vec<usize>> {
         set.rows
             .iter()
@@ -1565,4 +1585,33 @@ fn a_ring_read_that_did_not_happen_is_a_failure() {
     assert_eq!(out[0].1.source, BarSource::Cache5m);
     assert!(out[0].1.read_failed);
     assert_eq!(out[0].1.bars, 0);
+}
+
+/// A formation the flag row does NOT keep stays with the channel row that does, under the
+/// channel's name: against 101 the pair (110 over 100) is kept by its lower side, so a flag row
+/// taking only lines above price — or none at all — keeps nothing, and the channel row draws it.
+///
+/// Breakage: twins judged over the FOUND lines — the flag row's unkept reading takes the formation
+/// away from the channel row, and the chart draws neither.
+#[test]
+fn a_twin_the_flag_row_does_not_keep_stays_with_the_channel_row() {
+    use moon_chart::auto_figures::LineTag;
+    let row = |row_ix: usize, found: Vec<Found>| {
+        let mut r = tf_row(row_ix, TfId::H1, &[]);
+        Arc::make_mut(&mut r.outcome).found = found;
+        r
+    };
+    let flag = formation(LineTag::Flag, 3_600_000.0, 7_200_000.0, 0);
+    let channel = formation(LineTag::Channel, 3_600_000.0, 7_200_000.0, 2);
+    let at = 9.0 * 3_600_000.0;
+    let mut above_only = row(1, vec![flag.clone()]);
+    above_only.take.side = TakeSide::Above;
+    let mut none = row(1, vec![flag]);
+    none.take.count = 0;
+    for flags in [above_only, none] {
+        let mut set = AutoPaneFigures::new(vec![row(0, vec![channel.clone()]), flags], Vec::new());
+        set.select_all(&[101.0; 2], at);
+        assert_eq!(kept_tags(&set), [vec![Some(LineTag::Channel)], vec![]]);
+        assert!(set.reselect(101.0, at).is_none(), "the price pass agrees");
+    }
 }

@@ -59,7 +59,7 @@ pub(crate) mod select;
 mod tests;
 
 pub(crate) use caption::RowTitle;
-pub(crate) use select::{KeptLine, LineKey, RowRules};
+pub(crate) use select::{KeptLine, LineKey};
 
 /// One drawn row of one pane: its detector's outcome, the figures the row keeps, and the settings
 /// the price pass re-selects them by.
@@ -84,43 +84,20 @@ pub(crate) struct AutoRowDrawn {
     pub outcome: Arc<job::AutoRowOutcome>,
     /// The drawn lines, ranked: indices into `outcome.found` with their side and events.
     pub kept: Vec<KeptLine>,
-    /// What the twin pass decided for this row's found lines ([`select::resolve_twins`]), filled
-    /// by [`AutoPaneFigures::new`]; empty for a row no other row shares a formation with.
+    /// What the twin pass of the selection decided for this row's kept lines
+    /// ([`select::select_pane`]), re-derived with `kept`; empty for a row whose kept lines no other
+    /// row keeps too.
     pub twins: RowTwins,
     /// The moment the selection was made, Unix ms: where sloped lines were projected for it, and
     /// where a squeeze's sloped half stops when its apex lies further ahead.
     pub ref_ms: f64,
 }
 
-impl AutoRowDrawn {
-    /// The rules this row selects by, with the pane's hidden lines.
-    pub(crate) fn rules<'a>(&'a self, hidden: &'a [LineKey]) -> RowRules<'a> {
-        RowRules {
-            row_ix: self.row_ix,
-            take: &self.take,
-            marks: &self.marks,
-            policy: self.policy,
-            hidden,
-            twins: &self.twins,
-        }
-    }
-
-    /// The marks found line `ix` of this row shows: the row's own, or their union with the marks
-    /// of the rows whose twin of it was dropped ([`RowTwins::marks`]).
-    pub(crate) fn marks_of(&self, ix: usize) -> &EventMarks {
-        self.twins.marks_of(ix).unwrap_or(&self.marks)
-    }
-}
-
-/// One row's share of the cross-row twin pass ([`select::resolve_twins`]), decided once per
-/// published result over every row's FOUND lines.
+/// One row's share of the selection's cross-row twin pass ([`select::select_pane`]), re-derived
+/// with every selection — a twin exists only between lines two rows both keep.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct RowTwins {
-    /// One flag per found line, `true` where another row draws the same formation under a more
-    /// precise name: such a line is out of this row's `take`. Shorter than `found` (empty, for a
-    /// row with no lost twin) means the missing lines are not lost.
-    pub lost: Vec<bool>,
-    /// The found lines that survived a set of twins and show more marks than the row's own:
+    /// The kept lines that survived a set of twins and show more marks than the row's own:
     /// `(index into found, the union of the marks of every row of the set)`.
     pub marks: Vec<(usize, EventMarks)>,
 }
@@ -147,7 +124,7 @@ pub(crate) struct AutoPaneFigures {
     bufs: RefCell<PassBufs>,
 }
 
-/// The price pass's reused buffers: the events scratch of [`select::select_kept`], the rows' new
+/// The price pass's reused buffers: the events scratch of [`select::select_pane`], the rows' new
 /// selections before they are compared with the drawn ones, and the confluence pass's.
 #[derive(Debug, Default)]
 pub(crate) struct PassBufs {
@@ -165,15 +142,9 @@ impl Clone for PassBufs {
 }
 
 impl AutoPaneFigures {
-    /// A set of `rows`, with `hidden` lines left out by every later re-selection.
-    ///
-    /// Decides the twins across the rows' found lines first ([`select::resolve_twins`]) — once,
-    /// here, because only a new result changes them — so every selection made from this set,
-    /// the caller's and the price pass's, leaves them out. The rows' `kept` lines are taken as
-    /// they are; a caller that selects them itself does it AFTER this (the rows' `twins` are then
-    /// filled) and runs [`Self::cross_rows`] afterwards, as the price pass does.
-    pub(crate) fn new(mut rows: Vec<AutoRowDrawn>, hidden: Vec<LineKey>) -> Self {
-        select::resolve_twins(&mut rows);
+    /// A set of `rows`, with `hidden` lines left out by every later re-selection. The rows' `kept`
+    /// lines and `twins` are taken as they are; [`Self::select_all`] selects them.
+    pub(crate) fn new(rows: Vec<AutoRowDrawn>, hidden: Vec<LineKey>) -> Self {
         Self {
             rows,
             hidden,
@@ -182,22 +153,34 @@ impl AutoPaneFigures {
         }
     }
 
-    /// Run the cross-row pass over the rows' kept lines at `at_ms`: mark the confluences between
-    /// them ([`select::mark_confluence`]). The twins are already out of the selections
-    /// ([`Self::new`]).
+    /// Select every row at `at_ms`, row `i` against `ref_prices[i]` (`NaN`, keeping nothing, past
+    /// its end): the pane's selection with its twins ([`select::select_pane`]), then the
+    /// confluences between the selections ([`select::mark_confluence`]) — the same two steps the
+    /// price pass ([`Self::reselect`]) repeats with one price for every row.
     ///
-    /// For a set whose rows were selected one by one — the panel's publication of a finished run.
-    /// The price pass runs it itself, before it compares the new selection with the drawn one.
-    pub(crate) fn cross_rows(&mut self, at_ms: f64) {
+    /// For the panel's publication of a finished run, where a row without the chart's last price
+    /// is measured from its own last close.
+    pub(crate) fn select_all(&mut self, ref_prices: &[f64], at_ms: f64) {
         let bufs = self.bufs.get_mut();
-        let mut kept: Vec<Vec<KeptLine>> = self
-            .rows
-            .iter_mut()
-            .map(|r| std::mem::take(&mut r.kept))
-            .collect();
-        select::mark_confluence(&self.rows, &mut kept, at_ms, &mut bufs.confluence);
-        for (row, kept) in self.rows.iter_mut().zip(kept) {
+        let price = |i: usize| ref_prices.get(i).copied().unwrap_or(f64::NAN);
+        let twins = select::select_pane(
+            &self.rows,
+            &self.hidden,
+            &price,
+            at_ms,
+            &mut bufs.events,
+            &mut bufs.kept,
+        );
+        select::mark_confluence(
+            &self.rows,
+            &mut bufs.kept,
+            &twins,
+            at_ms,
+            &mut bufs.confluence,
+        );
+        for ((row, kept), twins) in self.rows.iter_mut().zip(bufs.kept.drain(..)).zip(twins) {
             row.kept = kept;
+            row.twins = twins;
         }
     }
 
@@ -235,10 +218,12 @@ impl AutoPaneFigures {
     /// What makes the price pass cheap to run on every tick: an unchanged answer replaces nothing,
     /// so it rebuilds no geometry and uploads nothing.
     ///
-    /// The cross-row pass is part of "drawn": every row is re-selected first — the formations
-    /// another row draws instead already out of the running ([`Self::new`]) — and the confluences
-    /// between the new selections marked across the rows, and only then is the result compared,
-    /// so a line that merely moved into or out of another timeframe's band replaces the set too.
+    /// The cross-row passes are part of "drawn": every row is re-selected together — a formation
+    /// two rows keep drawn once, by the more precise row, the other row taking its next line
+    /// ([`select::select_pane`], O(K²) in the few formations kept) — and the confluences between
+    /// the new selections marked across the rows, and only then is the result compared, so a line
+    /// that merely moved into or out of another timeframe's band, or a twin that changed hands,
+    /// replaces the set too.
     pub(crate) fn reselect(&self, price: f64, now_ms: f64) -> Option<Self> {
         let mut guard = self.bufs.borrow_mut();
         let PassBufs {
@@ -246,26 +231,23 @@ impl AutoPaneFigures {
             kept,
             confluence,
         } = &mut *guard;
-        kept.clear();
-        for row in &self.rows {
-            kept.push(select::select_kept(
-                &row.outcome,
-                &row.rules(&self.hidden),
-                price,
-                now_ms,
-                events,
-            ));
-        }
-        select::mark_confluence(&self.rows, kept, now_ms, confluence);
-        if self.rows.iter().zip(kept.iter()).all(|(r, k)| r.kept == *k) {
+        let twins = select::select_pane(&self.rows, &self.hidden, &|_| price, now_ms, events, kept);
+        select::mark_confluence(&self.rows, kept, &twins, now_ms, confluence);
+        let same = self
+            .rows
+            .iter()
+            .zip(kept.iter().zip(&twins))
+            .all(|(r, (k, t))| r.kept == *k && r.twins == *t);
+        if same {
             return None;
         }
         let next = std::mem::take(kept);
         // Released before the clone: cloning the set borrows its buffers' cell.
         drop(guard);
         let mut set = self.clone();
-        for (row, kept) in set.rows.iter_mut().zip(next) {
+        for ((row, kept), twins) in set.rows.iter_mut().zip(next).zip(twins) {
             row.kept = kept;
+            row.twins = twins;
             row.ref_ms = now_ms;
         }
         set.bufs = RefCell::new(self.bufs.take());

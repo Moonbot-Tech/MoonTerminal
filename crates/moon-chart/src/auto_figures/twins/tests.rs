@@ -163,3 +163,154 @@ fn the_survivor_shows_the_union_of_the_marks() {
     assert_eq!((u.approach_pct, u.confluence_pct), (0.7, 1.5));
     assert_eq!(u.stop_hunt_pct, 0.2);
 }
+
+/// A row's selection for [`select_rows`]: its first `count` found lines that are not skipped, or
+/// nothing at all for a row that keeps nothing (a `take` of the wrong side, `count = 0`, no
+/// reference price) — `take::select_skipping`'s contract without the geometry.
+fn first(count: usize, found: &[Found], skip: &[bool]) -> Vec<usize> {
+    (0..found.len())
+        .filter(|&i| !skip.get(i).copied().unwrap_or(false))
+        .take(count)
+        .collect()
+}
+
+/// Marks with only `breakout` (when `true`) or only `bounce` on.
+fn marks(breakout: bool) -> EventMarks {
+    EventMarks {
+        approach: false,
+        squeeze: false,
+        breakout,
+        false_break: false,
+        bounce: !breakout,
+        role_flip: false,
+        stop_hunt: false,
+        confluence: false,
+        ..EventMarks::default()
+    }
+}
+
+/// The flag row does not keep the formation (its side, its `count`): the channel row keeps it and
+/// draws it under its own name, with its own marks.
+///
+/// Breakage: twins judged over the found lines — the unkept flag takes the formation away from
+/// the channel row, and nobody draws it.
+#[test]
+fn a_twin_the_winner_does_not_keep_stays_with_the_row_that_keeps_it() {
+    let h1 = TfId::H1;
+    let channels = [pair(LineTag::Channel, 1_000.0, 2_000.0)];
+    let flags = [pair(LineTag::Flag, 1_000.0, 2_000.0)];
+    let (m0, m1) = (marks(true), marks(false));
+    let rows = [
+        TwinRow {
+            tf: h1,
+            found: &channels,
+            marks: &m0,
+        },
+        TwinRow {
+            tf: h1,
+            found: &flags,
+            marks: &m1,
+        },
+    ];
+    let picks = select_rows(&rows, |r, skip| match r {
+        0 => first(1, rows[r].found, skip),
+        _ => Vec::new(),
+    });
+    assert_eq!(picks[0].kept, vec![0]);
+    assert!(picks[1].kept.is_empty());
+    assert!(picks[0].joined.is_empty(), "{picks:?}");
+}
+
+/// Both rows keep the formation: the flag row draws it, once, with the union of both rows' marks,
+/// and the channel row takes its next line — once, and not a second reading of the same flag.
+///
+/// By hand: the channel row finds the shared formation X, the same sides as a triangle (X again)
+/// and another channel Y, and keeps one line. After losing X it may not take the triangle (the
+/// flag row draws that formation), so its slot goes to Y.
+///
+/// Breakage: the channel row's slot left empty, the refill bringing X back under another name, or
+/// the channel row's breakout mark lost with its twin.
+#[test]
+fn the_row_that_loses_a_twin_takes_its_next_line() {
+    let h1 = TfId::H1;
+    let channels = [
+        pair(LineTag::Channel, 1_000.0, 2_000.0),
+        pair(LineTag::Triangle, 1_000.0, 2_000.0),
+        pair(LineTag::Channel, 3_000.0, 4_000.0),
+    ];
+    let flags = [pair(LineTag::Flag, 1_000.0, 2_000.0)];
+    let (m0, m1) = (marks(true), marks(false));
+    let rows = [
+        TwinRow {
+            tf: h1,
+            found: &channels,
+            marks: &m0,
+        },
+        TwinRow {
+            tf: h1,
+            found: &flags,
+            marks: &m1,
+        },
+    ];
+    let mut calls = vec![0; 2];
+    let picks = select_rows(&rows, |r, skip| {
+        calls[r] += 1;
+        first(1, rows[r].found, skip)
+    });
+    assert_eq!(picks[0].kept, vec![2]);
+    assert_eq!(picks[1].kept, vec![0]);
+    assert_eq!(calls, [2, 1], "one refill, for the row that lost");
+    let joined = picks[1]
+        .joined_of(0)
+        .expect("the flag shows both rows' marks");
+    assert!(joined.breakout && joined.bounce);
+    assert!(picks[0].joined.is_empty());
+}
+
+/// Two rows that refill with the same formation draw it once, the more precise reading, and the
+/// other row is not refilled again.
+///
+/// By hand: rows A and B both lose X to the flag row C; A's next line is the channel Y, B's the
+/// wedge Y on the same sides — the wedge stays, A's channel goes, and A ends with nothing.
+///
+/// Breakage: a refill pair drawn twice, or a second refill (a loop with no exit).
+#[test]
+fn twins_among_the_refills_are_drawn_once() {
+    let h1 = TfId::H1;
+    let a = [
+        pair(LineTag::Channel, 1_000.0, 2_000.0),
+        pair(LineTag::Channel, 3_000.0, 4_000.0),
+    ];
+    let b = [
+        pair(LineTag::Triangle, 1_000.0, 2_000.0),
+        pair(LineTag::Wedge, 3_000.0, 4_000.0),
+    ];
+    let c = [pair(LineTag::Flag, 1_000.0, 2_000.0)];
+    let m = marks(false);
+    let rows = [
+        TwinRow {
+            tf: h1,
+            found: &a,
+            marks: &m,
+        },
+        TwinRow {
+            tf: h1,
+            found: &b,
+            marks: &m,
+        },
+        TwinRow {
+            tf: h1,
+            found: &c,
+            marks: &m,
+        },
+    ];
+    let mut calls = vec![0; 3];
+    let picks = select_rows(&rows, |r, skip| {
+        calls[r] += 1;
+        first(1, rows[r].found, skip)
+    });
+    assert!(picks[0].kept.is_empty(), "{picks:?}");
+    assert_eq!(picks[1].kept, vec![1]);
+    assert_eq!(picks[2].kept, vec![0]);
+    assert_eq!(calls, [2, 2, 1]);
+}

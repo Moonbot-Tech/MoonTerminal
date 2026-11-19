@@ -2,7 +2,7 @@ use super::super::test_bars::{MONDAY_2024_01_01_MS, ace, bar, range};
 use super::*;
 use moon_core::config::auto_figures::{
     AutoFiguresCfg, ExtremePeriod, FormationParams, PeriodExtremeParams, RoundGrid,
-    RoundLevelsParams, SwingParams, VolumeProfileParams,
+    RoundLevelsParams, SwingParams, TakeSide, VolumeProfileParams,
 };
 
 const HOUR_MS: f64 = 3_600_000.0;
@@ -671,6 +671,39 @@ fn a_formation_two_rows_find_is_one_line() {
     let both = scan(&[channels, flags], &bars, now);
     assert_eq!(both.lines, 1, "{both:?}");
     assert_eq!(both.nearest.map(|l| l.row_ix), Some(1), "{both:?}");
+}
+
+/// A formation the more precisely named row does NOT keep is drawn by the row that does, under its
+/// own name: the "Flags" row taking only lines below price, or none at all, leaves the flag to the
+/// "Channels" row, and the market still has its one line.
+///
+/// Breakage: twins judged over the FOUND lines — the flag row's unkept reading takes the formation
+/// away from the channel row, and the market loses the line altogether.
+#[test]
+fn a_twin_the_flag_row_does_not_keep_stays_with_the_channel_row() {
+    let bars = path_5m(&[
+        (0, 100.0),
+        (8, 112.0),
+        (11, 108.0),
+        (14, 111.0),
+        (17, 107.0),
+        (20, 110.0),
+        (23, 106.0),
+        (26, 107.5),
+    ]);
+    let now = MONDAY_2024_01_01_MS + 27.0 * 5.0 * MIN_MS;
+    let channels = formation_row(0, |p| p.channel = true);
+    let mut below_only = formation_row(1, |p| p.flag = true);
+    below_only.take.side = TakeSide::Below;
+    let mut none = formation_row(1, |p| p.flag = true);
+    none.take.count = 0;
+    for flags in [below_only, none] {
+        let alone = scan(&[flags], &bars, now);
+        assert_eq!((alone.rows_scanned, alone.lines), (1, 0), "{alone:?}");
+        let both = scan(&[channels, flags], &bars, now);
+        assert_eq!(both.lines, 1, "{both:?}");
+        assert_eq!(both.nearest.map(|l| l.row_ix), Some(0), "{both:?}");
+    }
 }
 
 /// Twelve 5-minute rows per hour with the ring's placeholder open and close — `open == high`,

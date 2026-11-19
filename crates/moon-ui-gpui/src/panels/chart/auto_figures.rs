@@ -48,7 +48,6 @@ use super::ChartPanel;
 use crate::chartdx::auto_figures_sync::job::{
     self, AutoRowOutcome, CacheAddr, PaneJob, RowKey, last_closed_open_ms, next_key_change_ms,
 };
-use crate::chartdx::auto_figures_sync::select::select_kept;
 use crate::chartdx::auto_figures_sync::{AutoPaneFigures, AutoRowDrawn, LineKey, RowTitle};
 use crate::chartdx::now_unix_ms;
 
@@ -815,7 +814,6 @@ impl ChartPanel {
             .and_then(|i| self.chart.auto_pane_view(i, target.0, &target.1))
             .and_then(|v| v.last_price);
         let now_ms = now_unix_ms();
-        let mut scratch = Vec::new();
         let mut rows = Vec::new();
         let mut ref_prices = Vec::new();
         for (row_ix, (row, slot)) in cfg.rows.iter().zip(&pane.rows).enumerate() {
@@ -840,22 +838,11 @@ impl ChartPanel {
                 ref_ms: now_ms,
             });
         }
-        // The set decides the twins over every row's found lines first; the rows select after it,
-        // so a formation another row draws never takes a slot of its own row.
+        // Every row at once — each row's `take`, then a formation two rows keep drawn once, then the
+        // confluences across them: the same passes the engine's price pass repeats on every price
+        // change.
         let mut set = AutoPaneFigures::new(rows, pane.hidden.clone());
-        for (drawn, ref_price) in set.rows.iter_mut().zip(ref_prices) {
-            // The same selection the engine's price pass repeats on every price change.
-            let kept = select_kept(
-                &drawn.outcome,
-                &drawn.rules(&pane.hidden),
-                ref_price,
-                now_ms,
-                &mut scratch,
-            );
-            drawn.kept = kept;
-        }
-        // Across the rows, once all of them are selected: the same pass the price pass repeats.
-        set.cross_rows(now_ms);
+        set.select_all(&ref_prices, now_ms);
         // One line per publication — a run completing or a configuration edit, never a frame — so
         // the app log says which source each row read and whether its history was short.
         log::info!("auto figures {}: {}", target.1, set.summary());
