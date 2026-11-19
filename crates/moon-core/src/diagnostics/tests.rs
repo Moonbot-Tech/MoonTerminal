@@ -94,6 +94,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     cfg.channels.hl_limit = true;
     cfg.channels.settings = true;
     cfg.channels.arb_coverage = true;
+    cfg.channels.candles_5m = true;
     cfg.channels.orders = "GateF/BTC".to_string();
     cfg.limits.log_ring_lines = 12_345;
     cfg.limits.balance_repeat_window_sec = 9;
@@ -103,6 +104,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
 
     assert!(render() && detect() && assets() && markets() && hl_limit() && settings() && orders());
     assert!(arb_coverage());
+    assert!(candles_5m());
     assert!(ui_stall());
     assert_eq!(ui_stall_threshold(), Duration::from_millis(42));
     assert_eq!(
@@ -126,6 +128,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
             && !hl_limit()
             && !settings()
             && !arb_coverage()
+            && !candles_5m()
             && !orders()
     );
     assert!(

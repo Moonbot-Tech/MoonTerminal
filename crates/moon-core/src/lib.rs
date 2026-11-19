@@ -16,6 +16,7 @@ pub mod arb_coverage;
 pub mod automation;
 mod backup_store;
 pub mod backups;
+pub mod candles_5m_diag;
 pub mod coin_naming;
 pub mod config;
 pub mod core_move;

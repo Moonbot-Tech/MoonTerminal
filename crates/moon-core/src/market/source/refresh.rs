@@ -102,9 +102,89 @@ impl MarketDataSource {
                 let mut last_written: HashMap<(CoreId, String), i64> = HashMap::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(60));
+                    // Before the recorder pass, not after: a first pass merges a day of buckets
+                    // per market and can run for a long while, and the diagnostic line should not
+                    // wait on it.
+                    if crate::candles_5m_diag::enabled() {
+                        source.sweep_candles_5m_diag();
+                    }
                     source.record_sealed_5m(&mut last_written);
                 }
             });
+    }
+
+    /// Elected providers with their kline-cache exchange key and client slot.
+    ///
+    /// The one traversal both the recorder and the ring-depth channel walk, so the channel reports
+    /// exactly the providers whose rings the recorder reads. Called under the caller's read lock.
+    fn recorder_providers(
+        inner: &MarketDataSourceInner,
+    ) -> Vec<(CoreId, String, SharedMoonClient)> {
+        inner
+            .provider_exchange
+            .iter()
+            .filter_map(|(p, e)| {
+                inner
+                    .clients
+                    .get(p)
+                    .map(|c| (*p, format!("{}:{:08x}", e.code, e.dex), c.clone()))
+            })
+            .collect()
+    }
+
+    /// Write one `channels.candles_5m` line per provider: how deep its 5-minute candle rings are.
+    ///
+    /// Reads the client's snapshot only; nothing is sent to the core. Each ring is folded under
+    /// its own read lock by [`crate::candles_5m_diag::ring_facts`], and the source lock is held
+    /// only for the provider list, never across the scan.
+    fn sweep_candles_5m_diag(&self) {
+        let providers: Vec<(CoreId, String, SharedMoonClient, String)> = {
+            let inner = self.inner.read().expect("market source poisoned");
+            Self::recorder_providers(&inner)
+                .into_iter()
+                .map(|(p, ex, slot)| {
+                    let venue = inner
+                        .core_venue
+                        .get(&p)
+                        .map(|venue| match venue.resolved() {
+                            Some(v) => v.brand.display().to_string(),
+                            None => venue.reported.clone(),
+                        })
+                        .unwrap_or_else(|| "unidentified".to_string());
+                    (p, ex, slot, venue)
+                })
+                .collect()
+        };
+        for (provider, ex, slot, venue) in providers {
+            // Switched off mid-sweep: the writer would discard the rest anyway.
+            if !crate::candles_5m_diag::enabled() {
+                return;
+            }
+            let Some(client) = slot.get() else { continue };
+            let Some(snap) = client.snapshot_versioned() else {
+                continue;
+            };
+            let mut depth = crate::candles_5m_diag::ProviderDepth::default();
+            for handle in snap.markets().iter() {
+                let name = handle.name();
+                match snap
+                    .market_history_readers(name)
+                    .and_then(|readers| readers.candles_5m)
+                {
+                    Some(ring) => depth.add_ring(
+                        name,
+                        ring.capacity(),
+                        crate::candles_5m_diag::ring_facts(&ring),
+                    ),
+                    None => depth.add_without_ring(),
+                }
+            }
+            crate::candles_5m_diag::record(
+                &format!("provider={provider} ({venue} · ex={ex})"),
+                &depth,
+                crate::util::time::now_unix_ms_i64(),
+            );
+        }
     }
 
     fn record_sealed_5m(&self, last_written: &mut HashMap<(CoreId, String), i64>) {
@@ -126,17 +206,7 @@ impl MarketDataSource {
             let Some(cache) = inner.kline_cache.clone() else {
                 return;
             };
-            let providers: Vec<(CoreId, String, SharedMoonClient)> = inner
-                .provider_exchange
-                .iter()
-                .filter_map(|(p, e)| {
-                    inner
-                        .clients
-                        .get(p)
-                        .map(|c| (*p, format!("{}:{:08x}", e.code, e.dex), c.clone()))
-                })
-                .collect();
-            (cache, providers)
+            (cache, Self::recorder_providers(&inner))
         };
         let now_ms = crate::util::time::now()
             .duration_since(std::time::UNIX_EPOCH)

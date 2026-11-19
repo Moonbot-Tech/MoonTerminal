@@ -185,3 +185,21 @@ fn whitespace_is_not_a_switch() {
     cfg.log.filter = "  ".to_string();
     assert!(!cfg.any_active());
 }
+
+#[test]
+fn the_candle_ring_depth_switch_is_read_from_the_file_and_the_environment() {
+    let cfg = parse("[channels]\ncandles_5m = true\n").expect("valid");
+    assert!(cfg.channels.candles_5m);
+    assert!(
+        cfg.active_summary()
+            .is_some_and(|s| s.contains("channels.candles_5m")),
+        "a forgotten channel must name itself in the startup warning"
+    );
+    assert!(!parse("[channels]\n").expect("valid").channels.candles_5m);
+
+    let mut cfg = DiagCfg::default();
+    apply_env(&mut cfg, |v| {
+        (v == "MOON_CANDLES_5M_DIAG").then(|| "1".to_string())
+    });
+    assert!(cfg.channels.candles_5m);
+}

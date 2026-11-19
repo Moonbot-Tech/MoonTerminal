@@ -72,6 +72,9 @@ pub struct Channels {
     /// Arbitrage coverage: how many of each core's markets hold a price from another venue, how
     /// fresh, and the catalog's `futures_type` histogram. See `crate::arb_coverage`.
     pub arb_coverage: bool,
+    /// Depth of each provider's retained 5-minute candle ring: counts, time span, age and how many
+    /// candles carry a real open/close. See `crate::candles_5m_diag`.
+    pub candles_5m: bool,
     /// The station's tape, recorded beside the terminal's own captures — the one key
     /// here that CONNECTS: one extra client per exchange. See `crate::market::tape_recorder`.
     pub tape_recorder: bool,
@@ -139,6 +142,7 @@ impl DiagCfg {
             || c.hl_limit
             || c.settings
             || c.arb_coverage
+            || c.candles_5m
             || c.tape_recorder
             || !c.orders.trim().is_empty()
             || !c.coin_naming.trim().is_empty()
@@ -171,6 +175,7 @@ impl DiagCfg {
         flag("channels.hl_limit", self.channels.hl_limit);
         flag("channels.settings", self.channels.settings);
         flag("channels.arb_coverage", self.channels.arb_coverage);
+        flag("channels.candles_5m", self.channels.candles_5m);
         flag("channels.tape_recorder", self.channels.tape_recorder);
         // The string-valued switches carry their value: "orders" alone would not say which
         // market is being followed, and that is the whole content of the setting.
@@ -232,6 +237,7 @@ pub fn apply_env(cfg: &mut DiagCfg, get: impl Fn(&str) -> Option<String>) {
     on("MOON_HL_LIMIT_DIAG", &mut cfg.channels.hl_limit);
     on("MOON_SETTINGS_DIAG", &mut cfg.channels.settings);
     on("MOON_ARB_COVERAGE_DIAG", &mut cfg.channels.arb_coverage);
+    on("MOON_CANDLES_5M_DIAG", &mut cfg.channels.candles_5m);
     // `MOON_MARKET_DIAG` and `MOON_RENDER_DIAG` have always been alternatives for the market
     // channel (`market::source::market_diag_enabled`), so the render switch keeps enabling it.
     if get("MOON_RENDER_DIAG").is_some() {
