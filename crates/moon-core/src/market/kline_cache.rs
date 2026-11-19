@@ -40,6 +40,31 @@
 //! reinterpretation shipped, so no v2 row poisoned by the old bug ever existed in the field —
 //! there is nothing for a v2 migration to correct.
 //!
+//! # The core's ring rows
+//!
+//! Besides real candles (the recorder's trade aggregation, the chart's deep write-back, the trade
+//! replay), kind 5 also keeps the rows of the core's own 5-minute ring
+//! ([`KlineCache::fill_range_batch_blocking`]), which carry only a high and a low. They are stored
+//! in the RANGE-ONLY form the ring delivers them in — `open == high`, `close == low`
+//! (`candles::is_range_only`) — in the same table, kind and row layout as every other row, and
+//! that form IS their quality mark:
+//!
+//! - **Writing.** A ring row is stored only where the bucket is empty or holds another range-only
+//!   row; a real candle is never overwritten by one. A real candle written later replaces a ring
+//!   row like any other row, because every other producer merges with plain replacement.
+//! - **Reading.** [`read_rows`] never lets a range-only row shadow a real one at the same offset,
+//!   whichever table each came from, and every reader of kind 5 sees the form and can treat the
+//!   row's open and close as unknown (the chart already draws such rows as the ring's own range
+//!   bars; the auto figures leave their closes out of every break and event).
+//!
+//! Why the form rather than a flag bit or a kind of its own: the bytes stay exactly what an older
+//! executable reads — it sees range bars where it saw holes, and no row it wrote is touched — so
+//! there is no schema step and no migration. A bit in a price or in the in-day offset would read as
+//! a wrong price or a bar days away in an older build; a separate kind would double the storage
+//! and every reader's work for buckets the real kind already holds. The cost is the one
+//! ambiguity `candles::is_range_only` documents: a real candle that opened at its high and closed
+//! at its low reads as range-only, and such a bucket's ring row carries the same four prices.
+//!
 //! Database open and schema creation run synchronously. Startup retention and queued reads
 //! and writes run on a dedicated worker because `Connection` is not `Sync`. Retention runs
 //! before the first queued operation. Synchronous reads wait for startup retention before
@@ -109,6 +134,36 @@ pub struct MergeItem {
     pub market: String,
     pub kind_min: u32,
     pub rows: Vec<ChartCandle>,
+}
+
+/// What one [`KlineCache::fill_range_batch_blocking`] call did with its rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RangeFill {
+    /// Rows stored: into an empty bucket, or over a range-only row that differed.
+    pub written: u64,
+    /// Rows left out because the bucket already holds a real candle.
+    pub kept_real: u64,
+    /// Rows left out because the bucket already holds the same range-only row.
+    pub unchanged: u64,
+}
+
+impl RangeFill {
+    /// Sum `other` into `self` — a pass adds up the answers of its batches.
+    pub fn add(&mut self, other: RangeFill) {
+        self.written += other.written;
+        self.kept_real += other.kept_real;
+        self.unchanged += other.unchanged;
+    }
+}
+
+/// How a merge treats a row already stored at the same open time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergeMode {
+    /// The incoming row replaces it: every producer of real candles.
+    Replace,
+    /// The incoming row is a range-only ring row: it fills an empty bucket or replaces another
+    /// range-only row, never a real candle (see the module doc).
+    RangeFill,
 }
 
 /// One chart's whole kline-cache prefix, asked for in a single queued request so the frame that
@@ -187,6 +242,12 @@ pub(crate) enum Op {
         /// Signalled after the transaction settles, so a producer can wait for one chunk before
         /// queueing the next. `None` means backpressure without a completion acknowledgement.
         done: Option<mpsc::Sender<()>>,
+    },
+    /// Range-only ring rows, merged without ever replacing a real candle; answered with what was
+    /// stored once the transaction settles.
+    FillRangeBatch {
+        items: Vec<MergeItem>,
+        done: mpsc::Sender<RangeFill>,
     },
     Read {
         exchange: String,
@@ -361,6 +422,29 @@ impl KlineCache {
         }
         // A dropped sender resolves this immediately, so a dead worker cannot park the producer.
         let _ = rx.recv();
+    }
+
+    /// Store the core's range-only ring rows for MANY markets in one transaction, where no better
+    /// row exists: each row fills an empty bucket or replaces a range-only row of the same bucket,
+    /// and is left out where a real candle is stored (see the module doc). Rows are stored in the
+    /// form they arrive in; a caller hands in ring rows, `open == high`, `close == low`.
+    ///
+    /// Blocks until the worker has settled the transaction, as [`Self::merge_batch_blocking`] does
+    /// and for the same reason — at most one such chunk ahead of a chart read. For BACKGROUND
+    /// writers only. A day whose rows all came out unchanged is not rewritten, so a pass that
+    /// offers rows already stored costs a read, not a write.
+    ///
+    /// Returns:
+    ///     What was stored and what was left out; all zero when the worker is gone.
+    pub fn fill_range_batch_blocking(&self, items: Vec<MergeItem>) -> RangeFill {
+        if items.is_empty() {
+            return RangeFill::default();
+        }
+        let (done, rx) = mpsc::channel();
+        if self.tx.send(Op::FillRangeBatch { items, done }).is_err() {
+            return RangeFill::default();
+        }
+        rx.recv().unwrap_or_default()
     }
 
     /// Reads rows whose `t_open` lies in the inclusive `[from_ms, to_ms]` range.
@@ -543,15 +627,28 @@ fn write_batch(
     announced: &mut bool,
     seen: &mut std::collections::HashSet<(String, String, u32)>,
 ) {
+    write_batch_mode(conn, items, MergeMode::Replace, announced, seen);
+}
+
+/// [`write_batch`] under `mode`, returning what a [`MergeMode::RangeFill`] batch stored (all zero
+/// under [`MergeMode::Replace`], which does not count).
+fn write_batch_mode(
+    conn: &rusqlite::Connection,
+    items: Vec<MergeItem>,
+    mode: MergeMode,
+    announced: &mut bool,
+    seen: &mut std::collections::HashSet<(String, String, u32)>,
+) -> RangeFill {
+    let mut fill = RangeFill::default();
     if items.is_empty() {
-        return;
+        return fill;
     }
     let now = now_unix_ms();
     let tx = match conn.unchecked_transaction() {
         Ok(tx) => tx,
         Err(e) => {
             log::warn!("kline cache batch tx failed ({} items): {e}", items.len());
-            return;
+            return fill;
         }
     };
     // An item failure does not abort the SQLite transaction. Log it, write the remaining items,
@@ -559,8 +656,20 @@ fn write_batch(
     let enabled = log::log_enabled!(MERGE_TRACE_LEVEL);
     let mut merged_any = false;
     for it in &items {
-        match upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now) {
+        let mut item_fill = RangeFill::default();
+        let counts = (mode == MergeMode::RangeFill).then_some(&mut item_fill);
+        let result = upsert_one(
+            &tx,
+            &it.exchange,
+            &it.market,
+            it.kind_min,
+            &it.rows,
+            now,
+            counts,
+        );
+        match result {
             Ok(wrote) => {
+                fill.add(item_fill);
                 merged_any |= wrote;
                 let key = (it.exchange.as_str(), it.market.as_str(), it.kind_min);
                 if wrote && trace_first_merge(seen, key, enabled) {
@@ -588,11 +697,15 @@ fn write_batch(
             if merged_any {
                 let _ = log_active_once(announced);
             }
+            fill
         }
-        Err(e) => log::warn!(
-            "kline cache batch commit failed ({} items): {e}",
-            items.len()
-        ),
+        Err(e) => {
+            log::warn!(
+                "kline cache batch commit failed ({} items): {e}",
+                items.len()
+            );
+            RangeFill::default()
+        }
     }
 }
 
@@ -630,6 +743,17 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bo
                 // Released however this arm ends, so a blocking producer is never parked.
                 let _settled = done.map(SettledOnDrop);
                 write_batch(&conn, items, &mut announced, &mut seen);
+            }
+            Op::FillRangeBatch { items, done } => {
+                // A panic here drops `done`, which wakes the producer with the default answer.
+                let fill = write_batch_mode(
+                    &conn,
+                    items,
+                    MergeMode::RangeFill,
+                    &mut announced,
+                    &mut seen,
+                );
+                let _ = done.send(fill);
             }
             Op::Read {
                 exchange,
@@ -726,10 +850,14 @@ fn read_or_empty(
 /// see the module doc for why an `upsert_one` that instead decoded and rewrote it would risk
 /// destroying rows it failed to fully understand.
 ///
+/// With `fill`, the merge is [`MergeMode::RangeFill`]'s: a row is merged only where the stored row
+/// at its offset is absent, or range-only and different from it; `fill` counts each decision, and
+/// a day where nothing changed is not rewritten. `None` is plain replacement.
+///
 /// Returns:
-///     Whether any chunk was written. `false` means every row failed the timestamp/`high` filter,
-///     which is a successful call that stored nothing — the distinction the liveness line needs,
-///     and one a bare `Ok(())` hid from its caller.
+///     Whether any chunk was written. `false` means every row failed the timestamp/`high` filter
+///     (or, with `fill`, changed nothing), which is a successful call that stored nothing — the
+///     distinction the liveness line needs, and one a bare `Ok(())` hid from its caller.
 fn upsert_one(
     conn: &rusqlite::Connection,
     exchange: &str,
@@ -737,6 +865,7 @@ fn upsert_one(
     kind_min: u32,
     rows: &[ChartCandle],
     now: i64,
+    mut fill: Option<&mut RangeFill>,
 ) -> rusqlite::Result<bool> {
     // Group by day and merge by t_open within each day; BTreeMap preserves ordering.
     let mut by_day: BTreeMap<i64, Vec<&ChartCandle>> = BTreeMap::new();
@@ -755,6 +884,7 @@ fn upsert_one(
     if by_day.is_empty() {
         return Ok(false);
     }
+    let mut wrote = false;
     for (day, day_rows) in by_day {
         let existing: Option<Vec<u8>> = conn
             .query_row(
@@ -770,8 +900,29 @@ fn upsert_one(
                 merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
             }
         }
+        let mut changed = fill.is_none();
         for r in day_rows {
-            merged.insert((r.t_open_ms as i64 - day_start) as u32, *r);
+            let offset = (r.t_open_ms as i64 - day_start) as u32;
+            if let Some(fill) = fill.as_deref_mut() {
+                match merged.get(&offset) {
+                    Some(stored) if !super::candles::is_range_only(stored) => {
+                        fill.kept_real += 1;
+                        continue;
+                    }
+                    Some(stored) if stored == r => {
+                        fill.unchanged += 1;
+                        continue;
+                    }
+                    _ => {
+                        fill.written += 1;
+                        changed = true;
+                    }
+                }
+            }
+            merged.insert(offset, *r);
+        }
+        if !changed {
+            continue;
         }
         let blob = pack_rows_v2(merged.values(), day_start);
         conn.execute(
@@ -779,8 +930,9 @@ fn upsert_one(
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![exchange, market, kind_min, day, blob, now],
         )?;
+        wrote = true;
     }
-    Ok(true)
+    Ok(wrote)
 }
 
 /// Reads rows for one key across both tables, merging v1 under v2 per bucket offset.
@@ -791,7 +943,9 @@ fn upsert_one(
 /// are queried by day, each carrying its own `updated_ms`, and merged into ONE
 /// `BTreeMap<u32, ChartCandle>` PER DAY: normally v1 inserted first and v2 second, so a v2 row at
 /// the same offset overrides its v1 counterpart — the same "newer overrides older" rule
-/// [`upsert_one`] already applies within v2 alone. **The one exception is a DOWNGRADE**: an older
+/// [`upsert_one`] already applies within v2 alone — except that a RANGE-ONLY row (the core's ring,
+/// see the module doc) never overrides a real one, whichever table holds which: the writer keeps
+/// that rule inside v2, and this keeps it across the two. **The one exception is a DOWNGRADE**: an older
 /// executable that has never heard of `chunks_v2` writes fresh data into `chunks` only, so on a
 /// day where the v1 chunk's `updated_ms` is NEWER than v2's, the insertion order is reversed (v2
 /// first, v1 second) so that fresher v1 data wins instead of being silently shadowed by a stale
@@ -847,17 +1001,28 @@ fn read_rows(
             _ => false,
         };
         let mut merged: BTreeMap<u32, ChartCandle> = BTreeMap::new();
+        // The later insert wins, except that a range-only row never shadows a real one.
+        let put = |merged: &mut BTreeMap<u32, ChartCandle>, c: ChartCandle| {
+            let offset = (c.t_open_ms as i64 - day_start) as u32;
+            let keeps_real = super::candles::is_range_only(&c)
+                && merged
+                    .get(&offset)
+                    .is_some_and(|stored| !super::candles::is_range_only(stored));
+            if !keeps_real {
+                merged.insert(offset, c);
+            }
+        };
         let insert_v1 = |merged: &mut BTreeMap<u32, ChartCandle>| {
             if let Some((blob, _)) = v1 {
                 for c in unpack_rows_v1(blob, day_start, v1_volume_is_quote) {
-                    merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
+                    put(merged, c);
                 }
             }
         };
         let insert_v2 = |merged: &mut BTreeMap<u32, ChartCandle>| {
             if let Some((blob, _)) = v2 {
                 for c in unpack_rows_v2(blob, day_start) {
-                    merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
+                    put(merged, c);
                 }
             }
         };

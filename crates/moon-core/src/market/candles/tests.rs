@@ -2136,3 +2136,31 @@ fn aggregate_late_resend_scale_probe() {
         before[3], after[3]
     );
 }
+
+/// A cached ring row whose bucket the live snapshot holds gives way to the snapshot's oriented
+/// row; one older than the snapshot stays and is oriented; a real cached candle is untouched.
+///
+/// By hand: the snapshot covers 5 min; the cache holds a real candle at 0, a ring row at 5 min
+/// (covered: dropped) and a ring row at 10 min with midpoint 13 above the real candle's 10.5
+/// (kept, oriented up: open 12, close 14).
+///
+/// Breakage: the cache's raw ring rows drawn over the snapshot (every bar of the ring's window a
+/// falling body), a covered ring row kept, or a real candle oriented or dropped.
+#[test]
+fn cached_ring_rows_yield_to_the_snapshot_and_are_oriented() {
+    let real = candle(0.0, 10.0, 12.0, 9.0, 11.0, 1.0);
+    let mut rows = vec![
+        real,
+        candle(5.0 * M, 12.0, 12.0, 10.0, 10.0, 1.0),
+        candle(10.0 * M, 14.0, 14.0, 12.0, 12.0, 1.0),
+    ];
+    assert!(is_range_only(&rows[1]) && !is_range_only(&real));
+    let snapshot = [candle(5.0 * M, 10.0, 12.0, 10.0, 12.0, 1.0)];
+    yield_cached_range_rows(&mut rows, &snapshot);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0], real);
+    assert_eq!(rows[1].t_open_ms, 10.0 * M);
+    assert_eq!((rows[1].open, rows[1].close), (12.0, 14.0));
+    // A flat candle is no range-only row: its close is the one price it traded at.
+    assert!(!is_range_only(&candle(0.0, 5.0, 5.0, 5.0, 5.0, 1.0)));
+}

@@ -1565,6 +1565,12 @@ impl super::DetectSnapshotRequest {
                     .read_range(ex, market, 5, from_ms, now_ms)
                     .unwrap_or_default()
                 {
+                    // A cached ring row (range-only) holds no more than the snapshot row of its
+                    // bucket, which is already oriented: it fills only a bucket the snapshot lacks.
+                    let ring_row = crate::market::candles::is_range_only(&c);
+                    if ring_row && buckets.contains_key(&bucket_key(c.t_open_ms as i64)) {
+                        continue;
+                    }
                     if c.high.is_finite() && c.low.is_finite() && c.high > 0.0 {
                         buckets.insert(
                             bucket_key(c.t_open_ms as i64),
