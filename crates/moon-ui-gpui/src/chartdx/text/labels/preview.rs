@@ -297,6 +297,8 @@ fn sample_inputs() -> LabelInputs {
             panic_armed: false,
             ban_until_ms: Some(4 * 3_600_000 + 12 * 60_000),
             favorite: None,
+            // The eye previews OPEN, the state a chart with auto figures on draws it in.
+            auto_figures: true,
         },
         column_scroll: Vec::new(),
     }

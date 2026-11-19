@@ -10,6 +10,10 @@
 //! - the tab's auto-figure configuration changes → the keys of the edited rows move (a style edit
 //!   moves no key and only re-publishes);
 //! - the pane switches market → its slots are dropped and every drawn row runs once;
+//! - the chart-label eye hides the pane → nothing is evaluated for it and its lines come off; the
+//!   eye shows it again → the rows whose cached answer is for the current key are republished as
+//!   they are, and only the others run. The eye's choice lives on the slots, so it ends with the
+//!   market like they do, and while it stands it outranks the tab's switch ([`pane_shows`]);
 //! - an `Auto` row's visible span crosses a hysteresis threshold AND stays past it for
 //!   [`AUTO_TF_DWELL`] → that row's timeframe moves. Before the pane's time scale is measured an
 //!   `Auto` row is not resolved at all: an unmeasured span would read as the finest timeframe and
@@ -160,6 +164,172 @@ struct PaneSlots {
     /// Rechecks spent waiting for the time scale, against [`UNMEASURED_RETRIES`]; reset once it is
     /// measured.
     unmeasured_retries: u8,
+    /// The chart-label eye's choice for this pane's coin: `Some(shown)` once the reader pressed it,
+    /// `None` while the pane follows the tab's switch (`docs-internal/AUTO_FIGURES.md` §13.1).
+    ///
+    /// Kept HERE, on the slots keyed by `(core, market)`, because that is exactly the lifetime
+    /// LinKvo decided for it (19.11.2026): until the pane changes market, or the app restarts —
+    /// the slots go with the market, and nothing here is ever written to disk. While it is set it
+    /// wins over the popup's switch: the reader said it about THIS coin, after looking at it, and a
+    /// tab-wide toggle flipped later says nothing about this one. See [`pane_shows`].
+    eye: Option<bool>,
+    /// Whether the engine holds a set published for this target, so a pane that stops showing
+    /// takes its lines off once — and one that starts showing again republishes what its slots
+    /// already hold, without waiting for a detector run that will not come.
+    published: bool,
+}
+
+impl PaneSlots {
+    /// Fresh slots for `target`: no rows evaluated, no eye pressed, nothing published.
+    fn new(target: (CoreId, String)) -> Self {
+        Self {
+            target,
+            rows: Vec::new(),
+            hidden: Vec::new(),
+            unmeasured_retries: 0,
+            eye: None,
+            published: false,
+        }
+    }
+}
+
+/// Whether a pane draws auto figures: the eye's choice where the reader made one, else the tab's
+/// switch — and either way only while some row is drawn at all.
+///
+/// The eye overrides the switch, not the rows: "show" on a tab kind whose popup is OFF runs and
+/// draws that kind's rows on this pane, but it cannot draw a row the popup has hidden.
+fn pane_shows(cfg: &AutoFiguresCfg, eye: Option<bool>) -> bool {
+    eye.unwrap_or(cfg.enabled) && cfg.rows.iter().any(AutoFigureRow::is_drawn)
+}
+
+/// Drop the slots of every pane target that is no longer on screen — every one of them on a frozen
+/// trade window — and return the targets dropped, whose lines the caller takes off.
+///
+/// This is where "until the market changes" happens for everything a pane remembers about its
+/// coin: the cached answers, the lines hidden from the menu, and the eye's override all live on
+/// the slots, keyed by `(core, market)`, so a pane that moves to another market leaves them all
+/// behind at once. A pane that is merely HIDDEN — by the tab's switch or by its eye — stays.
+fn drop_gone_panes(
+    panes: &mut Vec<PaneSlots>,
+    on_screen: &[(usize, (CoreId, String))],
+    historical: bool,
+) -> Vec<(CoreId, String)> {
+    let mut gone = Vec::new();
+    panes.retain(|p| {
+        let keep = !historical && on_screen.iter().any(|(_, t)| *t == p.target);
+        if !keep {
+            gone.push(p.target.clone());
+        }
+        keep
+    });
+    gone
+}
+
+/// Lower `wake` to `at` if `at` comes first: the wake timer serves the earliest moment of all.
+fn earliest(wake: &mut Option<i64>, at: i64) {
+    *wake = Some(wake.map_or(at, |w| w.min(at)));
+}
+
+/// What one evaluation of a pane's rows asks for.
+#[derive(Default)]
+struct RowPlan {
+    /// The rows a detector job has to run, with the key each runs for.
+    jobs: Vec<(usize, RowKey)>,
+    /// The earliest Unix ms a key of this pane can move, for the wake timer.
+    wake: Option<i64>,
+}
+
+/// Evaluate every row key of one pane and say which rows have to run.
+///
+/// A pane that does not show ([`pane_shows`]) evaluates NOTHING: no key, no job, no wake — its
+/// slots are left exactly as they are, finished answers included, so showing it again on the same
+/// bar finds them and runs only the rows whose key moved meanwhile. That is the whole contract of
+/// the eye: hiding costs no detector, and showing again costs one only where the cache is stale.
+///
+/// Args:
+///     cfg: The tab's auto-figure configuration.
+///     pane: The pane's slots; rows are resized to `cfg` and their keys updated.
+///     visible_ms: The pane's measured time span, `None` before the first market sync.
+///     chart_ready: Whether the pane holds candles of the chart's own timeframe.
+///     now: The instant the dwell and the back-offs are measured on.
+///     now_ms: The same moment as Unix ms, for the bar arithmetic.
+///
+/// Returns:
+///     The jobs to start and the next wake.
+fn plan_rows(
+    cfg: &AutoFiguresCfg,
+    pane: &mut PaneSlots,
+    visible_ms: Option<i64>,
+    chart_ready: bool,
+    now: Instant,
+    now_ms: f64,
+) -> RowPlan {
+    let mut plan = RowPlan::default();
+    if !pane_shows(cfg, pane.eye) {
+        return plan;
+    }
+    pane.rows.resize_with(cfg.rows.len(), RowSlot::default);
+    let measured = visible_ms.filter(|v| *v > 0);
+    let mut unmeasured_wait = false;
+    for (ix, (row, slot)) in cfg.rows.iter().zip(pane.rows.iter_mut()).enumerate() {
+        let Some(params) = row.detector.known().filter(|_| row.is_drawn()) else {
+            // A hidden or unknown row keeps nothing: showing it again runs it afresh.
+            *slot = RowSlot::default();
+            continue;
+        };
+        let resolved = match row.tf {
+            TfSource::Fixed(tf) => tf,
+            TfSource::Auto => {
+                // Before the pane's time scale is measured there is no span to choose from:
+                // resolving one would read as the finest timeframe and start a job for it. Keep
+                // whatever the row drew and ask again shortly.
+                let Some(visible) = measured else {
+                    unmeasured_wait = true;
+                    continue;
+                };
+                let (tf, recheck) = slot.auto_tf.update(visible as f64, now);
+                if let Some(at) = recheck {
+                    earliest(
+                        &mut plan.wake,
+                        wake_ms(now_ms, at.saturating_duration_since(now)),
+                    );
+                }
+                tf
+            }
+        };
+        let tf = resolved.min(params.coarsest_tf());
+        let key = RowKey {
+            detector: *params,
+            tf,
+            last_closed_ms: last_closed_open_ms(now_ms, tf),
+            chart_ready,
+        };
+        slot.current = Some(key);
+        earliest(&mut plan.wake, next_key_change_ms(now_ms, tf));
+        if needs_run(slot, &key, now) {
+            slot.pending = Some(key);
+            plan.jobs.push((ix, key));
+        } else if let Some(retry) = retry_due_ms(slot, now, now_ms) {
+            earliest(&mut plan.wake, retry);
+        }
+    }
+    if measured.is_some() {
+        pane.unmeasured_retries = 0;
+    } else if unmeasured_wait && pane.unmeasured_retries < UNMEASURED_RETRIES {
+        pane.unmeasured_retries += 1;
+        earliest(&mut plan.wake, wake_ms(now_ms, UNMEASURED_RECHECK));
+    }
+    plan
+}
+
+/// Whether a showing pane has to (re)publish on this evaluation: after a configuration edit, as
+/// before, or when the engine holds nothing for it yet while its slots already have something to
+/// draw — the eye just turned it back on, and the cached answers are the picture.
+///
+/// A fresh pane with nothing answered yet does not publish an empty set here: its first run's
+/// completion publishes, and an empty publication would only cost a userdata rebuild.
+fn needs_publish(pane: &PaneSlots, cfg_changed: bool) -> bool {
+    cfg_changed || (!pane.published && pane.rows.iter().any(|s| drawable(s).is_some()))
 }
 
 /// One row of one pane.
@@ -372,40 +542,32 @@ impl ChartPanel {
                 pane.hidden.clear();
             }
         }
-        // A frozen trade window describes a closed interval; lines computed from today's candles
-        // would describe a different picture.
-        let active = !self.historical
-            && self
-                .auto_figures
-                .cfg
-                .as_ref()
-                .is_some_and(AutoFiguresCfg::is_active);
         let targets: Vec<(usize, (CoreId, String))> = (0..self.chart.pane_count())
             .filter_map(|idx| self.chart.pane_target(idx).map(|t| (idx, t)))
             .collect();
 
-        // Panes that left (or the whole feature switched off) take their lines with them.
-        let gone: Vec<(CoreId, String)> = self
-            .auto_figures
-            .panes
-            .iter()
-            .filter(|p| !active || !targets.iter().any(|(_, t)| *t == p.target))
-            .map(|p| p.target.clone())
-            .collect();
+        // Panes that left — another market, or a closed slot — take their lines, their cached
+        // answers and their eye with them. A frozen trade window describes a closed interval, and
+        // lines computed from today's candles would describe a different picture, so it keeps
+        // nothing at all.
+        //
+        // A pane the tab's switch (or its eye) hides is NOT dropped: its slots are what lets the
+        // eye show it again without a detector run, and its eye is what must outlive a flip of the
+        // popup's switch until the market changes.
+        let gone = drop_gone_panes(&mut self.auto_figures.panes, &targets, self.historical);
         let mut republish = false;
         for target in &gone {
-            self.auto_figures.panes.retain(|p| p.target != *target);
             republish |= self.chart.set_auto_figures(target.0, &target.1, None);
         }
-        if !active {
-            self.auto_figures.timer = None;
-            if republish {
-                self.resync_userdata(cx);
+        let cfg = match (self.historical, self.auto_figures.cfg.clone()) {
+            (false, Some(cfg)) => cfg,
+            _ => {
+                self.auto_figures.timer = None;
+                if republish {
+                    self.resync_userdata(cx);
+                }
+                return;
             }
-            return;
-        }
-        let Some(cfg) = self.auto_figures.cfg.clone() else {
-            return;
         };
 
         let mut next_wake: Option<i64> = None;
@@ -414,81 +576,39 @@ impl ChartPanel {
                 // Not stamped with this target yet; the next sync after the market sync will be.
                 continue;
             };
-            let at = match self
+            let found = self
                 .auto_figures
                 .panes
                 .iter()
-                .position(|p| p.target == target)
-            {
+                .position(|p| p.target == target);
+            let eye = found.and_then(|at| self.auto_figures.panes[at].eye);
+            let shows = pane_shows(&cfg, eye);
+            let at = match found {
                 Some(at) => at,
+                // Nothing to keep for a pane that neither shows nor was ever pressed: a tab with
+                // the switch off walks its panes and allocates nothing.
+                None if !shows => continue,
                 None => {
-                    self.auto_figures.panes.push(PaneSlots {
-                        target: target.clone(),
-                        rows: Vec::new(),
-                        hidden: Vec::new(),
-                        unmeasured_retries: 0,
-                    });
+                    self.auto_figures.panes.push(PaneSlots::new(target.clone()));
                     self.auto_figures.panes.len() - 1
                 }
             };
             let pane = &mut self.auto_figures.panes[at];
-            pane.rows.resize_with(cfg.rows.len(), RowSlot::default);
-            let measured = view.visible_ms.filter(|v| *v > 0);
-            let mut unmeasured_wait = false;
-            let mut jobs: Vec<(usize, RowKey)> = Vec::new();
-            for (ix, (row, slot)) in cfg.rows.iter().zip(pane.rows.iter_mut()).enumerate() {
-                let Some(params) = row.detector.known().filter(|_| row.is_drawn()) else {
-                    // A hidden or unknown row keeps nothing: showing it again runs it afresh.
-                    *slot = RowSlot::default();
-                    continue;
-                };
-                let resolved = match row.tf {
-                    TfSource::Fixed(tf) => tf,
-                    TfSource::Auto => {
-                        // Before the pane's time scale is measured there is no span to choose
-                        // from: resolving one would read as the finest timeframe and start a job
-                        // for it. Keep whatever the row drew and ask again shortly.
-                        let Some(visible) = measured else {
-                            unmeasured_wait = true;
-                            continue;
-                        };
-                        let (tf, recheck) = slot.auto_tf.update(visible as f64, now);
-                        if let Some(at) = recheck {
-                            let wake = wake_ms(now_ms, at.saturating_duration_since(now));
-                            next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
-                        }
-                        tf
-                    }
-                };
-                let tf = resolved.min(params.coarsest_tf());
-                let key = RowKey {
-                    detector: *params,
-                    tf,
-                    last_closed_ms: last_closed_open_ms(now_ms, tf),
-                    chart_ready: view.chart_ready,
-                };
-                slot.current = Some(key);
-                let wake = next_key_change_ms(now_ms, tf);
-                next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
-                if needs_run(slot, &key, now) {
-                    slot.pending = Some(key);
-                    jobs.push((ix, key));
-                } else if let Some(retry) = retry_due_ms(slot, now, now_ms) {
-                    next_wake = Some(next_wake.map_or(retry, |w| w.min(retry)));
-                }
-            }
-            if measured.is_some() {
-                pane.unmeasured_retries = 0;
-            } else if unmeasured_wait && pane.unmeasured_retries < UNMEASURED_RETRIES {
-                pane.unmeasured_retries += 1;
-                let wake = wake_ms(now_ms, UNMEASURED_RECHECK);
+            let plan = plan_rows(&cfg, pane, view.visible_ms, view.chart_ready, now, now_ms);
+            if let Some(wake) = plan.wake {
                 next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
             }
-            if !jobs.is_empty() {
-                self.spawn_auto_job(idx, target.clone(), jobs, view.chart_tf_ms, now_ms, cx);
+            // A style or selection edit moves no key; the lines still have to follow it. A pane
+            // that stopped showing takes its lines off once; one shown again by its eye puts back
+            // what its slots already answered.
+            let publish = match shows {
+                true => needs_publish(pane, cfg_changed),
+                false => pane.published,
+            };
+            if !plan.jobs.is_empty() {
+                self.spawn_auto_job(idx, target.clone(), plan.jobs, view.chart_tf_ms, now_ms, cx);
             }
-            if cfg_changed {
-                // A style or selection edit moves no key; the lines still have to follow it.
+            if publish {
                 republish |= self.publish_auto_figures(&target);
             }
         }
@@ -496,6 +616,70 @@ impl ChartPanel {
             self.resync_userdata(cx);
         }
         self.arm_auto_figures_timer(next_wake, now_ms, cx);
+    }
+
+    /// Whether the pane showing `target` draws auto figures right now — what the chart-label eye
+    /// prints, open or crossed out.
+    ///
+    /// Read against the tab's configuration as the backend holds it rather than the copy the last
+    /// sync applied, so the eye is right on the very first render of a pane, before any sync ran.
+    pub(super) fn auto_figures_shown(
+        &self,
+        cfg: &AutoFiguresCfg,
+        target: &(CoreId, String),
+    ) -> bool {
+        let eye = self
+            .auto_figures
+            .panes
+            .iter()
+            .find(|p| p.target == *target)
+            .and_then(|p| p.eye);
+        !self.historical && pane_shows(cfg, eye)
+    }
+
+    /// The chart-label eye was pressed on the pane showing `target`: flip what THIS pane draws,
+    /// for this coin only (`docs-internal/AUTO_FIGURES.md` §13.1).
+    ///
+    /// Nothing is written — not the popup's configuration, not the disk — and nothing is sent to
+    /// the core. The flip is stored on the pane's slots ([`PaneSlots::eye`]), and the ordinary
+    /// sync does the rest by its own rules: a pane turned off evaluates no key and only takes its
+    /// lines off; a pane turned on runs a detector only for the rows whose cached answer is not
+    /// for the current key, and republishes the cached ones at once. The wake is this panel's own:
+    /// the userdata rebuild for the one pane, and a notify of this panel so the button's own state
+    /// follows the press — never the scene.
+    ///
+    /// A press for a market the pane no longer shows (the rectangles are a frame old) is dropped.
+    pub(super) fn toggle_auto_figures_eye(
+        &mut self,
+        core: CoreId,
+        market: String,
+        cx: &mut Context<Self>,
+    ) {
+        let target = (core, market);
+        let on_screen = (0..self.chart.pane_count())
+            .any(|i| self.chart.pane_target(i).as_ref() == Some(&target));
+        if self.historical || !on_screen {
+            return;
+        }
+        let shown = {
+            let b = self.backend.read(cx);
+            self.auto_figures_shown(b.layout.auto_figures_for(self.default_kind), &target)
+        };
+        let at = match self
+            .auto_figures
+            .panes
+            .iter()
+            .position(|p| p.target == target)
+        {
+            Some(at) => at,
+            None => {
+                self.auto_figures.panes.push(PaneSlots::new(target.clone()));
+                self.auto_figures.panes.len() - 1
+            }
+        };
+        self.auto_figures.panes[at].eye = Some(!shown);
+        self.sync_auto_figures(cx);
+        cx.notify();
     }
 
     /// Start one background run for pane `idx`'s `rows`.
@@ -605,13 +789,26 @@ impl ChartPanel {
     }
 
     /// Hand one pane target's accepted outcomes to the engine, selected against its current price.
+    ///
+    /// A pane that does not show ([`pane_shows`]: the eye or the tab's switch says no) publishes
+    /// NOTHING instead — its lines come off once, and its slots keep the answers for the next show.
+    /// A run completing for such a pane therefore fills the cache and draws nothing.
     fn publish_auto_figures(&mut self, target: &(CoreId, String)) -> bool {
         let (Some(cfg), Some(pane)) = (
             self.auto_figures.cfg.as_ref(),
-            self.auto_figures.panes.iter().find(|p| p.target == *target),
+            self.auto_figures
+                .panes
+                .iter_mut()
+                .find(|p| p.target == *target),
         ) else {
             return false;
         };
+        if self.historical || !pane_shows(cfg, pane.eye) {
+            return std::mem::take(&mut pane.published)
+                && self.chart.set_auto_figures(target.0, &target.1, None);
+        }
+        pane.published = true;
+        let pane = &*pane;
         let idx = (0..self.chart.pane_count())
             .find(|&i| self.chart.pane_target(i).as_ref() == Some(target));
         let last_price = idx

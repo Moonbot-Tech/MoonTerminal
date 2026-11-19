@@ -855,6 +855,7 @@ chart_labels.field.act_cancel_buy: "Botón «Cancel Buy»"
 chart_labels.field.act_panic_sell: "Botón «Panic Sell»"
 chart_labels.field.act_temp_ban: "Botón «Lista negra temporal»"
 chart_labels.field.act_favorite: "Botón «Moneda favorita»"
+chart_labels.field.act_auto_figures: "Botón «Figuras automáticas»"
 chart_labels.field.temp_ban_left: "Veto temporal restante"
 chart_labels.short.temp_ban_left: "Veto"
 # Moonbot brand terms: deliberately untranslated, exactly as the buttons read before this.

@@ -855,6 +855,7 @@ chart_labels.field.act_cancel_buy: "“Cancel Buy”按钮"
 chart_labels.field.act_panic_sell: "“Panic Sell”按钮"
 chart_labels.field.act_temp_ban: "“临时黑名单”按钮"
 chart_labels.field.act_favorite: "“自选”按钮"
+chart_labels.field.act_auto_figures: "“自动图形”按钮"
 chart_labels.field.temp_ban_left: "临时黑名单剩余"
 chart_labels.short.temp_ban_left: "黑名单"
 # Moonbot brand terms: deliberately untranslated, exactly as the buttons read before this.

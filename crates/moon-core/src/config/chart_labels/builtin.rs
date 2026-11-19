@@ -93,6 +93,20 @@ pub fn action_rows_at(cancel: Option<LabelAlign>, panic: Option<LabelAlign>) -> 
     rows
 }
 
+/// The auto-figures eye the live sets ship: alone, on the plot's bottom-LEFT edge.
+///
+/// Shipped so a new install and a tab that stores no captions find it at once (LinKvo,
+/// 19.11.2026); a stored caption set is never rewritten to gain it — the reader adds it from the
+/// catalogue. Not part of [`action_rows_at`] on purpose: that builder is also the one-shot
+/// migration's, which carries over the two TRADING buttons a tab had placed and must not invent a
+/// third. And the opposite edge from those two on purpose: the eye is pressed casually, and a
+/// display toggle one slip away from `Panic Sell` is a toggle nobody should have to aim at.
+fn auto_figures_eye_row() -> ChartLabelRow {
+    let mut row = ChartLabelRow::new(LabelZone::ChartBottom, LabelAlign::Left);
+    row.push_part(ChartLabelField::ActAutoFigures);
+    row
+}
+
 impl Default for ChartLabelsCfg {
     /// The working set the terminal ships with, and what the popup's Reset returns to.
     ///
@@ -234,6 +248,9 @@ impl Default for ChartLabelsCfg {
         for row in action_rows() {
             cfg.push_prepared(row);
         }
+
+        // The auto-figures eye, on the opposite edge from the trading pair.
+        cfg.push_prepared(auto_figures_eye_row());
 
         cfg
     }
@@ -381,6 +398,10 @@ impl ChartLabelsCfg {
         for row in action_rows() {
             cfg.push_prepared(row);
         }
+
+        // The eye as well: a comparison's panes can draw auto figures like any live chart, and its
+        // own kind ships them switched off — which is exactly when a per-coin "show" is wanted.
+        cfg.push_prepared(auto_figures_eye_row());
 
         // Repaired here for [`Self::trade_default`]'s reason: one shape wherever it is compared.
         cfg.sanitize();

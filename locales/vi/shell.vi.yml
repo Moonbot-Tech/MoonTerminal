@@ -855,6 +855,7 @@ chart_labels.field.act_cancel_buy: "Nút «Cancel Buy»"
 chart_labels.field.act_panic_sell: "Nút «Panic Sell»"
 chart_labels.field.act_temp_ban: "Nút chặn tạm"
 chart_labels.field.act_favorite: "Nút yêu thích"
+chart_labels.field.act_auto_figures: "Nút hình tự động"
 chart_labels.field.temp_ban_left: "Chặn tạm còn lại"
 chart_labels.short.temp_ban_left: "Chặn"
 # Moonbot brand terms: deliberately untranslated, exactly as the buttons read before this.

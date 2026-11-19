@@ -20,8 +20,8 @@ use gpui::*;
 use moon_core::config::{ChartAction, TempBanSpan};
 use moon_core::session::CoreId;
 use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonVariant, MoonContextMenuWindowExt as _, MoonMenuItem,
-    MoonRect, MoonWindowExt as _,
+    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonVariant,
+    MoonContextMenuWindowExt as _, MoonMenuItem, MoonRect, MoonWindowExt as _,
 };
 use rust_i18n::t;
 
@@ -45,6 +45,21 @@ use crate::Backend;
 fn action_label_metrics(cx: &App, size: f32) -> (f32, f32) {
     let zoom = moon_ui::MoonTheme::content_zoom(cx).max(0.1);
     (size / zoom, (size + 4.0) / zoom)
+}
+
+/// The MoonUI icon the auto-figures eye draws: open while the pane shows auto figures, crossed out
+/// while it does not.
+///
+/// Args:
+///     shown: Whether the pane draws auto figures right now.
+///
+/// Returns:
+///     The embedded asset path (`moon_ui::MoonAssets`).
+fn eye_icon(shown: bool) -> &'static str {
+    match shown {
+        true => "icons/eye.svg",
+        false => "icons/eye-off.svg",
+    }
 }
 
 impl ChartPanel {
@@ -116,6 +131,14 @@ impl ChartPanel {
                         backend.fav_market(core, &coin)
                     })
                     .flatten(),
+                // The panel's OWN answer — the tab's switch, or the eye's override for this coin —
+                // read against the configuration the backend holds now, so the eye is right on the
+                // first render after a press or a market change, before any sync ran.
+                auto_figures: wanted.auto_figures
+                    && self.auto_figures_shown(
+                        backend.layout.auto_figures_for(self.default_kind),
+                        &(core, market.clone()),
+                    ),
             };
             self.chart.set_pane_actions(pane, Some(state));
         }
@@ -127,10 +150,13 @@ impl ChartPanel {
     /// layout, in the band and at the alignment the reader chose. The control keeps everything a
     /// button has and a drawn rectangle cannot: the application's own type, its hover and press
     /// states, its disabled look, and the pointer over it.
-    pub(super) fn action_buttons(&self, cx: &App) -> Vec<AnyElement> {
+    pub(super) fn action_buttons(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         if !self.market_actions_pushed {
             return Vec::new();
         }
+        // The eye's press lands on THIS panel, which owns the per-pane override; every other
+        // button goes to the backend.
+        let panel = cx.entity().downgrade();
         // The published rectangles are in the CHART's logical pixels and this overlay is laid out
         // inside the chart SLOT in content pixels, so the slot's own position comes off and the
         // zoom divides — the same conversion the arbitrage cursor zones make, through the same
@@ -158,7 +184,12 @@ impl ChartPanel {
                         (MoonButtonVariant::Soft, false)
                     }
                     (ChartAction::CancelBuy, _) => (MoonButtonVariant::Soft, false),
+                    // A display toggle wears no accent: on Main it is ON by default, and an amber
+                    // square on every chart would shout a state nobody chose. The icon — an open or
+                    // a crossed-out eye — is what it says.
+                    (ChartAction::AutoFigures, _) => (MoonButtonVariant::Soft, false),
                 };
+                let panel = panel.clone();
                 let backend = self.backend.clone();
                 let group = self.workspace_group.clone();
                 let (action, active, core, market, coin) = (
@@ -172,6 +203,22 @@ impl ChartPanel {
                 // for lack of room would otherwise hand its hover and press state to the next one.
                 let id =
                     SharedString::from(format!("chart-act-{pane}-{}-{}", button.row, button.part));
+                // The chart owns the rectangle, including its inset. Tier padding would consume
+                // that room again and clip the measured caption.
+                let control = MoonButton::new(id).padding_x(0.0);
+                let control = match action {
+                    // An icon rather than the caption's text: a crossed-out eye exists in MoonUI's
+                    // icon set and in no font. Sized like the caption, so the caption-size step
+                    // moves it with the square it sits in.
+                    ChartAction::AutoFigures => control
+                        .leading_icon(MoonButtonIconSlot::new(eye_icon(active)).size(font_size)),
+                    _ => control.segment(
+                        MoonButtonSegment::new(button.label)
+                            .font_size(font_size)
+                            .line_height(line_height)
+                            .mono(true),
+                    ),
+                };
                 out.push(
                     div()
                         .absolute()
@@ -185,22 +232,22 @@ impl ChartPanel {
                         // pressed. The wrapper swallows the press whatever state the button is in.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
-                            MoonButton::new(id)
-                                // The chart owns the rectangle, including its inset. Tier padding
-                                // would consume that room again and clip the measured caption.
-                                .padding_x(0.0)
-                                .segment(
-                                    MoonButtonSegment::new(button.label)
-                                        .font_size(font_size)
-                                        .line_height(line_height)
-                                        .mono(true),
-                                )
+                            control
                                 .variant(variant)
                                 .selected(selected)
                                 .disabled(!button.enabled)
                                 .bounds(MoonRect::new(0.0, 0.0, button.w / zoom, button.h / zoom))
                                 .on_click(move |event, window, app| {
                                     let (market, coin) = (market.clone(), coin.clone());
+                                    // The eye is the panel's, not the backend's: nothing to send,
+                                    // nothing to save — see `toggle_auto_figures_eye`. A panel
+                                    // already released has no eye left to flip, hence `let _`.
+                                    if action == ChartAction::AutoFigures {
+                                        let _ = panel.update(app, |this, cx| {
+                                            this.toggle_auto_figures_eye(core, market, cx)
+                                        });
+                                        return;
+                                    }
                                     // The lock is the one control that ASKS. Closing it is a choice
                                     // — an hour, a day, three days — and a button cannot carry four
                                     // answers; opening it is not, so a running ban lifts on the
@@ -282,6 +329,9 @@ fn dispatch_market_action(
             // The COIN, not the market: the core matches its favourites against
             // `market_currency`. See `Backend::toggle_fav_market`.
             ChartAction::Favorite => b.toggle_fav_market(core, &coin),
+            // Never reaches here: the button's own handler routes the eye to its panel before the
+            // backend is touched, because it has nothing to send.
+            ChartAction::AutoFigures => {}
             // One control, both directions: a span sets the ban, `None` lifts the one that runs.
             // The press decided which — see the button's own handler — and it decided against the
             // same state the lock was DRAWN in, so the picture and the command agree.

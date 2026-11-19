@@ -72,6 +72,7 @@ impl ChartEngine {
                 Some(A::PanicSell) => wanted.panic_sell = true,
                 Some(A::TempBan) => wanted.temp_ban = true,
                 Some(A::Favorite) => wanted.favorite = true,
+                Some(A::AutoFigures) => wanted.auto_figures = true,
                 // The ban READOUT is not a button, and it needs the same fact the lock does: a
                 // chart printing only the remaining time must still be told what is left.
                 None => {
@@ -125,6 +126,7 @@ impl ChartEngine {
                 panic_armed: state.panic_armed,
                 ban_until_ms: state.ban_until_ms,
                 favorite: state.favorite,
+                auto_figures: state.auto_figures,
             },
         };
         if pr.label_actions == actions {
@@ -212,7 +214,10 @@ impl ChartEngine {
                     moon_core::config::ChartAction::Favorite => {
                         (state.favorite.unwrap_or(false), state.favorite.is_some())
                     }
+                    moon_core::config::ChartAction::AutoFigures => (state.auto_figures, true),
                 };
+                // The rail gates only what reaches the core: the eye changes this chart alone.
+                let rail_ok = state.allowed || !placement.mark.action.commands_core();
                 Some(ChartActionButton {
                     x: placement.x,
                     y: placement.y,
@@ -225,7 +230,7 @@ impl ChartEngine {
                     // unpressed.
                     // Both answers from ONE match on the action; see `on`/`ready` above.
                     active: on,
-                    enabled: state.allowed && ready,
+                    enabled: rail_ok && ready,
                     label: label.text.clone(),
                     size: placement.size,
                     row: placement.row,

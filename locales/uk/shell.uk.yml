@@ -855,6 +855,7 @@ chart_labels.field.act_cancel_buy: "Кнопка «Cancel Buy»"
 chart_labels.field.act_panic_sell: "Кнопка «Panic Sell»"
 chart_labels.field.act_temp_ban: "Кнопка «Тимчасовий ЧС»"
 chart_labels.field.act_favorite: "Кнопка «Улюблена монета»"
+chart_labels.field.act_auto_figures: "Кнопка «Автофігури»"
 chart_labels.field.temp_ban_left: "Залишок тимчасового ЧС"
 chart_labels.short.temp_ban_left: "ЧС"
 # Moonbot brand terms: deliberately untranslated, exactly as the buttons read before this.

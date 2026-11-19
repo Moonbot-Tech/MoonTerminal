@@ -1964,6 +1964,7 @@ fn a_chart_with_nothing_to_act_on_prints_no_button() {
         ChartLabelField::ActPanicSell,
         ChartLabelField::ActTempBan,
         ChartLabelField::ActFavorite,
+        ChartLabelField::ActAutoFigures,
     ] {
         assert_eq!(
             one_field(field, LabelInputs::default()),
@@ -1984,6 +1985,7 @@ fn the_panic_button_states_which_way_it_will_go() {
             panic_armed: armed,
             ban_until_ms: None,
             favorite: None,
+            auto_figures: false,
         },
         ..Default::default()
     };
@@ -2044,6 +2046,7 @@ fn the_lock_is_the_state_and_the_time_is_a_caption_of_its_own() {
             panic_armed: false,
             ban_until_ms: until,
             favorite: None,
+            auto_figures: false,
         },
         ..Default::default()
     };
@@ -2067,6 +2070,34 @@ fn the_lock_is_the_state_and_the_time_is_a_caption_of_its_own() {
     assert!(left.ends_with("42m"), "{left:?}");
 }
 
+/// The eye's caption differs between its two states — open while the pane draws auto figures,
+/// a dash while it does not.
+///
+/// The caption text is what the pass compares to decide a re-format: printed the same in both
+/// states, a press would leave the label and the pane's button rectangle on the old state.
+#[test]
+fn the_eye_caption_follows_whether_the_pane_draws_auto_figures() {
+    let live = |auto_figures: bool| LabelInputs {
+        actions: ActionInputs {
+            live: true,
+            allowed: false,
+            auto_figures,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        one_field(ChartLabelField::ActAutoFigures, live(true)).as_deref(),
+        Some("\u{1F441}"),
+        "shown: the open eye"
+    );
+    assert_eq!(
+        one_field(ChartLabelField::ActAutoFigures, live(false)).as_deref(),
+        Some("\u{2013}"),
+        "hidden: the dash, and the rail being closed does not silence it"
+    );
+}
+
 /// A button caption tells the control only what pressing it DOES — its state is read where the
 /// label is formatted, so the two cannot come from different generations.
 #[test]
@@ -2083,6 +2114,7 @@ fn a_button_carries_what_it_would_do() {
                 panic_armed: false,
                 ban_until_ms: None,
                 favorite: None,
+                auto_figures: false,
             },
             ..Default::default()
         },

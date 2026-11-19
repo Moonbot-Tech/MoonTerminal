@@ -161,6 +161,16 @@ fn the_default_is_the_shipped_working_layout() {
                 0,
                 vec![F::ActCancelBuy]
             ),
+            // The auto-figures eye, alone on the opposite edge from the trading pair.
+            (
+                None,
+                Z::ChartBottom,
+                A::Left,
+                Fl::Row,
+                Fl::Column,
+                0,
+                vec![F::ActAutoFigures]
+            ),
         ]
     );
     assert!(
@@ -368,7 +378,8 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
             ChartLabelField::DetectStrategy,
             ChartLabelField::StrategyFilters,
             ChartLabelField::ActPanicSell,
-            ChartLabelField::ActCancelBuy
+            ChartLabelField::ActCancelBuy,
+            ChartLabelField::ActAutoFigures
         ],
         "the survivors keep their relative order with no hole between them"
     );
@@ -963,7 +974,11 @@ fn a_hidden_row_draws_nothing_but_keeps_everything() {
     cfg.rows[5].visible = false;
     cfg.sanitize();
     assert!(!cfg.rows[5].is_drawn());
-    assert_eq!(cfg.used_rows(), 13, "it is still a row");
+    assert_eq!(
+        cfg.used_rows(),
+        ChartLabelsCfg::default().used_rows(),
+        "it is still a row"
+    );
     assert!(
         !cfg.any_drawn(|f| f == ChartLabelField::OpenPnlPct),
         "and its captions stop costing the order walk"
@@ -1583,4 +1598,64 @@ fn a_removed_time_badge_stays_removed_after_a_round_trip() {
 
     assert!(!back.contains(ChartLabelField::TimeScaleBadge));
     assert!(back.contains(ChartLabelField::ScaleBadge));
+}
+
+/// Every LIVE tab kind that stores no captions opens with the auto-figures eye (LinKvo,
+/// 19.11.2026), and the trade window — a closed trade, nothing to toggle live — does not.
+///
+/// Breaks if the eye leaves either live shipped set, or if a kind stops resolving to one of them.
+#[test]
+fn a_tab_without_stored_captions_shows_the_auto_figures_eye() {
+    use crate::config::chart_defaults::ChartTabKind;
+    let layout = Box::new(crate::config::layout::WindowLayout::default());
+    for kind in [
+        ChartTabKind::Main,
+        ChartTabKind::AddTo,
+        ChartTabKind::Compare,
+    ] {
+        let cfg = layout.chart_labels_for(kind);
+        assert!(
+            cfg.any_drawn(|f| f == ChartLabelField::ActAutoFigures),
+            "{kind:?} ships the eye"
+        );
+    }
+    assert!(
+        !layout
+            .chart_labels_for(ChartTabKind::Trade)
+            .contains(ChartLabelField::ActAutoFigures),
+        "the trade window draws no live buttons, so it ships no eye"
+    );
+}
+
+/// A caption set the reader STORED is never rewritten to gain the eye — they add it from the
+/// catalogue (CONTRIBUTING: "A value the user has STORED is never rewritten").
+///
+/// Read from a real layout written before the eye existed, then written back and read again: breaks
+/// if a wire upgrade step, or any read-time repair, starts inserting the eye into stored sets.
+#[test]
+fn a_stored_caption_set_does_not_gain_the_eye() {
+    use crate::config::chart_defaults::ChartTabKind;
+    let old = include_str!("../auto_figures/fixtures/layout_before_auto_figures.toml");
+    let layout: Box<crate::config::layout::WindowLayout> =
+        Box::new(toml::from_str(old).expect("the real old file loads"));
+    let text = toml::to_string(&*layout).expect("the layout serializes");
+    let back: Box<crate::config::layout::WindowLayout> =
+        Box::new(toml::from_str(&text).expect("and reads back"));
+    for layout in [&layout, &back] {
+        for kind in [
+            ChartTabKind::Main,
+            ChartTabKind::AddTo,
+            ChartTabKind::Compare,
+        ] {
+            let cfg = layout.chart_labels_for(kind);
+            assert!(
+                cfg.used_rows() > 0,
+                "{kind:?} reads its stored set, not an empty one"
+            );
+            assert!(
+                !cfg.contains(ChartLabelField::ActAutoFigures),
+                "{kind:?}'s stored captions stay as the reader left them"
+            );
+        }
+    }
 }

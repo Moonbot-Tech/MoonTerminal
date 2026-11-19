@@ -855,6 +855,7 @@ chart_labels.field.act_cancel_buy: "Cancel Buy düğmesi"
 chart_labels.field.act_panic_sell: "Panic Sell düğmesi"
 chart_labels.field.act_temp_ban: "Geçici yasak düğmesi"
 chart_labels.field.act_favorite: "Favori düğmesi"
+chart_labels.field.act_auto_figures: "Otomatik şekiller düğmesi"
 chart_labels.field.temp_ban_left: "Geçici yasaktan kalan"
 chart_labels.short.temp_ban_left: "Yasak"
 # Moonbot brand terms: deliberately untranslated, exactly as the buttons read before this.
