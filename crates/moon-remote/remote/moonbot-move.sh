@@ -34,7 +34,9 @@
 #   egress  <udp port> <ipv4|off>               — bind the located core's outgoing connections to
 #                                                 one of the server's addresses, or unbind them;
 #                                                 a running core is restarted on it, a stopped one
-#                                                 stays stopped and takes it on its next start
+#                                                 stays stopped and takes it on its next start;
+#                                                 a binding set up by hand in the core's own
+#                                                 drop-ins (another NFTSet=) is switched off
 # The work dir holds state.zip (settings archive), key (MoonProto connection packet) and, when
 # the move added it, ini-flag; install deletes it.
 # install and install-fresh take `egress=<ipv4>` after their arguments: the core is bound before
@@ -591,6 +593,96 @@ EOF
     egress_reload
 }
 
+# Every NFTSet= of unit $1 that is not ours, as "<file><TAB><value>" lines: a binding set up by
+# hand or by another tool (a drop-in naming its own table). The files are the ones systemd itself
+# reads for the unit, the template's and the type-wide drop-ins included. Such a set decides the
+# core's address through rules we do not read, so it is reported rather than taken for "primary",
+# and a binding of ours on top of it would put the core into two sets at once.
+egress_foreign() {
+    own_dropin=$(egress_dropin "$1")
+    fragment=$(systemctl show -p FragmentPath --value -- "$1" 2>/dev/null) || fragment=''
+    dropins=$(systemctl show -p DropInPaths --value -- "$1" 2>/dev/null) || dropins=''
+    # Unit paths carry no blanks; DropInPaths separates its files with spaces.
+    for f in $fragment $dropins; do
+        test "$f" != "$own_dropin" && test -f "$f" || continue
+        sed -n 's/^[[:space:]]*NFTSet=[[:space:]]*//p' "$f" | while IFS= read -r value; do
+            test -z "$value" || printf '%s\t%s\n' "$f" "$value"
+        done
+    done
+}
+
+# The first file of foreign binding list $2 (egress_foreign's lines) that is not one of unit $1's
+# own drop-ins under $SYSTEMD_DIR: the template's, a type-wide one or the unit file binds other
+# cores too, and /run or /usr/lib are not ours to write, so it is never edited here. Empty when
+# every foreign binding can be replaced.
+egress_foreign_shared() {
+    printf '%s\n' "$2" | while IFS="$(printf '\t')" read -r f _; do
+        test -n "$f" || continue
+        # A link in the core's own directory may point at a file other cores read: not ours either.
+        case $f in
+        "$SYSTEMD_DIR/$1.d/"*) test ! -L "$f" || { printf '%s\n' "$f"; break; } ;;
+        *) printf '%s\n' "$f"; break ;;
+        esac
+    done
+}
+
+# Switch off the foreign bindings in unit $1's own drop-ins: each NFTSet= line is commented out
+# with a marker, the rest of the file stays, and systemd is reloaded. Sets the files it changed in
+# foreign_replaced, for egress_foreign_restore. The core leaves the foreign set on its restart.
+# Returns 1 on any failed read, write or reload: its caller sits outside `set -e`'s reach.
+egress_foreign_replace() {
+    foreign_replaced=''
+    own_dropin=$(egress_dropin "$1")
+    for f in "$SYSTEMD_DIR/$1.d"/*.conf; do
+        test -f "$f" && test ! -L "$f" && test "$f" != "$own_dropin" || continue
+        grep -q '^[[:space:]]*NFTSet=' "$f" || continue
+        kept=$(sed 's/^\([[:space:]]*NFTSet=\)/# MOONTERMINAL_REPLACED: \1/' "$f") || return 1
+        egress_rewrite "$f" "$kept" || return 1
+        foreign_replaced="$foreign_replaced $f"
+    done
+    test -z "$foreign_replaced" || systemctl daemon-reload || return 1
+}
+
+# Replace file $1 with text $2 through a temporary file beside it: a write that fails leaves the
+# old file whole. The temporary name does not end in .conf, so systemd never reads it.
+egress_rewrite() {
+    tmp=$(mktemp "$1.XXXXXX") || return 1
+    if printf '%s\n' "$2" > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$1"; then
+        return 0
+    fi
+    rm -f -- "$tmp"
+    return 1
+}
+
+# Put back the NFTSet= lines egress_foreign_replace switched off in this step; never fails.
+egress_foreign_restore() {
+    test -n "${foreign_replaced:-}" || return 0
+    for f in $foreign_replaced; do
+        test -f "$f" || continue
+        kept=$(sed 's/^# MOONTERMINAL_REPLACED: //' "$f") || continue
+        egress_rewrite "$f" "$kept" || true
+    done
+    systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+# Whether started unit $1 still sits in a set of foreign binding list $2: a value names
+# "cgroup:<family>:<table>:<set>", and only cgroup sets are looked into.
+egress_in_foreign() {
+    printf '%s\n' "$2" | while IFS="$(printf '\t')" read -r _ value; do
+        for spec in $value; do
+            case $spec in cgroup:*:*:*) ;; *) continue ;; esac
+            rest=${spec#cgroup:}
+            family=${rest%%:*}
+            rest=${rest#*:}
+            table=${rest%%:*}
+            set_name=${rest#*:}
+            if nft list set "$family" "$table" "$set_name" 2>/dev/null | grep -q -F "/$1\""; then
+                printf '%s\n' "$spec"
+            fi
+        done
+    done | grep -q .
+}
+
 # Whether unit $1, started, sits in the set of its recorded address; true for an unbound unit.
 # The listing quotes each element as its cgroup path, so the unit is matched as the path's last
 # component, never as the tail of another unit's name.
@@ -611,6 +703,18 @@ egress_undo() {
 print_egress_info() {
     address=$(egress_of "$1")
     printf 'INFO_EGRESS=%s\n' "$address"
+    # A binding not of ours: each set it names, and the file that is not the core's own when
+    # one is (then the terminal does not replace it).
+    foreign=$(egress_foreign "$1")
+    if test -n "$foreign"; then
+        printf '%s\n' "$foreign" | while IFS="$(printf '\t')" read -r _ value; do
+            for spec in $value; do
+                printf 'INFO_EGRESS_FOREIGN=%s\n' "$spec"
+            done
+        done
+        shared=$(egress_foreign_shared "$1" "$foreign")
+        test -z "$shared" || printf 'INFO_EGRESS_FOREIGN_SHARED=%s\n' "$shared"
+    fi
     test -n "$address" || return 0
     present=0
     dev=$(default_route dev)
@@ -929,14 +1033,25 @@ egress)
     current=$(egress_of "$unit")
     running=0
     ! systemctl is-active --quiet -- "$unit" || running=1
+    # A binding set up outside the terminal is replaced by the choice, whatever it is; one in a
+    # file other cores read too is not ours to edit.
+    foreign=$(egress_foreign "$unit")
+    if test -n "$foreign"; then
+        shared=$(egress_foreign_shared "$unit" "$foreign")
+        test -z "$shared" || {
+            echo "The core's outgoing address is set in $shared, a file the terminal does not edit (shared with other cores, outside /etc or a link): undo that binding by hand first" >&2
+            exit 1
+        }
+    fi
     # Asked for what it already has: a trading core is not restarted for nothing. The rules are
     # still rewritten — a table from an older script is replaced — and the reload keeps the
     # running core in its set.
-    if test "$wanted" = off && test -z "$current"; then
+    if test -z "$foreign" && test "$wanted" = off && test -z "$current"; then
         printf 'EGRESS_OK=%s\n' "$wanted"
         exit 0
     fi
-    if test "$wanted" = "$current" && { test "$running" = 0 || egress_bound "$unit"; }; then
+    if test -z "$foreign" && test "$wanted" = "$current" &&
+        { test "$running" = 0 || egress_bound "$unit"; }; then
         # Under the lock like every write: a reload from a stale drop-in list, racing a step that
         # binds another core, would flush that core's fresh rules.
         egress_lock
@@ -949,14 +1064,23 @@ egress)
     test "$wanted" = off || egress_require "$wanted"
     # A failure from here on puts the previous binding back: a drop-in whose rules never loaded
     # would let the core's next start leave from the primary address while it reads as bound.
+    # A foreign binding switched off here comes back as well.
     restore_egress() {
         code=$?
         if test "$code" != 0; then
+            egress_foreign_restore
             (egress_write "$unit" "${current:-off}") >/dev/null 2>&1 || true
         fi
         exit "$code"
     }
     trap restore_egress EXIT
+    egress_lock
+    if test -n "$foreign"; then
+        egress_foreign_replace "$unit" || {
+            echo "The outgoing address set up outside MoonTerminal could not be switched off" >&2
+            exit 1
+        }
+    fi
     egress_write "$unit" "$wanted"
     # A stopped core stays stopped — it may be the old core of a move, or one its user stopped on
     # purpose: it takes the address on its next start, and the drop-in refuses that start without
@@ -981,6 +1105,10 @@ egress)
         sleep 1
     done
     egress_bound "$unit" || { echo "The core restarted outside its outgoing address $wanted" >&2; exit 1; }
+    if test -n "$foreign" && egress_in_foreign "$unit" "$foreign"; then
+        echo "The core restarted still inside the set of its former outgoing address" >&2
+        exit 1
+    fi
     trap - EXIT
     printf 'EGRESS_OK=%s\n' "$wanted"
     ;;

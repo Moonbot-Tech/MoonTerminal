@@ -336,3 +336,177 @@ fn a_reload_keeps_the_sets_of_other_bound_cores() {
         "{loader}"
     );
 }
+
+/// A hand-written drop-in of the fixture's core that puts it into `moon_srcip/via_extra`, listed
+/// in the unit's DropInPaths as systemd would.
+fn foreign_dropin(sandbox: &Sandbox) -> PathBuf {
+    let path = sandbox
+        .systemd_dir()
+        .join(format!("{UNIT}.d"))
+        .join("10-srcip.conf");
+    sandbox.answer_at(
+        &path,
+        "[Unit]\nAfter=moon-srcip.service\n\n[Service]\nNFTSet=cgroup:inet:moon_srcip:via_extra\n",
+    );
+    sandbox.answer("dropin_paths", &format!("{}\n", sandbox.posix(&path)));
+    path
+}
+
+/// A binding set up by hand is reported with its set, so the terminal does not read the core as
+/// leaving from the primary address; one in the core's own drop-in is not "shared".
+#[test]
+fn info_reports_a_binding_set_up_by_hand() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    bound_core(&sandbox, "203.0.113.12");
+    foreign_dropin(&sandbox);
+
+    let output = sandbox.run(&["info", "3302"]);
+
+    assert_ok(&output);
+    let out = stdout(&output);
+    assert!(out.contains("INFO_EGRESS=\n"), "{out}");
+    assert!(
+        out.contains("INFO_EGRESS_FOREIGN=cgroup:inet:moon_srcip:via_extra\n"),
+        "{out}"
+    );
+    assert!(!out.contains("INFO_EGRESS_FOREIGN_SHARED"), "{out}");
+}
+
+/// Binding over a hand-made binding switches its NFTSet= off — the rest of that file stays — and
+/// restarts the core into our set alone.
+#[test]
+fn egress_replaces_a_binding_set_up_by_hand() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    bound_core(&sandbox, "203.0.113.12");
+    let foreign = foreign_dropin(&sandbox);
+    sandbox.answer("nft_set_moon_srcip_via_extra", "");
+
+    let output = sandbox.run(&["egress", "3302", "203.0.113.12"]);
+
+    assert_ok(&output);
+    assert!(stdout(&output).ends_with("EGRESS_OK=203.0.113.12\n"));
+    let kept = sandbox.read(&foreign);
+    assert!(
+        kept.contains("# MOONTERMINAL_REPLACED: NFTSet=cgroup:inet:moon_srcip:via_extra\n"),
+        "{kept}"
+    );
+    assert!(kept.contains("After=moon-srcip.service\n"), "{kept}");
+    assert!(dropin(&sandbox).exists());
+    let calls = sandbox.read(&sandbox.root.join("systemctl_calls"));
+    assert!(calls.contains(&format!("restart -- {UNIT}\n")), "{calls}");
+}
+
+/// "Primary" over a hand-made binding is not "already unbound": the binding goes and the core
+/// restarts, though no drop-in of ours ever existed.
+#[test]
+fn egress_off_removes_a_binding_set_up_by_hand() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    bound_core(&sandbox, "203.0.113.12");
+    let foreign = foreign_dropin(&sandbox);
+    sandbox.answer("nft_set_moon_srcip_via_extra", "");
+
+    let output = sandbox.run(&["egress", "3302", "off"]);
+
+    assert_ok(&output);
+    assert!(stdout(&output).ends_with("EGRESS_OK=off\n"));
+    let kept = sandbox.read(&foreign);
+    assert!(!kept.contains("\nNFTSet="), "{kept}");
+    assert!(!dropin(&sandbox).exists());
+    let calls = sandbox.read(&sandbox.root.join("systemctl_calls"));
+    assert!(calls.contains("daemon-reload\n"), "{calls}");
+    assert!(calls.contains(&format!("restart -- {UNIT}\n")), "{calls}");
+}
+
+/// A binding in a file other cores read too (the template's drop-in) is never edited: the step
+/// refuses before anything changes.
+#[test]
+fn egress_refuses_over_a_shared_binding() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    bound_core(&sandbox, "203.0.113.12");
+    let shared = sandbox
+        .systemd_dir()
+        .join("moonbot@.service.d")
+        .join("10-srcip.conf");
+    let body = "[Service]\nNFTSet=cgroup:inet:moon_srcip:via_extra\n";
+    sandbox.answer_at(&shared, body);
+    sandbox.answer("dropin_paths", &format!("{}\n", sandbox.posix(&shared)));
+
+    let output = sandbox.run(&["egress", "3302", "203.0.113.12"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("undo that binding by hand"), "{stderr}");
+    assert_eq!(sandbox.read(&shared), body);
+    assert!(!dropin(&sandbox).exists());
+    let calls = sandbox.read(&sandbox.root.join("systemctl_calls"));
+    assert!(!calls.contains("restart"), "{calls}");
+}
+
+/// A core that came back still inside the hand-made set fails the step, and the hand-made binding
+/// is put back with the previous (no) binding of ours.
+#[test]
+fn egress_restores_a_binding_set_up_by_hand_when_the_core_stays_in_it() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    bound_core(&sandbox, "203.0.113.12");
+    let foreign = foreign_dropin(&sandbox);
+    sandbox.answer(
+        "nft_set_moon_srcip_via_extra",
+        &format!(
+            "table inet moon_srcip {{\n\tset via_extra {{\n\t\ttype cgroupsv2\n\t\t\
+             elements = {{ \"system.slice/{UNIT}\" }}\n\t}}\n}}\n"
+        ),
+    );
+
+    let output = sandbox.run(&["egress", "3302", "203.0.113.12"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("still inside the set"), "{stderr}");
+    let kept = sandbox.read(&foreign);
+    assert!(
+        kept.contains("\nNFTSet=cgroup:inet:moon_srcip:via_extra\n"),
+        "{kept}"
+    );
+    assert!(!kept.contains("MOONTERMINAL_REPLACED"), "{kept}");
+    assert!(!dropin(&sandbox).exists());
+}
+
+/// A drop-in in the core's own directory that is a link may point at a file other cores read: it
+/// counts as shared, and nothing is written through it.
+#[cfg(unix)]
+#[test]
+fn egress_refuses_a_linked_foreign_dropin() {
+    let Some(sandbox) = Sandbox::new() else {
+        return;
+    };
+    bound_core(&sandbox, "203.0.113.12");
+    let target = sandbox.root.join("shared-srcip.conf");
+    let body = "[Service]\nNFTSet=cgroup:inet:moon_srcip:via_extra\n";
+    sandbox.answer_at(&target, body);
+    let link = sandbox
+        .systemd_dir()
+        .join(format!("{UNIT}.d"))
+        .join("10-srcip.conf");
+    fs::create_dir_all(link.parent().expect("dir")).expect("create drop-in dir");
+    std::os::unix::fs::symlink(&target, &link).expect("link drop-in");
+    sandbox.answer("dropin_paths", &format!("{}\n", sandbox.posix(&link)));
+
+    let output = sandbox.run(&["egress", "3302", "203.0.113.12"]);
+
+    assert!(!output.status.success());
+    assert_eq!(sandbox.read(&target), body);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("undo that binding by hand"), "{stderr}");
+    let calls = sandbox.read(&sandbox.root.join("systemctl_calls"));
+    assert!(!calls.contains("restart"), "{calls}");
+}

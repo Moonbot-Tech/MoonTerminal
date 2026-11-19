@@ -43,6 +43,8 @@ show)
             printf 'Id=%s\n\n' "$name"
         done
         ;;
+    *FragmentPath*) cat "$MB_TEST_ROOT/fragment_path" ;;
+    *DropInPaths*) cat "$MB_TEST_ROOT/dropin_paths" ;;
     *MainPID*) cat "$MB_TEST_ROOT/main_pid" ;;
     *ActiveEnterTimestampMonotonic*) cat "$MB_TEST_ROOT/active_entered" ;;
     *MemoryCurrent*) cat "$MB_TEST_ROOT/memory_current" ;;
@@ -195,7 +197,14 @@ esac
 const NFT_STUB: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$MB_TEST_ROOT/nft_calls"
 case "$*" in
-"list set"*) cat "$MB_TEST_ROOT/nft_set" ;;
+# A set of another table answers from nft_set_<table>_<set> when the fixture wrote one.
+"list set"*)
+    if test -f "$MB_TEST_ROOT/nft_set_$4_$5"; then
+        cat "$MB_TEST_ROOT/nft_set_$4_$5"
+    else
+        cat "$MB_TEST_ROOT/nft_set"
+    fi
+    ;;
 "list chain"*) cat "$MB_TEST_ROOT/nft_chain" ;;
 esac
 "#;
@@ -317,6 +326,8 @@ impl Sandbox {
             "nft_calls",
             "nft_set",
             "nft_chain",
+            "fragment_path",
+            "dropin_paths",
         ] {
             sandbox.answer(name, "");
         }

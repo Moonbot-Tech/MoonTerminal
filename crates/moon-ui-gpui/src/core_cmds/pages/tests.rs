@@ -346,9 +346,72 @@ fn egress_facts(systemd: u32, bound_to: Option<&str>, in_set: bool) -> CoreFacts
                     "203.0.113.12".parse().expect("second"),
                 ],
             },
+            foreign: Vec::new(),
+            foreign_shared: None,
         },
     });
     facts
+}
+
+/// `egress_facts` of an unbound core that a hand-written drop-in put into `moon_srcip/via_extra`,
+/// in a file of its own or, with `shared`, in one the script will not edit.
+fn foreign_facts(shared: Option<&str>) -> CoreFacts {
+    let mut facts = egress_facts(257, None, false);
+    let egress = &mut facts.info.as_mut().expect("info").egress;
+    egress.foreign = vec!["cgroup:inet:moon_srcip:via_extra".into()];
+    egress.foreign_shared = shared.map(str::to_owned);
+    facts
+}
+
+/// A hand-made binding is never shown as "primary": the current row names its set, the page
+/// warns, no address is marked current, and every one — the primary included — can be picked.
+#[test]
+fn egress_names_a_foreign_binding_and_offers_every_address() {
+    let _locale = crate::test_locale::force("en");
+    let page = build(&foreign_facts(None), &state(Cmd::Egress));
+    let now = page.body.iter().find_map(|block| match block {
+        Block::Kv(rows) => rows
+            .iter()
+            .find(|(key, _)| *key == "core_cmds.egress.now")
+            .map(|(_, value)| value.clone()),
+        _ => None,
+    });
+    let now = now.expect("current row");
+    assert!(now.contains("moon_srcip/via_extra"), "{now}");
+    assert!(!now.contains("203.0.113.11"), "{now}");
+    assert!(
+        page.body
+            .iter()
+            .any(|block| matches!(block, Block::State(super::Tone::Warn, _, _)))
+    );
+    let choices = egress_choices(&page).expect("choices");
+    assert!(choices.iter().all(|row| !row.2 && row.3), "{choices:?}");
+}
+
+/// A foreign binding in a file other cores read too is not replaced: no choice is offered.
+#[test]
+fn egress_offers_nothing_over_a_shared_foreign_binding() {
+    let _locale = crate::test_locale::force("en");
+    let page = build(
+        &foreign_facts(Some("/etc/systemd/system/moonbot@.service.d/10-srcip.conf")),
+        &state(Cmd::Egress),
+    );
+    assert!(egress_choices(&page).is_none());
+}
+
+/// The confirmation over a foreign binding says the hand-made binding is switched off.
+#[test]
+fn egress_confirmation_names_the_replaced_binding() {
+    let _locale = crate::test_locale::force("en");
+    let mut view = state(Cmd::Egress);
+    view.confirm = Some(Confirm::Egress(None));
+    let page = build(&foreign_facts(None), &view);
+    let why = page.body.iter().find_map(|block| match block {
+        Block::Confirm { why, .. } => Some(why.clone()),
+        _ => None,
+    });
+    let why = why.expect("confirmation");
+    assert!(why.contains("moon_srcip/via_extra"), "{why}");
 }
 
 /// The choices of a two-address server.
@@ -484,4 +547,18 @@ fn egress_reports_a_lost_address() {
             .iter()
             .any(|block| matches!(block, Block::State(super::Tone::Bad, _, _)))
     );
+}
+
+/// On a one-address server a hand-made binding is still removable: the "primary" row alone is
+/// offered and pickable instead of the "nothing to choose" text.
+#[test]
+fn egress_offers_primary_over_a_foreign_binding_on_a_one_address_server() {
+    let _locale = crate::test_locale::force("en");
+    let mut facts = foreign_facts(None);
+    let egress = &mut facts.info.as_mut().expect("info").egress;
+    egress.options.addresses = vec!["203.0.113.11".parse().expect("primary")];
+    let page = build(&facts, &state(Cmd::Egress));
+    let choices = egress_choices(&page).expect("choices");
+    assert_eq!(choices.len(), 1);
+    assert_eq!((choices[0].0, choices[0].3), (None, true));
 }
