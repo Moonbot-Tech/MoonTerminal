@@ -49,3 +49,30 @@ fn info_reads_address_membership_and_connections() {
     assert!(bound.bound);
     assert_eq!(bound.connections, Some(42));
 }
+
+/// A binding set up by hand is read as every set it names, and the file the script will not edit
+/// as `foreign_shared`; a core without one has neither.
+#[test]
+fn info_reads_a_foreign_binding() {
+    let foreign = EgressInfo::parse(
+        "INFO_EGRESS=\n\
+         INFO_EGRESS_FOREIGN=cgroup:inet:moon_srcip:via_extra\n\
+         INFO_EGRESS_FOREIGN=cgroup:inet:other:set_b\n\
+         INFO_EGRESS_FOREIGN_SHARED=/etc/systemd/system/moonbot@.service.d/10-srcip.conf\n",
+    );
+    assert_eq!(
+        foreign.foreign,
+        vec![
+            "cgroup:inet:moon_srcip:via_extra",
+            "cgroup:inet:other:set_b"
+        ]
+    );
+    assert_eq!(
+        foreign.foreign_shared.as_deref(),
+        Some("/etc/systemd/system/moonbot@.service.d/10-srcip.conf")
+    );
+
+    let own = EgressInfo::parse("INFO_EGRESS=203.0.113.12\nINFO_EGRESS_BOUND=1\n");
+    assert!(own.foreign.is_empty());
+    assert_eq!(own.foreign_shared, None);
+}

@@ -66,7 +66,8 @@ impl EgressOptions {
 /// A located core's binding, from the script's `info` step.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EgressInfo {
-    /// The recorded outgoing address; `None` for an unbound core.
+    /// The outgoing address recorded by the terminal; `None` when the terminal did not bind the
+    /// core — which is the primary address only while `foreign` is empty.
     pub address: Option<Ipv4Addr>,
     /// Whether the server still has the recorded address on its main interface. A lost address
     /// keeps its rules, which drop the core's connections rather than let them out elsewhere.
@@ -79,12 +80,31 @@ pub struct EgressInfo {
     pub connections: Option<u64>,
     /// What another address could be chosen from.
     pub options: EgressOptions,
+    /// A binding set up outside the terminal: the systemd `NFTSet=` values (`cgroup:inet:t:s`)
+    /// that put the core into sets whose rules this terminal does not read. Non-empty means
+    /// `address` says nothing about where the core leaves from.
+    pub foreign: Vec<String>,
+    /// The file of a foreign binding that is not the core's own drop-in (the template's, a
+    /// type-wide one, one outside `/etc`, or a link): the script refuses to change the address
+    /// until it is undone by hand.
+    pub foreign_shared: Option<String>,
 }
 
 impl EgressInfo {
     /// Read the `INFO_EGRESS*` and `EGRESS_*` lines of an `info` reply.
     pub fn parse(text: &str) -> Self {
         Self {
+            foreign: text
+                .lines()
+                .filter_map(|line| line.strip_prefix("INFO_EGRESS_FOREIGN="))
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            foreign_shared: script::value(text, "INFO_EGRESS_FOREIGN_SHARED")
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned),
             address: script::value(text, "INFO_EGRESS").and_then(|v| v.parse().ok()),
             present: script::value(text, "INFO_EGRESS_PRESENT") == Some("1"),
             bound: script::value(text, "INFO_EGRESS_BOUND") == Some("1"),
@@ -120,7 +140,9 @@ impl std::error::Error for EgressRefused {}
 /// takes it on its next start. The script refuses an old systemd or an address the server does
 /// not have before it changes anything, and fails when the restarted core is not in its address's
 /// set, putting the previous binding back. Asked for what the core already has, it returns without
-/// a restart.
+/// a restart. A binding set up outside the terminal in the core's own drop-ins is switched off
+/// whatever the choice (a running core is restarted, a stopped one stays stopped); one in a file
+/// the script does not edit is refused.
 ///
 /// Errors:
 ///     [`EgressRefused`] when the script said no; any other error is the connection's.
