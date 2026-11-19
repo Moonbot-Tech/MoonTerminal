@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::paths::is_plain_directory;
 
 /// Return whether one SQLite error proves database-page corruption.
 ///
@@ -143,30 +144,6 @@ pub(in crate::db::valuation) fn prove_detached_store_corruption(
     is_corruption(error)
         && main_is_healthy(conn)
         && matches!(existing_store_is_healthy(path), Ok(false))
-}
-
-/// Return whether filesystem metadata describes a directory without any link or reparse point.
-///
-/// Args:
-///     metadata: Metadata obtained without following the final path component.
-///
-/// Returns:
-///     `true` only for a plain directory safe to use as a recovery boundary.
-fn is_plain_directory(metadata: &std::fs::Metadata) -> bool {
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-    }
-    #[cfg(not(windows))]
-    {
-        true
-    }
 }
 
 /// Create or validate one recovery directory without following a substituted final component.
