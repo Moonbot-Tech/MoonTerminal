@@ -40,6 +40,16 @@ pub(super) const MAX_BARS: usize = 240;
 pub(super) const MIN_BARS: usize = 80;
 /// Bars of one swing of the demo series.
 const SWING_BARS: f64 = 20.0;
+/// Shortest swing of the demo series, in bars: a pivot two bars wide still finds its turns.
+const MIN_SWING_BARS: f64 = 8.0;
+
+/// Bars of one swing of the demo series for a row that reads the newest `lookback` bars:
+/// [`SWING_BARS`], or fewer when the lookback is short, so the window it reads still holds five
+/// swings. A sloped line of three touches needs three troughs inside the window, and a 40-bar
+/// window (the shipped hour rows) over 20-bar swings holds two — the preview would show nothing.
+pub(super) fn demo_swing(lookback: u32) -> f64 {
+    (f64::from(lookback) / 5.0).clamp(MIN_SWING_BARS, SWING_BARS)
+}
 
 /// Everything one preview draws, computed once per edit rather than per frame.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,13 +95,14 @@ pub(super) fn preview_tf(row: &AutoFigureRow, params: &DetectorParams) -> TfId {
 /// first 40 %, then a squeeze — lows rising along a line into a flat top above the old range.
 /// The wicks carry a small fixed jitter so pivots do not sit at one exact price, and every bar
 /// carries turnover, so the volume detectors have a profile to build. The old range lies below
-/// everything after it, so its days' POCs stay untouched — naked.
-pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64) -> Vec<ChartCandle> {
+/// everything after it, so its days' POCs stay untouched — naked. Each swing is `swing` bars long
+/// ([`demo_swing`]).
+pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64, swing: f64) -> Vec<ChartCandle> {
     let tf_ms = tf.ms() as f64;
     let last_open = (now_ms / tf_ms).floor() * tf_ms - tf_ms;
     let split = (n as f64 * 0.4).round();
     let path = |i: f64| -> f64 {
-        let wave = (1.0 - (TAU * i / SWING_BARS).cos()) / 2.0;
+        let wave = (1.0 - (TAU * i / swing).cos()) / 2.0;
         if i < split {
             95.0 + 4.0 * wave
         } else {
@@ -274,10 +285,11 @@ pub(super) fn demo_formation_bars(
 pub(super) fn compute(row: &AutoFigureRow, now_ms: f64, theme: &ChartTheme) -> Option<PreviewData> {
     let params = row.detector.known()?;
     let tf = preview_tf(row, params);
-    let n = (params.bars_needed(tf) as usize).clamp(MIN_BARS, MAX_BARS);
+    let needed = params.bars_needed(tf);
+    let n = (needed as usize).clamp(MIN_BARS, MAX_BARS);
     let bars = match params {
         DetectorParams::Formation(p) => demo_formation_bars(p, tf, n, now_ms),
-        _ => demo_bars(tf, n, now_ms),
+        _ => demo_bars(tf, n, now_ms, demo_swing(needed)),
     };
     let ctx = DetectCtx {
         tf_ms: tf.ms(),

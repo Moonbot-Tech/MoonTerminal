@@ -9,7 +9,8 @@ use moon_core::figures::LineKind;
 
 use super::fields::{NumField, parse_number, unit_of_mut};
 use super::preview::{
-    MAX_BARS, MIN_BARS, compute, dash_pattern, dashes, demo_bars, demo_formation_bars, preview_tf,
+    MAX_BARS, MIN_BARS, compute, dash_pattern, dashes, demo_bars, demo_formation_bars, demo_swing,
+    preview_tf,
 };
 use super::{row_title, switch_detector};
 
@@ -328,8 +329,8 @@ fn a_row_is_titled_by_its_own_name_first() {
 /// preview that shifted between two renders would flicker. Mutation: seed the jitter from a clock.
 #[test]
 fn the_demo_series_is_deterministic_and_closed() {
-    let a = demo_bars(TfId::M15, 200, NOON);
-    let b = demo_bars(TfId::M15, 200, NOON);
+    let a = demo_bars(TfId::M15, 200, NOON, demo_swing(200));
+    let b = demo_bars(TfId::M15, 200, NOON, demo_swing(200));
     assert_eq!(a, b);
     let last = a.last().unwrap();
     assert!(last.t_open_ms + TfId::M15.ms() as f64 <= NOON);

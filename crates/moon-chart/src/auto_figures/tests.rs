@@ -665,3 +665,67 @@ fn an_unknown_close_leaves_the_true_range_to_the_bar() {
     let atr2 = atr(&bars, 2).expect("an ATR");
     assert!((atr2 - (6.0 + 4.0) / 2.0).abs() < 1e-9, "{atr2}");
 }
+
+/// 500 5-minute bars in the core ring's form (`with_ring_rows`, no open or close): an oscillation
+/// of eight hours with a steady rise, so its highs and its lows each lie on one rising line, and
+/// two neighbouring highs differ by a fraction of the swing tolerance.
+fn synthetic_ring() -> Vec<ChartCandle> {
+    use super::test_bars::bar;
+    let raw: Vec<ChartCandle> = (0..500)
+        .map(|i| {
+            let h = i as f64 / 12.0;
+            let mid = 100.0 + 0.02 * h + 1.5 * (std::f64::consts::TAU * h / 8.0).sin();
+            bar(
+                i,
+                mid as f32,
+                (mid + 0.1) as f32,
+                (mid - 0.1) as f32,
+                mid as f32,
+            )
+        })
+        .collect();
+    let mut ring = Vec::new();
+    with_ring_rows(&[], &raw, &mut ring);
+    ring
+}
+
+/// The shipped hour rows ("Levels 1h", "Trend lines 1h") find lines in what ONE core ring holds —
+/// the newest 500 5-minute bars, in the ring's form, on the committed `chart-ace` candles and on a
+/// synthetic swing — and call that history complete. The ring is the one history the terminal has
+/// for every market, so a shipped row that finds nothing in it, or reports it short, shows the
+/// reader nothing on most coins.
+///
+/// Breakage: the hour rows back on the generic lookback (200 bars: short history on every ring)
+/// or on 3-bar pivots with these touches (no level or no line on the bench's ring).
+#[test]
+fn the_shipped_hour_rows_find_lines_in_one_core_ring() {
+    use moon_core::config::auto_figures::{AutoFigurePreset, TfId, TfSource};
+    let (_, ace_ring) = ace_as_ring();
+    let ace_ring = ace_ring[ace_ring.len().saturating_sub(500)..].to_vec();
+    for (name, ring) in [("chart-ace", ace_ring), ("synthetic", synthetic_ring())] {
+        let mut h1 = Vec::new();
+        moon_core::market::candles::resample(&ring, 3_600_000, &mut h1);
+        for preset in [AutoFigurePreset::Levels1h, AutoFigurePreset::TrendLines1h] {
+            let row = preset.row();
+            assert_eq!(row.tf, TfSource::Fixed(TfId::H1));
+            let params = row.detector.known().expect("a known detector");
+            let needed = params.bars_needed(TfId::H1);
+            // The first hour of a ring is partial: the row reads whole hours only.
+            let whole = &h1[1..];
+            assert!(
+                history::history_full(whole.len(), needed, params),
+                "{name} {preset:?}: {} hours of {needed} is short",
+                whole.len()
+            );
+            let found = detect(
+                params,
+                window(whole, needed),
+                &DetectCtx {
+                    tf_ms: 3_600_000,
+                    now_ms: 0.0,
+                },
+            );
+            assert!(!found.is_empty(), "{name} {preset:?} found nothing");
+        }
+    }
+}

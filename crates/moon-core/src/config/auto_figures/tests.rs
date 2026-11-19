@@ -51,7 +51,7 @@ fn assert_shipped_rows(cfg: &AutoFiguresCfg) {
         presets,
         vec![
             Some(AutoFigurePreset::Levels1h),
-            Some(AutoFigurePreset::Levels4h),
+            Some(AutoFigurePreset::TrendLines1h),
             Some(AutoFigurePreset::Squeeze),
             Some(AutoFigurePreset::DayExtremes),
         ]
@@ -65,7 +65,7 @@ fn assert_shipped_rows(cfg: &AutoFiguresCfg) {
         shape,
         vec![
             (Some(DetectorKind::Swing), TfSource::Fixed(TfId::H1)),
-            (Some(DetectorKind::Swing), TfSource::Fixed(TfId::H4)),
+            (Some(DetectorKind::Trend), TfSource::Fixed(TfId::H1)),
             (Some(DetectorKind::Squeeze), TfSource::Fixed(TfId::M15)),
             (Some(DetectorKind::PeriodExtreme), TfSource::Fixed(TfId::M5)),
         ]
@@ -150,9 +150,12 @@ fn a_stored_value_survives_a_save_and_load_untouched() {
 }
 
 /// An edited row comes back equal, and states only the fields that were changed.
+///
+/// Built on the 4h levels preset, whose detector differs from the swing default only in the
+/// lookback this test overwrites — so every detector key written is one the edit made.
 #[test]
 fn an_edited_row_writes_only_what_changed() {
-    let mut row = AutoFigurePreset::Levels1h.row();
+    let mut row = AutoFigurePreset::Levels4h.row();
     row.name = "Мои уровни".into();
     row.take.count = 4;
     row.style.thickness = 3.0;
@@ -792,7 +795,6 @@ fn the_new_presets_are_offered_not_shipped() {
             AutoFigurePreset::PrevDayProfile,
             DetectorKind::VolumeProfile,
         ),
-        (AutoFigurePreset::NakedPoc, DetectorKind::VolumeProfile),
         (AutoFigurePreset::PeriodLevels, DetectorKind::PeriodLevel),
         (AutoFigurePreset::RoundLevels, DetectorKind::RoundLevels),
     ];
@@ -811,6 +813,86 @@ fn the_new_presets_are_offered_not_shipped() {
         panic!();
     };
     assert!(naked.naked_poc_days > 0 && !naked.poc && !naked.vah && !naked.val);
+}
+
+/// The rows that need days of history are offered and never shipped, and the two that need more
+/// than the cache holds for most markets are trimmed (LinKvo, 19.11.2026): the naked POCs leave the
+/// "Add" menu, and the period levels keep yesterday's close with the week's open off.
+///
+/// Breakage: `NakedPoc` back in `ALL`, or the period-level preset reaching back a week again.
+#[test]
+fn the_day_deep_presets_stay_out_of_the_shipped_set() {
+    assert!(!AutoFigurePreset::ALL.contains(&AutoFigurePreset::NakedPoc));
+    for preset in [AutoFigurePreset::Levels4h, AutoFigurePreset::PrevDayProfile] {
+        assert!(AutoFigurePreset::ALL.contains(&preset), "{preset:?}");
+        assert!(
+            !AutoFigurePreset::DEFAULT_SET.contains(&preset),
+            "{preset:?}"
+        );
+    }
+    let Some(DetectorParams::PeriodLevel(p)) = AutoFigurePreset::PeriodLevels
+        .row()
+        .detector
+        .known()
+        .copied()
+    else {
+        panic!();
+    };
+    assert!(p.prev_day_close && !p.week_open && !p.day_open && !p.prev_week_close);
+}
+
+/// Every row of the shipped set needs no more history than one core ring holds: 500 sealed
+/// 5-minute candles (moonproto `candles_5m`), less the partial first bar of the row's timeframe
+/// that the bar assembly drops. The ring is the one history the terminal has for every market; a
+/// row deeper than it reports "not enough history" almost everywhere.
+///
+/// Breakage: a shipped row back on the generic 200-bar lookback (50 h at 15 minutes, 200 h at an
+/// hour), or a day-deep preset slipped into the set.
+#[test]
+fn the_shipped_set_fits_one_core_ring() {
+    let ring_ms: i64 = 500 * 5 * 60_000;
+    for preset in AutoFigurePreset::DEFAULT_SET {
+        let row = preset.row();
+        let TfSource::Fixed(tf) = row.tf else {
+            panic!("{preset:?}: a shipped row names its timeframe");
+        };
+        let needed = row
+            .detector
+            .known()
+            .expect("a preset runs a known detector")
+            .bars_needed(tf);
+        let span = i64::from(needed) * tf.ms();
+        assert!(
+            span <= ring_ms - tf.ms(),
+            "{preset:?} needs {needed} bars of {tf:?}, {} h, past the ring",
+            span / 3_600_000
+        );
+    }
+}
+
+/// A row created from the naked-POC preset before it left the "Add" menu still loads, with its
+/// preset — the name it is shown under — and its parameters, and writes back the same.
+///
+/// Breakage: the variant deleted or renamed (the row would lose its name), or the lenient preset
+/// read turned strict (the row would be dropped).
+#[test]
+fn a_stored_naked_poc_row_still_loads() {
+    let file = r#"
+[[auto_figures.rows]]
+preset = "naked_poc"
+detector = { kind = "volume_profile", poc = false, vah = false, val = false, naked_poc_days = 5 }
+"#;
+    let doc: Doc = toml::from_str(file).expect("loads");
+    let rows = &doc.auto_figures.rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].preset, Some(AutoFigurePreset::NakedPoc));
+    assert_eq!(rows[0].title_key(), Some("auto_figures.preset.naked_poc"));
+    let Some(DetectorParams::VolumeProfile(p)) = rows[0].detector.known() else {
+        panic!("{:?}", rows[0].detector);
+    };
+    assert_eq!(p.naked_poc_days, 5);
+    let (_, back) = round_trip(&doc.auto_figures);
+    assert_eq!(back, doc.auto_figures);
 }
 
 /// The 4h levels are told apart from the 1h ones at a glance: another colour and a heavier line.

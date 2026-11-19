@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 use moon_chart::auto_figures::tf::BarSource;
 use moon_chart::auto_figures::{Found, FoundShape};
 use moon_core::config::auto_figures::{
-    AutoFigureRow, AutoFiguresCfg, DetectorKind, DetectorParams, SwingParams, TfId,
+    AutoFigurePreset, AutoFigureRow, AutoFiguresCfg, DetectorKind, DetectorParams, SwingParams,
+    TfId,
 };
 use moon_core::market::ChartCandle;
 
@@ -330,10 +331,14 @@ fn hiding_with_the_eye_runs_no_detector_and_keeps_the_cache() {
 ///
 /// Breakage: the show dropping the slots (every row recomputed), or waiting for a run to publish
 /// (nothing drawn until the next bar close).
+///
+/// The shipped set plus the 4h levels: every shipped row closes a bar within the hour, and "only
+/// the stale rows" needs a row whose bar did not.
 #[test]
 fn showing_again_takes_the_cache_and_runs_only_stale_rows() {
     let now = Instant::now();
-    let cfg = AutoFiguresCfg::shipped();
+    let mut cfg = AutoFiguresCfg::shipped();
+    cfg.rows.push(AutoFigurePreset::Levels4h.row());
     let mut pane = eye_pane();
     let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, now, EYE_NOW_MS);
     answer(&mut pane, &first.jobs, now);
