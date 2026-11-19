@@ -51,7 +51,8 @@ pub(crate) struct LineKey {
     touch_ms: u64,
     /// The last touch's time as bits; what tells two trend lines from one shared pivot apart.
     last_touch_ms: u64,
-    /// What the line is, for the detectors that draw several kinds of line from one anchor.
+    /// What the line is, for the detectors that draw several kinds of line from one anchor; a
+    /// naked POC is keyed as the POC it is ([`key_tag`]).
     tag: Option<LineTag>,
     /// The price as `f32` bits for a horizontal line with no touches and no tag (a round price);
     /// `0` for every other line, whose identity is in its anchors and tag.
@@ -78,9 +79,22 @@ impl LineKey {
             first_ms: found.first_ms.to_bits(),
             touch_ms: found.touches.first().map_or(0, |t| t.t_ms.to_bits()),
             last_touch_ms: found.touches.last().map_or(0, |t| t.t_ms.to_bits()),
-            tag: found.tag,
+            tag: found.tag.map(key_tag),
             price,
         }
+    }
+}
+
+/// The tag as it enters a [`LineKey`]: what the line IS, without what it currently SHOWS.
+///
+/// A previous day's POC turns naked when price leaves it and plain again when price comes back —
+/// the volume profile retags the same line between runs (`LineTag::NakedPoc` ↔ `LineTag::Poc`),
+/// so a key with the raw tag would lose a hidden POC to that flip and draw it again. Both are
+/// "the POC of that day"; the day itself is told apart by `first_ms`, its first bar.
+fn key_tag(tag: LineTag) -> LineTag {
+    match tag {
+        LineTag::NakedPoc => LineTag::Poc,
+        other => other,
     }
 }
 

@@ -39,7 +39,7 @@ fn each_detector_shows_exactly_its_own_numbers() {
     let shown = |row: AutoFigureRow| {
         NumField::DETECTOR
             .into_iter()
-            .filter(|f| f.get(&row).is_some())
+            .filter(|f| f.has(&row))
             .collect::<Vec<_>>()
     };
     use NumField::*;
@@ -124,7 +124,7 @@ fn every_shown_field_writes_what_it_reads() {
             for field in NumField::ALL {
                 let mut row = row.clone();
                 row.style.zone = Some(0.2);
-                if field.get(&row).is_none() {
+                if !field.has(&row) {
                     let before = row.clone();
                     assert!(!field.set(&mut row, 7.0), "{field:?} wrote into {kind:?}");
                     assert_eq!(row, before, "{field:?} changed {kind:?}");
@@ -146,6 +146,37 @@ fn a_typed_number_is_kept_until_the_row_is_sanitized() {
     assert_eq!(NumField::Lookback.get(&row), Some(1.0));
     row.sanitize();
     assert!(NumField::Lookback.get(&row).unwrap() >= 10.0);
+}
+
+/// A number too big for an `f32` field ("1e39" parses as a finite `f64`) is stored as the largest
+/// finite `f32`, never as infinity, and the next keystroke still writes. A row that already holds
+/// a non-finite value keeps the field, and typing repairs it.
+///
+/// Mutation: a plain `as f32` (the row holds infinity), or presence judged by the value — the
+/// field then answers `None`, `set` refuses every later keystroke and the form hides the field.
+#[test]
+fn a_huge_number_never_makes_a_field_unwritable() {
+    let mut row = row_of(DetectorKind::Swing);
+    let typed = parse_number("1e39", false).expect("a finite f64");
+    assert!(NumField::Tolerance.set(&mut row, typed));
+    let stored = NumField::Tolerance.get(&row).expect("still a number");
+    assert!(stored.is_finite());
+    assert!(NumField::Tolerance.set(&mut row, 0.5));
+    assert_eq!(NumField::Tolerance.get(&row), Some(0.5));
+
+    if let RowDetector::Known(DetectorParams::Swing(p)) = &mut row.detector {
+        p.tolerance_pct = f32::INFINITY;
+    }
+    assert!(
+        NumField::Tolerance.has(&row),
+        "the field is still the row's"
+    );
+    assert_eq!(NumField::Tolerance.get(&row), None, "nothing printable");
+    assert!(NumField::Tolerance.set(&mut row, 0.25));
+    assert_eq!(NumField::Tolerance.get(&row), Some(0.25));
+    // Not a number at all is still refused, and a field the row lacks still writes nothing.
+    assert!(!NumField::Tolerance.set(&mut row, f64::INFINITY));
+    assert!(!NumField::BodyBreaks.set(&mut row, 3.0));
 }
 
 /// Mutation: drop the comma replacement — a Russian or Ukrainian keyboard types "0,25".

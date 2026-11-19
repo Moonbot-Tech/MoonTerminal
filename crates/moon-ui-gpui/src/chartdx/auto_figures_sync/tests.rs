@@ -744,6 +744,47 @@ fn lines_sharing_their_anchors_are_told_apart_by_tag_and_round_price() {
     assert_ne!(LineKey::of(0, &day_open), LineKey::of(0, &week_open));
 }
 
+/// A previous day's POC is retagged naked when price leaves it and plain when price returns; the
+/// line the reader hid is the same line either way, and stays hidden. Another day's POC is not.
+///
+/// Breakage: the raw tag in the key (F4) — the hidden POC reappeared on the run after price moved
+/// off it.
+#[test]
+fn a_hidden_poc_stays_hidden_when_it_turns_naked() {
+    use moon_chart::auto_figures::LineTag;
+    let poc = |first_ms: f64, tag| Found {
+        shape: FoundShape::Horizontal { price: 100.0 },
+        touches: Vec::new(),
+        strength: 1.0,
+        first_ms,
+        last_ms: first_ms + 86_000_000.0,
+        broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
+        tag: Some(tag),
+    };
+    let yesterday = (DAY0 - 86_400_000) as f64;
+    let plain = poc(yesterday, LineTag::Poc);
+    let naked = poc(yesterday, LineTag::NakedPoc);
+    assert_eq!(LineKey::of(0, &plain), LineKey::of(0, &naked));
+    assert_ne!(
+        LineKey::of(0, &naked),
+        LineKey::of(0, &poc(yesterday - 86_400_000.0, LineTag::NakedPoc))
+    );
+    // Through the selection: hidden while plain, still hidden once naked.
+    let mut row = level_row(&[100.0]);
+    Arc::make_mut(&mut row.outcome).found = vec![naked];
+    let hidden = [LineKey::of(0, &plain)];
+    let kept = select_kept(
+        &row.outcome,
+        &row.rules(&hidden),
+        99.0,
+        0.0,
+        &mut Vec::new(),
+    );
+    assert!(kept.is_empty(), "the hidden POC came back as a naked one");
+}
+
 /// Breakage (B1, B2): the events read `events::bars_read` bars — the role-flip lookback, the
 /// false-break window and two more — but a row kept only `window + 6`, so a role flip was almost
 /// always reported as a bounce; and the tail was cut from the DETECTOR's bars, so a row of round
@@ -788,9 +829,11 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         assert!(!o.short_history(), "the events tail is not missing history");
     }
 
-    // An hour row of round prices on that chart: twelve hours cannot hold the hour bars the events
-    // read, so it goes to the cache, and the read reaches back far enough for them.
-    let cache = FakeCache {
+    // An hour row of round prices on that chart: its detector needs one hour bar, and the twelve
+    // hours of the chart hold it — so the chart, resampled, with or without a cache. The events get
+    // the twelve hours the chart has: best-effort, fewer than they could read, and no reason to
+    // leave the chart for the cache.
+    let m5_cache = || FakeCache {
         m5: Some(series(DAY0 - 2 * 86_400_000, 5 * MIN, 2 * 288 + 144)),
         reads: RefCell::new(Vec::new()),
     };
@@ -801,6 +844,24 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         cache: None,
         now_ms: now,
     };
+    let cache = m5_cache();
+    for with_cache in [true, false] {
+        let out = run(&job, with_cache.then_some(&cache as &dyn BarCache));
+        let o = &out[0].1;
+        assert_eq!(o.source, BarSource::ChartResampled, "cache: {with_cache}");
+        assert_eq!(o.bars, 1, "cache: {with_cache}");
+        assert_eq!(o.recent.len(), 12, "every closed hour of the chart");
+        assert!(!o.short_history());
+    }
+    assert!(cache.reads.borrow().is_empty(), "the cache is never read");
+
+    // A chart only an hour deep cannot hold even that one closed hour: the cache, and its read
+    // reaches back far enough for the events.
+    let job = PaneJob {
+        chart: series(DAY0 + 11 * 3_600_000, 5 * MIN, 12).into(),
+        ..job
+    };
+    let cache = m5_cache();
     let out = run(&job, Some(&cache));
     assert_eq!(out[0].1.source, BarSource::Cache5m);
     assert!(out[0].1.recent.len() >= wanted);
@@ -809,13 +870,77 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
     assert!(reads[0].1 <= last_closed - (wanted as i64 - 1) * 3_600_000);
 }
 
-/// "Not enough history" from 90 % of the detector's need (§13.3): the 4h levels row of the scenes'
-/// set reads 68 of its 72 bars and has its answer; 64 of 72 (88.9 %) is short, 65 (90.3 %) is not.
+/// A key of `detector` on `tf` at `now`.
+fn key_of(detector: DetectorParams, tf: TfId, now_ms: f64) -> RowKey {
+    RowKey {
+        detector,
+        tf,
+        last_closed_ms: last_closed_open_ms(now_ms, tf),
+        chart_ready: true,
+    }
+}
+
+/// The stand's "Period levels" row on M5 with the week open: 2017 bars needed, a 647-bar chart of
+/// the same timeframe, and a cache that is a week deep but an hour behind. The row reads the cache
+/// and the chart's tail after it — the whole week, ending on the chart's newest bar.
 ///
-/// Breakage: the old `bars < needed` (every hole in the cache read as missing history), or the
-/// threshold measured against the events tail.
+/// Breakage: the equal-timeframe short-cut to the chart series (647 bars: the week open is never
+/// found while the chart is open), or a cache path that drops the chart's fresher tail.
 #[test]
-fn a_row_has_its_history_from_ninety_percent_of_what_it_needs() {
+fn a_row_on_the_charts_timeframe_reads_the_cache_when_the_series_is_too_short() {
+    use moon_core::config::auto_figures::PeriodLevelParams;
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let row = key_of(
+        DetectorParams::PeriodLevel(PeriodLevelParams::default()),
+        TfId::M5,
+        now,
+    );
+    assert_eq!(row.detector.bars_needed(TfId::M5), 2017);
+    let chart: Arc<[ChartCandle]> =
+        series(DAY0 + 12 * 3_600_000 - 647 * 5 * MIN, 5 * MIN, 647).into();
+    // Eight days of rows up to 10:55 — the recorder has not written the last hour yet.
+    let cache = FakeCache {
+        m5: Some(series(DAY0 - 8 * 86_400_000, 5 * MIN, 8 * 288 + 132)),
+        reads: RefCell::new(Vec::new()),
+    };
+    let job = PaneJob {
+        rows: vec![(0, row)],
+        chart_tf_ms: 5 * MIN,
+        chart: chart.clone(),
+        cache: None,
+        now_ms: now,
+    };
+    let out = run(&job, Some(&cache));
+    let o = &out[0].1;
+    assert_eq!(o.source, BarSource::Cache5m);
+    assert_eq!(o.bars, 2017);
+    assert!(!o.short_history());
+    assert_eq!(
+        o.recent.last(),
+        chart.last(),
+        "the chart's tail is appended"
+    );
+    // On a market with no cache the chart is all there is: it is used, and the row says it is short.
+    let out = run(&job, None);
+    let o = &out[0].1;
+    assert_eq!(o.source, BarSource::ChartSeries);
+    assert_eq!(o.bars, 647);
+    assert!(o.short_history());
+}
+
+/// "Not enough history" from 90 % of the detector's need for a row that samples its bars (§13.3):
+/// the 4h levels row of the scenes' set reads 68 of its 72 bars and has its answer; 64 of 72
+/// (88.9 %) is short, 65 (90.3 %) is not. A calendar row needs every bar of its period: one bar
+/// short of a week's 2017 is short, at 95 % as well.
+///
+/// Breakage: the old `bars < needed` for every row (every hole in the cache read as missing
+/// history), the threshold measured against the events tail, or the 90 % applied to calendar rows
+/// too (a week open lost to a hole drawn as nothing, with no note).
+#[test]
+fn sampled_rows_have_their_history_at_ninety_percent_calendar_rows_at_all_of_it() {
+    use moon_core::config::auto_figures::{
+        PeriodExtremeParams, PeriodLevelParams, VolumeProfileParams,
+    };
     let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
     let mut o = without_cache(key(TfId::H4, now, 72), BarSource::Cache5m, 72);
     for (bars, short) in [(72, false), (68, false), (65, false), (64, true), (0, true)] {
@@ -827,6 +952,18 @@ fn a_row_has_its_history_from_ninety_percent_of_what_it_needs() {
     assert!(!one.short_history());
     one.bars = 0;
     assert!(one.short_history());
+
+    for detector in [
+        DetectorParams::PeriodLevel(PeriodLevelParams::default()),
+        DetectorParams::PeriodExtreme(PeriodExtremeParams::default()),
+        DetectorParams::VolumeProfile(VolumeProfileParams::default()),
+    ] {
+        let mut o = without_cache(key_of(detector, TfId::M5, now), BarSource::Cache5m, 2017);
+        for (bars, short) in [(2017, false), (2016, true), (1917, true)] {
+            o.bars = bars;
+            assert_eq!(o.short_history(), short, "{detector:?}: {bars} of 2017");
+        }
+    }
 }
 
 /// The caption names what a tagged line is beside its row ("POC", "Week open"), and leaves out
@@ -869,4 +1006,39 @@ fn a_caption_names_the_tag_and_skips_what_a_line_lacks() {
     assert!(!caption_text(&[CaptionPart::Touches], &values(None, 3, 1.0)).is_empty());
     assert_eq!(caption_text(&[CaptionPart::Age], &values(None, 0, 0.0)), "");
     assert!(!caption_text(&[CaptionPart::Age], &values(None, 0, DAY0 as f64)).is_empty());
+}
+
+/// The caption's rebuild key follows the age only where the age is printed: a line with no moment
+/// of birth (a round price) keeps its key as the clock moves, an anchored line's key moves with
+/// its age bucket.
+///
+/// Breakage: the age bucket hashed for every line (F7) — a round price's caption, which prints no
+/// age, was rebuilt at every bucket of the time since the epoch.
+#[test]
+fn an_unprinted_age_does_not_move_the_caption_key() {
+    use std::hash::Hasher as _;
+
+    use super::caption::{CaptionValues, caption_quantum};
+    let title = RowTitle::Named("Round".into());
+    let key_at = |first_ms: f64, now_ms: i64| {
+        let values = CaptionValues {
+            title: &title,
+            tag: None,
+            line_now: Some(100.0),
+            price: Some(100.0),
+            touches: 0,
+            tf: TfId::H1,
+            first_ms,
+            events: Default::default(),
+            now_ms: now_ms as f64,
+            tick: None,
+        };
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        caption_quantum(&[CaptionPart::RowName, CaptionPart::Age], &values, &mut h);
+        h.finish()
+    };
+    // A day apart: the time since the epoch crosses a day bucket, so a hashed epoch age would move.
+    let (now, day_later) = (DAY0 + 3_600_000, DAY0 + 86_400_000 + 3_600_000);
+    assert_eq!(key_at(0.0, now), key_at(0.0, day_later));
+    assert_ne!(key_at(DAY0 as f64, now), key_at(DAY0 as f64, day_later));
 }

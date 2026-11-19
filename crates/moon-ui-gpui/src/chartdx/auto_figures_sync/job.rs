@@ -149,28 +149,62 @@ pub(crate) struct AutoRowOutcome {
     pub found: Vec<Found>,
     /// The newest closed bars of the row's timeframe, oldest first — as many as the row's events
     /// can look at ([`events_tail`]), taken from everything fetched rather than from the detector's
-    /// own `needed` bars, which can be fewer (round prices need one). The events pass runs on
+    /// own `needed` bars, which can be fewer (round prices need one). Best-effort: the source is
+    /// chosen for the detector ([`plan_row`]), so a chart source shorter than the tail gives what
+    /// it has, and the events read fewer bars back. The events pass runs on
     /// every price change and must not re-read the cache or re-resample for that; these few bars
     /// are all it needs.
     pub recent: Vec<ChartCandle>,
 }
 
-/// Share of `bars_needed` a row must have read, in %, before it counts as having its full history
-/// (`docs-internal/AUTO_FIGURES.md` §13.3).
+/// Share of `bars_needed` a row that SAMPLES its bars must have read, in %, before it counts as
+/// having its full history (`docs-internal/AUTO_FIGURES.md` §13.3).
 ///
 /// Not 100: the local 5-minute cache is written only while the terminal runs, so holes are
-/// normal, and a row whose resampled bars come out a few short has its answer all the same. On
-/// the scenes' recorded set the 4h levels row reads 68 of its 72 bars — 94 % — and calling that
-/// "not enough history" told the reader something false about a row that found its levels. Below
-/// 90 % a missing day starts to be a missing swing, and the note is worth showing.
+/// normal, and a pivot row whose resampled bars come out a few short has its answer all the same —
+/// its levels are the turns of whatever bars it has. On the scenes' recorded set the 4h levels row
+/// reads 68 of its 72 bars — 94 % — and calling that "not enough history" told the reader
+/// something false about a row that found its levels. Below 90 % a missing day starts to be a
+/// missing swing, and the note is worth showing. Calendar rows ask for all of it instead
+/// ([`CALENDAR_HISTORY_PCT`]).
 pub(crate) const FULL_HISTORY_PCT: u64 = 90;
+
+/// Share of `bars_needed` a CALENDAR row (period extreme, period level, volume profile) must have
+/// read, in %: all of it.
+///
+/// Such a row's answer is a fact about every bar of its period, not a sample of them: the period's
+/// open IS its first bar, its high or low may be in any one bar, and every bar's volume moves the
+/// profile's POC. One bar missing can therefore change or erase the line itself — and a line that
+/// is silently missing or wrong is exactly what the note must not hide. The alternative ("short
+/// only when the detector found nothing") was rejected: a period-level row with the day open found
+/// and the week open lost finds something, and a week high taken from an incomplete week is found
+/// too — wrong, and unmarked.
+pub(crate) const CALENDAR_HISTORY_PCT: u64 = 100;
+
+/// The share of `bars_needed` a row of `detector` must read to count as complete, in % — by what
+/// its answer is made of ([`FULL_HISTORY_PCT`], [`CALENDAR_HISTORY_PCT`]). Exhaustive on purpose:
+/// a new detector kind has to say which it is.
+pub(crate) fn full_history_pct(detector: &DetectorParams) -> u64 {
+    match detector {
+        DetectorParams::Swing(_)
+        | DetectorParams::Trend(_)
+        | DetectorParams::Squeeze(_)
+        // One bar needed: 90 % and 100 % of it are the same test.
+        | DetectorParams::RoundLevels(_) => FULL_HISTORY_PCT,
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::VolumeProfile(_) => CALENDAR_HISTORY_PCT,
+    }
+}
 
 impl AutoRowOutcome {
     /// Whether the row ran on less history than it asks for — "not enough history" in the popup:
-    /// fewer than [`FULL_HISTORY_PCT`] % of `needed` bars, measured against the DETECTOR's need
-    /// only (the events tail fetched beside it is not history the answer lacks).
+    /// fewer than [`full_history_pct`] % of `needed` bars (90 % for a row that samples its bars,
+    /// all of them for a calendar row), measured against the DETECTOR's need only (the events tail
+    /// fetched beside it is not history the answer lacks).
     pub fn short_history(&self) -> bool {
-        (self.bars as u64).saturating_mul(100) < u64::from(self.needed) * FULL_HISTORY_PCT
+        (self.bars as u64).saturating_mul(100)
+            < u64::from(self.needed) * full_history_pct(&self.key.detector)
     }
 }
 
@@ -187,18 +221,28 @@ pub(crate) fn chart_extent(chart: &[ChartCandle], chart_tf_ms: i64) -> (i64, f64
 
 /// Where a row's bars come from, and how many its DETECTOR needs.
 ///
-/// The source is chosen for [`fetch_len`] bars — the detector's need or the events tail,
-/// whichever is longer — so a row whose detector needs one bar does not settle for a chart series
-/// too short to say whether a bar broke or bounced off its lines.
-pub(crate) fn plan_row(key: &RowKey, chart_tf_ms: i64, chart_history_ms: f64) -> (BarSource, u32) {
+/// The source is chosen for the detector's `needed` alone, never for [`fetch_len`]: the events
+/// tail is best-effort from whatever the chosen source gives — a cache read reaches back
+/// `fetch_len` bars, a chart source hands over every bar of its series. Sizing the choice by the
+/// tail sent every row that needs few bars (round prices, period levels, H1/H4 extremes, the
+/// profile) past a chart that holds all they need, to the cache — and on a market with no cache
+/// they drew nothing at all.
+///
+/// Args:
+///     key: The row's recompute key.
+///     chart_tf_ms: The chart series' bar length, ms (`chart_extent`).
+///     chart_history_ms: Time the chart series covers, ms (`chart_extent`).
+///     has_cache: Whether the market has a local kline cache — without one, a row the chart can
+///         serve on its own timeframe keeps the chart rather than an empty cache answer.
+pub(crate) fn plan_row(
+    key: &RowKey,
+    chart_tf_ms: i64,
+    chart_history_ms: f64,
+    has_cache: bool,
+) -> (BarSource, u32) {
     let needed = key.detector.bars_needed(key.tf);
     (
-        tf::bar_source(
-            key.tf,
-            chart_tf_ms,
-            chart_history_ms,
-            fetch_len(&key.detector, needed),
-        ),
+        tf::bar_source(key.tf, chart_tf_ms, chart_history_ms, needed, has_cache),
         needed,
     )
 }
@@ -265,7 +309,7 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
         .rows
         .iter()
         .map(|&(ix, key)| {
-            let (source, needed) = plan_row(&key, chart_tf_ms, chart_history_ms);
+            let (source, needed) = plan_row(&key, chart_tf_ms, chart_history_ms, cache.is_some());
             (ix, key, needed, source)
         })
         .collect();

@@ -169,10 +169,25 @@ impl NumField {
     /// The field's value on `row`, or `None` when this row has no such number — a field of
     /// another detector, a tolerance in the unit the row does not read, a broken-bar count under
     /// `Remove`, a zone opacity with the zone off, or any detector field of a row this build cannot
-    /// interpret.
+    /// interpret — or when the stored value is not a finite number, which the input cannot show.
     pub(super) fn get(self, row: &AutoFigureRow) -> Option<f64> {
+        self.stored(row).filter(|v| v.is_finite())
+    }
+
+    /// Whether `row` has this field at all, whatever its value holds.
+    ///
+    /// Separate from [`Self::get`] because presence must not hang on the value: a row that once
+    /// held a non-finite number in a field would otherwise lose the field — hidden from the form,
+    /// and refused by [`Self::set`] — with no way for the reader to type it back to a real number.
+    pub(super) fn has(self, row: &AutoFigureRow) -> bool {
+        self.stored(row).is_some()
+    }
+
+    /// The field's stored value on `row` as is, finite or not; `None` exactly when the row has no
+    /// such number (see [`Self::get`]).
+    fn stored(self, row: &AutoFigureRow) -> Option<f64> {
         let known = row.detector.known();
-        let v = match self {
+        match self {
             NumField::Lookback => known.and_then(|d| match d {
                 DetectorParams::Trend(p) => Some(f64::from(p.lookback_bars)),
                 d => swing_like(d).map(|p| f64::from(p.lookback_bars)),
@@ -264,27 +279,28 @@ impl NumField {
                 .style
                 .zone
                 .map(|a| (f64::from(a) * 100_000.0).round() / 1000.0),
-        };
-        v.filter(|v| v.is_finite())
+        }
     }
 
     /// Write `v` into `row`, returning whether the row has this field at all — exactly when
-    /// [`Self::get`] answers for it, so a tolerance in the unit the row does not read is never
-    /// written behind the reader's back.
+    /// [`Self::has`] says so, so a tolerance in the unit the row does not read is never written
+    /// behind the reader's back. A non-finite `v` is refused and writes nothing.
     ///
     /// Clamped only to what the TYPE can hold — never to the model's ranges, which `sanitize`
     /// owns. Applying those here would rewrite a number while it is being typed: "1" on the way to
     /// "150" would snap to the lookback minimum and the field would fight the keyboard. The editor
-    /// sanitizes a copy for its preview and the row itself on OK.
+    /// sanitizes a copy for its preview and the row itself on OK. For an `f32` field that clamp is
+    /// to `±f32::MAX`: a plain `as f32` turns "1e39" into infinity, and a row holding infinity
+    /// would print "inf" and feed it to the preview and the sanitizer.
     pub(super) fn set(self, row: &mut AutoFigureRow, v: f64) -> bool {
-        if !v.is_finite() || self.get(row).is_none() {
+        if !v.is_finite() || !self.has(row) {
             return false;
         }
         let v = if self.integer() { v.round() } else { v };
         let as_u8 = v.clamp(0.0, f64::from(u8::MAX)) as u8;
         let as_u16 = v.clamp(0.0, f64::from(u16::MAX)) as u16;
         let as_u32 = v.clamp(0.0, f64::from(u32::MAX)) as u32;
-        let as_f32 = v as f32;
+        let as_f32 = v.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
         match self {
             NumField::TakeCount => {
                 row.take.count = as_u8;

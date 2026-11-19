@@ -408,7 +408,7 @@ fn split_no_cache(
     let mut run = Vec::new();
     let mut resolved = Vec::new();
     for (ix, key) in rows {
-        let (source, needed) = job::plan_row(&key, tf_ms, history_ms);
+        let (source, needed) = job::plan_row(&key, tf_ms, history_ms, false);
         if job::reads_cache(source) {
             resolved.push((ix, job::without_cache(key, source, needed)));
         } else {

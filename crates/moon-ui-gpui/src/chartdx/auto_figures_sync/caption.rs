@@ -271,7 +271,10 @@ pub(crate) fn price_quantum(price: Option<f64>, tick: Option<f64>) -> Option<(us
 /// equal caption, so the caller rebuilds the string only when this moved.
 ///
 /// The price is quantized at the precision it is PRINTED with ([`price_quantum`]), the distance
-/// to the hundredth of a percent `fmt_pct` prints, the age to its bucket.
+/// to the hundredth of a percent `fmt_pct` prints, the age to its bucket — and only for a line
+/// with a moment of birth ([`has_anchor`]): `caption_text` prints no age for one without (a round
+/// price), and a bucket of the time since the epoch would rebuild that caption every minute for
+/// nothing.
 /// The name, touches, timeframe and events only change with a rebuild of the lines, which resets
 /// the caption anyway, but they are folded in too, so the function is the whole truth on its own.
 pub(crate) fn caption_quantum(
@@ -290,7 +293,9 @@ pub(crate) fn caption_quantum(
             }
             CaptionPart::Touches => values.touches.hash(h),
             CaptionPart::Tf => values.tf.hash(h),
-            CaptionPart::Age => age_bucket(values.now_ms - values.first_ms).hash(h),
+            CaptionPart::Age => has_anchor(values.first_ms)
+                .then(|| age_bucket(values.now_ms - values.first_ms))
+                .hash(h),
             CaptionPart::Event => values.events.hash(h),
         }
     }

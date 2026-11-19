@@ -71,28 +71,78 @@ fn big_jumps_bad_spans_and_fixed_rows() {
 fn bar_sources() {
     let m5 = TfId::M5.ms();
     let day = 24.0 * H;
-    assert_eq!(bar_source(TfId::M5, m5, 0.0, 200), BarSource::ChartSeries);
-    assert_eq!(bar_source(TfId::D1, m5, 1e15, 200), BarSource::CacheDaily);
+    let src = |row, chart_tf, history, lookback| bar_source(row, chart_tf, history, lookback, true);
+    // 201 five-minute bars cover a 200-bar lookback (+1, as for a resample).
     assert_eq!(
-        bar_source(TfId::D1, TfId::D1.ms(), 0.0, 200),
+        src(TfId::M5, m5, 201.0 * m5 as f64, 200),
+        BarSource::ChartSeries
+    );
+    assert_eq!(src(TfId::D1, m5, 1e15, 200), BarSource::CacheDaily);
+    assert_eq!(
+        src(TfId::D1, TfId::D1.ms(), 1e15, 200),
         BarSource::ChartSeries
     );
     // 200 hourly bars = 200 h of history: present, then missing.
-    assert_eq!(
-        bar_source(TfId::H1, m5, 9.0 * day, 200),
-        BarSource::ChartResampled
-    );
-    assert_eq!(bar_source(TfId::H1, m5, 2.0 * day, 200), BarSource::Cache5m);
-    assert_eq!(bar_source(TfId::H1, m5, f64::NAN, 200), BarSource::Cache5m);
+    assert_eq!(src(TfId::H1, m5, 9.0 * day, 200), BarSource::ChartResampled);
+    assert_eq!(src(TfId::H1, m5, 2.0 * day, 200), BarSource::Cache5m);
+    assert_eq!(src(TfId::H1, m5, f64::NAN, 200), BarSource::Cache5m);
     // A 5-minute row on an hourly chart cannot come from the chart: finer than its bars.
+    assert_eq!(src(TfId::M5, TfId::H1.ms(), 1e15, 200), BarSource::Cache5m);
+    assert_eq!(src(TfId::M1, m5, 1e15, 200), BarSource::Unavailable);
+    assert_eq!(src(TfId::M15, 0, 0.0, 200), BarSource::Cache5m);
+    // A 1-minute row on a 1-minute chart: nothing else can build it, however short the series.
     assert_eq!(
-        bar_source(TfId::M5, TfId::H1.ms(), 1e15, 200),
+        src(TfId::M1, TfId::M1.ms(), 0.0, 200),
+        BarSource::ChartSeries
+    );
+}
+
+/// A row on the chart's own timeframe takes the series only when it covers the detector's need;
+/// a shorter one hands the row to the cache, which the series' tail is appended to. The stand's
+/// case: "Period levels" on M5 with the week open needs 2017 bars, the chart holds 647 — the
+/// series never covers the week, the cache does. A row that only the chart can build (M1, or a
+/// market with no cache at all) keeps the series whatever its depth.
+///
+/// Breakage: the old "equal timeframe → chart series" short-cut (the week open is never found
+/// once the chart is open), or a fallback that sends an uncacheable row to the cache (it would
+/// read nothing — no cache, or no 1-minute rows in it).
+#[test]
+fn an_equal_timeframe_series_too_short_for_the_row_gives_way_to_the_cache() {
+    let m5 = TfId::M5.ms();
+    let week_open = 2017;
+    let chart = 647.0 * m5 as f64;
+    assert_eq!(
+        bar_source(TfId::M5, m5, chart, week_open, true),
         BarSource::Cache5m
     );
-    assert_eq!(bar_source(TfId::M1, m5, 1e15, 200), BarSource::Unavailable);
-    assert_eq!(bar_source(TfId::M15, 0, 0.0, 200), BarSource::Cache5m);
+    // The boundary: the lookback plus one bar of history.
+    let lookback = 646;
     assert_eq!(
-        bar_source(TfId::M1, TfId::M1.ms(), 0.0, 200),
+        bar_source(TfId::M5, m5, chart, lookback, true),
+        BarSource::ChartSeries
+    );
+    assert_eq!(
+        bar_source(TfId::M5, m5, chart, lookback + 1, true),
+        BarSource::Cache5m
+    );
+    // A daily row on a daily chart too short for it: the daily cache.
+    let d1 = TfId::D1.ms();
+    assert_eq!(
+        bar_source(TfId::D1, d1, 10.0 * d1 as f64, 30, true),
+        BarSource::CacheDaily
+    );
+    // Nothing but the chart can build these: the series, short or not.
+    let m1 = TfId::M1.ms();
+    assert_eq!(
+        bar_source(TfId::M1, m1, 10.0 * m1 as f64, 200, true),
+        BarSource::ChartSeries
+    );
+    assert_eq!(
+        bar_source(TfId::M5, m5, chart, week_open, false),
+        BarSource::ChartSeries
+    );
+    assert_eq!(
+        bar_source(TfId::D1, d1, 10.0 * d1 as f64, 30, false),
         BarSource::ChartSeries
     );
 }
@@ -120,9 +170,12 @@ fn a_resampled_chart_must_cover_one_bucket_more_than_the_lookback() {
     }
     let complete = per_hour.values().filter(|&&c| c == 12).count();
     assert_eq!(complete, 199);
-    assert_eq!(bar_source(TfId::H1, m5, 200.0 * H, 200), BarSource::Cache5m);
     assert_eq!(
-        bar_source(TfId::H1, m5, 201.0 * H, 200),
+        bar_source(TfId::H1, m5, 200.0 * H, 200, true),
+        BarSource::Cache5m
+    );
+    assert_eq!(
+        bar_source(TfId::H1, m5, 201.0 * H, 200, true),
         BarSource::ChartResampled
     );
 }

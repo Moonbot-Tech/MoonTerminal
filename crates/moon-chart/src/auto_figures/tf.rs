@@ -110,7 +110,8 @@ pub enum BarSource {
     /// The chart's series resampled up to the row's timeframe, a whole multiple of the chart's,
     /// when the series is deep enough for the row's lookback.
     ChartResampled,
-    /// The local 5-minute cache, resampled when the row's timeframe is wider than 5 minutes.
+    /// The local 5-minute cache, resampled when the row's timeframe is wider than 5 minutes —
+    /// also for a row on the chart's own timeframe whose series is too short for it.
     Cache5m,
     /// The local daily cache.
     CacheDaily,
@@ -124,35 +125,54 @@ const CACHE_BASE_MS: i64 = 5 * 60_000;
 
 /// Decide where a row's bars come from.
 ///
+/// The choice is made for the DETECTOR's need (`lookback_bars`), never for anything fetched beside
+/// it: a source picked for a longer events tail would send a row that needs one bar (round prices)
+/// to the cache, and on a market without one it would draw nothing although the chart holds all
+/// it needs.
+///
+/// An equal timeframe the series does NOT cover goes to the cache on purpose: the chart's own
+/// series is often shorter than a calendar row's period (a week of 5-minute bars is 2017 of them),
+/// and the cache path appends the chart's fresh tail to the cache's rows, so the row gets the depth
+/// of the one and the newest bars of the other.
+///
 /// Args:
 ///     row: The row's resolved timeframe.
 ///     chart_tf_ms: The chart series' bar length, ms; `<= 0` when there is no chart series.
 ///     chart_history_ms: How much time the chart series covers, ms.
 ///     lookback_bars: Bars of `row` the detector reads.
+///     has_cache: Whether this market has a local kline cache at all.
 ///
 /// Returns:
-///     In order: the chart series on an equal timeframe; the daily cache for `D1`; the chart series
-///     resampled when the row is a multiple of the chart's timeframe and the series covers
-///     `lookback_bars + 1` row bars (the first, partial bucket is dropped); the 5-minute cache for any multiple of 5 minutes; otherwise
-///     [`BarSource::Unavailable`].
+///     In order: the chart series on an equal timeframe when it covers `lookback_bars + 1` bars,
+///     or when the cache cannot stand in for it (a timeframe that is not a multiple of 5 minutes,
+///     or no cache for the market); the daily cache for `D1`; the chart series resampled when the
+///     row is a multiple of the chart's timeframe and the series covers `lookback_bars + 1` row
+///     bars (the first, partial bucket is dropped); the 5-minute cache for any multiple of
+///     5 minutes; otherwise [`BarSource::Unavailable`].
 pub fn bar_source(
     row: TfId,
     chart_tf_ms: i64,
     chart_history_ms: f64,
     lookback_bars: u32,
+    has_cache: bool,
 ) -> BarSource {
     let row_ms = row.ms();
+    // One bucket more than the lookback: a series that does not start on a bucket boundary yields
+    // a PARTIAL first bucket, which the bar assembly drops (a partial high or low would place a
+    // level where the market never turned). Asking for exactly `lookback` buckets of history would
+    // then deliver `lookback - 1` bars and report a short history the cache could have filled. The
+    // same margin is asked of an equal-timeframe series, so the two chart sources agree on "deep
+    // enough".
+    let needed_ms = (f64::from(lookback_bars) + 1.0) * row_ms as f64;
     if chart_tf_ms > 0 && row_ms == chart_tf_ms {
-        return BarSource::ChartSeries;
+        let cache_can_build = has_cache && row_ms % CACHE_BASE_MS == 0;
+        if chart_history_ms >= needed_ms || !cache_can_build {
+            return BarSource::ChartSeries;
+        }
     }
     if row == TfId::D1 {
         return BarSource::CacheDaily;
     }
-    // One bucket more than the lookback: a series that does not start on a bucket boundary yields
-    // a PARTIAL first bucket, which the bar assembly drops (a partial high or low would place a
-    // level where the market never turned). Asking for exactly `lookback` buckets of history would
-    // then deliver `lookback - 1` bars and report a short history the cache could have filled.
-    let needed_ms = (f64::from(lookback_bars) + 1.0) * row_ms as f64;
     if chart_tf_ms > 0
         && row_ms > chart_tf_ms
         && row_ms % chart_tf_ms == 0

@@ -734,7 +734,7 @@ fn search_pane(
         ));
     }
     for field in NumField::DETECTOR {
-        if field.get(row).is_some()
+        if field.has(row)
             && let Some(input) = input_of(field)
         {
             col = col.child(num_row(field, &input, p, cx));
