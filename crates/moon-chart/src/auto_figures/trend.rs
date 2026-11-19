@@ -15,6 +15,11 @@
 //! before its touches are counted (that keeps flat pairs out of the candidate list); the check on
 //! the final endpoints is the one that decides.
 //!
+//! The touch tolerance is the row's `tolerance_pct`, or under `ToleranceUnit::Atr` its
+//! `tolerance_atr` times the ATR over `ATR_PERIOD` bars divided by the last close — over all the
+//! bars handed in, as `Swing` computes it; no ATR (too few bars) finds nothing. The slope bounds
+//! stay in % per bar whatever the unit.
+//!
 //! A broken line — a close beyond it after its last touch, the latest such episode — is handled by
 //! the row's `TrendParams::broken` exactly as a level is: `Remove` drops it, `Keep { bars }` keeps
 //! it flagged.
@@ -31,13 +36,15 @@
 //! is a full-count candidate (`the_line_search_is_capped_to_the_newest_pivots`) — finishes inside
 //! the 0.10 s the whole detector test run takes. Acceptable on a bar close, never per frame.
 
-use moon_core::config::auto_figures::{DetectorKind, DetectorParams, TrendSide};
+use moon_core::config::auto_figures::{
+    ATR_PERIOD, DetectorKind, DetectorParams, ToleranceUnit, TrendSide,
+};
 use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, line_price_at, pct_frac,
-    scan_break, survives, touch_strength, touch_volume, window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, line_price_at, scan_break,
+    survives, tolerance_frac, touch_strength, touch_volume, window,
 };
 
 /// Most pivots of one kind a line search considers: the most recent ones. Bounds the O(P³) pair
@@ -57,6 +64,19 @@ impl Detector for Trend {
         let DetectorParams::Trend(p) = params else {
             return Vec::new();
         };
+        let atr = match p.tolerance_unit {
+            ToleranceUnit::Pct => None,
+            ToleranceUnit::Atr => atr(bars, ATR_PERIOD),
+        };
+        let Some(tol_frac) = tolerance_frac(
+            p.tolerance_unit,
+            p.tolerance_pct,
+            p.tolerance_atr,
+            atr,
+            bars,
+        ) else {
+            return Vec::new();
+        };
         let win = window(bars, p.lookback_bars);
         let mut pivots = Vec::new();
         find_pivots(win, p.pivot_left, p.pivot_right, &mut pivots);
@@ -69,7 +89,7 @@ impl Detector for Trend {
         for &kind in kinds {
             let spec = LineSpec {
                 kind,
-                tol_frac: pct_frac(p.tolerance_pct),
+                tol_frac,
                 min_touches: usize::from(p.min_touches),
                 max_body_breaks: usize::from(p.max_body_breaks),
                 min_slope_frac: slope_bound(p.min_slope_pct_per_bar),
@@ -106,6 +126,7 @@ impl Detector for Trend {
                     touch_volume: touch_volume(win, &line.touches),
                     touches: line.touches,
                     tolerance_frac: spec.tol_frac,
+                    tag: None,
                 });
             }
         }

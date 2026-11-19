@@ -20,6 +20,12 @@
 //! Each level and each sloped line takes part in at most one formation: valid pairs are taken
 //! greedily, the one whose projected gap to the level is smallest first.
 //!
+//! Both halves use ONE tolerance unit, `level.tolerance_unit`: under `Pct` the level reads
+//! `level.tolerance_pct` and the line `trend_tolerance_pct`; under `Atr` the level reads
+//! `level.tolerance_atr` and the line `trend_tolerance_atr`, each times the same ATR over
+//! `ATR_PERIOD` bars (computed once, over all the bars handed in) divided by the last close. No ATR
+//! (too few bars) finds nothing. `pressed_pct` stays in % whatever the unit.
+//!
 //! The contract gives the sloped half no body-break or slope bounds of its own; it is searched with
 //! [`MAX_BODY_BREAKS`] and with no slope bounds beyond the direction above.
 //!
@@ -27,15 +33,17 @@
 //! `trend::MAX_LINE_PIVOTS` pivots, see that module), plus O(L·S) to pair `L` levels with `S`
 //! lines.
 
-use moon_core::config::auto_figures::{DetectorKind, DetectorParams, SqueezeParams};
+use moon_core::config::auto_figures::{
+    ATR_PERIOD, DetectorKind, DetectorParams, SqueezeParams, ToleranceUnit,
+};
 use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{PivotKind, find_pivots};
 use super::swing::{Level, levels_from};
 use super::trend::{Line, LineSpec, find_lines};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, pct_frac, scan_break,
-    touch_strength, touch_volume, window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, pct_frac, scan_break,
+    tolerance_frac, touch_strength, touch_volume, window,
 };
 
 /// Bodies allowed to cross the sloped half between its first and last touch. One, not zero: a
@@ -66,7 +74,36 @@ struct Pair {
     gap: f64,
 }
 
+/// The level's and the sloped line's tolerances as fractions of price, in the formation's one unit
+/// (`level.tolerance_unit`), from one ATR over all of `bars`; `None` under ATR without an ATR.
+fn squeeze_tolerances(bars: &[ChartCandle], p: &SqueezeParams) -> Option<(f64, f64)> {
+    let unit = p.level.tolerance_unit;
+    let atr = match unit {
+        ToleranceUnit::Pct => None,
+        ToleranceUnit::Atr => atr(bars, ATR_PERIOD),
+    };
+    let level = tolerance_frac(
+        unit,
+        p.level.tolerance_pct,
+        p.level.tolerance_atr,
+        atr,
+        bars,
+    )?;
+    let line = tolerance_frac(
+        unit,
+        p.trend_tolerance_pct,
+        p.trend_tolerance_atr,
+        atr,
+        bars,
+    )?;
+    Some((level, line))
+}
+
+/// Every squeeze of `bars` under `p`; see the module doc for the procedure.
 fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
+    let Some((level_frac, line_frac)) = squeeze_tolerances(bars, p) else {
+        return Vec::new();
+    };
     let win = window(bars, p.level.lookback_bars);
     let Some(last_t) = win.iter().rev().find(|b| bar_ok(b)).map(|b| b.t_open_ms) else {
         return Vec::new();
@@ -75,13 +112,13 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
     find_pivots(win, p.level.pivot_left, p.level.pivot_right, &mut pivots);
     // `levels_from` has already applied the level's policy: what is left is either unbroken or
     // kept flagged.
-    let levels: Vec<Level> = levels_from(win, &pivots, &p.level);
+    let levels: Vec<Level> = levels_from(win, &pivots, &p.level, level_frac);
     if levels.is_empty() {
         return Vec::new();
     }
     let spec = |kind| LineSpec {
         kind,
-        tol_frac: pct_frac(p.trend_tolerance_pct),
+        tol_frac: line_frac,
         min_touches: usize::from(p.min_trend_touches),
         max_body_breaks: MAX_BODY_BREAKS,
         min_slope_frac: 0.0,
@@ -154,7 +191,8 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
             touches,
             broken: level.broken,
             // The band is drawn around the level, so it is the level's tolerance.
-            tolerance_frac: pct_frac(p.level.tolerance_pct),
+            tolerance_frac: level_frac,
+            tag: None,
         });
     }
     out

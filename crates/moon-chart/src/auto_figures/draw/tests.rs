@@ -35,6 +35,7 @@ fn level(price: f64, first_ms: f64, last_ms: f64) -> Found {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     }
 }
 
@@ -93,6 +94,7 @@ fn falling_squeeze() -> Found {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     }
 }
 
@@ -226,6 +228,7 @@ fn a_sloped_line_is_a_ray_and_both_edges_adds_the_mirror_without_overlap() {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     };
     let a = FigNode::new(1_000.0, 100.0);
     let (right, _) = draw(&found, &style(Extend::RightEdge), 0.0);
@@ -266,6 +269,7 @@ fn a_squeeze_draws_its_level_and_its_sloped_line() {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     };
     let (figs, _) = draw(&found, &style(Extend::BetweenTouches), 0.0);
     assert_eq!(figs.len(), 2);
@@ -295,6 +299,7 @@ fn unusable_geometry_draws_nothing() {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     };
     assert!(
         draw(&degenerate, &style(Extend::RightEdge), 0.0)

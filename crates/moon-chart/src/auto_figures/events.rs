@@ -1,28 +1,48 @@
 //! Events on found lines: lines + the current price + the last closed bars → which events each line
-//! shows. Pure and cheap — O(lines × min(bars, W)) with `W = false-break window + 2` — so it can
-//! run on every price change, unlike the detectors.
+//! shows. Pure and cheap — O(lines × min(bars, R)) with `R` = [`bars_read`] of the row's policy (at
+//! most [`ROLE_FLIP_LOOKBACK`] plus the false-break window plus two bars) — so it can run on every
+//! price change, unlike the detectors. The deep part of the walk (the role flip) runs only for a
+//! line the last bar touched and held; every other line costs at most `window + 2` bars, as before.
 //!
 //! Every comparison is against the line's price at the bar's OPEN time (the moment touches are
 //! stamped with), through [`super::FoundShape::price_at`]: a squeeze is judged by its level. A
-//! close exactly on the line has no side and neither breaks nor confirms anything.
+//! close exactly on the line has no side and neither breaks nor confirms anything. "The previous
+//! close" below is the nearest earlier close that HAD a side.
 //!
 //! - **Approach** — the current price is within `approach_pct` of the line at `at_ms`, measured as
 //!   a fraction of the LINE's price.
 //! - **Squeeze** — the figure is a squeeze whose `pressed` flag is set.
-//! - **Breakout** — the last closed bar closed on the other side of the line from the nearest
-//!   earlier close that had a side.
+//! - **Breakout** — the last closed bar closed on the other side of the line from the previous
+//!   close.
 //! - **FalseBreak** — the last closed bar closed back on a side the line held before a run of
 //!   closes beyond it, and that run began at most `window` bars before the last bar. `window` is
 //!   [`false_break_window`] of the row's policy; under `Remove` it is zero and a false break is
 //!   never shown — exactly what removing a level at once is for. A false break is the return
 //!   crossing, so the same bar does not also report a `Breakout`.
 //! - **Bounce** — the last closed bar's range reached the line and it closed on the same side as
-//!   the nearest earlier close that had a side.
-//! - **RoleFlip**, **StopHunt** — defined on `AutoEvent`; not detected yet (filled by the event
-//!   stage), so never set here. Their bits and their `EventMarks` switches already work.
+//!   the previous close, and that side is the one the line has HELD: walking back from the last
+//!   bar, no run of closes on the other side longer than `window` precedes the run on this side
+//!   within [`ROLE_FLIP_LOOKBACK`] bars (a run of `window` closes or fewer, with a close on this
+//!   side before it, was a false break of a line held on this side).
+//! - **RoleFlip** — the same touch-and-hold, but the run on this side was preceded, within
+//!   [`ROLE_FLIP_LOOKBACK`] bars, by a run of MORE than `window` closes on the other side: the line
+//!   held price there, price broke through, and the line now holds it from the new side (a broken
+//!   resistance holding as support, or the reverse). Under `Remove` (`window = 0`) any close on the
+//!   other side is a real break, as it is for that policy everywhere.
+//! - **StopHunt** — the touch-and-hold bar's wick pierced the line by MORE than `stop_hunt_pct` of
+//!   the line's price (below a held support, above a held resistance): the stops behind the line
+//!   were taken and the bar still closed back. A refinement of the touch-and-hold, so it always
+//!   comes WITH that bar's `Bounce` or `RoleFlip`, never alone.
 //! - **Confluence** — judged ACROSS rows by the caller, which alone sees the lines of every
-//!   timeframe; never set by this per-line pass. The caller inserts it into the line's set and
-//!   filters it through the same `EventMarks::marks`.
+//!   timeframe ([`super::confluence`]); never set by this per-line pass. The caller inserts it into
+//!   the line's set and filters it through the same `EventMarks::marks`.
+//!
+//! What one bar can show together. Its close tells ONE story of the line: a crossing (`Breakout` or
+//! `FalseBreak` — the previous close on the other side) or a touch-and-hold (`Bounce` or `RoleFlip`
+//! — the previous close on the same side). The two cases exclude each other, and inside each
+//! exactly one event is chosen, so no bar is both a bounce and a breakout, or both a bounce and a
+//! role flip. `StopHunt` only adds to a touch-and-hold; `Approach`, `Squeeze` and `Confluence`
+//! describe the place, not the bar, and combine with any of them.
 
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks};
 use moon_core::market::candles::ChartCandle;
@@ -94,14 +114,38 @@ pub fn false_break_window(policy: BrokenPolicy) -> u16 {
     }
 }
 
+/// Most bars back a role flip's break may lie: the touching bar's run of closes on the line's new
+/// side must have begun within this many valid bars before it.
+///
+/// Thirty bars is a retest's horizon — half an hour on 1-minute bars, more than a day on 1-hour
+/// ones. A line price has held from one side for longer than that has settled into its new role,
+/// and a touch of it is a bounce.
+pub const ROLE_FLIP_LOOKBACK: usize = 30;
+
+/// The most of the newest valid closed bars [`line_events`] reads under `policy` — what a caller
+/// keeping only the tail of a series must keep for the events to be exact (plus slack for
+/// unreadable bars, which are skipped and do not count): the last bar, a run of up to
+/// [`ROLE_FLIP_LOOKBACK`] bars on its side, and enough of the run before that to tell a false
+/// break (`window` closes or fewer) from a side the line held.
+pub fn bars_read(policy: BrokenPolicy) -> usize {
+    scan_len(usize::from(false_break_window(policy)))
+}
+
+/// [`bars_read`] for a false-break window of `window` bars.
+fn scan_len(window: usize) -> usize {
+    ROLE_FLIP_LOOKBACK.saturating_add(window).saturating_add(2)
+}
+
 /// The events of every line, one [`EventSet`] per line in input order, written into `out`.
 ///
 /// Args:
 ///     lines: The kept figures.
-///     bars: Closed bars of the row's timeframe, ascending; only the last few are read.
+///     bars: Closed bars of the row's timeframe, ascending; only the last [`bars_read`] valid
+///         ones are read.
 ///     price: The current price, for `Approach`.
 ///     at_ms: The moment the current price belongs to, for projecting sloped lines.
-///     marks: Which events the row shows; an unmarked event is never set.
+///     marks: Which events the row shows, and the approach and stop-hunt distances; an unmarked
+///         event is never set.
 ///     policy: The row's broken policy, for the false-break window — the row's
 ///         `DetectorParams::broken_policy()`, which answers for every detector kind (a period
 ///         extreme, which has no policy of its own, answers the default). Taken as the policy
@@ -118,6 +162,7 @@ pub fn line_events(
     out.clear();
     let window = usize::from(false_break_window(policy));
     let approach_frac = pct_frac(marks.approach_pct);
+    let hunt_frac = pct_frac(marks.stop_hunt_pct);
     for line in lines {
         let mut set = EventSet::default();
         let shape = &line.shape;
@@ -129,7 +174,7 @@ pub fn line_events(
         if matches!(shape, super::FoundShape::Squeeze { pressed: true, .. }) {
             set.insert(AutoEvent::Squeeze);
         }
-        bar_events(bars, |t| shape.price_at(t), window, &mut set);
+        bar_events(bars, |t| shape.price_at(t), window, hunt_frac, &mut set);
         let mut shown = EventSet::default();
         for e in set.iter().filter(|e| marks.marks(*e)) {
             shown.insert(e);
@@ -138,20 +183,24 @@ pub fn line_events(
     }
 }
 
-/// `Breakout`, `FalseBreak` and `Bounce` from the last closed bars, into `set`.
+/// `Breakout`, `FalseBreak`, `Bounce`, `RoleFlip` and `StopHunt` from the last closed bars, into
+/// `set` (see the module doc). `hunt_frac` is the stop-hunt pierce as a fraction of the line's
+/// price; zero never reports a stop hunt.
 fn bar_events(
     bars: &[ChartCandle],
     line_at: impl Fn(f64) -> Option<f64>,
     window: usize,
+    hunt_frac: f64,
     set: &mut EventSet,
 ) {
-    // The last valid bars, newest first, each with its side (`None` on the line or where the line
-    // has no price). Bounded: nothing past `window + 2` bars can change any of the three answers.
+    // The last valid bars, newest first, each with its line price and its side (`None` on the
+    // line or where the line has no price). Bounded by `scan_len`: nothing past it can change any
+    // answer.
     let mut recent = bars
         .iter()
         .rev()
         .filter(|b| bar_ok(b))
-        .take(window.saturating_add(2).max(2))
+        .take(scan_len(window))
         .map(|b| {
             let line = line_at(b.t_open_ms);
             let side = line.and_then(|l| side_of(f64::from(b.close), l));
@@ -160,14 +209,16 @@ fn bar_events(
     let Some((last, last_line, Some(last_side))) = recent.next() else {
         return;
     };
-    // One pass over the earlier bars, newest first. `prev_side` is the nearest earlier close that
-    // had a side. The run of closes NOT on `last_side` before the last bar must, for a false
-    // break, hold a close beyond, start within the window, and be preceded by a close on
-    // `last_side` — the side the line held before the break.
+    // `prev_side` is the previous close. The run of closes NOT on `last_side` before the last bar
+    // must, for a false break, hold a close beyond, start within the window, and be preceded by a
+    // close on `last_side` — the side the line held before the break. `k` counts the valid bars
+    // walked past the last one, so the touch-and-hold walk below continues from where this stops.
     let mut prev_side: Option<Side> = None;
     let mut run_start: Option<usize> = None;
     let mut origin_seen = false;
-    for (k, (_, _, side)) in recent.enumerate() {
+    let mut k = 0usize;
+    for (_, _, side) in recent.by_ref() {
+        k += 1;
         let Some(side) = side else {
             continue;
         };
@@ -176,7 +227,11 @@ fn bar_events(
             origin_seen = true;
             break;
         }
-        run_start = Some(k + 1);
+        run_start = Some(k);
+        if k > window {
+            // The run already began more than `window` bars back: no false break can follow.
+            break;
+        }
     }
     let false_break = origin_seen && run_start.is_some_and(|k| k <= window);
     if false_break {
@@ -185,13 +240,70 @@ fn bar_events(
         set.insert(AutoEvent::Breakout);
     }
 
-    if prev_side == Some(last_side) {
-        if let Some(line) = last_line {
-            if f64::from(last.low) <= line && line <= f64::from(last.high) {
-                set.insert(AutoEvent::Bounce);
+    // The touch-and-hold case: the previous close on the same side, the last bar's range on the
+    // line.
+    if prev_side != Some(last_side) {
+        return;
+    }
+    let Some(line) = last_line else {
+        return;
+    };
+    let (low, high) = (f64::from(last.low), f64::from(last.high));
+    if !(low <= line && line <= high) {
+        return;
+    }
+    let sides = recent.map(|(_, _, side)| side);
+    set.insert(if side_flipped(sides, k, last_side, window) {
+        AutoEvent::RoleFlip
+    } else {
+        AutoEvent::Bounce
+    });
+    let pierced = match last_side {
+        Side::Above => low < line * (1.0 - hunt_frac),
+        Side::Below => high > line * (1.0 + hunt_frac),
+    };
+    if hunt_frac > 0.0 && pierced {
+        set.insert(AutoEvent::StopHunt);
+    }
+}
+
+/// Whether the line held price on the side OPPOSITE `held` before the current run on `held`.
+///
+/// Continues the newest-first walk after valid bar `k` (the previous close, on `held`): the first
+/// close on the other side must come within [`ROLE_FLIP_LOOKBACK`] bars of the last one, and the
+/// run of closes there must be longer than `window`. A shorter run with a close on `held` before
+/// it was a false break of a line held on `held`'s side; a run cut off by the end of the bars read
+/// at `window` closes or fewer is no evidence of a flip either. Bars with no side are skipped
+/// without ending a run.
+fn side_flipped(
+    sides: impl Iterator<Item = Option<Side>>,
+    mut k: usize,
+    held: Side,
+    window: usize,
+) -> bool {
+    let mut beyond = 0usize;
+    for side in sides {
+        k += 1;
+        let Some(side) = side else {
+            continue;
+        };
+        if side == held {
+            // Back on `held` after a short run beyond (a false break), or still on `held` past the
+            // lookback (a settled role): no flip either way.
+            if beyond > 0 || k >= ROLE_FLIP_LOOKBACK {
+                return false;
             }
+            continue;
+        }
+        if beyond == 0 && k > ROLE_FLIP_LOOKBACK {
+            return false;
+        }
+        beyond += 1;
+        if beyond > window {
+            return true;
         }
     }
+    false
 }
 
 #[cfg(test)]

@@ -19,9 +19,10 @@
 //! A bar with a non-finite or non-positive price, or `high < low`, is skipped wherever it would be
 //! read — it never panics a detector and never becomes a touch.
 
-use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams};
+use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams, ToleranceUnit};
 use moon_core::market::candles::ChartCandle;
 
+pub mod confluence;
 pub mod draw;
 pub mod events;
 pub mod extremes;
@@ -123,6 +124,36 @@ pub fn line_price_at(t0_ms: f64, p0: f64, t1_ms: f64, p1: f64, t_ms: f64) -> Opt
     positive(p0 + (p1 - p0) * ((t_ms - t0_ms) / dt))
 }
 
+/// What a found horizontal line IS, for detectors whose lines are not interchangeable — so the
+/// caption can tell a day's POC from its value-area edge, or the week's open from yesterday's
+/// close, which share a row, a style and often a neighbourhood.
+///
+/// `None` in [`Found::tag`] for the pivot detectors and round prices: their lines are all of one
+/// kind, and the price (or the touch count) is the whole story.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LineTag {
+    /// A period's high (`PeriodExtreme`).
+    High,
+    /// A period's low (`PeriodExtreme`).
+    Low,
+    /// The point of control of the profiled day (`VolumeProfile`).
+    Poc,
+    /// The value area's upper edge (`VolumeProfile`).
+    Vah,
+    /// The value area's lower edge (`VolumeProfile`).
+    Val,
+    /// The POC of an earlier complete day that price has not traded at since (`VolumeProfile`).
+    NakedPoc,
+    /// The open of the reference UTC day (`PeriodLevel`).
+    DayOpen,
+    /// The close of the UTC day before the reference one (`PeriodLevel`).
+    PrevDayClose,
+    /// The open of the reference ISO week (`PeriodLevel`).
+    WeekOpen,
+    /// The close of the ISO week before the reference one (`PeriodLevel`).
+    PrevWeekClose,
+}
+
 /// One figure a detector found.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
@@ -145,13 +176,22 @@ pub struct Found {
     /// `ChartCandle::quote_volume`, each touching bar ONCE even when it touched twice (a squeeze's
     /// level and its line on one bar). What `StrengthBasis::Volume` ranks by. `0` for a figure
     /// without touches, and for bars whose source reports no turnover.
+    ///
+    /// A volume-profile line has no touching bars — it is a property of the profile, not a place
+    /// pivots met — so it reports the volume its profile holds in the line's own price bin: the
+    /// money traded AT that price, which is what this field measures for every other level too.
     pub touch_volume: f64,
     /// The tolerance the detector actually grouped touches by, as a FRACTION of price (`0.0025` =
     /// 0.25 %) — under `ToleranceUnit::Atr` the ATR share already converted with this run's ATR.
     /// The zone band is drawn from this, never re-derived from the row's parameters, so it shows
     /// the band the detector used whatever the unit. A squeeze reports its LEVEL's tolerance (the
-    /// band is drawn around the level); `0` for a detector without a tolerance.
+    /// band is drawn around the level); `0` for a detector without a tolerance. A volume-profile
+    /// line reports its bin's width as a fraction of its price, so its band is the bin it stands
+    /// for.
     pub tolerance_frac: f64,
+    /// What the line is, where a detector draws several kinds of line in one row (see
+    /// [`LineTag`]); `None` where every line of the detector is the same kind.
+    pub tag: Option<LineTag>,
 }
 
 /// What a detector legitimately needs beyond its bars and parameters.
@@ -294,6 +334,65 @@ pub(crate) fn touch_volume(bars: &[ChartCandle], touches: &[Touch]) -> f64 {
             (v.is_finite() && v > 0.0).then_some(v)
         })
         .sum()
+}
+
+/// The Average True Range over the last `period` true ranges of the valid bars of `bars`: the
+/// SIMPLE mean, a bar's true range being `max(high, prev_close) - min(low, prev_close)` with
+/// `prev_close` the close of the nearest earlier VALID bar. So it reads the last `period + 1` valid
+/// bars and nothing older (see `moon_core::config::auto_figures::ATR_PERIOD` for why a simple mean).
+///
+/// Returns `None` for `period = 0`, for fewer than `period + 1` valid bars, and for a result that
+/// is not a positive finite number — a flat series has no range to measure a tolerance in.
+/// Cost O(period) plus the unreadable bars skipped at the tail.
+pub fn atr(bars: &[ChartCandle], period: u32) -> Option<f64> {
+    let period = usize::try_from(period).ok().filter(|&p| p > 0)?;
+    let mut valid = bars.iter().rev().filter(|b| bar_ok(b));
+    // Newest first: each bar pairs with the NEXT one in this order, its previous close.
+    let mut newer = valid.next()?;
+    let mut sum = 0.0;
+    for _ in 0..period {
+        let older = valid.next()?;
+        let prev_close = f64::from(older.close);
+        let hi = f64::from(newer.high).max(prev_close);
+        let lo = f64::from(newer.low).min(prev_close);
+        sum += hi - lo;
+        newer = older;
+    }
+    positive(sum / period as f64)
+}
+
+/// The touch tolerance a row groups by, as a FRACTION of price, in the unit the row chose.
+///
+/// `Pct` reads `pct` (`pct_frac`); `Atr` reads `atr_share` as a multiple of `atr` divided by the
+/// last valid close of `bars` — once per run, so every touch of the run is grouped by the same
+/// band. `None` under `Atr` when there is no ATR (`atr` is `None`) or no valid close: the detector
+/// then finds nothing rather than silently falling back to a percentage the row did not ask for.
+/// A share that is not a positive finite number reads as zero, like a bad percentage.
+pub(crate) fn tolerance_frac(
+    unit: ToleranceUnit,
+    pct: f32,
+    atr_share: f32,
+    atr: Option<f64>,
+    bars: &[ChartCandle],
+) -> Option<f64> {
+    match unit {
+        ToleranceUnit::Pct => Some(pct_frac(pct)),
+        ToleranceUnit::Atr => {
+            let atr = atr?;
+            let close = bars
+                .iter()
+                .rev()
+                .find(|b| bar_ok(b))
+                .and_then(|b| positive(f64::from(b.close)))?;
+            let share = if atr_share.is_finite() && atr_share > 0.0 {
+                f64::from(atr_share)
+            } else {
+                0.0
+            };
+            let frac = share * atr / close;
+            frac.is_finite().then_some(frac)
+        }
+    }
 }
 
 /// `price` lies within `frac` of `line`, measured as a fraction of the LINE's price.

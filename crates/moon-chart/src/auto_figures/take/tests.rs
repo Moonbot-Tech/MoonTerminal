@@ -14,6 +14,7 @@ fn level(price: f64, strength: f32) -> Found {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     }
 }
 

@@ -1,7 +1,12 @@
 //! `Swing`: horizontal levels where pivots cluster.
 //!
 //! Pivot highs and lows of the searched window are sorted by price and grouped greedily: a group
-//! starts at its lowest price and takes every next pivot up to `tolerance_pct` above that start.
+//! starts at its lowest price and takes every next pivot up to the tolerance above that start. The
+//! tolerance is the row's `tolerance_pct`, or under `ToleranceUnit::Atr` its `tolerance_atr` times
+//! the ATR over `ATR_PERIOD` bars divided by the last close (`super::tolerance_frac`) — computed
+//! over ALL the bars handed in, not the lookback window: the caller fetches `bars_needed`, which is
+//! at least `ATR_PERIOD + 1` under ATR, while the lookback itself may be shorter. No ATR (too few
+//! bars) finds nothing.
 //! The level is the group's mean, so every touch lies within the tolerance of the level itself
 //! (the spread is at most `tolerance` of the lowest price, which is at most `tolerance` of the
 //! mean). A bar counts once even when both its high and its low fall into one group.
@@ -14,13 +19,15 @@
 //!
 //! Cost on `n` bars with `P` pivots and `L` levels: O(n·(left+right) + P log P + L·n).
 
-use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams, SwingParams};
+use moon_core::config::auto_figures::{
+    ATR_PERIOD, BrokenPolicy, DetectorKind, DetectorParams, SwingParams, ToleranceUnit,
+};
 use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
-    Broken, DetectCtx, Detector, Found, FoundShape, Side, Touch, pct_frac, scan_break, survives,
-    touch_strength, touch_volume, window,
+    Broken, DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, scan_break, survives,
+    tolerance_frac, touch_strength, touch_volume, window,
 };
 
 /// The `Swing` registry row.
@@ -40,11 +47,13 @@ impl Detector for Swing {
         let DetectorParams::Swing(p) = params else {
             return Vec::new();
         };
+        let Some(tolerance_frac) = swing_tolerance(bars, p) else {
+            return Vec::new();
+        };
         let win = window(bars, p.lookback_bars);
         let mut pivots = Vec::new();
         find_pivots(win, p.pivot_left, p.pivot_right, &mut pivots);
-        let tolerance_frac = pct_frac(p.tolerance_pct);
-        levels_from(win, &pivots, p)
+        levels_from(win, &pivots, p, tolerance_frac)
             .into_iter()
             .map(|l| Found {
                 shape: FoundShape::Horizontal { price: l.price },
@@ -55,9 +64,26 @@ impl Detector for Swing {
                 touches: l.touches,
                 broken: l.broken,
                 tolerance_frac,
+                tag: None,
             })
             .collect()
     }
+}
+
+/// The level tolerance of `p` as a fraction of price, in the row's unit, over all of `bars`;
+/// `None` under ATR without an ATR (see the module doc).
+pub(crate) fn swing_tolerance(bars: &[ChartCandle], p: &SwingParams) -> Option<f64> {
+    let atr = match p.tolerance_unit {
+        ToleranceUnit::Pct => None,
+        ToleranceUnit::Atr => atr(bars, ATR_PERIOD),
+    };
+    tolerance_frac(
+        p.tolerance_unit,
+        p.tolerance_pct,
+        p.tolerance_atr,
+        atr,
+        bars,
+    )
 }
 
 /// A level with the bookkeeping `Squeeze` needs on top of what `Found` carries.
@@ -76,11 +102,17 @@ pub(crate) struct Level {
 }
 
 /// Every level of `win` that survives `p.broken`, from pivots already found on `win` with
-/// `p.pivot_left` / `p.pivot_right`.
+/// `p.pivot_left` / `p.pivot_right`, grouped by `frac` — the tolerance as a fraction of price,
+/// already resolved in the row's unit ([`swing_tolerance`]), so `p`'s own tolerance fields are not
+/// read here.
 ///
 /// `p.min_touches = 0` reads as one: a group always holds at least one pivot.
-pub(crate) fn levels_from(win: &[ChartCandle], pivots: &[Pivot], p: &SwingParams) -> Vec<Level> {
-    let frac = pct_frac(p.tolerance_pct);
+pub(crate) fn levels_from(
+    win: &[ChartCandle],
+    pivots: &[Pivot],
+    p: &SwingParams,
+    frac: f64,
+) -> Vec<Level> {
     let min_touches = usize::from(p.min_touches.max(1));
     let mut sorted: Vec<&Pivot> = pivots.iter().filter(|q| q.price > 0.0).collect();
     sorted.sort_by(|a, b| a.price.total_cmp(&b.price).then(a.idx.cmp(&b.idx)));

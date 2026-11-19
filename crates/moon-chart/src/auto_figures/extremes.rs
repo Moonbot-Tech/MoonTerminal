@@ -24,7 +24,7 @@ use moon_core::config::auto_figures::{
 use moon_core::market::candles::ChartCandle;
 
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, scan_break, touch_volume,
+    DetectCtx, Detector, Found, FoundShape, LineTag, Side, Touch, bar_ok, scan_break, touch_volume,
 };
 
 /// One UTC day, ms.
@@ -106,7 +106,7 @@ fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: 
         return Vec::new();
     };
     let previous = matches!(p.period, ExtremePeriod::PrevDay | ExtremePeriod::PrevWeek);
-    let make = |(idx, price): (usize, f32), origin: Side| -> Found {
+    let make = |(idx, price): (usize, f32), origin: Side, tag: LineTag| -> Found {
         let price = f64::from(price);
         let touches = vec![Touch {
             t_ms: bars[idx].t_open_ms,
@@ -127,17 +127,18 @@ fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: 
             } else {
                 None
             },
+            tag: Some(tag),
         }
     };
     let mut out = Vec::with_capacity(2);
     if matches!(p.which, ExtremeWhich::High | ExtremeWhich::Both) {
         if let Some(h) = high {
-            out.push(make(h, Side::Below));
+            out.push(make(h, Side::Below, LineTag::High));
         }
     }
     if matches!(p.which, ExtremeWhich::Low | ExtremeWhich::Both) {
         if let Some(l) = low {
-            out.push(make(l, Side::Above));
+            out.push(make(l, Side::Above, LineTag::Low));
         }
     }
     out

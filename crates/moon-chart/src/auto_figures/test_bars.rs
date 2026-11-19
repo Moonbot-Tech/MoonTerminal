@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use moon_core::market::candles::ChartCandle;
+use moon_core::market::candles::{ChartCandle, estimate_quote_volume};
 
 /// 2024-01-01 00:00 UTC, a Monday — a calendar fact, independent of the code under test.
 pub const MONDAY_2024_01_01_MS: f64 = 1_704_067_200_000.0;
@@ -38,7 +38,10 @@ pub fn from_hl(hl: &[(f32, f32)]) -> Vec<ChartCandle> {
 /// `KlineCache` prunes chunks past their retention, and the fixture is dated, so it would read
 /// nothing — and, pointed at the committed file, delete it. Rows are the legacy 24-byte layout
 /// `u32 in-day offset ms + open, high, low, close, volume as f32`, the layout
-/// `moon_core::market::kline_cache` documents for the `chunks` table.
+/// `moon_core::market::kline_cache` documents for the `chunks` table. The turnover is what that
+/// cache's own decoder makes of such a row on a 1- or 5-minute kind: `volume` is base, and
+/// `quote_volume` the OHLC4 estimate (`estimate_quote_volume`) — so a detector reading
+/// `quote_volume` here sees what it sees on the live cache.
 pub fn ace(kind: u32) -> Vec<ChartCandle> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -62,14 +65,15 @@ pub fn ace(kind: u32) -> Vec<ChartCandle> {
         for row in blob.chunks_exact(24) {
             let word = |i: usize| [row[i], row[i + 1], row[i + 2], row[i + 3]];
             let f = |i: usize| f32::from_le_bytes(word(i));
+            let (open, high, low, close, volume) = (f(4), f(8), f(12), f(16), f(20));
             out.push(ChartCandle {
                 t_open_ms: (day * 86_400_000 + i64::from(u32::from_le_bytes(word(0)))) as f64,
-                open: f(4),
-                high: f(8),
-                low: f(12),
-                close: f(16),
-                volume: f(20),
-                quote_volume: 0.0,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                quote_volume: estimate_quote_volume(volume, open, high, low, close),
             });
         }
     }

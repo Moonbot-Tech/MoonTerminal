@@ -15,6 +15,7 @@ fn line(shape: FoundShape) -> Found {
         broken: None,
         touch_volume: 0.0,
         tolerance_frac: 0.0,
+        tag: None,
     }
 }
 
@@ -194,4 +195,179 @@ fn real_candles_breakout_matches_an_independent_crossing_check() {
             "bar {k} back: {a} -> {b} around {mid}"
         );
     }
+}
+
+/// `closes` followed by one bar opening and closing at `close` whose range is `low..high`.
+fn then_touch(cs: &[f32], low: f32, high: f32, close: f32) -> Vec<ChartCandle> {
+    let mut bars = closes(cs);
+    bars.push(bar(cs.len(), close, high, low, close));
+    bars
+}
+
+/// The four close-side events of one set, for checking which one a bar chose.
+fn side_story(e: EventSet) -> Vec<AutoEvent> {
+    [
+        AutoEvent::Breakout,
+        AutoEvent::FalseBreak,
+        AutoEvent::Bounce,
+        AutoEvent::RoleFlip,
+    ]
+    .into_iter()
+    .filter(|&x| e.contains(x))
+    .collect()
+}
+
+/// A resistance at 100 held for five closes below it, broke (two closes above), and the last bar
+/// dips to 99.9 and closes above again: the broken resistance holds as support — a role flip, and
+/// NOT a bounce. A wick to 99.9 is 0.1 % through, under the 0.3 % stop-hunt depth.
+///
+/// Breakage: a role flip never found (the old bounce-only reading), or reported with a bounce.
+#[test]
+fn a_broken_level_retested_from_the_new_side_flips_its_role() {
+    let l = [level(100.0)];
+    let bars = then_touch(
+        &[99.0, 99.0, 99.0, 99.0, 99.0, 101.0, 101.0],
+        99.9,
+        101.2,
+        101.0,
+    );
+    let e = events_of(&l, &bars, 101.0, KEEP3);
+    assert_eq!(side_story(e), vec![AutoEvent::RoleFlip]);
+    assert!(!e.contains(AutoEvent::StopHunt));
+
+    // A support at 100 broken downward and retested from below flips the same way.
+    let mut cs = vec![101.0f32; 5];
+    cs.extend([99.0, 99.0]);
+    let broken_support = then_touch(&cs, 98.8, 100.1, 99.0);
+    assert_eq!(
+        side_story(events_of(&l, &broken_support, 99.0, KEEP3)),
+        vec![AutoEvent::RoleFlip]
+    );
+    // Without the break it is a plain bounce of a resistance seen from below.
+    let held = then_touch(&[99.0; 7], 98.8, 100.1, 99.0);
+    assert_eq!(
+        side_story(events_of(&l, &held, 99.0, KEEP3)),
+        vec![AutoEvent::Bounce]
+    );
+}
+
+/// A support held above 100, dipped under it for ONE close (a false break, inside the 3-bar
+/// window), recovered, and the last bar touches and holds: the line held its side — a bounce, not
+/// a role flip. Under `Remove` a single close beyond is already a real break, so the same bars are
+/// a role flip there.
+///
+/// Breakage: any close beyond read as a role change whatever the policy, or `Remove`'s zero window
+/// ignored.
+#[test]
+fn a_false_break_does_not_flip_the_role() {
+    let l = [level(100.0)];
+    let bars = then_touch(
+        &[101.0, 101.0, 101.0, 101.0, 101.0, 99.0, 101.0, 101.0],
+        99.9,
+        101.2,
+        101.0,
+    );
+    assert_eq!(
+        side_story(events_of(&l, &bars, 101.0, KEEP3)),
+        vec![AutoEvent::Bounce]
+    );
+    assert_eq!(
+        side_story(events_of(&l, &bars, 101.0, BrokenPolicy::Remove)),
+        vec![AutoEvent::RoleFlip]
+    );
+}
+
+/// A break older than `ROLE_FLIP_LOOKBACK` bars is settled history: the touch is a bounce.
+///
+/// Breakage: the lookback ignored, so every touch of a line that ever changed sides is a flip.
+#[test]
+fn an_old_break_is_a_settled_role() {
+    let l = [level(100.0)];
+    let mut cs = vec![99.0f32; 5];
+    cs.extend(std::iter::repeat_n(101.0, ROLE_FLIP_LOOKBACK + 1));
+    let bars = then_touch(&cs, 99.9, 101.2, 101.0);
+    assert_eq!(
+        side_story(events_of(&l, &bars, 101.0, KEEP3)),
+        vec![AutoEvent::Bounce]
+    );
+    // The same break inside the lookback is a flip.
+    let mut cs = vec![99.0f32; 5];
+    cs.extend(std::iter::repeat_n(101.0, ROLE_FLIP_LOOKBACK - 2));
+    let bars = then_touch(&cs, 99.9, 101.2, 101.0);
+    assert_eq!(
+        side_story(events_of(&l, &bars, 101.0, KEEP3)),
+        vec![AutoEvent::RoleFlip]
+    );
+}
+
+/// A stop hunt: the wick goes MORE than `stop_hunt_pct` of the line's price through it and the bar
+/// still closes back — under a support (99.5 < 99.7) or over a resistance (100.5 > 100.3). It
+/// comes with the bar's bounce, never instead of it, and never with a crossing. A wick of exactly
+/// the depth (99.7 at 0.3 %) is not deeper than it; a deeper threshold (0.6 %) turns the first one
+/// off.
+///
+/// Breakage: the pierce measured from the close or the current price, the threshold read as a
+/// fraction, `>=` for "more than", or a stop hunt on a bar that closed beyond.
+#[test]
+fn a_stop_hunt_pierces_deeper_than_the_threshold_and_closes_back() {
+    let l = [level(100.0)];
+    let support = then_touch(&[101.0; 5], 99.5, 101.2, 101.0);
+    let e = events_of(&l, &support, 101.0, KEEP3);
+    assert!(e.contains(AutoEvent::StopHunt));
+    assert_eq!(side_story(e), vec![AutoEvent::Bounce]);
+
+    let resistance = then_touch(&[99.0; 5], 98.8, 100.5, 99.0);
+    let e = events_of(&l, &resistance, 99.0, KEEP3);
+    assert!(e.contains(AutoEvent::StopHunt));
+    assert_eq!(side_story(e), vec![AutoEvent::Bounce]);
+
+    let shallow = then_touch(&[101.0; 5], 99.75, 101.2, 101.0);
+    assert!(!events_of(&l, &shallow, 101.0, KEEP3).contains(AutoEvent::StopHunt));
+
+    let mut out = Vec::new();
+    let deep = EventMarks {
+        stop_hunt_pct: 0.6,
+        ..EventMarks::default()
+    };
+    line_events(&l, &support, 101.0, 0.0, &deep, KEEP3, &mut out);
+    assert!(!out[0].contains(AutoEvent::StopHunt));
+
+    // Closed beyond: a breakout with a long wick back is not a stop hunt.
+    let through = then_touch(&[101.0; 5], 98.0, 101.2, 99.0);
+    let e = events_of(&l, &through, 99.0, KEEP3);
+    assert!(!e.contains(AutoEvent::StopHunt));
+    assert_eq!(side_story(e), vec![AutoEvent::Breakout]);
+}
+
+/// On the real `chart-ace` candles, for a level at each of the last 200 bars' midpoints: one bar
+/// never tells two side stories (at most one of breakout / false break / bounce / role flip), a
+/// stop hunt always comes with a bounce or a role flip, and the last `bars_read` valid bars give
+/// exactly the answer the whole series does.
+///
+/// Breakage: two exclusive events set on one bar, a stop hunt on a crossing, or a walk reading
+/// further back than `bars_read` admits — which a caller keeping only that tail would miss.
+#[test]
+fn bench_events_are_exclusive_and_bounded() {
+    let bars = ace(1);
+    let n = bars.len();
+    let mut touched = 0;
+    for policy in [KEEP3, BrokenPolicy::Remove] {
+        for k in 0..200 {
+            let slice = &bars[..n - k];
+            let b = &slice[slice.len() - 1];
+            let mid = (f64::from(b.high) + f64::from(b.low)) / 2.0;
+            let price = f64::from(b.close);
+            let e = events_of(&[level(mid)], slice, price, policy);
+            assert!(side_story(e).len() <= 1, "bar {k}: {e:?}");
+            if e.contains(AutoEvent::StopHunt) {
+                assert!(e.contains(AutoEvent::Bounce) || e.contains(AutoEvent::RoleFlip));
+            }
+            if e.contains(AutoEvent::Bounce) || e.contains(AutoEvent::RoleFlip) {
+                touched += 1;
+            }
+            let tail = &slice[slice.len() - bars_read(policy)..];
+            assert_eq!(events_of(&[level(mid)], tail, price, policy), e, "bar {k}");
+        }
+    }
+    assert!(touched > 20, "the bench touches its midpoints: {touched}");
 }
