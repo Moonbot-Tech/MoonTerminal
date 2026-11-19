@@ -1,0 +1,10 @@
+_version: 1
+auto_figures_chart.caption.touches: "%{n} lần chạm"
+auto_figures_chart.card.tf: "Khung thời gian"
+auto_figures_chart.card.touches: "Số lần chạm"
+auto_figures_chart.card.age: "Tuổi"
+auto_figures_chart.card.event: "Sự kiện"
+auto_figures_chart.card.no_event: "không có"
+auto_figures_chart.menu.pin: "Ghim thành hình vẽ"
+auto_figures_chart.menu.hide: "Ẩn đường này"
+auto_figures_chart.menu.configure: "Cấu hình dòng…"

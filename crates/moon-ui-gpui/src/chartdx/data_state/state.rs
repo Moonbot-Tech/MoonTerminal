@@ -65,6 +65,8 @@ impl ChartDataState {
             figures: None,
             figure_visual: figures_sync::FigureVisual::default(),
             figure_visual_rev: 0,
+            auto_figures: Vec::new(),
+            auto_figures_rev: 0,
             news_marks: std::rc::Rc::new(Vec::new()),
             news_hovered: None,
             trade_history: std::rc::Rc::new(Vec::new()),
@@ -95,6 +97,7 @@ impl ChartDataState {
             last_source_market_sig: u64::MAX,
             last_volume_prepared_rev: 0,
             last_countdown_check: None,
+            last_auto_caption_tick: None,
             view_dirty: true,
         }
     }
@@ -583,6 +586,7 @@ impl ChartDataState {
             crate::diag::bump(&crate::diag::CHART_PREPARE);
         }
         self.tick_countdown_captions(now);
+        self.tick_auto_captions(now);
         self.tick_eviction_rebakes(now);
         self.render.borrow_mut().frame(info)
     }

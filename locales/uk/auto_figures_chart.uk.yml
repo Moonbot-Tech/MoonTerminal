@@ -1,0 +1,10 @@
+_version: 1
+auto_figures_chart.caption.touches: "дотиків: %{n}"
+auto_figures_chart.card.tf: "Таймфрейм"
+auto_figures_chart.card.touches: "Дотики"
+auto_figures_chart.card.age: "Вік"
+auto_figures_chart.card.event: "Подія"
+auto_figures_chart.card.no_event: "немає"
+auto_figures_chart.menu.pin: "Закріпити як фігуру"
+auto_figures_chart.menu.hide: "Сховати цю лінію"
+auto_figures_chart.menu.configure: "Налаштувати рядок…"

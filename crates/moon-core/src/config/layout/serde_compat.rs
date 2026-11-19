@@ -10,6 +10,7 @@ use std::hash::Hash;
 
 use serde::Deserialize;
 
+use super::super::auto_figures::AutoFiguresCfg;
 use super::super::chart_labels::ChartLabelsCfg;
 use super::{
     BookKind, ChartGraphicsCfg, HvolSide, TableSortPreference, TradeHistoryStyle, TradeKind,
@@ -330,6 +331,16 @@ where
     let mut cfg = de_lenient::<D, ChartLabelsCfg>(d)?.unwrap_or_default();
     cfg.sanitize();
     Ok(cfg)
+}
+
+/// Read [`AutoFiguresCfg`] leniently: a value that is not a table at all costs the auto figures,
+/// which fall back to the shipped set, and never the rest of the document. A readable one comes
+/// back already repaired and sanitized by its own reader.
+pub(super) fn de_lenient_auto_figures<'de, D>(d: D) -> Result<AutoFiguresCfg, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(de_lenient::<D, AutoFiguresCfg>(d)?.unwrap_or_default())
 }
 
 /// Read a hand-editable map without allowing one malformed preference to reject the layout.

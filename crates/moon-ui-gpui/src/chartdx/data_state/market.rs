@@ -2381,6 +2381,9 @@ impl ChartDataState {
             prepared_sig.unwrap_or_else(|| self.source_market_signature(source));
         self.view_dirty = false;
         self.last_volume_prepared_rev = volume_revision;
+        // Last, with the panes' prices fresh: the auto lines' kept set, sides, events and captions
+        // follow the price. Gated inside on the price having moved.
+        self.auto_figures_on_price();
     }
 }
 

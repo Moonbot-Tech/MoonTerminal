@@ -42,6 +42,126 @@ impl ChartEngine {
         self.data.borrow_mut().set_figure_visual(visual)
     }
 
+    /// Publishes one pane target's auto figures, or removes them with `None`; see
+    /// `auto_figures_sync`. The caller forces the userdata rebuild afterwards.
+    pub(crate) fn set_auto_figures(
+        &mut self,
+        core: CoreId,
+        market: &str,
+        set: Option<std::rc::Rc<super::auto_figures_sync::AutoPaneFigures>>,
+    ) -> bool {
+        self.data.borrow_mut().set_auto_figures(core, market, set)
+    }
+
+    /// The drawn auto line nearest `pos` on `pane`, within `threshold` pixels.
+    ///
+    /// Reads what the pane last DREW, so the hit matches the picture on screen. Auto lines are
+    /// found here only — never through the figure store — which is what keeps them out of
+    /// selection and dragging.
+    pub(crate) fn auto_line_at(
+        &self,
+        pane: usize,
+        pos: moon_core::figures::proj::PxPoint,
+        proj: &dyn moon_core::figures::Proj,
+        threshold: f32,
+    ) -> Option<super::auto_figures_sync::LineKey> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)?
+            .auto
+            .line_at(pos, proj, threshold)
+    }
+
+    /// Read the drawn auto line `key` of `pane`.
+    pub(crate) fn with_auto_line<R>(
+        &self,
+        pane: usize,
+        key: super::auto_figures_sync::LineKey,
+        read: impl FnOnce(&super::auto_figures_sync::pane::AutoLineRec) -> R,
+    ) -> Option<R> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)?
+            .auto
+            .line(key)
+            .map(read)
+    }
+
+    /// The figure-tool values the auto line `key` of `pane` is drawn as — what "pin as figure"
+    /// copies into the store.
+    pub(crate) fn auto_line_figures(
+        &self,
+        pane: usize,
+        key: super::auto_figures_sync::LineKey,
+    ) -> Vec<moon_core::figures::Figure> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)
+            .map(|pr| pr.auto.line_figures(key))
+            .unwrap_or_default()
+    }
+
+    /// Set the auto line under the pointer. Returns whether it changed; a change asks for a
+    /// present, so an `OnHover` caption appears or goes, and rebuilds nothing.
+    pub(crate) fn set_auto_hover(
+        &mut self,
+        hover: Option<(usize, super::auto_figures_sync::LineKey)>,
+    ) -> bool {
+        let mut st = self.state.borrow_mut();
+        if st.auto_hover == hover {
+            return false;
+        }
+        st.auto_hover = hover;
+        st.needs_present = true;
+        true
+    }
+
+    /// What pane `idx` currently shows, for evaluating its auto-figure keys without copying
+    /// candles. `None` until the pane is stamped with that target.
+    pub(crate) fn auto_pane_view(
+        &self,
+        idx: usize,
+        core: CoreId,
+        market: &str,
+    ) -> Option<super::auto_figures_sync::AutoPaneView> {
+        self.data.borrow().auto_pane_view(idx, core, market)
+    }
+
+    /// Pane `idx`'s closed candles of the chart's own timeframe — the snapshot a detector job
+    /// takes with it.
+    pub(crate) fn auto_pane_candles(
+        &self,
+        idx: usize,
+        core: CoreId,
+        market: &str,
+        now_ms: f64,
+    ) -> Vec<moon_core::market::ChartCandle> {
+        self.data
+            .borrow()
+            .auto_pane_candles(idx, core, market, now_ms)
+    }
+
+    /// Every published auto-figure row of every pane, as `(row index, outcome)` — what the
+    /// auto-figures popup reads to mark a row whose last run had too little history, lagged or
+    /// found no cache. Read-only and cheap: one `Arc` clone per drawn row, only while that popup
+    /// is open.
+    pub(crate) fn auto_row_outcomes(
+        &self,
+    ) -> Vec<(
+        usize,
+        std::sync::Arc<super::auto_figures_sync::job::AutoRowOutcome>,
+    )> {
+        self.data
+            .borrow()
+            .auto_figures
+            .iter()
+            .flat_map(|(_, set)| set.rows.iter().map(|r| (r.row_ix, r.outcome.clone())))
+            .collect()
+    }
+
     /// Sets this panel's news marks and the mark under the cursor. Returns whether anything changed,
     /// so the caller can skip the userdata resync.
     pub(crate) fn set_news_marks(

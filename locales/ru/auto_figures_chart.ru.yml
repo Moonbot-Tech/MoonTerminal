@@ -1,0 +1,10 @@
+_version: 1
+auto_figures_chart.caption.touches: "касаний: %{n}"
+auto_figures_chart.card.tf: "Таймфрейм"
+auto_figures_chart.card.touches: "Касания"
+auto_figures_chart.card.age: "Возраст"
+auto_figures_chart.card.event: "Событие"
+auto_figures_chart.card.no_event: "нет"
+auto_figures_chart.menu.pin: "Закрепить как фигуру"
+auto_figures_chart.menu.hide: "Скрыть эту линию"
+auto_figures_chart.menu.configure: "Настроить строку…"

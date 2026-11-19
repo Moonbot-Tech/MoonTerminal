@@ -1,0 +1,10 @@
+_version: 1
+auto_figures_chart.caption.touches: "触及 %{n} 次"
+auto_figures_chart.card.tf: "周期"
+auto_figures_chart.card.touches: "触及次数"
+auto_figures_chart.card.age: "形成时长"
+auto_figures_chart.card.event: "事件"
+auto_figures_chart.card.no_event: "无"
+auto_figures_chart.menu.pin: "固定为图形"
+auto_figures_chart.menu.hide: "隐藏此线"
+auto_figures_chart.menu.configure: "配置此行…"

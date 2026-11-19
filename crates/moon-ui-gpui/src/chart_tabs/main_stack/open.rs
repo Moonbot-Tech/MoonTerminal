@@ -183,6 +183,11 @@ impl MainChartStack {
         moon_core::config::ChartTabKind::of(false, self.compare_anchor.is_some())
     }
 
+    /// Every chart panel this stack holds, vacated slots included (they simply publish nothing).
+    pub(crate) fn chart_panels(&self) -> impl Iterator<Item = &Entity<ChartPanel>> {
+        self.charts.iter().map(|entry| &entry.panel)
+    }
+
     /// Tell every chart which default it follows now. See `AddChartStack::sync_default_kind`.
     pub(super) fn sync_default_kind(&mut self, cx: &mut Context<Self>) {
         let kind = self.default_kind();

@@ -184,9 +184,12 @@ impl Render for ChartPanel {
             self.view_dirty = false;
             self.camera_dirty = false;
             self.sync_orders_if_visible(cx, true);
+            self.sync_auto_figures(cx);
         } else if self.camera_dirty {
             self.camera_dirty = false;
             self.sync_orders_if_visible(cx, false);
+            // A zoom can move an `Auto` row's timeframe; a `Fixed` row's key ignores the camera.
+            self.sync_auto_figures(cx);
         }
 
         // Snapshot visible pane layout once and reuse its rectangles for pane-positioned GPUI
@@ -307,6 +310,10 @@ impl Render for ChartPanel {
         // scroll. This card needs no modifier (see `trade_history_hover`).
         self.revalidate_trade_hover(cx);
         let trade_card = self.trade_hover_card(sf, palette, cx);
+        // Auto lines: same re-validate — the price pass can take a line away from under a resting
+        // cursor. No modifier, like the trade card: a line is found by pointing at it.
+        self.revalidate_auto_hover(cx);
+        let auto_card = self.auto_hover_card(sf, palette, cx);
         // Per-figure settings panel, opened from a right-click on a figure. Rendered here beside
         // the other overlays rather than as a context menu: it holds swatches and switches, which
         // a menu of text items cannot draw.
@@ -535,6 +542,7 @@ impl Render for ChartPanel {
             .children(news_card)
             .children(warn_card)
             .children(trade_card)
+            .children(auto_card)
             .children(close_btns.into_iter().map(|(idx, right, top)| {
                 let entity = cx.entity();
                 MoonButton::new(SharedString::from(format!("chart-close-{idx}")))

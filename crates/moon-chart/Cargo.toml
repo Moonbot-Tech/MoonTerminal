@@ -16,5 +16,12 @@ moon-core = { path = "../moon-core" }
 # the wgpu chart engine was removed with the egui binary; own-pass DX11 (chartdx) does the rendering.
 bytemuck = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+# The auto-figure detector tests read the committed `chart-ace` candles straight from
+# `moon-core/fixtures/chart-ace/klines.sqlite`, read-only. The cache's own reader cannot serve them:
+# `KlineCache::open` prunes chunks past their retention on open, and the fixture is dated, so it
+# reads nothing (and would empty the committed file). Same version moon-core already builds.
+rusqlite = "0.41.1"
+
 [lints]
 workspace = true

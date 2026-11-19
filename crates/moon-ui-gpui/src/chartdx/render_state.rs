@@ -199,6 +199,9 @@ pub(in crate::chartdx) struct RenderState {
     /// The percent ruler while a drag holds it (`ruler.rs`): its band rides the readout batch and
     /// its text the text pass, both redrawn per present, so moving it costs no layer rebuild.
     pub(in crate::chartdx) ruler: Option<ruler::RulerReadout>,
+    /// The auto line under the pointer, by pane: the text pass prints an `OnHover` caption only
+    /// for it. Set by the panel's hover hit test; changing it costs a present, never a rebuild.
+    pub(in crate::chartdx) auto_hover: Option<(usize, super::auto_figures_sync::LineKey)>,
     pub(in crate::chartdx) pixel_scale: f32,
     /// Lazily created own-pass scissor rasterizer, recreated on device changes. It clips layers to
     /// the panel so price-positioned order books and orders cannot spill beyond the plot onto

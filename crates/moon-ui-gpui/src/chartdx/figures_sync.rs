@@ -52,13 +52,15 @@ impl ChartDataState {
         true
     }
 
-    /// Combines store and interaction revisions to gate userdata rebuilds. Never returns
-    /// `u64::MAX`, which panels reserve as the forced-dirty sentinel.
+    /// Combines store and interaction revisions, and the auto figures' publication revision
+    /// (`auto_figures_sync`), to gate userdata rebuilds. Never returns `u64::MAX`, which panels
+    /// reserve as the forced-dirty sentinel.
     pub(super) fn figures_sig(&self) -> u64 {
         let store_rev = self.figures.as_ref().map(|f| f.borrow().rev()).unwrap_or(0);
         let sig = store_rev
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            .wrapping_add(self.figure_visual_rev);
+            .wrapping_add(self.figure_visual_rev)
+            .wrapping_add(self.auto_figures_rev.wrapping_mul(0xC2B2_AE3D_27D4_EB4F));
         if sig == u64::MAX { 0 } else { sig }
     }
 

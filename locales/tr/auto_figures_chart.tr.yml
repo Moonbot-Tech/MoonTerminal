@@ -1,0 +1,10 @@
+_version: 1
+auto_figures_chart.caption.touches: "%{n} temas"
+auto_figures_chart.card.tf: "Zaman dilimi"
+auto_figures_chart.card.touches: "Temaslar"
+auto_figures_chart.card.age: "Yaş"
+auto_figures_chart.card.event: "Olay"
+auto_figures_chart.card.no_event: "yok"
+auto_figures_chart.menu.pin: "Şekil olarak sabitle"
+auto_figures_chart.menu.hide: "Bu çizgiyi gizle"
+auto_figures_chart.menu.configure: "Satırı yapılandır…"

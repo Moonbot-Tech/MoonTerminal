@@ -1,0 +1,10 @@
+_version: 1
+auto_figures_chart.caption.touches: "%{n} toques"
+auto_figures_chart.card.tf: "Temporalidad"
+auto_figures_chart.card.touches: "Toques"
+auto_figures_chart.card.age: "Antigüedad"
+auto_figures_chart.card.event: "Evento"
+auto_figures_chart.card.no_event: "ninguno"
+auto_figures_chart.menu.pin: "Fijar como figura"
+auto_figures_chart.menu.hide: "Ocultar esta línea"
+auto_figures_chart.menu.configure: "Configurar fila…"

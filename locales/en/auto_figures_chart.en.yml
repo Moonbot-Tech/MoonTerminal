@@ -1,0 +1,10 @@
+_version: 1
+auto_figures_chart.caption.touches: "%{n} touches"
+auto_figures_chart.card.tf: "Timeframe"
+auto_figures_chart.card.touches: "Touches"
+auto_figures_chart.card.age: "Age"
+auto_figures_chart.card.event: "Event"
+auto_figures_chart.card.no_event: "none"
+auto_figures_chart.menu.pin: "Pin as figure"
+auto_figures_chart.menu.hide: "Hide this line"
+auto_figures_chart.menu.configure: "Configure row…"

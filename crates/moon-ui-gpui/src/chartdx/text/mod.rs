@@ -727,6 +727,7 @@ fn nearest_orderbook_notional(
 
 // Split by responsibility: runs contains RenderState draw/measure helpers, FireTest text, and
 // the ghost cursor; prepare contains the main prepare_text implementation.
+mod auto_captions;
 mod caption;
 mod captions;
 mod column_scroll;

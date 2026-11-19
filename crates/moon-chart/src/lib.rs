@@ -10,6 +10,7 @@
 pub const PRICE_AXIS_W: f32 = 56.0;
 pub const TIME_AXIS_H: f32 = 16.0;
 
+pub mod auto_figures;
 pub mod axes;
 pub mod clusters;
 pub mod container;

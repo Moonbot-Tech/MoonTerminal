@@ -35,6 +35,9 @@ impl ChartPanel {
         // open hover card catches up on the next repaint.
         self.sync_news_marks(cx);
         self.sync_warn_marks(cx);
+        // Auto figures ride the same observer: a key evaluation per row, a detector run only when
+        // a key moved (a candle of the row's timeframe closed, a setting, the market).
+        self.sync_auto_figures(cx);
         // The top-left overlay needs no revision gate of its own: it reads the live order rows when
         // GPUI renders. Structural order changes advance `order_lines_rev` through
         // `OrderLineStore::update`, and `ChartDataState::order_signature` already gates that
@@ -362,6 +365,7 @@ impl ChartPanel {
             fig_draft_probe: None,
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
+            auto_figures: auto_figures::AutoFiguresState::default(),
             report_trades: report_trades::ReportTradesState::default(),
             trace_lines: trace_lines::TraceLinesState::default(),
             trade_hover: trade_history_hover::TradeHoverState::default(),
@@ -578,6 +582,7 @@ impl ChartPanel {
             fig_draft_probe: None,
             news: news::NewsState::default(),
             warn: warn::WarnState::default(),
+            auto_figures: auto_figures::AutoFiguresState::default(),
             report_trades: report_trades::ReportTradesState::default(),
             trace_lines: trace_lines::TraceLinesState::default(),
             trade_hover: trade_history_hover::TradeHoverState::default(),

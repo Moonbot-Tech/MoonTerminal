@@ -14,6 +14,7 @@
 //! [`render_input`].
 
 mod arb_open;
+mod auto_figures;
 mod click_series;
 mod figures;
 mod filter_headers;
@@ -249,6 +250,9 @@ pub struct ChartPanel {
     /// News marks for this chart's coin plus their hover state; see [`news`].
     news: news::NewsState,
     warn: warn::WarnState,
+    /// When each row's detector reruns, and the wake for the next candle close; see
+    /// [`auto_figures`].
+    auto_figures: auto_figures::AutoFiguresState,
     /// Runtime-only durable history for this exact Main core and market.
     report_trades: report_trades::ReportTradesState,
     /// The closed trades' archived lines for the "Moonbot lines" style — see [`trace_lines`].

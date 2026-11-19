@@ -817,6 +817,11 @@ impl AddChartStack {
         changed
     }
 
+    /// Every chart panel this stack holds, vacated slots included (they simply publish nothing).
+    pub(crate) fn chart_panels(&self) -> impl Iterator<Item = &Entity<ChartPanel>> {
+        self.charts.iter().map(|entry| &entry.panel)
+    }
+
     pub(crate) fn pane_count(&self, cx: &App) -> usize {
         self.charts
             .iter()

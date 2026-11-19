@@ -860,6 +860,14 @@ impl super::labels_popup::LabelsPopupHost for DetachedChartHost {
     }
 }
 
+/// Host for the "Auto figures" popup: the default of THIS window's kind, with the status read
+/// from this window's own charts.
+impl super::auto_figures_popup::AutoFiguresPopupHost for DetachedChartHost {
+    fn auto_figure_panels(&self, cx: &App) -> Vec<Entity<crate::panels::ChartPanel>> {
+        self.panel.read(cx).chart_panels().cloned().collect()
+    }
+}
+
 /// Host for the "Candles and Trades" candlestick popup targeting THIS window's panel.
 ///
 /// "Apply to all" sends a group request through Backend, drained by the tab strip.

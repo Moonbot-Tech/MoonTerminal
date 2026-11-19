@@ -12,6 +12,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::auto_figures_popup;
 use super::candle_popup;
 use super::common;
 use super::common::LayoutPopupHost as _;
@@ -328,6 +329,24 @@ impl Render for ChartTabs {
                 .render(),
             cx,
         );
+        // The auto-figures button beside the labels one edits the rows of the ACTIVE TAB's kind.
+        let auto_figures_open = self.popup_shows(ChartPopup::AutoFigures);
+        let auto_figures_btn = auto_figures_popup::auto_figures_popup_host(
+            self,
+            "chart-auto-figures",
+            MoonButton::new("chart-auto-figures-settings")
+                .leading_icon(MoonButtonIconSlot::new("icons/trending-up.svg"))
+                .tooltip(t!("auto_figures.button_tip").to_string())
+                .size(MoonSize::Xs)
+                .variant(if auto_figures_open {
+                    MoonButtonVariant::Blue
+                } else {
+                    MoonButtonVariant::Ghost
+                })
+                .selected(auto_figures_open)
+                .render(),
+            cx,
+        );
         // The volumes button beside the labels one edits the ACTIVE TAB's volume indicators.
         // TEMPORARY icon from the shipped set, until MoonUI carries a volumes glyph of its own.
         let volumes_popup_open = self.popup_shows(ChartPopup::Volumes);
@@ -525,6 +544,7 @@ impl Render for ChartTabs {
                     .child(graphics_btn)
                     .child(history_btn)
                     .child(labels_btn)
+                    .child(auto_figures_btn)
                     .child(volumes_btn)
                     .child(settings_btn),
             );
