@@ -213,6 +213,10 @@ struct Fake {
     exchanges: HashMap<(CoreId, String), String>,
     /// (exchange, market) → its 5-minute rows; a pair missing here is a read that did not happen.
     bars: HashMap<(String, String), Vec<ChartCandle>>,
+    /// (exchange, market) → its rows of the core's ring kind; a pair missing here has none.
+    ring: HashMap<(String, String), Vec<ChartCandle>>,
+    /// Every ring-kind read fails, as a read that did not happen.
+    ring_lost: bool,
     reads: RefCell<Vec<(String, String, i64, i64)>>,
 }
 
@@ -234,6 +238,26 @@ impl ScanSource for Fake {
         let rows = self.bars.get(&(exchange.to_string(), market.to_string()))?;
         Some(
             rows.iter()
+                .filter(|b| (from_ms as f64..=to_ms as f64).contains(&b.t_open_ms))
+                .copied()
+                .collect(),
+        )
+    }
+
+    fn read_ring_5m(
+        &self,
+        exchange: &str,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Option<Vec<ChartCandle>> {
+        if self.ring_lost {
+            return None;
+        }
+        let rows = self.ring.get(&(exchange.to_string(), market.to_string()));
+        Some(
+            rows.into_iter()
+                .flatten()
                 .filter(|b| (from_ms as f64..=to_ms as f64).contains(&b.t_open_ms))
                 .copied()
                 .collect(),
@@ -543,4 +567,53 @@ fn the_live_price_measures_the_distance() {
     assert_eq!(answer.last_price, Some(3.6));
     let d = answer.nearest.expect("the 3.5 line").distance_pct;
     assert!((d + 2.777_78).abs() < 1e-4, "{d}");
+}
+
+/// A market the cache knows only from the core's ring kind is scanned on it: its ring hours give
+/// the 3.5 level from their ranges (3.38–3.45 ×3, then 3.52–3.58) and no breakout, as ring bars
+/// have no close. When the ring read does not happen, the market is "unread", not scanned on half
+/// its base.
+///
+/// Breakage: the ring kind never read by the scan (the market short of history), the ring's
+/// placeholder lows read as closes (a breakout of 3.5 made of ring bars), or a failed ring read
+/// scanned as if the kind were empty.
+#[test]
+fn the_ring_kind_fills_the_base_and_a_failed_ring_read_is_unread() {
+    let ring: Vec<ChartCandle> = [(3.45f32, 3.38f32), (3.45, 3.38), (3.45, 3.38), (3.58, 3.52)]
+        .iter()
+        .enumerate()
+        .flat_map(|(h, &(hi, lo))| {
+            (0..12).map(move |j| ChartCandle {
+                t_open_ms: (MONDAY_MS + (h as i64 * 12 + j) * 300_000) as f64,
+                open: hi,
+                high: hi,
+                low: lo,
+                close: lo,
+                volume: 1.0,
+                quote_volume: 1.0,
+            })
+        })
+        .collect();
+    let now = MONDAY_MS + 4 * HOUR_MS;
+    let mut fake = Fake::default();
+    fake.exchanges
+        .insert((1, "AUSDT".to_string()), "ex".to_string());
+    fake.bars.insert(("ex".into(), "AUSDT".into()), Vec::new());
+    fake.ring.insert(("ex".into(), "AUSDT".into()), ring);
+    let targets = scan_targets(&[entry(1, 1, "AUSDT")]);
+    let mut work = ScanWork::new(targets.clone(), vec![round_row(TfId::H1)], now);
+    let answers = work.step(&fake, Duration::MAX);
+    let Some((_, _, MarketScan::Scanned(answer))) = answers.first() else {
+        panic!("scanned: {answers:?}");
+    };
+    assert_eq!((answer.rows_scanned, answer.lines), (1, 1), "{answer:?}");
+    assert_eq!(answer.best, None, "{answer:?}");
+
+    fake.ring_lost = true;
+    let mut work = ScanWork::new(targets, vec![round_row(TfId::H1)], now);
+    let answers = work.step(&fake, Duration::MAX);
+    assert!(
+        matches!(answers.first(), Some((_, _, MarketScan::Unread))),
+        "{answers:?}"
+    );
 }

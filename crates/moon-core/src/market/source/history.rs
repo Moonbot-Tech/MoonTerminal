@@ -849,7 +849,7 @@ impl MarketDataSource {
                     let t = c.t_open_ms as i64;
                     t >= series_floor_ms && t <= to_ms
                 };
-                let mut cache_part: Vec<ChartCandle> = cursor
+                let cache_part: Vec<ChartCandle> = cursor
                     .cache_rows
                     .iter()
                     .filter(in_window)
@@ -861,12 +861,6 @@ impl MarketDataSource {
                     .filter(in_window)
                     .cloned()
                     .collect();
-                // The cache's kind 5 also keeps the core's ring (range-only rows) where no real
-                // candle exists; those must not repaint the snapshot's oriented bars as falling.
-                // The finer kinds were oriented before they were folded (`history/prefix.rs`).
-                if cursor.cache_rows_kind == 5 {
-                    crate::market::candles::yield_cached_range_rows(&mut cache_part, &snap_part);
-                }
                 // Write deep rows back to the cache without blocking when the cheap fingerprint
                 // advances. Same-timestamp OHLC replacements do not advance it and remain unwritten
                 // until a later bucket does. Persist the complete retained sequence rather than

@@ -21,15 +21,18 @@
 //!
 //! # Bars without an open and close
 //!
-//! Much of the 5-minute history comes from the core's own ring, which carries only each bucket's
-//! high and low (`open == high`, `close == low`, the RANGE-ONLY form — measured 19.11.2026, and
-//! kept in that form by the kline cache, `moon_core::market::candles::is_range_only`). Such a
-//! bar's open and close are not prices the market traded at the bucket's edges, and read as
+//! Much of the 5-minute history comes from the core's own ring, which the kline cache keeps under a
+//! kind of its own (`moon_core::market::kline_cache::RING_5M_KIND`), and which carries only each
+//! bucket's high and low: its open and close are the core's `open == high`, `close == low`
+//! placeholder (measured 19.11.2026), not prices the market traded at the bucket's edges. Read as
 //! closes they would break every level the bucket's range straddles: a ring bar spanning a line
 //! "closes" below it whenever its low is below it.
 //!
-//! So the bar assembly ([`forget_range_closes`]) turns the range-only form into an UNKNOWN open and
-//! close — `NaN` in both — before anything resamples or detects. The mark is in the bar itself, so
+//! So the bar assembly ([`with_ring_rows`]) gives every bar taken from the ring kind an UNKNOWN
+//! open and close — `NaN` in both — before anything resamples or detects. The mark comes from the
+//! row's SOURCE, the kind it was read from, never from its shape: a real candle that opened at its
+//! high and closed at its low keeps both, and a real candle always wins its bucket over a ring
+//! row. The mark is in the bar itself, so
 //! it survives a resample with the meaning it should have: a bucket's open is its first sub-bar's
 //! and its close its last's, so a coarse bar whose last 5 minutes came from the ring has an unknown
 //! close and one ending on a real candle has the real close. Every reader of a close or an open
@@ -470,24 +473,46 @@ pub(crate) fn price_of(b: &ChartCandle) -> Option<f64> {
     close_of(b).or_else(|| positive((f64::from(b.high) + f64::from(b.low)) / 2.0))
 }
 
-/// Turn every range-only bar of `rows` into a bar with an UNKNOWN open and close (`NaN`), its high,
-/// low and volumes kept — the bar assembly's first step for anything the core's ring may have
-/// filled (see the module doc).
+/// The 5-minute bucket both cache kinds file their rows under, ms.
+const BASE_BUCKET_MS: i64 = 5 * 60_000;
+
+/// The 5-minute base of a market, assembled into `out` from the cache's two kinds: `real`, the
+/// real candles (kind 5), and `ring`, the core's ring rows (`kline_cache::RING_5M_KIND`) — the
+/// bar assembly's first step (see the module doc).
 ///
-/// A range-only bar is `moon_core::market::candles::is_range_only`'s: `open == high`,
-/// `close == low`, `high > low`, the form the ring and the kline cache keep it in. The form a
-/// chart's display orients ring rows into (`open == low`, `close == high`) is NOT taken: it is
-/// also every real rising candle of two prints, and the cache never stores a ring row in it.
+/// - A real candle is taken as it is, when every price of it is a positive finite number and
+///   `high >= low`; a broken one is dropped and does not hold its bucket.
+/// - A ring row fills only a 5-minute bucket no real candle holds, and comes out with an UNKNOWN
+///   open and close (`NaN`), its high, low and volumes kept — by its source, whatever its shape. A
+///   ring row whose high or low is unreadable is dropped.
 ///
-/// A real candle of the raw shape — two prints, the first at the high and the second at the low —
-/// loses its close too; it is a quiet market's bar, and the cost is one known close the events do
-/// not see, never a break that did not happen.
-pub fn forget_range_closes(rows: &mut [ChartCandle]) {
-    for b in rows.iter_mut() {
-        if moon_core::market::candles::is_range_only(b) {
-            b.open = f32::NAN;
-            b.close = f32::NAN;
-        }
+/// `out` is in ascending open time, each bucket once (both kinds key their rows by open time, so
+/// neither repeats one), whatever order the two inputs come in. Cost O((r + g) log(r + g)), and
+/// linear when both are already sorted, as the cache returns them.
+pub fn with_ring_rows(real: &[ChartCandle], ring: &[ChartCandle], out: &mut Vec<ChartCandle>) {
+    out.clear();
+    let price = |v: f32| v.is_finite() && v > 0.0;
+    let bucket = |b: &ChartCandle| (b.t_open_ms as i64).div_euclid(BASE_BUCKET_MS);
+    out.extend(real.iter().copied().filter(|b| {
+        b.t_open_ms.is_finite()
+            && [b.open, b.high, b.low, b.close].into_iter().all(price)
+            && b.high >= b.low
+    }));
+    let mut held: Vec<i64> = out.iter().map(bucket).collect();
+    held.sort_unstable();
+    let before = out.len();
+    out.extend(
+        ring.iter()
+            .filter(|b| b.t_open_ms.is_finite() && price(b.high) && price(b.low) && b.high >= b.low)
+            .filter(|b| held.binary_search(&bucket(b)).is_err())
+            .map(|b| ChartCandle {
+                open: f32::NAN,
+                close: f32::NAN,
+                ..*b
+            }),
+    );
+    if out.len() > before || !out.is_sorted_by(|a, b| a.t_open_ms <= b.t_open_ms) {
+        out.sort_by(|a, b| a.t_open_ms.total_cmp(&b.t_open_ms));
     }
 }
 

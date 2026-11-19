@@ -514,10 +514,11 @@ fn bench_touch_volume_counts_each_touching_bar_once() {
 }
 
 /// The committed day of `chart-ace` 5-minute candles as the core's ring would carry it: every bar
-/// in the range-only form (`open == high`, `close == low`), then through the bar assembly.
+/// with the ring's placeholder open and close (`open == high`, `close == low`), read from the ring
+/// kind through the bar assembly with no real candle beside it.
 fn ace_as_ring() -> (Vec<ChartCandle>, Vec<ChartCandle>) {
     let honest = test_bars::ace(5);
-    let mut ring: Vec<ChartCandle> = honest
+    let raw: Vec<ChartCandle> = honest
         .iter()
         .map(|b| ChartCandle {
             open: b.high,
@@ -525,7 +526,8 @@ fn ace_as_ring() -> (Vec<ChartCandle>, Vec<ChartCandle>) {
             ..*b
         })
         .collect();
-    forget_range_closes(&mut ring);
+    let mut ring = Vec::new();
+    with_ring_rows(&[], &raw, &mut ring);
     (honest, ring)
 }
 
@@ -569,39 +571,73 @@ fn ring_bars_give_their_turns_and_break_nothing() {
     }
 }
 
-/// The bar assembly: a range-only bar loses its open and close and keeps its range; a real rising
-/// candle of two prints (open at the low, close at the high), a real and a flat bar are untouched;
-/// and a resampled bucket's close is unknown exactly when its LAST five minutes came from the ring.
+/// The bar assembly marks by SOURCE: every row of the ring kind loses its open and close and keeps
+/// its range, whatever its shape, and every real candle keeps both, whatever its shape — a real
+/// candle that opened at its high and closed at its low (the ring's placeholder shape) included.
+/// A real candle wins its bucket; a ring row fills only a bucket no real candle holds; the result
+/// is in open-time order.
 ///
-/// Breakage: the rising shape forgotten too (a real candle loses its close), a flat bar's one
-/// price called unknown, or a resample that lets the first sub-bar's unknown close stand for the
-/// bucket's.
+/// By hand: real candles at buckets 1 and 3, the second of the ring's placeholder shape; ring rows
+/// at buckets 0, 1 and 2. Out: ring 0 (no close), real 1 (the ring row under it gone), ring 2,
+/// real 3 with its close of 8.
+///
+/// Breakage: the mark taken from the shape (the real falling candle loses its close, or a ring row
+/// that happens to look real keeps one), a ring row shadowing a real candle, or the rows out of
+/// order.
 #[test]
-fn the_bar_assembly_forgets_only_range_only_closes() {
-    use super::test_bars::bar;
-    let ring = bar(0, 12.0, 12.0, 8.0, 8.0);
-    let oriented = bar(1, 8.0, 12.0, 8.0, 12.0);
-    let real = bar(2, 9.0, 12.0, 8.0, 11.0);
-    let flat = bar(3, 10.0, 10.0, 10.0, 10.0);
-    let mut rows = [ring, oriented, real, flat];
-    forget_range_closes(&mut rows);
-    assert!(rows[0].close.is_nan() && rows[0].open.is_nan());
-    assert_eq!((rows[0].high, rows[0].low), (12.0, 8.0));
-    assert_eq!(rows[1], oriented);
-    assert_eq!(rows[2], real);
-    assert_eq!(rows[3], flat);
-    assert!(bar_ok(&rows[0]));
-    assert_eq!(close_of(&rows[0]), None);
-    assert_eq!(last_price(&rows[..1]), Some(10.0));
-
-    // Two buckets of 10 minutes: ring then real, and real then ring.
-    let mut five = [
+fn the_bar_assembly_marks_ring_rows_by_their_source() {
+    use super::test_bars::{MONDAY_2024_01_01_MS, bar};
+    let real = [bar(1, 9.0, 12.0, 8.0, 11.0), bar(3, 12.0, 12.0, 8.0, 8.0)];
+    let ring = [
         bar(0, 12.0, 12.0, 8.0, 8.0),
-        bar(1, 9.0, 12.0, 8.0, 11.0),
+        bar(1, 12.0, 13.0, 7.0, 7.0),
         bar(2, 9.0, 12.0, 8.0, 11.0),
-        bar(3, 12.0, 12.0, 8.0, 8.0),
     ];
-    forget_range_closes(&mut five);
+    let mut out = Vec::new();
+    with_ring_rows(&real, &ring, &mut out);
+    let t = |i: i64| MONDAY_2024_01_01_MS + (i * M5_MS) as f64;
+    assert_eq!(
+        out.iter().map(|b| b.t_open_ms).collect::<Vec<_>>(),
+        [t(0), t(1), t(2), t(3)]
+    );
+    assert!(out[0].open.is_nan() && out[0].close.is_nan());
+    assert_eq!((out[0].high, out[0].low), (12.0, 8.0));
+    assert_eq!(out[1], real[0]);
+    assert!(
+        out[2].open.is_nan() && out[2].close.is_nan(),
+        "{:?}",
+        out[2]
+    );
+    assert_eq!(out[3], real[1]);
+    assert_eq!(close_of(&out[3]), Some(8.0));
+    assert!(out.iter().all(bar_ok));
+    assert_eq!(close_of(&out[0]), None);
+    assert_eq!(last_price(&out[..1]), Some(10.0));
+
+    // A broken real candle does not hold its bucket; a broken ring row is dropped.
+    let broken_real = [bar(1, f32::NAN, 12.0, 8.0, 11.0)];
+    let broken_ring = [
+        bar(0, 12.0, f32::NAN, 8.0, 8.0),
+        bar(1, 12.0, 12.0, 8.0, 8.0),
+    ];
+    with_ring_rows(&broken_real, &broken_ring, &mut out);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].t_open_ms, t(1));
+    assert!(out[0].close.is_nan());
+}
+
+/// A resampled bucket's close is unknown exactly when its LAST five minutes came from the ring,
+/// and its open exactly when its first did.
+///
+/// Breakage: a resample that lets the first sub-bar's unknown close stand for the bucket's, or a
+/// ring bar's placeholder read as the bucket's open.
+#[test]
+fn a_resampled_bucket_takes_its_close_from_its_last_sub_bar() {
+    use super::test_bars::bar;
+    let real = [bar(1, 9.0, 12.0, 8.0, 11.0), bar(2, 9.0, 12.0, 8.0, 11.0)];
+    let ring = [bar(0, 12.0, 12.0, 8.0, 8.0), bar(3, 12.0, 12.0, 8.0, 8.0)];
+    let mut five = Vec::new();
+    with_ring_rows(&real, &ring, &mut five);
     let mut ten = Vec::new();
     moon_core::market::candles::resample(&five, 600_000, &mut ten);
     assert_eq!(ten.len(), 2);

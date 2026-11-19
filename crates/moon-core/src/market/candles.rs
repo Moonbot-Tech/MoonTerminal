@@ -692,45 +692,6 @@ pub fn deep_kind_min_for_tf(tf_min: u32) -> u32 {
     }
 }
 
-/// Whether `c` is in the RANGE-ONLY form: a candle whose source carried only its high and low,
-/// encoded as `open == high` and `close == low` with `high > low`.
-///
-/// The form the core's 5-minute ring arrives in (measured 19.11.2026 on live cores: 0.0–0.2 % of
-/// ring rows carry anything else), and the form those rows are kept in by the kline cache
-/// (`kline_cache::KlineCache::fill_range_batch_blocking`), so it is the ONE mark every reader of
-/// either can tell them by: a range-only row's open and close are not prices the market traded at
-/// the bucket's edges, only its extremes in an order nobody knows.
-///
-/// A flat candle (`high == low`) is never range-only: all four prices are that one price, which is
-/// what the market traded, so its close is known. A real candle that opened at its high and closed
-/// at its low (a bar of two prints, falling) has the same form and is read as range-only too; its
-/// content is then exactly what the core's ring row for that bucket carries, so a writer loses
-/// nothing by treating the two alike, and a reader only gives up a close equal to the low.
-/// The orientation [`orient_range_rows`] gives a chart's display (`open == low`, `close == high`)
-/// is NOT this form: an honest rising candle has it, and the cache never stores a ring row in it.
-pub fn is_range_only(c: &ChartCandle) -> bool {
-    c.high > c.low && c.open == c.high && c.close == c.low
-}
-
-/// Cached range-only rows (the core's ring kept in the kline cache) as a chart draws them: those
-/// whose bucket `snapshot` already holds are dropped, and the rest are oriented ([`orient_range_rows`]).
-///
-/// A cached ring row carries exactly the range the live snapshot row of its bucket carries, but in
-/// the raw `open == high`, `close == low` form; merged OVER the snapshot (the cache outranks it),
-/// it would draw every bar of the ring's window as a falling body where the oriented snapshot drew
-/// the market's direction. Where the snapshot has no row — the days before the ring's 41 hours,
-/// which only the cache keeps — the rows are oriented the way the snapshot is. Real cached
-/// candles are untouched; `snapshot` need not be sorted.
-pub fn yield_cached_range_rows(rows: &mut Vec<ChartCandle>, snapshot: &[ChartCandle]) {
-    if !rows.iter().any(is_range_only) {
-        return;
-    }
-    let mut covered: Vec<i64> = snapshot.iter().map(|c| c.t_open_ms as i64).collect();
-    covered.sort_unstable();
-    rows.retain(|c| !is_range_only(c) || covered.binary_search(&(c.t_open_ms as i64)).is_err());
-    orient_range_rows(rows);
-}
-
 /// Orients range-only candles whose real open and close values are unavailable.
 ///
 /// Measurements show that the core's bulk 5-minute snapshot carries ONLY high/low,

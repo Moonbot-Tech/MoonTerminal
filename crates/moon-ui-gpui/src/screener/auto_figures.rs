@@ -12,18 +12,20 @@
 //!
 //! # Where the bars come from
 //!
-//! ONLY the local 5-minute kline cache, which the background recorder keeps for every market (15
-//! days): real candles from the trade stream while the terminal runs, and the core's own 5-minute
-//! ring where no real candle exists, written each minute — so the last ~41 hours of every market
-//! the core carries are there without holes, the ring's rows with only their range (the scan
-//! gives them no close, `moon_chart::auto_figures::scan`). The cache is the ONE source: a market
-//! the recorder has not reached yet (the first minute after start) is honestly short of history.
-//! Never a core: a history request makes the core fetch klines from the exchange, and that is how
-//! a user's API key got banned once.
+//! ONLY the local kline cache, which the background recorder keeps for every market (15 days), in
+//! its two 5-minute kinds: the real candles of kind 5, folded from the trade stream while the
+//! terminal runs, and the core's own 5-minute ring (`kline_cache::RING_5M_KIND`), stored on every
+//! connect — the ~41 hours before it for every market the core carries, each row with only its
+//! range (the scan fills only the buckets the real candles leave empty with them, and gives them
+//! no close, `moon_chart::auto_figures::scan`). The cache is the ONE source: a market the recorder
+//! has not reached yet (the first minute after start) is honestly short of history. Never a core:
+//! a history request makes the core fetch klines from the exchange, and that is how a user's API
+//! key got banned once.
 //!
 //! Sides and distances are measured from the market's live price as the Screener's own row holds
-//! it at the press (its ask), and from the cache's last bar only where the row has none. The exchange key a market's rows are read under is the one the chart reads its own
-//! cache rows under (`MarketDataSource::kline_address`, the same call as
+//! it at the press (its ask), and from the cache's last bar only where the row has none. The
+//! exchange key a market's rows are read under is the one the chart reads its own cache rows
+//! under (`MarketDataSource::kline_address`, the same call as
 //! `panels::chart::auto_figures`), so the two see the same rows. A market with no address is
 //! "no cache" in its own cell, not a failure of the run.
 //!
@@ -375,9 +377,19 @@ pub(super) trait ScanSource {
     /// `None` when the terminal has no cache address for it.
     fn exchange(&self, core: CoreId, market: &str) -> Option<String>;
 
-    /// The 5-minute rows of `market` with an open time in `[from_ms, to_ms]`; `None` when the read
-    /// did not happen, as opposed to an empty answer.
+    /// The real 5-minute rows (kind 5) of `market` with an open time in `[from_ms, to_ms]`; `None`
+    /// when the read did not happen, as opposed to an empty answer.
     fn read_5m(
+        &self,
+        exchange: &str,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Option<Vec<ChartCandle>>;
+
+    /// The rows of the core's 5-minute ring (`kline_cache::RING_5M_KIND`) of `market` over the same
+    /// window; `None` when the read did not happen.
+    fn read_ring_5m(
         &self,
         exchange: &str,
         market: &str,
@@ -416,6 +428,22 @@ impl ScanSource for CacheSource {
         self.cache
             .as_ref()?
             .read_range(exchange, market, BASE_MIN, from_ms, to_ms)
+    }
+
+    fn read_ring_5m(
+        &self,
+        exchange: &str,
+        market: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Option<Vec<ChartCandle>> {
+        self.cache.as_ref()?.read_range(
+            exchange,
+            market,
+            moon_core::market::kline_cache::RING_5M_KIND,
+            from_ms,
+            to_ms,
+        )
     }
 }
 
@@ -486,16 +514,19 @@ impl ScanWork {
         } = self;
         while let Some(unit) = units.get(*next) {
             *next += 1;
-            let read = source.read_5m(
-                &unit.exchange,
-                &unit.market,
-                now_ms.saturating_sub(*span_ms),
-                *now_ms,
-            );
+            let from_ms = now_ms.saturating_sub(*span_ms);
+            // Both kinds or neither: half a base would scan on less history than the market has.
+            let read = source
+                .read_5m(&unit.exchange, &unit.market, from_ms, *now_ms)
+                .and_then(|bars| {
+                    let ring =
+                        source.read_ring_5m(&unit.exchange, &unit.market, from_ms, *now_ms)?;
+                    Some((bars, ring))
+                });
             let scan = match read {
                 None => MarketScan::Unread,
-                Some(bars) => {
-                    scan_market(rows, &bars, *now_ms as f64, unit.price, result);
+                Some((bars, ring)) => {
+                    scan_market(rows, &bars, &ring, *now_ms as f64, unit.price, result);
                     crate::diag::bump(&crate::diag::AUTOFIGURES_SCAN_MARKETS);
                     MarketScan::Scanned(result.answer())
                 }

@@ -21,19 +21,17 @@
 //! A market with no cache address at all gets a definitive empty answer for its cache rows
 //! ([`without_cache`]), which is never retried; only a read that did not happen is.
 //!
-//! ## Bars without an open and close
+//! ## The core's ring beside the 5-minute cache
 //!
-//! The 5-minute cache also keeps the core's own ring where no real candle exists — the recorder
-//! writes it each minute, so the last ~41 hours of every market the core carries are there — and
-//! a ring row carries only its high and low (`moon_core::market::candles::is_range_only`). Before
-//! anything is resampled, such rows become bars with an UNKNOWN open and close
-//! (`moon_chart::auto_figures::forget_range_closes`), in the cache's rows and in a 5-minute chart's
-//! own bars alike. Their highs and lows still make pivots, levels and profiles; no break, event,
-//! body or pole reads their closes. The chart's series is otherwise taken as it is: its oldest
-//! part is the same ring, drawn ORIENTED (`open == low` on a rise), and that shape is also every
-//! real rising candle of two prints, so it is not taken for a ring bar — those bars are the far
-//! left of the window, older than the chart's deep history, and the cache path is what a row reads
-//! whenever that series is too short for it.
+//! The cache keeps the core's own 5-minute ring under a kind of its own
+//! (`moon_core::market::kline_cache::RING_5M_KIND`), stored by the recorder on every connect: the
+//! only record of the hours the core ran and the terminal did not. A 5-minute cache read takes it
+//! beside kind 5 and assembles the two (`moon_chart::auto_figures::with_ring_rows`): a real
+//! candle wins its bucket, and a ring row fills a bucket none holds as a bar with an UNKNOWN open
+//! and close — marked by the kind it came from, never by its shape. Its high and low still make
+//! pivots, levels and profiles; no break, event, body or pole reads a close it does not have. The
+//! read fails, and the row is retried, when either kind's read did not happen. The chart's own
+//! series is taken as the chart draws it and never reads the ring kind.
 //!
 //! ## The recompute key
 //!
@@ -51,7 +49,7 @@ use moon_chart::auto_figures::{self, DetectCtx, Found};
 use moon_core::config::auto_figures::{DetectorParams, TfId};
 use moon_core::market::ChartCandle;
 use moon_core::market::candles::resample;
-use moon_core::market::kline_cache::KlineCache;
+use moon_core::market::kline_cache::{KlineCache, RING_5M_KIND};
 
 /// How long after a bar's close the row waits before treating it as closed, ms.
 ///
@@ -281,21 +279,6 @@ pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, Au
 /// [`run`] without the job-level stopwatch.
 fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowOutcome)> {
     let (chart_tf_ms, chart_history_ms) = chart_extent(&job.chart, job.chart_tf_ms);
-    // A 5-minute chart's oldest bars may be the core's ring in its raw form (module doc). Copied
-    // only when there is such a bar.
-    let raw_ring = chart_tf_ms == CACHE_BASE_MS
-        && job
-            .chart
-            .iter()
-            .any(moon_core::market::candles::is_range_only);
-    let chart: std::borrow::Cow<'_, [ChartCandle]> = if raw_ring {
-        let mut bars = job.chart.to_vec();
-        auto_figures::forget_range_closes(&mut bars);
-        std::borrow::Cow::Owned(bars)
-    } else {
-        std::borrow::Cow::Borrowed(&job.chart[..])
-    };
-    let chart = &chart[..];
     let plans: Vec<_> = job
         .rows
         .iter()
@@ -316,11 +299,14 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
         let (from, to) = window?;
         Some(cache.and_then(|c| c.read(kind_min, from, to)))
     };
-    let mut m5 = read(5, span(BarSource::Cache5m));
-    // The cache keeps the core's ring rows in their raw range-only form (module doc).
-    if let Some(Some(rows)) = m5.as_mut() {
-        auto_figures::forget_range_closes(rows);
-    }
+    // The 5-minute base: kind 5 with the core's ring in the buckets it leaves empty (module doc).
+    let m5 = span(BarSource::Cache5m).map(|window| {
+        let real = read(5, Some(window)).flatten()?;
+        let ring = read(RING_5M_KIND, Some(window)).flatten()?;
+        let mut base = Vec::with_capacity(real.len() + ring.len());
+        auto_figures::with_ring_rows(&real, &ring, &mut base);
+        Some(base)
+    });
     let d1 = read(1440, span(BarSource::CacheDaily));
 
     plans
@@ -332,14 +318,14 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
             let row_ms = key.tf.ms();
             let (bars, read_failed, lagging) = match source {
                 BarSource::ChartSeries | BarSource::ChartResampled => (
-                    closed_bars(chart, chart_tf_ms, row_ms, key.last_closed_ms),
+                    closed_bars(&job.chart, chart_tf_ms, row_ms, key.last_closed_ms),
                     false,
                     false,
                 ),
                 BarSource::Cache5m => match m5.as_ref().and_then(Option::as_ref) {
                     Some(rows) => {
                         let tail_closed = last_closed_open_ms(job.now_ms, TfId::M5);
-                        let rows = with_chart_tail(rows, chart, chart_tf_ms, tail_closed);
+                        let rows = with_chart_tail(rows, &job.chart, chart_tf_ms, tail_closed);
                         let (bars, lagging) =
                             cache_bars(&rows, row_ms, key.last_closed_ms, job.now_ms);
                         (bars, false, lagging)

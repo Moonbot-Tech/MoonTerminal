@@ -88,8 +88,18 @@ fn answer(r: &ScanResult) -> Answer {
 }
 
 fn scan(rows: &[ScanRow], bars: &[ChartCandle], now_ms: f64) -> ScanResult {
+    scan_with_ring(rows, bars, &[], now_ms)
+}
+
+/// [`scan`] with `ring` as the market's rows of the core's ring kind beside its real candles.
+fn scan_with_ring(
+    rows: &[ScanRow],
+    bars: &[ChartCandle],
+    ring: &[ChartCandle],
+    now_ms: f64,
+) -> ScanResult {
     let mut out = ScanResult::default();
-    scan_market(rows, bars, now_ms, None, &mut out);
+    scan_market(rows, bars, ring, now_ms, None, &mut out);
     out
 }
 
@@ -537,13 +547,14 @@ fn bench_scan_is_stable_and_auto_is_h1() {
     scan_market(
         &[round_row(0, TfId::H1, EventMarks::default())],
         &other,
+        &[],
         other_now,
         None,
         &mut reused,
     );
-    scan_market(&auto_rows, &bars, now, None, &mut reused);
+    scan_market(&auto_rows, &bars, &[], now, None, &mut reused);
     assert_eq!(answer(&reused), answer(&fresh));
-    scan_market(&auto_rows, &bars, now, None, &mut reused);
+    scan_market(&auto_rows, &bars, &[], now, None, &mut reused);
     assert_eq!(answer(&reused), answer(&fresh));
 
     let shipped = ScanRow::from_rows(&AutoFiguresCfg::shipped().rows);
@@ -662,8 +673,8 @@ fn a_formation_two_rows_find_is_one_line() {
     assert_eq!(both.nearest.map(|l| l.row_ix), Some(1), "{both:?}");
 }
 
-/// Twelve 5-minute rows per hour in the core's ring form — `open == high`, `close == low` — each
-/// hour spanning `(high, low)`.
+/// Twelve 5-minute rows per hour with the ring's placeholder open and close — `open == high`,
+/// `close == low` — each hour spanning `(high, low)`.
 fn hourly_ring(ranges: &[(f32, f32)]) -> Vec<ChartCandle> {
     ranges
         .iter()
@@ -674,28 +685,40 @@ fn hourly_ring(ranges: &[(f32, f32)]) -> Vec<ChartCandle> {
 
 /// A market the cache knows only from the core's ring finds its levels and no break: three hours
 /// spanning 3.38–3.45 and one spanning 3.52–3.58 — read as closes at the lows, 3.38 then 3.52, the
-/// 3.5 level would be "broken" on the last hour. With two ring hours and then two real hours closing
-/// 3.4 and 3.55, the breakout is the real closes' and is found.
+/// 3.5 level would be "broken" on the last hour. The same bars read as REAL candles do break it:
+/// the mark comes from the kind the rows were read from, not from their shape. And with real
+/// candles for the last two hours (closing 3.4 and 3.55) over the same ring, the real candles win
+/// their buckets and the breakout is theirs.
 ///
 /// By hand: the round level is placed from the last price, the middle of the last ring row's range,
 /// (3.58 + 3.52) / 2 = 3.55, so 3.5 is the only half-order level within 10 %; the scan keeps it
 /// either way. Its distance in the real case is (3.5 - 3.55) / 3.55 = -1.408 %.
 ///
-/// Breakage: the range-only rows' lows taken as closes (a breakout made of ring bars), or the rows
-/// dropped (no level, no history).
+/// Breakage: the ring's placeholder lows taken as closes (a breakout made of ring bars), the mark
+/// taken from the shape (the real candles of that shape lose their closes), a ring row shadowing
+/// a real candle, or the ring dropped (no level, no history).
 #[test]
 fn a_ring_breaks_nothing_and_real_closes_break_the_level() {
     let rows = [round_row(0, TfId::H1, EventMarks::default())];
     let now = MONDAY_2024_01_01_MS + 4.0 * HOUR_MS;
     let ring = hourly_ring(&[(3.45, 3.38), (3.45, 3.38), (3.45, 3.38), (3.58, 3.52)]);
-    let r = scan(&rows, &ring, now);
+    let r = scan_with_ring(&rows, &[], &ring, now);
     assert_eq!((r.rows_scanned, r.lines), (1, 1), "{r:?}");
     assert_eq!(r.best, None, "{r:?}");
     assert_eq!(r.last_price, Some(f64::from((3.58f32 + 3.52f32) / 2.0)));
 
-    let mut mixed = hourly_ring(&[(3.45, 3.38), (3.45, 3.38)]);
-    mixed.extend(hourly(&[3.4, 3.4, 3.4, 3.55]).into_iter().skip(24));
-    let r = scan(&rows, &mixed, now);
+    let as_real = scan(&rows, &ring, now);
+    assert_eq!(
+        as_real.best.map(|b| b.event),
+        Some(AutoEvent::Breakout),
+        "{as_real:?}"
+    );
+
+    let real: Vec<ChartCandle> = hourly(&[3.4, 3.4, 3.4, 3.55])
+        .into_iter()
+        .skip(24)
+        .collect();
+    let r = scan_with_ring(&rows, &real, &ring, now);
     assert_eq!(r.best.map(|b| b.event), Some(AutoEvent::Breakout), "{r:?}");
     let d = r.nearest.expect("the 3.5 line").distance_pct;
     assert!((d + 1.408_45).abs() < 1e-4, "{d}");
@@ -711,10 +734,10 @@ fn a_live_price_is_the_reference() {
     let rows = [round_row(0, TfId::H1, EventMarks::default())];
     let (bars, now) = breakout_series();
     let mut out = ScanResult::default();
-    scan_market(&rows, &bars, now, Some(3.6), &mut out);
+    scan_market(&rows, &bars, &[], now, Some(3.6), &mut out);
     assert_eq!(out.last_price, Some(3.6));
     let d = out.nearest.expect("the 3.5 line").distance_pct;
     assert!((d + 2.777_78).abs() < 1e-4, "{d}");
-    scan_market(&rows, &bars, now, Some(0.0), &mut out);
+    scan_market(&rows, &bars, &[], now, Some(0.0), &mut out);
     assert_eq!(out.last_price, Some(f64::from(3.55f32)));
 }

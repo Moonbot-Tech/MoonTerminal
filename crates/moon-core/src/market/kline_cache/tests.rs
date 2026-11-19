@@ -293,7 +293,7 @@ fn cache_merges_only_into_v2_without_rewriting_legacy_chunk_bytes() {
     ).expect("legacy row");
     let mut incoming = candle((day + 60_000) as f64, 20.0);
     incoming.quote_volume = 200.0;
-    assert!(upsert_one(&conn, "x", "PAIR", 5, &[incoming], 1, None).expect("v2 merge"));
+    assert!(upsert_one(&conn, "x", "PAIR", 5, &[incoming], 1).expect("v2 merge"));
     let after: Vec<u8> = conn
         .query_row(
             "SELECT rows FROM chunks WHERE exchange='x' AND market='PAIR' AND kind=5 AND day=?1",
@@ -429,20 +429,11 @@ fn a_merge_of_only_invalid_rows_reports_that_it_wrote_nothing() {
 
     let mut rejected = candle(day as f64, 5.0);
     rejected.high = 0.0;
-    let wrote =
-        upsert_one(&conn, "7:0", "BTCUSDT", 1, &[rejected], now, None).expect("filtered merge");
+    let wrote = upsert_one(&conn, "7:0", "BTCUSDT", 1, &[rejected], now).expect("filtered merge");
     assert!(!wrote, "every row was filtered, so nothing was stored");
 
-    let wrote = upsert_one(
-        &conn,
-        "7:0",
-        "BTCUSDT",
-        1,
-        &[candle(day as f64, 5.0)],
-        now,
-        None,
-    )
-    .expect("valid merge");
+    let wrote = upsert_one(&conn, "7:0", "BTCUSDT", 1, &[candle(day as f64, 5.0)], now)
+        .expect("valid merge");
     assert!(wrote, "a row that passes the filter is written");
 }
 
@@ -563,7 +554,6 @@ fn kline_expired_read_runs_no_query() {
         1,
         &[candle(day as f64, 10.0)],
         1,
-        None,
     )
     .expect("seed candle");
     let (tx, rx) = mpsc::sync_channel(OP_QUEUE_CAP);
@@ -800,7 +790,6 @@ fn kline_read_during_prune_waits_for_rows() {
             5,
             &[candle(expired as f64, 10.0), candle(today as f64, 12.0)],
             1,
-            None,
         )
         .expect("seed expired and current rows");
     }
@@ -874,174 +863,77 @@ fn kline_merge_backlog_scale_probe() {
     );
 }
 
-/// A ring row as the core sends it: only the range, `open == high`, `close == low`.
-fn ring_row(t: f64, high: f32, low: f32) -> ChartCandle {
-    ChartCandle {
-        t_open_ms: t,
-        open: high,
-        high,
-        low,
-        close: low,
-        volume: 3.0,
-        quote_volume: 300.0,
+/// The core's ring kind ages out with kind 5, fifteen days, and is not kept for the ten years an
+/// unknown large kind would fall into.
+///
+/// By hand: a ring chunk 16 days old is past fifteen days and goes; one 14 days old stays.
+///
+/// Breakage: the ring kind left out of the startup prune (it would grow for ten years, 5 500
+/// markets of rows a day), or pruned at another kind's cutoff.
+#[test]
+fn the_ring_kind_is_pruned_like_kind_5() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("v2 schema");
+    let today = now_unix_ms() / DAY_MS;
+    for day in [today - 16, today - 14] {
+        conn.execute(
+            "INSERT INTO chunks_v2(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "x",
+                "PAIR",
+                RING_5M_KIND,
+                day,
+                packed_rows(&[candle((day * DAY_MS) as f64, 10.0)], day * DAY_MS, true),
+                0
+            ],
+        )
+        .expect("seed ring chunk");
     }
+    prune_expired(&conn);
+    let days: Vec<i64> = conn
+        .prepare("SELECT day FROM chunks_v2 WHERE kind=?1 ORDER BY day")
+        .expect("query")
+        .query_map([RING_5M_KIND], |row| row.get(0))
+        .expect("rows")
+        .collect::<Result<_, _>>()
+        .expect("days");
+    assert_eq!(days, vec![today - 14]);
 }
 
-/// The range-fill merge through an open connection, the way the worker runs a ring batch.
-fn fill(conn: &rusqlite::Connection, rows: &[ChartCandle]) -> RangeFill {
-    let mut counts = RangeFill::default();
-    upsert_one(conn, "x", "PAIR", 5, rows, 1, Some(&mut counts)).expect("range fill");
-    counts
-}
-
-/// A ring row never overwrites a real candle, and a real candle overwrites a ring row.
+/// A confirmed batch answers per item once the transaction committed, and rows stored under the
+/// ring kind stay out of every kind-5 read.
 ///
-/// By hand: a real candle at `day` (open 10, close 10.5), then ring rows at `day` and
-/// `day + 5 min` — the first is left out under the real one, the second fills its empty bucket.
-/// Then a real candle at `day + 5 min` through the ordinary merge replaces the ring row there.
-///
-/// Breakage: the ring merge going through plain replacement (the real close at `day` lost), or a
-/// real merge that keeps a ring row it should replace.
+/// Breakage: `merge_batch_confirmed` answering before the commit (the read after it would miss the
+/// row) or answering `false` for a stored item (the recorder would rewrite every ring each pass),
+/// or the ring kind landing in kind 5, where the tuner, the mini app and the chart read it.
 #[test]
-fn a_ring_row_never_replaces_a_real_candle_and_a_real_one_replaces_it() {
-    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
-    init_schema(&conn).expect("schema");
-    let day = 20_010 * DAY_MS;
-    let real = candle(day as f64, 10.0);
-    assert!(upsert_one(&conn, "x", "PAIR", 5, &[real], 1, None).expect("real merge"));
-
-    let counts = fill(
-        &conn,
-        &[
-            ring_row(day as f64, 12.0, 8.0),
-            ring_row((day + 300_000) as f64, 13.0, 9.0),
-        ],
-    );
-    assert_eq!(
-        counts,
-        RangeFill {
-            written: 1,
-            kept_real: 1,
-            unchanged: 0
-        }
-    );
-    let rows = read_rows(&conn, "x", "PAIR", 5, day, day + DAY_MS - 1).expect("read");
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0], real, "the real candle stays");
-    assert!(crate::market::candles::is_range_only(&rows[1]));
-
-    let later = candle((day + 300_000) as f64, 11.0);
-    assert!(upsert_one(&conn, "x", "PAIR", 5, &[later], 2, None).expect("real merge"));
-    let rows = read_rows(&conn, "x", "PAIR", 5, day, day + DAY_MS - 1).expect("read");
-    assert_eq!(rows[1], later, "the real candle replaces the ring row");
-}
-
-/// The same ring rows offered twice store nothing the second time, and nothing is duplicated; a
-/// ring row that changed (the core re-sealed the bucket wider) replaces the one stored.
-///
-/// Breakage: an unchanged pass counted as written (its day rewritten), two rows at one open time,
-/// or a stored ring row that a newer ring row cannot correct.
-#[test]
-fn a_repeated_ring_pass_stores_nothing_twice() {
-    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
-    init_schema(&conn).expect("schema");
-    let day = 20_011 * DAY_MS;
-    let rows: Vec<ChartCandle> = (0..3)
-        .map(|i| ring_row((day + i * 300_000) as f64, 12.0, 8.0))
-        .collect();
-    assert_eq!(fill(&conn, &rows).written, 3);
-    assert_eq!(
-        fill(&conn, &rows),
-        RangeFill {
-            written: 0,
-            kept_real: 0,
-            unchanged: 3
-        }
-    );
-    assert_eq!(fill(&conn, &[ring_row(day as f64, 12.5, 8.0)]).written, 1);
-    let read = read_rows(&conn, "x", "PAIR", 5, day, day + DAY_MS - 1).expect("read");
-    assert_eq!(read.len(), 3);
-    assert_eq!(read[0].high, 12.5);
-}
-
-/// A database an older build wrote — real candles only in the legacy `chunks` table — still reads
-/// its real candles where ring rows were filled into `chunks_v2` over the same buckets: a
-/// range-only row never shadows a real one across the two tables, and the legacy bytes are not
-/// touched.
-///
-/// Breakage: the v1-then-v2 read order letting the ring row win over the older real candle, or the
-/// fill rewriting the legacy chunk.
-#[test]
-fn an_old_database_keeps_its_real_candles_under_ring_rows() {
-    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
-    init_schema(&conn).expect("schema");
-    let day = 20_012 * DAY_MS;
-    let mut legacy = candle(day as f64, 10.0);
-    legacy.quote_volume = 0.0;
-    let original = packed_rows(&[legacy], day, false);
-    conn.execute(
-        "INSERT INTO chunks(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params!["x", "PAIR", 5, day / DAY_MS, &original, 0],
-    )
-    .expect("legacy row");
-    // The writer reads v2 only, so it stores the ring row; the reader must still prefer v1's.
-    let counts = fill(
-        &conn,
-        &[
-            ring_row(day as f64, 12.0, 8.0),
-            ring_row((day + 300_000) as f64, 13.0, 9.0),
-        ],
-    );
-    assert_eq!(counts.written, 2);
-    let rows = read_rows(&conn, "x", "PAIR", 5, day, day + DAY_MS - 1).expect("read");
-    assert_eq!(rows.len(), 2);
-    assert_eq!(
-        (rows[0].open, rows[0].close),
-        (10.0, 10.5),
-        "the legacy real candle"
-    );
-    assert!(crate::market::candles::is_range_only(&rows[1]));
-    let after: Vec<u8> = conn
-        .query_row("SELECT rows FROM chunks WHERE kind=5", [], |row| row.get(0))
-        .expect("legacy chunk remains");
-    assert_eq!(after, original);
-}
-
-/// The cache's public ring path end to end: the worker's range-fill batch answers with its counts
-/// and leaves a real candle merged before it in place.
-///
-/// Breakage: `fill_range_batch_blocking` routed through the plain merge, or returning before the
-/// transaction settles (the read after it would not see the ring row).
-#[test]
-fn the_ring_batch_reports_what_it_stored() {
-    let dir = std::env::temp_dir().join(format!("kline-ring-test-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("klines-ring.sqlite");
-    let _ = std::fs::remove_file(&path);
-    let cache = KlineCache::open(path.clone()).expect("open cache");
+fn a_confirmed_ring_batch_lands_under_its_own_kind() {
+    let dir = BenchDir::new("kline-ring-kind");
+    let cache = KlineCache::open(dir.0.join("klines.sqlite")).expect("open cache");
     let day = (now_unix_ms() / DAY_MS) * DAY_MS;
-    let real = candle(day as f64, 10.0);
-    cache.merge_batch_blocking(vec![MergeItem {
-        exchange: "x".into(),
-        market: "PAIR".into(),
-        kind_min: 5,
-        rows: vec![real],
-    }]);
-    let counts = cache.fill_range_batch_blocking(vec![MergeItem {
-        exchange: "x".into(),
-        market: "PAIR".into(),
-        kind_min: 5,
-        rows: vec![
-            ring_row(day as f64, 12.0, 8.0),
-            ring_row((day + 300_000) as f64, 13.0, 9.0),
-        ],
-    }]);
-    assert_eq!((counts.written, counts.kept_real), (1, 1));
-    let rows = cache
+    let ring_row = candle(day as f64, 10.0);
+    let stored = cache.merge_batch_confirmed(vec![
+        MergeItem {
+            exchange: "x".into(),
+            market: "PAIR".into(),
+            kind_min: RING_5M_KIND,
+            rows: vec![ring_row],
+        },
+        MergeItem {
+            exchange: "x".into(),
+            market: "OTHER".into(),
+            kind_min: RING_5M_KIND,
+            rows: Vec::new(),
+        },
+    ]);
+    assert_eq!(stored, vec![true, true]);
+    let ring = cache
+        .read_range("x", "PAIR", RING_5M_KIND, day, day + DAY_MS - 1)
+        .expect("ring read");
+    assert_eq!(ring, vec![ring_row]);
+    let real = cache
         .read_range("x", "PAIR", 5, day, day + DAY_MS - 1)
-        .expect("read");
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0], real);
-    drop(cache);
-    let _ = std::fs::remove_file(&path);
+        .expect("kind 5 read");
+    assert!(real.is_empty(), "{real:?}");
+    assert!(cache.merge_batch_confirmed(Vec::new()).is_empty());
 }

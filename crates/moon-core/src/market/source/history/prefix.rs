@@ -76,16 +76,6 @@ pub(crate) fn poll_cache_prefix(
                     // and costs no extra read.
                     let native_tf_ms = pending.kind as i64 * 60_000;
                     cursor.cache_rows_finer.clear();
-                    // Kind 5 also keeps the core's ring where no real candle exists, in its raw
-                    // range-only form; oriented like the live snapshot before it is folded, so a
-                    // hole it fills does not draw as one long fall.
-                    let mut rows = rows;
-                    for (kind, part) in rows.finer.iter_mut() {
-                        if *kind == 5 {
-                            crate::market::candles::orient_range_rows(part);
-                        }
-                    }
-                    crate::market::candles::orient_range_rows(&mut rows.m5);
                     if !rows.finer.is_empty() {
                         let parts: Vec<crate::market::candles::BasePart<'_>> = rows
                             .finer

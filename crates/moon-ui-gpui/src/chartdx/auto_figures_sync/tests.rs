@@ -202,10 +202,11 @@ fn rows_take_their_bars_from_the_chart_or_the_cache_and_read_it_once() {
     // Two and a half days of hours is sixty: short of the two hundred asked for, and it says so.
     assert_eq!(out[1].1.bars, 60);
     assert!(out[1].1.short_history());
+    // One read per kind — the real candles and the core's ring beside them — serves every
+    // 5-minute row.
     assert_eq!(
-        cache.reads.borrow().len(),
-        1,
-        "one read serves every 5-minute row"
+        cache.reads.borrow().iter().map(|r| r.0).collect::<Vec<_>>(),
+        [5, moon_core::market::kline_cache::RING_5M_KIND],
     );
     assert!(out.iter().all(|(_, o)| !o.read_failed));
 }
@@ -1469,39 +1470,58 @@ fn a_twin_leaves_its_rows_count_and_hands_its_marks_to_the_flag() {
     assert!(moved.rows[1].kept[0].events.contains(AutoEvent::Approach));
 }
 
-/// Cached ring rows (the core's range-only form) reach the row's bars with an unknown open and
-/// close, and a real cached candle replaces them where it exists: of two cached days the last hour
-/// is real, so the newest H1 bars have their closes and the older ones do not, and the reference
-/// price is the real close.
+/// A cache with the core's ring kind beside kind 5: `ring` answers the ring kind, `None` a read
+/// that did not happen.
+struct RingCache {
+    m5: Vec<ChartCandle>,
+    ring: Option<Vec<ChartCandle>>,
+}
+
+impl BarCache for RingCache {
+    fn read(&self, kind_min: u32, _from_ms: i64, _to_ms: i64) -> Option<Vec<ChartCandle>> {
+        match kind_min {
+            5 => Some(self.m5.clone()),
+            moon_core::market::kline_cache::RING_5M_KIND => self.ring.clone(),
+            _ => Some(Vec::new()),
+        }
+    }
+}
+
+/// Rows of the ring kind reach the row's bars with an unknown open and close, and a real candle
+/// (kind 5) replaces them in its bucket — whatever either looks like: of a day and a half of ring
+/// rows the last hour is real, and one of those real candles has the ring's own shape (it opened
+/// at its high and closed at its low), so the newest H1 bar closes at that real low and the older
+/// ones have no close. The reference price is the real close.
 ///
-/// Breakage: the ring's `close == low` read as a close (the older H1 bars closing at their lows),
-/// or the bar assembly forgetting a real candle.
+/// Breakage: the ring's placeholder `close == low` read as a close (the older H1 bars closing at
+/// their lows), the mark taken from the shape (the real falling candle losing its close), or a
+/// ring row shadowing a real one.
 #[test]
-fn cached_ring_rows_have_no_close_and_real_rows_keep_theirs() {
+fn ring_kind_rows_have_no_close_and_real_rows_keep_theirs() {
     let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
     let from = DAY0 - 86_400_000;
-    let mut m5: Vec<ChartCandle> = (0..(288 + 144))
-        .map(|i| {
-            let t = (from + i as i64 * 5 * MIN) as f64;
-            ChartCandle {
-                t_open_ms: t,
-                open: 102.0,
-                high: 102.0,
-                low: 98.0,
-                close: 98.0,
-                volume: 1.0,
-                quote_volume: 1.0,
-            }
-        })
+    let candle = |i: i64, open: f32, high: f32, low: f32, close: f32| ChartCandle {
+        t_open_ms: (from + i * 5 * MIN) as f64,
+        open,
+        high,
+        low,
+        close,
+        volume: 1.0,
+        quote_volume: 1.0,
+    };
+    let n = 288 + 144;
+    let ring: Vec<ChartCandle> = (0..n)
+        .map(|i| candle(i, 102.0, 102.0, 98.0, 98.0))
         .collect();
-    // The last hour before 12:00 is real: opens at 99, closes at 101.
-    for b in m5.iter_mut().rev().take(12) {
-        b.open = 99.0;
-        b.close = 101.0;
-    }
-    let cache = FakeCache {
-        m5: Some(m5),
-        reads: RefCell::new(Vec::new()),
+    // The last hour before 12:00 is real: opens at 99, closes at 101 — but its last candle fell
+    // from its high to its low.
+    let mut m5: Vec<ChartCandle> = (n - 12..n)
+        .map(|i| candle(i, 99.0, 102.0, 98.0, 101.0))
+        .collect();
+    *m5.last_mut().expect("real rows") = candle(n - 1, 102.0, 102.0, 98.0, 98.0);
+    let cache = RingCache {
+        m5,
+        ring: Some(ring),
     };
     let job = PaneJob {
         rows: vec![(0, key(TfId::H1, now, 30))],
@@ -1513,10 +1533,36 @@ fn cached_ring_rows_have_no_close_and_real_rows_keep_theirs() {
     let out = run(&job, Some(&cache));
     let o = &out[0].1;
     assert_eq!(o.source, BarSource::Cache5m);
+    assert!(!o.read_failed);
     let last = o.recent.last().expect("bars");
-    assert_eq!((last.open, last.close), (99.0, 101.0));
+    assert_eq!((last.open, last.close), (99.0, 98.0));
     let older = &o.recent[o.recent.len() - 2];
     assert!(older.close.is_nan() && older.open.is_nan(), "{older:?}");
     assert_eq!((older.high, older.low), (102.0, 98.0));
-    assert_eq!(o.last_close, Some(101.0));
+    assert_eq!(o.last_close, Some(98.0));
+}
+
+/// A ring-kind read that did not happen fails the row like a kind-5 read that did not — it is
+/// retried, rather than trusted on half its history.
+///
+/// Breakage: the missing ring read taken as "no ring rows", an answer short of the hours the ring
+/// covers, never recomputed until the next bar closes.
+#[test]
+fn a_ring_read_that_did_not_happen_is_a_failure() {
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let cache = RingCache {
+        m5: series(DAY0 - 86_400_000, 5 * MIN, 288 + 144),
+        ring: None,
+    };
+    let job = PaneJob {
+        rows: vec![(0, key(TfId::H1, now, 30))],
+        chart_tf_ms: 5 * MIN,
+        chart: Vec::new().into(),
+        cache: None,
+        now_ms: now,
+    };
+    let out = run(&job, Some(&cache));
+    assert_eq!(out[0].1.source, BarSource::Cache5m);
+    assert!(out[0].1.read_failed);
+    assert_eq!(out[0].1.bars, 0);
 }

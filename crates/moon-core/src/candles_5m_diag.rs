@@ -313,25 +313,26 @@ pub fn record(caption: &str, depth: &ProviderDepth, now_ms: i64) {
     );
 }
 
-/// Write one recorder pass's account of the core's rings kept in the candle cache: how many
-/// markets offered rows, how many rows, and what the cache did with them — stored, left out under
-/// a real candle, or already there. One line per pass, beside the per-provider depth lines; nothing
-/// is written while the channel is off.
+/// Write one recorder pass's account of the core's rings stored in the candle cache under their
+/// own kind (`kline_cache::RING_5M_KIND`): how many markets held a snapshot not stored yet, how
+/// many rows those offered, and for how many markets the cache confirmed the write. One line per
+/// pass, beside the per-provider depth lines; nothing is written while the channel is off.
+///
+/// A steady pass reads `markets=0`: only a connect, a reconnect or a new snapshot brings rows (the
+/// recorder's `refresh/ring.rs` says why the live seals in between are not stored). `stored` below
+/// `markets` is a failed write; those markets are taken whole again by the next pass.
 ///
 /// Args:
-///     markets: Markets whose ring offered at least one row this pass.
+///     markets: Markets whose ring held a snapshot not stored yet.
 ///     rows: Rows offered in all.
-///     fill: The cache's answer, summed over the pass's batches.
-pub fn record_ring_fill(markets: usize, rows: usize, fill: crate::market::kline_cache::RangeFill) {
+///     stored: Markets the cache confirmed stored.
+pub fn record_ring_pass(markets: usize, rows: usize, stored: usize) {
     if !enabled() {
         return;
     }
     crate::diagnostics::stamped_line(
         "candles_5m_diag.log",
-        &format!(
-            "ring->cache markets={markets} rows={rows} written={} kept_real={} unchanged={}",
-            fill.written, fill.kept_real, fill.unchanged
-        ),
+        &format!("ring->cache markets={markets} rows={rows} stored={stored}"),
     );
 }
 
