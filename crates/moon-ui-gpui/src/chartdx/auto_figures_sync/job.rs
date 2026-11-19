@@ -49,7 +49,7 @@ use moon_chart::auto_figures::{self, DetectCtx, Found};
 use moon_core::config::auto_figures::{DetectorParams, TfId};
 use moon_core::market::ChartCandle;
 use moon_core::market::candles::resample;
-use moon_core::market::kline_cache::{KlineCache, RING_5M_KIND};
+use moon_core::market::kline_cache::{KIND_5M_MS, KlineCache, RING_5M_KIND};
 
 /// How long after a bar's close the row waits before treating it as closed, ms.
 ///
@@ -57,9 +57,6 @@ use moon_core::market::kline_cache::{KlineCache, RING_5M_KIND};
 /// candle event and the recorder's write both land a moment later. Two seconds of a five-minute
 /// bar is nothing to a reader, and it spares recomputing on a bar that is still being finished.
 pub(crate) const SETTLE_MS: i64 = 2_000;
-
-/// The 5-minute bar of the always-recorded local cache, ms.
-const CACHE_BASE_MS: i64 = 5 * 60_000;
 
 /// Open time of the last bar of `tf` that has closed and settled by `now_ms`.
 pub(crate) fn last_closed_open_ms(now_ms: f64, tf: TfId) -> i64 {
@@ -394,7 +391,7 @@ pub(crate) fn cache_bars(
     last_closed_ms: i64,
     now_ms: f64,
 ) -> (Vec<ChartCandle>, bool) {
-    let expected = (row_ms / CACHE_BASE_MS).max(1) as usize;
+    let expected = (row_ms / KIND_5M_MS).max(1) as usize;
     let (open, close) = (last_closed_ms as f64, (last_closed_ms + row_ms) as f64);
     let have = rows
         .iter()
@@ -406,7 +403,7 @@ pub(crate) fn cache_bars(
     } else {
         last_closed_ms
     };
-    (closed_bars(rows, CACHE_BASE_MS, row_ms, through), lagging)
+    (closed_bars(rows, KIND_5M_MS, row_ms, through), lagging)
 }
 
 /// The open-time window a row reads from the cache: its `needed` bars (what it fetches,
@@ -472,11 +469,11 @@ pub(crate) fn with_chart_tail(
     last_closed_5m: i64,
 ) -> Vec<ChartCandle> {
     let mut rows = cache_rows.to_vec();
-    if chart_tf_ms <= 0 || CACHE_BASE_MS % chart_tf_ms != 0 || chart.is_empty() {
+    if chart_tf_ms <= 0 || KIND_5M_MS % chart_tf_ms != 0 || chart.is_empty() {
         return rows;
     }
     let after = rows.last().map_or(f64::NEG_INFINITY, |r| r.t_open_ms);
-    let folded = closed_bars(chart, chart_tf_ms, CACHE_BASE_MS, last_closed_5m);
+    let folded = closed_bars(chart, chart_tf_ms, KIND_5M_MS, last_closed_5m);
     rows.extend(folded.into_iter().filter(|b| b.t_open_ms > after));
     rows
 }

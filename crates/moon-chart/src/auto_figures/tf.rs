@@ -2,6 +2,7 @@
 //! and where a row's bars come from once its timeframe is known. Decisions only — no I/O.
 
 use moon_core::config::auto_figures::TfId;
+use moon_core::market::kline_cache::KIND_5M_MS;
 
 /// `Auto`'s table: the visible span, in HOURS, at which each timeframe starts, widest first (the
 /// shape of `hvol::AUTO_TF_TABLE`).
@@ -120,9 +121,6 @@ pub enum BarSource {
     Unavailable,
 }
 
-/// Five minutes, ms — the bar of the always-recorded local cache.
-const CACHE_BASE_MS: i64 = 5 * 60_000;
-
 /// Decide where a row's bars come from.
 ///
 /// The choice is made for the DETECTOR's need (`lookback_bars`), never for anything fetched beside
@@ -165,7 +163,7 @@ pub fn bar_source(
     // enough".
     let needed_ms = (f64::from(lookback_bars) + 1.0) * row_ms as f64;
     if chart_tf_ms > 0 && row_ms == chart_tf_ms {
-        let cache_can_build = has_cache && row_ms % CACHE_BASE_MS == 0;
+        let cache_can_build = has_cache && row_ms % KIND_5M_MS == 0;
         if chart_history_ms >= needed_ms || !cache_can_build {
             return BarSource::ChartSeries;
         }
@@ -180,7 +178,7 @@ pub fn bar_source(
     {
         return BarSource::ChartResampled;
     }
-    if row_ms % CACHE_BASE_MS == 0 {
+    if row_ms % KIND_5M_MS == 0 {
         return BarSource::Cache5m;
     }
     BarSource::Unavailable

@@ -105,17 +105,31 @@ std::thread_local! {
 /// lists its kinds explicitly and leaves this one alone; this build prunes it like kind 5.
 pub const RING_5M_KIND: u32 = 1_000_005;
 
+/// The period of a kind-5 row and of a [`RING_5M_KIND`] row, ms — the one 5-minute bucket both
+/// kinds file their rows under.
+///
+/// The single source for every reader that buckets, resamples or ages these rows (the auto
+/// figures' bar assembly, the Screener's scan, the chart's auto-figure job, the ring recorder): a
+/// copy of the number in each of them is a copy that can drift from the cache's own bucket.
+pub const KIND_5M_MS: i64 = 5 * 60_000;
+
 /// Returns retention in days for a candle kind.
 ///
 /// Small timeframes are expensive while larger ones are cheap. The background recorder
 /// writes 5-minute data for ALL markets, about 15 MB/day for roughly 5,500 markets, so it
-/// retains 15 days to keep the database near 250 MB instead of multiple gigabytes
+/// retains 15 days to keep kind 5 near 250 MB instead of multiple gigabytes
 /// (measured 2026-07-15). Distant small-timeframe history is unnecessary because larger
 /// layers fill the tail. One-minute data comes from deep-history replies for open charts
 /// and is retained for 30 days.
 ///
 /// The core's ring ([`RING_5M_KIND`]) is kept as long as kind 5: it fills kind 5's holes, and a
-/// hole older than kind 5's retention is one no reader looks at.
+/// hole older than kind 5's retention is one no reader looks at. Its size is NOT inside the
+/// 250 MB above, and it is not small: a ring covers every market of the core, so each calendar day
+/// a snapshot reaches gains up to 288 rows × 28 B ≈ 8 KB per market. With the terminal started
+/// (or reconnected) at least once a day, every day is reached — about 44 MB a day for 5,500
+/// markets and some 650 MB over the 15 days at the ceiling, on top of kind 5. Less when the
+/// terminal runs rarely (a snapshot reaches back only about 41.6 hours, so the days between two
+/// launches farther apart than that stay empty) or when a ring holds fewer rows than its 500.
 ///
 /// Crate-visible so the auto-figure presets can be checked against it: a shipped row deeper than
 /// what the cache keeps would report short history forever.
@@ -796,10 +810,19 @@ fn read_or_empty(
 /// see the module doc for why an `upsert_one` that instead decoded and rewrote it would risk
 /// destroying rows it failed to fully understand.
 ///
+/// A day whose merged rows come out byte-identical to the stored chunk is NOT rewritten. The
+/// recorder hands the core's whole ring (up to 500 rows, two or three days) to this one worker for
+/// every market again after each reconnect, and a ring that only re-sends what is stored would
+/// otherwise rewrite every day of every market — WAL pages, `updated_ms` and all — on the worker a
+/// chart read waits behind for at most 250 ms. The one exception keeps the downgrade rule of
+/// [`read_rows`] intact: when the legacy `chunks` row for that day is NEWER than the stored v2 one,
+/// the day is rewritten anyway, so the fresh `updated_ms` lets these rows win over it as before.
+///
 /// Returns:
 ///     Whether any chunk was written. `false` means every row failed the timestamp/`high` filter,
-///     which is a successful call that stored nothing — the distinction the liveness line needs,
-///     and one a bare `Ok(())` hid from its caller.
+///     or every day it touched already held exactly these rows; both are successful calls that
+///     stored nothing new — the distinction the liveness line needs, and one a bare `Ok(())` hid
+///     from its caller. The rows are in the cache either way once the call returns `Ok`.
 fn upsert_one(
     conn: &rusqlite::Connection,
     exchange: &str,
@@ -825,18 +848,20 @@ fn upsert_one(
     if by_day.is_empty() {
         return Ok(false);
     }
+    let mut wrote = false;
     for (day, day_rows) in by_day {
-        let existing: Option<Vec<u8>> = conn
+        let existing: Option<(Vec<u8>, i64)> = conn
             .query_row(
-                "SELECT rows FROM chunks_v2 WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
+                "SELECT rows, updated_ms FROM chunks_v2
+                 WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
                 rusqlite::params![exchange, market, kind_min, day],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .ok();
         let day_start = day * DAY_MS;
         let mut merged: BTreeMap<u32, ChartCandle> = BTreeMap::new();
-        if let Some(blob) = existing {
-            for c in unpack_rows_v2(&blob, day_start) {
+        if let Some((blob, _)) = &existing {
+            for c in unpack_rows_v2(blob, day_start) {
                 merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
             }
         }
@@ -844,13 +869,41 @@ fn upsert_one(
             merged.insert((r.t_open_ms as i64 - day_start) as u32, *r);
         }
         let blob = pack_rows_v2(merged.values(), day_start);
+        let unchanged = existing.as_ref().is_some_and(|(stored, stored_ms)| {
+            *stored == blob
+                && !legacy_day_is_newer(conn, exchange, market, kind_min, day, *stored_ms)
+        });
+        if unchanged {
+            continue;
+        }
         conn.execute(
             "INSERT OR REPLACE INTO chunks_v2(exchange, market, kind, day, rows, updated_ms)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![exchange, market, kind_min, day, blob, now],
         )?;
+        wrote = true;
     }
-    Ok(true)
+    Ok(wrote)
+}
+
+/// Whether the legacy `chunks` row of one day was written after the `chunks_v2` row stamped
+/// `v2_updated_ms` — the downgrade case in which [`read_rows`] lets the legacy row win, so an
+/// unchanged v2 day must still be rewritten to win back (see [`upsert_one`]). A missing or
+/// unreadable legacy row is not newer.
+fn legacy_day_is_newer(
+    conn: &rusqlite::Connection,
+    exchange: &str,
+    market: &str,
+    kind_min: u32,
+    day: i64,
+    v2_updated_ms: i64,
+) -> bool {
+    conn.query_row(
+        "SELECT updated_ms FROM chunks WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
+        rusqlite::params![exchange, market, kind_min, day],
+        |r| r.get::<_, i64>(0),
+    )
+    .is_ok_and(|v1_ms| v1_ms > v2_updated_ms)
 }
 
 /// Reads rows for one key across both tables, merging v1 under v2 per bucket offset.

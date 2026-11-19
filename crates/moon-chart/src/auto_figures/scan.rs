@@ -46,6 +46,7 @@ use moon_core::config::auto_figures::{
     AutoEvent, AutoFigureRow, DetectorParams, EventMarks, Take, TfId, TfSource,
 };
 use moon_core::market::candles::{ChartCandle, resample};
+use moon_core::market::kline_cache::KIND_5M_MS;
 
 use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
@@ -70,9 +71,6 @@ pub const AUTO_TF: TfId = TfId::H1;
 /// (its high and low would be wrong); past it the bucket is taken as it is — an illiquid market may
 /// simply have no row for a quiet five minutes.
 pub const LAG_CAP_MS: i64 = 5 * 60_000;
-
-/// The bar of the local cache this module reads, ms.
-const BASE_MS: i64 = 5 * 60_000;
 
 /// Longest a market's newest closed 5-minute row may have closed before `now_ms` for its answer to
 /// be CURRENT, ms; past it the answer is marked [`ScanResult::cache_lag_ms`].
@@ -145,7 +143,7 @@ impl ScanRow {
             TfSource::Auto => AUTO_TF,
         }
         .min(params.coarsest_tf());
-        if tf.ms() % BASE_MS != 0 {
+        if tf.ms() % KIND_5M_MS != 0 {
             return None;
         }
         Some(Self {
@@ -385,10 +383,10 @@ pub fn matches(result: &ScanResult, filter: &ScanFilter) -> bool {
 ///
 /// Args:
 ///     rows: The rows to run ([`ScanRow::from_rows`] of Main's set).
-///     bars_5m: The market's real 5-minute candles (the kline cache's kind 5), sorted by open time
-///         ascending, as the cache returns them. Unreadable rows (non-finite or non-positive
-///         prices, `high < low`) and rows out of order are skipped; nothing in them can panic the
-///         scan.
+///     bars_5m: The market's real 5-minute candles (the kline cache's kind 5), in any order —
+///         the cache returns them ascending, and [`with_ring_rows`] sorts the assembled base when
+///         they are not. Unreadable rows (non-finite or non-positive prices, `high < low`) are
+///         dropped; nothing in them can panic the scan.
 ///     ring_5m: The market's rows of the core's 5-minute ring (the cache's ring kind), likewise;
 ///         read for their high and low only, in buckets `bars_5m` leaves empty.
 ///     now_ms: The reference time, Unix ms — what decides which bars are closed and where sloped
@@ -557,7 +555,7 @@ pub fn scan_market(
     out.short_history = scanned == 0 && short > 0;
     out.last_price = last_price;
     out.cache_lag_ms = m5.last().and_then(|b| {
-        let lag = now_ms - (b.t_open_ms + BASE_MS as f64);
+        let lag = now_ms - (b.t_open_ms + KIND_5M_MS as f64);
         (lag > STALE_CACHE_MS as f64).then_some(lag as i64)
     });
 }
@@ -582,7 +580,7 @@ fn closed_5m(base: &[ChartCandle], now_ms: f64, out: &mut Vec<ChartCandle>) -> O
         }
         after = b.t_open_ms;
         last = price_of(b);
-        if b.t_open_ms + BASE_MS as f64 <= now_ms {
+        if b.t_open_ms + KIND_5M_MS as f64 <= now_ms {
             out.push(*b);
         }
     }
@@ -597,7 +595,7 @@ fn closed_bars(m5: &[ChartCandle], tf_ms: i64, now_ms: f64, out: &mut Vec<ChartC
     let Some(first) = m5.first() else {
         return;
     };
-    if tf_ms == BASE_MS {
+    if tf_ms == KIND_5M_MS {
         out.extend_from_slice(m5);
         return;
     }
@@ -613,7 +611,7 @@ fn closed_bars(m5: &[ChartCandle], tf_ms: i64, now_ms: f64, out: &mut Vec<ChartC
         out.pop();
     }
     if let Some(open) = out.last().map(|b| b.t_open_ms) {
-        let expected = usize::try_from(tf_ms / BASE_MS)
+        let expected = usize::try_from(tf_ms / KIND_5M_MS)
             .unwrap_or(usize::MAX)
             .max(1);
         let have = m5

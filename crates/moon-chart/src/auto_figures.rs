@@ -56,6 +56,7 @@
 
 use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams, ToleranceUnit};
 use moon_core::market::candles::ChartCandle;
+use moon_core::market::kline_cache::KIND_5M_MS;
 
 pub mod confluence;
 pub mod draw;
@@ -473,9 +474,6 @@ pub(crate) fn price_of(b: &ChartCandle) -> Option<f64> {
     close_of(b).or_else(|| positive((f64::from(b.high) + f64::from(b.low)) / 2.0))
 }
 
-/// The 5-minute bucket both cache kinds file their rows under, ms.
-const BASE_BUCKET_MS: i64 = 5 * 60_000;
-
 /// The 5-minute base of a market, assembled into `out` from the cache's two kinds: `real`, the
 /// real candles (kind 5), and `ring`, the core's ring rows (`kline_cache::RING_5M_KIND`) — the
 /// bar assembly's first step (see the module doc).
@@ -492,7 +490,7 @@ const BASE_BUCKET_MS: i64 = 5 * 60_000;
 pub fn with_ring_rows(real: &[ChartCandle], ring: &[ChartCandle], out: &mut Vec<ChartCandle>) {
     out.clear();
     let price = |v: f32| v.is_finite() && v > 0.0;
-    let bucket = |b: &ChartCandle| (b.t_open_ms as i64).div_euclid(BASE_BUCKET_MS);
+    let bucket = |b: &ChartCandle| (b.t_open_ms as i64).div_euclid(KIND_5M_MS);
     out.extend(real.iter().copied().filter(|b| {
         b.t_open_ms.is_finite()
             && [b.open, b.high, b.low, b.close].into_iter().all(price)

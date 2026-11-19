@@ -323,6 +323,14 @@ start backfills and can take longer), read from memory only — nothing is reque
   || deepest / median / shallowest   three example markets with the same figures each
 Percentiles are nearest-rank: every printed figure is a value some market actually has.
 
+One more line per pass, `ring->cache markets= rows= stored=`, accounts for the rings the recorder
+copies into the candle cache under a kind of their own (read only by auto figures and the Screener):
+  markets                     markets whose ring held a snapshot not stored yet
+  rows                        rows those snapshots offered in all
+  stored                      markets the cache confirmed written
+A steady pass reads `markets=0`: only a connect, a reconnect or a new snapshot brings rows.
+`stored` below `markets` is a failed write; those markets are taken whole again on the next pass.
+
 The first line appears up to a minute after switching on. Written by the graphical terminal only:
 the sweep runs on its kline recorder's background thread, which the server station does not start.
 COST: low — one pass over every ring of every provider per minute, on a background thread. On

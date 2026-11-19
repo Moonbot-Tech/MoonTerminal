@@ -47,9 +47,7 @@
 use moonproto::state::SeqRingCursor;
 
 use crate::market::candles::{ChartCandle, normalize_ohlc, split_wire_volume};
-
-/// The ring's period, ms. Its rows are stamped when they were sealed, at the END of their period.
-pub(super) const RING_TF_MS: i64 = 300_000;
+use crate::market::kline_cache::KIND_5M_MS;
 
 /// What the recorder remembers about one market's ring between passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +94,7 @@ pub(super) fn ring_open_ms(stamp_ms: i64, cur_bucket_ms: i64) -> Option<i64> {
     if stamp_ms <= 0 {
         return None;
     }
-    let open = (stamp_ms - RING_TF_MS).div_euclid(RING_TF_MS) * RING_TF_MS;
+    let open = (stamp_ms - KIND_5M_MS).div_euclid(KIND_5M_MS) * KIND_5M_MS;
     (open < cur_bucket_ms).then_some(open)
 }
 

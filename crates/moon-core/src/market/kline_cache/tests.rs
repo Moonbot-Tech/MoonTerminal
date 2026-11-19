@@ -437,6 +437,72 @@ fn a_merge_of_only_invalid_rows_reports_that_it_wrote_nothing() {
     assert!(wrote, "a row that passes the filter is written");
 }
 
+/// Reads one v2 chunk's blob and `updated_ms`, for the rewrite tests below.
+fn v2_chunk(conn: &rusqlite::Connection, kind: u32, day: i64) -> (Vec<u8>, i64) {
+    conn.query_row(
+        "SELECT rows, updated_ms FROM chunks_v2
+         WHERE exchange='x' AND market='PAIR' AND kind=?1 AND day=?2",
+        rusqlite::params![kind, day],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .expect("v2 chunk")
+}
+
+/// Every reconnect hands the cache the core's whole ring again, for every market; when that ring
+/// only repeats what is stored, rewriting each day put thousands of identical chunk writes on the
+/// single worker chart reads queue behind. Deleting the unchanged-day skip in `upsert_one` makes
+/// the second write below stamp the newer `updated_ms` and report a write.
+#[test]
+fn a_repeated_snapshot_leaves_unchanged_days_unwritten() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("schema");
+    let day = 20_010_i64;
+    let rows: Vec<ChartCandle> = (0..3)
+        .map(|i| candle((day * DAY_MS + i * 300_000) as f64, 10.0 + i as f32))
+        .collect();
+    assert!(upsert_one(&conn, "x", "PAIR", RING_5M_KIND, &rows, 100).expect("first write"));
+    let first = v2_chunk(&conn, RING_5M_KIND, day);
+
+    let wrote = upsert_one(&conn, "x", "PAIR", RING_5M_KIND, &rows, 200).expect("repeat");
+    assert!(!wrote, "the same rows again change nothing");
+    assert_eq!(
+        v2_chunk(&conn, RING_5M_KIND, day),
+        first,
+        "the stored chunk keeps its bytes and its stamp"
+    );
+
+    let mut moved = rows.clone();
+    moved[1].high += 1.0;
+    assert!(upsert_one(&conn, "x", "PAIR", RING_5M_KIND, &moved, 300).expect("changed"));
+    assert_eq!(
+        v2_chunk(&conn, RING_5M_KIND, day).1,
+        300,
+        "a day with a changed row is rewritten"
+    );
+}
+
+/// The downgrade rule of `read_rows` lets a legacy chunk written AFTER the v2 one win; an
+/// unchanged v2 day skipped under it would leave the older executable's rows shadowing the ones
+/// just merged. So the skip yields to a newer legacy row and the day is stamped again.
+#[test]
+fn an_unchanged_day_is_still_rewritten_under_a_newer_legacy_chunk() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("schema");
+    let day = 20_011_i64;
+    let row = candle((day * DAY_MS) as f64, 10.0);
+    assert!(upsert_one(&conn, "x", "PAIR", 5, &[row], 100).expect("first write"));
+    let legacy = packed_rows(&[candle((day * DAY_MS) as f64, 20.0)], day * DAY_MS, false);
+    conn.execute(
+        "INSERT INTO chunks(exchange, market, kind, day, rows, updated_ms)
+         VALUES('x', 'PAIR', 5, ?1, ?2, 150)",
+        rusqlite::params![day, legacy],
+    )
+    .expect("newer legacy chunk");
+
+    assert!(upsert_one(&conn, "x", "PAIR", 5, &[row], 200).expect("repeat"));
+    assert_eq!(v2_chunk(&conn, 5, day).1, 200, "the v2 day wins back");
+}
+
 /// The liveness line is a heartbeat, and a heartbeat repeated per key is not one: the per-key form
 /// reset its deduplication set on every launch and wrote ~4700 lines within minutes of each start,
 /// 32803 a day. One line per writer, whatever it goes on to merge.
