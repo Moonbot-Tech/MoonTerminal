@@ -200,7 +200,10 @@ fn every_detector_survives_empty_and_tiny_input() {
         );
         let found = detect(&params, &one, &ctx);
         match kind {
-            DetectorKind::Swing | DetectorKind::Trend | DetectorKind::Squeeze => {
+            DetectorKind::Swing
+            | DetectorKind::Trend
+            | DetectorKind::Squeeze
+            | DetectorKind::Formation => {
                 assert!(found.is_empty(), "{kind:?} on one bar");
             }
             DetectorKind::PeriodExtreme

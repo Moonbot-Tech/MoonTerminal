@@ -307,3 +307,137 @@ fn unusable_geometry_draws_nothing() {
             .is_empty()
     );
 }
+
+/// A two-line formation of `tag` with the sides `upper` and `lower`, `(t0, p0, t1, p1)` each.
+fn formation(tag: LineTag, upper: (f64, f64, f64, f64), lower: (f64, f64, f64, f64)) -> Found {
+    let seg = |(t0_ms, p0, t1_ms, p1)| Seg {
+        t0_ms,
+        p0,
+        t1_ms,
+        p1,
+    };
+    Found {
+        shape: FoundShape::Pair {
+            upper: seg(upper),
+            lower: seg(lower),
+        },
+        tag: Some(tag),
+        first_ms: upper.0.min(lower.0),
+        last_ms: upper.2.max(lower.2),
+        ..level(100.0, 0.0, 0.0)
+    }
+}
+
+/// A triangle's sides stop where they meet, or at the reference time before that — never rays.
+///
+/// By hand: the top falls 110 → 106 over 1..3 s (−2/s), the bottom rises 90 → 92 over 2..4 s
+/// (+1/s): they meet where 110 − 2(t − 1) = 90 + (t − 2), at t = 8 s, price 96. At a reference of
+/// 5 s both stop at 5 s (102 and 93); at 20 s both stop at the apex.
+///
+/// Breakage: a converging side drawn as a ray past the apex, or the apex solved with the wrong
+/// signs.
+#[test]
+fn a_triangle_stops_at_its_apex_or_now() {
+    let f = formation(
+        LineTag::Triangle,
+        (1_000.0, 110.0, 3_000.0, 106.0),
+        (2_000.0, 90.0, 4_000.0, 92.0),
+    );
+    let (figs, bands) = draw_at(&f, &style(Extend::RightEdge), 0.5, 5_000.0);
+    assert!(bands.is_empty(), "no zone for sloped sides");
+    let segs: Vec<_> = figs.iter().map(|f| f.kind.clone()).collect();
+    assert_eq!(
+        segs,
+        [
+            FigureKind::Segment(Segment {
+                a: FigNode::new(1_000.0, 110.0),
+                b: FigNode::new(5_000.0, 102.0),
+            }),
+            FigureKind::Segment(Segment {
+                a: FigNode::new(2_000.0, 90.0),
+                b: FigNode::new(5_000.0, 93.0),
+            }),
+        ]
+    );
+    let (figs, _) = draw_at(&f, &style(Extend::RightEdge), 0.5, 20_000.0);
+    let ends: Vec<_> = figs
+        .iter()
+        .map(|f| match f.kind {
+            FigureKind::Segment(s) => (s.b.time_ms, s.b.price),
+            ref k => panic!("{k:?}"),
+        })
+        .collect();
+    assert_eq!(ends.len(), 2);
+    for (t, p) in ends {
+        assert!(
+            (t - 8_000.0).abs() < 1e-6 && (p - 96.0).abs() < 1e-9,
+            "{t} {p}"
+        );
+    }
+}
+
+/// A sloped channel runs on as two rays; a horizontal pair (a double top) is two levels from the
+/// formation's first touch, with its zone the box between them.
+#[test]
+fn a_channel_runs_on_and_a_double_is_a_boxed_pair_of_levels() {
+    let channel = formation(
+        LineTag::Channel,
+        (1_000.0, 110.0, 3_000.0, 108.0),
+        (2_000.0, 99.0, 4_000.0, 97.0),
+    );
+    let (figs, _) = draw(&channel, &style(Extend::RightEdge), 0.5);
+    assert_eq!(figs.len(), 2);
+    assert!(figs.iter().all(|f| matches!(f.kind, FigureKind::Ray(_))));
+
+    let double = formation(
+        LineTag::DoubleTop,
+        (1_000.0, 110.0, 3_000.0, 110.0),
+        (1_000.0, 104.0, 3_000.0, 104.0),
+    );
+    let mut boxed = style(Extend::RightEdge);
+    boxed.zone_alpha = Some(0.2);
+    let (figs, bands) = draw(&double, &boxed, 0.5);
+    let kinds: Vec<_> = figs.iter().map(|f| f.kind.clone()).collect();
+    assert_eq!(
+        kinds,
+        [
+            FigureKind::HorizontalRay(HorizontalRay {
+                origin: FigNode::new(1_000.0, 110.0),
+            }),
+            FigureKind::HorizontalRay(HorizontalRay {
+                origin: FigNode::new(1_000.0, 104.0),
+            }),
+        ]
+    );
+    assert_eq!(bands.len(), 1);
+    let b = bands[0];
+    assert_eq!(
+        (b.p0, b.p1, b.t0_ms, b.t1_ms),
+        (104.0, 110.0, 1_000.0, f64::INFINITY)
+    );
+    assert!((b.color[3] - 0.2).abs() < 1e-6);
+}
+
+/// A flag that comes out exactly flat is still a short pattern: its sides stop at the reference
+/// time, never run to the edge as levels, and draw no box.
+///
+/// Breakage: the level-and-box branch taken on float equality before the tag is read.
+#[test]
+fn a_flat_flag_is_capped_not_a_pair_of_levels() {
+    let flag = formation(
+        LineTag::Flag,
+        (1_000.0, 110.0, 3_000.0, 110.0),
+        (1_500.0, 108.0, 3_500.0, 108.0),
+    );
+    let mut boxed = style(Extend::RightEdge);
+    boxed.zone_alpha = Some(0.2);
+    let (figs, bands) = draw_at(&flag, &boxed, 0.5, 5_000.0);
+    assert!(bands.is_empty());
+    assert_eq!(figs.len(), 2);
+    for f in &figs {
+        let FigureKind::Segment(s) = f.kind else {
+            panic!("{:?}", f.kind);
+        };
+        assert_eq!(s.b.time_ms, 5_000.0);
+    }
+}

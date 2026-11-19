@@ -1,5 +1,5 @@
 use super::super::test_bars::{ace, bar};
-use super::super::{FoundShape, Touch};
+use super::super::{FoundShape, Seg, Touch};
 use super::*;
 
 fn line(shape: FoundShape) -> Found {
@@ -432,4 +432,66 @@ fn an_unmarked_role_flip_shows_as_a_bounce() {
     assert_eq!(story(false, true), vec![AutoEvent::Bounce]);
     assert_eq!(story(true, false), vec![AutoEvent::RoleFlip]);
     assert_eq!(story(false, false), Vec::<AutoEvent>::new());
+}
+
+/// A horizontal two-line formation from `lower` to `upper`.
+fn pair(upper: f64, lower: f64) -> Found {
+    let side = |p: f64| Seg {
+        t0_ms: 0.0,
+        p0: p,
+        t1_ms: 1.0,
+        p1: p,
+    };
+    line(FoundShape::Pair {
+        upper: side(upper),
+        lower: side(lower),
+    })
+}
+
+/// A formation breaks out through EITHER side, bounces off either, and a bar that does both tells
+/// one story — the breakout.
+///
+/// By hand, a channel 99..101 and bars of ±0.2 around their closes: a close of 101.5 after 100
+/// crosses the top, one of 98.5 the bottom; a close of 99.1 after 99.5 dips its low to 98.9, onto
+/// the bottom, and holds above it. The last bar of the fourth case closes at 98.5 below the bottom
+/// while its high of 101.2 reached the top from below and its close stayed below the top too: a
+/// touch-and-hold of the top AND a crossing of the bottom, of which only the crossing is shown.
+///
+/// Breakage: only the upper side judged (the downside breakout and the bounce off the bottom go
+/// unmarked), or the two sides' stories shown together.
+#[test]
+fn a_formation_breaks_and_bounces_on_either_side() {
+    let f = [pair(101.0, 99.0)];
+    let e = events_of(&f, &closes(&[100.0, 100.0, 101.5]), 101.5, KEEP3);
+    assert!(e.contains(AutoEvent::Breakout), "{e:?}");
+    let e = events_of(&f, &closes(&[100.0, 100.0, 98.5]), 98.5, KEEP3);
+    assert!(e.contains(AutoEvent::Breakout), "{e:?}");
+    let e = events_of(&f, &closes(&[100.0, 99.5, 99.1]), 99.1, KEEP3);
+    assert!(
+        e.contains(AutoEvent::Bounce) && !e.contains(AutoEvent::Breakout),
+        "{e:?}"
+    );
+
+    let mut bars = closes(&[100.0, 100.0]);
+    bars.push(bar(2, 100.0, 101.2, 98.3, 98.5));
+    let e = events_of(&f, &bars, 98.5, KEEP3);
+    assert!(e.contains(AutoEvent::Breakout), "{e:?}");
+    assert!(
+        !e.contains(AutoEvent::Bounce) && !e.contains(AutoEvent::StopHunt),
+        "{e:?}"
+    );
+}
+
+/// A formation is approached at its NEARER side: a price of 99.1 is 0.1 % from the bottom of a
+/// 99..101 channel, inside the default 0.3 %, though 1.9 % from its top; a price of 100 is 1 % from
+/// both and approaches neither.
+///
+/// Breakage: the approach measured to the upper line only.
+#[test]
+fn a_formation_is_approached_at_its_nearer_side() {
+    let f = [pair(101.0, 99.0)];
+    let e = events_of(&f, &closes(&[100.0, 100.0]), 99.1, KEEP3);
+    assert!(e.contains(AutoEvent::Approach), "{e:?}");
+    let e = events_of(&f, &closes(&[100.0, 100.0]), 100.0, KEEP3);
+    assert!(!e.contains(AutoEvent::Approach), "{e:?}");
 }

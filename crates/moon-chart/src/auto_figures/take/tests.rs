@@ -194,3 +194,40 @@ fn real_levels_respect_count_and_side() {
         }
     }
 }
+
+/// A horizontal two-line formation from `lower` to `upper`.
+fn pair(upper: f64, lower: f64) -> Found {
+    let side = |p: f64| super::super::Seg {
+        t0_ms: 0.0,
+        p0: p,
+        t1_ms: 1.0,
+        p1: p,
+    };
+    Found {
+        shape: FoundShape::Pair {
+            upper: side(upper),
+            lower: side(lower),
+        },
+        ..level(upper, 1.0)
+    }
+}
+
+/// A formation is kept on the side of its NEARER line: a channel 99..101 is above a price of 100.6
+/// (its top is nearer) and below one of 99.3 (its bottom is), and its distance is to that line — so
+/// with the 101 level beside it, nearest first puts whichever is closer first.
+///
+/// Breakage: the side taken from the upper line alone (a price inside the channel would always see
+/// it above), or the distance measured to the far side.
+#[test]
+fn a_formation_takes_the_side_of_its_nearer_line() {
+    let both = take(1, TakeSide::Both, TakeOrder::Nearest);
+    assert_eq!(select(&[pair(101.0, 99.0)], &both, 100.6, 0.0), [0]);
+    let above = take(1, TakeSide::Above, TakeOrder::Nearest);
+    assert_eq!(select(&[pair(101.0, 99.0)], &above, 100.6, 0.0), [0]);
+    assert!(select(&[pair(101.0, 99.0)], &above, 99.3, 0.0).is_empty());
+    let below = take(1, TakeSide::Below, TakeOrder::Nearest);
+    assert_eq!(select(&[pair(101.0, 99.0)], &below, 99.3, 0.0), [0]);
+    // At 99.3 the channel's bottom (0.3 away) is nearer than a lone level at 98.9 (0.4 away).
+    let found = [level(98.9, 1.0), pair(101.0, 99.0)];
+    assert_eq!(select(&found, &below, 99.3, 0.0), [1]);
+}

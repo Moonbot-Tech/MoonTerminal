@@ -10,9 +10,9 @@
 //! terminal, which knows both.
 
 use super::{
-    AutoFigureRow, AutoFiguresCfg, BrokenPolicy, DetectorParams, EventMarks, LineCaption,
-    LineStyle, RoundLevelsParams, RowDetector, SqueezeParams, SwingParams, Take, TfSource,
-    TrendParams, VolumeProfileParams,
+    AutoFigureRow, AutoFiguresCfg, BrokenPolicy, DetectorParams, EventMarks, FormationParams,
+    LineCaption, LineStyle, RoundLevelsParams, RowDetector, SqueezeParams, SwingParams, Take,
+    TfSource, TrendParams, VolumeProfileParams,
 };
 
 /// Most rows one configuration keeps. Every visible row is a detector run, so an unbounded list —
@@ -66,6 +66,18 @@ pub const AF_PROFILE_BINS_MAX: u16 = 500;
 /// `Major` grid can hold none; past 50 % the "nearby" round numbers are another market.
 pub const AF_ROUND_RANGE_MIN: f32 = 0.5;
 pub const AF_ROUND_RANGE_MAX: f32 = 50.0;
+/// Shortest formation span and shortest flag cap, in bars: three bars cannot hold two pivots of a
+/// side and one of the other.
+pub const AF_FORMATION_BARS_MIN: u32 = 3;
+/// A channel's width-change bound, % of the starting width. Under one percent no real pair of
+/// lines is parallel; at 90 a pair whose width falls to a tenth still counts as a channel.
+pub const AF_PARALLEL_WIDTH_MIN: f32 = 1.0;
+pub const AF_PARALLEL_WIDTH_MAX: f32 = 90.0;
+/// A price move — a flag's pole, a double's trough — upper bound, % of price. Wider than
+/// [`AF_PCT_MAX`], a bound for touch-like bands: a pole of 20 % is an ordinary day for an altcoin.
+pub const AF_MOVE_PCT_MAX: f32 = 50.0;
+/// Longest a flag's pole may be looked for, in bars.
+pub const AF_IMPULSE_BARS_MAX: u32 = 100;
 
 impl AutoFiguresCfg {
     /// Repair whatever a hand-edited or older file can state. Idempotent.
@@ -144,6 +156,7 @@ fn sanitize_detector(params: &mut DetectorParams) {
         // like a hidden one).
         DetectorParams::PeriodLevel(_) => {}
         DetectorParams::RoundLevels(p) => sanitize_round(p),
+        DetectorParams::Formation(p) => sanitize_formation(p),
     }
 }
 
@@ -215,6 +228,42 @@ fn sanitize_profile(p: &mut VolumeProfileParams) {
 fn sanitize_round(p: &mut RoundLevelsParams) {
     let d = RoundLevelsParams::default();
     p.range_pct = finite_or(p.range_pct, d.range_pct).clamp(AF_ROUND_RANGE_MIN, AF_ROUND_RANGE_MAX);
+}
+
+/// Pivot widths, lookback, both tolerances, the per-side touches, the span bounds and the flag and
+/// double numbers into their ranges, and the broken-line policy.
+///
+/// Every kind switch off is left as it is: like a period-level row with every flag off, the row
+/// draws nothing, which is what such a row asks for. `min_bars` and `flag_max_bars` are bounded by
+/// the lookback (a formation longer than the bars searched is never found), which `lookback`
+/// settles first — so a second run sees the same bound and changes nothing.
+fn sanitize_formation(p: &mut FormationParams) {
+    let d = FormationParams::default();
+    p.pivot_left = p.pivot_left.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
+    p.pivot_right = p.pivot_right.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
+    p.lookback_bars = lookback(p.lookback_bars, p.pivot_left, p.pivot_right);
+    p.tolerance_pct = pct(p.tolerance_pct, d.tolerance_pct, AF_TOLERANCE_MIN);
+    p.tolerance_atr = atr_share(p.tolerance_atr, d.tolerance_atr);
+    // Two pivots define a side; a side through one is any line at all.
+    p.min_touches = p.min_touches.clamp(2, AF_TOUCHES_MAX);
+    p.min_bars = p.min_bars.clamp(AF_FORMATION_BARS_MIN, p.lookback_bars);
+    p.parallel_width_pct = finite_or(p.parallel_width_pct, d.parallel_width_pct)
+        .clamp(AF_PARALLEL_WIDTH_MIN, AF_PARALLEL_WIDTH_MAX);
+    p.impulse_pct =
+        finite_or(p.impulse_pct, d.impulse_pct).clamp(AF_TOLERANCE_MIN, AF_MOVE_PCT_MAX);
+    p.impulse_bars = p.impulse_bars.clamp(1, AF_IMPULSE_BARS_MAX);
+    p.flag_max_bars = p
+        .flag_max_bars
+        .clamp(AF_FORMATION_BARS_MIN, p.lookback_bars);
+    p.double_tolerance_pct = pct(
+        p.double_tolerance_pct,
+        d.double_tolerance_pct,
+        AF_TOLERANCE_MIN,
+    );
+    p.double_tolerance_atr = atr_share(p.double_tolerance_atr, d.double_tolerance_atr);
+    p.double_depth_pct =
+        finite_or(p.double_depth_pct, d.double_depth_pct).clamp(AF_TOLERANCE_MIN, AF_MOVE_PCT_MAX);
+    sanitize_broken(&mut p.broken);
 }
 
 /// At least one line: a row that keeps none is a hidden row, and the eye switch says that.

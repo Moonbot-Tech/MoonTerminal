@@ -6,11 +6,14 @@
 //!
 //! Every comparison is against the line's price at the bar's OPEN time (the moment touches are
 //! stamped with), through [`super::FoundShape::price_at`]: a squeeze is judged by its level. A
-//! close exactly on the line has no side and neither breaks nor confirms anything. "The previous
-//! close" below is the nearest earlier close that HAD a side.
+//! two-line formation (`FoundShape::Pair`) is judged side by side — each side as a line of its
+//! own, the two answers merged into one story (`pair_events`): leaving the formation through
+//! either side is its breakout. A close exactly on the line has no side and neither breaks nor
+//! confirms anything. "The previous close" below is the nearest earlier close that HAD a side.
 //!
 //! - **Approach** — the current price is within `approach_pct` of the line at `at_ms`, measured as
-//!   a fraction of the LINE's price.
+//!   a fraction of the LINE's price; for a formation, of its side nearer the price
+//!   ([`super::FoundShape::price_near`]).
 //! - **Squeeze** — the figure is a squeeze whose `pressed` flag is set.
 //! - **Breakout** — the last closed bar closed on the other side of the line from the previous
 //!   close.
@@ -48,7 +51,7 @@
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks};
 use moon_core::market::candles::ChartCandle;
 
-use super::{Found, Side, bar_ok, pct_frac, side_of};
+use super::{Found, FoundShape, Seg, Side, bar_ok, pct_frac, side_of};
 
 /// The events one line shows, as a bit set — no allocation per line.
 ///
@@ -93,6 +96,11 @@ impl EventSet {
     /// Adds `event`.
     pub fn insert(&mut self, event: AutoEvent) {
         self.0 |= Self::bit(event);
+    }
+
+    /// Drops `event` — how a formation's two sides are merged into one story (`pair_events`).
+    fn remove(&mut self, event: AutoEvent) {
+        self.0 &= !Self::bit(event);
     }
 
     /// No event at all.
@@ -173,16 +181,58 @@ pub fn line_events(
     for line in lines {
         let mut set = EventSet::default();
         let shape = &line.shape;
-        if let Some(at) = shape.price_at(at_ms) {
+        // A formation is approached at its nearer side; every other shape has one line.
+        if let Some(at) = shape.price_near(at_ms, price) {
             if price.is_finite() && price > 0.0 && super::within(price, at, approach_frac) {
                 set.insert(AutoEvent::Approach);
             }
         }
-        if matches!(shape, super::FoundShape::Squeeze { pressed: true, .. }) {
+        if matches!(shape, FoundShape::Squeeze { pressed: true, .. }) {
             set.insert(AutoEvent::Squeeze);
         }
-        bar_events(bars, |t| shape.price_at(t), window, hunt_frac, &mut set);
+        match shape {
+            FoundShape::Pair { upper, lower } => {
+                pair_events(bars, upper, lower, window, hunt_frac, &mut set);
+            }
+            _ => bar_events(bars, |t| shape.price_at(t), window, hunt_frac, &mut set),
+        }
         out.push(shown_events(set, marks));
+    }
+}
+
+/// The bar events of a two-line formation: each side judged as a line of its own by
+/// [`bar_events`], then merged so the bar still tells ONE story.
+///
+/// A crossing of either side wins: a bar that closed through the lower side after its range
+/// brushed the upper one broke the formation, and that is all it shows — `Breakout` or
+/// `FalseBreak`, never with a `Bounce`, `RoleFlip` or `StopHunt` from the other side. Without a
+/// crossing, the touch-and-hold events of both sides are kept (a bar spanning a narrow formation
+/// can hold at both), a `RoleFlip` on one side absorbing a plain `Bounce` on the other.
+///
+/// So a close outside the formation after closes inside is a `Breakout` — up through the upper
+/// side or down through the lower, the line says which — and a return inside within the false-break
+/// window a `FalseBreak`, exactly as for a single line.
+fn pair_events(
+    bars: &[ChartCandle],
+    upper: &Seg,
+    lower: &Seg,
+    window: usize,
+    hunt_frac: f64,
+    set: &mut EventSet,
+) {
+    let mut sides = EventSet::default();
+    bar_events(bars, |t| upper.price_at(t), window, hunt_frac, &mut sides);
+    bar_events(bars, |t| lower.price_at(t), window, hunt_frac, &mut sides);
+    let crossed = sides.contains(AutoEvent::Breakout) || sides.contains(AutoEvent::FalseBreak);
+    if crossed {
+        sides.remove(AutoEvent::Bounce);
+        sides.remove(AutoEvent::RoleFlip);
+        sides.remove(AutoEvent::StopHunt);
+    } else if sides.contains(AutoEvent::RoleFlip) {
+        sides.remove(AutoEvent::Bounce);
+    }
+    for e in sides.iter() {
+        set.insert(e);
     }
 }
 

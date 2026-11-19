@@ -1,4 +1,6 @@
-//! `Trend`: sloped lines through pivots, and the line search `Squeeze` reuses.
+//! `Trend`: sloped lines through pivots, and the line search `Squeeze` and `Formation` reuse —
+//! both with no slope bound beyond what they check themselves, so for them the slope screen below
+//! admits flat pairs too.
 //!
 //! Every pair of same-kind pivots (highs for a resistance, lows for a support) defines a candidate
 //! line, built in TIME so a gap in the series does not bend it. A pivot of that kind touches the

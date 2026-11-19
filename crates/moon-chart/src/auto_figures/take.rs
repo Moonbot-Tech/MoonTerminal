@@ -1,9 +1,11 @@
 //! Which of a detector's figures a row keeps: a side filter against the current price, a ranking,
 //! and a count — per side when the row takes both.
 //!
-//! A figure's side is decided by its primary line's price at the moment asked for
-//! ([`super::FoundShape::price_at`]: the level of a horizontal or squeeze, the projection of a sloped
-//! line). A line exactly at the reference price counts as above it. Cost O(F log F).
+//! A figure's side is decided by its line's price at the moment asked for
+//! ([`super::FoundShape::price_near`]: the level of a horizontal or squeeze, the projection of a
+//! sloped line, and for a two-line formation the side NEARER the reference price — price inside a
+//! channel is kept above or below by the boundary it is closer to, and ranked by the distance to
+//! it). A line exactly at the reference price counts as above it. Cost O(F log F).
 
 use moon_core::config::auto_figures::{StrengthBasis, Take, TakeOrder, TakeSide};
 
@@ -31,7 +33,7 @@ pub fn select(found: &[Found], take: &Take, ref_price: f64, at_ms: f64) -> Vec<u
     let mut above: Vec<(usize, f64, f64)> = Vec::new();
     let mut below: Vec<(usize, f64, f64)> = Vec::new();
     for (i, f) in found.iter().enumerate() {
-        let Some(price) = f.shape.price_at(at_ms) else {
+        let Some(price) = f.shape.price_near(at_ms, ref_price) else {
             continue;
         };
         // What "strongest" means for this row: the detector's own rank, or the money traded on

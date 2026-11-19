@@ -13,7 +13,7 @@
 //!     row.kept.iter().filter_map(move |line| Some(PlacedLine {
 //!         row: row.ix,
 //!         tf: row.tf,
-//!         price: line.found.shape.price_at(at_ms)?,
+//!         price: line.found.shape.price_near(at_ms, price)?,
 //!         pct: row.events.confluence_pct,
 //!     }))
 //! }).collect();
@@ -52,7 +52,9 @@ pub struct PlacedLine {
     pub row: usize,
     /// The timeframe the row's detector ran on.
     pub tf: TfId,
-    /// The line's price at the moment judged: `FoundShape::price_at(at_ms)`.
+    /// The line's price at the moment judged: `FoundShape::price_near(at_ms, price)` — for a
+    /// two-line formation its side nearer the current price, the one `take` kept it by; its far
+    /// side takes no part (one placed price per kept line, so `near[i]` answers for line `i`).
     pub price: f64,
     /// The row's `EventMarks::confluence_pct`, % of price.
     pub pct: f32,

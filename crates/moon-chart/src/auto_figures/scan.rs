@@ -163,7 +163,8 @@ pub struct ScanLine {
     pub row_ix: usize,
     /// The timeframe that row was scanned on.
     pub tf: TfId,
-    /// The line's price at `now_ms` (a sloped line projected there).
+    /// The line's price at `now_ms` (a sloped line projected there; for a two-line formation its
+    /// side nearer the last price, `FoundShape::price_near`).
     pub price: f64,
     /// `(price - last price) / last price × 100`: positive when the line is ABOVE the last price,
     /// negative below.
@@ -380,7 +381,8 @@ pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: 
             let Some(f) = found.get(ix) else {
                 continue;
             };
-            let Some(line_price) = f.shape.price_at(now_ms) else {
+            // A formation's distance is to its nearer side, the one `take` kept it by.
+            let Some(line_price) = f.shape.price_near(now_ms, price) else {
                 continue;
             };
             line_events(

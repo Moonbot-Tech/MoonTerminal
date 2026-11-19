@@ -5,14 +5,15 @@
 //!
 //! The shipped set is LinKvo's decision of 18.11.2026: on by default, four rows — 1h levels, 4h
 //! levels in another colour and heavier, the squeeze, and the day's extremes. The volume, period
-//! and round-price presets of 19.11.2026 are offered in the "Add" menu only and never join it.
+//! and round-price presets of 19.11.2026, and the formation presets after them, are offered in the
+//! "Add" menu only and never join it.
 
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AutoFigureRow, DetectorParams, ExtremePeriod, ExtremeWhich, LineStyle, PeriodExtremeParams,
-    PeriodLevelParams, ProfilePeriod, RoundLevelsParams, SqueezeParams, SwingParams, TfId,
-    TfSource, TrendParams, VolumeProfileParams,
+    AutoFigureRow, DetectorParams, ExtremePeriod, ExtremeWhich, FormationParams, LineStyle,
+    PeriodExtremeParams, PeriodLevelParams, ProfilePeriod, RoundLevelsParams, SqueezeParams,
+    SwingParams, TfId, TfSource, TrendParams, VolumeProfileParams,
 };
 use crate::config::chart_labels::LabelColor;
 use crate::figures::LineKind;
@@ -62,11 +63,20 @@ pub enum AutoFigurePreset {
     PeriodLevels,
     /// Round prices on the half-order grid within 10 % of the last close. Offered, not shipped.
     RoundLevels,
+    /// Triangles and wedges: two converging lines. Offered, not shipped.
+    Triangles,
+    /// Channels: two parallel lines, sloped or horizontal. Offered, not shipped.
+    Channels,
+    /// Flags and pennants: a short channel or triangle right after an impulse. Offered, not
+    /// shipped.
+    Flags,
+    /// Double tops and double bottoms. Offered, not shipped.
+    DoubleTops,
 }
 
 impl AutoFigurePreset {
     /// Every preset, in "Add" menu order.
-    pub const ALL: [AutoFigurePreset; 10] = [
+    pub const ALL: [AutoFigurePreset; 14] = [
         AutoFigurePreset::Levels1h,
         AutoFigurePreset::Levels4h,
         AutoFigurePreset::Squeeze,
@@ -77,6 +87,10 @@ impl AutoFigurePreset {
         AutoFigurePreset::NakedPoc,
         AutoFigurePreset::PeriodLevels,
         AutoFigurePreset::RoundLevels,
+        AutoFigurePreset::Triangles,
+        AutoFigurePreset::Channels,
+        AutoFigurePreset::Flags,
+        AutoFigurePreset::DoubleTops,
     ];
 
     /// The rows a chart ships with, in draw order.
@@ -101,6 +115,10 @@ impl AutoFigurePreset {
             AutoFigurePreset::NakedPoc => "auto_figures.preset.naked_poc",
             AutoFigurePreset::PeriodLevels => "auto_figures.preset.period_levels",
             AutoFigurePreset::RoundLevels => "auto_figures.preset.round_levels",
+            AutoFigurePreset::Triangles => "auto_figures.preset.triangles",
+            AutoFigurePreset::Channels => "auto_figures.preset.channels",
+            AutoFigurePreset::Flags => "auto_figures.preset.flags",
+            AutoFigurePreset::DoubleTops => "auto_figures.preset.double_tops",
         }
     }
 
@@ -226,6 +244,70 @@ impl AutoFigurePreset {
                 TfSource::Auto,
                 LineStyle {
                     line_kind: LineKind::Dot,
+                    ..LineStyle::default()
+                },
+            ),
+            // The formation presets follow the chart's zoom, like the trend lines they are built
+            // from: a triangle of 1-minute swings and one of 4-hour swings are both triangles.
+            AutoFigurePreset::Triangles => (
+                DetectorParams::Formation(FormationParams {
+                    channel: false,
+                    flag: false,
+                    double: false,
+                    ..FormationParams::default()
+                }),
+                TfSource::Auto,
+                LineStyle {
+                    color: LabelColor::Fixed(rgb(palette::ACCENT)),
+                    thickness: 1.5,
+                    ..LineStyle::default()
+                },
+            ),
+            AutoFigurePreset::Channels => (
+                DetectorParams::Formation(FormationParams {
+                    triangle: false,
+                    wedge: false,
+                    flag: false,
+                    double: false,
+                    ..FormationParams::default()
+                }),
+                TfSource::Auto,
+                LineStyle {
+                    color: LabelColor::Fixed(rgb(palette::TP)),
+                    ..LineStyle::default()
+                },
+            ),
+            // A flag is short and stands right after its pole, so the last hundred bars hold it,
+            // and two touches a side are what a fifteen-bar flag has room for; the pole and the
+            // retrace bound are what keep noise out.
+            AutoFigurePreset::Flags => (
+                DetectorParams::Formation(FormationParams {
+                    triangle: false,
+                    wedge: false,
+                    channel: false,
+                    double: false,
+                    lookback_bars: 100,
+                    min_touches: 2,
+                    ..FormationParams::default()
+                }),
+                TfSource::Auto,
+                LineStyle {
+                    color: LabelColor::Fixed(rgb(palette::ORANGE)),
+                    thickness: 1.5,
+                    ..LineStyle::default()
+                },
+            ),
+            AutoFigurePreset::DoubleTops => (
+                DetectorParams::Formation(FormationParams {
+                    triangle: false,
+                    wedge: false,
+                    channel: false,
+                    flag: false,
+                    ..FormationParams::default()
+                }),
+                TfSource::Auto,
+                LineStyle {
+                    line_kind: LineKind::Dash,
                     ..LineStyle::default()
                 },
             ),

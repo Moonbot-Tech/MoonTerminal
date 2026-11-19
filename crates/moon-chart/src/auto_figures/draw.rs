@@ -15,7 +15,7 @@ use moon_core::config::auto_figures::{Extend, LineStyle};
 use moon_core::figures::tools::{HLine, HorizontalRay, Ray, Segment};
 use moon_core::figures::{DrawStyle, FigNode, Figure, FigureKind, LineKind};
 
-use super::{Found, FoundShape, positive, within};
+use super::{Found, FoundShape, LineTag, Seg, positive, within};
 use crate::figures::FigureBand;
 
 /// A row's line style with its colour already resolved, ready to stamp onto figures.
@@ -118,7 +118,83 @@ pub fn append_shapes(
             );
             zone(level, found, style, bands);
         }
+        FoundShape::Pair { upper, lower } => {
+            pair(&upper, &lower, found, style, ref_ms, push, bands)
+        }
     }
+}
+
+/// A two-line formation: its two sides in the row's style, and for a horizontal pair the box
+/// between them as its zone.
+///
+/// - Both sides horizontal (a double top or bottom, a range — the detector reports a range's sides
+///   as exact levels), and not tagged a triangle, wedge or flag: each side is a level drawn like a
+///   [`FoundShape::Horizontal`] over the span `extend` gives the formation, and the zone, when the
+///   row draws one, is the box from the lower side to the upper over that span — the
+///   "rectangle of the zone" the pattern is read as.
+/// - A channel: each side like a [`FoundShape::Sloped`] line — a ray to the edge, its mirror, or
+///   the segment between its own touches, as `extend` says. A channel runs on.
+/// - Everything else (a triangle, a wedge, a flag or pennant): each side a segment from its first
+///   touch to the apex where the sides meet or the reference time, whichever comes first — the
+///   squeeze's rule, for its reason: past the apex the lines claim prices the pattern never did.
+///   `BetweenTouches` keeps its meaning.
+///
+/// No zone for sloped sides: the zone layer draws axis-aligned boxes, and a box around a sloped
+/// pair would shade prices outside it.
+fn pair(
+    upper: &Seg,
+    lower: &Seg,
+    found: &Found,
+    style: &ResolvedStyle,
+    ref_ms: f64,
+    mut push: impl FnMut(FigureKind),
+    bands: &mut Vec<FigureBand>,
+) {
+    let flat = |s: &Seg| s.p0 == s.p1;
+    // The level-and-box reading is for the patterns that ARE two levels (a double, a range): a
+    // flag or a triangle that happens to come out flat is still a short pattern, capped below.
+    let levels = !matches!(
+        found.tag,
+        Some(LineTag::Triangle | LineTag::Wedge | LineTag::Flag)
+    );
+    if levels && flat(upper) && flat(lower) {
+        let (Some(hi), Some(lo)) = (positive(upper.p0), positive(lower.p0)) else {
+            return;
+        };
+        horizontal(hi, found, style.extend, &mut push);
+        horizontal(lo, found, style.extend, &mut push);
+        zone_box(lo, hi, found, style, bands);
+        return;
+    }
+    if found.tag == Some(LineTag::Channel) {
+        for s in [upper, lower] {
+            sloped(s.t0_ms, s.p0, s.t1_ms, s.p1, style.extend, &mut push);
+        }
+        return;
+    }
+    let apex = apex_ms(upper, lower);
+    for s in [upper, lower] {
+        capped_slope(
+            (s.t0_ms, s.p0, s.t1_ms, s.p1),
+            apex,
+            ref_ms,
+            style.extend,
+            &mut push,
+        );
+    }
+}
+
+/// The time where the two sides meet, when they converge (the upper side falling toward the lower,
+/// relative to it); `NaN` for parallel or diverging sides, which `capped_slope` reads as "no apex".
+fn apex_ms(upper: &Seg, lower: &Seg) -> f64 {
+    let slope = |s: &Seg| (s.p1 - s.p0) / (s.t1_ms - s.t0_ms);
+    let (su, sl) = (slope(upper), slope(lower));
+    // upper(t) = p0u + su (t − t0u), lower(t) = p0l + sl (t − t0l); equal at the apex.
+    let closing = sl - su;
+    if !(closing > 0.0) {
+        return f64::NAN;
+    }
+    (upper.p0 - su * upper.t0_ms - lower.p0 + sl * lower.t0_ms) / closing
 }
 
 /// The time span `extend` gives a figure anchored to its first and last touch, `±∞` meaning "to
@@ -204,6 +280,22 @@ fn squeeze_slope(
     extend: Extend,
     push: &mut impl FnMut(FigureKind),
 ) {
+    // Where the line meets the level; NaN (no apex) for a flat line, which `capped_slope` ignores.
+    let apex = t0 + (level - p0) / (p1 - p0) * (t1 - t0);
+    capped_slope((t0, p0, t1, p1), apex, ref_ms, extend, push);
+}
+
+/// A sloped line drawn as a segment from its first touch to `apex` or the reference time `ref_ms`,
+/// whichever comes first — never a ray, and never cut short of its last touch by a stale
+/// reference. An `apex` that is not a finite time after the first touch is no apex. `BetweenTouches` is the segment between
+/// the two touches. Shared by a squeeze's sloped half and a converging formation's sides.
+fn capped_slope(
+    (t0, p0, t1, p1): (f64, f64, f64, f64),
+    apex: f64,
+    ref_ms: f64,
+    extend: Extend,
+    push: &mut impl FnMut(FigureKind),
+) {
     if !(t0.is_finite() && t1.is_finite() && t1 > t0) {
         return;
     }
@@ -219,7 +311,6 @@ fn squeeze_slope(
             } else {
                 t1
             };
-            let apex = t0 + (level - p0) / (p1 - p0) * (t1 - t0);
             if apex.is_finite() && apex > t0 {
                 now.min(apex)
             } else {
@@ -263,19 +354,43 @@ fn zone(price: f64, found: &Found, style: &ResolvedStyle, bands: &mut Vec<Figure
         }
     }
     let (t0_ms, t1_ms) = time_span(found, style.extend);
-    let c = |v: u8| f32::from(v) / 255.0;
     bands.push(FigureBand {
         t0_ms,
         t1_ms,
         p0: lo,
         p1: hi,
-        color: [
-            c(style.rgb[0]),
-            c(style.rgb[1]),
-            c(style.rgb[2]),
-            alpha.min(1.0),
-        ],
+        color: band_color(style, alpha),
     });
+}
+
+/// The box from `lo` to `hi` over the formation's drawn span, when the row draws a zone — a
+/// horizontal formation's zone. Same colour and opacity rule as a level's band.
+fn zone_box(lo: f64, hi: f64, found: &Found, style: &ResolvedStyle, bands: &mut Vec<FigureBand>) {
+    let Some(alpha) = style.zone_alpha.filter(|a| a.is_finite() && *a > 0.0) else {
+        return;
+    };
+    if !(lo < hi) {
+        return;
+    }
+    let (t0_ms, t1_ms) = time_span(found, style.extend);
+    bands.push(FigureBand {
+        t0_ms,
+        t1_ms,
+        p0: lo,
+        p1: hi,
+        color: band_color(style, alpha),
+    });
+}
+
+/// The row's colour at `alpha`, as the zone layer's `0..=1` RGBA.
+fn band_color(style: &ResolvedStyle, alpha: f32) -> [f32; 4] {
+    let c = |v: u8| f32::from(v) / 255.0;
+    [
+        c(style.rgb[0]),
+        c(style.rgb[1]),
+        c(style.rgb[2]),
+        alpha.min(1.0),
+    ]
 }
 
 #[cfg(test)]

@@ -449,6 +449,113 @@ impl Default for RoundLevelsParams {
     }
 }
 
+/// `Formation`: chart patterns made of two lines — triangles and wedges (two converging sloped
+/// lines), channels (two parallel ones), flags and pennants (a short channel or triangle right
+/// after an impulse), and double tops and bottoms (two equal extremes with a trough between).
+///
+/// The rules each kind is recognised by are `moon_chart::auto_figures::formations`'s; this struct
+/// only names the switches and the numbers they read. One tolerance unit for the whole row, as in
+/// `Squeeze`: `tolerance_unit` decides whether the touches read `tolerance_pct` or
+/// `tolerance_atr`, AND whether the equality of a double's two extremes reads
+/// `double_tolerance_pct` or `double_tolerance_atr`. Every other distance is always in %.
+///
+/// A detector TYPE of its own rather than a value of an existing field: an older build keeps an
+/// unknown type verbatim (`RowDetector::Unknown`), but would reset an unknown value of a known
+/// type's field to its default.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FormationParams {
+    /// Look for triangles: two converging lines sloping toward each other, or one of them
+    /// horizontal (an ascending or descending triangle).
+    pub triangle: bool,
+    /// Look for wedges: two converging lines sloping the same way.
+    pub wedge: bool,
+    /// Look for channels: two parallel lines, horizontal (a range) or sloped.
+    pub channel: bool,
+    /// Look for flags and pennants: a short channel or converging pair right after an impulse.
+    /// With this off, such a pair is still reported as the channel or triangle it is, when that
+    /// kind is on.
+    pub flag: bool,
+    /// Look for double tops and double bottoms.
+    pub double: bool,
+    /// How many of the most recent closed bars are searched.
+    pub lookback_bars: u32,
+    /// Bars on each side a pivot must out-rank, as in [`SwingParams`].
+    pub pivot_left: u8,
+    pub pivot_right: u8,
+    /// Which of the tolerance fields applies, for the touches and for a double's equality alike.
+    pub tolerance_unit: ToleranceUnit,
+    /// A pivot touches a side when it lies within this distance of the line, in % of price. Read
+    /// under [`ToleranceUnit::Pct`].
+    pub tolerance_pct: f32,
+    /// The same distance as a share of the ATR over [`ATR_PERIOD`] bars. Read under
+    /// [`ToleranceUnit::Atr`].
+    pub tolerance_atr: f32,
+    /// Fewest pivots on EACH side, the two that define the side included. At least two.
+    pub min_touches: u8,
+    /// Shortest formation, in bars from its first touch to its last (a double: from its first
+    /// extreme to its second). Shorter is noise between two neighbouring swings.
+    pub min_bars: u32,
+    /// Two sides are parallel (a channel) when the formation's width — upper line minus lower
+    /// line — changes by at most this over the stretch both sides share (from the later first
+    /// touch to the earlier last touch), in % of the width at its start.
+    /// A width that shrinks by more is a converging pair (a triangle or a wedge); one that grows
+    /// by more is a broadening pattern, which is none of the kinds here and is not reported.
+    pub parallel_width_pct: f32,
+    /// A flag's pole: the move in the `impulse_bars` bars before the formation's first touch must
+    /// reach this, in % of price.
+    pub impulse_pct: f32,
+    /// How many bars before the formation the pole is looked for in.
+    pub impulse_bars: u32,
+    /// Longest a flag may be, in bars from its first touch to its last; a longer consolidation is
+    /// the channel or triangle it is, not a flag.
+    pub flag_max_bars: u32,
+    /// A double's two extremes count as one level when they differ by at most this, in % of
+    /// price. Read under [`ToleranceUnit::Pct`].
+    pub double_tolerance_pct: f32,
+    /// The same as a share of the ATR over [`ATR_PERIOD`] bars. Read under
+    /// [`ToleranceUnit::Atr`].
+    pub double_tolerance_atr: f32,
+    /// Shallowest trough (peak, for a double bottom) between a double's two extremes, in % of the
+    /// level's price.
+    pub double_depth_pct: f32,
+    /// What happens to a formation once a bar has CLOSED outside it after its last touch — beyond
+    /// either line — the same choice a level row makes.
+    pub broken: BrokenPolicy,
+}
+
+impl Default for FormationParams {
+    fn default() -> Self {
+        Self {
+            triangle: true,
+            wedge: true,
+            channel: true,
+            flag: true,
+            double: true,
+            lookback_bars: 150,
+            // Narrower than a level's 3/3: a formation is drawn through the smaller swings inside
+            // it, and a flag of fifteen bars holds few 3/3 pivots.
+            pivot_left: 2,
+            pivot_right: 2,
+            tolerance_unit: ToleranceUnit::Pct,
+            tolerance_pct: 0.2,
+            tolerance_atr: 0.4,
+            // Three a side, the classic five-to-six point pattern: with two a side, ANY two pairs
+            // of swings make a "formation", and noise is full of them.
+            min_touches: 3,
+            min_bars: 15,
+            parallel_width_pct: 20.0,
+            impulse_pct: 3.0,
+            impulse_bars: 10,
+            flag_max_bars: 30,
+            double_tolerance_pct: 0.5,
+            double_tolerance_atr: 0.5,
+            double_depth_pct: 1.5,
+            broken: BrokenPolicy::default(),
+        }
+    }
+}
+
 /// The kind of detector a row runs — one variant per module under `moon_chart::auto_figures`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -460,11 +567,12 @@ pub enum DetectorKind {
     VolumeProfile,
     PeriodLevel,
     RoundLevels,
+    Formation,
 }
 
 impl DetectorKind {
     /// Every kind, in the order the row editor lists them.
-    pub const ALL: [DetectorKind; 7] = [
+    pub const ALL: [DetectorKind; 8] = [
         DetectorKind::Swing,
         DetectorKind::PeriodExtreme,
         DetectorKind::Trend,
@@ -472,6 +580,7 @@ impl DetectorKind {
         DetectorKind::VolumeProfile,
         DetectorKind::PeriodLevel,
         DetectorKind::RoundLevels,
+        DetectorKind::Formation,
     ];
 
     /// The kind's parameters at their defaults — what a row switched to this kind starts with.
@@ -488,6 +597,7 @@ impl DetectorKind {
             }
             DetectorKind::PeriodLevel => DetectorParams::PeriodLevel(PeriodLevelParams::default()),
             DetectorKind::RoundLevels => DetectorParams::RoundLevels(RoundLevelsParams::default()),
+            DetectorKind::Formation => DetectorParams::Formation(FormationParams::default()),
         }
     }
 }
@@ -507,6 +617,7 @@ pub enum DetectorParams {
     VolumeProfile(VolumeProfileParams),
     PeriodLevel(PeriodLevelParams),
     RoundLevels(RoundLevelsParams),
+    Formation(FormationParams),
 }
 
 /// One UTC day, ms — what the calendar detectors' bar counts are sized by.
@@ -541,6 +652,7 @@ impl DetectorParams {
             DetectorParams::VolumeProfile(_) => DetectorKind::VolumeProfile,
             DetectorParams::PeriodLevel(_) => DetectorKind::PeriodLevel,
             DetectorParams::RoundLevels(_) => DetectorKind::RoundLevels,
+            DetectorParams::Formation(_) => DetectorKind::Formation,
         }
     }
 
@@ -556,6 +668,7 @@ impl DetectorParams {
             DetectorParams::Swing(p) => p.broken,
             DetectorParams::Trend(p) => p.broken,
             DetectorParams::Squeeze(p) => p.level.broken,
+            DetectorParams::Formation(p) => p.broken,
             DetectorParams::PeriodExtreme(_)
             | DetectorParams::VolumeProfile(_)
             | DetectorParams::PeriodLevel(_)
@@ -588,8 +701,9 @@ impl DetectorParams {
     /// fetches, and what it compares against before saying "not enough history" instead of
     /// silently drawing nothing.
     ///
-    /// - The pivot detectors: their lookback (`Squeeze`: its level's), raised to
-    ///   `ATR_PERIOD + 1` when the tolerance is in ATR — the ATR reads that many bars.
+    /// - The pivot detectors (`Swing`, `Trend`, `Squeeze`, `Formation`): their lookback
+    ///   (`Squeeze`: its level's), raised to `ATR_PERIOD + 1` when the tolerance is in ATR — the
+    ///   ATR reads that many bars. A flag's pole lies inside the lookback, so it adds nothing.
     /// - A period extreme: the bars that cover the requested period from its START up to the
     ///   latest possible reference time — the current day or week in full, the previous one plus
     ///   all of the current one — plus one (see `bars_for_days`): the detector refuses a period
@@ -615,6 +729,7 @@ impl DetectorParams {
             DetectorParams::Swing(p) => with_atr(p.lookback_bars, p.tolerance_unit),
             DetectorParams::Trend(p) => with_atr(p.lookback_bars, p.tolerance_unit),
             DetectorParams::Squeeze(p) => with_atr(p.level.lookback_bars, p.level.tolerance_unit),
+            DetectorParams::Formation(p) => with_atr(p.lookback_bars, p.tolerance_unit),
             DetectorParams::PeriodExtreme(p) => {
                 let days: i64 = match p.period {
                     ExtremePeriod::Day => 1,
@@ -672,7 +787,7 @@ pub enum TakeOrder {
     #[default]
     Nearest,
     /// Strongest first, by [`Take::strength`]. Under [`StrengthBasis::Touches`], for the pivot
-    /// detectors (`Swing`, `Trend`, `Squeeze`) the strength is the touch count plus the fraction
+    /// detectors (`Swing`, `Trend`, `Squeeze`, `Formation`) the strength is the touch count plus the fraction
     /// of the searched window the touches span — the fraction is below one, so one more touch
     /// always outranks a longer life. A period extreme's strength is a constant 1, so its lines
     /// tie and fall back to nearest first.

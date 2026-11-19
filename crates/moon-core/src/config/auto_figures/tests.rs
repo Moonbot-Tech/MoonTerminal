@@ -379,6 +379,25 @@ fn hostile() -> AutoFiguresCfg {
     }));
     day_open.tf = TfSource::Fixed(TfId::D1);
 
+    let formation = AutoFigureRow::new(DetectorParams::Formation(FormationParams {
+        lookback_bars: 40,
+        pivot_left: 0,
+        pivot_right: 99,
+        tolerance_pct: f32::NAN,
+        tolerance_atr: -2.0,
+        min_touches: 1,
+        min_bars: 0,
+        parallel_width_pct: f32::INFINITY,
+        impulse_pct: f32::NAN,
+        impulse_bars: 0,
+        flag_max_bars: u32::MAX,
+        double_tolerance_pct: 1e9,
+        double_tolerance_atr: f32::NAN,
+        double_depth_pct: -1.0,
+        broken: BrokenPolicy::Keep { bars: u16::MAX },
+        ..FormationParams::default()
+    }));
+
     let mut rows = vec![
         swing,
         trend,
@@ -388,6 +407,7 @@ fn hostile() -> AutoFiguresCfg {
         round,
         round_wide,
         day_open,
+        formation,
     ];
     rows.extend(std::iter::repeat_n(AutoFigurePreset::Levels1h.row(), 100));
     AutoFiguresCfg {
@@ -1128,5 +1148,197 @@ fn the_shipped_4h_levels_fit_the_candle_cache() {
     assert!(
         i64::from(needed) < cache_4h_bars,
         "4h row needs {needed} bars, the 5-minute cache holds {cache_4h_bars}"
+    );
+}
+
+/// What `sanitize` repairs each impossible formation value TO: NaN to the default, the rest into
+/// the documented bounds, and the span bounds into the lookback the row searches.
+///
+/// By hand, from `hostile`'s formation row: the pivot widths clamp to 1 and 20, so the 40-bar
+/// lookback stays (it holds 1 + 1 + 20 bars); `min_bars` 0 rises to the 3-bar floor and
+/// `flag_max_bars` falls to the lookback, 40; one touch a side rises to two.
+///
+/// Breakage: a NaN clamped instead of replaced, a span bound left above the lookback (a row that
+/// can never find a flag), or the formation left out of the repair altogether.
+#[test]
+fn sanitize_repairs_the_formation_fields() {
+    let mut cfg = hostile();
+    cfg.sanitize();
+    let Some(DetectorParams::Formation(f)) = cfg.rows[8].detector.known() else {
+        panic!("{:?}", cfg.rows[8].detector);
+    };
+    let d = FormationParams::default();
+    assert_eq!((f.pivot_left, f.pivot_right), (1, 20));
+    assert_eq!(f.lookback_bars, 40);
+    assert_eq!(f.tolerance_pct, d.tolerance_pct);
+    assert_eq!(f.tolerance_atr, AF_TOLERANCE_ATR_MIN);
+    assert_eq!(f.min_touches, 2);
+    assert_eq!(f.min_bars, AF_FORMATION_BARS_MIN);
+    // Infinite is not finite: the default, like a NaN.
+    assert_eq!(f.parallel_width_pct, d.parallel_width_pct);
+    assert_eq!(f.impulse_pct, d.impulse_pct);
+    assert_eq!(f.impulse_bars, 1);
+    assert_eq!(f.flag_max_bars, 40);
+    assert_eq!(f.double_tolerance_pct, AF_PCT_MAX);
+    assert_eq!(f.double_tolerance_atr, d.double_tolerance_atr);
+    assert_eq!(f.double_depth_pct, AF_TOLERANCE_MIN);
+    assert_eq!(
+        f.broken,
+        BrokenPolicy::Keep {
+            bars: AF_BROKEN_KEEP_MAX
+        }
+    );
+    // The kind switches are choices, not damage: all on stays all on.
+    assert!(f.triangle && f.wedge && f.channel && f.flag && f.double);
+}
+
+/// A formation row writes only what differs from its kind's defaults and reads back equal; a
+/// formation table from a build that knew fewer of its fields loads with the rest at their
+/// defaults, and one unreadable field costs only itself.
+///
+/// Breakage: a renamed serde tag (`formation`) or field, a field without a default (an older
+/// formation row fails to load), or the field-by-field repair skipping the new kind.
+#[test]
+fn a_formation_row_round_trips_and_loads_partially() {
+    let mut row = AutoFigureRow::new(DetectorParams::Formation(FormationParams {
+        wedge: false,
+        double: false,
+        tolerance_unit: ToleranceUnit::Atr,
+        tolerance_atr: 0.75,
+        impulse_pct: 4.5,
+        flag_max_bars: 24,
+        broken: BrokenPolicy::Remove,
+        ..FormationParams::default()
+    }));
+    row.preset = Some(AutoFigurePreset::Triangles);
+    let cfg = AutoFiguresCfg {
+        enabled: true,
+        rows: vec![
+            row,
+            AutoFigureRow::new(DetectorKind::Formation.default_params()),
+        ],
+    };
+    let mut sanitized = cfg.clone();
+    sanitized.sanitize();
+    assert_eq!(sanitized, cfg, "the test values are already in range");
+
+    let (text, back) = round_trip(&cfg);
+    assert_eq!(back, cfg);
+    let rows = written_table(&text)["rows"].clone();
+    let table = |s: &str| toml::Value::Table(toml::from_str(s).unwrap());
+    assert_eq!(
+        rows[0]["detector"],
+        table(
+            r#"kind = "formation"
+wedge = false
+double = false
+tolerance_unit = "atr"
+tolerance_atr = 0.75
+impulse_pct = 4.5
+flag_max_bars = 24
+broken = { mode = "remove" }"#
+        )
+    );
+    assert_eq!(rows[0]["preset"].as_str(), Some("triangles"));
+    assert_eq!(rows[1]["detector"], table(r#"kind = "formation""#));
+
+    let file = r#"
+[[auto_figures.rows]]
+detector = { kind = "formation", channel = false, lookback_bars = 90 }
+[[auto_figures.rows]]
+detector = { kind = "formation", min_touches = "three", double_depth_pct = 2.5 }
+"#;
+    let doc: Doc = toml::from_str(file).expect("loads");
+    let Some(DetectorParams::Formation(older)) = doc.auto_figures.rows[0].detector.known() else {
+        panic!("{:?}", doc.auto_figures.rows[0].detector);
+    };
+    assert_eq!(
+        *older,
+        FormationParams {
+            channel: false,
+            lookback_bars: 90,
+            ..FormationParams::default()
+        }
+    );
+    let Some(DetectorParams::Formation(typo)) = doc.auto_figures.rows[1].detector.known() else {
+        panic!("{:?}", doc.auto_figures.rows[1].detector);
+    };
+    assert_eq!(typo.min_touches, FormationParams::default().min_touches);
+    assert_eq!(typo.double_depth_pct, 2.5);
+}
+
+/// The formation presets are offered in the "Add" menu, never shipped, and each switches on the
+/// kinds its name promises and no other.
+///
+/// Breakage: a formation preset slipped into `DEFAULT_SET` (it would switch on for every profile
+/// that never edited its rows), or a preset that also finds what another one is for.
+#[test]
+fn the_formation_presets_are_offered_not_shipped() {
+    let expect = [
+        (
+            AutoFigurePreset::Triangles,
+            [true, true, false, false, false],
+        ),
+        (
+            AutoFigurePreset::Channels,
+            [false, false, true, false, false],
+        ),
+        (AutoFigurePreset::Flags, [false, false, false, true, false]),
+        (
+            AutoFigurePreset::DoubleTops,
+            [false, false, false, false, true],
+        ),
+    ];
+    for (preset, kinds) in expect {
+        assert!(AutoFigurePreset::ALL.contains(&preset), "{preset:?}");
+        assert!(
+            !AutoFigurePreset::DEFAULT_SET.contains(&preset),
+            "{preset:?}"
+        );
+        let Some(DetectorParams::Formation(p)) = preset.row().detector.known().copied() else {
+            panic!("{preset:?}");
+        };
+        assert_eq!(
+            [p.triangle, p.wedge, p.channel, p.flag, p.double],
+            kinds,
+            "{preset:?}"
+        );
+        assert!(preset.locale_key().starts_with("auto_figures.preset."));
+    }
+}
+
+/// The formation kind's policy, coarsest timeframe and bar need: its own `broken`, any timeframe,
+/// and its lookback raised to the ATR's `ATR_PERIOD + 1` bars under an ATR tolerance.
+///
+/// Breakage: the policy arm returning the default (a row's `Remove` never reaching the event
+/// layer), or the ATR need forgotten (a short lookback fetches too few bars for its ATR).
+#[test]
+fn the_formation_policy_timeframe_and_bars() {
+    let remove = DetectorParams::Formation(FormationParams {
+        broken: BrokenPolicy::Remove,
+        ..FormationParams::default()
+    });
+    assert_eq!(remove.broken_policy(), BrokenPolicy::Remove);
+    assert_eq!(remove.coarsest_tf(), TfId::D1);
+    assert_eq!(remove.kind(), DetectorKind::Formation);
+    assert_eq!(DetectorKind::ALL.last(), Some(&DetectorKind::Formation));
+
+    let short = |unit| {
+        DetectorParams::Formation(FormationParams {
+            lookback_bars: 10,
+            tolerance_unit: unit,
+            ..FormationParams::default()
+        })
+    };
+    assert_eq!(short(ToleranceUnit::Pct).bars_needed(TfId::M5), 10);
+    assert_eq!(
+        short(ToleranceUnit::Atr).bars_needed(TfId::M5),
+        ATR_PERIOD + 1
+    );
+    assert_eq!(
+        DetectorKind::Formation
+            .default_params()
+            .bars_needed(TfId::H1),
+        150
     );
 }

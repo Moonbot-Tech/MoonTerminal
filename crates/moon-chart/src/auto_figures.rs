@@ -1,4 +1,4 @@
-//! Auto figures: levels, sloped lines and squeezes found in closed candles.
+//! Auto figures: levels, sloped lines, squeezes and two-line formations found in closed candles.
 //!
 //! Every detector here is a PURE function over the closed bars of ONE timeframe: no clock, no I/O,
 //! no market lookup, no chart state. The chart calls them when a bar of the row's timeframe closes
@@ -26,6 +26,7 @@ pub mod confluence;
 pub mod draw;
 pub mod events;
 pub mod extremes;
+pub mod formations;
 pub mod period_levels;
 pub mod pivots;
 pub mod round_levels;
@@ -87,11 +88,39 @@ pub enum FoundShape {
         p1: f64,
         pressed: bool,
     },
+    /// A formation of two lines (`Formation`): a triangle, wedge, channel or flag of two sloped or
+    /// horizontal sides, or a double top / bottom drawn as its level and its neckline. `upper`
+    /// lies above `lower` over the whole formation; each runs through its OWN first and last
+    /// touch. What the pair is is [`Found::tag`].
+    Pair { upper: Seg, lower: Seg },
+}
+
+/// One side of a [`FoundShape::Pair`]: the line through `(t0_ms, p0)` and `(t1_ms, p1)`, its first
+/// and last touch, `t0_ms < t1_ms`. A horizontal side has `p0 == p1`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Seg {
+    pub t0_ms: f64,
+    pub p0: f64,
+    pub t1_ms: f64,
+    pub p1: f64,
+}
+
+impl Seg {
+    /// The side's price at `t_ms`, through [`line_price_at`]: `None` on a degenerate or unusable
+    /// line.
+    pub fn price_at(&self, t_ms: f64) -> Option<f64> {
+        line_price_at(self.t0_ms, self.p0, self.t1_ms, self.p1, t_ms)
+    }
 }
 
 impl FoundShape {
     /// Price of the figure's primary line at `t_ms`: the level of a horizontal or a squeeze, the
-    /// projection of a sloped line.
+    /// projection of a sloped line, the UPPER side of a pair.
+    ///
+    /// A pair has two lines and no primary one; the upper is the answer where no reference price
+    /// says which matters (a caption placed on the line, a sort key). Wherever a reference price
+    /// exists — which side of price a figure is on, how far it is, whether price approaches it —
+    /// the caller asks [`FoundShape::price_near`] instead, which picks the nearer side.
     ///
     /// Returns `None` where no usable price exists — a non-finite input, a degenerate line, or a
     /// sloped line extrapolated to zero or below. Callers divide by this price, so a value that is
@@ -107,6 +136,31 @@ impl FoundShape {
                 t1_ms,
                 p1,
             } => line_price_at(t0_ms, p0, t1_ms, p1, t_ms),
+            FoundShape::Pair { upper, .. } => upper.price_at(t_ms),
+        }
+    }
+
+    /// Price at `t_ms` of the figure's line NEAREST `ref_price`: for a pair, whichever of its two
+    /// sides is closer to `ref_price` (the upper one on a tie, or when `ref_price` is not finite);
+    /// for every other shape, [`FoundShape::price_at`].
+    ///
+    /// What "the figure's price" means wherever it is measured against the current price: the
+    /// side of price a row keeps it on (`take`), its distance, an `Approach`. Price inside a
+    /// channel is near the boundary it will meet first, and that boundary is what the reader
+    /// watches. A side with no usable price at `t_ms` is skipped; `None` when neither has one.
+    pub fn price_near(&self, t_ms: f64, ref_price: f64) -> Option<f64> {
+        let FoundShape::Pair { upper, lower } = self else {
+            return self.price_at(t_ms);
+        };
+        match (upper.price_at(t_ms), lower.price_at(t_ms)) {
+            (Some(u), Some(l)) => {
+                if ref_price.is_finite() && (l - ref_price).abs() < (u - ref_price).abs() {
+                    Some(l)
+                } else {
+                    Some(u)
+                }
+            }
+            (u, l) => u.or(l),
         }
     }
 }
@@ -125,12 +179,13 @@ pub fn line_price_at(t0_ms: f64, p0: f64, t1_ms: f64, p1: f64, t_ms: f64) -> Opt
     positive(p0 + (p1 - p0) * ((t_ms - t0_ms) / dt))
 }
 
-/// What a found horizontal line IS, for detectors whose lines are not interchangeable — so the
-/// caption can tell a day's POC from its value-area edge, or the week's open from yesterday's
-/// close, which share a row, a style and often a neighbourhood.
+/// What a found figure IS, for detectors whose figures are not interchangeable — so the caption
+/// can tell a day's POC from its value-area edge, the week's open from yesterday's close, or a
+/// triangle from a channel, which share a row, a style and often a neighbourhood.
 ///
-/// `None` in [`Found::tag`] for the pivot detectors and round prices: their lines are all of one
-/// kind, and the price (or the touch count) is the whole story.
+/// `None` in [`Found::tag`] for `Swing`, `Trend`, `Squeeze` and round prices: their lines are all
+/// of one kind, and the price (or the touch count) is the whole story. A `Formation` always tags
+/// its pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LineTag {
     /// A period's high (`PeriodExtreme`).
@@ -153,6 +208,21 @@ pub enum LineTag {
     WeekOpen,
     /// The close of the ISO week before the reference one (`PeriodLevel`).
     PrevWeekClose,
+    /// Two converging sides sloping toward each other, or one of them horizontal (`Formation`).
+    Triangle,
+    /// Two converging sides sloping the same way (`Formation`).
+    Wedge,
+    /// Two parallel sides, sloped or horizontal (`Formation`).
+    Channel,
+    /// A short channel or converging pair right after an impulse — a flag or a pennant
+    /// (`Formation`).
+    Flag,
+    /// Two equal highs with a trough between: `upper` is the tops' level, `lower` the neckline
+    /// (`Formation`).
+    DoubleTop,
+    /// Two equal lows with a peak between: `lower` is the bottoms' level, `upper` the neckline
+    /// (`Formation`).
+    DoubleBottom,
 }
 
 /// One figure a detector found.
@@ -170,7 +240,8 @@ pub struct Found {
     pub last_ms: f64,
     /// The latest break episode after the last touch, set when the row's `BrokenPolicy` still
     /// keeps the figure (`Keep { bars }`; `Remove` drops it instead). For a squeeze it is the
-    /// level's break. A previous period's extreme reports it informationally and is never
+    /// level's break; for a two-line formation, the later-starting break of its two sides (a close
+    /// above the upper or below the lower). A previous period's extreme reports it informationally and is never
     /// dropped: a period's high is a fact, not a hypothesis a break disproves.
     pub broken: Option<Broken>,
     /// Quote volume traded on the bars that touched the figure — the sum of their
@@ -186,7 +257,8 @@ pub struct Found {
     /// 0.25 %) — under `ToleranceUnit::Atr` the ATR share already converted with this run's ATR.
     /// The zone band is drawn from this, never re-derived from the row's parameters, so it shows
     /// the band the detector used whatever the unit. A squeeze reports its LEVEL's tolerance (the
-    /// band is drawn around the level); `0` for a detector without a tolerance. A volume-profile
+    /// band is drawn around the level); a formation its touch tolerance, a double its equality
+    /// tolerance; `0` for a detector without a tolerance. A volume-profile
     /// line reports its bin's width as a fraction of its price, so its band is the bin it stands
     /// for.
     pub tolerance_frac: f64,
@@ -242,6 +314,7 @@ pub static REGISTRY: &[&dyn Detector] = &[
     &volume_profile::VolumeProfile,
     &period_levels::PeriodLevel,
     &round_levels::RoundLevels,
+    &formations::Formation,
 ];
 
 /// Run the detector `params` names over `bars`.
