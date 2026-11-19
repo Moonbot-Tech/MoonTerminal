@@ -64,7 +64,7 @@ impl ChartEngine {
         }
         use moon_core::config::ChartAction as A;
         let mut wanted = WantedActions::default();
-        // ONE walk for the three answers: three `any_drawn` calls would each cross sixteen rows of
+        // ONE walk for every answer: an `any_drawn` call per action would each cross sixteen rows of
         // captions, on a path whose whole purpose is to keep work off the render.
         for part in data.render.borrow().chart_labels.drawn_parts() {
             match part.field.action() {

@@ -199,7 +199,7 @@ impl PaneSlots {
 /// The eye overrides the switch, not the rows: "show" on a tab kind whose popup is OFF runs and
 /// draws that kind's rows on this pane, but it cannot draw a row the popup has hidden.
 fn pane_shows(cfg: &AutoFiguresCfg, eye: Option<bool>) -> bool {
-    eye.unwrap_or(cfg.enabled) && cfg.rows.iter().any(AutoFigureRow::is_drawn)
+    cfg.shows(eye)
 }
 
 /// Drop the slots of every pane target that is no longer on screen — every one of them on a frozen

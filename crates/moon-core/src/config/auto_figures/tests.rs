@@ -211,7 +211,7 @@ fn an_unknown_detector_kind_round_trips_verbatim() {
     };
     assert_eq!(unknown.kind(), "density_level");
     assert!(!row.is_drawn());
-    assert!(!doc.auto_figures.is_active());
+    assert!(!doc.auto_figures.shows(None));
 
     let (text, back) = round_trip(&doc.auto_figures);
     assert_eq!(back, doc.auto_figures);

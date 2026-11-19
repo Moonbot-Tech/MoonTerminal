@@ -80,10 +80,15 @@ impl AutoFiguresCfg {
         }
     }
 
-    /// Whether this configuration asks any detector to run: switched on, with at least one row
-    /// that is visible and whose detector this build knows.
-    pub fn is_active(&self) -> bool {
-        self.enabled && self.rows.iter().any(AutoFigureRow::is_drawn)
+    /// Whether a chart pane draws these auto figures: the pane's own eye override where the reader
+    /// pressed it (`Some`), else this configuration's switch — and either way only while at least
+    /// one row is visible and has a detector this build knows.
+    ///
+    /// The ONE copy of this rule: the terminal's pane sync asks it with the pane's eye, so the
+    /// switch and the eye can never disagree about what "showing" means. The eye overrides the
+    /// switch, not the rows: it cannot draw a row the popup has hidden.
+    pub fn shows(&self, eye: Option<bool>) -> bool {
+        eye.unwrap_or(self.enabled) && self.rows.iter().any(AutoFigureRow::is_drawn)
     }
 }
 

@@ -812,7 +812,7 @@ impl ChartLabelField {
 /// What a pressable caption does when it is clicked.
 ///
 /// Named apart from the field so the terminal's dispatch matches on INTENT rather than on a
-/// catalogue entry: the catalogue holds fifty-odd figures, three of which happen to act, and a
+/// catalogue entry: the catalogue holds fifty-odd figures, a handful of which act, and a
 /// dispatch written against it would have to restate that filter at every call site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartAction {
@@ -840,8 +840,8 @@ impl ChartAction {
 
     /// Whether this button is a SQUARE carrying a symbol rather than a labelled control.
     ///
-    /// The lock is one: what it says is its own state — open or closed — and a word beside it would
-    /// only repeat the picture. The caption pass reserves a square for it instead of measuring a
+    /// The lock, the star and the eye are: what each says is its own state — on or off — and a word
+    /// beside it would only repeat the picture. The caption pass reserves a square for it instead of measuring a
     /// label, so it keeps its shape whatever the reader sets the caption size to.
     pub fn square(self) -> bool {
         matches!(
