@@ -251,6 +251,7 @@ Each stage writes a log of the form:
 [firetest] stage=price_scale_auto
 [firetest] stage=price_scale_verify_auto
 [firetest] stage=order_cancel_lag
+[firetest] stage=gpu_recovery
 [firetest] stage=cooldown
 ```
 
