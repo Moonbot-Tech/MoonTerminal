@@ -662,19 +662,20 @@ fn a_channel_running_with_its_pole_is_not_a_flag() {
 }
 
 /// The pole is looked for in exactly `impulse_bars` bars ending at the first touch, is the net move
-/// from the window's open to that bar, and never one bar's own range.
+/// from the window's open to that bar's close, and never one bar's own range.
 ///
 /// By hand, on flat bars at 100 (range ±0.05 %, open and close 100): bar 2 opens at 90 (low 90,
 /// high 100.05, close 100), and bar 9 is the start. With `bars = 7` the window is bars 3..=9,
 /// opens at 100 and ends at 100 — no move; with `bars = 8` it is bars 2..=9, opens at 90 and bar 9
-/// closes above it: a rise to its high, (100.05 − 90) / 90 = 11.2 %. A bar opening 100, low 94,
-/// high 106, closing 105 after a bar that opened at 100: a rise of (106 − 100) / 100 = 6 % from
-/// the window's open — not the bar's own 12 / 94 = 12.8 %, nor the 7.07 % from the earlier bar's
-/// low; and one bar alone is no pole. A window that dips to 90 and closes its last bar at 98,
-/// below its open of 100, is a FALL to that bar's low (2 %), however far the dip went.
+/// closes at 100: a rise of (100 − 90) / 90 = 11.1 %. A bar opening 100, low 94, high 106, closing
+/// 105 after a bar that opened at 100: a rise of (105 − 100) / 100 = 5 % from the window's open —
+/// not the bar's own 12 / 94 = 12.8 %, nor the 6 % to its high; and one bar alone is no pole. A
+/// window that dips to 90 and closes its last bar at 98, below its open of 100, is a FALL of 2 %,
+/// however far the dip went.
 ///
 /// Breakage: the window one bar too long (the old `start - bars ..= start`), a bar's own range
-/// counted as a move, or a low inside the window taken as the pole's base.
+/// counted as a move, a low inside the window taken as the pole's base, or the move measured to
+/// the touch bar's extreme instead of its close.
 #[test]
 fn the_pole_window_is_impulse_bars_long_and_spans_bars() {
     let flat = |i: usize, lo: f32, hi: f32| bar(i, (lo + hi) / 2.0, hi, lo, (lo + hi) / 2.0);
@@ -683,12 +684,12 @@ fn the_pole_window_is_impulse_bars_long_and_spans_bars() {
     let short = pole(&win, 9, 7).expect("seven valid bars");
     assert!(short.frac < 0.002, "{short:?}");
     let long = pole(&win, 9, 8).expect("eight valid bars");
-    assert!((long.frac - 10.05 / 90.0).abs() < 1e-6, "{long:?}");
+    assert!((long.frac - 10.0 / 90.0).abs() < 1e-6, "{long:?}");
     assert_eq!(long.dir, 1);
 
     let pair = [flat(0, 99.0, 101.0), bar(1, 100.0, 106.0, 94.0, 105.0)];
     let p = pole(&pair, 1, 2).expect("two valid bars");
-    assert!((p.frac - 0.06).abs() < 1e-6, "{p:?}");
+    assert!((p.frac - 0.05).abs() < 1e-6, "{p:?}");
     assert_eq!(p.dir, 1);
     assert_eq!(pole(&pair, 1, 1), None);
 
@@ -718,9 +719,9 @@ fn the_pole_window_is_impulse_bars_long_and_spans_bars() {
 /// - The widest swing in that window is the bounce: 88 → 101.05 = +14.8 %, larger than the fall
 ///   from bar 5's high to bar 6's low (110.06 → 95.62, −13.1 %) — so the old rule read a RISE
 ///   and took the falling channel for a pause in it: a bull flag.
-/// - The move into the figure is the window's open, 110, to bar 14 closing at 101: a fall, of
-///   110 − 101·(1 − H) = 9.05 (8.2 %) to the bar's low. The midline falls with it — the channel
-///   runs with its pole, so it is a channel.
+/// - The move into the figure is the window's open, 110, to bar 14 closing at 101: a fall of
+///   110 − 101 = 9 (8.2 %). The midline falls with it — the channel runs with its pole, so it is a
+///   channel.
 ///
 /// Breakage: the pole taken as the widest swing in the window (any low inside it, a wick
 /// included, as a base), or measured in the wrong direction.
@@ -746,8 +747,34 @@ fn a_falling_channel_after_a_wicked_crash_is_not_a_flag() {
 
     let p = pole(&bars, 14, 10).expect("ten valid bars");
     assert_eq!(p.dir, -1, "{p:?}");
-    assert!(
-        close_to(p.height, 110.0 - f64::from((101.0 * (1.0 - H)) as f32)),
-        "{p:?}"
-    );
+    assert!(close_to(p.height, 9.0), "{p:?}");
+}
+
+/// A flat market and one long shadow on the touch bar make no pole (LinKvo, 19.11.2026: a "bull
+/// flag" out of a wick).
+///
+/// By hand: ten bars flat at 100 (open and close 100, range ±0.05 %), the last of them — the touch
+/// bar — with an upper shadow to 106 and a close of 100.1. Measured to the bar's high that was
+/// (106 − 100) / 100 = 6 %, twice the default 3 % `impulse_pct`; the net move to its close is
+/// (100.1 − 100) / 100 = 0.1 %, which is no pole. The mirrored lower shadow to 94 with a close of
+/// 99.9 is a 0.1 % fall.
+///
+/// Breakage: the pole's height read from the touch bar's high or low instead of its close.
+#[test]
+fn a_shadow_on_the_touch_bar_is_no_pole() {
+    let impulse = pct_frac(FormationParams::default().impulse_pct);
+    let flat = |i: usize| bar(i, 100.0, 100.05, 99.95, 100.0);
+    let mut up: Vec<ChartCandle> = (0..10).map(flat).collect();
+    up[9] = bar(9, 100.0, 106.0, 99.95, 100.1);
+    assert!((f64::from(up[9].high) - 100.0) / 100.0 >= impulse);
+    let p = pole(&up, 9, 10).expect("ten valid bars");
+    assert_eq!(p.dir, 1, "{p:?}");
+    assert!((p.frac - 0.001).abs() < 1e-6, "{p:?}");
+    assert!(p.frac < impulse, "{p:?}");
+
+    let mut down: Vec<ChartCandle> = (0..10).map(flat).collect();
+    down[9] = bar(9, 100.0, 100.05, 94.0, 99.9);
+    let p = pole(&down, 9, 10).expect("ten valid bars");
+    assert_eq!(p.dir, -1, "{p:?}");
+    assert!((p.frac - 0.001).abs() < 1e-6, "{p:?}");
 }

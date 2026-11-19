@@ -25,6 +25,22 @@ use super::Found;
 ///     positive finite price — without a reference there is no side and no distance to rank by. A
 ///     figure with no usable price at `at_ms` is never kept.
 pub fn select(found: &[Found], take: &Take, ref_price: f64, at_ms: f64) -> Vec<usize> {
+    select_skipping(found, take, ref_price, at_ms, &[])
+}
+
+/// [`select`] with some figures out of the running: `skip[i] == true` is never kept, and the slot
+/// it would have taken goes to the next figure of its side. An index past the end of `skip` is not
+/// skipped, so an empty `skip` is plain [`select`].
+///
+/// What the cross-row twin pass hands in (`super::twins`): a formation another row draws under a
+/// more precise name is dropped BEFORE the count, so it never costs its own row a line.
+pub fn select_skipping(
+    found: &[Found],
+    take: &Take,
+    ref_price: f64,
+    at_ms: f64,
+    skip: &[bool],
+) -> Vec<usize> {
     if take.count == 0 || !(ref_price.is_finite() && ref_price > 0.0) {
         return Vec::new();
     }
@@ -33,6 +49,9 @@ pub fn select(found: &[Found], take: &Take, ref_price: f64, at_ms: f64) -> Vec<u
     let mut above: Vec<(usize, f64, f64)> = Vec::new();
     let mut below: Vec<(usize, f64, f64)> = Vec::new();
     for (i, f) in found.iter().enumerate() {
+        if skip.get(i).copied().unwrap_or(false) {
+            continue;
+        }
         let Some(price) = f.shape.price_near(at_ms, ref_price) else {
             continue;
         };

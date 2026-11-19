@@ -44,12 +44,14 @@
 //! - it is no longer than `flag_max_bars`;
 //! - the `impulse_bars` bars ending at its first touch (that bar included, so `impulse_bars`
 //!   bars in all) hold a pole of at least `impulse_pct` of the price it started from. The pole is
-//!   the move INTO the formation: from the open of the window's first bar to the bar of the first
-//!   touch — a rise when that bar closes above the window's open, reaching its high; a fall when
-//!   it closes below, reaching its low. Not the widest swing inside the window: after a crash
-//!   whose bar leaves a long lower wick, the bounce off the wick is a swing in the window, but
-//!   the move that brought price to the pattern is the crash (LinKvo, 19.11.2026). Never one
-//!   bar's own range: the window needs two valid bars, so the pole always spans bars;
+//!   the NET move INTO the formation: from the open of the window's first bar to the CLOSE of the
+//!   bar of the first touch — a rise when that close is above the window's open, a fall when it
+//!   is below. Not the widest swing inside the window: after a crash whose bar leaves a long lower
+//!   wick, the bounce off the wick is a swing in the window, but the move that brought price to the
+//!   pattern is the crash (LinKvo, 19.11.2026). And not the touch bar's own high or low either: in
+//!   a flat market one long wick on that bar is not a move price made — measured to the wick, a
+//!   flat with one shadow passed `impulse_pct` by itself and became a "bull flag". Never one bar's
+//!   own range: the window needs two valid bars, so the pole always spans bars;
 //! - its width at the start is at most [`FLAG_MAX_RETRACE`] of the pole's height;
 //! - it does not run WITH the pole: its midline — halfway between the sides — is flat (it moves
 //!   by at most twice the touch tolerance over the shared stretch, the flat-side rule below) or
@@ -493,15 +495,14 @@ struct Pole {
 }
 
 /// The pole in the `bars` bars ending at `win[start]` (that bar included, `bars` bars in all): the
-/// NET move from the open of the first valid bar of that range to the last valid one — the bar of
-/// the formation's first touch.
+/// NET move from the open of the first valid bar of that range to the CLOSE of the last valid one —
+/// the bar of the formation's first touch.
 ///
-/// Its direction is where that bar CLOSES against the range's open: above is a rise, measured to
-/// the bar's high; below is a fall, measured to its low; level is no move (a zero pole). The
-/// extreme rather than the close, because the first touch of a flag after a rise is typically
-/// the top of the pole — its high is where the move ended — and the close only says which way
-/// price went. The open of the range rather than its lowest low (highest high): a low inside the
-/// window is a swing price passed through, and taking it as the base turned the bounce off a
+/// Above the range's open is a rise, below it a fall, level is no move (a zero pole). The close
+/// rather than the touch bar's high or low: a wick is where price was rejected, not where the move
+/// went, and in a flat market one long shadow on the touch bar measured to its extreme made a pole
+/// out of nothing. The open of the range rather than its lowest low (highest high): a low inside
+/// the window is a swing price passed through, and taking it as the base turned the bounce off a
 /// crash's wick into a rise, and the falling channel after the crash into a "flag" against it.
 ///
 /// `None` when fewer than two valid bars lie in the range (`bars < 2` included): a single bar's
@@ -516,14 +517,11 @@ fn pole(win: &[ChartCandle], start: usize, bars: u32) -> Option<Pole> {
         return None;
     }
     let base = f64::from(range[first].open);
-    let entry = &range[last];
-    let close = f64::from(entry.close);
-    let (height, dir) = if close > base {
-        (f64::from(entry.high) - base, 1)
-    } else if close < base {
-        (base - f64::from(entry.low), -1)
+    let close = f64::from(range[last].close);
+    let (height, dir) = if close >= base {
+        (close - base, 1)
     } else {
-        (0.0, 1)
+        (base - close, -1)
     };
     let frac = height / base;
     // `bar_ok` keeps every price positive and finite, so `frac` is finite and not negative.

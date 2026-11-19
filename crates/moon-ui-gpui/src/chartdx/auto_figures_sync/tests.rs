@@ -334,6 +334,7 @@ fn level_row(levels: &[f64]) -> AutoRowDrawn {
         policy: BrokenPolicy::default(),
         outcome: Arc::new(outcome),
         kept: Vec::new(),
+        twins: Default::default(),
         ref_ms: 0.0,
     }
 }
@@ -1374,4 +1375,96 @@ fn one_formation_two_rows_find_is_drawn_once_under_the_flags_name() {
     }
     set.cross_rows(at);
     assert_eq!(kept_tags(&set), [vec![], vec![]]);
+}
+
+/// A twin is out of its row's selection BEFORE the count, and the drawn formation shows the
+/// events its twin's row marks.
+///
+/// By hand: a "Channels" row keeping one line per side, nearest first, finds the flag's channel
+/// reading (sides 110 / 100) and a lower channel (sides 99 / 90, shifted by 11); against 101 the
+/// nearest below is the twin's 100 (1 away), then the other channel's 99 (2 away). The "Flags" row
+/// finds the flag and marks nothing but bounces; the channel row marks approaches at 2 %. So the
+/// channel row draws the LOWER channel — the twin's slot goes to its next line, it does not stay
+/// empty — the flag row draws the flag, and the flag shows an approach (101 is 1 % from 100, inside
+/// the channel row's 2 %), which its own row does not mark. The same holds after a price pass.
+///
+/// Breakage: the twin dropped after `take::select` (the channel row keeps only the twin, which is
+/// then removed, and draws nothing below), or the twin's marks dropped with it (the flag shows no
+/// approach).
+#[test]
+fn a_twin_leaves_its_rows_count_and_hands_its_marks_to_the_flag() {
+    use moon_chart::auto_figures::LineTag;
+    let row = |row_ix: usize, found: Vec<Found>, marks: EventMarks| {
+        let mut r = tf_row(row_ix, TfId::H1, &[]);
+        Arc::make_mut(&mut r.outcome).found = found;
+        r.take.count = 1;
+        r.marks = marks;
+        r
+    };
+    let shifted = |f: Found, by: f64| {
+        let FoundShape::Pair {
+            mut upper,
+            mut lower,
+        } = f.shape
+        else {
+            unreachable!("a formation is a pair");
+        };
+        upper.p0 -= by;
+        upper.p1 -= by;
+        lower.p0 -= by;
+        lower.p1 -= by;
+        Found {
+            shape: FoundShape::Pair { upper, lower },
+            ..f
+        }
+    };
+    let quiet = EventMarks {
+        approach: false,
+        squeeze: false,
+        breakout: false,
+        false_break: false,
+        bounce: true,
+        role_flip: false,
+        stop_hunt: false,
+        confluence: false,
+        ..EventMarks::default()
+    };
+    let approaching = EventMarks {
+        approach: true,
+        approach_pct: 2.0,
+        bounce: false,
+        ..quiet
+    };
+    let flag = formation(LineTag::Flag, 3_600_000.0, 7_200_000.0, 0);
+    let twin = formation(LineTag::Channel, 3_600_000.0, 7_200_000.0, 1);
+    let lower = shifted(
+        formation(LineTag::Channel, 3_000_000.0, 6_000_000.0, 0),
+        11.0,
+    );
+    let at = 9.0 * 3_600_000.0;
+    let mut set = AutoPaneFigures::new(
+        vec![
+            row(0, vec![twin, lower], approaching),
+            row(1, vec![flag], quiet),
+        ],
+        Vec::new(),
+    );
+    for r in &mut set.rows {
+        let kept = select_kept(&r.outcome, &r.rules(&[]), 101.0, at, &mut Vec::new());
+        r.kept = kept;
+    }
+    set.cross_rows(at);
+    let kept_ix = |set: &AutoPaneFigures| -> Vec<Vec<usize>> {
+        set.rows
+            .iter()
+            .map(|r| r.kept.iter().map(|k| k.ix).collect())
+            .collect()
+    };
+    assert_eq!(kept_ix(&set), [vec![1], vec![0]]);
+    assert!(set.rows[1].kept[0].events.contains(AutoEvent::Approach));
+    assert!(!set.rows[1].marks.approach);
+
+    let moved = set.reselect(101.5, at).unwrap_or(set);
+    assert_eq!(kept_ix(&moved), [vec![1], vec![0]]);
+    assert!(moved.rows[1].kept[0].events.contains(AutoEvent::Approach));
 }

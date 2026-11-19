@@ -817,6 +817,7 @@ impl ChartPanel {
         let now_ms = now_unix_ms();
         let mut scratch = Vec::new();
         let mut rows = Vec::new();
+        let mut ref_prices = Vec::new();
         for (row_ix, (row, slot)) in cfg.rows.iter().zip(&pane.rows).enumerate() {
             let (Some(params), Some(outcome)) = (row.detector.known(), drawable(slot)) else {
                 continue;
@@ -824,8 +825,8 @@ impl ChartPanel {
             if !row.is_drawn() {
                 continue;
             }
-            let ref_price = last_price.or(outcome.last_close).unwrap_or(f64::NAN);
-            let mut drawn = AutoRowDrawn {
+            ref_prices.push(last_price.or(outcome.last_close).unwrap_or(f64::NAN));
+            rows.push(AutoRowDrawn {
                 row_ix,
                 title: RowTitle::of(row, params.kind()),
                 style: row.style,
@@ -835,20 +836,25 @@ impl ChartPanel {
                 policy: params.broken_policy(),
                 outcome: outcome.clone(),
                 kept: Vec::new(),
+                twins: Default::default(),
                 ref_ms: now_ms,
-            };
+            });
+        }
+        // The set decides the twins over every row's found lines first; the rows select after it,
+        // so a formation another row draws never takes a slot of its own row.
+        let mut set = AutoPaneFigures::new(rows, pane.hidden.clone());
+        for (drawn, ref_price) in set.rows.iter_mut().zip(ref_prices) {
             // The same selection the engine's price pass repeats on every price change.
-            drawn.kept = select_kept(
+            let kept = select_kept(
                 &drawn.outcome,
                 &drawn.rules(&pane.hidden),
                 ref_price,
                 now_ms,
                 &mut scratch,
             );
-            rows.push(drawn);
+            drawn.kept = kept;
         }
-        let mut set = AutoPaneFigures::new(rows, pane.hidden.clone());
-        // Across the rows, once all of them are selected: the same passes the price pass repeats.
+        // Across the rows, once all of them are selected: the same pass the price pass repeats.
         set.cross_rows(now_ms);
         // One line per publication — a run completing or a configuration edit, never a frame — so
         // the app log says which source each row read and whether its history was short.

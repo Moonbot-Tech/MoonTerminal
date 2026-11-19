@@ -231,3 +231,17 @@ fn a_formation_takes_the_side_of_its_nearer_line() {
     let found = [level(98.9, 1.0), pair(101.0, 99.0)];
     assert_eq!(select(&found, &below, 99.3, 0.0), [1]);
 }
+
+/// A skipped figure gives its slot to the next one of its side: with one per side, nearest first,
+/// and 101 skipped, the kept pair is 110 above and 99 below — the next-nearest above takes the
+/// slot. Without the skip it is 101 and 99.
+///
+/// Breakage: the skip applied after the count (the slot left empty, only 99 kept), or ignored.
+#[test]
+fn a_skipped_figure_hands_its_slot_on() {
+    let found = ladder();
+    let one = take(1, TakeSide::Both, TakeOrder::Nearest);
+    assert_eq!(select(&found, &one, 100.0, 0.0), [2, 3]);
+    let skip = [false, false, true];
+    assert_eq!(select_skipping(&found, &one, 100.0, 0.0, &skip), [4, 3]);
+}

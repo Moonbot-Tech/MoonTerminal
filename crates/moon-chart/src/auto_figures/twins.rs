@@ -21,15 +21,24 @@
 //! twins, because a 1h and a 4h reading of a pattern are two readings, which is exactly what a
 //! confluence between them is about.
 //!
-//! # Who calls it
+//! # Who calls it, and when
 //!
-//! Both places that put several rows' lines side by side, after each row's own selection
-//! (`take::select`) and before the cross-row confluence pass: the chart's pane (the terminal's
-//! `chartdx/auto_figures_sync/select.rs`) and the screener's scan ([`super::scan`]). A dropped
-//! twin is then neither drawn nor counted nor a confluence partner, on the chart and in the
-//! screener alike.
+//! Both places that put several rows' lines side by side, BEFORE each row's own selection
+//! (`take::select_skipping`) and before the cross-row confluence pass: the chart's publication of
+//! a finished run (the terminal's `chartdx/auto_figures_sync/select.rs`, once per result, never on
+//! a price tick) and the screener's scan ([`super::scan`]). The pass runs over every row's FOUND
+//! formations, not over what each row kept: a twin dropped after the selection would have spent
+//! one of its row's `count` slots and left the row's next line undrawn, and a row whose selection
+//! moved on a tick would bring its twin back under its own name — the caption switching between
+//! "Flag" and "Channel" as price moves. Dropped before, the losing row never sees the twin, and
+//! its `take` fills the slot with its next line.
+//!
+//! A dropped twin is neither drawn nor counted nor a confluence partner, on the chart and in the
+//! screener alike. What its row MARKS is not lost with it: the winner shows the union of the
+//! events every row of its set marks ([`union_marks`]) — a "Channels" row marking breakouts and a
+//! "Flags" row that does not still see the breakout of the flag both found.
 
-use moon_core::config::auto_figures::TfId;
+use moon_core::config::auto_figures::{EventMarks, TfId};
 
 use super::{Found, FoundShape, LineTag};
 
@@ -42,7 +51,7 @@ enum Family {
     DoubleBottom,
 }
 
-/// One kept formation as the twin pass reads it: its identity across rows and the rank of its
+/// One found formation as the twin pass reads it: its identity across rows and the rank of its
 /// name.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Twin {
@@ -103,29 +112,82 @@ fn rank(tag: LineTag) -> u8 {
     }
 }
 
-/// Which of `twins` — every kept line of the pane (or the market), in row order, `None` for a
-/// line that is not a formation — are drawn by another line instead, into `losers` (one flag per
-/// line, overwritten).
+/// For every entry of `twins` — every FOUND line of the pane's (or the market's) rows, in row order,
+/// `None` for a line that is not a formation — the index of the line that draws it instead, into
+/// `winner_of` (one entry per line, overwritten): `Some(j)` for a twin that loses to line `j`,
+/// `None` for a line that is drawn (a survivor, or anything but a formation).
 ///
 /// A formation loses to its twin with the higher `rank`; on equal ranks (the same kind found by
 /// two rows) the EARLIER line wins, so the row higher in the panel keeps it. Exactly one line of
-/// each set of twins survives.
+/// each set of twins survives, and every other member of the set names that one — never a fellow
+/// loser — so a caller can hand the survivor what each loser's row contributes ([`union_marks`]).
 ///
-/// Cost: O(n²) in the kept lines, which a pane and a market count in tens; nothing is allocated
-/// once `losers` has grown.
-pub fn twin_losers(twins: &[Option<Twin>], losers: &mut Vec<bool>) {
-    losers.clear();
-    losers.resize(twins.len(), false);
-    for (i, a) in twins.iter().enumerate() {
-        let Some(a) = a else {
+/// Cost: O(P²) in the formations among `twins` (the other lines are skipped in one pass): a pane
+/// and a market find formations in tens, and a level row adds only its `None`s. Nothing is
+/// allocated once `winner_of` and `scratch` have grown.
+pub fn twin_winners(
+    twins: &[Option<Twin>],
+    scratch: &mut Vec<usize>,
+    winner_of: &mut Vec<Option<usize>>,
+) {
+    winner_of.clear();
+    winner_of.resize(twins.len(), None);
+    scratch.clear();
+    scratch.extend(
+        twins
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| t.is_some().then_some(i)),
+    );
+    for &i in scratch.iter() {
+        let Some(a) = twins[i] else {
             continue;
         };
-        losers[i] = twins.iter().enumerate().any(|(j, b)| {
-            b.is_some_and(|b| {
-                j != i && a.same(&b) && (b.rank > a.rank || (b.rank == a.rank && j < i))
-            })
-        });
+        // The set's survivor: the highest rank, the earliest line on a tie.
+        let mut best = i;
+        let mut best_rank = a.rank;
+        for &j in scratch.iter() {
+            let Some(b) = twins[j] else {
+                continue;
+            };
+            if j != i && a.same(&b) && (b.rank > best_rank || (b.rank == best_rank && j < best)) {
+                best = j;
+                best_rank = b.rank;
+            }
+        }
+        if best != i {
+            winner_of[i] = Some(best);
+        }
     }
+}
+
+/// The events the survivor of a set of twins shows: those its own row marks, plus every one
+/// `twin`'s row marks that it does not (LinKvo, 19.11.2026: one drawing, the union of the marks).
+///
+/// The distances belong to the event they size: an event only `twin`'s row marks comes with that
+/// row's `approach_pct`, `stop_hunt_pct` or `confluence_pct`; one both rows mark keeps the
+/// winner's own. The false-break window is the winner row's `BrokenPolicy`, which is not part of
+/// the marks.
+pub fn union_marks(winner: &EventMarks, twin: &EventMarks) -> EventMarks {
+    let mut out = *winner;
+    if twin.approach && !winner.approach {
+        out.approach = true;
+        out.approach_pct = twin.approach_pct;
+    }
+    if twin.stop_hunt && !winner.stop_hunt {
+        out.stop_hunt = true;
+        out.stop_hunt_pct = twin.stop_hunt_pct;
+    }
+    if twin.confluence && !winner.confluence {
+        out.confluence = true;
+        out.confluence_pct = twin.confluence_pct;
+    }
+    out.squeeze |= twin.squeeze;
+    out.breakout |= twin.breakout;
+    out.false_break |= twin.false_break;
+    out.bounce |= twin.bounce;
+    out.role_flip |= twin.role_flip;
+    out
 }
 
 #[cfg(test)]

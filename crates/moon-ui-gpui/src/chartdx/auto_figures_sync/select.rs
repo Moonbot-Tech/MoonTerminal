@@ -8,18 +8,22 @@
 //!
 //! Called from two places with the same arguments, so they cannot disagree: the panel's
 //! publication of a finished run (`panels::chart::auto_figures`) and the engine's price pass
-//! ([`super::ChartDataState::auto_figures_on_price`]). Both then run the same two cross-row passes
-//! over the rows' selections, in this order: [`drop_twins`] (one formation two rows found is drawn
-//! once) and [`mark_confluence`].
+//! ([`super::ChartDataState::auto_figures_on_price`]). Both then run the same cross-row pass over
+//! the rows' selections, [`mark_confluence`].
+//!
+//! One formation two rows found is drawn once ([`resolve_twins`]), and that is decided BEFORE any
+//! selection, over the rows' found lines, once per published result rather than on every tick:
+//! the twin leaves its row's running, so it neither takes a slot of the row's `count` nor comes
+//! back under its own row's name when that row's selection moves with the price.
 
 use moon_chart::auto_figures::confluence::{ConfluenceScratch, PlacedLine, confluence_in};
 use moon_chart::auto_figures::events::{EventSet, line_events};
-use moon_chart::auto_figures::twins::{Twin, twin_losers};
+use moon_chart::auto_figures::twins::{Twin, twin_winners, union_marks};
 use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide, take};
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks, Take};
 
-use super::AutoRowDrawn;
 use super::job::AutoRowOutcome;
+use super::{AutoRowDrawn, RowTwins};
 
 /// Names one found line across detector runs of its row, so a line the user hid stays hidden when
 /// the next bar close recomputes it.
@@ -151,13 +155,26 @@ pub(crate) struct RowRules<'a> {
     pub policy: BrokenPolicy,
     /// Lines the user hid on this pane (`Hide this line`), for every row.
     pub hidden: &'a [LineKey],
+    /// What the twin pass decided for this row's found lines ([`resolve_twins`]): which are out of
+    /// its selection, and which show the joined marks of their twins' rows.
+    pub twins: &'a RowTwins,
+}
+
+impl RowRules<'_> {
+    /// The marks found line `ix` shows: its row's own, or — for a formation that other rows found
+    /// too — the union with theirs ([`RowTwins::marks`]).
+    pub(crate) fn marks_of(&self, ix: usize) -> &EventMarks {
+        self.twins.marks_of(ix).unwrap_or(self.marks)
+    }
 }
 
 /// The lines a row draws against `ref_price` at `at_ms`, each with its side and events.
 ///
-/// `take::select` first, then the hidden lines are dropped — a hidden line leaves its slot empty
-/// rather than pulling in the next one, so hiding a line never makes a different one appear —
-/// and each survivor gets its events from the row's recent closed bars.
+/// `take::select_skipping` first, with the formations another row draws instead out of the running
+/// ([`RowRules::twins`]) — their slot goes to the row's next line — then the hidden lines are
+/// dropped — a hidden line leaves its slot empty rather than pulling in the next one, so hiding a
+/// line never makes a different one appear — and each survivor gets its events from the row's
+/// recent closed bars, under the marks it shows ([`RowRules::marks_of`]).
 ///
 /// Counter: `autofigures_events` moves by the number of lines whose events were derived.
 ///
@@ -174,7 +191,13 @@ pub(crate) fn select_kept(
     at_ms: f64,
     scratch: &mut Vec<EventSet>,
 ) -> Vec<KeptLine> {
-    let picked = take::select(&outcome.found, rules.take, ref_price, at_ms);
+    let picked = take::select_skipping(
+        &outcome.found,
+        rules.take,
+        ref_price,
+        at_ms,
+        &rules.twins.lost,
+    );
     let mut out = Vec::with_capacity(picked.len());
     for ix in picked {
         let Some(found) = outcome.found.get(ix) else {
@@ -193,7 +216,7 @@ pub(crate) fn select_kept(
             &outcome.recent,
             ref_price,
             at_ms,
-            rules.marks,
+            rules.marks_of(ix),
             rules.policy,
             scratch,
         );
@@ -208,76 +231,64 @@ pub(crate) fn select_kept(
     out
 }
 
-/// The working buffers of the twin pass ([`drop_twins`]), kept by the published set so a price
-/// change allocates nothing for it once they have grown.
-#[derive(Debug, Default)]
-pub(crate) struct TwinBufs {
-    /// Every kept line of every row, in row order, as a twin identity (`None`: not a formation).
-    twins: Vec<Option<Twin>>,
-    /// The pass's answer, one flag per `twins` entry: drawn by another row instead.
-    losers: Vec<bool>,
-    /// The identities of the hidden formations the pane's rows still find.
-    hidden: Vec<Twin>,
-}
-
-/// Drop from `kept` every formation another row draws instead: the same pair of sides found by
-/// two rows ("Flags" and "Channels" both reading one flag) is drawn once, under the more precise
-/// name, `Flag > Wedge = Triangle > Channel`, the earlier row on a tie. The rule and the identity
-/// (the first touch of each side, on one timeframe) are `moon_chart::auto_figures::twins`'s, which
-/// the screener's scan applies too, so the two agree on what a market draws.
+/// Decide, over the FOUND lines of every row of one pane, which formations another row draws
+/// instead, into each row's [`AutoRowDrawn::twins`]: the same pair of sides found by two rows
+/// ("Flags" and "Channels" both reading one flag) is drawn once, under the more precise name,
+/// `Flag > Wedge = Triangle > Channel`, the earlier row on a tie. The rule and the identity (the
+/// first touch of each side, on one timeframe) are `moon_chart::auto_figures::twins`'s, which the
+/// screener's scan applies too, so the two agree on what a market draws.
 ///
-/// A formation the user HID is a twin too: hiding the drawn flag hides the channel the other row
-/// found on the same sides. `select_kept` hides by the row's own key, and without this the twin
-/// would come up in the flag's place, a different line appearing because one was hidden. A dropped
-/// twin is not drawn, so it is no confluence partner (this pass runs before [`mark_confluence`])
-/// and no target of the hover card, "Hide this line" or "Pin" (they hit-test the drawn lines only).
+/// Run once per published result, before any row selects ([`super::AutoPaneFigures::new`]) — not on
+/// a price tick: the twins depend on what the rows FOUND, which only a detector run changes. Each
+/// loser is out of its row's `take` (its slot goes to the row's next line) and the survivor shows
+/// the union of the marks of every row of its set (`twins::union_marks`), so dropping the twin
+/// never drops an event its row asked for.
 ///
-/// Cost: O(n^2) in the pane's kept lines, plus one key per found line of a row named by a hidden
-/// key, and only when some row keeps a formation; no allocation once `bufs` has grown.
+/// A formation the user HID needs nothing here: its twins lost to it already, so hiding the drawn
+/// flag hides the channel another row found on the same sides, and nothing comes up in its place.
+/// A dropped twin is not drawn, so it is no confluence partner and no target of the hover card,
+/// "Hide this line" or "Pin" (they hit-test the drawn lines only).
 ///
-/// Args:
-///     rows: The pane's rows, in their published order.
-///     kept: Each row's kept lines, parallel to `rows`; the twins are removed here.
-///     hidden: The lines the user hid on this pane.
-///     bufs: Reused working buffers.
-pub(crate) fn drop_twins(
-    rows: &[AutoRowDrawn],
-    kept: &mut [Vec<KeptLine>],
-    hidden: &[LineKey],
-    bufs: &mut TwinBufs,
-) {
-    bufs.twins.clear();
-    for (row, lines) in rows.iter().zip(kept.iter()) {
-        bufs.twins.extend(lines.iter().map(|line| {
-            row.outcome
-                .found
-                .get(line.ix)
-                .and_then(|f| Twin::of(f, row.outcome.key.tf))
-        }));
+/// Cost: O(P²) in the pane's found formations, one pass over its other found lines, and a few
+/// allocations — once per publication, never per frame or per tick.
+pub(crate) fn resolve_twins(rows: &mut [AutoRowDrawn]) {
+    let mut twins: Vec<Option<Twin>> = Vec::new();
+    let mut owner: Vec<(usize, usize)> = Vec::new();
+    for (r, row) in rows.iter().enumerate() {
+        for (ix, found) in row.outcome.found.iter().enumerate() {
+            twins.push(Twin::of(found, row.outcome.key.tf));
+            owner.push((r, ix));
+        }
     }
-    if bufs.twins.iter().all(Option::is_none) {
+    for row in rows.iter_mut() {
+        row.twins = RowTwins::default();
+    }
+    if twins.iter().all(Option::is_none) {
         return;
     }
-    bufs.hidden.clear();
-    for key in hidden {
-        let Some(row) = rows.iter().find(|r| r.row_ix == key.row_ix) else {
+    let mut winner_of = Vec::new();
+    twin_winners(&twins, &mut Vec::new(), &mut winner_of);
+    for (flat, winner) in winner_of.iter().enumerate() {
+        let Some(winner) = *winner else {
             continue;
         };
-        bufs.hidden.extend(
-            row.outcome
-                .found
-                .iter()
-                .find(|f| LineKey::of(row.row_ix, f) == *key)
-                .and_then(|f| Twin::of(f, row.outcome.key.tf)),
+        let (r, ix) = owner[flat];
+        let (wr, wix) = owner[winner];
+        let loser_marks = rows[r].marks;
+        let lost = &mut rows[r].twins.lost;
+        if lost.len() <= ix {
+            lost.resize(ix + 1, false);
+        }
+        lost[ix] = true;
+        let target = &mut rows[wr];
+        let joined = union_marks(
+            target.twins.marks_of(wix).unwrap_or(&target.marks),
+            &loser_marks,
         );
-    }
-    twin_losers(&bufs.twins, &mut bufs.losers);
-    for (lost, twin) in bufs.losers.iter_mut().zip(&bufs.twins) {
-        *lost |= twin.is_some_and(|t| bufs.hidden.iter().any(|h| h.same(&t)));
-    }
-    let mut lost = bufs.losers.iter();
-    for lines in kept.iter_mut().take(rows.len()) {
-        lines.retain(|_| !lost.next().copied().unwrap_or(false));
+        match target.twins.marks.iter_mut().find(|(i, _)| *i == wix) {
+            Some(entry) => entry.1 = joined,
+            None => target.twins.marks.push((wix, joined)),
+        }
     }
 }
 
@@ -300,7 +311,9 @@ pub(crate) struct ConfluenceBufs {
 /// `moon_chart::auto_figures::confluence`'s).
 ///
 /// Judged across the rows of ONE pane, which is the only place every timeframe's lines meet: no
-/// detector run sees another row. Every kept line takes part as a partner, whether or not its own
+/// detector run sees another row. A line's "own row" here is the marks it shows
+/// ([`AutoRowDrawn::marks_of`]): a formation whose twin another row found carries that row's
+/// confluence mark too. Every kept line takes part as a partner, whether or not its own
 /// row marks the event — a 4h level is a place the 1h row agrees with even when the 4h row shows
 /// no mark of its own. Hidden lines are not kept, so they neither get nor give a mark. A two-line
 /// formation takes part at the side it was kept by ([`KeptLine::side`]), its far side not at all —
@@ -321,7 +334,14 @@ pub(crate) fn mark_confluence(
     at_ms: f64,
     bufs: &mut ConfluenceBufs,
 ) {
-    if !rows.iter().any(|r| r.marks.marks(AutoEvent::Confluence)) {
+    let marks_confluence = |r: &AutoRowDrawn| {
+        r.marks.marks(AutoEvent::Confluence)
+            || r.twins
+                .marks
+                .iter()
+                .any(|(_, m)| m.marks(AutoEvent::Confluence))
+    };
+    if !rows.iter().any(marks_confluence) {
         return;
     }
     bufs.placed.clear();
@@ -340,16 +360,18 @@ pub(crate) fn mark_confluence(
                 row: row.row_ix,
                 tf: row.outcome.key.tf,
                 price,
-                pct: row.marks.confluence_pct,
+                pct: row.marks_of(line.ix).confluence_pct,
             });
             bufs.owners.push((i, k));
         }
     }
     confluence_in(&bufs.placed, &mut bufs.scratch, &mut bufs.near);
     for (&(i, k), &near) in bufs.owners.iter().zip(&bufs.near) {
-        if near
-            && rows[i].marks.marks(AutoEvent::Confluence)
-            && let Some(line) = kept.get_mut(i).and_then(|l| l.get_mut(k))
+        if !near {
+            continue;
+        }
+        if let Some(line) = kept.get_mut(i).and_then(|l| l.get_mut(k))
+            && rows[i].marks_of(line.ix).marks(AutoEvent::Confluence)
         {
             line.events.insert(AutoEvent::Confluence);
         }
