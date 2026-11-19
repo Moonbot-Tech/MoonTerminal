@@ -31,14 +31,18 @@ pub use presets::AutoFigurePreset;
 pub use sanitize::*;
 pub use style::*;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+// Imported by name so the `#[serde(from = …)]` targets below are bare identifiers: the
+// `settings_enum_tolerance` contract resolves a `from` target by its literal name.
+use wire::{CfgRead, CfgWrite, RowWire};
 
 /// Every auto-figure row of one chart kind, plus the master switch.
 ///
 /// Read and written through `wire`: a file without the key, or with the key but no `rows`, is the
 /// shipped set; an empty `rows` list is the reader's own choice and stays empty.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(from = "wire::CfgRead", into = "wire::CfgWrite")]
+#[serde(from = "CfgRead", into = "CfgWrite")]
 pub struct AutoFiguresCfg {
     /// Master switch. Off keeps every row and its settings; it only stops the detectors.
     pub enabled: bool,
@@ -84,8 +88,8 @@ impl AutoFiguresCfg {
 }
 
 /// One auto figure "by a characteristic": what to find, on which bars, how many, how it looks.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "serde_json::Value", into = "wire::RowWire")]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(into = "RowWire")]
 pub struct AutoFigureRow {
     /// User-assigned name, which OVERRIDES [`Self::preset`]'s. Empty means the row is named by its
     /// preset — translated by the terminal through [`Self::title_key`] — or, with no preset, by its
@@ -145,6 +149,19 @@ impl AutoFigureRow {
     /// Whether the row puts anything on the chart: visible, and running a detector this build has.
     pub fn is_drawn(&self) -> bool {
         self.visible && self.detector.known().is_some()
+    }
+}
+
+impl<'de> Deserialize<'de> for AutoFigureRow {
+    /// Read the row as a raw value first and hand it to `wire`'s `TryFrom<Value>`, which keeps an
+    /// unknown detector verbatim and repairs a known one field by field.
+    ///
+    /// Written by hand rather than as `#[serde(try_from = "serde_json::Value")]`: the
+    /// `settings_enum_tolerance` contract reads every `from = "X"` in the crate as "this struct is
+    /// read through the struct named `X`", and a path to a foreign type is not one it can resolve.
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = serde_json::Value::deserialize(d)?;
+        Self::try_from(raw).map_err(serde::de::Error::custom)
     }
 }
 

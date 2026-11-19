@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+// Imported by name so the `#[serde(from = …)]` targets below are bare identifiers: the
+// `settings_enum_tolerance` contract resolves a `from` target by its literal name.
+use super::wire::{CaptionWire, StyleWire};
 use crate::config::chart_labels::LabelColor;
 use crate::figures::LineKind;
 
@@ -30,7 +33,7 @@ impl Extend {
 
 /// How a row's lines are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(from = "super::wire::StyleWire", into = "super::wire::StyleWire")]
+#[serde(from = "StyleWire", into = "StyleWire")]
 pub struct LineStyle {
     /// The colour, as a REFERENCE — the chart caption's own type, so a line follows the theme
     /// exactly as a caption does and the colour picker is the one the labels already have.
@@ -139,7 +142,7 @@ pub enum CaptionShow {
 
 /// The caption printed on a line itself, and where.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(from = "super::wire::CaptionWire", into = "super::wire::CaptionWire")]
+#[serde(from = "CaptionWire", into = "CaptionWire")]
 pub struct LineCaption {
     /// The pieces, in print order, each at most once. Empty prints nothing.
     pub parts: Vec<CaptionPart>,
