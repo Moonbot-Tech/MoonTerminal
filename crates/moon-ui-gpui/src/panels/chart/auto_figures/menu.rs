@@ -7,8 +7,9 @@
 //! a line that is on screen.
 //!
 //! The card is a GPUI overlay like the trade-arrow card: theme colours and the font slider come for
-//! free, and the GPUI tree repaints only when the hovered line changes. The hover itself is handed
-//! to the engine too, which prints an `OnHover` caption for it — a present, no rebuild.
+//! free. It appears only after the pointer has rested on a line (`CARD_DWELL`), so a sweep across
+//! the plot's full-width levels does not repaint the scene at every crossing. The hover itself is
+//! handed to the engine at once, which prints an `OnHover` caption for it — a present, no rebuild.
 
 use gpui::*;
 use moon_ui::{
@@ -31,6 +32,15 @@ const CARD_W: f32 = 220.0;
 const CARD_GAP: f32 = 12.0;
 /// Gap kept between the card and the slot edge it is pushed against.
 const CARD_EDGE_INSET: f32 = 6.0;
+/// How long the pointer must rest on an auto line before its card appears.
+///
+/// The card is a GPUI element, so showing or hiding it repaints the whole scene. Auto levels run
+/// across the whole plot, and a pointer sweeping over the chart crosses them constantly: shown on
+/// contact, the card turned every crossing into two scene repaints — measured with FireTest's
+/// mouse storm on the bench, `chart_render` 64 → 110 per second on a chart with two day-extreme
+/// lines. Behind a short rest, a sweep costs nothing but the line's own highlight (a present), and
+/// a reader who stops on a line still gets the card at tooltip speed.
+const CARD_DWELL: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// The auto line under the pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +55,11 @@ pub(in crate::panels::chart) struct AutoHoverState {
     hover: Option<AutoHover>,
     /// Point of the most recent hit test, for the movement threshold every chart hover uses.
     probe: Option<(f32, f32)>,
+    /// Whether the card for `hover` is on screen: set once the pointer has rested [`CARD_DWELL`]
+    /// on the line, cleared with every change of `hover`.
+    shown: bool,
+    /// Bumped with every change of `hover`, so a dwell timer armed for an earlier line does nothing.
+    dwell_gen: u64,
 }
 
 impl ChartPanel {
@@ -66,7 +81,9 @@ impl ChartPanel {
         }
         self.auto_figures.hover.probe = Some(pos);
         let hit = self.auto_hit(pos, cx);
-        self.apply_auto_hover(hit)
+        let repaint = self.apply_auto_hover(hit);
+        self.arm_auto_card(cx);
+        repaint
     }
 
     /// Drop the hover when the pointer leaves the chart slot. Returns whether the card was shown.
@@ -86,6 +103,7 @@ impl ChartPanel {
         }
         let hit = self.input.cursor.and_then(|pos| self.auto_hit(pos, cx));
         self.apply_auto_hover(hit);
+        self.arm_auto_card(cx);
     }
 
     /// The auto line at `pos` (panel-local device pixels), if any.
@@ -111,15 +129,44 @@ impl ChartPanel {
         Some(AutoHover { pane, key })
     }
 
-    /// Apply a hit result: hand it to the engine for the `OnHover` captions. Returns whether the
-    /// card changed.
+    /// Apply a hit result: hand it to the engine for the `OnHover` captions and the highlight (a
+    /// present, never a scene repaint). Returns whether the GPUI tree must repaint — only when a
+    /// card that was ON SCREEN goes away; a new card waits for [`Self::arm_auto_card`].
     fn apply_auto_hover(&mut self, hit: Option<AutoHover>) -> bool {
-        if self.auto_figures.hover.hover == hit {
+        let state = &mut self.auto_figures.hover;
+        if state.hover == hit {
             return false;
         }
-        self.auto_figures.hover.hover = hit;
+        let was_shown = std::mem::take(&mut state.shown);
+        state.hover = hit;
+        state.dwell_gen = state.dwell_gen.wrapping_add(1);
         self.chart.set_auto_hover(hit.map(|h| (h.pane, h.key)));
-        true
+        was_shown
+    }
+
+    /// Show the card once the pointer has rested on the hovered line for [`CARD_DWELL`].
+    ///
+    /// Does nothing when no line is hovered or its card is already up. The timer checks the
+    /// generation it was armed for, so a pointer that has moved on to another line, or off every
+    /// line, by the time it fires is left alone.
+    fn arm_auto_card(&mut self, cx: &mut Context<Self>) {
+        let state = &self.auto_figures.hover;
+        if state.hover.is_none() || state.shown {
+            return;
+        }
+        let generation = state.dwell_gen;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(CARD_DWELL).await;
+            let _ = this.update(cx, |this, cx| {
+                let state = &mut this.auto_figures.hover;
+                if state.dwell_gen == generation && state.hover.is_some() && !state.shown {
+                    state.shown = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// The hover card, or `None` when no auto line is hovered: the row's name, then its
@@ -130,7 +177,11 @@ impl ChartPanel {
         palette: MoonPalette,
         cx: &App,
     ) -> Option<AnyElement> {
-        let hover = self.auto_figures.hover.hover?;
+        let hover = self
+            .auto_figures
+            .hover
+            .hover
+            .filter(|_| self.auto_figures.hover.shown)?;
         let (cursor_x, cursor_y) = self.input.cursor?;
         let now_ms = now_unix_ms_i64() as f64;
         let (title, rows) = self.chart.with_auto_line(hover.pane, hover.key, |line| {
