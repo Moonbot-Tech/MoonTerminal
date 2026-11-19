@@ -81,8 +81,13 @@ impl ChartPanel {
         }
         self.auto_figures.hover.probe = Some(pos);
         let hit = self.auto_hit(pos, cx);
+        let generation = self.auto_figures.hover.dwell_gen;
         let repaint = self.apply_auto_hover(hit);
-        self.arm_auto_card(cx);
+        // One timer per line entered, not per pointer event: a pointer resting on (or jittering
+        // along) the same line would otherwise spawn a timer task at every move.
+        if self.auto_figures.hover.dwell_gen != generation {
+            self.arm_auto_card(cx);
+        }
         repaint
     }
 
@@ -102,8 +107,13 @@ impl ChartPanel {
             return;
         }
         let hit = self.input.cursor.and_then(|pos| self.auto_hit(pos, cx));
+        let generation = self.auto_figures.hover.dwell_gen;
         self.apply_auto_hover(hit);
-        self.arm_auto_card(cx);
+        // Runs in every render while a line is hovered: arm only when the line under a resting
+        // cursor actually changed, never once per frame.
+        if self.auto_figures.hover.dwell_gen != generation {
+            self.arm_auto_card(cx);
+        }
     }
 
     /// The auto line at `pos` (panel-local device pixels), if any.
