@@ -51,37 +51,39 @@ impl RowTitle {
     }
 }
 
-/// Dictionary key of a detector kind's name.
+/// Dictionary key of a detector kind's name — the ONE vocabulary the popup, the row editor, the
+/// line captions and the hover card all print.
 pub(crate) fn kind_key(kind: DetectorKind) -> &'static str {
     match kind {
-        DetectorKind::Swing => "auto_figures_chart.kind.swing",
-        DetectorKind::PeriodExtreme => "auto_figures_chart.kind.period_extreme",
-        DetectorKind::Trend => "auto_figures_chart.kind.trend",
-        DetectorKind::Squeeze => "auto_figures_chart.kind.squeeze",
+        DetectorKind::Swing => "auto_figures.kind.swing",
+        DetectorKind::PeriodExtreme => "auto_figures.kind.period_extreme",
+        DetectorKind::Trend => "auto_figures.kind.trend",
+        DetectorKind::Squeeze => "auto_figures.kind.squeeze",
     }
 }
 
-/// Dictionary key of a timeframe's short label.
+/// Dictionary key of a timeframe's short label, shared like [`kind_key`].
 pub(crate) fn tf_key(tf: TfId) -> &'static str {
     match tf {
-        TfId::M1 => "auto_figures_chart.tf.m1",
-        TfId::M5 => "auto_figures_chart.tf.m5",
-        TfId::M15 => "auto_figures_chart.tf.m15",
-        TfId::M30 => "auto_figures_chart.tf.m30",
-        TfId::H1 => "auto_figures_chart.tf.h1",
-        TfId::H4 => "auto_figures_chart.tf.h4",
-        TfId::D1 => "auto_figures_chart.tf.d1",
+        TfId::M1 => "auto_figures.tf.m1",
+        TfId::M5 => "auto_figures.tf.m5",
+        TfId::M15 => "auto_figures.tf.m15",
+        TfId::M30 => "auto_figures.tf.m30",
+        TfId::H1 => "auto_figures.tf.h1",
+        TfId::H4 => "auto_figures.tf.h4",
+        TfId::D1 => "auto_figures.tf.d1",
     }
 }
 
-/// Dictionary key of an event's name.
+/// Dictionary key of an event's name, shared like [`kind_key`]: the editor's checkbox for a mark
+/// and the mark's name on the line say the same word.
 pub(crate) fn event_key(event: AutoEvent) -> &'static str {
     match event {
-        AutoEvent::Approach => "auto_figures_chart.event.approach",
-        AutoEvent::Squeeze => "auto_figures_chart.event.squeeze",
-        AutoEvent::Breakout => "auto_figures_chart.event.breakout",
-        AutoEvent::FalseBreak => "auto_figures_chart.event.false_break",
-        AutoEvent::Bounce => "auto_figures_chart.event.bounce",
+        AutoEvent::Approach => "auto_figures.event.approach",
+        AutoEvent::Squeeze => "auto_figures.event.squeeze",
+        AutoEvent::Breakout => "auto_figures.event.breakout",
+        AutoEvent::FalseBreak => "auto_figures.event.false_break",
+        AutoEvent::Bounce => "auto_figures.event.bounce",
     }
 }
 
@@ -201,11 +203,22 @@ pub(crate) fn caption_text(parts: &[CaptionPart], values: &CaptionValues<'_>) ->
     out
 }
 
+/// The printed price as an integer: `price` scaled by `10^d`, where `d` is the number of decimals
+/// `format_price` prints it with for this tick. Equal quanta print equal text; `None` without a
+/// price. The decimals depend on the price only before a tick is known, and then they are part of
+/// the quantum too.
+pub(crate) fn price_quantum(price: Option<f64>, tick: Option<f64>) -> Option<(usize, i64)> {
+    let price = price.filter(|p| p.is_finite())?;
+    let decimals = moon_chart::axes::format_price_decimals(price, tick);
+    let scale = 10f64.powi(decimals.min(18) as i32);
+    Some((decimals, (price * scale).round() as i64))
+}
+
 /// Folds into `h` the numbers `caption_text` would print for these `parts`: equal quanta mean an
 /// equal caption, so the caller rebuilds the string only when this moved.
 ///
-/// The price is quantized to the tick it is printed with (to its `f32` bits before a tick is
-/// known), the distance to the hundredth of a percent `fmt_pct` prints, the age to its bucket.
+/// The price is quantized at the precision it is PRINTED with ([`price_quantum`]), the distance
+/// to the hundredth of a percent `fmt_pct` prints, the age to its bucket.
 /// The name, touches, timeframe and events only change with a rebuild of the lines, which resets
 /// the caption anyway, but they are folded in too, so the function is the whole truth on its own.
 pub(crate) fn caption_quantum(
@@ -216,11 +229,7 @@ pub(crate) fn caption_quantum(
     for part in parts {
         match part {
             CaptionPart::RowName => values.title.hash(h),
-            CaptionPart::Price => match (values.line_now, values.tick) {
-                (Some(p), Some(tick)) if tick > 0.0 => ((p / tick).round() as i64).hash(h),
-                (Some(p), _) => (p as f32).to_bits().hash(h),
-                (None, _) => 0u8.hash(h),
-            },
+            CaptionPart::Price => price_quantum(values.line_now, values.tick).hash(h),
             CaptionPart::DistancePct => {
                 distance_pct(values)
                     .map(|d| (d * 100.0).round() as i64)

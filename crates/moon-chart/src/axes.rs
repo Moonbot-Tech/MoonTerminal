@@ -53,19 +53,12 @@ pub fn price_decimals(price: f32) -> usize {
     }
 }
 
-/// Format an axis or cursor price with the market grid and MoonBot's small-price unit.
-///
-/// At or below `0.00001`, MoonBot prints price × 10^8 and removes eight decimal places.
-/// This is a display unit only, including for non-BTC markets. Without a usable tick (not
-/// arrived yet, or refused as a placeholder by the source), keep the ordinary magnitude format, but give small prices four significant digits (up to the
-/// same twelve-decimal limit as the ladder) instead of rounding them to zero.
-///
-/// Generic over the width because a figure stores its price as `f64`: narrowing that to `f32`
-/// would misprint the last tick on large prices, while an `f32` axis value widens exactly.
-pub fn format_price(price: impl Into<f64>, tick: Option<f64>) -> String {
-    let price: f64 = price.into();
-    let decimals = tick
-        .filter(|tick| tick.is_finite() && *tick > 0.0)
+/// The decimals [`format_price`] prints `price` with: the tick's own when a usable tick is known,
+/// else the magnitude rule. Public so a caller that caches printed prices can tell when the TEXT
+/// would change — rounding to the tick is not that: a 0.25 tick prints two decimals, so 100.0 and
+/// 100.1 sit on one tick multiple yet print differently.
+pub fn format_price_decimals(price: f64, tick: Option<f64>) -> usize {
+    tick.filter(|tick| tick.is_finite() && *tick > 0.0)
         .map(crate::ladder::tick_decimals)
         .unwrap_or_else(|| {
             // Counted in `f32` for every caller: 0.01f32 widens to just under 0.01, so `log10` on
@@ -77,7 +70,21 @@ pub fn format_price(price: impl Into<f64>, tick: Option<f64>) -> String {
             } else {
                 price_decimals(price as f32)
             }
-        });
+        })
+}
+
+/// Format an axis or cursor price with the market grid and MoonBot's small-price unit.
+///
+/// At or below `0.00001`, MoonBot prints price × 10^8 and removes eight decimal places.
+/// This is a display unit only, including for non-BTC markets. Without a usable tick (not
+/// arrived yet, or refused as a placeholder by the source), keep the ordinary magnitude format, but give small prices four significant digits (up to the
+/// same twelve-decimal limit as the ladder) instead of rounding them to zero.
+///
+/// Generic over the width because a figure stores its price as `f64`: narrowing that to `f32`
+/// would misprint the last tick on large prices, while an `f32` axis value widens exactly.
+pub fn format_price(price: impl Into<f64>, tick: Option<f64>) -> String {
+    let price: f64 = price.into();
+    let decimals = format_price_decimals(price, tick);
     if price.abs() <= 0.00001 {
         let satoshis = price * 1e8;
         let decimals = decimals.saturating_sub(8);

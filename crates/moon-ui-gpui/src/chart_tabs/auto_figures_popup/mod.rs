@@ -15,7 +15,7 @@
 
 use gpui::*;
 use moon_core::config::ChartTabKind;
-use moon_core::config::auto_figures::AutoFiguresCfg;
+use moon_core::config::auto_figures::{AutoFigureRow, AutoFiguresCfg};
 use moon_ui::{
     MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement,
     h_flex, v_flex,
@@ -85,7 +85,7 @@ pub(super) trait AutoFiguresPopupHost: LayoutPopupHost {
     }
 
     /// One status mark per row, the worst across the target's panes.
-    fn auto_figure_statuses(&self, rows: usize, cx: &App) -> Vec<Option<RowStatus>> {
+    fn auto_figure_statuses(&self, rows: &[AutoFigureRow], cx: &App) -> Vec<Option<RowStatus>> {
         let outcomes: Vec<_> = self
             .auto_figure_panels(cx)
             .iter()
@@ -244,7 +244,7 @@ fn render_popup<T: AutoFiguresPopupHost>(
 ) -> AnyElement {
     let entity = cx.entity();
     let kind = this.source_kind(cx);
-    let statuses = this.auto_figure_statuses(cfg.rows.len(), cx);
+    let statuses = this.auto_figure_statuses(&cfg.rows, cx);
     let theme = {
         let b = this.backend().read(cx);
         b.preview

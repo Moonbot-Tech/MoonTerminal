@@ -345,19 +345,23 @@ impl ChartPanel {
         cx.notify();
     }
 
-    /// Open the row editor for row `row_ix` of `kind`'s auto-figure configuration.
+    /// Open the row editor for row `row_ix` of `kind`'s auto-figure configuration — the same modal
+    /// the "Автофигуры" popup opens from a row's name.
     ///
-    /// TODO(stage 4 merge): call open_auto_figure_row_editor
-    ///
-    /// The editor is built in the stage-4 branch; until the two meet, the menu item is wired here
-    /// and does nothing, so the merge is a one-line change in one place.
+    /// Nothing is reopened on dismiss: the editor was entered from the chart's context menu, which
+    /// has already closed, not from the popup. The editor refuses (and this logs) when the row is
+    /// gone or its detector is one this build does not know — a stale menu cannot edit the wrong
+    /// row.
     fn configure_auto_row(
         &mut self,
         kind: ChartTabKind,
         row_ix: usize,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
-        log::debug!("auto figures: configure row {row_ix} of {kind:?} (editor not merged yet)");
+        let backend = self.backend.clone();
+        if !crate::panels::open_auto_figure_row_editor(&backend, kind, row_ix, window, cx, |_| {}) {
+            log::debug!("auto figures: row {row_ix} of {kind:?} has no editor to open");
+        }
     }
 }

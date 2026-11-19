@@ -37,7 +37,9 @@ use std::time::{Duration, Instant};
 
 use gpui::Context;
 use moon_chart::auto_figures::tf::AutoTf;
-use moon_core::config::auto_figures::{AutoFiguresCfg, DetectorParams, TfId, TfSource};
+use moon_core::config::auto_figures::{
+    AutoFigureRow, AutoFiguresCfg, DetectorParams, RowDetector, TfId, TfSource,
+};
 use moon_core::session::CoreId;
 
 use super::ChartPanel;
@@ -176,6 +178,9 @@ struct RowSlot {
     retry: Option<(RowKey, Instant)>,
     /// Consecutive failed reads, indexing [`READ_RETRY`].
     failures: usize,
+    /// The key the row asked for at its latest evaluation: what [`drawable`] checks `done`
+    /// against before it is published.
+    current: Option<RowKey>,
 }
 
 /// Whether a row with `key` has to run: not already answered FINALLY for it (a lagging answer is
@@ -245,10 +250,96 @@ fn split_no_cache(
     (run, resolved)
 }
 
-/// When a held-off rerun is due, as Unix ms, for the wake timer.
+/// When a held-off rerun is due, as Unix ms, for the wake timer; `None` while the row's own run is
+/// in flight.
+///
+/// A pending run answers for itself: its completion re-arms whatever hold-off it earns. A retry
+/// instant left over from an earlier answer has usually passed by then, and turned into a wake it
+/// is a 0 ms timer whose sync finds the row still pending, arms the same past instant again, and
+/// spins the UI thread for as long as the job runs.
 fn retry_due_ms(slot: &RowSlot, now: Instant, now_ms: f64) -> Option<i64> {
+    if slot.pending.is_some() {
+        return None;
+    }
     let (_, at) = slot.retry.as_ref()?;
-    Some(now_ms as i64 + at.saturating_duration_since(now).as_millis() as i64)
+    Some(wake_ms(now_ms, at.saturating_duration_since(now)))
+}
+
+/// The Unix ms a wake `after` from `now_ms` is armed for, rounded UP.
+///
+/// Rounded down, a wake could fire up to a millisecond before what it waits for — a dwell or a
+/// back-off measured on `Instant` — find it not yet due, and re-arm for the same instant at 0 ms.
+fn wake_ms(now_ms: f64, after: Duration) -> i64 {
+    (now_ms + after.as_secs_f64() * 1000.0).ceil() as i64
+}
+
+/// The run outcome a row may publish: its last accepted answer, only while that answer is for the
+/// row as it now stands — the same detector parameters and timeframe as its current key.
+///
+/// Not the whole key: `last_closed_ms` moves with every bar close, and the previous bar's lines are
+/// the right thing to show until the new run returns. What must never be drawn is an answer
+/// computed for different parameters — a row moved into this slot, or edited, still holding the
+/// old answer, which would draw the previous row's lines in this row's style.
+fn drawable(slot: &RowSlot) -> Option<&Arc<AutoRowOutcome>> {
+    let current = slot.current.as_ref()?;
+    slot.done
+        .as_ref()
+        .filter(|d| d.key.detector == current.detector && d.key.tf == current.tf)
+}
+
+/// A row's identity for carrying its slot across an edit of the row list: what its answer
+/// depends on, apart from the clock.
+fn row_identity(row: &AutoFigureRow) -> (&RowDetector, TfSource) {
+    (&row.detector, row.tf)
+}
+
+/// Where each NEW row's slot comes from in the OLD list: the same position when the row there is
+/// the same, else the first unused old slot of an identical row, else none (a fresh slot).
+///
+/// Slots hold per-row state by position — the last answer, a run in flight, the `Auto` dwell — and
+/// the popup moves, removes and inserts rows; without this, after a swap each row would inherit
+/// its neighbour's answer.
+fn slot_map(old: &[AutoFigureRow], new: &[AutoFigureRow]) -> Vec<Option<usize>> {
+    let mut used = vec![false; old.len()];
+    let mut map: Vec<Option<usize>> = new
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let same = old
+                .get(i)
+                .is_some_and(|o| row_identity(o) == row_identity(row));
+            if same {
+                used[i] = true;
+            }
+            same.then_some(i)
+        })
+        .collect();
+    for (i, row) in new.iter().enumerate() {
+        if map[i].is_some() {
+            continue;
+        }
+        if let Some(j) =
+            (0..old.len()).find(|&j| !used[j] && row_identity(&old[j]) == row_identity(row))
+        {
+            used[j] = true;
+            map[i] = Some(j);
+        }
+    }
+    map
+}
+
+/// Whether `map` keeps every row where it was: same length and each slot in place.
+fn keeps_positions(map: &[Option<usize>], old_len: usize) -> bool {
+    map.len() == old_len && map.iter().enumerate().all(|(i, m)| *m == Some(i))
+}
+
+/// Re-order `slots` by `map` (from [`slot_map`]); unmatched rows start fresh.
+fn realign(slots: &mut Vec<RowSlot>, map: &[Option<usize>]) {
+    let mut old: Vec<Option<RowSlot>> = std::mem::take(slots).into_iter().map(Some).collect();
+    *slots = map
+        .iter()
+        .map(|m| m.and_then(|j| old.get_mut(j)?.take()).unwrap_or_default())
+        .collect();
 }
 
 /// The touch tolerance a row's zone band shows, in % of price; `0` for a detector without one.
@@ -271,16 +362,28 @@ impl ChartPanel {
         }
         let now_ms = now_unix_ms();
         let now = Instant::now();
-        let cfg_changed = {
+        let (cfg_changed, moved) = {
             let b = self.backend.read(cx);
             let cfg = b.layout.auto_figures_for(self.default_kind);
             if self.auto_figures.cfg.as_ref() != Some(cfg) {
+                let moved = self.auto_figures.cfg.as_ref().map(|old| {
+                    let map = slot_map(&old.rows, &cfg.rows);
+                    (!keeps_positions(&map, old.rows.len())).then_some(map)
+                });
                 self.auto_figures.cfg = Some(cfg.clone());
-                true
+                (true, moved.flatten())
             } else {
-                false
+                (false, None)
             }
         };
+        // Rows moved, came or went: every slot follows its row, and the hidden lines are dropped —
+        // they name rows by position, and they are a passing choice, not a setting.
+        if let Some(map) = moved {
+            for pane in &mut self.auto_figures.panes {
+                realign(&mut pane.rows, &map);
+                pane.hidden.clear();
+            }
+        }
         // A frozen trade window describes a closed interval; lines computed from today's candles
         // would describe a different picture.
         let active = !self.historical
@@ -363,8 +466,7 @@ impl ChartPanel {
                         };
                         let (tf, recheck) = slot.auto_tf.update(visible as f64, now);
                         if let Some(at) = recheck {
-                            let wake = now_ms as i64
-                                + at.saturating_duration_since(now).as_millis() as i64;
+                            let wake = wake_ms(now_ms, at.saturating_duration_since(now));
                             next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
                         }
                         tf
@@ -377,6 +479,7 @@ impl ChartPanel {
                     last_closed_ms: last_closed_open_ms(now_ms, tf),
                     chart_ready: view.chart_ready,
                 };
+                slot.current = Some(key);
                 let wake = next_key_change_ms(now_ms, tf);
                 next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
                 if needs_run(slot, &key, now) {
@@ -390,7 +493,7 @@ impl ChartPanel {
                 pane.unmeasured_retries = 0;
             } else if unmeasured_wait && pane.unmeasured_retries < UNMEASURED_RETRIES {
                 pane.unmeasured_retries += 1;
-                let wake = now_ms as i64 + UNMEASURED_RECHECK.as_millis() as i64;
+                let wake = wake_ms(now_ms, UNMEASURED_RECHECK);
                 next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
             }
             if !jobs.is_empty() {
@@ -483,7 +586,19 @@ impl ChartPanel {
         let mut accepted = false;
         let mut retry = false;
         for (ix, outcome) in outcomes {
-            let Some(slot) = pane.rows.get_mut(ix) else {
+            // By position first, else wherever the run's row moved while it ran (`realign`).
+            let at = if pane
+                .rows
+                .get(ix)
+                .is_some_and(|s| s.pending == Some(outcome.key))
+            {
+                Some(ix)
+            } else {
+                pane.rows
+                    .iter()
+                    .position(|s| s.pending == Some(outcome.key))
+            };
+            let Some(slot) = at.and_then(|at| pane.rows.get_mut(at)) else {
                 continue;
             };
             // Only an outcome that arms a hold-off needs the wake re-armed; a definitive answer
@@ -518,7 +633,7 @@ impl ChartPanel {
         let mut scratch = Vec::new();
         let mut rows = Vec::new();
         for (row_ix, (row, slot)) in cfg.rows.iter().zip(&pane.rows).enumerate() {
-            let (Some(params), Some(outcome)) = (row.detector.known(), slot.done.as_ref()) else {
+            let (Some(params), Some(outcome)) = (row.detector.known(), drawable(slot)) else {
                 continue;
             };
             if !row.is_drawn() {
@@ -584,7 +699,8 @@ impl ChartPanel {
         self.auto_figures.timer_gen = self.auto_figures.timer_gen.wrapping_add(1);
         let generation = self.auto_figures.timer_gen;
         self.auto_figures.timer = Some((at_ms, generation));
-        let delay = Duration::from_millis((at_ms as f64 - now_ms).max(0.0) as u64);
+        // Rounded up, like the instants it is armed for (`wake_ms`): firing early only re-arms.
+        let delay = Duration::from_millis((at_ms as f64 - now_ms).max(0.0).ceil() as u64);
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             executor.timer(delay).await;

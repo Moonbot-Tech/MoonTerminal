@@ -13,13 +13,17 @@ use moon_core::config::auto_figures::{
 };
 use moon_core::market::ChartCandle;
 
+use super::caption::price_quantum;
 use super::job::{
     AutoRowOutcome, BarCache, PaneJob, RowKey, cache_bars, closed_bars, last_closed_open_ms,
     next_key_change_ms, run, with_chart_tail,
 };
-use super::pane::{AutoPaneDrawn, append_auto_geometry, refresh_auto_captions};
+use super::pane::{AutoPaneDrawn, SegmentBase, append_auto_geometry, refresh_auto_captions};
 use super::select::select_kept;
-use super::{AutoPaneFigures, AutoRowDrawn, LineKey, RowTitle, native_closed_candles, resolve_rgb};
+use super::{
+    AutoPaneFigures, AutoRowDrawn, LineKey, PriceStep, RowTitle, native_closed_candles, price_step,
+    resegment, resolve_rgb,
+};
 use crate::chartdx::types::CandleGpu;
 
 const MIN: i64 = 60_000;
@@ -453,4 +457,150 @@ fn a_periods_high_and_low_are_different_lines() {
     let mut rerun = low.clone();
     rerun.shape = FoundShape::Horizontal { price: 1.01 };
     assert_eq!(LineKey::of(0, &low), LineKey::of(0, &rerun));
+}
+
+/// Breakage (#12a/b): the price gate removed (every market sync re-selects, a pan included), or a
+/// crossing that leaves the published set in place — the side and its `BySign` colour stay stale.
+#[test]
+fn the_price_pass_skips_an_unchanged_price_and_replaces_on_a_crossing() {
+    let mut set = Rc::new(published(&[95.0, 105.0, 112.0], Vec::new(), 100.0));
+    let first = set.clone();
+    // First sight of a price: evaluated; nothing drawn moved, so the set is kept.
+    assert_eq!(price_step(&mut set, 100.0, 0.0), PriceStep::Same);
+    assert!(Rc::ptr_eq(&set, &first));
+    // The same price again: not even evaluated.
+    assert_eq!(price_step(&mut set, 100.0, 0.0), PriceStep::Skipped);
+    // Across 105: replaced, and 105 is now below the price.
+    assert_eq!(price_step(&mut set, 106.0, 0.0), PriceStep::Replaced);
+    assert!(!Rc::ptr_eq(&set, &first));
+    let at_105 = set.rows[0].kept.iter().find(|k| k.ix == 1).unwrap();
+    assert!(!at_105.above);
+    // And the replacement remembers its price: the next sync at 106 does nothing.
+    assert_eq!(price_step(&mut set, 106.0, 0.0), PriceStep::Skipped);
+}
+
+/// The raw bytes of a buffer of GPU instances, for comparing two of them exactly.
+fn bytes<T: bytemuck::Pod>(v: &[T]) -> Vec<u8> {
+    bytemuck::cast_slice(v).to_vec()
+}
+
+/// Breakage (#12c): a partial redraw that does not cut back to the recorded base (the old lines
+/// stay under the new ones) or that appends something a full rebuild would not.
+#[test]
+fn redrawing_the_segment_equals_a_full_rebuild() {
+    use moon_chart::layers::{MARKER_SHAPE_CROSS, MarkerInstance, ZoneInstance};
+    let theme = ChartTheme::default();
+    // What the layers in front of the auto segment put there: one order zone, one marker.
+    let prefix = |scratch: &mut crate::chartdx::UdScratch| {
+        scratch.zones.push(ZoneInstance {
+            price0: 1.0,
+            price1: 2.0,
+            t0_rel: 0.0,
+            t1_rel: 1.0,
+            color: [1.0; 4],
+        });
+        scratch.markers.push(MarkerInstance::at_price(
+            0.0,
+            1.0,
+            3.0,
+            1.0,
+            MARKER_SHAPE_CROSS,
+            [1.0; 4],
+        ));
+    };
+    let full = |set: &Rc<AutoPaneFigures>| {
+        let mut scratch = crate::chartdx::UdScratch::default();
+        prefix(&mut scratch);
+        let base = SegmentBase {
+            zones: scratch.zones.len(),
+            hlines: scratch.hlines.len(),
+            segs: scratch.segs.len(),
+            markers: scratch.markers.len(),
+        };
+        let mut drawn = AutoPaneDrawn::default();
+        resegment(&mut scratch, base, Some(set), &theme, 1.0, 0.0, &mut drawn);
+        (scratch, base)
+    };
+    let mut band = level_row(&[95.0, 105.0]);
+    band.style.zone = Some(0.2);
+    band.tolerance_pct = 0.5;
+    band.kept = select_kept(&band.outcome, &band.rules(&[]), 100.0, 0.0, &mut Vec::new());
+    let before = Rc::new(AutoPaneFigures::new(vec![band.clone()], Vec::new()));
+    let after = Rc::new(
+        before
+            .reselect(106.0, 0.0)
+            .expect("the crossing moved a line"),
+    );
+
+    let (mut partial, base) = full(&before);
+    let mut drawn = AutoPaneDrawn::default();
+    resegment(
+        &mut partial,
+        base,
+        Some(&after),
+        &theme,
+        1.0,
+        0.0,
+        &mut drawn,
+    );
+    let (fresh, _) = full(&after);
+    assert_eq!(bytes(&partial.zones), bytes(&fresh.zones));
+    assert_eq!(bytes(&partial.hlines), bytes(&fresh.hlines));
+    assert_eq!(bytes(&partial.segs), bytes(&fresh.segs));
+    assert_eq!(bytes(&partial.markers), bytes(&fresh.markers));
+    // And the front layers are untouched.
+    assert_eq!(partial.zones[0].price1, 2.0);
+    assert!(partial.zones.len() > base.zones);
+}
+
+/// Breakage (#2): the caption price cached by tick multiples. With a 0.25 tick the price prints
+/// two decimals, so 100.0 and 100.1 — one tick multiple — print differently and the caption went
+/// stale; 100.001 and 100.004 print the same and must not rebuild.
+#[test]
+fn a_caption_price_is_quantized_at_its_printed_precision() {
+    let tick = Some(0.25);
+    assert_ne!(
+        price_quantum(Some(100.0), tick),
+        price_quantum(Some(100.1), tick)
+    );
+    assert_eq!(
+        price_quantum(Some(100.001), tick),
+        price_quantum(Some(100.004), tick)
+    );
+    assert_eq!(
+        moon_chart::axes::format_price(100.001, tick),
+        moon_chart::axes::format_price(100.004, tick)
+    );
+}
+
+/// Breakage (#10): two trend lines from one shared pivot keyed alike — hiding, pinning or hovering
+/// one acted on the other.
+#[test]
+fn two_trend_lines_from_one_pivot_are_different_lines() {
+    let line = |t1: f64, p1: f64| Found {
+        shape: FoundShape::Sloped {
+            t0_ms: 0.0,
+            p0: 100.0,
+            t1_ms: t1,
+            p1,
+        },
+        touches: vec![
+            Touch {
+                t_ms: 0.0,
+                price: 100.0,
+            },
+            Touch {
+                t_ms: t1,
+                price: p1,
+            },
+        ],
+        strength: 1.0,
+        first_ms: 0.0,
+        last_ms: t1,
+        broken: None,
+    };
+    assert_ne!(
+        LineKey::of(0, &line(3_600_000.0, 101.0)),
+        LineKey::of(0, &line(7_200_000.0, 103.0))
+    );
 }

@@ -9,7 +9,7 @@
 use gpui::*;
 use moon_core::config::LabelColor;
 use moon_core::config::auto_figures::{
-    AutoFigureRow, BrokenPolicy, CaptionPart, CaptionPlace, CaptionShow, DetectorKind,
+    AutoEvent, AutoFigureRow, BrokenPolicy, CaptionPart, CaptionPlace, CaptionShow, DetectorKind,
     DetectorParams, Extend, ExtremePeriod, ExtremeWhich, TakeOrder, TakeSide, TfId, TfSource,
     TrendSide,
 };
@@ -24,6 +24,7 @@ use rust_i18n::t;
 use super::fields::{NumField, broken_of, broken_of_mut};
 use super::preview::{self, PreviewData};
 use super::{AutoFigureEditState, kind_key, reseed_inputs, switch_detector};
+use crate::chartdx::auto_figures_sync::caption::{event_key, tf_key};
 use crate::design::{self, moon};
 use crate::panels::popup_group;
 
@@ -79,19 +80,6 @@ pub(crate) fn tf_source_label(tf: TfSource) -> String {
     match tf {
         TfSource::Auto => t!("auto_figures.tf.auto").to_string(),
         TfSource::Fixed(tf) => t!(tf_key(tf)).to_string(),
-    }
-}
-
-/// Locale key of one timeframe's short name.
-pub(crate) fn tf_key(tf: TfId) -> &'static str {
-    match tf {
-        TfId::M1 => "auto_figures.tf.m1",
-        TfId::M5 => "auto_figures.tf.m5",
-        TfId::M15 => "auto_figures.tf.m15",
-        TfId::M30 => "auto_figures.tf.m30",
-        TfId::H1 => "auto_figures.tf.h1",
-        TfId::H4 => "auto_figures.tf.h4",
-        TfId::D1 => "auto_figures.tf.d1",
     }
 }
 
@@ -876,14 +864,17 @@ fn look_pane(
     // nothing else can be "pressed".
     let is_squeeze = matches!(row.detector.known(), Some(DetectorParams::Squeeze(_)));
     let mut events = h_flex().w_full().flex_wrap().gap(design::ui_px(cx, 8.0));
-    let marks: [(&str, &str, bool); 5] = [
-        ("approach", "auto_figures.edit.event.approach", true),
-        ("squeeze", "auto_figures.edit.event.squeeze", is_squeeze),
-        ("breakout", "auto_figures.edit.event.breakout", true),
-        ("false_break", "auto_figures.edit.event.false_break", true),
-        ("bounce", "auto_figures.edit.event.bounce", true),
+    // Named through the same `event_key` the line captions print, so a mark and its checkbox
+    // cannot disagree on the word.
+    let marks: [(&str, AutoEvent, bool); 5] = [
+        ("approach", AutoEvent::Approach, true),
+        ("squeeze", AutoEvent::Squeeze, is_squeeze),
+        ("breakout", AutoEvent::Breakout, true),
+        ("false_break", AutoEvent::FalseBreak, true),
+        ("bounce", AutoEvent::Bounce, true),
     ];
-    for (id, key, shown) in marks {
+    for (id, event, shown) in marks {
+        let key = event_key(event);
         if !shown {
             continue;
         }

@@ -301,16 +301,8 @@ impl ChartDataState {
                 .find(|pr| pr.active && pr.core == Some(target.0) && pr.market == target.1)
                 .and_then(|pr| pr.cached_last_price)
                 .filter(|p| p.is_finite() && *p > 0.0);
-            let Some(price) = price else {
-                continue;
-            };
-            if set.eval_price.get() == Some(price.to_bits()) {
-                continue;
-            }
-            set.eval_price.set(Some(price.to_bits()));
-            if let Some(next) = set.reselect(f64::from(price), now_ms) {
-                next.eval_price.set(Some(price.to_bits()));
-                *set = Rc::new(next);
+            if let Some(price) = price {
+                price_step(set, price, now_ms);
             }
         }
         let mut base_changed = false;
@@ -428,8 +420,74 @@ impl ChartDataState {
     }
 }
 
+/// What the price pass did with one published set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PriceStep {
+    /// The set was already evaluated at this price: nothing was selected or derived.
+    Skipped,
+    /// Re-selected at a new price; the drawn lines came out the same, so nothing was replaced.
+    Same,
+    /// Re-selected, and the drawn lines (which, their sides or their events) changed: the set was
+    /// replaced, and every pane showing it redraws its auto segment.
+    Replaced,
+}
+
+/// One published set's step of the price pass at `price` (the pane's last price, `f32` as the
+/// pane holds it).
+///
+/// The gate is the price itself: the set remembers the price it was last evaluated at, so a
+/// market sync with an unchanged price — every camera sync of a mouse move, a pan or a zoom —
+/// costs one comparison and derives nothing.
+pub(super) fn price_step(set: &mut Rc<AutoPaneFigures>, price: f32, now_ms: f64) -> PriceStep {
+    if set.eval_price.get() == Some(price.to_bits()) {
+        return PriceStep::Skipped;
+    }
+    set.eval_price.set(Some(price.to_bits()));
+    match set.reselect(f64::from(price), now_ms) {
+        Some(next) => {
+            next.eval_price.set(Some(price.to_bits()));
+            *set = Rc::new(next);
+            PriceStep::Replaced
+        }
+        None => PriceStep::Same,
+    }
+}
+
 /// How often the age captions are re-checked against the clock.
 const AUTO_CAPTION_TICK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The buffer half of [`redraw_auto_segment`]: cut `scratch` back to `base` and append `set`'s auto
+/// geometry again. Kept apart so it can be checked against a full rebuild without a GPU.
+pub(super) fn resegment(
+    scratch: &mut super::UdScratch,
+    base: pane::SegmentBase,
+    set: Option<&Rc<AutoPaneFigures>>,
+    theme: &ChartTheme,
+    ppp: f32,
+    epoch_ms: f64,
+    drawn: &mut pane::AutoPaneDrawn,
+) {
+    scratch.zones.truncate(base.zones);
+    scratch.hlines.truncate(base.hlines);
+    scratch.segs.truncate(base.segs);
+    scratch.markers.truncate(base.markers);
+    // Passive figures emit no readouts; the buffer exists only to satisfy the sink.
+    let mut no_labels = Vec::new();
+    pane::append_auto_geometry(
+        set,
+        theme,
+        ppp,
+        epoch_ms,
+        &mut moon_chart::figures::FigureBuffers {
+            zones: &mut scratch.zones,
+            hlines: &mut scratch.hlines,
+            segs: &mut scratch.segs,
+            markers: &mut scratch.markers,
+            labels: &mut no_labels,
+        },
+        drawn,
+    );
+}
 
 /// Redraw ONE pane's auto segment from `set` without the order sync: truncate the retained
 /// userdata to the segment's base, append the auto geometry again, re-upload. Returns whether the
@@ -447,27 +505,8 @@ fn redraw_auto_segment(
         return false;
     };
     let mut scratch = std::mem::take(&mut pr.ud_scratch);
-    scratch.zones.truncate(base.zones);
-    scratch.hlines.truncate(base.hlines);
-    scratch.segs.truncate(base.segs);
-    scratch.markers.truncate(base.markers);
-    // Passive figures emit no readouts; the buffer exists only to satisfy the sink.
-    let mut no_labels = Vec::new();
     let epoch_ms = pr.auto.epoch_ms;
-    pane::append_auto_geometry(
-        set,
-        theme,
-        ppp,
-        epoch_ms,
-        &mut moon_chart::figures::FigureBuffers {
-            zones: &mut scratch.zones,
-            hlines: &mut scratch.hlines,
-            segs: &mut scratch.segs,
-            markers: &mut scratch.markers,
-            labels: &mut no_labels,
-        },
-        &mut pr.auto,
-    );
+    resegment(&mut scratch, base, set, theme, ppp, epoch_ms, &mut pr.auto);
     let zone_sig = super::data_state::orders::hash_order_zones(&scratch.zones);
     let base_changed = pr.last_order_zone_sig != zone_sig;
     pr.last_order_zone_sig = zone_sig;

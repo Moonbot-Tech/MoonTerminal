@@ -22,7 +22,8 @@ use gpui::*;
 use moon_core::config::ChartTabKind;
 use moon_core::config::ChartTheme;
 use moon_core::config::auto_figures::{
-    AF_ROWS_MAX, AutoFigureRow, AutoFiguresCfg, DetectorKind, DetectorParams, RowDetector,
+    AF_ROWS_MAX, AutoFigureRow, AutoFiguresCfg, DetectorKind, DetectorParams, EventMarks,
+    LineCaption, RowDetector,
 };
 use moon_ui::{
     MoonButton, MoonButtonVariant, MoonInputEvent, MoonInputState, MoonPalette, MoonWindowExt as _,
@@ -40,6 +41,9 @@ mod preview;
 #[cfg(test)]
 mod tests;
 
+use crate::chartdx::auto_figures_sync::RowTitle;
+/// The detector-kind vocabulary is the chart's own, shared with the captions and the hover card.
+pub(crate) use crate::chartdx::auto_figures_sync::caption::kind_key;
 pub(crate) use body::tf_source_label;
 use fields::{NumField, parse_number};
 pub(crate) use preview::line_swatch;
@@ -84,28 +88,17 @@ pub(crate) fn write_auto_figures(
 }
 
 /// The name a row is listed and titled by: the user's own, else its preset's in the active
-/// language, else its detector kind's; a row of a detector this build lacks says so with the kind
-/// the newer build wrote.
+/// language, else its detector kind's — the same rule the chart's captions and hover card print
+/// by ([`RowTitle`]); a row of a detector this build lacks says so with the kind the newer build
+/// wrote.
 pub(crate) fn row_title(row: &AutoFigureRow) -> String {
-    if !row.name.is_empty() {
-        return row.name.clone();
-    }
-    if let Some(key) = row.title_key() {
-        return t!(key).to_string();
-    }
     match &row.detector {
-        RowDetector::Known(params) => t!(kind_key(params.kind())).to_string(),
-        RowDetector::Unknown(u) => t!("auto_figures.unknown", kind = u.kind()).to_string(),
-    }
-}
-
-/// Locale key of a detector kind's name.
-pub(crate) fn kind_key(kind: DetectorKind) -> &'static str {
-    match kind {
-        DetectorKind::Swing => "auto_figures.kind.swing",
-        DetectorKind::PeriodExtreme => "auto_figures.kind.period_extreme",
-        DetectorKind::Trend => "auto_figures.kind.trend",
-        DetectorKind::Squeeze => "auto_figures.kind.squeeze",
+        RowDetector::Known(params) => RowTitle::of(row, params.kind()).text(),
+        RowDetector::Unknown(_) if !row.name.is_empty() => row.name.clone(),
+        RowDetector::Unknown(u) => match row.title_key() {
+            Some(key) => t!(key).to_string(),
+            None => t!("auto_figures.unknown", kind = u.kind()).to_string(),
+        },
     }
 }
 
@@ -143,8 +136,13 @@ impl AutoFigureEditState {
     fn preview(&mut self) -> Rc<Option<preview::PreviewData>> {
         let mut key = self.row.clone();
         key.sanitize();
-        // The name and the caption change nothing the preview draws.
+        // The preview draws the detector's lines on demo candles in the row's style, selected by
+        // its timeframe and `take`: the name, the preset label, the caption and the event marks
+        // change none of that, so an edit to them must not recompute it.
         key.name.clear();
+        key.preset = None;
+        key.caption = LineCaption::default();
+        key.events = EventMarks::default();
         if let Some((cached, data)) = &self.preview
             && *cached == key
         {
@@ -332,7 +330,7 @@ fn open_editor(
                         // typing; one that does not parse (mid-edit "0,") leaves it alone.
                         MoonInputEvent::Change => {
                             let text = input.read(cx).value().to_string();
-                            if let Some(v) = parse_number(&text)
+                            if let Some(v) = parse_number(&text, field.integer())
                                 && field.set(&mut this.row, v)
                             {
                                 cx.notify();

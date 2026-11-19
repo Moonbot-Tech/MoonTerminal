@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use moon_chart::auto_figures::tf::BarSource;
+use moon_core::config::auto_figures::AutoFigureRow;
 
 use crate::chartdx::auto_figures_sync::job::{AutoRowOutcome, reads_cache};
 
@@ -55,19 +56,24 @@ impl RowStatus {
     }
 }
 
-/// One mark per row of a `rows`-long configuration, the worst across every published outcome.
+/// One mark per row of `rows`, the worst across every published outcome.
 ///
-/// An outcome naming a row past the end — published before a removal reached the panel — is
-/// ignored rather than shifted onto another row.
+/// An outcome counts for a row only when it is an answer FOR that row: its index is in range and
+/// its detector parameters are the row's. Outcomes are published by position, and the popup moves
+/// and removes rows — between a reorder and the chart's next publication, an outcome names a
+/// position whose row is now a different one, and is ignored rather than shifted onto it.
 pub(crate) fn merge(
     outcomes: impl IntoIterator<Item = (usize, Arc<AutoRowOutcome>)>,
-    rows: usize,
+    rows: &[AutoFigureRow],
 ) -> Vec<Option<RowStatus>> {
-    let mut out = vec![None; rows];
+    let mut out = vec![None; rows.len()];
     for (ix, outcome) in outcomes {
-        let Some(slot) = out.get_mut(ix) else {
+        let (Some(slot), Some(row)) = (out.get_mut(ix), rows.get(ix)) else {
             continue;
         };
+        if row.detector.known() != Some(&outcome.key.detector) {
+            continue;
+        }
         if let Some(status) = RowStatus::of(&outcome) {
             *slot = Some(slot.map_or(status, |s: RowStatus| s.max(status)));
         }

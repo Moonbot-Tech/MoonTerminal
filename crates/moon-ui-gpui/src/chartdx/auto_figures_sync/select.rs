@@ -21,11 +21,12 @@ use super::job::AutoRowOutcome;
 ///
 /// A run renumbers its figures and nudges their prices — a level's price is the mean of its
 /// touches, and one more touch moves it — so neither the index nor the price identifies a line.
-/// Its anchors do: the figure's first anchor (`first_ms`) and its first touch. For a pivot line
-/// the two are the oldest touch; for a period extreme `first_ms` is the period's first bar, which
-/// the high and the low SHARE, and the touch is the bar that set each one. Both stay put until
-/// they fall out of the row's lookback (or a new extreme is set), which is when the line itself is
-/// a different one.
+/// Its anchors do: the figure's first anchor (`first_ms`) and its first and last touch. For a
+/// pivot line the first anchor is the oldest touch; for a period extreme `first_ms` is the
+/// period's first bar, which the high and the low SHARE, and the touch is the bar that set each
+/// one; two trend lines may share their first pivot (the trend detector allows one shared pivot)
+/// and differ in the last. They stay put until they fall out of the row's lookback (or a new
+/// extreme or a further touch is found), which is when the line itself is a different one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct LineKey {
     /// The row's index in its kind's configuration.
@@ -36,6 +37,8 @@ pub(crate) struct LineKey {
     first_ms: u64,
     /// The first touch's time as bits; what tells a period's high from its low.
     touch_ms: u64,
+    /// The last touch's time as bits; what tells two trend lines from one shared pivot apart.
+    last_touch_ms: u64,
 }
 
 impl LineKey {
@@ -51,6 +54,7 @@ impl LineKey {
             shape,
             first_ms: found.first_ms.to_bits(),
             touch_ms: found.touches.first().map_or(0, |t| t.t_ms.to_bits()),
+            last_touch_ms: found.touches.last().map_or(0, |t| t.t_ms.to_bits()),
         }
     }
 }

@@ -90,10 +90,10 @@ fn a_typed_number_is_kept_until_the_row_is_sanitized() {
 /// Mutation: drop the comma replacement — a Russian or Ukrainian keyboard types "0,25".
 #[test]
 fn a_decimal_comma_parses_and_garbage_does_not() {
-    assert_eq!(parse_number(" 0,25 "), Some(0.25));
-    assert_eq!(parse_number("12"), Some(12.0));
-    assert_eq!(parse_number("abc"), None);
-    assert_eq!(parse_number("inf"), None);
+    assert_eq!(parse_number(" 0,25 ", false), Some(0.25));
+    assert_eq!(parse_number("12", true), Some(12.0));
+    assert_eq!(parse_number("abc", false), None);
+    assert_eq!(parse_number("inf", false), None);
 }
 
 /// A broken-bar count exists only under `Keep`. Mutation: answer it under `Remove`.
@@ -196,4 +196,22 @@ fn dashes_cover_the_on_fraction_of_the_segment() {
     // 6 on, 4 off: 60 % ink, give or take the cut at the end.
     assert!((55.0..=65.0).contains(&ink), "ink {ink}");
     assert!(parts.len() >= 9);
+}
+
+/// Breakage: "1,000" in a bar count read as a decimal comma — one bar, then silently clamped.
+#[test]
+fn thousands_separators_group_in_a_whole_number() {
+    for typed in ["1,000", "1 000", "1\u{a0}000", "1_000", " 1,000 "] {
+        assert_eq!(parse_number(typed, true), Some(1000.0), "{typed:?}");
+    }
+}
+
+/// Breakage: every comma in a fraction treated alike — either "0,25" stops being a quarter, or
+/// "1,000.5" reads as one.
+#[test]
+fn a_comma_is_decimal_only_when_it_is_the_only_separator() {
+    assert_eq!(parse_number("0,25", false), Some(0.25));
+    assert_eq!(parse_number("1,000.5", false), Some(1000.5));
+    assert_eq!(parse_number("1,000,000", false), Some(1_000_000.0));
+    assert_eq!(parse_number("1 000,5", false), Some(1000.5));
 }

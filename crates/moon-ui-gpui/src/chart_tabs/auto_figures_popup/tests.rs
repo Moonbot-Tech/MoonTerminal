@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use moon_chart::auto_figures::tf::BarSource;
 use moon_core::config::auto_figures::{
-    AutoFigurePreset, AutoFigureRow, DetectorParams, SwingParams, TfId,
+    AutoFigurePreset, AutoFigureRow, DetectorKind, DetectorParams, SwingParams, TfId,
 };
 
 use super::rows::fitted_name;
@@ -27,6 +27,7 @@ fn outcome(source: BarSource, bars: usize, needed: u32) -> AutoRowOutcome {
         read_failed: false,
         lagging: false,
         found: Vec::new(),
+        recent: Vec::new(),
     }
 }
 
@@ -71,9 +72,25 @@ fn merge_keeps_the_worst_per_row_and_ignores_rows_past_the_end() {
             (1, Arc::new(outcome(BarSource::ChartSeries, 200, 200))),
             (5, Arc::new(lag)),
         ],
-        2,
+        &[swing_row(), swing_row()],
     );
     assert_eq!(marks, vec![Some(RowStatus::NoCache), None]);
+}
+
+fn swing_row() -> AutoFigureRow {
+    AutoFigureRow::new(DetectorParams::Swing(SwingParams::default()))
+}
+
+/// Breakage: a mark read by index alone. After the popup reorders rows, an outcome published for
+/// the old order names the position, not the row, and the neighbour would inherit its "no cache".
+#[test]
+fn an_outcome_of_another_detector_marks_nothing() {
+    let trend = AutoFigureRow::new(DetectorKind::Trend.default_params());
+    let marks = merge(
+        [(0, Arc::new(outcome(BarSource::Cache5m, 0, 200)))],
+        &[trend],
+    );
+    assert_eq!(marks, vec![None]);
 }
 
 /// A name wider than the button is cut with an ellipsis and never painted past the border; one

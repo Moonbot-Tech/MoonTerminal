@@ -3,10 +3,15 @@ use std::time::{Duration, Instant};
 
 use moon_chart::auto_figures::tf::BarSource;
 use moon_chart::auto_figures::{Found, FoundShape};
-use moon_core::config::auto_figures::{DetectorParams, SwingParams, TfId};
+use moon_core::config::auto_figures::{
+    AutoFigureRow, DetectorKind, DetectorParams, SwingParams, TfId,
+};
 use moon_core::market::ChartCandle;
 
-use super::{AUTO_TF_DWELL, DwellTf, RowSlot, accept, needs_run, split_no_cache};
+use super::{
+    AUTO_TF_DWELL, DwellTf, RowSlot, accept, drawable, needs_run, realign, retry_due_ms, slot_map,
+    split_no_cache,
+};
 use crate::chartdx::auto_figures_sync::job::{AutoRowOutcome, RowKey};
 
 const HOUR: i64 = 3_600_000;
@@ -212,4 +217,54 @@ fn an_auto_timeframe_switches_only_after_the_span_held_past_the_dwell() {
         dwell.update(8.0 * HOUR as f64, again + AUTO_TF_DWELL),
         (TfId::M5, None)
     );
+}
+
+/// Breakage (#1): a retry instant that passed while the row's own run is in flight turned into a
+/// 0 ms wake; each sync found the row still pending and armed it again — a spin for the whole job.
+#[test]
+fn a_pending_row_with_a_past_retry_arms_no_wake() {
+    let now = Instant::now();
+    let mut slot = RowSlot {
+        retry: Some((key(0), now)),
+        ..RowSlot::default()
+    };
+    let later = now + Duration::from_secs(1);
+    // Not pending: the passed retry is due now.
+    assert!(retry_due_ms(&slot, later, 1_000.0).is_some());
+    slot.pending = Some(key(HOUR));
+    assert_eq!(retry_due_ms(&slot, later, 1_000.0), None);
+}
+
+/// Breakage (#7): slots kept by position across a swap — each row then published its neighbour's
+/// answer in its own style until its run returned.
+#[test]
+fn swapped_rows_carry_their_slots_and_a_foreign_answer_is_not_drawn() {
+    let a = AutoFigureRow::new(DetectorParams::Swing(SwingParams::default()));
+    let b = AutoFigureRow::new(DetectorKind::Trend.default_params());
+    let map = slot_map(&[a.clone(), b.clone()], &[b.clone(), a.clone()]);
+    assert_eq!(map, vec![Some(1), Some(0)]);
+
+    let key_a = key(0);
+    let key_b = RowKey {
+        detector: DetectorKind::Trend.default_params(),
+        ..key(0)
+    };
+    let slot = |k: RowKey| RowSlot {
+        done: Some(Arc::new(outcome(k, &[100.0]))),
+        current: Some(k),
+        ..RowSlot::default()
+    };
+    let mut slots = vec![slot(key_a), slot(key_b)];
+    realign(&mut slots, &map);
+    assert_eq!(slots[0].done.as_ref().unwrap().key, key_b);
+    assert_eq!(slots[1].done.as_ref().unwrap().key, key_a);
+
+    // Without the realignment the slot at position 0 holds A's answer while the row there is now
+    // B: the publication check refuses it.
+    let mut stale = slot(key_a);
+    stale.current = Some(key_b);
+    assert!(drawable(&stale).is_none());
+    // A newer bar of the same row is not foreign: the last answer stays on screen meanwhile.
+    stale.current = Some(key(HOUR));
+    assert!(drawable(&stale).is_some());
 }

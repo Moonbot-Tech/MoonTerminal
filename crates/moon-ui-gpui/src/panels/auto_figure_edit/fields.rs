@@ -109,7 +109,7 @@ impl NumField {
     }
 
     /// Whether the field holds a whole number.
-    fn integer(self) -> bool {
+    pub(super) fn integer(self) -> bool {
         !matches!(
             self,
             NumField::Tolerance
@@ -281,13 +281,29 @@ impl NumField {
     }
 }
 
-/// Parse what the reader typed: a decimal comma reads as a point, blanks around it are ignored.
-pub(super) fn parse_number(text: &str) -> Option<f64> {
-    text.trim()
-        .replace(',', ".")
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite())
+/// Characters a reader may group thousands with: none of them is ever a decimal separator.
+const GROUPING: [char; 3] = [' ', '\u{a0}', '_'];
+
+/// Parse what the reader typed into a field that holds a whole number (`integer`) or a fraction.
+///
+/// A whole number has no decimal separator, so every comma, blank, no-break space and underscore
+/// in it groups thousands: "1,000" and "1 000" are a thousand, never one. In a fraction a comma is
+/// the decimal separator only when it is the ONLY separator — "0,25" is a quarter — while beside a
+/// point, or repeated, it groups thousands ("1,000.5", "1,000,000"). Blanks around the number are
+/// ignored.
+pub(super) fn parse_number(text: &str, integer: bool) -> Option<f64> {
+    let text: String = text
+        .trim()
+        .chars()
+        .filter(|c| !GROUPING.contains(c))
+        .collect();
+    let commas = text.matches(',').count();
+    let normalized = if integer || text.contains('.') || commas > 1 {
+        text.replace(',', "")
+    } else {
+        text.replace(',', ".")
+    };
+    normalized.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 /// The broken-line policy a detector carries, if it has one of its own. A period extreme has none:
