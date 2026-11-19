@@ -8,10 +8,13 @@
 //!
 //! Called from two places with the same arguments, so they cannot disagree: the panel's
 //! publication of a finished run (`panels::chart::auto_figures`) and the engine's price pass
-//! ([`super::ChartDataState::auto_figures_on_price`]).
+//! ([`super::ChartDataState::auto_figures_on_price`]). Both then run the same two cross-row passes
+//! over the rows' selections, in this order: [`drop_twins`] (one formation two rows found is drawn
+//! once) and [`mark_confluence`].
 
 use moon_chart::auto_figures::confluence::{ConfluenceScratch, PlacedLine, confluence_in};
 use moon_chart::auto_figures::events::{EventSet, line_events};
+use moon_chart::auto_figures::twins::{Twin, twin_losers};
 use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide, take};
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks, Take};
 
@@ -203,6 +206,79 @@ pub(crate) fn select_kept(
     }
     crate::diag::bump_by(&crate::diag::AUTOFIGURES_EVENTS, out.len() as u64);
     out
+}
+
+/// The working buffers of the twin pass ([`drop_twins`]), kept by the published set so a price
+/// change allocates nothing for it once they have grown.
+#[derive(Debug, Default)]
+pub(crate) struct TwinBufs {
+    /// Every kept line of every row, in row order, as a twin identity (`None`: not a formation).
+    twins: Vec<Option<Twin>>,
+    /// The pass's answer, one flag per `twins` entry: drawn by another row instead.
+    losers: Vec<bool>,
+    /// The identities of the hidden formations the pane's rows still find.
+    hidden: Vec<Twin>,
+}
+
+/// Drop from `kept` every formation another row draws instead: the same pair of sides found by
+/// two rows ("Flags" and "Channels" both reading one flag) is drawn once, under the more precise
+/// name, `Flag > Wedge = Triangle > Channel`, the earlier row on a tie. The rule and the identity
+/// (the first touch of each side, on one timeframe) are `moon_chart::auto_figures::twins`'s, which
+/// the screener's scan applies too, so the two agree on what a market draws.
+///
+/// A formation the user HID is a twin too: hiding the drawn flag hides the channel the other row
+/// found on the same sides. `select_kept` hides by the row's own key, and without this the twin
+/// would come up in the flag's place, a different line appearing because one was hidden. A dropped
+/// twin is not drawn, so it is no confluence partner (this pass runs before [`mark_confluence`])
+/// and no target of the hover card, "Hide this line" or "Pin" (they hit-test the drawn lines only).
+///
+/// Cost: O(n^2) in the pane's kept lines, plus one key per found line of a row named by a hidden
+/// key, and only when some row keeps a formation; no allocation once `bufs` has grown.
+///
+/// Args:
+///     rows: The pane's rows, in their published order.
+///     kept: Each row's kept lines, parallel to `rows`; the twins are removed here.
+///     hidden: The lines the user hid on this pane.
+///     bufs: Reused working buffers.
+pub(crate) fn drop_twins(
+    rows: &[AutoRowDrawn],
+    kept: &mut [Vec<KeptLine>],
+    hidden: &[LineKey],
+    bufs: &mut TwinBufs,
+) {
+    bufs.twins.clear();
+    for (row, lines) in rows.iter().zip(kept.iter()) {
+        bufs.twins.extend(lines.iter().map(|line| {
+            row.outcome
+                .found
+                .get(line.ix)
+                .and_then(|f| Twin::of(f, row.outcome.key.tf))
+        }));
+    }
+    if bufs.twins.iter().all(Option::is_none) {
+        return;
+    }
+    bufs.hidden.clear();
+    for key in hidden {
+        let Some(row) = rows.iter().find(|r| r.row_ix == key.row_ix) else {
+            continue;
+        };
+        bufs.hidden.extend(
+            row.outcome
+                .found
+                .iter()
+                .find(|f| LineKey::of(row.row_ix, f) == *key)
+                .and_then(|f| Twin::of(f, row.outcome.key.tf)),
+        );
+    }
+    twin_losers(&bufs.twins, &mut bufs.losers);
+    for (lost, twin) in bufs.losers.iter_mut().zip(&bufs.twins) {
+        *lost |= twin.is_some_and(|t| bufs.hidden.iter().any(|h| h.same(&t)));
+    }
+    let mut lost = bufs.losers.iter();
+    for lines in kept.iter_mut().take(rows.len()) {
+        lines.retain(|_| !lost.next().copied().unwrap_or(false));
+    }
 }
 
 /// The working buffers of the confluence pass ([`mark_confluence`]), kept by the published set so

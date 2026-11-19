@@ -118,11 +118,12 @@ pub(crate) struct AutoPaneFigures {
 }
 
 /// The price pass's reused buffers: the events scratch of [`select::select_kept`], the rows' new
-/// selections before they are compared with the drawn ones, and the confluence pass's.
+/// selections before they are compared with the drawn ones, and the twin and confluence passes'.
 #[derive(Debug, Default)]
 pub(crate) struct PassBufs {
     events: Vec<moon_chart::auto_figures::events::EventSet>,
     kept: Vec<Vec<KeptLine>>,
+    twins: select::TwinBufs,
     confluence: select::ConfluenceBufs,
 }
 
@@ -138,7 +139,7 @@ impl AutoPaneFigures {
     /// A set of `rows`, with `hidden` lines left out by every later re-selection.
     ///
     /// The rows' `kept` lines are taken as they are; a caller that selected them itself runs
-    /// [`Self::mark_confluence`] afterwards, as the price pass does.
+    /// [`Self::cross_rows`] afterwards, as the price pass does.
     pub(crate) fn new(rows: Vec<AutoRowDrawn>, hidden: Vec<LineKey>) -> Self {
         Self {
             rows,
@@ -148,17 +149,20 @@ impl AutoPaneFigures {
         }
     }
 
-    /// Mark the confluences between the rows' kept lines at `at_ms` ([`select::mark_confluence`]).
+    /// Run the cross-row passes over the rows' kept lines at `at_ms`: drop the formations another
+    /// row draws instead ([`select::drop_twins`]), then mark the confluences between what is left
+    /// ([`select::mark_confluence`]).
     ///
     /// For a set whose rows were selected one by one — the panel's publication of a finished run.
-    /// The price pass marks them itself, before it compares the new selection with the drawn one.
-    pub(crate) fn mark_confluence(&mut self, at_ms: f64) {
+    /// The price pass runs both itself, before it compares the new selection with the drawn one.
+    pub(crate) fn cross_rows(&mut self, at_ms: f64) {
         let bufs = self.bufs.get_mut();
         let mut kept: Vec<Vec<KeptLine>> = self
             .rows
             .iter_mut()
             .map(|r| std::mem::take(&mut r.kept))
             .collect();
+        select::drop_twins(&self.rows, &mut kept, &self.hidden, &mut bufs.twins);
         select::mark_confluence(&self.rows, &mut kept, at_ms, &mut bufs.confluence);
         for (row, kept) in self.rows.iter_mut().zip(kept) {
             row.kept = kept;
@@ -199,14 +203,16 @@ impl AutoPaneFigures {
     /// What makes the price pass cheap to run on every tick: an unchanged answer replaces nothing,
     /// so it rebuilds no geometry and uploads nothing.
     ///
-    /// The confluence marks are part of "drawn": every row is re-selected first, the confluences
-    /// between their new selections marked across the rows, and only then is the result compared,
-    /// so a line that merely moved into or out of another timeframe's band replaces the set too.
+    /// The cross-row passes are part of "drawn": every row is re-selected first, the formations
+    /// another row draws instead dropped and the confluences between the new selections marked
+    /// across the rows, and only then is the result compared, so a line that merely moved into or
+    /// out of another timeframe's band replaces the set too.
     pub(crate) fn reselect(&self, price: f64, now_ms: f64) -> Option<Self> {
         let mut guard = self.bufs.borrow_mut();
         let PassBufs {
             events,
             kept,
+            twins,
             confluence,
         } = &mut *guard;
         kept.clear();
@@ -219,6 +225,7 @@ impl AutoPaneFigures {
                 events,
             ));
         }
+        select::drop_twins(&self.rows, kept, &self.hidden, twins);
         select::mark_confluence(&self.rows, kept, now_ms, confluence);
         if self.rows.iter().zip(kept.iter()).all(|(r, k)| r.kept == *k) {
             return None;

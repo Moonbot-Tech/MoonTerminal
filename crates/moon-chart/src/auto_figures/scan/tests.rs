@@ -1,8 +1,8 @@
 use super::super::test_bars::{MONDAY_2024_01_01_MS, ace, bar, range};
 use super::*;
 use moon_core::config::auto_figures::{
-    AutoFiguresCfg, ExtremePeriod, PeriodExtremeParams, RoundGrid, RoundLevelsParams, SwingParams,
-    VolumeProfileParams,
+    AutoFiguresCfg, ExtremePeriod, FormationParams, PeriodExtremeParams, RoundGrid,
+    RoundLevelsParams, SwingParams, VolumeProfileParams,
 };
 
 const HOUR_MS: f64 = 3_600_000.0;
@@ -583,4 +583,80 @@ fn the_copied_answer_is_the_result() {
     ] {
         assert_eq!(copied.matches(&filter), matches(&r, &filter), "{filter:?}");
     }
+}
+
+/// 5-minute bars along the straight path through `vertices` (`(bar index, price)`, ascending, the
+/// first at index 0), each opening and closing on the path and spanning ±0.05 % of it — the
+/// formation tests' synthetic shape, which the scan reads bar for bar on `M5`.
+fn path_5m(vertices: &[(usize, f64)]) -> Vec<ChartCandle> {
+    let last = vertices.last().map_or(0, |v| v.0);
+    (0..=last)
+        .map(|i| {
+            let k = vertices.iter().rposition(|v| v.0 <= i).unwrap_or(0);
+            let (i0, p0) = vertices[k];
+            let p = match vertices.get(k + 1) {
+                Some(&(i1, p1)) => p0 + (p1 - p0) * (i - i0) as f64 / (i1 - i0) as f64,
+                None => p0,
+            };
+            let (hi, lo) = (p * 1.0005, p * 0.9995);
+            bar(i, p as f32, hi as f32, lo as f32, p as f32)
+        })
+        .collect()
+}
+
+/// A formation row on `M5` over the newest 27 bars, with only the kinds `pick` leaves on.
+fn formation_row(row_ix: usize, pick: impl Fn(&mut FormationParams)) -> ScanRow {
+    let mut p = FormationParams {
+        triangle: false,
+        wedge: false,
+        channel: false,
+        flag: false,
+        double: false,
+        lookback_bars: 27,
+        ..FormationParams::default()
+    };
+    pick(&mut p);
+    ScanRow {
+        row_ix,
+        params: DetectorParams::Formation(p),
+        tf: TfId::M5,
+        take: Take::default(),
+        marks: EventMarks::default(),
+    }
+}
+
+/// One formation kept by a "Channels" row and a "Flags" row is ONE line of the market, the flag's:
+/// the chart draws it once under the more precise name, and the screener counts and places what
+/// the chart draws.
+///
+/// By hand: the bull flag of the formation tests — a 12 % rise 100 → 112 over bars 0..8, then a
+/// channel falling 1/6 per bar (tops 112 / 111 / 110, bottoms 108 / 107 / 106) — is a flag to the
+/// flag row and the channel it is to the channel row, the same pair of sides. Each row alone keeps
+/// one line; together they keep one, the flag row's, although the channel row comes first and a
+/// tie on distance goes to the lower row index.
+///
+/// Breakage: the scan counting both rows' readings (two lines, the nearest one the channel row's),
+/// so the screener disagrees with the chart about what is drawn.
+#[test]
+fn a_formation_two_rows_find_is_one_line() {
+    let bars = path_5m(&[
+        (0, 100.0),
+        (8, 112.0),
+        (11, 108.0),
+        (14, 111.0),
+        (17, 107.0),
+        (20, 110.0),
+        (23, 106.0),
+        (26, 107.5),
+    ]);
+    let now = MONDAY_2024_01_01_MS + 27.0 * 5.0 * MIN_MS;
+    let channels = formation_row(0, |p| p.channel = true);
+    let flags = formation_row(1, |p| p.flag = true);
+    for row in [channels, flags] {
+        let alone = scan(&[row], &bars, now);
+        assert_eq!((alone.rows_scanned, alone.lines), (1, 1), "{alone:?}");
+    }
+    let both = scan(&[channels, flags], &bars, now);
+    assert_eq!(both.lines, 1, "{both:?}");
+    assert_eq!(both.nearest.map(|l| l.row_ix), Some(1), "{both:?}");
 }

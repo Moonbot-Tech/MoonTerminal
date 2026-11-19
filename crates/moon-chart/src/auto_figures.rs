@@ -37,6 +37,7 @@ pub mod swing;
 pub mod take;
 pub mod tf;
 pub mod trend;
+pub mod twins;
 pub mod volume_profile;
 
 #[cfg(test)]

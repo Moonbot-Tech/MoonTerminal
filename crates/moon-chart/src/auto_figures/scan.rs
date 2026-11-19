@@ -6,7 +6,8 @@
 //! chart calls — [`super::detect`], [`super::take::select`], [`super::events::line_events`] and
 //! [`super::confluence::confluence`] — on the rows of Main's set (LinKvo, 19.11.2026: the same rows
 //! and parameters, configured in one place), so a coin the screener flags shows the same lines and
-//! marks when it is opened on a chart.
+//! marks when it is opened on a chart. The chart's cross-row rule is applied here too: a formation
+//! two rows both kept is counted once, under its more precise name ([`super::twins`]).
 //!
 //! Pure like every detector: no clock (`now_ms` is an argument), no I/O, no market lookup. The
 //! caller reads the market's rows from the local 5-minute kline cache, which the background
@@ -40,6 +41,7 @@ use moon_core::market::candles::{ChartCandle, resample};
 use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
 use super::history::history_full;
+use super::twins::{Twin, twin_losers};
 use super::{DetectCtx, bar_ok, detect, take};
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
@@ -223,6 +225,9 @@ struct Scratch {
     events: Vec<EventSet>,
     /// Every kept line of every scanned row.
     kept: Vec<Kept>,
+    /// The kept lines' twin identities ([`Twin`]) and which of them another row draws instead.
+    twins: Vec<Option<Twin>>,
+    losers: Vec<bool>,
     /// The kept lines as the confluence pass reads them, and its answer.
     placed: Vec<PlacedLine>,
     near: Vec<bool>,
@@ -234,6 +239,9 @@ struct Kept {
     line: ScanLine,
     events: EventSet,
     marks: EventMarks,
+    /// The line's identity as a formation another row may also have found; `None` for anything
+    /// but a formation.
+    twin: Option<Twin>,
 }
 
 /// The public half of a [`ScanResult`] — every answer field, none of the scratch.
@@ -347,8 +355,9 @@ pub fn matches(result: &ScanResult, filter: &ScanFilter) -> bool {
 /// the chart calls short is never scanned here); otherwise the newest
 /// `bars_needed` of them go to `detect`, `take::select` keeps the row's lines against the last
 /// price at `now_ms`, and `line_events` marks each kept line from the same closed bars (it reads
-/// only the newest `events::bars_read(policy)` valid ones). Then confluence across every row's kept
-/// lines, set where a row marks it; then the best event and the nearest line.
+/// only the newest `events::bars_read(policy)` valid ones). Then a formation two rows both kept is
+/// counted once ([`super::twins`]); then confluence across every row's kept lines, set where a
+/// row marks it; then the best event and the nearest line.
 ///
 /// Args:
 ///     rows: The rows to run ([`ScanRow::from_rows`] of Main's set).
@@ -365,6 +374,8 @@ pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: 
         bars,
         events,
         kept,
+        twins,
+        losers,
         placed,
         near,
     } = &mut out.scratch;
@@ -417,9 +428,19 @@ pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: 
                 },
                 events: events.first().copied().unwrap_or_default(),
                 marks: row.marks,
+                twin: Twin::of(f, row.tf),
             });
         }
     }
+
+    // One formation kept by two rows is one line, as on the chart: the twin under the less
+    // precise name is neither counted, nor a confluence partner, nor a candidate for the best
+    // event — so the column never names an event of a line the chart does not draw.
+    twins.clear();
+    twins.extend(kept.iter().map(|k| k.twin));
+    twin_losers(twins, losers);
+    let mut lost = losers.iter();
+    kept.retain(|_| !lost.next().copied().unwrap_or(false));
 
     placed.clear();
     placed.extend(kept.iter().map(|k| PlacedLine {
