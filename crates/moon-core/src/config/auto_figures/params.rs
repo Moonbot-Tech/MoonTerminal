@@ -502,10 +502,10 @@ pub struct FormationParams {
     /// A width that shrinks by more is a converging pair (a triangle or a wedge); one that grows
     /// by more is a broadening pattern, which is none of the kinds here and is not reported.
     pub parallel_width_pct: f32,
-    /// A flag's pole: the move in the `impulse_bars` bars before the formation's first touch must
-    /// reach this, in % of price.
+    /// A flag's pole: the net move INTO the formation — from the open of the `impulse_bars` bars
+    /// ending at its first touch to that touch's bar — must reach this, in % of price.
     pub impulse_pct: f32,
-    /// How many bars before the formation the pole is looked for in.
+    /// How many bars, the bar of the formation's first touch included, the pole is measured over.
     pub impulse_bars: u32,
     /// Longest a flag may be, in bars from its first touch to its last; a longer consolidation is
     /// the channel or triangle it is, not a flag.

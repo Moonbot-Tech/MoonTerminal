@@ -43,10 +43,13 @@
 //!
 //! - it is no longer than `flag_max_bars`;
 //! - the `impulse_bars` bars ending at its first touch (that bar included, so `impulse_bars`
-//!   bars in all) hold a pole — the largest rise from a low to a STRICTLY later bar's high, or
-//!   fall from a high to a strictly later bar's low — of at least `impulse_pct` of the price it
-//!   started from. Never one bar's own range: the bar of the first touch is a swing of the
-//!   pattern, and its wick alone is not a move the pattern pauses;
+//!   bars in all) hold a pole of at least `impulse_pct` of the price it started from. The pole is
+//!   the move INTO the formation: from the open of the window's first bar to the bar of the first
+//!   touch — a rise when that bar closes above the window's open, reaching its high; a fall when
+//!   it closes below, reaching its low. Not the widest swing inside the window: after a crash
+//!   whose bar leaves a long lower wick, the bounce off the wick is a swing in the window, but
+//!   the move that brought price to the pattern is the crash (LinKvo, 19.11.2026). Never one
+//!   bar's own range: the window needs two valid bars, so the pole always spans bars;
 //! - its width at the start is at most [`FLAG_MAX_RETRACE`] of the pole's height;
 //! - it does not run WITH the pole: its midline — halfway between the sides — is flat (it moves
 //!   by at most twice the touch tolerance over the shared stretch, the flat-side rule below) or
@@ -478,7 +481,7 @@ fn latest(a: Option<Broken>, b: Option<Broken>) -> Option<Broken> {
     }
 }
 
-/// A flag's pole: the move before the formation.
+/// A flag's pole: the move into the formation ([`pole`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Pole {
     /// The move as a fraction of the price it started from.
@@ -490,42 +493,41 @@ struct Pole {
 }
 
 /// The pole in the `bars` bars ending at `win[start]` (that bar included, `bars` bars in all): the
-/// largest rise from a low to a STRICTLY later bar's high, or fall from a high to a strictly later
-/// bar's low — whichever fraction of the price it started from is larger, a rise on a tie.
+/// NET move from the open of the first valid bar of that range to the last valid one — the bar of
+/// the formation's first touch.
 ///
-/// Strictly later, so no bar's own range is a pole: the bar of the first touch is part of the
-/// pattern, and a pole must be a move ACROSS bars. `None` when fewer than two valid bars lie in
-/// the range (`bars < 2` included) — a single bar has no move to measure.
+/// Its direction is where that bar CLOSES against the range's open: above is a rise, measured to
+/// the bar's high; below is a fall, measured to its low; level is no move (a zero pole). The
+/// extreme rather than the close, because the first touch of a flag after a rise is typically
+/// the top of the pole — its high is where the move ended — and the close only says which way
+/// price went. The open of the range rather than its lowest low (highest high): a low inside the
+/// window is a swing price passed through, and taking it as the base turned the bounce off a
+/// crash's wick into a rise, and the falling channel after the crash into a "flag" against it.
+///
+/// `None` when fewer than two valid bars lie in the range (`bars < 2` included): a single bar's
+/// own range is not a move across bars, and the bar of the first touch is part of the pattern.
 fn pole(win: &[ChartCandle], start: usize, bars: u32) -> Option<Pole> {
     let bars = usize::try_from(bars).unwrap_or(usize::MAX);
     let from = (start + 1).saturating_sub(bars);
     let range = win.get(from..=start)?;
-    let mut lowest = f64::INFINITY;
-    let mut highest = f64::NEG_INFINITY;
-    let mut best: Option<Pole> = None;
-    let mut seen = 0usize;
-    for b in range.iter().filter(|b| bar_ok(b)) {
-        seen += 1;
-        let (hi, lo) = (f64::from(b.high), f64::from(b.low));
-        // Against the extremes of the EARLIER bars only, before this bar joins them.
-        for (height, base, dir) in [(hi - lowest, lowest, 1), (highest - lo, highest, -1)] {
-            let frac = height / base;
-            if frac.is_finite() && frac > 0.0 && best.is_none_or(|so_far| frac > so_far.frac) {
-                best = Some(Pole { frac, height, dir });
-            }
-        }
-        lowest = lowest.min(lo);
-        highest = highest.max(hi);
-    }
-    if seen < 2 {
+    let first = range.iter().position(bar_ok)?;
+    let last = range.iter().rposition(bar_ok)?;
+    if last == first {
         return None;
     }
-    // Two valid bars that moved nowhere still have a (zero) pole: the impulse test rejects it.
-    Some(best.unwrap_or(Pole {
-        frac: 0.0,
-        height: 0.0,
-        dir: 1,
-    }))
+    let base = f64::from(range[first].open);
+    let entry = &range[last];
+    let close = f64::from(entry.close);
+    let (height, dir) = if close > base {
+        (f64::from(entry.high) - base, 1)
+    } else if close < base {
+        (base - f64::from(entry.low), -1)
+    } else {
+        (0.0, 1)
+    };
+    let frac = height / base;
+    // `bar_ok` keeps every price positive and finite, so `frac` is finite and not negative.
+    Some(Pole { frac, height, dir })
 }
 
 /// The touches of both sides in time order, each pivot once (a bar can be a pivot high on one side
