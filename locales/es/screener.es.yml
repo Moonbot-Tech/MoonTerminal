@@ -26,3 +26,19 @@ screener.columns: "Columnas"
 screener.listed_both: "Both"
 screener.listed_spot_only: "Spot Only"
 screener.listed_futures_only: "Futures Only"
+# The auto-figures column (docs-internal/AUTO_FIGURES.md 13.4): its filter list and approach box,
+# the Calculate button with its progress (`%{done}` of `%{total}` markets) and tooltips, the words a
+# cell shows, and what an empty table says while the filter has nothing to go by. The column's own
+# name is `auto_figures.title`, the event names are `auto_figures.event.*`.
+screener.af_approach: "Aproximación ≤"
+screener.af_calculate: "Calcular"
+screener.af_progress: "Calculando %{done} / %{total}"
+screener.af_calculate_tip: "Buscar figuras automáticas en todos los mercados del Screener con la caché local de velas de 5 minutos, con las filas del conjunto Main"
+screener.af_restart_tip: "Calculando: pulse para empezar de nuevo"
+screener.af_no_rows_tip: "El conjunto de figuras automáticas de Main no tiene filas activadas"
+screener.af_nothing: "nada"
+screener.af_short: "poco historial"
+screener.af_no_cache: "sin caché"
+screener.af_unread: "caché no leída"
+screener.af_press_calculate: "Pulse «Calcular» para elegir monedas por figuras automáticas"
+screener.af_running: "Calculando figuras automáticas…"

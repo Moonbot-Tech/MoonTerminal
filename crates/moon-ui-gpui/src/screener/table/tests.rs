@@ -401,3 +401,24 @@ pub(in crate::screener) fn sort_entries(entries: &mut [super::Entry], key: &str,
         }
     }
 }
+
+/// The auto-figures column is a column of the schema — so a layout with no stored set, which
+/// shows every `COLS` key, shows it — and it is NOT one of the late columns pushed into a set the
+/// user stored: whoever arranged their columns keeps exactly that arrangement and turns the new one
+/// on in the column menu.
+///
+/// Mutation: drop the column from `COLS` (a fresh layout never shows it), or list it in
+/// `COLS_ADDED_LATE` (every stored arrangement is rewritten to include it on the next open).
+#[test]
+fn the_auto_figures_column_ships_on_without_rewriting_a_stored_set() {
+    use super::super::auto_figures::AUTO_FIGURES_KEY;
+    assert!(COLS.iter().any(|column| column.0 == AUTO_FIGURES_KEY));
+    assert!(
+        super::COLS_ADDED_LATE
+            .iter()
+            .all(|(_, key)| *key != AUTO_FIGURES_KEY)
+    );
+    let mut arranged = vec!["market".to_string(), "vol24".to_string()];
+    add_new_columns(&mut arranged, 0);
+    assert!(!arranged.iter().any(|key| key == AUTO_FIGURES_KEY));
+}

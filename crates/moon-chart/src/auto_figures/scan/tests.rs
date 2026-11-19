@@ -494,3 +494,37 @@ fn bench_scan_is_stable_and_auto_is_h1() {
     let r = scan(&shipped, &bars, now);
     assert_eq!(r.rows_scanned + r.rows_short, shipped.len() as u32);
 }
+
+/// The copied-out answer carries every answer field of the result and filters the same way.
+///
+/// Breakage: `ScanResult::answer` dropping or swapping a field (the screener would show one
+/// market's nearest line as its best, or lose the short-history mark), or `ScanAnswer::matches`
+/// drifting from `matches`.
+#[test]
+fn the_copied_answer_is_the_result() {
+    let (bars, now) = breakout_series();
+    let r = scan(&[round_row(0, TfId::H1, EventMarks::default())], &bars, now);
+    let copied = r.answer();
+    assert_eq!(
+        (
+            copied.best,
+            copied.nearest,
+            copied.lines,
+            copied.rows_scanned,
+            copied.rows_short,
+            copied.short_history,
+            copied.last_price,
+        ),
+        answer(&r)
+    );
+    for filter in [
+        ScanFilter::Any,
+        ScanFilter::Squeeze,
+        ScanFilter::Breakout,
+        ScanFilter::FalseBreak,
+        ScanFilter::Approach { max_pct: 1.5 },
+        ScanFilter::Approach { max_pct: 1.4 },
+    ] {
+        assert_eq!(copied.matches(&filter), matches(&r, &filter), "{filter:?}");
+    }
+}

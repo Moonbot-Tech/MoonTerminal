@@ -25,10 +25,13 @@ use crate::panels::data_table_host;
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
+use super::auto_figures::ScanQuery;
 use super::table::{
-    COLS, ColDef, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE, column_title, moon, moon_alpha,
-    parse_vol, screener_row,
+    COLS, ColDef, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE, column_label, column_title, moon,
+    moon_alpha, parse_vol, screener_row,
 };
+
+mod scan;
 
 /// What the Type list offers, in menu order. `None` is an exchange this build cannot name.
 const TYPE_CHOICES: [Option<MarketKind>; 4] = [
@@ -181,6 +184,13 @@ pub struct ScreenerView {
     col_order_cache: Vec<SharedString>,
     /// One trailing refresh coalesces feed events without losing their final publication.
     refresh_task: Option<Task<()>>,
+    /// Session-only: the latest Calculate press's auto-figure answers (`screener::auto_figures`).
+    scan_book: Rc<super::auto_figures::ScanBook>,
+    /// The run a press started; replacing it stops the old one at its next slice.
+    scan_task: Option<Task<()>>,
+    /// Session-only: the auto-figures list's choice, and the approach distance box beside it.
+    scan_choice: scan::ScanChoice,
+    scan_pct_input: Entity<MoonInputState>,
     focus: FocusHandle,
 }
 
@@ -206,6 +216,21 @@ impl ScreenerView {
             })
             .detach();
         }
+
+        // Read by the approach choice of the auto-figures list alone, so a change re-selects the
+        // published rows and starts no publication.
+        let scan_pct_input = cx.new(|cx| {
+            MoonInputState::new(window, cx).placeholder(scan::DEFAULT_APPROACH_PCT.to_string())
+        });
+        cx.subscribe(
+            &scan_pct_input,
+            |this: &mut Self, _, ev: &MoonInputEvent, cx| {
+                if matches!(ev, MoonInputEvent::Change) {
+                    this.scan_pct_changed(cx);
+                }
+            },
+        )
+        .detach();
 
         // Screener always runs in a separate window, so its width context is fixed to `:win`.
         let widths_id = crate::persistence::table_persist::ctx_id("screener-table", true);
@@ -371,6 +396,10 @@ impl ScreenerView {
             table_state,
             col_order_cache,
             refresh_task: None,
+            scan_book: Rc::default(),
+            scan_task: None,
+            scan_choice: scan::ScanChoice::Any,
+            scan_pct_input,
             focus: cx.focus_handle(),
         };
         this.rebuild(cx);
@@ -481,7 +510,9 @@ impl ScreenerView {
 
     /// Filter a prepared publication using the live preset and controls without cloning rows.
     fn filter_cached(&mut self, cx: &mut Context<Self>) {
-        let coin = CoinQuery::new(&self.coin_input.read(cx).value()).listed_in(&self.listed_sel);
+        let coin = CoinQuery::new(&self.coin_input.read(cx).value())
+            .listed_in(&self.listed_sel)
+            .with_scan(self.scan_query(cx));
         let min_vol = parse_vol(self.dvol_input.read(cx).value().trim());
         let b = self.backend.read(cx);
         let venues = b.session.core_venues();
@@ -558,14 +589,19 @@ impl ScreenerView {
         self.table_state.update(cx, move |state, _| {
             state.set_sort(indicator_key, indicator_ascending)
         });
-        let preference = (self.sort_key != "vol24" || !self.sort_desc).then(|| {
-            moon_core::config::TableSortPreference {
-                column: self.sort_key.clone(),
-                ascending: !self.sort_desc,
-            }
-        });
-        let id = crate::persistence::table_persist::ctx_id("screener-table", true);
-        crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
+        // The auto-figures column sorts by answers that live for this window's session only, so
+        // its sort is not stored: the next open would sort by an empty column. The sort stored
+        // before it stays, and comes back on reopen.
+        if self.sort_key != super::auto_figures::AUTO_FIGURES_KEY {
+            let preference = (self.sort_key != "vol24" || !self.sort_desc).then(|| {
+                moon_core::config::TableSortPreference {
+                    column: self.sort_key.clone(),
+                    ascending: !self.sort_desc,
+                }
+            });
+            let id = crate::persistence::table_persist::ctx_id("screener-table", true);
+            crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
+        }
         self.rebuild(cx);
         cx.notify();
     }
@@ -746,7 +782,11 @@ impl ScreenerView {
             both: t!("screener.listed_both").to_string().into(),
             spot_only: t!("screener.listed_spot_only").to_string().into(),
             futures_only: t!("screener.listed_futures_only").to_string().into(),
+            scan_book: self.scan_book.clone(),
+            scan_labels: Self::scan_labels(),
+            scan_running: self.scan_book.progress().is_some(),
         });
+        let scan_title = self.scan_column_title();
 
         data_table_host(
             "screener-table-host",
@@ -764,6 +804,8 @@ impl ScreenerView {
                 self.scope_marker.as_ref(),
                 if self.sessions_total == 0 {
                     t!("screener.empty").to_string()
+                } else if let Some(text) = self.scan_empty_text() {
+                    text
                 } else if let Some(seconds) = self.listed_wait_seconds() {
                     t!("screener.listed_collecting", n = seconds).to_string()
                 } else if self.has_displayed_rows {
@@ -787,6 +829,10 @@ impl ScreenerView {
                 visible
                     .iter()
                     .map(|&&(key, title, width, right)| {
+                        let title = match key {
+                            super::auto_figures::AUTO_FIGURES_KEY => scan_title.clone(),
+                            _ => column_label(key, title),
+                        };
                         let col = MoonDataTableColumn::new(key, title, width).sortable(true);
                         let col = if right { col.right() } else { col };
                         if key == "market" {
@@ -968,7 +1014,7 @@ impl ScreenerView {
             let last_visible = shown && visible_count == 1;
             let view = view.clone();
             menu = menu.item(
-                MoonMenuItem::with_key(format!("col-{key}"), title)
+                MoonMenuItem::with_key(format!("col-{key}"), column_label(key, title))
                     .checked(shown)
                     .disabled(last_visible)
                     .on_click(move |_, _, app| {
@@ -1060,6 +1106,7 @@ impl ScreenerView {
                         .cleanable(true),
                 ),
             )
+            .child(self.scan_controls(p, cx))
             .child(div().flex_1())
             // Head and tail are DIRECT children of the row, never nested in one shared wrapper —
             // nested, the wrapper would take a zero flex basis while the `flex_none` head keeps
@@ -1355,9 +1402,9 @@ fn entries_for(
 /// real name is Cyrillic (`ОФЗ 26254` on a T-Invest core) is only reachable by the text as typed.
 /// Folding alone made every Cyrillic name unfindable (#1303).
 ///
-/// It also carries the one other per-ROW test of the bottom bar, the Listed list, so the
-/// selection pass takes the row-level controls as one value. The Type list is not here: it is
-/// decided per core, with the source selector.
+/// It also carries the other per-ROW tests of the bottom bar, the Listed list and the
+/// auto-figures filter, so the selection pass takes the row-level controls as one value. The Type
+/// list is not here: it is decided per core, with the source selector.
 pub(super) struct CoinQuery {
     /// The query as typed, uppercased.
     typed: String,
@@ -1365,6 +1412,9 @@ pub(super) struct CoinQuery {
     folded: Option<String>,
     /// The Listed answers a row may carry, one bit each; zero for every answer.
     listed: u8,
+    /// The auto-figures filter with the answers it reads, and what the column sorts by; `None`
+    /// passes every row and leaves the column unsorted.
+    scan: Option<ScanQuery>,
 }
 
 impl CoinQuery {
@@ -1377,6 +1427,25 @@ impl CoinQuery {
             typed,
             folded,
             listed: 0,
+            scan: None,
+        }
+    }
+
+    /// Narrows the rows by the auto-figures filter, which also supplies the column's sort.
+    pub(super) fn with_scan(mut self, scan: ScanQuery) -> Self {
+        self.scan = Some(scan);
+        self
+    }
+
+    /// Whether a row passes the auto-figures filter (`ScanQuery::admits`); every row without one.
+    pub(super) fn admits_scan(&self, entry: &Entry) -> bool {
+        self.scan.as_ref().is_none_or(|scan| scan.admits(entry))
+    }
+
+    /// Sort `order` by the auto-figures column; left as it is without a filter to read from.
+    pub(super) fn sort_by_scan(&self, entries: &[Entry], order: &mut [usize], desc: bool) {
+        if let Some(scan) = &self.scan {
+            scan.sort(entries, order, desc);
         }
     }
 

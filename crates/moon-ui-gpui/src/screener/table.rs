@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
+use rust_i18n::t;
 
 use moon_core::market::SharedScreenerRow;
 use moon_core::session::CoreId;
@@ -13,6 +14,7 @@ use moon_core::util::fmt::{self, DeltaSign};
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use crate::panels::num;
 
+use super::auto_figures::{AUTO_FIGURES_KEY, ScanBook, ScanLabels};
 use super::view::ScreenerView;
 
 pub(super) use crate::design::{moon, moon_alpha};
@@ -61,7 +63,20 @@ pub(super) const COLS: &[ColDef] = &[
     ("pnl", "PnL", 76.0, true),
     ("session_profit", "Session", 76.0, true),
     ("pos", "Pos", 66.0, true),
+    // The coin's best auto-figure event and the distance to its nearest line, from the last press
+    // of the Calculate button (`super::auto_figures`). Not a Moonbot column, so its header and its
+    // entry in the column menu are translated (`column_label`); the title here is the fallback.
+    (AUTO_FIGURES_KEY, "Auto figures", 150.0, false),
 ];
+
+/// The header and column-menu caption of a column: the untranslated Moonbot label of `COLS`, or
+/// the translated name of a column of the terminal's own.
+pub(super) fn column_label(key: &str, title: &'static str) -> SharedString {
+    match key {
+        AUTO_FIGURES_KEY => t!("auto_figures.title").to_string().into(),
+        _ => title.into(),
+    }
+}
 
 /// Return the displayed title for a Screener column key.
 ///
@@ -436,6 +451,10 @@ pub(super) struct RowStyle {
     pub(super) both: SharedString,
     pub(super) spot_only: SharedString,
     pub(super) futures_only: SharedString,
+    /// The latest press's answers, its words, and whether its run is still being worked off.
+    pub(super) scan_book: std::rc::Rc<ScanBook>,
+    pub(super) scan_labels: ScanLabels,
+    pub(super) scan_running: bool,
 }
 
 /// The venue caption with its brand logo, clipped rather than wrapped in a narrow column.
@@ -594,6 +613,11 @@ pub(super) fn screener_row(
                 Some(v) => money_cell(v),
                 None => MoonDataCell::text("—").tone(MoonTone::Muted),
             },
+            AUTO_FIGURES_KEY => super::auto_figures::cell(
+                style.scan_book.get(r.provider, &r.market),
+                style.scan_running,
+                &style.scan_labels,
+            ),
             "pos" => {
                 if r.pos_size != 0.0 {
                     MoonDataCell::text(num(r.pos_size))

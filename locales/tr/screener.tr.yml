@@ -26,3 +26,19 @@ screener.columns: "Sütunlar"
 screener.listed_both: "Both"
 screener.listed_spot_only: "Spot Only"
 screener.listed_futures_only: "Futures Only"
+# The auto-figures column (docs-internal/AUTO_FIGURES.md 13.4): its filter list and approach box,
+# the Calculate button with its progress (`%{done}` of `%{total}` markets) and tooltips, the words a
+# cell shows, and what an empty table says while the filter has nothing to go by. The column's own
+# name is `auto_figures.title`, the event names are `auto_figures.event.*`.
+screener.af_approach: "Yaklaşma ≤"
+screener.af_calculate: "Hesapla"
+screener.af_progress: "Hesaplanıyor %{done} / %{total}"
+screener.af_calculate_tip: "Tarayıcıdaki tüm piyasalarda otomatik şekilleri yerel 5 dakikalık mum önbelleğinden, Main setinin satırlarıyla bul"
+screener.af_restart_tip: "Hesaplanıyor — baştan başlatmak için basın"
+screener.af_no_rows_tip: "Main otomatik şekil setinde etkin satır yok"
+screener.af_nothing: "hiçbir şey"
+screener.af_short: "geçmiş az"
+screener.af_no_cache: "önbellek yok"
+screener.af_unread: "önbellek okunamadı"
+screener.af_press_calculate: "Coinleri otomatik şekillere göre seçmek için Hesapla düğmesine basın"
+screener.af_running: "Otomatik şekiller hesaplanıyor…"

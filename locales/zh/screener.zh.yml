@@ -26,3 +26,19 @@ screener.columns: "列"
 screener.listed_both: "Both"
 screener.listed_spot_only: "Spot Only"
 screener.listed_futures_only: "Futures Only"
+# The auto-figures column (docs-internal/AUTO_FIGURES.md 13.4): its filter list and approach box,
+# the Calculate button with its progress (`%{done}` of `%{total}` markets) and tooltips, the words a
+# cell shows, and what an empty table says while the filter has nothing to go by. The column's own
+# name is `auto_figures.title`, the event names are `auto_figures.event.*`.
+screener.af_approach: "接近 ≤"
+screener.af_calculate: "计算"
+screener.af_progress: "计算中 %{done} / %{total}"
+screener.af_calculate_tip: "根据本地 5 分钟K线缓存，用 Main 组的行在筛选器的所有市场上查找自动图形"
+screener.af_restart_tip: "计算中——点击重新开始"
+screener.af_no_rows_tip: "Main 的自动图形组没有启用的行"
+screener.af_nothing: "无"
+screener.af_short: "历史不足"
+screener.af_no_cache: "无缓存"
+screener.af_unread: "缓存未读取"
+screener.af_press_calculate: "点击「计算」以按自动图形筛选币种"
+screener.af_running: "正在计算自动图形…"

@@ -26,3 +26,19 @@ screener.columns: "Колонки"
 screener.listed_both: "Both"
 screener.listed_spot_only: "Spot Only"
 screener.listed_futures_only: "Futures Only"
+# The auto-figures column (docs-internal/AUTO_FIGURES.md 13.4): its filter list and approach box,
+# the Calculate button with its progress (`%{done}` of `%{total}` markets) and tooltips, the words a
+# cell shows, and what an empty table says while the filter has nothing to go by. The column's own
+# name is `auto_figures.title`, the event names are `auto_figures.event.*`.
+screener.af_approach: "Подход ≤"
+screener.af_calculate: "Рассчитать"
+screener.af_progress: "Расчёт %{done} / %{total}"
+screener.af_calculate_tip: "Найти автофигуры на всех рынках скринера по локальному кэшу 5-минутных свечей, строками набора Main"
+screener.af_restart_tip: "Идёт расчёт — нажмите, чтобы начать заново"
+screener.af_no_rows_tip: "В наборе автофигур Main нет включённых строк"
+screener.af_nothing: "ничего"
+screener.af_short: "мало истории"
+screener.af_no_cache: "нет кэша"
+screener.af_unread: "кэш не прочитан"
+screener.af_press_calculate: "Нажмите «Рассчитать», чтобы отобрать монеты по автофигурам"
+screener.af_running: "Идёт расчёт автофигур…"

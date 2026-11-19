@@ -180,8 +180,8 @@ pub struct ScanHit {
 /// One market's answer, and the scratch the next call reuses.
 ///
 /// Build it once with `Default` and hand the same value to [`scan_market`] for every market: each
-/// call overwrites every public field, and the scratch keeps its capacity. Copy the public fields
-/// out (they are all `Copy`) to keep a market's answer.
+/// call overwrites every public field, and the scratch keeps its capacity. Keep a market's answer
+/// with [`Self::answer`], which copies the public fields out.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// The best event over every kept line of every scanned row: the lowest [`event_rank`], then
@@ -230,7 +230,59 @@ struct Kept {
     marks: EventMarks,
 }
 
+/// The public half of a [`ScanResult`] — every answer field, none of the scratch.
+///
+/// What a caller keeps per market once the scan of the next one overwrites the result: the
+/// screener holds one per market for the column and the filter, and a whole `ScanResult` per market
+/// would carry its 5-minute buffers along (thousands of bars each).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ScanAnswer {
+    /// [`ScanResult::best`].
+    pub best: Option<ScanHit>,
+    /// [`ScanResult::nearest`].
+    pub nearest: Option<ScanLine>,
+    /// [`ScanResult::lines`].
+    pub lines: u32,
+    /// [`ScanResult::rows_scanned`].
+    pub rows_scanned: u32,
+    /// [`ScanResult::rows_short`].
+    pub rows_short: u32,
+    /// [`ScanResult::short_history`].
+    pub short_history: bool,
+    /// [`ScanResult::last_price`].
+    pub last_price: Option<f64>,
+}
+
+impl ScanAnswer {
+    /// Whether this answer passes `filter` — the rule [`matches`] documents.
+    pub fn matches(&self, filter: &ScanFilter) -> bool {
+        let best_is = |e: AutoEvent| self.best.is_some_and(|b| b.event == e);
+        match *filter {
+            ScanFilter::Any => true,
+            ScanFilter::Squeeze => best_is(AutoEvent::Squeeze),
+            ScanFilter::Breakout => best_is(AutoEvent::Breakout),
+            ScanFilter::FalseBreak => best_is(AutoEvent::FalseBreak),
+            ScanFilter::Approach { max_pct } => self
+                .nearest
+                .is_some_and(|l| l.distance_pct.abs() <= f64::from(max_pct)),
+        }
+    }
+}
+
 impl ScanResult {
+    /// The answer fields, copied out, for a caller that keeps them past the next scan.
+    pub fn answer(&self) -> ScanAnswer {
+        ScanAnswer {
+            best: self.best,
+            nearest: self.nearest,
+            lines: self.lines,
+            rows_scanned: self.rows_scanned,
+            rows_short: self.rows_short,
+            short_history: self.short_history,
+            last_price: self.last_price,
+        }
+    }
+
     /// Every public field back to "nothing"; the scratch keeps its capacity.
     fn reset(&mut self) {
         self.best = None;
@@ -267,17 +319,11 @@ pub enum ScanFilter {
 /// event, because each row marks an approach at its own `approach_pct` (0.3 % by default) while the
 /// screener's question is "which coins are within X % of a level", with X chosen in the screener. A
 /// `max_pct` that is negative or not a number passes nothing.
+///
+/// The rule itself lives on [`ScanAnswer::matches`], so a caller holding only the copied-out answer
+/// filters by the same code.
 pub fn matches(result: &ScanResult, filter: &ScanFilter) -> bool {
-    let best_is = |e: AutoEvent| result.best.is_some_and(|b| b.event == e);
-    match *filter {
-        ScanFilter::Any => true,
-        ScanFilter::Squeeze => best_is(AutoEvent::Squeeze),
-        ScanFilter::Breakout => best_is(AutoEvent::Breakout),
-        ScanFilter::FalseBreak => best_is(AutoEvent::FalseBreak),
-        ScanFilter::Approach { max_pct } => result
-            .nearest
-            .is_some_and(|l| l.distance_pct.abs() <= f64::from(max_pct)),
-    }
+    result.answer().matches(filter)
 }
 
 /// Scan one market: every row of `rows` over `bars_5m`, written into `out`.

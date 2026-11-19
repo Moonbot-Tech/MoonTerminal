@@ -26,3 +26,19 @@ screener.columns: "Cột"
 screener.listed_both: "Both"
 screener.listed_spot_only: "Spot Only"
 screener.listed_futures_only: "Futures Only"
+# The auto-figures column (docs-internal/AUTO_FIGURES.md 13.4): its filter list and approach box,
+# the Calculate button with its progress (`%{done}` of `%{total}` markets) and tooltips, the words a
+# cell shows, and what an empty table says while the filter has nothing to go by. The column's own
+# name is `auto_figures.title`, the event names are `auto_figures.event.*`.
+screener.af_approach: "Tiếp cận ≤"
+screener.af_calculate: "Tính"
+screener.af_progress: "Đang tính %{done} / %{total}"
+screener.af_calculate_tip: "Tìm hình tự động trên mọi thị trường của Screener từ bộ nhớ đệm nến 5 phút cục bộ, theo các dòng của bộ Main"
+screener.af_restart_tip: "Đang tính — nhấn để bắt đầu lại"
+screener.af_no_rows_tip: "Bộ hình tự động của Main không có dòng nào được bật"
+screener.af_nothing: "không có gì"
+screener.af_short: "ít lịch sử"
+screener.af_no_cache: "không có bộ đệm"
+screener.af_unread: "chưa đọc được bộ đệm"
+screener.af_press_calculate: "Nhấn «Tính» để lọc coin theo hình tự động"
+screener.af_running: "Đang tính hình tự động…"
