@@ -58,8 +58,13 @@ pub(in crate::panels::chart) struct AutoHoverState {
     /// Whether the card for `hover` is on screen: set once the pointer has rested [`CARD_DWELL`]
     /// on the line, cleared with every change of `hover`.
     shown: bool,
-    /// Bumped with every change of `hover`, so a dwell timer armed for an earlier line does nothing.
-    dwell_gen: u64,
+    /// When the pointer entered the line now in `hover`; `None` with no line hovered.
+    entered: Option<std::time::Instant>,
+    /// Whether a dwell timer is in flight. At most one per chart: a sweep crosses lines hundreds
+    /// of times a second, and a timer task per crossing loaded the UI thread enough to show in
+    /// FireTest (present 120 → 90 per second under the mouse storm). The one timer re-arms for the
+    /// remainder when the line changed while it waited.
+    timer_live: bool,
 }
 
 impl ChartPanel {
@@ -81,13 +86,8 @@ impl ChartPanel {
         }
         self.auto_figures.hover.probe = Some(pos);
         let hit = self.auto_hit(pos, cx);
-        let generation = self.auto_figures.hover.dwell_gen;
         let repaint = self.apply_auto_hover(hit);
-        // One timer per line entered, not per pointer event: a pointer resting on (or jittering
-        // along) the same line would otherwise spawn a timer task at every move.
-        if self.auto_figures.hover.dwell_gen != generation {
-            self.arm_auto_card(cx);
-        }
+        self.arm_auto_card(cx);
         repaint
     }
 
@@ -107,13 +107,8 @@ impl ChartPanel {
             return;
         }
         let hit = self.input.cursor.and_then(|pos| self.auto_hit(pos, cx));
-        let generation = self.auto_figures.hover.dwell_gen;
         self.apply_auto_hover(hit);
-        // Runs in every render while a line is hovered: arm only when the line under a resting
-        // cursor actually changed, never once per frame.
-        if self.auto_figures.hover.dwell_gen != generation {
-            self.arm_auto_card(cx);
-        }
+        self.arm_auto_card(cx);
     }
 
     /// The auto line at `pos` (panel-local device pixels), if any.
@@ -149,30 +144,42 @@ impl ChartPanel {
         }
         let was_shown = std::mem::take(&mut state.shown);
         state.hover = hit;
-        state.dwell_gen = state.dwell_gen.wrapping_add(1);
+        state.entered = hit.map(|_| std::time::Instant::now());
         self.chart.set_auto_hover(hit.map(|h| (h.pane, h.key)));
         was_shown
     }
 
     /// Show the card once the pointer has rested on the hovered line for [`CARD_DWELL`].
     ///
-    /// Does nothing when no line is hovered or its card is already up. The timer checks the
-    /// generation it was armed for, so a pointer that has moved on to another line, or off every
-    /// line, by the time it fires is left alone.
+    /// Does nothing when no line is hovered, its card is already up, or a timer is already in
+    /// flight — that one re-checks when it fires: it shows the card if the pointer has stayed on
+    /// the same line for the whole dwell, re-arms for the remainder if the line changed meanwhile,
+    /// and stops if no line is hovered any more.
     fn arm_auto_card(&mut self, cx: &mut Context<Self>) {
-        let state = &self.auto_figures.hover;
-        if state.hover.is_none() || state.shown {
+        let state = &mut self.auto_figures.hover;
+        let Some(entered) = state
+            .entered
+            .filter(|_| state.hover.is_some() && !state.shown)
+        else {
+            return;
+        };
+        if state.timer_live {
             return;
         }
-        let generation = state.dwell_gen;
+        state.timer_live = true;
+        let wait = CARD_DWELL.saturating_sub(entered.elapsed());
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
-            executor.timer(CARD_DWELL).await;
+            executor.timer(wait).await;
             let _ = this.update(cx, |this, cx| {
                 let state = &mut this.auto_figures.hover;
-                if state.dwell_gen == generation && state.hover.is_some() && !state.shown {
+                state.timer_live = false;
+                let rested = state.entered.is_some_and(|at| at.elapsed() >= CARD_DWELL);
+                if rested && state.hover.is_some() && !state.shown {
                     state.shown = true;
                     cx.notify();
+                } else {
+                    this.arm_auto_card(cx);
                 }
             });
         })
