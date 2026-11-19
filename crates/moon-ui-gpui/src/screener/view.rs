@@ -582,6 +582,12 @@ impl ScreenerView {
             }),
             &self.visible_cols,
         );
+        self.apply_sort(next, true, cx);
+    }
+
+    /// Apply `(key, descending)` as the table's order and rebuild; `store` writes it over the stored
+    /// preference (never for the auto-figures column, whose answers are session-only).
+    fn apply_sort(&mut self, next: (String, bool), store: bool, cx: &mut Context<Self>) {
         self.sort_key = next.0;
         self.sort_desc = next.1;
         let indicator_key = self.sort_key.clone();
@@ -592,7 +598,7 @@ impl ScreenerView {
         // The auto-figures column sorts by answers that live for this window's session only, so
         // its sort is not stored: the next open would sort by an empty column. The sort stored
         // before it stays, and comes back on reopen.
-        if self.sort_key != super::auto_figures::AUTO_FIGURES_KEY {
+        if store && self.sort_key != super::auto_figures::AUTO_FIGURES_KEY {
             let preference = (self.sort_key != "vol24" || !self.sort_desc).then(|| {
                 moon_core::config::TableSortPreference {
                     column: self.sort_key.clone(),
@@ -692,10 +698,27 @@ impl ScreenerView {
             self.visible_cols.insert(key.to_string());
         }
         self.persist_visible_cols(cx);
-        if !self.visible_cols.contains(&self.sort_key) {
-            let hidden_sort = self.sort_key.clone();
-            self.set_sort(&hidden_sort, self.sort_desc, cx);
+        self.resort_if_sort_hidden(cx);
+    }
+
+    /// Move the sort off a column that is no longer visible ([`super::table::sort_after_hiding`]):
+    /// back to the stored preference when it was the auto-figures column, to the usual fallback
+    /// otherwise.
+    fn resort_if_sort_hidden(&mut self, cx: &mut Context<Self>) {
+        if self.visible_cols.contains(&self.sort_key) {
+            return;
         }
+        let id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        let stored = super::table::migrate_legacy_sort(
+            crate::persistence::table_persist::saved_sort(self.backend.read(cx), &id),
+        );
+        let (next, store) = super::table::sort_after_hiding(
+            &self.sort_key,
+            self.sort_desc,
+            stored,
+            &self.visible_cols,
+        );
+        self.apply_sort(next, store, cx);
     }
 
     /// Toggle every column on, or retain only the first when all are already visible.
@@ -709,10 +732,7 @@ impl ScreenerView {
             COLS.iter().map(|c| c.0.to_string()).collect()
         };
         self.persist_visible_cols(cx);
-        if !self.visible_cols.contains(&self.sort_key) {
-            let hidden_sort = self.sort_key.clone();
-            self.set_sort(&hidden_sort, self.sort_desc, cx);
-        }
+        self.resort_if_sort_hidden(cx);
     }
 
     /// Persist visible column keys in canonical `COLS` order.

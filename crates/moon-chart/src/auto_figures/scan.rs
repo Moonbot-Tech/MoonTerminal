@@ -39,6 +39,7 @@ use moon_core::market::candles::{ChartCandle, resample};
 
 use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
+use super::history::history_full;
 use super::{DetectCtx, bar_ok, detect, take};
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
@@ -52,15 +53,6 @@ use super::{DetectCtx, bar_ok, detect, take};
 /// every row never moves it.
 pub const AUTO_TF: TfId = TfId::H1;
 
-/// Share of [`DetectorParams::bars_needed`] a row must have to be scanned at all.
-///
-/// The cache records only while the terminal runs, so a few missing hours are the norm, not a
-/// fault (on the scenes set a 4h row holds 68 of its 72 bars); requiring every bar would leave most
-/// rows permanently "short of history". 90 % keeps a row whose answer is essentially the full one
-/// and drops a market the recorder has barely seen. The UI's "not enough history" mark should read
-/// the same constant (through [`history_full`]) so the two never disagree.
-pub const FULL_HISTORY_SHARE: f32 = 0.9;
-
 /// How long past a bucket's close the newest bucket waits for its missing 5-minute rows, ms.
 ///
 /// Mirrors `LAG_CAP_MS` of the chart's job: inside the cap an incomplete newest bucket is left out
@@ -70,6 +62,17 @@ pub const LAG_CAP_MS: i64 = 5 * 60_000;
 
 /// The bar of the local cache this module reads, ms.
 const BASE_MS: i64 = 5 * 60_000;
+
+/// Longest a market's newest closed 5-minute row may have closed before `now_ms` for its answer to
+/// be CURRENT, ms; past it the answer is marked [`ScanResult::cache_lag_ms`].
+///
+/// The recorder writes the cache only while the terminal runs, so after a restart (or a stretch the
+/// recorder did not reach the market) the cache ends hours before now. The scan still finds the
+/// lines in those old bars, but an event on them — a breakout, a squeeze — is an event of the
+/// moment the cache stops, not of now, and the column must not present it as today's. Fifteen
+/// minutes is three bars: a live recorder's newest row closed at most five minutes ago plus its
+/// write delay, and an illiquid market can miss a row or two, but not an hour of them.
+pub const STALE_CACHE_MS: i64 = 15 * 60_000;
 
 /// Events from most to least useful to a trader looking down the screener's column — the order
 /// the market's best event is picked by (see [`event_rank`]).
@@ -95,12 +98,6 @@ pub fn event_rank(event: AutoEvent) -> usize {
         .iter()
         .position(|e| *e == event)
         .unwrap_or(BEST_ORDER.len())
-}
-
-/// Whether `have` closed bars are enough for a row that needs `needed` — at least
-/// [`FULL_HISTORY_SHARE`] of them.
-pub fn history_full(have: usize, needed: u32) -> bool {
-    have as f64 >= f64::from(needed) * f64::from(FULL_HISTORY_SHARE)
 }
 
 /// What the scan needs from one row of the auto-figure set, with its timeframe already resolved.
@@ -195,15 +192,23 @@ pub struct ScanResult {
     pub lines: u32,
     /// Rows that had enough history and ran their detector.
     pub rows_scanned: u32,
-    /// Rows with less than [`FULL_HISTORY_SHARE`] of their bars, which did not run.
+    /// Rows short of their history ([`history_full`]: 90 % of their bars for a row that samples
+    /// them, all of them for a calendar row), which did not run.
     pub rows_short: u32,
     /// No row ran, and at least one was short of history: the market has too little cache to say
     /// anything — "not enough history" in the column, rather than "nothing found".
     pub short_history: bool,
-    /// The close of the newest valid 5-minute row opening at or before `now_ms` — the forming one
-    /// included, being the freshest price the cache holds; a row out of order is not "newest". What
-    /// sides and distances are measured from.
+    /// The close of the newest valid 5-minute row opening at or before `now_ms` — the freshest
+    /// price the cache holds (the recorder writes a row once it has closed, so this is normally
+    /// the newest closed row's; a row out of order is not "newest"). What sides and distances are
+    /// measured from.
     pub last_price: Option<f64>,
+    /// How long before `now_ms` the newest closed 5-minute row closed, ms — set only when that is
+    /// more than [`STALE_CACHE_MS`]: the cache is behind, and the events found are of the moment
+    /// it stops, not current. `None` for a cache that is current, and for one with no closed row
+    /// at all (that market is [`Self::short_history`]). Such an answer passes no event filter
+    /// ([`ScanAnswer::matches`]).
+    pub cache_lag_ms: Option<i64>,
     scratch: Scratch,
 }
 
@@ -252,6 +257,8 @@ pub struct ScanAnswer {
     pub short_history: bool,
     /// [`ScanResult::last_price`].
     pub last_price: Option<f64>,
+    /// [`ScanResult::cache_lag_ms`].
+    pub cache_lag_ms: Option<i64>,
 }
 
 impl ScanAnswer {
@@ -260,6 +267,8 @@ impl ScanAnswer {
         let best_is = |e: AutoEvent| self.best.is_some_and(|b| b.event == e);
         match *filter {
             ScanFilter::Any => true,
+            // A lagging cache's events and distances are of the moment it stops: not current.
+            _ if self.cache_lag_ms.is_some() => false,
             ScanFilter::Squeeze => best_is(AutoEvent::Squeeze),
             ScanFilter::Breakout => best_is(AutoEvent::Breakout),
             ScanFilter::FalseBreak => best_is(AutoEvent::FalseBreak),
@@ -281,6 +290,7 @@ impl ScanResult {
             rows_short: self.rows_short,
             short_history: self.short_history,
             last_price: self.last_price,
+            cache_lag_ms: self.cache_lag_ms,
         }
     }
 
@@ -293,6 +303,7 @@ impl ScanResult {
         self.rows_short = 0;
         self.short_history = false;
         self.last_price = None;
+        self.cache_lag_ms = None;
     }
 }
 
@@ -315,7 +326,9 @@ pub enum ScanFilter {
 ///
 /// The event filters read the market's BEST event — the one its column shows (LinKvo, 19.11.2026:
 /// "the column shows the coin's best event; the filter goes by it"), so a filtered list never shows
-/// a column that disagrees with the filter. `Approach` is the exception on purpose: it reads the
+/// a column that disagrees with the filter. An answer whose cache lags ([`ScanResult::cache_lag_ms`])
+/// passes none of them, `Approach` included: what it found is of the moment the cache stops.
+/// `Approach` is the exception on purpose: it reads the
 /// distance to the nearest kept line against the filter's own `max_pct`, not the rows' `Approach`
 /// event, because each row marks an approach at its own `approach_pct` (0.3 % by default) while the
 /// screener's question is "which coins are within X % of a level", with X chosen in the screener. A
@@ -330,7 +343,8 @@ pub fn matches(result: &ScanResult, filter: &ScanFilter) -> bool {
 /// Scan one market: every row of `rows` over `bars_5m`, written into `out`.
 ///
 /// Per row: its closed bars resampled from `bars_5m` (see the module doc); fewer than
-/// [`FULL_HISTORY_SHARE`] of `bars_needed` → counted short and skipped; otherwise the newest
+/// [`history_full`] of `bars_needed` → counted short and skipped (the chart's own rule, so a row
+/// the chart calls short is never scanned here); otherwise the newest
 /// `bars_needed` of them go to `detect`, `take::select` keeps the row's lines against the last
 /// price at `now_ms`, and `line_events` marks each kept line from the same closed bars (it reads
 /// only the newest `events::bars_read(policy)` valid ones). Then confluence across every row's kept
@@ -362,7 +376,7 @@ pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: 
         let tf_ms = row.tf.ms();
         closed_bars(m5, tf_ms, now_ms, bars);
         let read = tail(bars, needed);
-        if read.is_empty() || !history_full(read.len(), needed) {
+        if read.is_empty() || !history_full(read.len(), needed, &row.params) {
             short += 1;
             continue;
         }
@@ -455,11 +469,17 @@ pub fn scan_market(rows: &[ScanRow], bars_5m: &[ChartCandle], now_ms: f64, out: 
     out.rows_short = short;
     out.short_history = scanned == 0 && short > 0;
     out.last_price = last_price;
+    out.cache_lag_ms = m5.last().and_then(|b| {
+        let lag = now_ms - (b.t_open_ms + BASE_MS as f64);
+        (lag > STALE_CACHE_MS as f64).then_some(lag as i64)
+    });
 }
 
 /// The valid 5-minute rows of `bars` that have closed by `now_ms`, in strictly ascending open
 /// time, into `out`; returns the last price — the close of the newest valid row opening at or
-/// before `now_ms`, the forming one included.
+/// before `now_ms`. The recorder writes a row only once it has closed, so that is normally the
+/// newest closed row; a row still forming at `now_ms` (a cache filled by another writer, or a
+/// clock a little behind the recorder's) is read for the price but never resampled into a bar.
 ///
 /// A row out of order or repeating an open time is dropped, from both answers, rather than letting
 /// `resample` fold it into the wrong bucket or an older row at the end of the input pass for the

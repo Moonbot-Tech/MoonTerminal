@@ -8,7 +8,8 @@
 //! stamped with), through [`super::FoundShape::price_at`]: a squeeze is judged by its level. A
 //! two-line formation (`FoundShape::Pair`) is judged side by side — each side as a line of its
 //! own, the two answers merged into one story (`pair_events`): leaving the formation through
-//! either side is its breakout. A close exactly on the line has no side and neither breaks nor
+//! either side is its breakout, and a bar that crosses both sides tells the story of the side its
+//! close ended up beyond. A close exactly on the line has no side and neither breaks nor
 //! confirms anything. "The previous close" below is the nearest earlier close that HAD a side.
 //!
 //! - **Approach** — the current price is within `approach_pct` of the line at `at_ms`, measured as
@@ -51,7 +52,7 @@
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks};
 use moon_core::market::candles::ChartCandle;
 
-use super::{Found, FoundShape, Seg, Side, bar_ok, pct_frac, side_of};
+use super::{Found, FoundShape, PairSide, Seg, Side, bar_ok, pct_frac, side_of};
 
 /// The events one line shows, as a bit set — no allocation per line.
 ///
@@ -203,15 +204,25 @@ pub fn line_events(
 /// The bar events of a two-line formation: each side judged as a line of its own by
 /// [`bar_events`], then merged so the bar still tells ONE story.
 ///
-/// A crossing of either side wins: a bar that closed through the lower side after its range
-/// brushed the upper one broke the formation, and that is all it shows — `Breakout` or
-/// `FalseBreak`, never with a `Bounce`, `RoleFlip` or `StopHunt` from the other side. Without a
-/// crossing, the touch-and-hold events of both sides are kept (a bar spanning a narrow formation
-/// can hold at both), a `RoleFlip` on one side absorbing a plain `Bounce` on the other.
+/// Which side's crossing counts is decided by where the last close lies:
 ///
-/// So a close outside the formation after closes inside is a `Breakout` — up through the upper
-/// side or down through the lower, the line says which — and a return inside within the false-break
-/// window a `FalseBreak`, exactly as for a single line.
+/// - **beyond a side** (above the upper, below the lower) — only THAT side's crossing is the bar's
+///   story. A bar that ran through a narrow formation from above its top to below its bottom
+///   crossed both lines: judged alone, the upper side calls it a return (a `FalseBreak`, when the
+///   close before was a short run above it) and the lower side a `Breakout`. The close is outside
+///   the formation, below it, so the formation broke down, and the bar shows the lower side's
+///   `Breakout` alone; the upper side's crossing is dropped.
+/// - **inside** — the close is back between the sides, and the crossing of whichever side the
+///   previous close lay beyond is the story (a `FalseBreak` within the window, a `Breakout` back
+///   in after a long stay outside). The previous close lay beyond one side at most, so at most one
+///   side reports a crossing; should both (a close exactly on one side shifts which close counts as
+///   "previous" for it), the upper side's is kept.
+///
+/// A crossing wins over a touch: a bar that closed through one side after its range brushed the
+/// other broke the formation, and that is all it shows — never a `Bounce`, `RoleFlip` or
+/// `StopHunt` with it. Without a crossing, the touch-and-hold events of both sides are kept (a bar
+/// spanning a narrow formation can hold at both), a `RoleFlip` on one side absorbing a plain
+/// `Bounce` on the other.
 fn pair_events(
     bars: &[ChartCandle],
     upper: &Seg,
@@ -220,11 +231,24 @@ fn pair_events(
     hunt_frac: f64,
     set: &mut EventSet,
 ) {
-    let mut sides = EventSet::default();
-    bar_events(bars, |t| upper.price_at(t), window, hunt_frac, &mut sides);
-    bar_events(bars, |t| lower.price_at(t), window, hunt_frac, &mut sides);
-    let crossed = sides.contains(AutoEvent::Breakout) || sides.contains(AutoEvent::FalseBreak);
-    if crossed {
+    let mut up = EventSet::default();
+    let mut down = EventSet::default();
+    bar_events(bars, |t| upper.price_at(t), window, hunt_frac, &mut up);
+    bar_events(bars, |t| lower.price_at(t), window, hunt_frac, &mut down);
+    let crossed =
+        |e: EventSet| e.contains(AutoEvent::Breakout) || e.contains(AutoEvent::FalseBreak);
+    let drop_crossing = |e: &mut EventSet| {
+        e.remove(AutoEvent::Breakout);
+        e.remove(AutoEvent::FalseBreak);
+    };
+    match last_close_beyond(bars, upper, lower) {
+        Some(PairSide::Upper) => drop_crossing(&mut down),
+        Some(PairSide::Lower) => drop_crossing(&mut up),
+        None if crossed(up) => drop_crossing(&mut down),
+        None => {}
+    }
+    let mut sides = EventSet(up.0 | down.0);
+    if crossed(sides) {
         sides.remove(AutoEvent::Bounce);
         sides.remove(AutoEvent::RoleFlip);
         sides.remove(AutoEvent::StopHunt);
@@ -233,6 +257,20 @@ fn pair_events(
     }
     for e in sides.iter() {
         set.insert(e);
+    }
+}
+
+/// Which side of the pair the last valid close lies beyond — above `upper` or below `lower` at the
+/// bar's open time — or `None` when it is inside, on a side, or a side has no price there.
+fn last_close_beyond(bars: &[ChartCandle], upper: &Seg, lower: &Seg) -> Option<PairSide> {
+    let last = bars.iter().rev().find(|b| bar_ok(b))?;
+    let close = f64::from(last.close);
+    if upper.price_at(last.t_open_ms).is_some_and(|u| close > u) {
+        Some(PairSide::Upper)
+    } else if lower.price_at(last.t_open_ms).is_some_and(|l| close < l) {
+        Some(PairSide::Lower)
+    } else {
+        None
     }
 }
 

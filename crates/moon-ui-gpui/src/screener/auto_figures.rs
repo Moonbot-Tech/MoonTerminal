@@ -187,8 +187,10 @@ impl ScanQuery {
 
 /// Where one answer sorts in the column, ascending: the best events first by
 /// [`event_rank`], then by the distance to the nearest line, then the markets with a line and no
-/// event, then those scanned with nothing, then the ones that could not say anything — short of
-/// history, unread, without a cache — and last the markets the run has not answered.
+/// event, then those scanned with nothing, then the ones that could not say anything CURRENT — a
+/// cache that lags behind now (`ScanAnswer::cache_lag_ms`: whatever it found is of the moment the
+/// cache stops), short of history, unread, without a cache — and last the markets the run has not
+/// answered.
 ///
 /// The distance is an absolute value, so its bit pattern orders like the number (an absent line
 /// is `+inf`, after every real one).
@@ -205,10 +207,14 @@ fn rank(scan: Option<MarketScan>) -> (u8, usize, u64) {
         .nearest
         .map_or(f64::INFINITY, |line| line.distance_pct.abs())
         .to_bits();
+    if answer.cache_lag_ms.is_some() {
+        return (3, 0, 0);
+    }
     match answer.best {
         Some(best) => (0, event_rank(best.event), distance),
         None if answer.nearest.is_some() => (1, 0, distance),
-        None if answer.short_history => (3, 0, 0),
+        // After a lagging cache, which at least read bars.
+        None if answer.short_history => (3, 1, 0),
         None => (2, 0, 0),
     }
 }
@@ -243,6 +249,9 @@ pub(super) struct ScanLabels {
     pub(super) short: SharedString,
     pub(super) no_cache: SharedString,
     pub(super) unread: SharedString,
+    /// A cache that lags behind now, worded with its lag in ms — called only for such a market,
+    /// which a current recorder never produces, so the per-row words above stay the common case.
+    pub(super) stale: Box<dyn Fn(i64) -> String>,
 }
 
 impl ScanLabels {
@@ -253,6 +262,7 @@ impl ScanLabels {
         short: String,
         no_cache: String,
         unread: String,
+        stale: impl Fn(i64) -> String + 'static,
     ) -> Self {
         Self {
             events: BEST_ORDER
@@ -263,13 +273,15 @@ impl ScanLabels {
             short: short.into(),
             no_cache: no_cache.into(),
             unread: unread.into(),
+            stale: Box::new(stale),
         }
     }
 }
 
 /// The column's text for one market, without its tone: the best event and the signed distance to
 /// the nearest line (`Ложный пробой +0.42%`), the "nothing" word with the distance when a line
-/// was kept but showed no event, or what kept the market from an answer. `pending` is the mark of
+/// was kept but showed no event, or what kept the market from an answer — a cache that lags behind
+/// now says so with its lag (`кэш отстаёт 3ч`) INSTEAD of its event, which is not current. `pending` is the mark of
 /// a market the run has not reached; `—` before the first press and for a market the last run did
 /// not cover (it appeared after the press).
 pub(super) fn cell_text(scan: Option<MarketScan>, running: bool, labels: &ScanLabels) -> String {
@@ -288,6 +300,10 @@ pub(super) fn cell_text(scan: Option<MarketScan>, running: bool, labels: &ScanLa
         None => "—".to_string(),
         Some(MarketScan::NoCache) => labels.no_cache.to_string(),
         Some(MarketScan::Unread) => labels.unread.to_string(),
+        Some(MarketScan::Scanned(ScanAnswer {
+            cache_lag_ms: Some(lag),
+            ..
+        })) => (labels.stale)(lag),
         Some(MarketScan::Scanned(answer)) => match answer.best {
             Some(best) => {
                 let name = labels
@@ -303,11 +319,15 @@ pub(super) fn cell_text(scan: Option<MarketScan>, running: bool, labels: &ScanLa
     }
 }
 
-/// The column's cell for one market: [`cell_text`], an event in the accent tone and everything
-/// else muted.
+/// The column's cell for one market: [`cell_text`], a current event in the accent tone and
+/// everything else — a lagging cache's included — muted.
 pub(super) fn cell(scan: Option<MarketScan>, running: bool, labels: &ScanLabels) -> MoonDataCell {
     let tone = match scan {
-        Some(MarketScan::Scanned(ScanAnswer { best: Some(_), .. })) => MoonTone::Accent,
+        Some(MarketScan::Scanned(ScanAnswer {
+            best: Some(_),
+            cache_lag_ms: None,
+            ..
+        })) => MoonTone::Accent,
         _ => MoonTone::Muted,
     };
     MoonDataCell::text(cell_text(scan, running, labels)).tone(tone)

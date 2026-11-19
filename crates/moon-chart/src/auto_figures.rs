@@ -27,6 +27,7 @@ pub mod draw;
 pub mod events;
 pub mod extremes;
 pub mod formations;
+pub mod history;
 pub mod period_levels;
 pub mod pivots;
 pub mod round_levels;

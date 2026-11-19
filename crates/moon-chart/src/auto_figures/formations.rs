@@ -5,7 +5,9 @@
 //!
 //! The sides are the `Trend` line search run twice: once through pivot HIGHS (the upper side) and
 //! once through pivot LOWS (the lower side), each with the row's touch tolerance and
-//! `min_touches`, at most [`MAX_BODY_BREAKS`] bodies across a side between its own touches, and no
+//! `min_touches`, at most [`MAX_BODY_BREAKS`] bodies across a side between its own touches (the
+//! allowance a squeeze's sloped half gets, for the same reason: one wide bar does not undo a
+//! pattern, two make the line a guess), and no
 //! slope bound — a horizontal side is what an ascending or descending triangle and a range are made
 //! of. The strongest [`MAX_SIDE_LINES`] lines of each side are paired, and a pair is a formation
 //! when:
@@ -37,13 +39,23 @@
 //!   symmetric (opposite slopes), ascending or descending (one side flat);
 //! - **broadening** (`w1 / w0` above the band) — none of the kinds here; not reported.
 //!
-//! A channel or converging pair is a **flag** (a pennant when converging) when it is no longer than
-//! `flag_max_bars`, the `impulse_bars` bars before its first touch (that bar included) hold a pole
-//! — the largest rise from a low to a LATER high, or fall from a high to a later low — of at least
-//! `impulse_pct` of the price it started from, and its width at the start is at most
-//! [`FLAG_MAX_RETRACE`] of the pole's height. The flag reading wins when the row looks for flags;
-//! when it does not, the pair is reported as the channel or triangle it is, if the row looks for
-//! that kind.
+//! A channel or converging pair is a **flag** (a pennant when converging) when:
+//!
+//! - it is no longer than `flag_max_bars`;
+//! - the `impulse_bars` bars ending at its first touch (that bar included, so `impulse_bars`
+//!   bars in all) hold a pole — the largest rise from a low to a STRICTLY later bar's high, or
+//!   fall from a high to a strictly later bar's low — of at least `impulse_pct` of the price it
+//!   started from. Never one bar's own range: the bar of the first touch is a swing of the
+//!   pattern, and its wick alone is not a move the pattern pauses;
+//! - its width at the start is at most [`FLAG_MAX_RETRACE`] of the pole's height;
+//! - it does not run WITH the pole: its midline — halfway between the sides — is flat (it moves
+//!   by at most twice the touch tolerance over the shared stretch, the flat-side rule below) or
+//!   slopes against the pole. A flag after a rise drifts down or sideways, a pennant converges
+//!   around a flat midline; a channel or wedge that keeps climbing after a rise is the trend
+//!   going on, not a pause in it, and is reported as the channel or wedge it is.
+//!
+//! The flag reading wins when the row looks for flags; when it does not, or the pair fails a test
+//! above, the pair is reported as the channel or triangle it is, if the row looks for that kind.
 //!
 //! Each line takes part in at most one formation, and one stretch of bars holds one: the pairs are
 //! taken greedily, most touches first, then the longer span, and a pair whose span shares more than
@@ -88,17 +100,13 @@ use moon_core::config::auto_figures::{
 use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{Pivot, PivotKind, find_pivots};
+use super::squeeze::MAX_BODY_BREAKS;
 use super::trend::{Line, LineSpec, MAX_LINE_PIVOTS, find_lines};
 use super::{
     Broken, DetectCtx, Detector, Found, FoundShape, LineTag, Seg, Side, Touch, atr, bar_ok,
     pct_frac, positive, scan_break, survives, tolerance_frac, touch_strength, touch_volume, window,
     within,
 };
-
-/// Bodies allowed to cross a side between its own first and last touch — the allowance a
-/// squeeze's sloped half gets, for the same reason: one wide bar does not undo a pattern, two make
-/// the line a guess.
-pub const MAX_BODY_BREAKS: usize = 1;
 
 /// Closes allowed outside the pair, by more than the touch tolerance, between the formation's first
 /// and last touch.
@@ -352,10 +360,14 @@ fn classify(
         // Broadening: none of the kinds here.
         return None;
     };
+    // The midline's own direction, by the same flat rule as a side's.
+    let midline = dir((us + ls) / 2.0, (ue + le) / 2.0);
     let is_flag = p.flag
         && span_bars <= usize::try_from(p.flag_max_bars).unwrap_or(usize::MAX)
-        && pole(win, first_idx, p.impulse_bars).is_some_and(|(frac, height)| {
-            frac >= pct_frac(p.impulse_pct) && w0 <= FLAG_MAX_RETRACE * height
+        && pole(win, first_idx, p.impulse_bars).is_some_and(|pole| {
+            pole.frac >= pct_frac(p.impulse_pct)
+                && w0 <= FLAG_MAX_RETRACE * pole.height
+                && midline != pole.dir
         });
     let wanted = |tag: LineTag| match tag {
         LineTag::Channel => p.channel,
@@ -466,32 +478,54 @@ fn latest(a: Option<Broken>, b: Option<Broken>) -> Option<Broken> {
     }
 }
 
-/// The pole in the `bars` bars up to and including `win[start]`: the largest rise from a low to a
-/// later (or the same) bar's high, or fall from a high to a later bar's low, as `(fraction of the
-/// price it started from, height in price)` — whichever fraction is larger. `None` when no valid
-/// bar precedes `start` within the range.
-fn pole(win: &[ChartCandle], start: usize, bars: u32) -> Option<(f64, f64)> {
-    let from = start.saturating_sub(usize::try_from(bars).unwrap_or(usize::MAX));
+/// A flag's pole: the move before the formation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Pole {
+    /// The move as a fraction of the price it started from.
+    frac: f64,
+    /// The move in price.
+    height: f64,
+    /// `1` for a rise, `-1` for a fall — compared with a midline's direction (`classify`'s `dir`).
+    dir: i8,
+}
+
+/// The pole in the `bars` bars ending at `win[start]` (that bar included, `bars` bars in all): the
+/// largest rise from a low to a STRICTLY later bar's high, or fall from a high to a strictly later
+/// bar's low — whichever fraction of the price it started from is larger, a rise on a tie.
+///
+/// Strictly later, so no bar's own range is a pole: the bar of the first touch is part of the
+/// pattern, and a pole must be a move ACROSS bars. `None` when fewer than two valid bars lie in
+/// the range (`bars < 2` included) — a single bar has no move to measure.
+fn pole(win: &[ChartCandle], start: usize, bars: u32) -> Option<Pole> {
+    let bars = usize::try_from(bars).unwrap_or(usize::MAX);
+    let from = (start + 1).saturating_sub(bars);
     let range = win.get(from..=start)?;
     let mut lowest = f64::INFINITY;
     let mut highest = f64::NEG_INFINITY;
-    let (mut best_frac, mut best_height) = (0.0f64, 0.0f64);
+    let mut best: Option<Pole> = None;
     let mut seen = 0usize;
     for b in range.iter().filter(|b| bar_ok(b)) {
         seen += 1;
         let (hi, lo) = (f64::from(b.high), f64::from(b.low));
-        lowest = lowest.min(lo);
-        highest = highest.max(hi);
-        let rise = (hi - lowest, lowest);
-        let fall = (highest - lo, highest);
-        for (height, base) in [rise, fall] {
+        // Against the extremes of the EARLIER bars only, before this bar joins them.
+        for (height, base, dir) in [(hi - lowest, lowest, 1), (highest - lo, highest, -1)] {
             let frac = height / base;
-            if frac.is_finite() && frac > best_frac {
-                (best_frac, best_height) = (frac, height);
+            if frac.is_finite() && frac > 0.0 && best.is_none_or(|so_far| frac > so_far.frac) {
+                best = Some(Pole { frac, height, dir });
             }
         }
+        lowest = lowest.min(lo);
+        highest = highest.max(hi);
     }
-    (seen >= 2).then_some((best_frac, best_height))
+    if seen < 2 {
+        return None;
+    }
+    // Two valid bars that moved nowhere still have a (zero) pole: the impulse test rejects it.
+    Some(best.unwrap_or(Pole {
+        frac: 0.0,
+        height: 0.0,
+        dir: 1,
+    }))
 }
 
 /// The touches of both sides in time order, each pivot once (a bar can be a pivot high on one side

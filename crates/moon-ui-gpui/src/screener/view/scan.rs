@@ -205,6 +205,10 @@ impl ScreenerView {
             t!("screener.af_short").to_string(),
             t!("screener.af_no_cache").to_string(),
             t!("screener.af_unread").to_string(),
+            |lag_ms| {
+                let age = crate::chartdx::auto_figures_sync::caption::age_text(lag_ms as f64);
+                t!("screener.af_stale", age = age).to_string()
+            },
         )
     }
 

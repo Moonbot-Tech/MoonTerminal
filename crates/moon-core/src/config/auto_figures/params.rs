@@ -517,7 +517,10 @@ pub struct FormationParams {
     /// [`ToleranceUnit::Atr`].
     pub double_tolerance_atr: f32,
     /// Shallowest trough (peak, for a double bottom) between a double's two extremes, in % of the
-    /// level's price.
+    /// price of the extreme NEARER it — the lower of two tops, the higher of two bottoms. So the
+    /// trough is at least this deep below BOTH tops (above both bottoms): measured from the higher
+    /// top, a trough could pass the test while sitting less deep than that under the lower one,
+    /// and the pattern the reader sees is only as deep as its shallower half.
     pub double_depth_pct: f32,
     /// What happens to a formation once a bar has CLOSED outside it after its last touch — beyond
     /// either line — the same choice a level row makes.

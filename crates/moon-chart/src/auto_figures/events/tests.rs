@@ -495,3 +495,29 @@ fn a_formation_is_approached_at_its_nearer_side() {
     let e = events_of(&f, &closes(&[100.0, 100.0]), 100.0, KEEP3);
     assert!(!e.contains(AutoEvent::Approach), "{e:?}");
 }
+
+/// A bar that runs through a narrow formation tells ONE story: the story of the side its close
+/// ended up beyond.
+///
+/// By hand, a 99.5..100.5 formation: closes 100, 100, then 101 (out through the top), then 99 —
+/// one bar from above the top to below the bottom. Judged alone, the top calls that bar a false
+/// break (a one-bar run above, back below it) and the bottom a breakout; the close is below the
+/// formation, so it is the breakout down, alone. The mirror (98.5 then 101) is the breakout up.
+/// Closing back INSIDE (101 then 100) is the false break of the top, alone.
+///
+/// Breakage: the two sides' crossings merged as they come (the old union showed Breakout AND
+/// FalseBreak on the one bar).
+#[test]
+fn a_bar_through_a_narrow_formation_is_one_crossing() {
+    let f = [pair(100.5, 99.5)];
+    let story = |cs: &[f32]| {
+        let e = events_of(&f, &closes(cs), f64::from(*cs.last().unwrap()), KEEP3);
+        (
+            e.contains(AutoEvent::Breakout),
+            e.contains(AutoEvent::FalseBreak),
+        )
+    };
+    assert_eq!(story(&[100.0, 100.0, 101.0, 99.0]), (true, false));
+    assert_eq!(story(&[100.0, 100.0, 98.5, 101.0]), (true, false));
+    assert_eq!(story(&[100.0, 100.0, 101.0, 100.0]), (false, true));
+}

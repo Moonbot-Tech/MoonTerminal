@@ -274,8 +274,6 @@ fn a_lagging_newest_bucket_waits_up_to_the_cap() {
 /// Breakage: the threshold read as 100 %, or `short_history` set by a single short row.
 #[test]
 fn short_history_is_ninety_percent_of_the_need() {
-    assert!(history_full(9, 10));
-    assert!(!history_full(8, 10));
     let swing = ScanRow {
         row_ix: 0,
         params: DetectorParams::Swing(SwingParams {
@@ -321,6 +319,64 @@ fn short_history_is_ninety_percent_of_the_need() {
         (1, 1, false)
     );
     assert_eq!(r.best.map(|b| b.event), Some(AutoEvent::Breakout));
+}
+
+/// A calendar row needs EVERY bar of its period, as on the chart: today's extremes on H1 need 25
+/// closed hours, and 23 of them (92 %, past a sampling row's 90 %) leave the row short — the
+/// column must not show a day high the chart, on the same bars, calls "not enough history".
+///
+/// Breakage: the scan reading one 90 % share for every row (`history_full` without the params).
+#[test]
+fn a_calendar_row_needs_its_whole_period() {
+    let day = ScanRow {
+        row_ix: 0,
+        params: DetectorParams::PeriodExtreme(PeriodExtremeParams {
+            period: ExtremePeriod::Day,
+            ..PeriodExtremeParams::default()
+        }),
+        tf: TfId::H1,
+        take: Take::default(),
+        marks: EventMarks::default(),
+    };
+    assert_eq!(day.params.bars_needed(TfId::H1), 25);
+    let short = hourly(&[3.4; 23]);
+    let r = scan(&[day], &short, MONDAY_2024_01_01_MS + 23.0 * HOUR_MS);
+    assert_eq!((r.rows_scanned, r.rows_short), (0, 1));
+    let full = hourly(&[3.4; 25]);
+    let r = scan(&[day], &full, MONDAY_2024_01_01_MS + 25.0 * HOUR_MS);
+    assert_eq!((r.rows_scanned, r.rows_short), (1, 0));
+}
+
+/// A cache that ends more than [`STALE_CACHE_MS`] before now is marked with its lag, and its answer
+/// passes no event filter — it still finds the breakout, which is of the moment the cache stops.
+///
+/// By hand: the newest 5-minute row of the breakout series closes at the end of the fourth hour.
+/// Judged 15 minutes later the lag is exactly the bound — current; judged 3 hours later the lag is
+/// 10 800 000 ms, and the Breakout, Squeeze, FalseBreak and Approach filters (even at 100 %) turn
+/// the market away while `Any` keeps it.
+///
+/// Breakage: the lag measured from the row's open (5 minutes more, so the 15-minute case goes
+/// stale), the bound strict the wrong way, or the filters reading `best` without the lag.
+#[test]
+fn a_lagging_cache_is_marked_and_passes_no_event_filter() {
+    let (bars, end) = breakout_series();
+    let rows = [round_row(0, TfId::H1, EventMarks::default())];
+    let fresh = scan(&rows, &bars, end + 15.0 * MIN_MS);
+    assert_eq!(fresh.cache_lag_ms, None);
+    assert!(matches(&fresh, &ScanFilter::Breakout));
+    let late = scan(&rows, &bars, end + 3.0 * HOUR_MS);
+    assert_eq!(late.cache_lag_ms, Some(10_800_000));
+    assert_eq!(late.answer().cache_lag_ms, late.cache_lag_ms);
+    assert_eq!(late.best.map(|b| b.event), Some(AutoEvent::Breakout));
+    for filter in [
+        ScanFilter::Breakout,
+        ScanFilter::Squeeze,
+        ScanFilter::FalseBreak,
+        ScanFilter::Approach { max_pct: 100.0 },
+    ] {
+        assert!(!matches(&late, &filter), "{filter:?}");
+    }
+    assert!(matches(&late, &ScanFilter::Any));
 }
 
 /// Empty input never panics: no rows is "nothing to say", no bars is "short of history".

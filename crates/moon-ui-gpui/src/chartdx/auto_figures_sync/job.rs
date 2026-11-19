@@ -157,55 +157,14 @@ pub(crate) struct AutoRowOutcome {
     pub recent: Vec<ChartCandle>,
 }
 
-/// Share of `bars_needed` a row that SAMPLES its bars must have read, in %, before it counts as
-/// having its full history (`docs-internal/AUTO_FIGURES.md` §13.3).
-///
-/// Not 100: the local 5-minute cache is written only while the terminal runs, so holes are
-/// normal, and a pivot row whose resampled bars come out a few short has its answer all the same —
-/// its levels are the turns of whatever bars it has. On the scenes' recorded set the 4h levels row
-/// reads 68 of its 72 bars — 94 % — and calling that "not enough history" told the reader
-/// something false about a row that found its levels. Below 90 % a missing day starts to be a
-/// missing swing, and the note is worth showing. Calendar rows ask for all of it instead
-/// ([`CALENDAR_HISTORY_PCT`]).
-pub(crate) const FULL_HISTORY_PCT: u64 = 90;
-
-/// Share of `bars_needed` a CALENDAR row (period extreme, period level, volume profile) must have
-/// read, in %: all of it.
-///
-/// Such a row's answer is a fact about every bar of its period, not a sample of them: the period's
-/// open IS its first bar, its high or low may be in any one bar, and every bar's volume moves the
-/// profile's POC. One bar missing can therefore change or erase the line itself — and a line that
-/// is silently missing or wrong is exactly what the note must not hide. The alternative ("short
-/// only when the detector found nothing") was rejected: a period-level row with the day open found
-/// and the week open lost finds something, and a week high taken from an incomplete week is found
-/// too — wrong, and unmarked.
-pub(crate) const CALENDAR_HISTORY_PCT: u64 = 100;
-
-/// The share of `bars_needed` a row of `detector` must read to count as complete, in % — by what
-/// its answer is made of ([`FULL_HISTORY_PCT`], [`CALENDAR_HISTORY_PCT`]). Exhaustive on purpose:
-/// a new detector kind has to say which it is.
-pub(crate) fn full_history_pct(detector: &DetectorParams) -> u64 {
-    match detector {
-        DetectorParams::Swing(_)
-        | DetectorParams::Trend(_)
-        | DetectorParams::Squeeze(_)
-        | DetectorParams::Formation(_)
-        // One bar needed: 90 % and 100 % of it are the same test.
-        | DetectorParams::RoundLevels(_) => FULL_HISTORY_PCT,
-        DetectorParams::PeriodExtreme(_)
-        | DetectorParams::PeriodLevel(_)
-        | DetectorParams::VolumeProfile(_) => CALENDAR_HISTORY_PCT,
-    }
-}
-
 impl AutoRowOutcome {
     /// Whether the row ran on less history than it asks for — "not enough history" in the popup:
-    /// fewer than [`full_history_pct`] % of `needed` bars (90 % for a row that samples its bars,
-    /// all of them for a calendar row), measured against the DETECTOR's need only (the events tail
-    /// fetched beside it is not history the answer lacks).
+    /// short of `moon_chart::auto_figures::history::history_full` (90 % of `needed` bars for a
+    /// row that samples its bars, all of them for a calendar row — the rule the screener's scan
+    /// reads too), measured against the DETECTOR's need only (the events tail fetched beside it is
+    /// not history the answer lacks).
     pub fn short_history(&self) -> bool {
-        (self.bars as u64).saturating_mul(100)
-            < u64::from(self.needed) * full_history_pct(&self.key.detector)
+        !moon_chart::auto_figures::history::history_full(self.bars, self.needed, &self.key.detector)
     }
 }
 

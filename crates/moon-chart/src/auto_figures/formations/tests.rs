@@ -619,3 +619,72 @@ fn a_horizontal_range_is_two_levels() {
     assert_eq!((upper.t0_ms, upper.t1_ms), (t(5), t(25)));
     assert_eq!((lower.t0_ms, lower.t1_ms), (t(10), t(30)));
 }
+
+/// A rising channel right after a rise is the trend going on, not a pause in it: with the same
+/// pole and width as the bull flag above, but sides climbing (+1/6 per bar), it is reported as the
+/// channel it is. The mirror — the same channel after a FALL — is a bear flag.
+///
+/// By hand: pole 100 → 112 over bars 0..8 (12 %), tops 112 / 113 / 114 at 8 / 14 / 20, bottoms
+/// 109.5 / 110.5 / 111.5 at 11 / 17 / 23. Width 3 at both ends (parallel), 3 ≤ half the 12-high
+/// pole, 15 bars ≤ the 30-bar cap — everything a flag needs but the direction: the midline rises
+/// 110.5 → 113, 2.3 %, far past twice the 0.2 % tolerance, the same way as the pole. Mirrored:
+/// pole 112 → 100, bottoms 100 / 101 / 102 at 8 / 14 / 20, tops 103.5 / 104.5 / 105.5 at
+/// 11 / 17 / 23 — the midline rises against a falling pole: a flag.
+///
+/// Breakage: the flag read from the pole and the width alone, with no look at where it runs.
+#[test]
+fn a_channel_running_with_its_pole_is_not_a_flag() {
+    let with_pole = path(&[
+        (0, 100.0),
+        (8, 112.0),
+        (11, 109.5),
+        (14, 113.0),
+        (17, 110.5),
+        (20, 114.0),
+        (23, 111.5),
+        (26, 113.0),
+    ]);
+    let found = run(&with_pole, FormationParams::default());
+    assert_eq!(tags(&found), [Some(LineTag::Channel)], "{found:?}");
+
+    let against_pole = path(&[
+        (0, 112.0),
+        (8, 100.0),
+        (11, 103.5),
+        (14, 101.0),
+        (17, 104.5),
+        (20, 102.0),
+        (23, 105.5),
+        (26, 104.0),
+    ]);
+    let found = run(&against_pole, FormationParams::default());
+    assert_eq!(tags(&found), [Some(LineTag::Flag)], "{found:?}");
+}
+
+/// The pole is looked for in exactly `impulse_bars` bars ending at the first touch, and never in
+/// one bar's own range.
+///
+/// By hand, on flat bars at 100 (range ±0.05 %): one low of 90 at bar 2, and bar 9 the start.
+/// With `bars = 7` the window is bars 3..=9 and never sees the low — the pole is the flat bars'
+/// own 0.1 % wobble; with `bars = 8` it is bars 2..=9 and the rise 90 → 100.05 is 11.2 %. A bar
+/// with low 94 and high 106 after a bar of 99..101 is a pole of (106 − 99) / 99 = 7.07 % — the
+/// rise from the EARLIER bar's low — not its own 12.8 %; and one bar alone is no pole.
+///
+/// Breakage: the window one bar too long (the old `start - bars ..= start`), or a bar's own range
+/// counted as a move.
+#[test]
+fn the_pole_window_is_impulse_bars_long_and_spans_bars() {
+    let flat = |i: usize, lo: f32, hi: f32| bar(i, (lo + hi) / 2.0, hi, lo, (lo + hi) / 2.0);
+    let mut win: Vec<ChartCandle> = (0..10).map(|i| flat(i, 99.95, 100.05)).collect();
+    win[2] = flat(2, 90.0, 100.05);
+    let short = pole(&win, 9, 7).expect("seven valid bars");
+    assert!(short.frac < 0.002, "{short:?}");
+    let long = pole(&win, 9, 8).expect("eight valid bars");
+    assert!((long.frac - 10.05 / 90.0).abs() < 1e-6, "{long:?}");
+    assert_eq!(long.dir, 1);
+
+    let pair = [flat(0, 99.0, 101.0), flat(1, 94.0, 106.0)];
+    let p = pole(&pair, 1, 2).expect("two valid bars");
+    assert!((p.frac - 7.0 / 99.0).abs() < 1e-6, "{p:?}");
+    assert_eq!(pole(&pair, 1, 1), None);
+}

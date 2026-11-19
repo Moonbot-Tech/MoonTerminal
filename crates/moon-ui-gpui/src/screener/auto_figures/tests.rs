@@ -88,7 +88,19 @@ fn labels() -> ScanLabels {
         "short".into(),
         "no cache".into(),
         "unread".into(),
+        |lag_ms| format!("stale {lag_ms}"),
     )
+}
+
+/// `scan` with its cache lagging `lag_ms` behind the run's moment.
+fn stale(scan: MarketScan, lag_ms: i64) -> MarketScan {
+    match scan {
+        MarketScan::Scanned(answer) => MarketScan::Scanned(ScanAnswer {
+            cache_lag_ms: Some(lag_ms),
+            ..answer
+        }),
+        other => other,
+    }
 }
 
 /// The column orders by the best event's rank, then by how near the nearest line is, then the
@@ -452,4 +464,43 @@ fn a_cell_reads_the_event_and_the_signed_distance() {
     assert_eq!(text(Some(MarketScan::Unread), false), "unread");
     assert_eq!(text(None, true), "…");
     assert_eq!(text(None, false), "—");
+}
+
+/// A market whose cache lags behind now shows its lag INSTEAD of its event, sorts among the
+/// markets that could not say anything current (after "nothing", before "short history"), and no
+/// event filter admits it — the breakout it holds is of the moment the cache stops.
+///
+/// Breakage: the cell printing the old breakout as current, the market sorting at the top by that
+/// breakout, or the Breakout / Approach filter admitting it.
+#[test]
+fn a_lagging_cache_is_not_shown_as_a_current_event() {
+    let lagging = stale(scanned(Some(AutoEvent::Breakout), Some(0.1)), 3 * HOUR_MS);
+    let l = labels();
+    assert_eq!(cell_text(Some(lagging), false, &l), "stale 10800000");
+
+    let book = Rc::new(book(&[
+        ("LAGGING", lagging),
+        ("NOTHING", scanned(None, None)),
+        ("SHORT", short()),
+        ("FB", scanned(Some(AutoEvent::FalseBreak), Some(0.5))),
+    ]));
+    let entries: Vec<_> = ["LAGGING", "NOTHING", "SHORT", "FB"]
+        .iter()
+        .map(|m| entry(1, 1, m))
+        .collect();
+    let mut order: Vec<_> = (0..entries.len()).collect();
+    sort_by_scan(&book, &entries, &mut order, false);
+    let sorted: Vec<_> = order
+        .iter()
+        .map(|&i| entries[i].row.market.as_str())
+        .collect();
+    assert_eq!(sorted, ["FB", "NOTHING", "LAGGING", "SHORT"]);
+
+    for filter in [ScanFilter::Breakout, ScanFilter::Approach { max_pct: 5.0 }] {
+        assert!(
+            !ScanQuery::new(book.clone(), filter).admits(&entries[0]),
+            "{filter:?}"
+        );
+    }
+    assert!(ScanQuery::new(book, ScanFilter::Any).admits(&entries[0]));
 }

@@ -194,10 +194,14 @@ const COLS_ADDED_LATE: &[(u32, &str)] = &[
     (2, EXCHANGE_KEY),
     (2, TYPE_KEY),
     (2, LISTED_KEY),
+    // A display feature ships ON (CONTRIBUTING § UI): a stored set that predates the column is a
+    // set with the value ABSENT, not one where the user turned it off, so it is offered once like
+    // every late column — and a user who hides it afterwards keeps it hidden.
+    (3, AUTO_FIGURES_KEY),
 ];
 
 /// The migration version a layout is at once every late column has been offered to it.
-pub(super) const COLUMNS_MIGRATION: u32 = 2;
+pub(super) const COLUMNS_MIGRATION: u32 = 3;
 
 /// Add the columns a stored visible set predates.
 ///
@@ -224,6 +228,38 @@ pub(super) fn add_new_columns(keys: &mut Vec<String>, applied: u32) {
             keys.push((*column).to_string());
         }
     }
+}
+
+/// The sort to fall back to once the column the table is sorted by has been hidden, as
+/// `((key, descending), store)` — `store` says whether that sort is to be written over the stored
+/// preference.
+///
+/// The auto-figures column is never stored as the sort (its answers live for one window session,
+/// see `ScreenerView::set_sort`), so while it is the sort the STORED preference is still the one
+/// the user chose before it. Hiding it therefore goes back to that stored sort, and stores nothing:
+/// writing the fallback would erase the very preference the column's sort was careful to keep.
+/// Any other hidden sort column falls back through [`restore_sort`] as before, and that fallback
+/// is stored.
+///
+/// Args:
+///     sort_key: The column the table is sorted by, now hidden.
+///     sort_desc: Its direction.
+///     stored: The stored sort preference, already brought current ([`migrate_legacy_sort`]).
+///     visible: The visible columns after the hide.
+pub(super) fn sort_after_hiding(
+    sort_key: &str,
+    sort_desc: bool,
+    stored: Option<moon_core::config::TableSortPreference>,
+    visible: &HashSet<String>,
+) -> ((String, bool), bool) {
+    if sort_key == AUTO_FIGURES_KEY {
+        return (restore_sort(stored, visible), false);
+    }
+    let current = moon_core::config::TableSortPreference {
+        column: sort_key.to_string(),
+        ascending: !sort_desc,
+    };
+    (restore_sort(Some(current), visible), true)
 }
 
 /// Restore a visible Screener sort as `(key, descending)`.
