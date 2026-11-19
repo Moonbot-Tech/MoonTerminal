@@ -135,13 +135,36 @@ pub(crate) fn search_limited(
     query: &str,
     limit: usize,
 ) -> Vec<CoinHit> {
+    search_in_cores(b, cores_for(b, group, bucket), query, limit)
+}
+
+/// [`search_limited`] over a core list the caller chose, rather than one window group's.
+///
+/// For a caller whose scope is not a group at all — the arbitrage column asks "which connected
+/// core trades this coin on that exchange", whichever window the core lives in. Passing an empty
+/// group name to [`search_limited`] instead matches no core: no session belongs to group `""`.
+///
+/// Args:
+///     b: Backend holding the live sessions and market catalogs.
+///     cores: Cores to search, in the order their hits should come back.
+///     query: Coin text as typed or resolved; normalised here like every search.
+///     limit: Results requested per core.
+///
+/// Returns:
+///     Every core's hits, resolved to labels, in `cores` order.
+pub(crate) fn search_in_cores(
+    b: &Backend,
+    cores: Vec<CoreId>,
+    query: &str,
+    limit: usize,
+) -> Vec<CoinHit> {
     let query = normalize_layout(query.trim());
     let query = query.trim();
     if query.is_empty() {
         return Vec::new();
     }
     let ms = b.session.market_source();
-    let pairs: Vec<(CoreId, String)> = cores_for(b, group, bucket)
+    let pairs: Vec<(CoreId, String)> = cores
         .into_iter()
         .flat_map(|core| {
             ms.search_markets(core, query, limit)
