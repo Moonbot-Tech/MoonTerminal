@@ -87,7 +87,10 @@ std::thread_local! {
 /// (measured 2026-07-15). Distant small-timeframe history is unnecessary because larger
 /// layers fill the tail. One-minute data comes from deep-history replies for open charts
 /// and is retained for 30 days.
-fn retention_days(kind_min: u32) -> i64 {
+///
+/// Crate-visible so the auto-figure presets can be checked against it: a shipped row deeper than
+/// what the cache keeps would report short history forever.
+pub(crate) fn retention_days(kind_min: u32) -> i64 {
     match kind_min {
         0..=1 => 30,
         2..=5 => 15,

@@ -589,3 +589,21 @@ fn a_timeframe_the_detector_cannot_answer_on_is_pulled_down() {
     prev.sanitize();
     assert_eq!(prev.tf, TfSource::Fixed(TfId::D1));
 }
+
+/// The shipped 4h levels are built from the 5-minute cache, so their lookback (plus the partial
+/// first bucket the bar assembly drops) must fit what that cache keeps. Shipped at the generic
+/// 200 bars (33 days) against a 15-day cache, the row reported "not enough history" for ever.
+#[test]
+fn the_shipped_4h_levels_fit_the_candle_cache() {
+    let row = AutoFigurePreset::Levels4h.row();
+    let needed = row
+        .detector
+        .known()
+        .expect("a preset runs a known detector")
+        .bars_needed(TfId::H4);
+    let cache_4h_bars = crate::market::kline_cache::retention_days(5) * 24 / 4;
+    assert!(
+        i64::from(needed) < cache_4h_bars,
+        "4h row needs {needed} bars, the 5-minute cache holds {cache_4h_bars}"
+    );
+}

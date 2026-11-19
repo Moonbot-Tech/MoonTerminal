@@ -16,6 +16,14 @@ use crate::config::chart_labels::LabelColor;
 use crate::figures::LineKind;
 use crate::palette;
 
+/// Lookback of the shipped "Levels 4h" row, in four-hour bars.
+///
+/// Bounded by the local 5-minute candle cache the 4h bars are built from: it keeps 15 days
+/// (≈ 90 four-hour bars), so a deeper default would leave the row permanently short of history.
+/// 72 bars (12 days) leaves room for the partial first bucket and for a cache that is a few days
+/// short of full — a fresh install, or the 14-day set the atlas is shot on.
+pub const LEVELS_4H_LOOKBACK: u32 = 72;
+
 /// One ready-made row.
 ///
 /// Serialized, because a row remembers the preset it came from: that is what keeps its name
@@ -89,7 +97,13 @@ impl AutoFigurePreset {
                 LineStyle::default(),
             ),
             AutoFigurePreset::Levels4h => (
-                DetectorParams::Swing(SwingParams::default()),
+                // The default 200-bar lookback is 33 days of 4h bars, and the 4h bars come from the
+                // local 5-minute cache, which keeps 15 days (`market::kline_cache::retention_days`):
+                // shipped at 200 the row could never fill and would always report short history.
+                DetectorParams::Swing(SwingParams {
+                    lookback_bars: LEVELS_4H_LOOKBACK,
+                    ..SwingParams::default()
+                }),
                 TfSource::Fixed(TfId::H4),
                 LineStyle {
                     color: LabelColor::Fixed(rgb(palette::ACCENT)),
