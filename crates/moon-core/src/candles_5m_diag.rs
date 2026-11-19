@@ -15,15 +15,14 @@
 //!   `open != high || close != low`. A genuinely monotone falling candle also reads dishonest, so
 //!   the share is a signal across a whole ring, not a verdict on one candle.
 //!
-//! One line per elected provider every [`SWEEP_PERIOD_MS`], appended to `logs/candles_5m_diag.log`.
+//! One line per elected provider on every pass of the kline recorder — about a minute apart, the
+//! recorder's own loop; the first pass after start backfills and can take longer — appended to
+//! `logs/candles_5m_diag.log`.
 //! The scan only READS rings already in memory — it sends nothing to the core — and runs on the
 //! kline recorder's own background thread, never on the UI thread. Each ring is folded under its
 //! own read lock in one pass, without copying its rows out.
 
 use moonproto::state::{Candle5mRow, SeqRingReader};
-
-/// Gap between two sweeps; the kline recorder's loop period, which is what drives this channel.
-pub const SWEEP_PERIOD_MS: i64 = 60_000;
 
 /// Milliseconds per hour, for the span figures.
 const MS_PER_HOUR: f64 = 3_600_000.0;
@@ -102,6 +101,11 @@ pub fn ring_facts(reader: &SeqRingReader<Candle5mRow>) -> RingFacts {
     reader.with_last(reader.capacity(), |view| {
         let mut facts = RingFacts::default();
         view.for_each(|c| {
+            // moonproto stores `MoonTime::ZERO` for a row whose core time was unusable and keeps
+            // the row in the ring; one such stamp would stretch the span and age to decades.
+            if c.unix_millis() <= 0 {
+                return;
+            }
             facts.add(
                 c.unix_millis(),
                 c.open(),

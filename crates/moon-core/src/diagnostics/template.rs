@@ -307,8 +307,11 @@ per market. Answers \"how much 5-minute history does a core really hand over, fo
 the ring's capacity (`cap`, 500 = about 41.6 hours) is only an upper bound, and what the core's
 snapshot fills it with is visible nowhere else.
 
-One line per provider every minute, read from memory only — nothing is requested from the core:
-  markets / ring / nonempty   catalog size, markets that have a ring, rings holding any candle
+One line per provider on every kline-recorder pass (about a minute apart; the first pass after
+start backfills and can take longer), read from memory only — nothing is requested from the core:
+  markets / ring / nonempty   catalog size, markets that have a ring, rings holding any candle (an
+                              empty ring can also be one the client cleared because its snapshot
+                              was too old to trust, moonproto STALE_CANDLES_SNAPSHOT_MS)
   count[min/med/p90/max]      candles per non-empty ring
   span_h[...]                 newest minus oldest candle stamp, hours
   age_min[med/max]            minutes since the newest candle; sealed candles are stamped at the
