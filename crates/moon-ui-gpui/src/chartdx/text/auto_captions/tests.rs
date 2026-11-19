@@ -1,4 +1,4 @@
-//! Placement of auto-line captions on the drawn side.
+//! Placement of auto-line captions: on the drawn side, and clear of the order captions.
 //!
 //! Explicit imports, never `use super::*`: the text module re-exports `gpui::*`, whose own `test`
 //! would shadow the built-in `#[test]` attribute (CONTRIBUTING.md).
@@ -7,8 +7,9 @@ use moon_chart::auto_figures::draw::drawn_side;
 use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide, Seg};
 use moon_core::config::auto_figures::{CaptionPlace, Extend};
 
-use super::{CaptionMap, CaptionSpot, caption_spot};
-use crate::chartdx::text::READOUT_PAD_X;
+use super::{CaptionMap, CaptionSpot, caption_spot, clear_of_orders};
+use crate::chartdx::text::OrderCaption;
+use crate::chartdx::text::{READOUT_PAD_X, READOUT_PAD_Y};
 
 /// A 1000 × 500 plot at the origin, one physical pixel per logical one: 0.1 px per ms from the
 /// epoch (the plot shows 0..10 s), 20 px per unit of price from `price0` at the bottom edge.
@@ -125,4 +126,65 @@ fn a_formation_caption_sits_on_its_kept_side() {
     };
     assert_eq!(at(Some(PairSide::Lower)), Some(400.0));
     assert_eq!(at(Some(PairSide::Upper)), Some(200.0));
+}
+
+/// An order caption in the price column, its padded box ending at `right` and `w` wide, its text
+/// at `top`, 12 px tall.
+fn order(right: f32, w: f32, top: Option<f32>) -> OrderCaption {
+    OrderCaption {
+        source: 0,
+        book: false,
+        uid: 1,
+        secondary: false,
+        interacting: false,
+        pinned: false,
+        distance: 0.0,
+        top: top.map(|t| t - READOUT_PAD_Y),
+        x: [right - w - 2.0 * READOUT_PAD_X, right],
+        height: 12.0 + 2.0 * READOUT_PAD_Y,
+    }
+}
+
+/// A right-anchored caption keeps its place with nothing beside it, and slides LEFT along its line
+/// past every order caption it would cover — one after another, as each slide meets the next —
+/// never up or down; an order caption the layout hid, or one in another row, is not in the way;
+/// with no room left of the column it is dropped rather than drawn over the orders.
+///
+/// By hand: an 80-wide caption ending at 990 at top 100 (12 tall), its padded box 905..995. An
+/// order 60 wide ends its box at 995, so starts it at 925: the caption must end at 925 − 5 = 920.
+/// A second order in the same row, its box 840..900, is clear of the caption's first place but
+/// not of its second (835..925): it pushes the caption on to 840 − 5 = 835 — whichever order the
+/// layout left the two in. An order at top 130 does not share the row; a hidden one is ignored.
+/// With the plot starting at 800, an 80-wide caption cannot end at 835 (its text would start at
+/// 755): dropped.
+///
+/// Breakage: the auto caption drawn over the order numbers (13.3), moved off its line, a hidden
+/// order caption still pushing it, or a loop that stops after the first order it meets.
+#[test]
+fn a_right_end_caption_slides_left_of_the_order_captions() {
+    let (w, h, top) = (80.0, 12.0, 100.0);
+    assert_eq!(clear_of_orders(990.0, w, top, h, &[], 0.0), Some(990.0));
+    let first = order(995.0, 60.0, Some(100.0));
+    assert_eq!(
+        clear_of_orders(990.0, w, top, h, std::slice::from_ref(&first), 0.0),
+        Some(925.0 - READOUT_PAD_X)
+    );
+    let beside = order(900.0, 50.0, Some(104.0));
+    assert_eq!(beside.x[0], 840.0);
+    let both = [first.clone(), beside.clone()];
+    assert_eq!(
+        clear_of_orders(990.0, w, top, h, &both, 0.0),
+        Some(840.0 - READOUT_PAD_X)
+    );
+    let swapped = [beside, first.clone()];
+    assert_eq!(
+        clear_of_orders(990.0, w, top, h, &swapped, 0.0),
+        Some(840.0 - READOUT_PAD_X)
+    );
+    let elsewhere = [order(995.0, 60.0, Some(130.0)), order(995.0, 60.0, None)];
+    assert_eq!(
+        clear_of_orders(990.0, w, top, h, &elsewhere, 0.0),
+        Some(990.0)
+    );
+    assert_eq!(clear_of_orders(990.0, w, top, h, &both, 800.0), None);
 }

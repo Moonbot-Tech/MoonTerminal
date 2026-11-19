@@ -3,14 +3,16 @@
 //! The strings are made on revisions by `auto_figures_sync::pane::refresh_auto_captions` — a
 //! rebuild of the lines, a price change that moved a printed digit, the age clock — so this pass,
 //! which runs on every presented frame, does arithmetic only: where the line's drawn stretch is on
-//! screen, the line's price there, and which side of it the text goes.
+//! screen, the line's price there, which side of it the text goes, and — for a caption anchored at
+//! its right — whether it has to step aside for the order captions in the price column.
 //!
-//! The placement itself is pure ([`caption_spot`]) so it is tested without a
-//! text context; [`RenderState::draw_auto_captions`] only draws what it decides.
+//! The placement itself is pure ([`caption_spot`], [`clear_of_orders`]) so it is tested without a
+//! text context; [`RenderState::draw_auto_captions`] only measures and draws what they decide.
 
 use moon_chart::auto_figures::{FoundShape, PairSide};
 use moon_core::config::auto_figures::CaptionPlace;
 
+use super::caption::order_rows::OrderCaption;
 use super::*;
 
 #[cfg(test)]
@@ -124,12 +126,73 @@ pub(super) fn caption_spot(
     Some(CaptionSpot { x, ax, line_y })
 }
 
+/// Where a RIGHT-anchored caption ends once it is clear of the order captions: its anchor `x`
+/// when nothing is in the way, else slid LEFT along its line until its padded box meets none of
+/// the laid-out `orders` (an order caption whose `top` is `None` is hidden and not in the way);
+/// `None` when the text would then start left of `min_left`.
+///
+/// Why sliding left rather than the alternatives: moving the text up or down puts it beside a
+/// DIFFERENT price, where it names the wrong line; shortening it to the price still covers the
+/// order's numbers. Along its own line the caption keeps its height and still reads as that
+/// line's. The order captions keep the column: they carry the user's live orders.
+///
+/// Deterministic, so it cannot flicker on a still picture: the answer depends only on this frame's
+/// order layout, and each step moves the box strictly left of an order caption it met, so it ends
+/// within `orders.len()` steps.
+///
+/// Args:
+///     x: The caption's right edge (its anchor), logical pixels.
+///     w: The caption's text width.
+///     top: The top of its text.
+///     h: Its text line height.
+///     orders: This frame's order captions, after `layout_order_captions`.
+///     min_left: The leftmost x its text may start at (the plot's left edge).
+pub(super) fn clear_of_orders(
+    x: f32,
+    w: f32,
+    top: f32,
+    h: f32,
+    orders: &[OrderCaption],
+    min_left: f32,
+) -> Option<f32> {
+    // The same padded box an order caption is laid out by.
+    let (y0, y1) = (top - READOUT_PAD_Y, top + h + READOUT_PAD_Y);
+    let mut right = x;
+    for _ in 0..=orders.len() {
+        let (x0, x1) = (right - w - READOUT_PAD_X, right + READOUT_PAD_X);
+        let block = orders
+            .iter()
+            .filter_map(|o| {
+                let o_top = o.top?;
+                (o.x[0] < x1 && x0 < o.x[1] && o_top < y1 && y0 < o_top + o.height)
+                    .then_some(o.x[0])
+            })
+            .reduce(f32::min);
+        let Some(block) = block else {
+            return (right - w >= min_left).then_some(right);
+        };
+        right = block - READOUT_PAD_X;
+    }
+    None
+}
+
+/// Whether any of `orders` shares the rows from `top` to `top + h` — the cheap test that decides
+/// whether a caption is worth measuring for [`clear_of_orders`].
+fn row_has_orders(top: f32, h: f32, orders: &[OrderCaption]) -> bool {
+    let (y0, y1) = (top - READOUT_PAD_Y, top + h + READOUT_PAD_Y);
+    orders
+        .iter()
+        .any(|o| o.top.is_some_and(|t| t < y1 && y0 < t + o.height))
+}
+
 impl RenderState {
     /// Draw pane `idx`'s auto-line captions.
     ///
     /// An `OnHover` caption is drawn only for the line under the pointer (`auto_hover`). A line
     /// whose drawn stretch is off screen, or whose price at the anchor is outside the plot, prints
-    /// nothing.
+    /// nothing. A right-anchored caption (`RightEnd`, `AtPriceAxis`) steps aside for this frame's
+    /// order captions ([`clear_of_orders`]): they are the pane's `order_caption_scratch`, laid out
+    /// earlier in the same pass whenever line labels are on.
     ///
     /// Args:
     ///     ctx: Text context of the frame.
@@ -167,6 +230,12 @@ impl RenderState {
             .auto_hover
             .filter(|(pane, _)| *pane == idx)
             .map(|(_, key)| key);
+        // Taken for the loop and put back after it, so its allocation is reused next frame. The
+        // order captions are this frame's only while line labels are on; the scratch is stale
+        // otherwise, and nothing is in the column.
+        let orders = std::mem::take(&mut self.panes[idx].order_caption_scratch);
+        let live = if self.line_labels { &orders[..] } else { &[] };
+        let line_h = label_line_px(self.label_font_delta);
         let mut result = Ok(());
         for li in 0..self.panes[idx].auto.lines.len() {
             // Copied out: the text is an `Arc<str>` (a refcount bump), and drawing needs `&mut self`.
@@ -194,7 +263,17 @@ impl RenderState {
                 CaptionPlace::BelowLine => (spot.line_y + LABEL_LINE_GAP, 0.0),
                 _ => (spot.line_y - LABEL_LINE_GAP, 1.0),
             };
-            let x = spot.x;
+            let mut x = spot.x;
+            let top = dy - ay * line_h;
+            // Measured only when an order caption shares the row: text shaping is the expensive
+            // call on this path, and most captions have nothing beside them.
+            if spot.ax == 1.0 && row_has_orders(top, line_h, live) {
+                let w = self.measure_label_text(ctx, &text).width.as_f32();
+                let Some(clear) = clear_of_orders(x, w, top, line_h, live, plot[0]) else {
+                    continue;
+                };
+                x = clear;
+            }
             match draw_label_text_run(
                 &mut self.text_runs,
                 &mut self.text_run_cursor,
@@ -222,6 +301,7 @@ impl RenderState {
                 }
             }
         }
+        self.panes[idx].order_caption_scratch = orders;
         result
     }
 }
