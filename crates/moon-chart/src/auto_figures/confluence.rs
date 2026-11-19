@@ -37,6 +37,9 @@
 //! O(n log n): the lines are grouped by timeframe (at most seven groups) and sorted by price once;
 //! each line then binary-searches its band in every OTHER timeframe's group, and decides "a line of
 //! another row in that band" in O(1) from the run of equal rows starting at the band's first line.
+//! A caller that runs it on every price change keeps a [`ConfluenceScratch`] and calls
+//! [`confluence_in`]: the groups keep their buffers between runs, so a run allocates nothing once
+//! they have grown to the largest input seen.
 
 use moon_core::config::auto_figures::TfId;
 
@@ -56,6 +59,7 @@ pub struct PlacedLine {
 }
 
 /// One timeframe's lines, sorted by price, with what an O(1) "another row?" check needs.
+#[derive(Debug, Clone, Default)]
 struct Group {
     /// (price, row), ascending by price.
     lines: Vec<(f64, usize)>,
@@ -64,17 +68,26 @@ struct Group {
 }
 
 impl Group {
-    fn new(mut lines: Vec<(f64, usize)>) -> Self {
-        lines.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        let mut run_end = vec![0; lines.len()];
-        for k in (0..lines.len()).rev() {
-            run_end[k] = if k + 1 < lines.len() && lines[k + 1].1 == lines[k].1 {
-                run_end[k + 1]
+    /// Sort the lines pushed since the last [`Group::clear`] and index their runs of equal rows.
+    fn finish(&mut self) {
+        self.lines
+            .sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        self.run_end.clear();
+        self.run_end.resize(self.lines.len(), 0);
+        for k in (0..self.lines.len()).rev() {
+            self.run_end[k] = if k + 1 < self.lines.len() && self.lines[k + 1].1 == self.lines[k].1
+            {
+                self.run_end[k + 1]
             } else {
                 k
             };
         }
-        Self { lines, run_end }
+    }
+
+    /// Empty the group, keeping its buffers.
+    fn clear(&mut self) {
+        self.lines.clear();
+        self.run_end.clear();
     }
 
     /// Whether a line of a row other than `row` lies in `[lo, hi]`.
@@ -85,25 +98,51 @@ impl Group {
     }
 }
 
+/// The working buffers of [`confluence_in`], kept by a caller that runs the pass often (the chart
+/// runs it on every price change) so a run allocates nothing once the buffers have grown to the
+/// largest input seen. Holds no state between runs: every run starts by clearing it.
+#[derive(Debug, Clone, Default)]
+pub struct ConfluenceScratch {
+    /// One group per timeframe met so far; a timeframe absent from a run leaves its group empty.
+    groups: Vec<(TfId, Group)>,
+}
+
 /// For each of `lines`, whether a line of another row on a different timeframe lies within that
 /// line's row's `pct` of its price; written into `out`, one flag per line in input order (see the
 /// module doc for the rule and the cost).
+///
+/// Allocates its working buffers on every call; a caller that runs it often keeps a
+/// [`ConfluenceScratch`] and calls [`confluence_in`].
 pub fn confluence(lines: &[PlacedLine], out: &mut Vec<bool>) {
+    confluence_in(lines, &mut ConfluenceScratch::default(), out);
+}
+
+/// [`confluence`] with caller-owned working buffers: the same answer, without the allocations
+/// once `scratch` has grown.
+pub fn confluence_in(lines: &[PlacedLine], scratch: &mut ConfluenceScratch, out: &mut Vec<bool>) {
     out.clear();
-    let mut by_tf: Vec<(TfId, Vec<(f64, usize)>)> = Vec::new();
+    for (_, g) in &mut scratch.groups {
+        g.clear();
+    }
     for l in lines {
         let Some(price) = positive(l.price) else {
             continue;
         };
-        match by_tf.iter_mut().find(|(tf, _)| *tf == l.tf) {
-            Some((_, v)) => v.push((price, l.row)),
-            None => by_tf.push((l.tf, vec![(price, l.row)])),
+        match scratch.groups.iter_mut().find(|(tf, _)| *tf == l.tf) {
+            Some((_, g)) => g.lines.push((price, l.row)),
+            None => scratch.groups.push((
+                l.tf,
+                Group {
+                    lines: vec![(price, l.row)],
+                    run_end: Vec::new(),
+                },
+            )),
         }
     }
-    let groups: Vec<(TfId, Group)> = by_tf
-        .into_iter()
-        .map(|(tf, v)| (tf, Group::new(v)))
-        .collect();
+    for (_, g) in &mut scratch.groups {
+        g.finish();
+    }
+    let groups = &scratch.groups;
     out.extend(lines.iter().map(|l| {
         let Some(price) = positive(l.price) else {
             return false;

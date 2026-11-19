@@ -79,7 +79,9 @@ pub(super) fn preview_tf(row: &AutoFigureRow, params: &DetectorParams) -> TfId {
 ///
 /// Two phases, so that every detector finds something: a range between two flat levels for the
 /// first 40 %, then a squeeze — lows rising along a line into a flat top above the old range.
-/// The wicks carry a small fixed jitter so pivots do not sit at one exact price.
+/// The wicks carry a small fixed jitter so pivots do not sit at one exact price, and every bar
+/// carries turnover, so the volume detectors have a profile to build. The old range lies below
+/// everything after it, so its days' POCs stay untouched — naked.
 pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64) -> Vec<ChartCandle> {
     let tf_ms = tf.ms() as f64;
     let last_open = (now_ms / tf_ms).floor() * tf_ms - tf_ms;
@@ -108,14 +110,18 @@ pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64) -> Vec<ChartCandle> {
             let close = path(i_f + 0.5);
             let hi = open.max(close) * (1.0 + 0.0004 * jitter());
             let lo = open.min(close) * (1.0 - 0.0004 * jitter());
+            // Turnover grows with the bar's range, with the same fixed jitter: the volume profile
+            // gets a day with a clear POC and value area, and "strongest by volume" has something
+            // to rank. Base volume is the turnover over the mid price, as a cache row carries it.
+            let quote_volume = 1_000.0 * (1.0 + (hi - lo)) * (0.5 + jitter());
             ChartCandle {
                 t_open_ms: last_open - (n - 1 - i) as f64 * tf_ms,
                 open: open as f32,
                 high: hi as f32,
                 low: lo as f32,
                 close: close as f32,
-                volume: 0.0,
-                quote_volume: 0.0,
+                volume: (quote_volume / ((hi + lo) / 2.0)) as f32,
+                quote_volume: quote_volume as f32,
             }
         })
         .collect()

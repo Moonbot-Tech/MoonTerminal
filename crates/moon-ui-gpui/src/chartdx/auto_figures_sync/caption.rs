@@ -9,6 +9,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use moon_chart::auto_figures::LineTag;
 use moon_chart::auto_figures::events::EventSet;
 use moon_core::config::auto_figures::{AutoEvent, AutoFigureRow, CaptionPart, DetectorKind, TfId};
 use rust_i18n::t;
@@ -93,6 +94,44 @@ pub(crate) fn event_key(event: AutoEvent) -> &'static str {
     }
 }
 
+/// Dictionary key of what a tagged line is (`moon_chart::auto_figures::LineTag`), shared like
+/// [`kind_key`]: the caption, the hover card and the row editor's checkboxes for the same line say
+/// the same word. POC, VAH and VAL are the market's own abbreviations and stay Latin in every
+/// language (`locales/README.md`).
+pub(crate) fn tag_key(tag: LineTag) -> &'static str {
+    match tag {
+        LineTag::High => "auto_figures.tag.high",
+        LineTag::Low => "auto_figures.tag.low",
+        LineTag::Poc => "auto_figures.tag.poc",
+        LineTag::Vah => "auto_figures.tag.vah",
+        LineTag::Val => "auto_figures.tag.val",
+        LineTag::NakedPoc => "auto_figures.tag.naked_poc",
+        LineTag::DayOpen => "auto_figures.tag.day_open",
+        LineTag::PrevDayClose => "auto_figures.tag.prev_day_close",
+        LineTag::WeekOpen => "auto_figures.tag.week_open",
+        LineTag::PrevWeekClose => "auto_figures.tag.prev_week_close",
+    }
+}
+
+/// A line's name: its row's title, then what the line is when its detector says ("POC", "Week
+/// open"), so two lines of one row standing side by side are told apart.
+pub(crate) fn line_title(title: &RowTitle, tag: Option<LineTag>) -> String {
+    let mut out = title.text();
+    if let Some(tag) = tag {
+        if !out.is_empty() {
+            out.push_str(PART_SEP);
+        }
+        out.push_str(&t!(tag_key(tag)));
+    }
+    out
+}
+
+/// Whether a line has a moment it was born at: a round price has none (`first_ms` is `0`), and an
+/// age measured from the epoch would print fifty years.
+pub(crate) fn has_anchor(first_ms: f64) -> bool {
+    first_ms.is_finite() && first_ms > 0.0
+}
+
 /// The events of a line in display order, joined; empty when it shows none.
 pub(crate) fn events_text(events: EventSet) -> String {
     let mut out = String::new();
@@ -152,6 +191,8 @@ pub(crate) fn touches_text(n: usize) -> String {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CaptionValues<'a> {
     pub title: &'a RowTitle,
+    /// What the line is, for detectors that draw several kinds of line; printed with the name.
+    pub tag: Option<LineTag>,
     /// The line's price at `now_ms`, when it has one.
     pub line_now: Option<f64>,
     /// The pane's current price.
@@ -174,11 +215,15 @@ fn distance_pct(values: &CaptionValues<'_>) -> Option<f64> {
 
 /// The caption of one line: `parts` in their configured order, each that has something to say,
 /// joined. Empty when no part does.
+///
+/// A part with nothing true to say is left out rather than printed as a fact: the touch count of a
+/// line nothing touched (a volume-profile line, a round price) and the age of a line with no
+/// moment of birth (a round price).
 pub(crate) fn caption_text(parts: &[CaptionPart], values: &CaptionValues<'_>) -> String {
     let mut out = String::new();
     for part in parts {
         let piece = match part {
-            CaptionPart::RowName => values.title.text(),
+            CaptionPart::RowName => line_title(values.title, values.tag),
             CaptionPart::Price => match values.line_now {
                 Some(p) => moon_chart::axes::format_price(p, values.tick),
                 None => continue,
@@ -187,8 +232,10 @@ pub(crate) fn caption_text(parts: &[CaptionPart], values: &CaptionValues<'_>) ->
                 Some(d) => crate::chartdx::text::fmt_pct(d as f32),
                 None => continue,
             },
+            CaptionPart::Touches if values.touches == 0 => continue,
             CaptionPart::Touches => touches_text(values.touches),
             CaptionPart::Tf => t!(tf_key(values.tf)).to_string(),
+            CaptionPart::Age if !has_anchor(values.first_ms) => continue,
             CaptionPart::Age => age_text(values.now_ms - values.first_ms),
             CaptionPart::Event => {
                 let text = events_text(values.events);
@@ -234,7 +281,7 @@ pub(crate) fn caption_quantum(
 ) {
     for part in parts {
         match part {
-            CaptionPart::RowName => values.title.hash(h),
+            CaptionPart::RowName => (values.title, values.tag).hash(h),
             CaptionPart::Price => price_quantum(values.line_now, values.tick).hash(h),
             CaptionPart::DistancePct => {
                 distance_pct(values)

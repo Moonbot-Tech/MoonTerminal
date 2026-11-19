@@ -115,3 +115,29 @@ fn matches_brute_force() {
     }
     assert!(fast.iter().any(|&f| f) && fast.iter().any(|&f| !f));
 }
+
+/// A reused scratch answers exactly like a fresh one, run after run: a timeframe group left over
+/// from an earlier run (here the 4h lines of the first) must not flag anything in the next.
+///
+/// Breakage: the groups not cleared between runs, or a stale group's sorted runs read against the
+/// new lines.
+#[test]
+fn a_reused_scratch_carries_nothing_between_runs() {
+    let first = [
+        placed(0, TfId::H1, 100.0, 0.3),
+        placed(1, TfId::H4, 100.1, 0.3),
+    ];
+    let second = [
+        placed(0, TfId::H1, 100.0, 0.3),
+        placed(1, TfId::M5, 105.0, 0.3),
+    ];
+    let mut scratch = ConfluenceScratch::default();
+    let mut out = Vec::new();
+    confluence_in(&first, &mut scratch, &mut out);
+    assert_eq!(out, vec![true, true]);
+    confluence_in(&second, &mut scratch, &mut out);
+    assert_eq!(out, vec![false, false]);
+    let mut fresh = Vec::new();
+    confluence(&second, &mut fresh);
+    assert_eq!(out, fresh);
+}

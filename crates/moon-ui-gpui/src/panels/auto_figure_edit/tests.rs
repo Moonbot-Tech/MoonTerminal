@@ -3,11 +3,11 @@
 use moon_core::config::ChartTheme;
 use moon_core::config::auto_figures::{
     AutoFigurePreset, AutoFigureRow, BrokenPolicy, DetectorKind, DetectorParams, ExtremePeriod,
-    PeriodExtremeParams, TfId, TfSource,
+    PeriodExtremeParams, RowDetector, TfId, TfSource, ToleranceUnit,
 };
 use moon_core::figures::LineKind;
 
-use super::fields::{NumField, parse_number};
+use super::fields::{NumField, parse_number, unit_of_mut};
 use super::preview::{MAX_BARS, compute, dash_pattern, dashes, demo_bars, preview_tf};
 use super::{row_title, switch_detector};
 
@@ -19,31 +19,63 @@ fn row_of(kind: DetectorKind) -> AutoFigureRow {
     AutoFigureRow::new(kind.default_params())
 }
 
+/// `kind`'s default row with its touch tolerance in ATR — the same row for a kind without one.
+fn atr_row_of(kind: DetectorKind) -> AutoFigureRow {
+    let mut row = row_of(kind);
+    if let RowDetector::Known(d) = &mut row.detector
+        && let Some(unit) = unit_of_mut(d)
+    {
+        *unit = ToleranceUnit::Atr;
+    }
+    row
+}
+
 /// Which numbers each detector shows is the editor's whole layout rule: a field shown on a kind
-/// that ignores it is a control that changes nothing. Mutation: let `BodyBreaks` answer for a
-/// swing, or a period extreme answer a lookback.
+/// that ignores it is a control that changes nothing — and a tolerance shown in the unit the row
+/// does not read is one too. Mutation: let `BodyBreaks` answer for a swing, a period extreme answer
+/// a lookback, or the `%` tolerance answer on a row in ATR.
 #[test]
 fn each_detector_shows_exactly_its_own_numbers() {
-    let shown = |kind| {
+    let shown = |row: AutoFigureRow| {
         NumField::DETECTOR
             .into_iter()
-            .filter(|f| f.get(&row_of(kind)).is_some())
+            .filter(|f| f.get(&row).is_some())
             .collect::<Vec<_>>()
     };
     use NumField::*;
     assert_eq!(
-        shown(DetectorKind::Swing),
+        shown(row_of(DetectorKind::Swing)),
         vec![Lookback, PivotLeft, PivotRight, Tolerance, MinTouches]
     );
-    assert_eq!(shown(DetectorKind::PeriodExtreme), Vec::<NumField>::new());
     assert_eq!(
-        shown(DetectorKind::Trend),
+        shown(atr_row_of(DetectorKind::Swing)),
+        vec![Lookback, PivotLeft, PivotRight, ToleranceAtr, MinTouches]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::PeriodExtreme)),
+        Vec::<NumField>::new()
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::Trend)),
         vec![
             Lookback, PivotLeft, PivotRight, Tolerance, MinTouches, BodyBreaks, SlopeMin, SlopeMax
         ]
     );
     assert_eq!(
-        shown(DetectorKind::Squeeze),
+        shown(atr_row_of(DetectorKind::Trend)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            ToleranceAtr,
+            MinTouches,
+            BodyBreaks,
+            SlopeMin,
+            SlopeMax
+        ]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::Squeeze)),
         vec![
             Lookback,
             PivotLeft,
@@ -55,23 +87,52 @@ fn each_detector_shows_exactly_its_own_numbers() {
             Pressed
         ]
     );
+    // One unit for both halves of the formation.
+    assert_eq!(
+        shown(atr_row_of(DetectorKind::Squeeze)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            ToleranceAtr,
+            MinTouches,
+            TrendTouches,
+            TrendToleranceAtr,
+            Pressed
+        ]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::VolumeProfile)),
+        vec![ValueArea, NakedPocDays, Bins]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::PeriodLevel)),
+        Vec::<NumField>::new()
+    );
+    assert_eq!(shown(row_of(DetectorKind::RoundLevels)), vec![RoundRange]);
 }
 
-/// Every field a row shows writes the number it then reads back, for every kind — the table's
-/// `get` and `set` name the same struct field. Mutation: point one `set` arm at a neighbour (the
-/// squeeze's tolerance into its sloped half's).
+/// Every field a row shows writes the number it then reads back, for every kind and both
+/// tolerance units — the table's `get` and `set` name the same struct field — and a field the row
+/// does not show writes nothing. Mutation: point one `set` arm at a neighbour (the squeeze's
+/// tolerance into its sloped half's, an ATR share into the `%` field), or let `set` write a
+/// tolerance of the unit the row does not read.
 #[test]
 fn every_shown_field_writes_what_it_reads() {
     for kind in DetectorKind::ALL {
-        for field in NumField::ALL {
-            let mut row = row_of(kind);
-            row.style.zone = Some(0.2);
-            if field.get(&row).is_none() {
-                assert!(!field.set(&mut row, 7.0), "{field:?} wrote into {kind:?}");
-                continue;
+        for row in [row_of(kind), atr_row_of(kind)] {
+            for field in NumField::ALL {
+                let mut row = row.clone();
+                row.style.zone = Some(0.2);
+                if field.get(&row).is_none() {
+                    let before = row.clone();
+                    assert!(!field.set(&mut row, 7.0), "{field:?} wrote into {kind:?}");
+                    assert_eq!(row, before, "{field:?} changed {kind:?}");
+                    continue;
+                }
+                assert!(field.set(&mut row, 7.0), "{field:?} on {kind:?}");
+                assert_eq!(field.get(&row), Some(7.0), "{field:?} on {kind:?}");
             }
-            assert!(field.set(&mut row, 7.0), "{field:?} on {kind:?}");
-            assert_eq!(field.get(&row), Some(7.0), "{field:?} on {kind:?}");
         }
     }
 }
@@ -155,25 +216,14 @@ fn the_demo_series_is_deterministic_and_closed() {
 }
 
 /// The demo candles are built so that every shipped detector finds something: a preview that
-/// draws nothing for the default rows would show the reader nothing to judge. Mutation: flatten
-/// the demo series, or drop the take selection.
+/// draws nothing for the default rows would show the reader nothing to judge — the volume, period
+/// and round-price presets included. Mutation: flatten
+/// the demo series, drop the take selection, or take the turnover off the demo bars (the volume
+/// presets then have no profile).
 #[test]
 fn every_default_detector_finds_something_on_the_demo_candles() {
     let theme = ChartTheme::default();
     for preset in AutoFigurePreset::ALL {
-        // STUB DETECTORS, to be removed by the detector stage that fills them: the volume, period
-        // and round-price detectors are registry stubs that find nothing yet (and the demo candles
-        // carry no volume), so their presets cannot pass this check until they are written. The
-        // stage that writes them deletes this skip and makes the demo series feed them.
-        if matches!(
-            preset,
-            AutoFigurePreset::PrevDayProfile
-                | AutoFigurePreset::NakedPoc
-                | AutoFigurePreset::PeriodLevels
-                | AutoFigurePreset::RoundLevels
-        ) {
-            continue;
-        }
         let mut row = preset.row();
         row.sanitize();
         let data = compute(&row, NOON, &theme).expect("a known detector");

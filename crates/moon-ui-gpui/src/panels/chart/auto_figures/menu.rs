@@ -22,7 +22,9 @@ use moon_core::util::now_unix_ms_i64;
 
 use super::super::ChartPanel;
 use crate::chartdx::auto_figures_sync::LineKey;
-use crate::chartdx::auto_figures_sync::caption::{age_text, events_text, tf_key};
+use crate::chartdx::auto_figures_sync::caption::{
+    age_text, events_text, has_anchor, line_title, tf_key,
+};
 use crate::design;
 
 /// Card width in logical pixels, before the UI-scale slider: four short rows of name and value.
@@ -122,8 +124,9 @@ impl ChartPanel {
         true
     }
 
-    /// The hover card, or `None` when no auto line is hovered: the row's name, then its
-    /// timeframe, touch count, age and current event.
+    /// The hover card, or `None` when no auto line is hovered: the line's name (its row's, and what
+    /// the line is when its detector says), then its timeframe, touch count, age and current
+    /// event — the touches and the age only where the line has them.
     pub(in crate::panels::chart) fn auto_hover_card(
         &self,
         sf: f32,
@@ -140,24 +143,27 @@ impl ChartPanel {
             } else {
                 event
             };
-            (
-                line.title.text(),
-                [
-                    (
-                        t!("auto_figures_chart.card.tf"),
-                        t!(tf_key(line.tf)).to_string(),
-                    ),
-                    (
-                        t!("auto_figures_chart.card.touches"),
-                        line.touches.to_string(),
-                    ),
-                    (
-                        t!("auto_figures_chart.card.age"),
-                        age_text(now_ms - line.first_ms),
-                    ),
-                    (t!("auto_figures_chart.card.event"), event),
-                ],
-            )
+            // A row with nothing true to say is left out, as the caption leaves it out: no touch
+            // count for a line nothing touched (a profile line, a round price), no age for one
+            // with no moment of birth (a round price).
+            let mut rows = vec![(
+                t!("auto_figures_chart.card.tf"),
+                t!(tf_key(line.tf)).to_string(),
+            )];
+            if line.touches > 0 {
+                rows.push((
+                    t!("auto_figures_chart.card.touches"),
+                    line.touches.to_string(),
+                ));
+            }
+            if has_anchor(line.first_ms) {
+                rows.push((
+                    t!("auto_figures_chart.card.age"),
+                    age_text(now_ms - line.first_ms),
+                ));
+            }
+            rows.push((t!("auto_figures_chart.card.event"), event));
+            (line_title(&line.title, line.tag), rows)
         })?;
         let sf = sf.max(0.1);
         let slot = self.chart.slot_dev_size();

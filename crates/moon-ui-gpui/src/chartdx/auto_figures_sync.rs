@@ -37,7 +37,7 @@
 //! their colour is resolved against THIS engine's theme at that moment: a theme switch forces the
 //! rebuild anyway, and then the lines follow it with nothing extra to invalidate.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -112,15 +112,56 @@ pub(crate) struct AutoPaneFigures {
     /// The price (`f32` bits) the price pass last evaluated this set at; `None` until it has.
     /// Interior: the pass runs over a shared set and replaces it only when the selection moved.
     eval_price: Cell<Option<u32>>,
+    /// The price pass's working buffers, handed on to the set that replaces this one, so a price
+    /// change allocates nothing for them once they have grown. Scratch, not state.
+    bufs: RefCell<PassBufs>,
+}
+
+/// The price pass's reused buffers: the events scratch of [`select::select_kept`], the rows' new
+/// selections before they are compared with the drawn ones, and the confluence pass's.
+#[derive(Debug, Default)]
+pub(crate) struct PassBufs {
+    events: Vec<moon_chart::auto_figures::events::EventSet>,
+    kept: Vec<Vec<KeptLine>>,
+    confluence: select::ConfluenceBufs,
+}
+
+impl Clone for PassBufs {
+    /// A clone starts empty: the buffers hold nothing between passes, and the set that replaces a
+    /// published one takes the old one's buffers explicitly ([`AutoPaneFigures::reselect`]).
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 impl AutoPaneFigures {
     /// A set of `rows`, with `hidden` lines left out by every later re-selection.
+    ///
+    /// The rows' `kept` lines are taken as they are; a caller that selected them itself runs
+    /// [`Self::mark_confluence`] afterwards, as the price pass does.
     pub(crate) fn new(rows: Vec<AutoRowDrawn>, hidden: Vec<LineKey>) -> Self {
         Self {
             rows,
             hidden,
             eval_price: Cell::new(None),
+            bufs: RefCell::new(PassBufs::default()),
+        }
+    }
+
+    /// Mark the confluences between the rows' kept lines at `at_ms` ([`select::mark_confluence`]).
+    ///
+    /// For a set whose rows were selected one by one — the panel's publication of a finished run.
+    /// The price pass marks them itself, before it compares the new selection with the drawn one.
+    pub(crate) fn mark_confluence(&mut self, at_ms: f64) {
+        let bufs = self.bufs.get_mut();
+        let mut kept: Vec<Vec<KeptLine>> = self
+            .rows
+            .iter_mut()
+            .map(|r| std::mem::take(&mut r.kept))
+            .collect();
+        select::mark_confluence(&self.rows, &mut kept, at_ms, &mut bufs.confluence);
+        for (row, kept) in self.rows.iter_mut().zip(kept) {
+            row.kept = kept;
         }
     }
 
@@ -157,34 +198,40 @@ impl AutoPaneFigures {
     ///
     /// What makes the price pass cheap to run on every tick: an unchanged answer replaces nothing,
     /// so it rebuilds no geometry and uploads nothing.
+    ///
+    /// The confluence marks are part of "drawn": every row is re-selected first, the confluences
+    /// between their new selections marked across the rows, and only then is the result compared,
+    /// so a line that merely moved into or out of another timeframe's band replaces the set too.
     pub(crate) fn reselect(&self, price: f64, now_ms: f64) -> Option<Self> {
-        let mut scratch = Vec::new();
-        let mut next: Option<Vec<Vec<KeptLine>>> = None;
-        for (i, row) in self.rows.iter().enumerate() {
-            let kept = select::select_kept(
+        let mut guard = self.bufs.borrow_mut();
+        let PassBufs {
+            events,
+            kept,
+            confluence,
+        } = &mut *guard;
+        kept.clear();
+        for row in &self.rows {
+            kept.push(select::select_kept(
                 &row.outcome,
                 &row.rules(&self.hidden),
                 price,
                 now_ms,
-                &mut scratch,
-            );
-            match &mut next {
-                Some(all) => all.push(kept),
-                None if kept != row.kept => {
-                    let mut all: Vec<Vec<KeptLine>> =
-                        self.rows[..i].iter().map(|r| r.kept.clone()).collect();
-                    all.push(kept);
-                    next = Some(all);
-                }
-                None => {}
-            }
+                events,
+            ));
         }
-        let next = next?;
+        select::mark_confluence(&self.rows, kept, now_ms, confluence);
+        if self.rows.iter().zip(kept.iter()).all(|(r, k)| r.kept == *k) {
+            return None;
+        }
+        let next = std::mem::take(kept);
+        // Released before the clone: cloning the set borrows its buffers' cell.
+        drop(guard);
         let mut set = self.clone();
         for (row, kept) in set.rows.iter_mut().zip(next) {
             row.kept = kept;
             row.ref_ms = now_ms;
         }
+        set.bufs = RefCell::new(self.bufs.take());
         Some(set)
     }
 }

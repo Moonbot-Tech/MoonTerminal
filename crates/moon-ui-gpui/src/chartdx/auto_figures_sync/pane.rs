@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use moon_chart::auto_figures::draw::{ResolvedStyle, append_shapes, time_span};
 use moon_chart::auto_figures::events::EventSet;
-use moon_chart::auto_figures::{Found, FoundShape};
+use moon_chart::auto_figures::{Found, FoundShape, LineTag};
 use moon_chart::figures::{FigureBand, FigureBuffers};
 use moon_chart::layers::{MARKER_SHAPE_KNOT, MarkerInstance};
 use moon_core::config::ChartTheme;
@@ -70,6 +70,8 @@ pub(crate) struct AutoLineRec {
     pub color: u32,
     pub caption: LineCaption,
     pub title: RowTitle,
+    /// What the line is, where its detector draws several kinds (`Found::tag`).
+    pub tag: Option<LineTag>,
     /// Which of [`AutoPaneDrawn::figures`] draw this line.
     figs: Range<usize>,
     /// The caption, built by [`refresh_auto_captions`]; `None` when it prints nothing.
@@ -240,6 +242,7 @@ pub(crate) fn append_auto_geometry(
                 color: rgb_u32(rgb),
                 caption: row.caption.clone(),
                 title: row.title.clone(),
+                tag: found.tag,
                 figs: start..drawn.figures.len(),
                 text: None,
             });
@@ -262,6 +265,7 @@ fn caption_values(
 ) -> CaptionValues<'_> {
     CaptionValues {
         title: &line.title,
+        tag: line.tag,
         line_now: line.shape.price_at(now_ms),
         price,
         touches: line.touches,

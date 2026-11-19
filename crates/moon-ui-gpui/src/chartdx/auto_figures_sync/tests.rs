@@ -617,6 +617,86 @@ fn two_trend_lines_from_one_pivot_are_different_lines() {
     );
 }
 
+/// A row of `prices` on `tf`, numbered `row_ix`, keeping up to five lines per side nearest first —
+/// for the cross-row passes, where several rows have to meet.
+fn tf_row(row_ix: usize, tf: TfId, prices: &[f64]) -> AutoRowDrawn {
+    let mut row = level_row(prices);
+    row.row_ix = row_ix;
+    row.take.count = 5;
+    let mut outcome = (*row.outcome).clone();
+    outcome.key.tf = tf;
+    row.outcome = Arc::new(outcome);
+    row
+}
+
+/// The confluence marks of every kept line of `set`, row by row, ascending by line price (the
+/// kept order is the take's ranking, which these tests do not judge).
+fn confluences(set: &AutoPaneFigures) -> Vec<Vec<(f64, bool)>> {
+    set.rows
+        .iter()
+        .map(|r| {
+            let mut lines: Vec<(f64, bool)> = r
+                .kept
+                .iter()
+                .map(|k| {
+                    let price = r.outcome.found[k.ix].shape.price_at(0.0).unwrap();
+                    (price, k.events.contains(AutoEvent::Confluence))
+                })
+                .collect();
+            lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+            lines
+        })
+        .collect()
+}
+
+/// Confluence is judged across the pane's rows on every price pass: a 1h line at 100 and a 4h line
+/// at 100.2 (0.2 % apart, inside the default 0.3 %) both get the mark; a second 1h row's line at
+/// 100.1 is not a confluence with the first 1h row (same timeframe) but is with the 4h one; a 4h
+/// line at 110 has nothing near. A row that does not mark confluence shows none and still gives
+/// one to the others. The publication's own pass (`mark_confluence`) agrees with the price pass.
+///
+/// Breakage: confluence never inserted (the per-line events pass never sets it), judged within one
+/// row, the mark filter ignored, an unmarking row dropped as a partner, or the price pass comparing
+/// before the cross-row marks are in.
+#[test]
+fn lines_of_two_timeframes_close_together_are_marked_as_confluence() {
+    let rows = vec![
+        tf_row(0, TfId::H1, &[100.0]),
+        tf_row(1, TfId::H4, &[100.2, 110.0]),
+        tf_row(2, TfId::H1, &[100.1]),
+    ];
+    let set = AutoPaneFigures::new(rows, Vec::new());
+    let next = set
+        .reselect(105.0, 0.0)
+        .expect("the first selection draws lines");
+    assert_eq!(
+        confluences(&next),
+        vec![
+            vec![(100.0, true)],
+            vec![(100.2, true), (110.0, false)],
+            vec![(100.1, true)],
+        ]
+    );
+    // The same answer again replaces nothing: the marks are part of what is compared.
+    assert!(next.reselect(105.0, 0.0).is_none());
+
+    // The 4h row turns the mark off: it shows none, the 1h row still sees it as a partner.
+    let mut rows = vec![
+        tf_row(0, TfId::H1, &[100.0]),
+        tf_row(1, TfId::H4, &[100.2, 110.0]),
+    ];
+    rows[1].marks.confluence = false;
+    for row in &mut rows {
+        row.kept = select_kept(&row.outcome, &row.rules(&[]), 105.0, 0.0, &mut Vec::new());
+    }
+    let mut published = AutoPaneFigures::new(rows, Vec::new());
+    published.mark_confluence(0.0);
+    assert_eq!(
+        confluences(&published),
+        vec![vec![(100.0, true)], vec![(100.2, false), (110.0, false)]]
+    );
+}
+
 /// Breakage (B3): a line keyed by its anchors alone — every round level of a row (no touches, no
 /// anchor), the POC, VAH and VAL of one day (one span, no touches), and a Monday's day open and
 /// week open (one bar) each shared a key, so "Hide this line" hid all of them. The key must still
@@ -747,4 +827,46 @@ fn a_row_has_its_history_from_ninety_percent_of_what_it_needs() {
     assert!(!one.short_history());
     one.bars = 0;
     assert!(one.short_history());
+}
+
+/// The caption names what a tagged line is beside its row ("POC", "Week open"), and leaves out
+/// what a line does not have: no touch count for a line nothing touched, no age for a line with no
+/// moment of birth.
+///
+/// Breakage: the tag never printed (a day's POC and VAH captioned alike), "touches: 0" printed as
+/// a fact on a profile line, or a round price aged from the epoch.
+#[test]
+fn a_caption_names_the_tag_and_skips_what_a_line_lacks() {
+    use super::caption::{CaptionValues, caption_text, tag_key};
+    use moon_chart::auto_figures::LineTag;
+    crate::test_locale::warm();
+    let title = RowTitle::Named("Profile".into());
+    let values = |tag, touches, first_ms| CaptionValues {
+        title: &title,
+        tag,
+        line_now: Some(100.0),
+        price: Some(100.0),
+        touches,
+        tf: TfId::H1,
+        first_ms,
+        events: Default::default(),
+        now_ms: (DAY0 + 3_600_000) as f64,
+        tick: None,
+    };
+    let poc = rust_i18n::t!(tag_key(LineTag::Poc)).to_string();
+    assert_eq!(
+        caption_text(&[CaptionPart::RowName], &values(Some(LineTag::Poc), 0, 1.0)),
+        format!("Profile · {poc}")
+    );
+    assert_eq!(
+        caption_text(&[CaptionPart::RowName], &values(None, 0, 1.0)),
+        "Profile"
+    );
+    assert_eq!(
+        caption_text(&[CaptionPart::Touches], &values(None, 0, 1.0)),
+        ""
+    );
+    assert!(!caption_text(&[CaptionPart::Touches], &values(None, 3, 1.0)).is_empty());
+    assert_eq!(caption_text(&[CaptionPart::Age], &values(None, 0, 0.0)), "");
+    assert!(!caption_text(&[CaptionPart::Age], &values(None, 0, DAY0 as f64)).is_empty());
 }

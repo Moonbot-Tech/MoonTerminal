@@ -847,7 +847,9 @@ impl ChartPanel {
             );
             rows.push(drawn);
         }
-        let set = AutoPaneFigures::new(rows, pane.hidden.clone());
+        let mut set = AutoPaneFigures::new(rows, pane.hidden.clone());
+        // Across the rows, once all of them are selected: the same pass the price pass repeats.
+        set.mark_confluence(now_ms);
         // One line per publication — a run completing or a configuration edit, never a frame — so
         // the app log says which source each row read and whether its history was short.
         log::info!("auto figures {}: {}", target.1, set.summary());

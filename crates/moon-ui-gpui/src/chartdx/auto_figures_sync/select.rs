@@ -10,10 +10,12 @@
 //! publication of a finished run (`panels::chart::auto_figures`) and the engine's price pass
 //! ([`super::ChartDataState::auto_figures_on_price`]).
 
+use moon_chart::auto_figures::confluence::{ConfluenceScratch, PlacedLine, confluence_in};
 use moon_chart::auto_figures::events::{EventSet, line_events};
 use moon_chart::auto_figures::{Found, FoundShape, LineTag, take};
-use moon_core::config::auto_figures::{BrokenPolicy, EventMarks, Take};
+use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks, Take};
 
+use super::AutoRowDrawn;
 use super::job::AutoRowOutcome;
 
 /// Names one found line across detector runs of its row, so a line the user hid stays hidden when
@@ -155,4 +157,77 @@ pub(crate) fn select_kept(
     }
     crate::diag::bump_by(&crate::diag::AUTOFIGURES_EVENTS, out.len() as u64);
     out
+}
+
+/// The working buffers of the confluence pass ([`mark_confluence`]), kept by the published set so
+/// a price change allocates nothing for it once they have grown.
+#[derive(Debug, Default)]
+pub(crate) struct ConfluenceBufs {
+    /// Every kept line of every row, placed at the moment judged.
+    placed: Vec<PlacedLine>,
+    /// For each of `placed`, which row (position in the set) and which of its kept lines.
+    owners: Vec<(usize, usize)>,
+    /// The pass's answer, one flag per `placed` line.
+    near: Vec<bool>,
+    scratch: ConfluenceScratch,
+}
+
+/// Insert [`AutoEvent::Confluence`] into the events of every kept line that lies within its own
+/// row's `confluence_pct` of a kept line of ANOTHER row on a DIFFERENT timeframe — for the rows
+/// that mark it (`docs-internal/AUTO_FIGURES.md` §13; the rule is
+/// `moon_chart::auto_figures::confluence`'s).
+///
+/// Judged across the rows of ONE pane, which is the only place every timeframe's lines meet: no
+/// detector run sees another row. Every kept line takes part as a partner, whether or not its own
+/// row marks the event — a 4h level is a place the 1h row agrees with even when the 4h row shows
+/// no mark of its own. Hidden lines are not kept, so they neither get nor give a mark.
+///
+/// Cost: O(n log n) in the kept lines of the pane, nothing at all when no row marks the event,
+/// and no allocation once `bufs` has grown.
+///
+/// Args:
+///     rows: The pane's rows, in their published order.
+///     kept: Each row's kept lines, parallel to `rows`; the events are written here.
+///     at_ms: The moment sloped lines are projected to, Unix ms — the same one their selection
+///         used.
+///     bufs: Reused working buffers.
+pub(crate) fn mark_confluence(
+    rows: &[AutoRowDrawn],
+    kept: &mut [Vec<KeptLine>],
+    at_ms: f64,
+    bufs: &mut ConfluenceBufs,
+) {
+    if !rows.iter().any(|r| r.marks.marks(AutoEvent::Confluence)) {
+        return;
+    }
+    bufs.placed.clear();
+    bufs.owners.clear();
+    for (i, (row, lines)) in rows.iter().zip(kept.iter()).enumerate() {
+        for (k, line) in lines.iter().enumerate() {
+            let Some(price) = row
+                .outcome
+                .found
+                .get(line.ix)
+                .and_then(|f| f.shape.price_at(at_ms))
+            else {
+                continue;
+            };
+            bufs.placed.push(PlacedLine {
+                row: row.row_ix,
+                tf: row.outcome.key.tf,
+                price,
+                pct: row.marks.confluence_pct,
+            });
+            bufs.owners.push((i, k));
+        }
+    }
+    confluence_in(&bufs.placed, &mut bufs.scratch, &mut bufs.near);
+    for (&(i, k), &near) in bufs.owners.iter().zip(&bufs.near) {
+        if near
+            && rows[i].marks.marks(AutoEvent::Confluence)
+            && let Some(line) = kept.get_mut(i).and_then(|l| l.get_mut(k))
+        {
+            line.events.insert(AutoEvent::Confluence);
+        }
+    }
 }
