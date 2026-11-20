@@ -110,7 +110,12 @@ assets.order_failed: "Lệnh giới hạn đóng vị thế %{coin} không đư�
 assets.wallet.kind.spot: "Spot"
 assets.wallet.kind.futures: "Futures"
 assets.wallet.kind.quarterly: "Quarterly"
-assets.wallet.filtered_empty: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
+# Bybit names its own accounts: the Unified Trading account arrives as Spot, Funding as Futures.
+assets.wallet.kind.bybit_unified: "Tài khoản giao dịch hợp nhất"
+assets.wallet.kind.bybit_funding: "Funding"
+assets.wallet.filtered_empty_one: "%{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
+assets.wallet.filtered_empty_few: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
+assets.wallet.filtered_empty_many: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
 assets.wallets_hint: "Ví · kéo coin giữa các ngăn"
 assets.refresh_hint: "Làm mới số dư core"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

@@ -110,7 +110,12 @@ assets.order_failed: "Лімітне закриття позиції %{coin} н�
 assets.wallet.kind.spot: "Спот"
 assets.wallet.kind.futures: "Ф'ючерси"
 assets.wallet.kind.quarterly: "Квартальні"
-assets.wallet.filtered_empty: "Усі %{n} активів сховані фільтром вартості %{thr}$"
+# Bybit names its own accounts: the Unified Trading account arrives as Spot, Funding as Futures.
+assets.wallet.kind.bybit_unified: "Єдиний торговий рахунок"
+assets.wallet.kind.bybit_funding: "Funding"
+assets.wallet.filtered_empty_one: "%{n} актив схований фільтром вартості %{thr}$"
+assets.wallet.filtered_empty_few: "Усі %{n} активи сховані фільтром вартості %{thr}$"
+assets.wallet.filtered_empty_many: "Усі %{n} активів сховані фільтром вартості %{thr}$"
 assets.wallets_hint: "Гаманці · перетягніть монету між контейнерами"
 assets.refresh_hint: "Оновити баланси ядра"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

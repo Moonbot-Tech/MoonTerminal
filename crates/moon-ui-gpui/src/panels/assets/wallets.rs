@@ -1,6 +1,10 @@
-//! Lower Assets-window section with Spot, Futures, and Quarterly wallet containers for the
-//! selected core, drag-and-drop transfers between them, and an amount dialog whose initial text
-//! adaptively formats the available quantity.
+//! Lower Assets-window section with the selected core's wallet containers, drag-and-drop
+//! transfers between them, and an amount dialog whose initial text adaptively formats the
+//! available quantity.
+//!
+//! The core reports Spot, Futures, and Quarterly wallet codes; which of them a core shows, and
+//! what they are called, is its exchange's account layout — `WalletKind::is_shown` and
+//! `WalletKind::label_key` decide both per brand (#1347).
 
 use super::*;
 use anyhow::Result;
@@ -63,19 +67,35 @@ pub(super) fn wallet_count_label(shown_count: usize, total_count: usize) -> Stri
     }
 }
 
-/// Return the localized wallet-kind label shared by wallet headings and transfer dialogs.
+/// Identity of the wallet-column cache: effective wallet core, its brand, its transfer revision,
+/// and the dust-threshold bit pattern.
+pub(super) type WalletCacheKey = (Option<CoreId>, Option<Brand>, u64, u64);
+
+/// Return the brand of `core`'s exchange, `None` before its venue is known or for an unknown one.
+///
+/// Args:
+///     b: Backend holding the session's venue directory.
+///     core: Core whose wallets are named.
+///
+/// Returns:
+///     The brand the wallet names are chosen by.
+pub(super) fn core_brand(b: &Backend, core: CoreId) -> Option<Brand> {
+    b.session
+        .core_venues()
+        .get(&core)
+        .and_then(|venue| venue.brand())
+}
+
+/// Return the localized wallet label shared by wallet headings and transfer dialogs.
 ///
 /// Args:
 ///     kind: Wallet kind to label.
+///     brand: Brand of the core the wallet belongs to.
 ///
 /// Returns:
-///     The corresponding localized wallet-kind label.
-fn wallet_kind_label(kind: WalletKind) -> String {
-    match kind {
-        WalletKind::Spot => t!("assets.wallet.kind.spot").to_string(),
-        WalletKind::Futures => t!("assets.wallet.kind.futures").to_string(),
-        WalletKind::Quarterly => t!("assets.wallet.kind.quarterly").to_string(),
-    }
+///     The wallet's name on that core's exchange, in the active language.
+fn wallet_kind_label(kind: WalletKind, brand: Option<Brand>) -> String {
+    t!(kind.label_key(brand)).to_string()
 }
 
 /// Coin-transfer preview displayed under the drag cursor: a flat chip with a blue edge, on
@@ -108,7 +128,7 @@ impl Render for AssetDragPreview {
 }
 
 impl AssetsView {
-    /// Renders the selected core's three wallet containers in one row.
+    /// Renders the selected core's wallet containers in one row.
     ///
     /// The section header, label, and refresh button are owned by `bottom()`, following the
     /// window's shared collapsible-section pattern.
@@ -125,7 +145,8 @@ impl AssetsView {
         )
     }
 
-    /// Renders one Spot, Futures, or Quarterly wallet as draggable coin rows and a drop target.
+    /// Renders one wallet container as draggable coin rows and a drop target, headed by the
+    /// wallet's name on the core's exchange.
     ///
     /// Dropping a coin from another wallet of the same core opens the transfer-amount dialog;
     /// same-wallet and cross-core drops are ignored.
@@ -145,7 +166,10 @@ impl AssetsView {
                 "—".to_string()
             } else {
                 t!(
-                    "assets.wallet.filtered_empty",
+                    crate::display_text::plural_key(
+                        "assets.wallet.filtered_empty",
+                        snapshot.total_count as u64
+                    ),
                     n = snapshot.total_count,
                     thr = moon_core::util::fmt::usd(self.min_value_usd),
                 )
@@ -273,7 +297,7 @@ impl AssetsView {
                     .text_center()
                     .child(format!(
                         "{} ({})",
-                        wallet_kind_label(kind),
+                        wallet_kind_label(kind, snapshot.brand),
                         wallet_count_label(snapshot.rows.len(), snapshot.total_count)
                     )),
             )
@@ -321,6 +345,7 @@ impl AssetsView {
         if self.effective_wallet_core(self.backend.read(cx)) != Some(drag.core) {
             return;
         }
+        let brand = core_brand(self.backend.read(cx), drag.core);
         let default_qty = transfer_amount(drag.free);
         let input = cx.new(|cx| MoonInputState::new(window, cx).default_value(&default_qty));
         let pending = PendingTransfer {
@@ -338,8 +363,8 @@ impl AssetsView {
             let title = t!(
                 "assets.transfer_title",
                 coin = pending.asset,
-                from = wallet_kind_label(pending.from),
-                to = wallet_kind_label(pending.to)
+                from = wallet_kind_label(pending.from, brand),
+                to = wallet_kind_label(pending.to, brand)
             )
             .to_string();
             let content_view = view.clone();

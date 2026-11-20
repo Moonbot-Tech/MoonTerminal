@@ -110,7 +110,12 @@ assets.order_failed: "Команда на закрытие позиции %{coin
 assets.wallet.kind.spot: "Спот"
 assets.wallet.kind.futures: "Фьючерсы"
 assets.wallet.kind.quarterly: "Квартальные"
-assets.wallet.filtered_empty: "Все %{n} активов скрыты фильтром по стоимости %{thr}$"
+# Bybit names its own accounts: the Unified Trading account arrives as Spot, Funding as Futures.
+assets.wallet.kind.bybit_unified: "Единый торговый счёт"
+assets.wallet.kind.bybit_funding: "Funding"
+assets.wallet.filtered_empty_one: "%{n} актив скрыт фильтром по стоимости %{thr}$"
+assets.wallet.filtered_empty_few: "Все %{n} актива скрыты фильтром по стоимости %{thr}$"
+assets.wallet.filtered_empty_many: "Все %{n} активов скрыты фильтром по стоимости %{thr}$"
 assets.wallets_hint: "Кошельки · перетащи монету между контейнерами"
 assets.refresh_hint: "Обновить балансы ядра"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

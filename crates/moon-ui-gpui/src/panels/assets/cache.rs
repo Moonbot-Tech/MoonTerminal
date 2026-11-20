@@ -148,6 +148,14 @@ impl AssetsView {
             .map(|(id, _)| (*id, store.core(*id)))
             .fold(0u64, |a, (id, core)| {
                 b.session.account_merge_key(id).hash(&mut keys);
+                // The brand names and hides wallet columns, and a venue that lands after the
+                // wallets moves no data revision; the merge key above misses it on a core that
+                // states no account identity.
+                b.session
+                    .core_venues()
+                    .get(&id)
+                    .and_then(|venue| venue.brand())
+                    .hash(&mut keys);
                 let a = a.wrapping_mul(31).wrapping_add(id);
                 let Some(c) = core else {
                     return a;
@@ -271,13 +279,22 @@ impl AssetsView {
     ///     b: Backend snapshot providing workspace ownership and transfer revisions.
     ///
     /// Returns:
-    ///     Effective wallet core, its transfer revision, and the dust-threshold bit pattern.
-    pub(super) fn wallet_cache_key(&self, b: &Backend) -> (Option<CoreId>, u64, u64) {
+    ///     Effective wallet core, its brand, its transfer revision, and the dust-threshold bit
+    ///     pattern. The brand is part of the key because it decides which columns exist and what
+    ///     they are called, and a core's venue can arrive after its wallets without moving the
+    ///     transfer revision.
+    pub(super) fn wallet_cache_key(&self, b: &Backend) -> WalletCacheKey {
         let selected_core = self.effective_wallet_core(b);
         let transfer_rev = selected_core
             .and_then(|core| b.session.store().core(core).map(|cd| cd.transfer_rev))
             .unwrap_or(0);
-        (selected_core, transfer_rev, self.min_value_usd.to_bits())
+        let brand = selected_core.and_then(|core| core_brand(b, core));
+        (
+            selected_core,
+            brand,
+            transfer_rev,
+            self.min_value_usd.to_bits(),
+        )
     }
 
     pub(super) fn rebuild_wallet_cache(&mut self, b: &Backend) {
@@ -295,10 +312,14 @@ impl AssetsView {
             self.cached_wallet_key = Some(key);
             return;
         };
+        let brand = key.1;
         let mut snapshots = Vec::new();
         for kind in WalletKind::ALL {
             let all_items = cd.transfer_assets.wallet(kind).to_vec();
             let total_count = all_items.len();
+            if !kind.is_shown(brand, total_count) {
+                continue;
+            }
             let thr = self.min_value_usd;
             let mut rows: Vec<TransferAssetRow> = all_items
                 .into_iter()
@@ -311,6 +332,7 @@ impl AssetsView {
             });
             snapshots.push(WalletColumnSnapshot {
                 kind,
+                brand,
                 total_count,
                 rows,
             });

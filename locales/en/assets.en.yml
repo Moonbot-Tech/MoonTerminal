@@ -110,7 +110,12 @@ assets.order_failed: "Limit close of the %{coin} position was not sent: the core
 assets.wallet.kind.spot: "Spot"
 assets.wallet.kind.futures: "Futures"
 assets.wallet.kind.quarterly: "Quarterly"
-assets.wallet.filtered_empty: "All %{n} assets are hidden by the %{thr}$ value filter"
+# Bybit names its own accounts: the Unified Trading account arrives as Spot, Funding as Futures.
+assets.wallet.kind.bybit_unified: "Unified Trading"
+assets.wallet.kind.bybit_funding: "Funding"
+assets.wallet.filtered_empty_one: "%{n} asset is hidden by the %{thr}$ value filter"
+assets.wallet.filtered_empty_few: "All %{n} assets are hidden by the %{thr}$ value filter"
+assets.wallet.filtered_empty_many: "All %{n} assets are hidden by the %{thr}$ value filter"
 assets.wallets_hint: "Wallets · drag a coin between containers"
 assets.refresh_hint: "Refresh core balances"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

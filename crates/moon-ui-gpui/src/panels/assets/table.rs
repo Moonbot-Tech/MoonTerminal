@@ -575,7 +575,7 @@ impl AssetsView {
     /// Measures the WIDEST ROW rather than the widest name plus the widest figure: the two cells
     /// belong to one aggregate, and the longest name rarely sits on the row carrying the longest
     /// balance — combining maxima that never coexist would reserve width no row asks for and
-    /// starve all three wallet columns for nothing. Every row is measured, not only distinct
+    /// starve the wallet columns for nothing. Every row is measured, not only distinct
     /// names, because the figure differs per core even where the name repeats.
     ///
     /// Called from `render`, which is the only place holding both `&mut self` and an `App`;
@@ -798,7 +798,7 @@ impl AssetsView {
         // you cannot read by name cannot be used to pick a transfer host, which is the column's
         // whole purpose.
         //
-        // The three wallet columns pay for it and that is the right trade: they are a `flex_1`
+        // The wallet columns pay for it and that is the right trade: they are a `flex_1`
         // remainder, so widening this one narrows them evenly, and they are routinely near-empty
         // (a core holds a handful of currencies) while this column is never empty.
         //
@@ -811,7 +811,7 @@ impl AssetsView {
         // And the DEFAULT is now measured rather than fixed. 420 px was chosen against the names
         // above, but a name is the user's own free text: at the shipped width every row read
         // `Demo Fund ~ EX-X / SUBACCOUNT (…`, ellipsized exactly at the sub-account that says which
-        // row it is, while the three wallet columns beside it held one short entry each. The
+        // row it is, while the wallet columns beside it held one short entry each. The
         // column is sized to its widest name plus the figure it must not overlap, floored at the
         // shipped width and capped at `MAX_BASE_W` (`roster_width::auto_base`); a stored drag
         // still wins, and double-click drops back onto this measurement.
@@ -861,7 +861,7 @@ impl AssetsView {
             )
             .child(roster_resize_handle(base_w, p, cx));
 
-        // Right side: Spot, Futures, and Quarterly wallet containers.
+        // Right side: the selected core's wallet containers, named by its exchange.
         let right = match selected {
             Some(core) => self.wallets_section(core, wallets, cx).into_any_element(),
             None => div()

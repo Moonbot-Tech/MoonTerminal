@@ -110,7 +110,12 @@ assets.order_failed: "%{coin} pozisyonunun limit kapanışı gönderilmedi: çek
 assets.wallet.kind.spot: "Spot"
 assets.wallet.kind.futures: "Futures"
 assets.wallet.kind.quarterly: "Quarterly"
-assets.wallet.filtered_empty: "%{n} varlığın tümü %{thr}$ değer filtresiyle gizli"
+# Bybit names its own accounts: the Unified Trading account arrives as Spot, Funding as Futures.
+assets.wallet.kind.bybit_unified: "Birleşik işlem hesabı"
+assets.wallet.kind.bybit_funding: "Funding"
+assets.wallet.filtered_empty_one: "%{n} varlık %{thr}$ değer filtresiyle gizli"
+assets.wallet.filtered_empty_few: "%{n} varlığın tümü %{thr}$ değer filtresiyle gizli"
+assets.wallet.filtered_empty_many: "%{n} varlığın tümü %{thr}$ değer filtresiyle gizli"
 assets.wallets_hint: "Cüzdanlar · bir coin'i kaplar arasında sürükleyin"
 assets.refresh_hint: "Çekirdek bakiyelerini yenile"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

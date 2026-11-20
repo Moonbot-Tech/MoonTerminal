@@ -110,7 +110,12 @@ assets.order_failed: "Fechamento limitado da posição %{coin} não enviado: o n
 assets.wallet.kind.spot: "Spot"
 assets.wallet.kind.futures: "Futures"
 assets.wallet.kind.quarterly: "Quarterly"
-assets.wallet.filtered_empty: "Todos os ativos ocultos pelo filtro de %{thr}$: %{n}"
+# Bybit names its own accounts: the Unified Trading account arrives as Spot, Funding as Futures.
+assets.wallet.kind.bybit_unified: "Trading unificado"
+assets.wallet.kind.bybit_funding: "Funding"
+assets.wallet.filtered_empty_one: "%{n} ativo está oculto pelo filtro de %{thr}$"
+assets.wallet.filtered_empty_few: "Todos os %{n} ativos estão ocultos pelo filtro de %{thr}$"
+assets.wallet.filtered_empty_many: "Todos os %{n} ativos estão ocultos pelo filtro de %{thr}$"
 assets.wallets_hint: "Carteiras · arraste uma moeda entre os contêineres"
 assets.refresh_hint: "Atualizar os saldos do núcleo"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

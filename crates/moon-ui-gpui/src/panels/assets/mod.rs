@@ -2,8 +2,9 @@
 //! across every in-scope core (values and totals in USDT); then a footer carrying both summaries
 //! — visible-row count and Σ on the left, the scope's account equity on the right.
 //! Bottom (global window, detached Classic window, and Auto dock tab): the core list on the left
-//! (free/total) and three wallet containers (Spot/Futures/Quarterly) on the right — dragging a
-//! coin between them opens a quantity dialog (defaulting to the whole free amount) and performs
+//! (free/total) and the selected core's wallet containers on the right (Spot/Futures/Quarterly,
+//! named and shown per exchange — Bybit's are Unified Trading/Funding) — dragging a coin between
+//! them opens a quantity dialog (defaulting to the whole free amount) and performs
 //! the transfer. Classic dock tabs omit this section; Auto cannot detach, so the docked tab is
 //! the window form.
 //!
@@ -22,7 +23,7 @@
 //! Split by responsibility: state/data/lifecycle/window here; the table, the core bar/list and
 //! the footer in [`table`]; the selectable fields, their persistence and the header sort in
 //! [`columns`]; balance aggregation and its trust-aware rendering in [`balances`];
-//! the 3 wallet containers and the drag&drop transfer dialog in [`wallets`].
+//! the wallet containers and the drag&drop transfer dialog in [`wallets`].
 
 mod balances;
 mod cache;
@@ -41,6 +42,7 @@ mod window;
 
 use collect::{AssetEntry, WalletColumnSnapshot, money};
 use columns::AssetCol;
+use wallets::{WalletCacheKey, core_brand};
 pub use window::open;
 use window::{ASSETS_HEADER_H, assets_header};
 
@@ -65,6 +67,7 @@ use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
 use moon_core::session::core_order::{CoreOrder, OrderedCores};
 use moon_core::util::fmt;
+use moon_core::venue::Brand;
 use rust_i18n::t;
 
 use balances::CoreAgg;
@@ -106,7 +109,7 @@ pub struct AssetsView {
     /// Retained core filter for Classic group views and the global aggregate view; empty means all
     /// scoped cores. Group Auto pins its effective workspace scope without mutating this set.
     pub(super) sel_cores: HashSet<CoreId>,
-    /// Whether the core list and Spot, Futures, and Quarterly wallet section is collapsed.
+    /// Whether the core list and wallet section is collapsed.
     pub(super) wallets_collapsed: bool,
     /// Whether that settings popup is showing. Process-lifetime state, never persisted.
     pub(super) wallet_settings_open: bool,
@@ -151,7 +154,8 @@ pub struct AssetsView {
     /// open positions" rather than "no assets": futures balances are quote-denominated and never
     /// reach the table. Computed in `rebuild_cache` to keep the store out of `render`.
     cached_all_futures: bool,
-    cached_wallet_key: Option<(Option<CoreId>, u64, u64)>,
+    /// Key of [`Self::cached_wallets`]: see [`Self::wallet_cache_key`].
+    cached_wallet_key: Option<WalletCacheKey>,
     cached_wallets: Rc<Vec<WalletColumnSnapshot>>,
     /// Finite USDT value summed across the currently visible table rows.
     cached_total_value: f64,
