@@ -111,9 +111,16 @@ impl Shell {
         if !self.window_active {
             return;
         }
-        let toasts = self
-            .backend
-            .update(cx, |b, _| b.session.take_engine_action_toasts());
+        let toasts: Vec<_> = self.backend.update(cx, |b, _| {
+            b.session
+                .take_engine_action_toasts()
+                .into_iter()
+                .map(|(core, r)| {
+                    let brand = toast_core_brand(&b.session, &core);
+                    (core, r, brand)
+                })
+                .collect()
+        });
         if toasts.is_empty() {
             return;
         }
@@ -121,8 +128,8 @@ impl Shell {
         cx.defer(move |app| {
             let _ = handle.update(app, move |_, window, app| {
                 use moon_ui::MoonWindowExt as _;
-                for (core, r) in toasts {
-                    let action = engine_action_label(&r.kind);
+                for (core, r, brand) in toasts {
+                    let action = engine_action_label(&r.kind, brand);
                     let note = if r.success {
                         moon_ui::MoonNotification::success(action)
                             .title(rust_i18n::t!("shell.engine_toast.ok", core = core).to_string())
@@ -580,9 +587,47 @@ fn engine_error_text(msg: &str, code: i32) -> String {
     }
 }
 
+/// Return the brand of the core an Engine-action toast came from, which names its wallets.
+///
+/// The toast queue identifies a core only by its display name, so the brand is read through
+/// every session of that name and given only when they all agree. Two cores sharing a name on
+/// different exchanges get `None` — the generic wallet names — rather than one of them guessed.
+///
+/// Args:
+///     session: Session holding the cores and their venue directory.
+///     name: Display name the toast carries.
+///
+/// Returns:
+///     The one brand every core of that name trades on, or `None`.
+fn toast_core_brand(
+    session: &moon_core::session::SessionManager,
+    name: &str,
+) -> Option<moon_core::venue::Brand> {
+    let venues = session.core_venues();
+    let mut brands = session
+        .sessions()
+        .iter()
+        .filter(|core| core.name == name)
+        .map(|core| venues.get(&core.id).and_then(|venue| venue.brand()));
+    let first = brands.next()??;
+    brands.all(|brand| brand == Some(first)).then_some(first)
+}
+
 /// Build the human-readable Engine-action label for a result accepted or rejected by the core.
-/// Wallet names use `WalletKind::label()`, matching the Assets tree.
-fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
+///
+/// Wallet names come from `WalletKind::label_key` for the core's brand, matching the Assets
+/// wallet headings and the transfer dialog.
+///
+/// Args:
+///     kind: The action the core reported.
+///     brand: Brand of the reporting core, which names its wallets.
+///
+/// Returns:
+///     The localized action label.
+fn engine_action_label(
+    kind: &moon_core::feed::EngineActionKind,
+    brand: Option<moon_core::venue::Brand>,
+) -> String {
     use moon_core::feed::EngineActionKind as K;
     use rust_i18n::t;
     match kind {
@@ -615,8 +660,8 @@ fn engine_action_label(kind: &moon_core::feed::EngineActionKind) -> String {
             // `0.012648` as `0.013`, a figure the exchange would have refused (#1316).
             qty = moon_core::util::fmt::transfer_amount(*qty),
             asset = asset,
-            from = from.label(),
-            to = to.label()
+            from = t!(from.label_key(brand)).to_string(),
+            to = t!(to.label_key(brand)).to_string()
         )
         .to_string(),
         K::ReloadOrderBook => t!("shell.engine_action.reload_order_book").to_string(),

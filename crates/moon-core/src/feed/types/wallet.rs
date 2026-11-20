@@ -1,9 +1,20 @@
 //! Wallet, balance and license snapshot types.
 
+use crate::venue::Brand;
+
+#[cfg(test)]
+mod tests;
+
 /// Exchange wallet used by the asset-transfer tree.
 ///
 /// This mirrors moonproto `ExchangeKind` with Spot=0, Futures=1, and Quarterly=2, but is decoupled
 /// so the UI and store do not depend on moonproto.
+///
+/// The three codes are the CORE's, not the exchange's: every venue is reported under them, and
+/// which account of the exchange each code holds is that exchange's layout. A Bybit core sends its
+/// Unified Trading account as `Spot`, its Funding wallet as `Futures`, and its `Quarterly` code
+/// names Bybit's old derivatives account, which a unified account does not use (#1347). How a code
+/// is NAMED is therefore [`Self::label_key`], per brand; the code itself is what a transfer sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WalletKind {
     Spot,
@@ -15,13 +26,48 @@ impl WalletKind {
     /// All wallets in display order as tree branches.
     pub const ALL: [WalletKind; 3] = [WalletKind::Spot, WalletKind::Futures, WalletKind::Quarterly];
 
-    /// Return the human-readable branch label.
-    pub fn label(self) -> &'static str {
-        match self {
-            WalletKind::Spot => "Спот",
-            WalletKind::Futures => "Фьючерсы",
-            WalletKind::Quarterly => "Квартальные",
+    /// Return the locale key of this wallet's name on a core trading on `brand`.
+    ///
+    /// THE one answer for every surface that names a wallet — the Assets column heading, the
+    /// transfer dialog and the transfer toast — so the three cannot disagree. Bybit's names are the
+    /// exchange's own: a Bybit core's `Spot` code IS its Unified Trading account, and labelling it
+    /// "Spot" told a futures trader their margin sat on spot.
+    ///
+    /// Bybit is matched whole, spot and futures cores alike. The wire carries no flag telling a
+    /// unified account from a classic one: the transfer request names only the three codes, and a
+    /// Bybit core asks the exchange for the unified account under `Spot` on every account it runs.
+    /// A brand the directory does not know (`None`) keeps the generic names.
+    ///
+    /// Args:
+    ///     brand: Brand of the core the wallet belongs to, `None` before its venue is known.
+    ///
+    /// Returns:
+    ///     Key into `locales/<lang>/assets.<lang>.yml`.
+    pub const fn label_key(self, brand: Option<Brand>) -> &'static str {
+        match (brand, self) {
+            (Some(Brand::Bybit), WalletKind::Spot) => "assets.wallet.kind.bybit_unified",
+            (Some(Brand::Bybit), WalletKind::Futures) => "assets.wallet.kind.bybit_funding",
+            (_, WalletKind::Spot) => "assets.wallet.kind.spot",
+            (_, WalletKind::Futures) => "assets.wallet.kind.futures",
+            (_, WalletKind::Quarterly) => "assets.wallet.kind.quarterly",
         }
+    }
+
+    /// Return whether this wallet gets a column for a core trading on `brand`.
+    ///
+    /// Bybit's `Quarterly` code is its old derivatives account, always empty under a unified
+    /// account, so its column is dropped there — but only while it holds nothing. Money the core
+    /// does report in it stays visible: hiding a wallet that holds a balance would hide funds, and
+    /// the wire cannot prove the account is unified (see [`Self::label_key`]).
+    ///
+    /// Args:
+    ///     brand: Brand of the core, `None` before its venue is known.
+    ///     held: Assets the core reports in this wallet, before any value filter.
+    ///
+    /// Returns:
+    ///     `true` when the column is drawn.
+    pub const fn is_shown(self, brand: Option<Brand>, held: usize) -> bool {
+        held > 0 || !matches!((brand, self), (Some(Brand::Bybit), WalletKind::Quarterly))
     }
 
     /// Return the stable persistence code used for expanded branches and selection.

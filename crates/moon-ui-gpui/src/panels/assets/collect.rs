@@ -76,9 +76,14 @@ pub(super) struct AssetEntry {
     pub(super) market_exists: bool,
 }
 
+/// One wallet column of the selected core, as the Wallets section draws it.
 #[derive(Clone)]
 pub(super) struct WalletColumnSnapshot {
     pub(super) kind: WalletKind,
+    /// Brand of the core the column belongs to, which names the wallet
+    /// ([`WalletKind::label_key`]). Kept rather than the resolved text so a live language switch
+    /// renames the heading without a data revision.
+    pub(super) brand: Option<Brand>,
     pub(super) total_count: usize,
     pub(super) rows: Vec<TransferAssetRow>,
 }

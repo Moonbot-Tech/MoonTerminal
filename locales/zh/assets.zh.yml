@@ -110,7 +110,12 @@ assets.order_failed: "%{coin} 仓位的限价平仓指令未发送：核心不�
 assets.wallet.kind.spot: "现货"
 assets.wallet.kind.futures: "合约"
 assets.wallet.kind.quarterly: "季度合约"
-assets.wallet.filtered_empty: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
+# Bybit names its own accounts: the Unified Trading account arrives as Spot, Funding as Futures.
+assets.wallet.kind.bybit_unified: "统一交易账户"
+assets.wallet.kind.bybit_funding: "Funding"
+assets.wallet.filtered_empty_one: "%{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
+assets.wallet.filtered_empty_few: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
+assets.wallet.filtered_empty_many: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
 assets.wallets_hint: "钱包 · 在容器之间拖动币种"
 assets.refresh_hint: "刷新核心余额"
 # --- Wallet-section display settings (the gear beside the refresh button) ---
