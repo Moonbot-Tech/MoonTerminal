@@ -33,6 +33,10 @@ impl Render for ChartTabs {
         crate::diag::bump(&crate::diag::CHART_TABS_RENDER);
         let _render_us = crate::diag::scope(&crate::diag::CHART_TABS_RENDER_US);
         crate::firetest::dense::install_main(&self.main, &self.backend, &self.group, window, cx);
+        // The private filming overlay drives the Main charts and needs to find them, per window:
+        // a group window has chart tabs of its own.
+        #[cfg(uidoc)]
+        crate::uidoc::note_main_stack(&self.main, window.window_handle());
         // Snapshot tabs so callbacks do not retain a borrow of `self.add`: identity, label, width
         // count, unread badge count, and detachability.
         let mut tabs: Vec<(Tab, String, usize, usize, bool)> =

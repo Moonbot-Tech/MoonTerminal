@@ -89,6 +89,24 @@ impl ChartEngine {
             .map(read)
     }
 
+    /// Read every auto line `pane` last DREW, in drawing order.
+    ///
+    /// For tooling that has to point at a line it did not hover first (the private filming
+    /// overlay); the hover path keeps asking [`Self::auto_line_at`], which answers for one point.
+    /// `None` when the pane does not exist. Compiled only beside that overlay, its one caller.
+    #[cfg(uidoc)]
+    pub(crate) fn with_auto_lines<R>(
+        &self,
+        pane: usize,
+        read: impl FnOnce(&[super::auto_figures_sync::pane::AutoLineRec]) -> R,
+    ) -> Option<R> {
+        self.state
+            .borrow()
+            .panes
+            .get(pane)
+            .map(|pr| read(&pr.auto.lines))
+    }
+
     /// The figure-tool values the auto line `key` of `pane` is drawn as — what "pin as figure"
     /// copies into the store.
     pub(crate) fn auto_line_figures(
