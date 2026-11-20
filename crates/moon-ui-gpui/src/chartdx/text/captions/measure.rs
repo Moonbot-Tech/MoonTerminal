@@ -4,42 +4,46 @@ use super::*;
 use super::fit::fit_caption;
 
 impl RenderState {
-    /// Width of a line once every column is truncated to the budget it would actually get.
+    /// Width of a row once each column is fitted at its position and item depths.
     pub(super) fn measure_row(
         &mut self,
         ctx: &gpui::GpuCanvasTextContext<'_>,
         texts: &[LabelText],
         cells: &[Cell],
-        max_w: f32,
+        line_width: impl Fn(f32, f32) -> f32,
+        can_widen: bool,
     ) -> f32 {
         let mut total = 0.0;
-        let mut budget = max_w;
         for (n, cell) in cells.iter().enumerate() {
             let gap = if n == 0 { 0.0 } else { CAPTION_GAP + cell.gap };
-            budget -= gap;
-            if budget < MIN_LEGIBLE_W {
+            let Some(w) = self.measure_cell(ctx, texts, cell, |offset, height| {
+                line_width(offset, height) - (total + gap)
+            }) else {
+                if can_widen {
+                    continue;
+                }
                 break;
-            }
-            let w = self.measure_cell(ctx, texts, cell, budget);
+            };
             total += gap + w;
-            budget -= w;
         }
         total
     }
 
-    /// Width of one column: its widest caption, each truncated to the same budget.
+    /// Width of one column after fitting each item at its own depth, if any line has room.
     pub(super) fn measure_cell(
         &mut self,
         ctx: &gpui::GpuCanvasTextContext<'_>,
         texts: &[LabelText],
         cell: &Cell,
-        budget: f32,
-    ) -> f32 {
+        line_width: impl Fn(f32, f32) -> f32,
+    ) -> Option<f32> {
         let reserve = bar_zone(texts, cell);
-        let text_w = cell
-            .items
-            .iter()
-            .filter_map(|item| {
+        cell.positioned_items()
+            .filter_map(|(offset, item)| {
+                let budget = line_width(offset, item.block_h());
+                if budget < MIN_LEGIBLE_W {
+                    return None;
+                }
                 let entry = texts.get(item.pos)?;
                 // Same rule as the drawing pass: a split caption is a prefix plus a value, and its
                 // width is the sum. Measuring only the glued form would misplace every centred line
@@ -58,9 +62,9 @@ impl RenderState {
                     Some(_) => ACTION_PLATE_W,
                     None => 0.0,
                 };
-                match self.wrapped(item) {
-                    Some(lines) => Some(lines.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max)),
-                    None => Some(
+                let width = match self.wrapped(item) {
+                    Some(lines) => lines.iter().map(|(_, w)| *w).fold(0.0_f32, f32::max),
+                    None => {
                         fit_caption(
                             &mut self.caption_fit_memo,
                             ctx,
@@ -69,12 +73,12 @@ impl RenderState {
                             item,
                             budget - bar_reserve - act_w,
                         )
-                        .1 + act_w,
-                    ),
-                }
+                        .1 + act_w
+                    }
+                };
+                Some(width + reserve)
             })
-            .fold(0.0_f32, f32::max);
-        text_w + reserve
+            .reduce(f32::max)
     }
 
     /// The lines `plan_wraps` broke this caption into, or `None` when it is not prose.

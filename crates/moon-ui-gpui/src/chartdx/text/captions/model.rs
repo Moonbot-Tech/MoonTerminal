@@ -242,6 +242,15 @@ impl Cell {
     pub(super) fn height(&self) -> f32 {
         self.items.iter().map(|it| it.block_h()).sum()
     }
+
+    /// Place every item relative to the row top, even when fitting drops its text.
+    pub(super) fn positioned_items(&self) -> impl Iterator<Item = (f32, &Item)> {
+        self.items.iter().scan(0.0, |offset, item| {
+            let top = *offset;
+            *offset += item.block_h();
+            Some((top, item))
+        })
+    }
 }
 
 /// One printed line: the columns on it, left to right.
@@ -325,4 +334,29 @@ pub(super) struct HungryBudget {
     pub(super) align: LabelAlign,
     pub(super) taken: widths::Taken,
     pub(super) inset: f32,
+}
+
+impl HungryBudget {
+    /// Width left by the neighbouring bands at this depth into the fill direction.
+    pub(super) fn at_depth(self, depth: f32) -> f32 {
+        widths::line_budget(self.total, self.align, self.taken, depth, self.inset)
+    }
+
+    /// Width at the item's near edge. An upward row measures from its bottom, so an item
+    /// shares the neighbours' space until its own bottom has cleared them.
+    pub(super) fn item_width(
+        self,
+        travelled: f32,
+        row_h: f32,
+        offset: f32,
+        item_h: f32,
+        downward: bool,
+    ) -> f32 {
+        let depth = if downward {
+            offset
+        } else {
+            (row_h - (offset + item_h)).max(0.0)
+        };
+        self.at_depth(travelled + depth)
+    }
 }

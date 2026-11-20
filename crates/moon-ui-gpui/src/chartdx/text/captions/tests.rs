@@ -879,6 +879,7 @@ fn the_wrapped_draw_branch_registers_column_lines() {
 /// Truncating the whole widened header used to sacrifice the count and print its tail through the
 /// centred venue/all-cores caption. Every localized title, both fold states, narrow and wide panes,
 /// must instead keep the fixed head intact and cut only the core segment out of the centre's way.
+/// Charging the row's far edge instead of each item's near edge breaks this at equal heights.
 #[test]
 fn widened_filter_header_stays_clear_in_every_locale() {
     // A CJK glyph is about twice as wide as a Latin one: count it so, or the Chinese pass would
@@ -921,9 +922,18 @@ fn widened_filter_header_stays_clear_in_every_locale() {
                 let mut taken = super::widths::Taken::default();
                 taken.set_extent(LabelAlign::Center, centre_w, 15.0);
                 let anchor_inset = (left_x - base_left).max(0.0);
-                let budget =
-                    super::widths::band_max_w(total, None, false, true, LabelAlign::Left, taken)
-                        - anchor_inset;
+                let hungry = super::model::HungryBudget {
+                    total,
+                    align: LabelAlign::Left,
+                    taken,
+                    inset: anchor_inset,
+                };
+                let budget = hungry.item_width(0.0, 15.0, 0.0, 15.0, true);
+                let second_line = hungry.item_width(0.0, 30.0, 15.0, 15.0, true);
+                assert_eq!(hungry.item_width(0.0, 30.0, 0.0, 15.0, true), budget);
+                assert_eq!(second_line, total - anchor_inset);
+                assert_eq!(hungry.item_width(0.0, 30.0, 15.0, 15.0, false), budget);
+                assert_eq!(hungry.item_width(0.0, 30.0, 0.0, 15.0, false), second_line);
                 let (caption, width) =
                     super::fit::fit_filter_header(&head, &long_core, budget, measure);
                 if caption.is_empty() {
