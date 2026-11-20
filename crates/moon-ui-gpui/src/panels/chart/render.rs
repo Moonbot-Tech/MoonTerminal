@@ -313,7 +313,7 @@ impl Render for ChartPanel {
         // Auto lines: same re-validate — the price pass can take a line away from under a resting
         // cursor. Ctrl-gated like the news card (LinKvo, 19.11.2026): a pointer crossing lines
         // must not repaint GPUI, and only a held modifier asks for the card.
-        self.revalidate_auto_hover(cx);
+        self.revalidate_auto_hover(news_ctrl, cx);
         let auto_card = self.auto_hover_card(sf, news_ctrl, palette, cx);
         // Per-figure settings panel, opened from a right-click on a figure. Rendered here beside
         // the other overlays rather than as a context menu: it holds swatches and switches, which

@@ -5,6 +5,7 @@ _version: 1
 auto_figures.title: "自动图形"
 auto_figures.button_tip: "自动图形：图表自动发现的水平位、趋势线和挤压"
 auto_figures.enabled: "显示自动图形"
+auto_figures.modifier_only: "仅按住 Ctrl 时线条响应鼠标"
 auto_figures.opacity: "不透明度"
 auto_figures.for_kind: "设置对象：%{kind}"
 auto_figures.frame_rows: "行"

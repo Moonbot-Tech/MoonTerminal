@@ -5,6 +5,7 @@ _version: 1
 auto_figures.title: "Otomatik şekiller"
 auto_figures.button_tip: "Otomatik şekiller: grafiğin kendi bulduğu seviyeler, trend çizgileri ve sıkışmalar"
 auto_figures.enabled: "Otomatik şekilleri göster"
+auto_figures.modifier_only: "Çizgiler fareye yalnızca Ctrl ile tepki verir"
 auto_figures.opacity: "Opaklık"
 auto_figures.for_kind: "Ayarlar: %{kind}"
 auto_figures.frame_rows: "Satırlar"

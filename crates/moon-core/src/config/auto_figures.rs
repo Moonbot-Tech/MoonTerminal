@@ -55,6 +55,15 @@ pub struct AutoFiguresCfg {
     /// figures are against the chart", and a row's own colour, dash and zone keep telling the rows
     /// apart at any opacity. Absent from a file reads as [`AF_OPACITY_DEFAULT`].
     pub opacity: f32,
+    /// Whether the pointer reaches the auto lines only while the hover-card modifier (Ctrl,
+    /// Command on macOS) is held.
+    ///
+    /// On, a bare pointer passes straight through them — no highlight, no hover caption, no card —
+    /// and a right press over one starts the chart's own right-button drag instead of opening the
+    /// line's menu: a right-drag across a chart full of lines kept catching on them (LinKvo,
+    /// 20.11.2026). The modifier brings back all of it at once, the way it already brings the card.
+    /// Ships ON; absent from a file reads as on.
+    pub modifier_only: bool,
 }
 
 impl Default for AutoFiguresCfg {
@@ -72,6 +81,7 @@ impl AutoFiguresCfg {
             enabled: true,
             rows: presets::shipped_rows(),
             opacity: AF_OPACITY_DEFAULT,
+            modifier_only: true,
         }
     }
 

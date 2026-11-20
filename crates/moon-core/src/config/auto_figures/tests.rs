@@ -145,6 +145,7 @@ fn a_stored_value_survives_a_save_and_load_untouched() {
     // An emptied table is the reader's choice, not an absent setting.
     let empty = AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: true,
         rows: Vec::new(),
     };
@@ -167,6 +168,7 @@ fn an_edited_row_writes_only_what_changed() {
     }
     let cfg = AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: true,
         rows: vec![row],
     };
@@ -304,6 +306,7 @@ fn an_unsanitized_value_still_saves() {
     .expect("a JSON copy of a row reads");
     let cfg = AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: true,
         rows: vec![row, from_json],
     };
@@ -426,6 +429,7 @@ fn hostile() -> AutoFiguresCfg {
     rows.extend(std::iter::repeat_n(AutoFigurePreset::Levels1h.row(), 100));
     AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: true,
         rows,
     }
@@ -437,6 +441,7 @@ fn hostile() -> AutoFiguresCfg {
 fn sanitize_is_idempotent() {
     let mut presets = AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: true,
         rows: AutoFigurePreset::ALL.map(AutoFigurePreset::row).to_vec(),
     };
@@ -701,6 +706,7 @@ fn the_new_kinds_and_options_round_trip() {
     });
     let cfg = AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: true,
         rows: vec![
             swing_atr,
@@ -925,6 +931,7 @@ fn per_kind_storage_never_freezes_a_follower() {
     let mut layout = WindowLayout::default();
     let off = AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: false,
         rows: Vec::new(),
     };
@@ -1308,6 +1315,7 @@ fn a_formation_row_round_trips_and_loads_partially() {
     row.preset = Some(AutoFigurePreset::Triangles);
     let cfg = AutoFiguresCfg {
         opacity: AF_OPACITY_DEFAULT,
+        modifier_only: true,
         enabled: true,
         rows: vec![
             row,
@@ -1485,6 +1493,36 @@ fn the_block_opacity_defaults_round_trips_and_is_repaired() {
     // A hand-edited value out of bounds is repaired on read.
     let hand: Doc = toml::from_str("[auto_figures]\nopacity = 5.0\n").expect("loads");
     assert_eq!(hand.auto_figures.opacity, 1.0);
+}
+
+/// "Lines only with Ctrl": a profile saved before the setting existed reads it ON, the shipped
+/// value is never written, and a reader who turned it off gets exactly that back.
+///
+/// Breakage: the read default flipped to off (every upgraded profile keeps catching right-drags on
+/// the lines), the default frozen into every saved file, or `false` dropped on the way out (the
+/// choice is lost on the next start).
+#[test]
+fn lines_only_with_the_modifier_default_on_and_round_trip_off() {
+    let old: Doc = toml::from_str("[auto_figures]\nenabled = true\n").expect("an old table loads");
+    assert!(old.auto_figures.modifier_only);
+    let (text, _) = round_trip(&AutoFiguresCfg::default());
+    assert!(!text.contains("modifier_only"), "{text}");
+
+    let stored = AutoFiguresCfg {
+        modifier_only: false,
+        ..AutoFiguresCfg::default()
+    };
+    let (text, back) = round_trip(&stored);
+    assert!(!back.modifier_only);
+    assert_eq!(
+        written_table(&text),
+        toml::from_str::<toml::Table>("modifier_only = false").unwrap()
+    );
+    // An unreadable value costs this field alone, and reads as the shipped behaviour.
+    let hand: Doc =
+        toml::from_str("[auto_figures]\nmodifier_only = \"yes\"\nopacity = 0.6\n").expect("loads");
+    assert!(hand.auto_figures.modifier_only);
+    assert_eq!(hand.auto_figures.opacity, 0.6);
 }
 
 /// Period-extreme presets print their captions always, every other preset prints them on hover,

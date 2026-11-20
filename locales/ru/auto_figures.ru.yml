@@ -5,6 +5,7 @@ _version: 1
 auto_figures.title: "Автофигуры"
 auto_figures.button_tip: "Автофигуры: уровни, наклонные и поджим, которые график находит сам"
 auto_figures.enabled: "Показывать автофигуры"
+auto_figures.modifier_only: "Линии реагируют на мышь только с Ctrl"
 auto_figures.opacity: "Непрозрачность"
 auto_figures.for_kind: "Настройки для: %{kind}"
 auto_figures.frame_rows: "Строки"
