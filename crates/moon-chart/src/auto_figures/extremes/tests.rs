@@ -115,31 +115,51 @@ fn a_partly_covered_period_is_not_reported() {
     assert!(run(&[], ExtremePeriod::Day, ExtremeWhich::Both).is_empty());
 }
 
-/// On the real `chart-ace` candles: the current and previous day's extremes are the max high and
-/// min low of exactly the bars inside that UTC day, computed here independently.
+/// On the real `chart-ace` 5-minute candles, read as 5-minute bars: the current and previous day's
+/// extremes are the max high and min low of exactly the bars inside that UTC day, computed here
+/// independently — on the series cut after day 20680, whose two last days are whole (288 bars
+/// each). The bench's own last day, 20681, has 163 bars with empty stretches of 4 h 25 min
+/// (06:25–10:50) and 5 h 50 min (12:05–17:55): it reports nothing.
 ///
-/// Breakage: a period boundary off by a bar, or a NaN/zero bar winning the minimum.
+/// Breakage: a period boundary off by a bar, a NaN/zero bar winning the minimum, or a recorded day
+/// with hours missing reported as if it were whole.
 #[test]
 fn real_candles_match_an_independent_scan() {
-    let bars = ace(5);
-    let last_day = (bars[bars.len() - 1].t_open_ms / 86_400_000.0).floor();
+    let day_ms = 86_400_000.0;
+    let all = ace(5);
+    let run_m5 = |bars: &[ChartCandle], period, now_ms| {
+        prices(&PeriodExtreme.detect(
+            bars,
+            &DetectorParams::PeriodExtreme(PeriodExtremeParams {
+                period,
+                which: ExtremeWhich::Both,
+            }),
+            &DetectCtx {
+                tf_ms: 300_000,
+                now_ms,
+            },
+        ))
+    };
+    let cut = 20_681.0 * day_ms;
+    let bars: Vec<ChartCandle> = all.iter().copied().filter(|b| b.t_open_ms < cut).collect();
     for (period, day) in [
-        (ExtremePeriod::Day, last_day),
-        (ExtremePeriod::PrevDay, last_day - 1.0),
+        (ExtremePeriod::Day, 20_680.0),
+        (ExtremePeriod::PrevDay, 20_679.0),
     ] {
-        let (start, end) = (day * 86_400_000.0, (day + 1.0) * 86_400_000.0);
+        let (start, end) = (day * day_ms, (day + 1.0) * day_ms);
         let inside: Vec<ChartCandle> = bars
             .iter()
             .copied()
             .filter(|b| b.t_open_ms >= start && b.t_open_ms < end)
             .collect();
+        assert_eq!(inside.len(), 288, "{period:?}: a whole bench day");
         let (lo, hi) = range(&inside);
-        assert_eq!(
-            prices(&run(&bars, period, ExtremeWhich::Both)),
-            vec![hi, lo],
-            "{period:?}"
-        );
+        // A millisecond before midnight: day 20680 is still "today".
+        assert_eq!(run_m5(&bars, period, cut - 1.0), vec![hi, lo], "{period:?}");
     }
+    let last = all.last().expect("bars").t_open_ms;
+    assert_eq!((last / day_ms).floor(), 20_681.0);
+    assert!(run_m5(&all, ExtremePeriod::Day, last).is_empty());
 }
 
 /// "Today" is the reference time's day, not the last bar's: ten minutes after UTC midnight, with
@@ -230,9 +250,10 @@ fn run_5m(bars: &[ChartCandle], period: ExtremePeriod, now: f64) -> Vec<f64> {
 /// came out 1.1 % under the real one) reports nothing, and neither does the week those three bars
 /// leave short, while Wednesday's whole first six hours are its current day.
 ///
-/// By hand: Monday has 288 bars, Tuesday 3, Wednesday 72 (to 06:00). Tuesday: 3 of 288. The week so
-/// far, Monday 00:00 to Wednesday 06:00: 363 of 648 = 56 %, under 90 %. Wednesday up to its last
-/// closed bar: 72 of 72.
+/// By hand: Monday has 288 bars, Tuesday 3, Wednesday 72 (to 06:00). Tuesday's first bar is 10:35,
+/// ten hours after its start. The week so far, Monday 00:00 to Wednesday 06:00, has an empty
+/// stretch of 10 h 35 min from Monday's last close to Tuesday's first bar. Wednesday up to its last
+/// closed bar: no empty stretch at all.
 ///
 /// Breakage: completeness read from the input's first bar (Monday covers every period that starts
 /// after it), or a period's bars never counted against what it should hold.
@@ -255,7 +276,7 @@ fn a_period_is_judged_by_its_own_bars() {
 
 /// A period missing its start, its end or a stretch inside reports nothing, each with the day
 /// before it whole: Wednesday from 07:50; Tuesday from 03:00; Tuesday with no bars from 06:00 to
-/// 14:00 (192 of 288 = 67 %); Tuesday without its last bar, 23:55.
+/// 14:00 (an eight-hour stretch); Tuesday without its last bar, 23:55.
 ///
 /// Breakage: a period checked only at its start (the hole inside and the missing end pass), or
 /// only against the input's first bar (every one of them passes).
@@ -289,24 +310,24 @@ fn a_period_missing_its_start_end_or_middle_is_not_reported() {
     assert!(run_5m(&no_end, ExtremePeriod::PrevDay, one_am).is_empty());
 }
 
-/// A few missing bars do not hide a period: Tuesday without 24 of its 288 bars (264, 91.7 %)
-/// reports its high — a 120 bar at 13:00 — and without 30 (258, 89.6 %) it reports nothing. The
-/// missing bars are every 12th from 00:05 (and, for 30, six more from 22:10), so its first and last
-/// bar stay.
+/// A two-hour hole hides a period even when nearly every bar is there: Tuesday without 12:00–14:00
+/// is 264 of its 288 bars (91.7 %), and reports nothing — the real high may sit in those two hours.
+/// The limit is an hour of nothing: Tuesday without 12:00–13:00 (twelve bars, an empty hour between
+/// 11:55's close and 13:00) reports its high, a 120 bar at 15:00; one bar more, 65 minutes, nothing.
 ///
-/// Breakage: the 90 % share not applied, applied the wrong way, or measured against a span other
-/// than the day's 288 bars.
+/// Breakage: completeness read as a share of the bars present (264 of 288 passes), or the hour
+/// limit off by a bar either way.
 #[test]
-fn a_period_needs_ninety_percent_of_its_bars() {
-    let without = |extra: usize| {
+fn a_two_hour_hole_hides_the_period() {
+    let h = |x: f64| x * HOUR_MS;
+    let without = |from: f64, to: f64| {
         let mut bars = m5_bars(0.0, DAY);
-        let tuesday = m5_bars(DAY, 2.0 * DAY);
-        for (i, mut b) in tuesday.into_iter().enumerate() {
-            let gap = i % 12 == 1 || (266..266 + extra).contains(&i);
-            if gap {
+        for mut b in m5_bars(DAY, 2.0 * DAY) {
+            let t = b.t_open_ms - MONDAY_2024_01_01_MS - DAY;
+            if t >= from && t < to {
                 continue;
             }
-            if i == 156 {
+            if t == h(15.0) {
                 b.high = 120.0;
             }
             bars.push(b);
@@ -315,13 +336,67 @@ fn a_period_needs_ninety_percent_of_its_bars() {
         bars
     };
     let one_am = 2.0 * DAY + HOUR_MS;
-    let enough = without(0);
-    assert_eq!(enough.len(), 288 + 264 + 12);
+    let two_hours = without(h(12.0), h(14.0));
+    assert_eq!(two_hours.len(), 288 + 264 + 12);
+    assert!(run_5m(&two_hours, ExtremePeriod::PrevDay, one_am).is_empty());
+    assert!(
+        run_5m(&two_hours, ExtremePeriod::Week, one_am).is_empty(),
+        "the week holds the same hole"
+    );
+    let one_hour = without(h(12.0), h(13.0));
     assert_eq!(
-        run_5m(&enough, ExtremePeriod::PrevDay, one_am),
+        run_5m(&one_hour, ExtremePeriod::PrevDay, one_am),
         vec![120.0, 100.0]
     );
-    let short = without(6);
-    assert_eq!(short.len(), 288 + 258 + 12);
-    assert!(run_5m(&short, ExtremePeriod::PrevDay, one_am).is_empty());
+    let one_bar_more = without(h(12.0), h(13.0) + M5);
+    assert!(run_5m(&one_bar_more, ExtremePeriod::PrevDay, one_am).is_empty());
+}
+
+/// A quiet market's day is covered: the cache holds a bar only where something traded, so a coin
+/// that trades in four 5-minute slots out of every ten has 117 of Tuesday's 288 bars (40.6 %), with
+/// empty stretches of 30 minutes at most, its first bar at 00:00 and its last at 23:55 — and its
+/// high (a 120 bar at 12:40) and low are reported.
+///
+/// By hand: slots `i % 10 < 4` of 0..288 are 28 × 4 + 4 = 116 bars, plus slot 287 (23:55): 117.
+/// Inside, six empty slots (30 min) after every fourth bar, and three (15 min) before 23:55.
+///
+/// Breakage: completeness read as a share of the bars present (40 % fails any share worth the
+/// name), or a quiet stretch read as a hole.
+#[test]
+fn a_quiet_market_covers_its_day() {
+    let mut bars = m5_bars(0.0, DAY);
+    for (i, mut b) in m5_bars(DAY, 2.0 * DAY).into_iter().enumerate() {
+        if i % 10 >= 4 && i != 287 {
+            continue;
+        }
+        if i == 152 {
+            b.high = 120.0;
+        }
+        bars.push(b);
+    }
+    assert_eq!(bars.len(), 288 + 117);
+    bars.extend(m5_bars(2.0 * DAY, 2.0 * DAY + HOUR_MS));
+    let one_am = 2.0 * DAY + HOUR_MS;
+    assert_eq!(
+        run_5m(&bars, ExtremePeriod::PrevDay, one_am),
+        vec![120.0, 100.0]
+    );
+}
+
+/// The current day is covered up to "now": Wednesday whole from 00:00 to 04:00 and nothing after
+/// reports its high and low at 05:00 — an hour since the last close, which a quiet market leaves —
+/// and nothing at 06:00, two hours of nothing up to now, where today's real high may sit.
+///
+/// Breakage: the current period measured only up to its own last bar (a stale "today's high"
+/// reported after hours of a missing record), or the tail measured without the bar still forming.
+#[test]
+fn the_current_day_needs_its_recent_bars() {
+    let h = |x: f64| x * HOUR_MS;
+    let mut bars = m5_bars(0.0, 2.0 * DAY);
+    bars.extend(m5_bars(2.0 * DAY, 2.0 * DAY + h(4.0)));
+    assert_eq!(
+        run_5m(&bars, ExtremePeriod::Day, 2.0 * DAY + h(5.0)),
+        vec![110.0, 100.0]
+    );
+    assert!(run_5m(&bars, ExtremePeriod::Day, 2.0 * DAY + h(6.0)).is_empty());
 }

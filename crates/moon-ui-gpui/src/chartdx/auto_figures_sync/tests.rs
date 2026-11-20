@@ -168,31 +168,45 @@ fn a_half_written_newest_bucket_waits_for_the_cache_but_not_forever() {
     assert!(!cache_bars(&full, 60 * MIN, ten, one_minute_after_close).1);
 }
 
-/// A bucket of the cache assembled from fewer than half of its 5-minute rows is a hole, not a bar:
-/// the 09:00 hour of five rows is left out between two whole hours, the 10:00 hour of six — exactly
-/// half — is kept; a day of one row is no daily bar.
+/// A bucket of the cache with empty 5-minute slots is still a bar: the cache holds a row only where
+/// something traded, so a quiet 09:00 hour of five rows (09:00, 09:15, 09:30, 09:40, 09:55) is the
+/// bar of those five trades — kept between two whole hours, its low and high the lowest and highest
+/// of its rows, 98 and 105 by hand. A day of one row is that day's bar as well.
 ///
-/// Breakage: every resampled bucket taken as whole (an hour's high and low from 25 minutes, a day
-/// from five), or the half counted the wrong way (the six-row hour dropped).
+/// Breakage: a share-of-rows rule dropping the quiet buckets (a quiet coin's honest 1h and daily
+/// bars thrown away, and the chart seeing other bars than the screener's scan), or a bucket's range
+/// not folding all of its rows.
 #[test]
-fn a_bucket_from_fewer_than_half_its_rows_is_a_hole() {
+fn a_bucket_with_empty_slots_is_still_a_bar() {
     let hour = |h: i64| DAY0 + h * 3_600_000;
     let mut rows = series(hour(8), 5 * MIN, 12);
-    rows.extend(series(hour(9), 5 * MIN, 5));
-    rows.extend(series(hour(10), 5 * MIN, 6));
-    rows.extend(series(hour(11), 5 * MIN, 12));
-    let past_the_cap = (hour(12) + 6 * MIN) as f64;
-    let (bars, lagging) = cache_bars(&rows, 60 * MIN, hour(11), past_the_cap);
+    let quiet = [
+        (0, 100.0, 103.0),
+        (15, 98.0, 104.0),
+        (30, 102.0, 105.0),
+        (40, 99.0, 101.0),
+        (55, 101.0, 102.0),
+    ];
+    rows.extend(
+        quiet
+            .iter()
+            .map(|&(m, low, high)| bar(hour(9) + m * MIN, low, high)),
+    );
+    rows.extend(series(hour(10), 5 * MIN, 12));
+    let past_the_cap = (hour(11) + 6 * MIN) as f64;
+    let (bars, lagging) = cache_bars(&rows, 60 * MIN, hour(10), past_the_cap);
     assert!(!lagging);
     let opens: Vec<i64> = bars.iter().map(|b| b.t_open_ms as i64).collect();
-    assert_eq!(opens, vec![hour(8), hour(10), hour(11)]);
+    assert_eq!(opens, vec![hour(8), hour(9), hour(10)]);
+    assert_eq!((bars[1].low, bars[1].high), (98.0, 105.0));
 
     let day = 24 * 3_600_000;
     let mut rows = series(DAY0, 5 * MIN, 288);
-    rows.extend(series(DAY0 + day, 5 * MIN, 1));
+    rows.push(bar(DAY0 + day + 12 * 3_600_000, 90.0, 95.0));
     let days = closed_bars(&rows, 5 * MIN, day, DAY0 + day);
     let opens: Vec<i64> = days.iter().map(|b| b.t_open_ms as i64).collect();
-    assert_eq!(opens, vec![DAY0]);
+    assert_eq!(opens, vec![DAY0, DAY0 + day]);
+    assert_eq!((days[1].low, days[1].high), (90.0, 95.0));
 }
 
 /// A cache that counts its reads and answers from fixed rows.
@@ -1241,6 +1255,12 @@ fn a_formation_is_kept_drawn_and_pinned_by_its_nearer_side() {
 
 /// Draw `set` into fresh buffers, returning what the pane recorded and the event marks appended.
 fn draw_set(set: &Rc<AutoPaneFigures>) -> (AutoPaneDrawn, Vec<moon_chart::layers::MarkerInstance>) {
+    let (drawn, scratch) = draw_into_scratch(set);
+    (drawn, scratch.markers)
+}
+
+/// Draw `set` into fresh buffers, returning what the pane recorded and every buffer it filled.
+fn draw_into_scratch(set: &Rc<AutoPaneFigures>) -> (AutoPaneDrawn, crate::chartdx::UdScratch) {
     let mut drawn = AutoPaneDrawn::default();
     let mut scratch = crate::chartdx::UdScratch::default();
     let mut no_labels = Vec::new();
@@ -1258,7 +1278,17 @@ fn draw_set(set: &Rc<AutoPaneFigures>) -> (AutoPaneDrawn, Vec<moon_chart::layers
         },
         &mut drawn,
     );
-    (drawn, scratch.markers)
+    (drawn, scratch)
+}
+
+/// The alpha of every line instance a draw of `set` put into the GPU buffers, levels then
+/// segments.
+fn drawn_alphas(set: &Rc<AutoPaneFigures>) -> Vec<f32> {
+    let (_, scratch) = draw_into_scratch(set);
+    let levels = scratch.hlines.iter().map(|l| l.color[3]);
+    levels
+        .chain(scratch.segs.iter().map(|s| s.color[3]))
+        .collect()
 }
 
 /// A formation kept by its LOWER side is read at that side by every consumer of the kept side:
@@ -1643,11 +1673,12 @@ fn a_twin_the_flag_row_does_not_keep_stays_with_the_channel_row() {
     }
 }
 
-/// The set's one opacity reaches everything it draws: each line's figure alpha and the alpha its
-/// caption prints at — the colour itself stays the row's — and a new set draws opaque until the
-/// publisher sets it.
+/// The set's one opacity reaches everything it draws: each line instance's alpha in the GPU
+/// buffers and the alpha its caption prints at — the colour itself stays the row's — and a new set
+/// draws opaque until the publisher sets it.
 ///
-/// By hand: at 0.5 a figure's alpha is 255 · 0.5 = 127.5 → 128.
+/// By hand: at 0.5 a figure's alpha byte is 255 · 0.5 = 127.5 → 128, so every instance of the
+/// faded draw is 128 / 255 of the same instance drawn opaque.
 ///
 /// Breakage: the opacity copied into the set but not applied by the geometry, or applied to the
 /// lines and not handed to the captions (a faded line under a loud name).
@@ -1655,21 +1686,71 @@ fn a_twin_the_flag_row_does_not_keep_stays_with_the_channel_row() {
 fn the_sets_opacity_fades_every_line_and_its_caption() {
     let opaque = Rc::new(published(&[99.0, 101.0], Vec::new(), 100.0));
     assert_eq!(opaque.opacity, 1.0);
-    let (drawn, _) = draw_set(&opaque);
-    let full = drawn.line_figures(drawn.lines[0].key);
-    assert!(!full.is_empty() && full.iter().all(|f| f.color[3] == 255));
+    let full = drawn_alphas(&opaque);
+    assert!(!full.is_empty());
 
     let mut faded = published(&[99.0, 101.0], Vec::new(), 100.0);
     faded.opacity = 0.5;
-    let (drawn, _) = draw_set(&Rc::new(faded));
+    let faded = Rc::new(faded);
+    let (drawn, _) = draw_set(&faded);
     assert!(!drawn.lines.is_empty());
     for line in &drawn.lines {
         assert_eq!(line.opacity, 0.5);
+    }
+    let alphas = drawn_alphas(&faded);
+    assert_eq!(alphas.len(), full.len());
+    for (f, o) in alphas.iter().zip(&full) {
+        assert!((f / o - 128.0 / 255.0).abs() < 1e-4, "{f} of {o}");
+    }
+}
+
+/// A pinned line is the reader's own figure: at full opacity whatever the block's, in the line's
+/// own colour. The block is drawn at 60 % (an alpha byte of 255 · 0.6 = 153 on its figures); what
+/// "Pin as figure" copies — a level, and both sides of a formation — carries 255.
+///
+/// Breakage: a level pinned as a copy of its drawn figures (the block's fade baked into the user's
+/// figure for good), or only a formation's sides rebuilt at full opacity.
+#[test]
+fn a_pinned_line_is_at_full_opacity_whatever_the_blocks() {
+    use moon_chart::auto_figures::LineTag;
+    let mut levels = level_row(&[99.0, 101.0]);
+    levels.kept = select_kept(
+        &levels.outcome,
+        &rules(&levels, &[]),
+        100.0,
+        0.0,
+        &mut Vec::new(),
+    );
+    let mut pair = level_row(&[]);
+    pair.row_ix = 1;
+    Arc::make_mut(&mut pair.outcome).found =
+        vec![formation(LineTag::Channel, 3_600_000.0, 7_200_000.0, 0)];
+    let at = 9.0 * 3_600_000.0;
+    pair.ref_ms = at;
+    pair.kept = select_kept(
+        &pair.outcome,
+        &rules(&pair, &[]),
+        101.0,
+        at,
+        &mut Vec::new(),
+    );
+    let mut set = AutoPaneFigures::new(vec![levels, pair], Vec::new());
+    set.opacity = 0.6;
+    let set = Rc::new(set);
+    let (drawn, _) = draw_set(&set);
+    assert!(drawn.lines.iter().all(|l| l.opacity == 0.6));
+    assert!(drawn.lines.iter().any(|l| l.tag == Some(LineTag::Channel)));
+    assert!(drawn.lines.iter().any(|l| l.tag != Some(LineTag::Channel)));
+    for line in &drawn.lines {
         let figs = drawn.line_figures(line.key);
-        assert!(!figs.is_empty());
-        for (f, o) in figs.iter().zip(&full) {
-            assert_eq!(f.color[3], 128);
-            assert_eq!(f.color[..3], o.color[..3]);
+        assert!(!figs.is_empty(), "{:?}", line.tag);
+        let rgb = [
+            (line.color >> 16) as u8,
+            (line.color >> 8) as u8,
+            line.color as u8,
+        ];
+        for f in &figs {
+            assert_eq!(f.color, [rgb[0], rgb[1], rgb[2], 255], "{:?}", line.tag);
         }
     }
 }

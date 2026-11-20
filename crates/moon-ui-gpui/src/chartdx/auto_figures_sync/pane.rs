@@ -178,21 +178,15 @@ impl AutoPaneDrawn {
     /// two levels or two segments — and what the line is drawn as for every other shape.
     ///
     /// Rebuilt from the published figure the line was drawn from, with the row's style, the line's
-    /// own colour and the run's reference time, so a pinned pair is the pair on screen. Empty when
-    /// the line, or the figure it came from, is no longer in the published set.
+    /// own colour and the run's reference time, so what is pinned is the line on screen — but at
+    /// FULL opacity (`ResolvedStyle::new`), never the block's: once pinned it is the reader's own
+    /// figure, drawn like every other, and the block's fade must not stay baked into its colour
+    /// after the auto line is gone. Hence never a copy of the drawn figures, which carry that
+    /// fade. Empty when the line, or the figure it came from, is no longer in the published set.
     pub(crate) fn line_figures(&self, key: LineKey) -> Vec<Figure> {
         let Some(line) = self.line(key) else {
             return Vec::new();
         };
-        let drawn = || {
-            self.figures
-                .get(line.figs.clone())
-                .map(<[Figure]>::to_vec)
-                .unwrap_or_default()
-        };
-        if !matches!(line.shape, FoundShape::Pair { .. }) {
-            return drawn();
-        }
         let Some((row, found)) = self.set.as_ref().and_then(|set| {
             set.rows
                 .iter()

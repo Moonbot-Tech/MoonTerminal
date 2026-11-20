@@ -34,7 +34,9 @@ use crate::config::chart_labels::LabelColor;
 use crate::figures::LineKind;
 use crate::palette;
 
-/// Lookback of the shipped "Levels 4h" row, in four-hour bars.
+/// Lookback of the "Levels 4h" preset row, in four-hour bars. The preset is offered in the "Add"
+/// menu, not shipped in the default set: days of history are more than the cache holds for most
+/// markets, which the shipped set is sized against (module doc).
 ///
 /// Bounded by the local 5-minute candle cache the 4h bars are built from: it keeps 15 days
 /// (≈ 90 four-hour bars), so a deeper default would leave the row permanently short of history.

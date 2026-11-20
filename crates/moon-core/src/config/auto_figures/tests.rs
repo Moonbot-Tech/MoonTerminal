@@ -1230,11 +1230,12 @@ fn a_timeframe_the_detector_cannot_answer_on_is_pulled_down() {
     assert_eq!(prev.tf, TfSource::Fixed(TfId::D1));
 }
 
-/// The shipped 4h levels are built from the 5-minute cache, so their lookback (plus the partial
-/// first bucket the bar assembly drops) must fit what that cache keeps. Shipped at the generic
-/// 200 bars (33 days) against a 15-day cache, the row reported "not enough history" for ever.
+/// The "Levels 4h" preset — offered in the "Add" menu, no longer in the shipped set — is built from
+/// the 5-minute cache, so its lookback (plus the partial first bucket the bar assembly drops) must
+/// fit what that cache keeps. At the generic 200 bars (33 days) against a 15-day cache, a row added
+/// from it would report "not enough history" for ever.
 #[test]
-fn the_shipped_4h_levels_fit_the_candle_cache() {
+fn the_offered_4h_levels_fit_the_candle_cache() {
     let row = AutoFigurePreset::Levels4h.row();
     let needed = row
         .detector
@@ -1490,7 +1491,9 @@ fn the_block_opacity_defaults_round_trips_and_is_repaired() {
 }
 
 /// Every preset prints its captions on hover, and a row stored before that — its caption absent
-/// from the file — keeps printing it always.
+/// from the file — keeps printing it always. The stored row is a real "Levels 1h" row: its preset
+/// in the file is the variant's serde name (`levels1h`, not the locale key's `levels_1h`), and it is
+/// recognised as that preset — the case the rule is about, not an unnamed row.
 ///
 /// Breakage: a preset left on `Always`, or `LineCaption`'s own default moved to `OnHover`, which
 /// would silently switch every stored row the reader never touched.
@@ -1505,9 +1508,13 @@ fn presets_caption_on_hover_and_stored_rows_keep_theirs() {
     }
     let file = r#"
 [[auto_figures.rows]]
-preset = "levels_1h"
+preset = "levels1h"
 detector = { kind = "swing" }
 "#;
     let doc: Doc = toml::from_str(file).expect("loads");
+    assert_eq!(
+        doc.auto_figures.rows[0].preset,
+        Some(AutoFigurePreset::Levels1h)
+    );
     assert_eq!(doc.auto_figures.rows[0].caption.show, CaptionShow::Always);
 }

@@ -24,16 +24,14 @@
 //!
 //! The local 5-minute cache is written only while the terminal runs, so a day with a hole is
 //! normal, and a profile of part of a day is a different profile — its POC can sit at a price the
-//! missing hours never cared about. A day is profiled only when it is COMPLETE enough — the check
-//! every calendar detector shares ([`super::coverage`]): its first bar opens within one bar length
-//! of its start, a finished day's last bar closes at its end, and the bars present are at least
-//! [`MIN_COVERAGE`] of the bars the covered span should hold. The current day is measured up to its
-//! last closed bar. The share is counted in bars of the row's timeframe; a coarse bar the bar
-//! assembly built from a few 5-minute rows never reaches the detector
-//! ([`super::resample_5m`]), so a day of H4 or D1 buckets each holding one 5-minute row is not a
-//! "whole" day of six or one bars. A naked POC
-//! additionally needs the span AFTER its day, up to the reference time, covered to the same share:
-//! "nothing traded at it since" is not a claim a hole of a day can support.
+//! missing hours never cared about. A day is profiled only when it is COVERED — the check every
+//! calendar detector shares ([`super::coverage`]): its first bar opens within one bar length of its
+//! start, a finished day's last bar closes at its end (the current day's last bar is close enough
+//! to the reference time), and no empty stretch between neighbouring bars is longer than
+//! [`MAX_GAP_MS`](super::coverage::MAX_GAP_MS) — a quiet market's short stretches without a trade
+//! are not holes, hours in a row are. A naked POC additionally needs the span AFTER its day, up to
+//! the reference time, free of such a stretch ([`span_covered`]): "nothing traded at it since" is
+//! not a claim a hole of a day can support.
 //!
 //! Each line reports the volume its bin holds as [`Found::touch_volume`] (what
 //! `StrengthBasis::Volume` ranks by), that volume's share of its day as `strength`, and the bin's
@@ -55,7 +53,7 @@ use moon_core::config::auto_figures::{
 };
 use moon_core::market::candles::ChartCandle;
 
-use super::coverage::{MIN_COVERAGE, covered};
+use super::coverage::{covered, span_covered};
 use super::extremes::day_of;
 use super::period_levels::day_start_ms;
 use super::{DetectCtx, Detector, Found, FoundShape, LineTag, bar_ok, positive};
@@ -161,12 +159,21 @@ fn bars_in(bars: &[ChartCandle], start: f64, end: f64) -> Vec<&ChartCandle> {
 }
 
 /// Whether `day` (its valid bars, ascending) covers its day from `start` — to `end` when the day is
-/// finished, to its last bar's close when it is the current one ([`covered`]).
-fn complete(day: &[&ChartCandle], start: f64, end: Option<f64>, tf: f64) -> bool {
-    let (Some(first), Some(last)) = (day.first(), day.last()) else {
-        return false;
-    };
-    covered(first.t_open_ms, last.t_open_ms, day.len(), start, end, tf)
+/// finished, to `reference_ms` when it is the current one ([`covered`]).
+fn complete(
+    day: &[&ChartCandle],
+    start: f64,
+    end: Option<f64>,
+    reference_ms: f64,
+    tf: f64,
+) -> bool {
+    covered(
+        day.iter().map(|b| b.t_open_ms),
+        start,
+        end,
+        reference_ms,
+        tf,
+    )
 }
 
 /// The profile of `day`'s bars over `bins` bins, or `None` when nothing traded.
@@ -222,18 +229,19 @@ fn build(day: &[&ChartCandle], bins: u16) -> Option<Profile> {
     })
 }
 
-/// The profile of UTC day `day` when it is complete enough (`finished` says whether the day is
-/// over, so its end must be covered too), with its last close.
+/// The profile of UTC day `day` when it is covered (`finished` says whether the day is over, so its
+/// end must be covered too; otherwise it is covered up to `reference_ms`), with its last close.
 fn day_profile(
     bars: &[ChartCandle],
     day: i64,
     finished: bool,
+    reference_ms: f64,
     bins: u16,
     tf: f64,
 ) -> Option<(Profile, f64)> {
     let (start, end) = (day_start_ms(day), day_start_ms(day + 1));
     let in_day = bars_in(bars, start, end);
-    if !complete(&in_day, start, finished.then_some(end), tf) {
+    if !complete(&in_day, start, finished.then_some(end), reference_ms, tf) {
         return None;
     }
     // Only the POC's tie-break reads it, which needs where the day ended, not its exact close.
@@ -259,7 +267,8 @@ fn line(profile: &Profile, price: f64, bin: usize, tag: LineTag) -> Option<Found
 }
 
 /// Whether the span from `from` up to `reference_ms` is covered well enough to say what traded in
-/// it, and if so whether any of its bars traded at `price`. `None` when the span has too big a hole.
+/// it ([`span_covered`]), and if so whether any of its bars traded at `price`. `None` when the span
+/// has too long a hole.
 fn traded_since(
     bars: &[ChartCandle],
     from: f64,
@@ -268,8 +277,7 @@ fn traded_since(
     price: f64,
 ) -> Option<bool> {
     let after = bars_in(bars, from, f64::INFINITY);
-    let expected = ((reference_ms - from) / tf).floor().max(0.0);
-    if (after.len() as f64) < MIN_COVERAGE * expected {
+    if !span_covered(after.iter().map(|b| b.t_open_ms), from, reference_ms, tf) {
         return None;
     }
     Some(
@@ -297,7 +305,9 @@ fn profile_lines(
         ProfilePeriod::PrevDay => (reference_day - 1, true),
     };
     if p.poc || p.vah || p.val {
-        if let Some((profile, last_close)) = day_profile(bars, day, finished, p.bins, tf) {
+        if let Some((profile, last_close)) =
+            day_profile(bars, day, finished, reference_ms, p.bins, tf)
+        {
             if let Some(poc) = profile.poc(last_close) {
                 let (va_lo, va_hi) = profile.value_area(poc, p.value_area_pct);
                 if p.poc {
@@ -319,7 +329,8 @@ fn profile_lines(
     }
     for back in 1..=i64::from(p.naked_poc_days) {
         let day = reference_day - back;
-        let Some((profile, last_close)) = day_profile(bars, day, true, p.bins, tf) else {
+        let Some((profile, last_close)) = day_profile(bars, day, true, reference_ms, p.bins, tf)
+        else {
             continue;
         };
         let Some(poc) = profile.poc(last_close) else {

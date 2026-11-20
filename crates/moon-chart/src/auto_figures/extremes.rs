@@ -13,12 +13,12 @@
 //!
 //! A period its own bars do not cover is reported as nothing rather than as a partial extreme
 //! ([`super::coverage`]): its first bar within one bar length (`DetectCtx::tf_ms`) of its start,
-//! a previous period's last bar closing at its end, and at least
-//! [`MIN_COVERAGE`](super::coverage::MIN_COVERAGE) of the bars the span should hold — the whole
-//! previous period, the current one up to its last closed bar. The cache holds holes of hours, and
-//! the bars before the input's first one are not the only ones that can be missing: a day of three
-//! bars in the middle of an otherwise long input is three bars, and its real high or low is simply
-//! not in them. Without a usable bar length (`tf_ms <= 0`) nothing can be checked and nothing is
+//! a previous period's last bar closing at its end, the current one's last bar close enough to the
+//! reference time, and no empty stretch between neighbouring bars longer than
+//! [`MAX_GAP_MS`](super::coverage::MAX_GAP_MS). The cache holds holes of hours, and the bars before
+//! the input's first one are not the only ones that can be missing: a day of three bars in the
+//! middle of an otherwise long input is three bars, and its real high or low is simply not in
+//! them. A quiet market's short stretches without a trade are not holes. Without a usable bar length (`tf_ms <= 0`) nothing can be checked and nothing is
 //! found. A previous period's extreme also reports, informationally, the latest later break of it
 //! in `broken`; it is never dropped (`DetectorParams::broken_policy` gives this kind the default
 //! policy only for the event layer's false-break window). Cost O(n).
@@ -92,20 +92,19 @@ fn period_extremes(
     let (start, end) = period_bounds(p.period, day_of(reference_ms));
     // (index, bar) of the period's bars, and the extremes among them — the first bar to reach the
     // extreme wins a tie, so the touch marks where the level was set.
+    let in_period = |b: &ChartCandle| bar_ok(b) && b.t_open_ms >= start && b.t_open_ms < end;
     let mut first_in: Option<f64> = None;
     let mut last_in: Option<f64> = None;
-    let mut count = 0usize;
     let mut high: Option<(usize, f32)> = None;
     let mut low: Option<(usize, f32)> = None;
     let mut last_idx_in = 0;
     for (i, b) in bars.iter().enumerate() {
-        if !bar_ok(b) || b.t_open_ms < start || b.t_open_ms >= end {
+        if !in_period(b) {
             continue;
         }
         first_in.get_or_insert(b.t_open_ms);
         last_in = Some(b.t_open_ms);
         last_idx_in = i;
-        count += 1;
         if high.is_none_or(|(_, h)| b.high > h) {
             high = Some((i, b.high));
         }
@@ -117,7 +116,8 @@ fn period_extremes(
         return Vec::new();
     };
     let previous = matches!(p.period, ExtremePeriod::PrevDay | ExtremePeriod::PrevWeek);
-    if !covered(first_ms, last_ms, count, start, previous.then_some(end), tf) {
+    let opens = bars.iter().filter(|b| in_period(b)).map(|b| b.t_open_ms);
+    if !covered(opens, start, previous.then_some(end), reference_ms, tf) {
         return Vec::new();
     }
     let make = |(idx, price): (usize, f32), origin: Side, tag: LineTag| -> Found {

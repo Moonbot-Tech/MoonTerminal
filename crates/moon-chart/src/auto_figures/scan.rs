@@ -17,8 +17,9 @@
 //! (`moon_core::market::kline_cache::RING_5M_KIND`), stored on every connect — about the 41 hours
 //! before it for every market the core carries. A real candle wins its bucket; a ring row fills a
 //! bucket none holds, as a bar with an unknown open and close (`super::with_ring_rows`), which
-//! gives its high and low to pivots and levels and no close to any break or event. It never asks
-//! a core for anything.
+//! gives its high and low to pivots and levels, and takes a side of a line for a break or an event
+//! only when its whole range lies on that side (`super::close_side`). It never asks a core for
+//! anything.
 //!
 //! # From 5-minute rows to a row's bars
 //!
@@ -30,8 +31,10 @@
 //! may not have written the bucket's last rows yet — the same rule, with the same cap, as the
 //! chart's own job (`chartdx/auto_figures_sync/job.rs::cache_bars`), so the two see the same bars.
 //! Every timeframe — `D1` included — is resampled from the 5-minute rows; the scanner has no other
-//! source. A bucket assembled from fewer than half of its 5-minute rows is a hole, not a bar, and
-//! is left out (`super::resample_5m`, the same function the chart's job resamples through).
+//! source, and it is resampled exactly as the chart's job resamples it
+//! (`moon_core::market::candles::resample`): a bucket with empty 5-minute slots is still the bar
+//! of what traded in it — a quiet market leaves such slots everywhere — and the calendar detectors
+//! judge holes by their length themselves (`super::coverage`).
 //!
 //! # Cost
 //!
@@ -46,14 +49,14 @@
 use moon_core::config::auto_figures::{
     AutoEvent, AutoFigureRow, DetectorParams, EventMarks, Take, TfId, TfSource,
 };
-use moon_core::market::candles::ChartCandle;
+use moon_core::market::candles::{ChartCandle, resample};
 use moon_core::market::kline_cache::KIND_5M_MS;
 
 use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
 use super::history::history_full;
 use super::twins::{TwinRow, select_rows};
-use super::{DetectCtx, Found, bar_ok, detect, price_of, resample_5m, take, with_ring_rows};
+use super::{DetectCtx, Found, bar_ok, detect, price_of, take, with_ring_rows};
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
 ///
@@ -589,9 +592,8 @@ fn closed_5m(base: &[ChartCandle], now_ms: f64, out: &mut Vec<ChartCandle>) -> O
 }
 
 /// The closed bars of `tf_ms` that `m5` (closed 5-minute rows, ascending) yields at `now_ms`, into
-/// `out`: the partial first bucket, every bucket assembled from fewer than half of its rows
-/// ([`resample_5m`]), every bucket still forming, and a lagging newest bucket left out (see the
-/// module doc).
+/// `out`: the partial first bucket, every bucket still forming, and a lagging newest bucket left
+/// out (see the module doc).
 fn closed_bars(m5: &[ChartCandle], tf_ms: i64, now_ms: f64, out: &mut Vec<ChartCandle>) {
     out.clear();
     let Some(first) = m5.first() else {
@@ -604,7 +606,7 @@ fn closed_bars(m5: &[ChartCandle], tf_ms: i64, now_ms: f64, out: &mut Vec<ChartC
     if tf_ms <= 0 {
         return;
     }
-    resample_5m(m5, tf_ms, out);
+    resample(m5, tf_ms, out);
     if out.first().is_some_and(|b| first.t_open_ms > b.t_open_ms) {
         out.remove(0);
     }

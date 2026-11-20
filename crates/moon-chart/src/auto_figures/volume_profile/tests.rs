@@ -164,9 +164,9 @@ fn no_volume_and_holes_give_nothing() {
     }
     assert!(run(&dry, p, now).is_empty());
 
-    // 3 of the 4 hours: 75 % < 90 %.
+    // The two middle hours missing: two hours of nothing between 01:00 and 03:00.
     let mut holed = four_bars(1.0);
-    holed.remove(1);
+    holed.drain(1..3);
     assert!(run(&holed, p, now).is_empty());
 
     // The day's first hour missing.

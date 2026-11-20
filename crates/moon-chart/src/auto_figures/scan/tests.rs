@@ -277,44 +277,38 @@ fn a_lagging_newest_bucket_waits_up_to_the_cap() {
     assert_eq!(late.best.map(|b| b.event), Some(AutoEvent::Breakout));
 }
 
-/// An hour assembled from fewer than half of its twelve 5-minute rows is a hole, not a bar: three
-/// whole hours at 3.4, then a fourth of five rows at 3.55, judged past the lag cap, show no
-/// breakout of 3.5 — the fourth hour's bar would be 25 minutes of it. Six rows, exactly half, are
-/// a bar, and its close breaks the level.
+/// A quiet hour is a bar: the cache holds a row only where something traded, so a fourth hour of
+/// five 5-minute rows at 3.55 after three whole hours at 3.4, judged past the lag cap, is the bar of
+/// those five trades, and its close breaks 3.5 — 1.408 % below price ((3.5 − 3.55) / 3.55), the
+/// answer of the whole hour.
 ///
-/// Breakage: every resampled bucket taken as whole (a breakout drawn from five 5-minute rows), or
-/// the half counted the wrong way (six rows dropped).
+/// Breakage: a share-of-rows rule dropping the quiet hour (no breakout on a market that traded
+/// through the level), or the scan resampling differently from the chart's job.
 #[test]
-fn an_hour_from_fewer_than_half_its_rows_is_a_hole() {
+fn a_quiet_hour_of_few_rows_is_a_bar() {
     let rows = [round_row(0, TfId::H1, EventMarks::default())];
     let now = MONDAY_2024_01_01_MS + 4.0 * HOUR_MS + 6.0 * MIN_MS;
-    let with = |n: usize| {
-        let mut bars = hourly(&[3.4, 3.4, 3.4]);
-        bars.extend((36..36 + n).map(|i| bar(i, 3.55, 3.55, 3.55, 3.55)));
-        bars
-    };
-    let sparse = scan(&rows, &with(5), now);
-    assert_eq!((sparse.rows_scanned, sparse.best), (1, None), "{sparse:?}");
-    let half = scan(&rows, &with(6), now);
-    assert_eq!(
-        half.best.map(|b| b.event),
-        Some(AutoEvent::Breakout),
-        "{half:?}"
-    );
+    let mut bars = hourly(&[3.4, 3.4, 3.4]);
+    bars.extend([36, 38, 41, 44, 47].map(|i| bar(i, 3.55, 3.55, 3.55, 3.55)));
+    let r = scan(&rows, &bars, now);
+    assert_eq!(r.best.map(|b| b.event), Some(AutoEvent::Breakout), "{r:?}");
+    let d = r.nearest.expect("the 3.5 line").distance_pct;
+    assert!((d + 1.408_45).abs() < 1e-4, "{d}");
 }
 
-/// A day the cache holds one 5-minute row of per four hours has six H4 bars — all of its H4
-/// buckets — and a profile of them would be "complete" in H4 bars. Those buckets are holes, so the
-/// H4 profile of that day draws nothing.
+/// A quiet day is profiled: Wednesday with one 5-minute row every half hour (8 of each H4 bucket's
+/// 48) gives six H4 bars of what it traded, so the H4 profile of the previous day is Wednesday's,
+/// at 3.59–3.61 — not nothing, and not Tuesday's 3.4.
 ///
-/// By hand: Monday and Tuesday whole, Wednesday six rows (one at the start of each four hours),
-/// Thursday's first four hours whole, judged just past them. The row needs 13 H4 bars (two days
-/// and the bar after); Monday's 6, Tuesday's 6 and Thursday's first give 13 without Wednesday's,
-/// so the row runs, and Wednesday — its previous day — has no bar to profile.
+/// By hand: Monday and Tuesday whole at 3.4, Wednesday's rows at 3.6 (range 3.59–3.61), Thursday's
+/// first four hours whole at 3.4, judged just past them. The row needs 13 H4 bars (two days and
+/// the bar after); Monday's 6, Tuesday's 6, Wednesday's 6 and Thursday's first give 19. Every line
+/// of a profile lies inside its day's range.
 ///
-/// Breakage: the sparse buckets taken as bars (a POC, VAH and VAL of six 5-minute rows).
+/// Breakage: a share-of-rows rule dropping the quiet buckets (the day has no bars, the profile
+/// nothing), or the coverage check reading the empty 5-minute slots as holes.
 #[test]
-fn a_profile_does_not_see_a_day_of_sparse_buckets() {
+fn a_quiet_day_is_profiled() {
     let profile = ScanRow {
         row_ix: 0,
         params: DetectorParams::VolumeProfile(VolumeProfileParams {
@@ -330,12 +324,17 @@ fn a_profile_does_not_see_a_day_of_sparse_buckets() {
     let day = 288;
     let flat = |i: usize, p: f32| bar(i, p, p + 0.01, p - 0.01, p);
     let mut bars: Vec<ChartCandle> = (0..2 * day).map(|i| flat(i, 3.4)).collect();
-    bars.extend((0..6).map(|k| flat(2 * day + k * 48, 3.6)));
+    bars.extend((0..48).map(|k| flat(2 * day + k * 6, 3.6)));
     bars.extend((3 * day..3 * day + 48).map(|i| flat(i, 3.4)));
     let now = MONDAY_2024_01_01_MS + 3.0 * 24.0 * HOUR_MS + 4.0 * HOUR_MS + 6.0 * MIN_MS;
     let r = scan(&[profile], &bars, now);
     assert_eq!((r.rows_scanned, r.rows_short), (1, 0), "{r:?}");
-    assert_eq!((r.lines, r.nearest), (0, None), "{r:?}");
+    assert!(r.lines > 0, "{r:?}");
+    let price = r.nearest.expect("a profile line").price;
+    assert!(
+        (f64::from(3.59f32)..=f64::from(3.61f32)).contains(&price),
+        "{price}"
+    );
 }
 
 /// 90 % of `bars_needed` is enough, less is "short": a 10-bar swing row runs on 9 closed hours and
