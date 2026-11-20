@@ -93,8 +93,11 @@ feature — a row in the map, a new user word — a row in the dictionary.
   Ctrl+Z, magnet on Ctrl, figure alerts with sound and flags. A Zone prints its width in
   percent at both lines, always, like Moonbot's rectangle (#660).
 - **«Автофигуры»** (“Auto figures”) — lines the chart finds by
-  itself, not drawn by hand: levels, period high/low, sloped trend lines, squeezes (#1408). Not
-  the user's Figures: nothing is saved to the figure store unless a line is pinned as a figure.
+  itself, not drawn by hand: levels, period high/low, sloped trend lines, squeezes (#1408), the
+  volume profile's POC / VAH / VAL, round prices and formations (channels, triangles, flags,
+  double tops). High/low and the profile read a rolling window of the last 4 / 12 / 24 / 48 hours
+  (24 by default) or a UTC calendar day or week. Not the user's Figures: nothing is saved to the
+  figure store unless a line is pinned as a figure.
 - **«Линейка %»** (“percent ruler”) — Shift + left drag on the chart plot shows the move in
   percent, how long it took and the Bv/Sv traded over the stretch; release and nothing is
   left behind (#485). The modifier is set in Hotkeys → Chart; the order book keeps its own
@@ -123,10 +126,14 @@ volumes at the bottom (in quote currency), horizontal volumes by price beside th
 plot (Moonbot's HVol), bought/sold volume by the chart,
 volume measure around the cursor, the crosshair's values (armed order size, book depth,
 percent from the best price) each placed or hidden per tab, auto figures (levels, period
-high/low, trend lines and squeezes found on the candles — a table of rows per kind of chart tab
-from a button on the tab strip, each row its detector, timeframe, how many lines to keep and their
-look, captions and event marks; a hovered line shows a card, its right-click menu pins it as a
-figure, hides it or opens its row; on by default on Main, shipped switched off on the other kinds), liquidation count, news marks (gems by
+high/low, trend lines, squeezes, volume profile, round prices and formations found on the candles
+and the core's 5-minute ring — a table of rows per kind of chart tab from a button on the tab
+strip, each row its detector, timeframe, how many lines to keep and their look, captions and event
+marks, one opacity for the block; captions show on hover by default, a hovered line shows its card
+while Ctrl is held, its right-click menu pins it as a figure, hides it or opens its row; an eye in
+the chart's captions shows or hides the auto figures on that coin until the coin changes; on by default on Main, shipped
+switched off on the other kinds; the Screener scans every market with Main's rows on a button press
+and filters by the event found), liquidation count, news marks (gems by
 tags, Ctrl-hover card), own-trade markers, chart stacks/columns,
 detach into separate windows, chart screenshot to the clipboard (with the header baked in), favourite
 coins and a temporary coin ban (as in MB), coin search with tabs, where a coin is blacklisted
