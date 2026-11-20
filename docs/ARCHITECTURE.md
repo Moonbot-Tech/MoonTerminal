@@ -215,7 +215,9 @@ Rules that are easy to break unnoticed:
   minutes `report_recovery::status()` answers `CheckRunning` — a notice derived from the running
   check, not latched like the others — and it goes away with the verdict. A check that still
   could not run preserves access to existing history through SQLite read-only connections and
-  publishes the stopped-recording notice. New reader connections become
+  publishes the stopped-recording notice (`CheckIncomplete`). The writer does not exit then: it
+  parks uninitialized, closes the WAL anchor and waits for the user's fresh replica (see the
+  fresh-replica bullet below); recording stays off until then. New reader connections become
   writable only after the full gate opens, preserving the Report preference-write API.
   **A thread that serves anything else must not wait on that gate.** A core's feed thread does
   not: it asks the writer for its start state without blocking (`ReportSink::try_start`), runs
@@ -223,17 +225,23 @@ Rules that are easy to break unnoticed:
   (`feed/live/report_sync.rs::writer_pending`). Until then the core sends no report rows —
   asking for the schema is what turns live delivery on — and the catch-up carries what was
   missed. No core's clock offset is adopted until then either, report feed on or off, so Core
-  Status never shows a correction whose segment the writer has not stored. Before #1190 the feed waited there, so every core stood
+  Status never shows a correction whose segment the writer has not stored. That holds for a
+  writer parked after a check that could not run as well: its cores declare nothing and adopt no
+  offset until a fresh replica opens, and on the station, which has no surface to start one, for
+  the rest of the session. Before #1190 the feed waited there, so every core stood
   still for as long as the check ran. Daily compaction defers the replica while the gate is
   pending and compacts the strategies and trades databases; its retry returns for the replica.
   Report preference writes that find the gate pending are parked behind one shared waiting
   thread rather than on the background executor, whose pool is fixed-size on Linux. Analytics
-  polls the verdict every 500 ms, and every 5 s once the still-running notice is up.
+  polls the verdict every 500 ms, and every 5 s once the still-running notice is up; it polls
+  every 2 s while a fresh-replica set-aside runs, and briefly after a check that could not run,
+  until the writer has decided whether to offer one.
   The report revision channel publishes a recovery notice when it appears, changes or goes
   away, even when no writer commits; Report repaints the notice without requerying unchanged
   rows. A
   read-only WAL anchor held by the permit keeps early read-write preference readers from
-  triggering a last-connection checkpoint before the writer opens.
+  triggering a last-connection checkpoint before the writer opens; a writer that parks closes it,
+  since its open handle would keep the main file from being moved.
   Confirmed damage is never "repaired" in place:
   `reports.sqlite`, `reports.sqlite-wal` and `reports.sqlite-shm` are copied to staging, checked
   by size and SHA-256, given versioned metadata and published by one directory rename into
@@ -254,8 +262,29 @@ Rules that are easy to break unnoticed:
     the retry-loop, and the core can send the unacknowledged batch again after a clean recovery.
     Non-corruption persistent errors are also bounded by retry-round count and do not keep the channel
     blocked forever.
-  - `CheckFailed` is not equal to `Damaged`: an inconclusive check deletes nothing. Strategy,
-    warning, and market-cache databases are not in this protocol.
+  - `CheckFailed` is not equal to `Damaged`: an inconclusive check deletes nothing and moves
+    nothing by itself. Strategy, warning, and market-cache databases are not in this protocol.
+  - **Fresh replica after a check that could not run.** While the writer is parked
+    (`report_recovery::fresh_replica_offered`), the Report and Analytics notices offer "Start a
+    fresh replica" (`report_notice::fresh_replica_action`) behind a confirmation; it is never
+    offered while a check runs, and a second press while one runs is refused.
+    `start_fresh_replica` runs off the UI thread: it closes reads and drains the reader budget,
+    then sets the three files aside through the same copy-verify-publish-retire path as confirmed
+    damage, into a snapshot whose metadata says no damage was found (a user set-aside does not
+    trip the 24-hour circuit breaker). On success write access opens, the parked writer drops
+    whatever was queued for the old replica, numbers the fresh valuation outbox above the
+    acknowledgements already sent, opens the new replica, and every core declares its catch-up
+    from the start; the notice becomes `FreshReplicaStarted` with the snapshot path. The check
+    that could not run is still never treated as a pass: nothing is written to the unchecked files.
+    - A failed move (the file held, too little space) puts back whatever it retired, withdraws
+      the published copy, reopens reads and shows `FreshReplicaFailed` with the action offered
+      again. A copy that cannot be withdrawn, or a member that cannot be put back, is stuck: the
+      notice is `Failed`, no retry is offered, reads reopen only over a complete live set, and the
+      next start's resume finishes the move. Report requeries when a set-aside ends, since reads
+      were closed while it ran.
+    - Settings → Storage → Data by core does not send a report delete to a writer that is not
+      running (`report_recovery::recording_stopped`); it reports that recording is off in this
+      session and points to the notice.
 - **Both "by insertion" modes share one `insertion_key`** and are therefore exact mirrors
   of each other. The key is injective (`uid`, and when `uid == 0` — "newest possible", plus `id` as
   a tie-break), so the reverse does not rely on sort stability, and the row currently
