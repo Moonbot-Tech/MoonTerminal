@@ -99,6 +99,21 @@ static FRESH_RUNNING_NOTICE: RecoveryNotice = RecoveryNotice::FreshReplicaRunnin
 /// Shown after a set-aside that left every file where it was; the next attempt replaces it.
 static FRESH_FAILED_NOTICE: RecoveryNotice = RecoveryNotice::FreshReplicaFailed;
 
+/// The incomplete-check notice again, once the parked writer has made the action available.
+///
+/// Equal in value to [`NOTICE`] but a different address. The UI learns about notices by
+/// identity (`startup.rs::recovery_notice_changed`), and the writer parks a moment after the
+/// notice is published: without a new address, a surface that rendered in between would show no
+/// button until some unrelated repaint.
+static OFFERED_NOTICE: OnceLock<RecoveryNotice> = OnceLock::new();
+
+/// Whether a writer holds the permit and has not yet decided between recording and parking.
+///
+/// True from the moment the writer starts waiting for the verdict until it either opens the
+/// replica or has offered (or declined to offer) the fresh-replica action, so a surface can
+/// wait out that moment instead of polling for the rest of the session.
+static OFFER_PENDING: AtomicBool = AtomicBool::new(false);
+
 /// Snapshot cause recorded for a set-aside the user asked for. It is not a damage verdict.
 const FRESH_REPLICA_CAUSE: &str = "The full integrity check could not run, and the user set the \
                                    replica aside to start a fresh one. No damage was found.";
@@ -190,8 +205,15 @@ impl StartupGate {
 
 impl ReportWritePermit {
     /// Wait for the full verdict and hand the writer its WAL anchor and authorization.
+    ///
+    /// A closed verdict leaves the writer's decision pending until [`wait_for_fresh_replica`]
+    /// has made it.
     pub(crate) fn wait(self) -> (bool, Arc<Mutex<Option<Connection>>>) {
+        OFFER_PENDING.store(true, Ordering::Release);
         let allowed = self.gate.wait();
+        if allowed {
+            OFFER_PENDING.store(false, Ordering::Release);
+        }
         (allowed, self.anchor)
     }
 }
@@ -311,8 +333,15 @@ fn status_at(now: Instant) -> Option<&'static RecoveryNotice> {
         FreshReplica::Running => Some(&FRESH_RUNNING_NOTICE),
         FreshReplica::Failed => Some(&FRESH_FAILED_NOTICE),
         FreshReplica::Started | FreshReplica::Stuck => FRESH_NOTICE.get().or_else(|| NOTICE.get()),
-        FreshReplica::Unavailable | FreshReplica::Offered => NOTICE.get(),
+        FreshReplica::Offered => OFFERED_NOTICE.get().or_else(|| NOTICE.get()),
+        FreshReplica::Unavailable => NOTICE.get(),
     }
+}
+
+/// Whether the fresh-replica action may still appear: a writer holds the permit and has not
+/// decided yet. Brief — the writer decides as soon as the verdict is published.
+pub fn fresh_replica_offer_pending() -> bool {
+    OFFER_PENDING.load(Ordering::Acquire)
 }
 
 /// Current fresh-replica lifecycle, read under its lock.
@@ -479,7 +508,9 @@ impl Drop for FreshRun {
 ///     `true` once a fresh replica is in place; `false` at once when the verdict was anything
 ///     but a check that could not run. Otherwise it does not return until the user acts.
 pub(crate) fn wait_for_fresh_replica(anchor: &Mutex<Option<Connection>>) -> bool {
-    if !offer_fresh_replica(anchor) {
+    let offered = offer_fresh_replica(anchor);
+    OFFER_PENDING.store(false, Ordering::Release);
+    if !offered {
         return false;
     }
     log::warn!(
@@ -497,10 +528,10 @@ pub(crate) fn wait_for_fresh_replica(anchor: &Mutex<Option<Connection>>) -> bool
 /// Returns:
 ///     Whether the action is now offered; it is offered at most once per process.
 fn offer_fresh_replica(anchor: &Mutex<Option<Connection>>) -> bool {
-    if !matches!(NOTICE.get(), Some(RecoveryNotice::CheckIncomplete { .. }))
-        || integrity::writes_blocked()
-        || access_permitted()
-    {
+    let Some(notice @ RecoveryNotice::CheckIncomplete { .. }) = NOTICE.get() else {
+        return false;
+    };
+    if integrity::writes_blocked() || access_permitted() {
         return false;
     }
     anchor.lock().unwrap_or_else(|p| p.into_inner()).take();
@@ -508,6 +539,9 @@ fn offer_fresh_replica(anchor: &Mutex<Option<Connection>>) -> bool {
     if *state != FreshReplica::Unavailable {
         return false;
     }
+    // Before the state, under its lock: `status` reads this notice once the state says
+    // `Offered`, and its new address is what tells the UI to show the button.
+    let _ = OFFERED_NOTICE.set(notice.clone());
     *state = FreshReplica::Offered;
     true
 }

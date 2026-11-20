@@ -536,7 +536,10 @@ impl Render for ReportPanel {
                 db::report_recovery::RecoveryNotice::CheckIncomplete { .. } => true,
                 db::report_recovery::RecoveryNotice::FreshReplicaFailed => true,
                 // A failed read already carries the same text through its access-denied note.
+                // `Failed` reaches readable history when a set-aside could not be withdrawn: the
+                // files are back, but recording is off and the next start finishes the move.
                 db::report_recovery::RecoveryNotice::Recovered { .. }
+                | db::report_recovery::RecoveryNotice::Failed { .. }
                 | db::report_recovery::RecoveryNotice::FreshReplicaRunning
                 | db::report_recovery::RecoveryNotice::FreshReplicaStarted { .. } => {
                     !matches!(self.data, LoadState::Failed(_))

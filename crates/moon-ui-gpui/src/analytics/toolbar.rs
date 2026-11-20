@@ -1032,9 +1032,15 @@ impl AnalyticsView {
             recovery_note,
             Some(RecoveryNotice::FreshReplicaStarted { .. })
         );
+        // The writer offers the fresh replica a moment after the incomplete-check notice is out.
+        // Nothing repaints this window for that, so it waits out the writer's decision with the
+        // same poll; once decided, the latched notice returns below and the poll stops.
+        let deciding = matches!(recovery_note, Some(RecoveryNotice::CheckIncomplete { .. }))
+            && moon_core::db::report_recovery::fresh_replica_offer_pending();
+        let transient = setting_aside || deciding;
         // A still-running check is the one notice that goes away by itself, so it must not
         // return here: the poll below is what notices the verdict and takes the notice down.
-        if !setting_aside
+        if !transient
             && !fresh
             && matches!(
                 recovery_note,
@@ -1047,7 +1053,7 @@ impl AnalyticsView {
             return recovered;
         }
 
-        let verdict = if setting_aside {
+        let verdict = if transient {
             None
         } else {
             moon_core::db::integrity::status()

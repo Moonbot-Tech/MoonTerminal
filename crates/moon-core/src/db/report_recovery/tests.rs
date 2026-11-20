@@ -963,14 +963,28 @@ fn an_unchecked_replica_is_set_aside_and_the_parked_writer_records_into_a_fresh_
         "never offered while the check runs"
     );
     assert!(!begin_fresh_replica());
+    wait_until(
+        "the writer to wait for the verdict",
+        fresh_replica_offer_pending,
+    );
 
     // The verdict the worker publishes after its last attempt, then the permit it resolves.
     assert!(!finish_background(
         Decision::Ready,
         Integrity::CheckFailed("fixture: file held".into())
     ));
+    let incomplete = status().expect("the incomplete-check notice");
     gate.finish(false);
     wait_until("the writer to park", fresh_replica_offered);
+    assert!(
+        !fresh_replica_offer_pending(),
+        "a surface waiting for the writer's decision would poll forever"
+    );
+    // Same words, new address: the UI compares notices by identity, and a surface that
+    // rendered before the writer parked must be told the button is there now.
+    let offered = status().expect("the offered notice");
+    assert_eq!(offered, incomplete);
+    assert!(!std::ptr::eq(offered, incomplete));
     assert!(
         anchor.lock().unwrap().is_none(),
         "the anchor would block the move"
