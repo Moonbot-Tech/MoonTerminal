@@ -105,8 +105,8 @@ pub(super) struct RosterDragAnchor {
 ///
 /// Mirrors `panels::report::widths`'s `NaturalWidthsEnvironment`, which exists for exactly this
 /// reason: a content-measured width is valid only for the typography and the LANGUAGE it was
-/// measured in, and neither of those bumps a DATA revision — `assets_sig` hashes core ids and
-/// their `*_rev` counters and nothing else. Settings applies a language or scale change LIVE to
+/// measured in, and neither of those bumps a DATA revision — `assets_sig` hashes the cores, their
+/// data revisions and the account, label and venue inputs, never the language or typography. Settings applies a language or scale change LIVE to
 /// open windows, so keying the width on `cached_aggs` alone would leave the column sized for the
 /// previous locale until some balance happened to move, which on a quiet account is never.
 ///
@@ -624,8 +624,9 @@ impl AssetsView {
         ));
     }
 
-    /// Collapsible Wallets section: a selectable balance-aware core list plus the Spot,
-    /// Futures, and Quarterly transfer containers. Expanded content shares the available height.
+    /// Collapsible Wallets section: a selectable balance-aware core list plus the selected core's
+    /// transfer containers, named and shown per exchange. Expanded content shares the available
+    /// height.
     ///
     /// Args:
     ///     aggs: Balance aggregates for the cores currently in scope.

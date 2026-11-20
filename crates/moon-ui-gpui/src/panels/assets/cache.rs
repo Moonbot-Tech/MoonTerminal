@@ -142,20 +142,19 @@ impl AssetsView {
             cores.iter().map(|(id, name)| (*id, name.as_str())),
             &b.config.servers,
         );
+        // The wallet core's brand names and hides the wallet columns, and a venue that lands after
+        // the wallets moves no data revision. Neither the merge keys (absent on a core that states
+        // no account identity) nor the query cores (the wallet core may sit outside the filter)
+        // are sure to carry it, so it is hashed on its own.
+        self.effective_wallet_core(b)
+            .and_then(|core| core_brand(b, core))
+            .hash(&mut keys);
         let sig = cores
             .iter()
             // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
             .map(|(id, _)| (*id, store.core(*id)))
             .fold(0u64, |a, (id, core)| {
                 b.session.account_merge_key(id).hash(&mut keys);
-                // The brand names and hides wallet columns, and a venue that lands after the
-                // wallets moves no data revision; the merge key above misses it on a core that
-                // states no account identity.
-                b.session
-                    .core_venues()
-                    .get(&id)
-                    .and_then(|venue| venue.brand())
-                    .hash(&mut keys);
                 let a = a.wrapping_mul(31).wrapping_add(id);
                 let Some(c) = core else {
                     return a;
