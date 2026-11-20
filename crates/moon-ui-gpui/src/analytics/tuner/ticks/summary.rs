@@ -363,6 +363,9 @@ pub(super) struct SummaryModel {
     pub changed_header: String,
     pub changes: Vec<ChangeRow>,
     pub warnings: Vec<String>,
+    /// Why the last search never landed (`TicksState::stopped_by`). Shown with or without a
+    /// variant in the column: a cut run leaves it empty, which is exactly when it must be said.
+    pub stopped: Option<String>,
     pub details: Vec<(String, String)>,
     pub details_open: bool,
     pub write_enabled: bool,
@@ -604,6 +607,11 @@ impl SummaryModel {
             changed_header: t!("analytics.ticks.sum.changed", n = changes.len()).to_string(),
             changes,
             warnings,
+            stopped: state
+                .stopped_by
+                .filter(|_| matches!(state.sugg, SuggState::Idle))
+                .and_then(|stop| stop.note_key())
+                .map(|key| t!(key).to_string()),
             details,
             details_open: state.details_open,
             write_enabled: false,

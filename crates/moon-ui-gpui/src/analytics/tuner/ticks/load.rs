@@ -22,7 +22,9 @@ use gpui::*;
 
 use super::super::super::AnalyticsView;
 use super::signature::{ReloadKey, SamplePolicy};
-use super::state::{DealRow, NowValue, OwnValues, RowAddress, SettledMiss, TapeStatus, TicksData};
+use super::state::{
+    DealRow, NowValue, OwnValues, RowAddress, SearchStop, SettledMiss, TapeStatus, TicksData,
+};
 use super::tape;
 use super::unmodelled::{UnmodelledMap, unmodelled_map};
 use crate::analytics::bg::ReadLane;
@@ -87,6 +89,15 @@ impl AnalyticsView {
         self.reload_ticks_inner(false, true, cx);
     }
 
+    /// Read the table again after a strategy write — at once, or once a running search lands
+    /// (`TicksState::defer_reread`): the write is the same scope with new values, and a reload
+    /// now would throw the search away.
+    pub(in crate::analytics) fn reload_ticks_after_write(&mut self, cx: &mut Context<Self>) {
+        if !self.ticks.defer_reread() {
+            self.reload_ticks(cx);
+        }
+    }
+
     /// Recompute report-stale data through the writer-driven catch-up path.
     ///
     /// Held when "recount on request only" holds the rows in force and nothing but the report
@@ -113,6 +124,10 @@ impl AnalyticsView {
     ) {
         let show_overlay = self.axis_read_overlay(show_overlay);
         if !after_report {
+            // A full reload reads the strategies' values as they stand, a write's included. A
+            // report reload leaves a held write re-read owed: it may run before the write's
+            // snapshot echo is on disk, and nothing would repeat it.
+            self.ticks.reread_pending = false;
             self.report_busy_retries.reset();
             // A reload by hand of rows "recount on request only" holds reads the station's
             // filings too, so the card stops saying it is behind on them.
@@ -142,7 +157,7 @@ impl AnalyticsView {
         // finished at all, and said nothing.
         if !after_report {
             self.latest_reads.cancel(&[ReadLane::TicksSearch]);
-            self.ticks.stop_search("manual reload");
+            self.ticks.stop_search(SearchStop::Reload);
         }
         let req = self.ticks.seq;
         let report_req = self.current_report_generation();
@@ -628,11 +643,17 @@ impl AnalyticsView {
             ReadLane::TicksVariants,
             ReadLane::TicksSearch,
         ]);
-        self.ticks.stop_search("model settings");
+        self.ticks.stop_search(SearchStop::Model);
         // Every verdict of the table is of the old settings now: none may be carried by a
         // reload until this stage has judged them all again.
         self.ticks.judged_under = None;
         self.ticks.reload_key = None;
+        // A write's re-read held back for the search it just stopped: the full reload reads
+        // the written values and judges every row under the new settings in its own stage C.
+        if self.ticks.reread_pending {
+            self.reload_ticks(cx);
+            return;
+        }
         let req = self.ticks.seq;
         self.start_tape_stage(req, None, None, cx);
     }

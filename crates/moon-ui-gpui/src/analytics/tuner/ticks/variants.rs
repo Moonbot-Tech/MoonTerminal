@@ -806,11 +806,16 @@ impl AnalyticsView {
                     // A miss arms nothing, yet a tick changed during the run waits for its end.
                     this.ticks_sync_entry_tape(cx);
                 }
-                // A station-tape wake that came during the run was held back so its reload
-                // would not stop the search; the answer has landed, so it goes through now —
-                // unless landing itself restarted the replay above, which drops the flag
-                // (`stop_search`) and asks for the missing rows as that reload ends.
-                if this.ticks.station_wake_pending {
+                // A strategy write's re-read held back for the run goes through now, unless
+                // landing already reloaded above (`ticks_replay_again` consumes it). Its reload
+                // asks for the missing rows as it ends, so it stands in for a held station wake.
+                if this.ticks.reread_pending {
+                    this.reload_ticks(cx);
+                } else if this.ticks.station_wake_pending {
+                    // A station-tape wake that came during the run was held back so its reload
+                    // would not stop the search; the answer has landed, so it goes through now —
+                    // unless landing itself restarted the replay above, which drops the flag
+                    // (`stop_search`) and asks for the missing rows as that reload ends.
                     this.station_tape_woke(cx);
                 }
                 cx.notify();

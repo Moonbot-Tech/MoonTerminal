@@ -961,7 +961,8 @@ impl AnalyticsView {
             StratMode::Filters => self.reload_tuner(cx),
             StratMode::Time => self.reload_time(cx),
             StratMode::Coins => self.reload_coins(cx),
-            StratMode::Ticks => self.reload_ticks(cx),
+            // A running Entry/Exit search outlives the write: the re-read waits for it.
+            StratMode::Ticks => self.reload_ticks_after_write(cx),
         }
     }
 }
