@@ -31,10 +31,10 @@
 //! may not have written the bucket's last rows yet — the same rule, with the same cap, as the
 //! chart's own job (`chartdx/auto_figures_sync/job.rs::cache_bars`), so the two see the same bars.
 //! Every timeframe — `D1` included — is resampled from the 5-minute rows; the scanner has no other
-//! source, and it is resampled exactly as the chart's job resamples it
-//! (`moon_core::market::candles::resample`): a bucket with empty 5-minute slots is still the bar
-//! of what traded in it — a quiet market leaves such slots everywhere — and the calendar detectors
-//! judge holes by their length themselves (`super::coverage`).
+//! source, and it is resampled exactly as the chart's job resamples it ([`resample_5m`]): a bucket
+//! with short empty 5-minute slots is still the bar of what traded in it — a quiet market leaves
+//! such slots everywhere — while one holding more than an hour of nothing is a hole, judged by the
+//! same length the calendar detectors judge their periods by (`super::coverage`).
 //!
 //! # Cost
 //!
@@ -49,14 +49,14 @@
 use moon_core::config::auto_figures::{
     AutoEvent, AutoFigureRow, DetectorParams, EventMarks, Take, TfId, TfSource,
 };
-use moon_core::market::candles::{ChartCandle, resample};
+use moon_core::market::candles::ChartCandle;
 use moon_core::market::kline_cache::KIND_5M_MS;
 
 use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
 use super::history::history_full;
 use super::twins::{TwinRow, select_rows};
-use super::{DetectCtx, Found, bar_ok, detect, price_of, take, with_ring_rows};
+use super::{DetectCtx, Found, bar_ok, detect, price_of, resample_5m, take, with_ring_rows};
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
 ///
@@ -606,7 +606,7 @@ fn closed_bars(m5: &[ChartCandle], tf_ms: i64, now_ms: f64, out: &mut Vec<ChartC
     if tf_ms <= 0 {
         return;
     }
-    resample(m5, tf_ms, out);
+    resample_5m(m5, tf_ms, out);
     if out.first().is_some_and(|b| first.t_open_ms > b.t_open_ms) {
         out.remove(0);
     }

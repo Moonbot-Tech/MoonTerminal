@@ -12,10 +12,10 @@
 //! is why the shipped extreme rows run on 5-minute bars.
 //!
 //! A period its own bars do not cover is reported as nothing rather than as a partial extreme
-//! ([`super::coverage`]): its first bar within one bar length (`DetectCtx::tf_ms`) of its start,
-//! a previous period's last bar closing at its end, the current one's last bar close enough to the
-//! reference time, and no empty stretch between neighbouring bars longer than
-//! [`MAX_GAP_MS`](super::coverage::MAX_GAP_MS). The cache holds holes of hours, and the bars before
+//! ([`super::coverage`]): no empty stretch longer than
+//! [`MAX_GAP_MS`](super::coverage::MAX_GAP_MS) from its start to its first bar, between
+//! neighbouring bars, or from its last bar's close to its end (the current one's: to the reference
+//! time). The cache holds holes of hours, and the bars before
 //! the input's first one are not the only ones that can be missing: a day of three bars in the
 //! middle of an otherwise long input is three bars, and its real high or low is simply not in
 //! them. A quiet market's short stretches without a trade are not holes. Without a usable bar length (`tf_ms <= 0`) nothing can be checked and nothing is

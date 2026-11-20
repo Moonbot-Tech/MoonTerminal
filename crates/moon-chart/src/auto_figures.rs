@@ -59,7 +59,7 @@
 //! a break the market did not make.
 
 use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams, ToleranceUnit};
-use moon_core::market::candles::ChartCandle;
+use moon_core::market::candles::{ChartCandle, bucket_open_ms, resample};
 use moon_core::market::kline_cache::KIND_5M_MS;
 
 pub mod confluence;
@@ -541,6 +541,56 @@ pub fn with_ring_rows(real: &[ChartCandle], ring: &[ChartCandle], out: &mut Vec<
     if out.len() > before || !out.is_sorted_by(|a, b| a.t_open_ms <= b.t_open_ms) {
         out.sort_by(|a, b| a.t_open_ms.total_cmp(&b.t_open_ms));
     }
+}
+
+/// `m5` (5-minute rows, ascending — the bar assembly's base, [`with_ring_rows`], real candles and
+/// ring rows alike) resampled to `tf_ms` into `out`, without the buckets that hold an empty stretch
+/// longer than [`coverage::MAX_GAP_MS`]: those are holes, not bars.
+///
+/// A row exists only where something traded, so a quiet market's bucket has empty slots and is
+/// still the bar of what traded in it. A bucket the terminal and the core both missed for hours is
+/// not: its high and low are those of the minutes that were recorded, and a pivot, a swing, an ATR
+/// or a day's extremes read from it see a market that never turned there. The line between the two
+/// is the one [`coverage`] draws for a calendar period — no empty stretch longer than an hour from
+/// the bucket's start to its first row, between two rows, or from its last row's close to its end
+/// — applied to each bucket, so a hole inside a 4-hour or daily bar is seen the way a hole between
+/// 5-minute bars is.
+///
+/// The one resample of the 5-minute base for every reader of it — the chart's rows and the
+/// screener's scan — so both drop the same buckets. A bucket no longer than the allowed stretch
+/// cannot hold one, so `tf_ms` up to an hour passes every bucket. The bucket still forming is
+/// judged like the others and dropped, as the readers drop it anyway. Buckets are cut exactly as
+/// `moon_core::market::candles::resample` cuts them. Cost O(n).
+pub fn resample_5m(m5: &[ChartCandle], tf_ms: i64, out: &mut Vec<ChartCandle>) {
+    resample(m5, tf_ms, out);
+    if tf_ms as f64 <= coverage::MAX_GAP_MS {
+        return;
+    }
+    let tf = tf_ms as f64;
+    let step = KIND_5M_MS as f64;
+    // `resample` opens a bucket with every row whose bucket differs from the last one opened, so
+    // the rows come in the same runs as `out`'s buckets: each bucket takes the row that opened it,
+    // then every following row of the same bucket.
+    let mut rows = m5.iter().peekable();
+    let mut opens = Vec::new();
+    out.retain(|bucket| {
+        opens.clear();
+        if let Some(r) = rows.next() {
+            opens.push(r.t_open_ms);
+        }
+        while let Some(r) = rows.next_if(|r| bucket_open_ms(r.t_open_ms, tf_ms) == bucket.t_open_ms)
+        {
+            opens.push(r.t_open_ms);
+        }
+        let end = bucket.t_open_ms + tf;
+        coverage::covered(
+            opens.iter().copied(),
+            bucket.t_open_ms,
+            Some(end),
+            end,
+            step,
+        )
+    });
 }
 
 /// The most recent `lookback` bars — all of them when fewer exist, none for `lookback = 0`.

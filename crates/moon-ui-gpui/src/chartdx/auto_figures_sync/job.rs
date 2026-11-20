@@ -428,10 +428,11 @@ fn tail(bars: &[ChartCandle], n: u32) -> &[ChartCandle] {
 ///
 /// Equal timeframes pass through. A wider one is resampled, and a bucket the source does not
 /// cover from its start is dropped — the first one, when the source begins mid-bucket — because a
-/// partial high or low would place a level where the market never turned. A bucket with empty
-/// slots inside is kept: the cache holds a row only where something traded, so a quiet market's
-/// bucket is the bar of what it did trade — the same `resample` the screener's scan uses, so the
-/// two see the same bars. A bucket is closed when it opens at or before `last_closed_ms`; the one
+/// partial high or low would place a level where the market never turned. From 5-minute rows the
+/// resample is [`auto_figures::resample_5m`], the one the screener's scan uses, so the two see the
+/// same bars: a bucket with short empty slots is kept — the cache holds a row only where something
+/// traded, so a quiet market's bucket is the bar of what it did trade — and one holding more than
+/// an hour of nothing is dropped as a hole. A bucket is closed when it opens at or before `last_closed_ms`; the one
 /// still forming is dropped.
 pub(crate) fn closed_bars(
     rows: &[ChartCandle],
@@ -451,7 +452,11 @@ pub(crate) fn closed_bars(
             .collect();
     }
     let mut out = Vec::new();
-    resample(rows, row_ms, &mut out);
+    if src_ms == KIND_5M_MS {
+        auto_figures::resample_5m(rows, row_ms, &mut out);
+    } else {
+        resample(rows, row_ms, &mut out);
+    }
     if let (Some(first_bucket), Some(first_row)) = (out.first(), rows.first())
         && first_row.t_open_ms > first_bucket.t_open_ms
     {

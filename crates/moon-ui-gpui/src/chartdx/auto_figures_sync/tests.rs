@@ -171,11 +171,13 @@ fn a_half_written_newest_bucket_waits_for_the_cache_but_not_forever() {
 /// A bucket of the cache with empty 5-minute slots is still a bar: the cache holds a row only where
 /// something traded, so a quiet 09:00 hour of five rows (09:00, 09:15, 09:30, 09:40, 09:55) is the
 /// bar of those five trades — kept between two whole hours, its low and high the lowest and highest
-/// of its rows, 98 and 105 by hand. A day of one row is that day's bar as well.
+/// of its rows, 98 and 105 by hand. A quiet day — a row every 50 minutes — is that day's bar as
+/// well, while a day of one row at 12:00 is a hole: twelve hours of nothing on each side of it are
+/// a terminal and a core that were not running, not a market that did not trade.
 ///
 /// Breakage: a share-of-rows rule dropping the quiet buckets (a quiet coin's honest 1h and daily
-/// bars thrown away, and the chart seeing other bars than the screener's scan), or a bucket's range
-/// not folding all of its rows.
+/// bars thrown away, and the chart seeing other bars than the screener's scan), a bucket of a few
+/// recorded minutes read as a whole day, or a bucket's range not folding all of its rows.
 #[test]
 fn a_bucket_with_empty_slots_is_still_a_bar() {
     let hour = |h: i64| DAY0 + h * 3_600_000;
@@ -203,10 +205,10 @@ fn a_bucket_with_empty_slots_is_still_a_bar() {
     let day = 24 * 3_600_000;
     let mut rows = series(DAY0, 5 * MIN, 288);
     rows.push(bar(DAY0 + day + 12 * 3_600_000, 90.0, 95.0));
-    let days = closed_bars(&rows, 5 * MIN, day, DAY0 + day);
+    rows.extend(series(DAY0 + 2 * day, 50 * MIN, 29));
+    let days = closed_bars(&rows, 5 * MIN, day, DAY0 + 2 * day);
     let opens: Vec<i64> = days.iter().map(|b| b.t_open_ms as i64).collect();
-    assert_eq!(opens, vec![DAY0, DAY0 + day]);
-    assert_eq!((days[1].low, days[1].high), (90.0, 95.0));
+    assert_eq!(opens, vec![DAY0, DAY0 + 2 * day]);
 }
 
 /// A cache that counts its reads and answers from fixed rows.

@@ -772,6 +772,43 @@ fn a_resampled_bucket_takes_its_close_from_its_last_sub_bar() {
     assert_eq!(open_of(&ten[1]), Some(9.0));
 }
 
+/// A 4-hour bucket is a bar while no stretch of it longer than an hour is empty, wherever that
+/// stretch lies; an hour bucket cannot hold one and always passes. Five buckets of 48 slots: a
+/// quiet one (a row every 50 minutes) kept; a 70-minute hole inside, 65 minutes missing at the
+/// end and 65 at the start each dropped; a full one kept after them, in order.
+///
+/// Breakage: the hole rule dropped (a bucket of a few recorded minutes read as four hours), a share
+/// of rows instead of the gap length (the quiet bucket dropped), or the runs misaligned with the
+/// buckets after a dropped one.
+#[test]
+fn a_coarse_bucket_with_an_hour_of_nothing_is_a_hole() {
+    use super::test_bars::bar;
+    let slots: Vec<usize> = [0, 10, 20, 30, 40, 47]
+        .into_iter()
+        .chain((48..=60).chain(75..96))
+        .chain(96..=130)
+        .chain(157..192)
+        .chain(192..240)
+        .collect();
+    let m5: Vec<ChartCandle> = slots
+        .iter()
+        .map(|&i| bar(i, 10.0, 11.0, 9.0, 10.0))
+        .collect();
+    let h4 = 4 * 3_600_000;
+    let mut out = Vec::new();
+    resample_5m(&m5, h4, &mut out);
+    let opens: Vec<i64> = out
+        .iter()
+        .map(|b| ((b.t_open_ms - m5[0].t_open_ms) as i64) / h4)
+        .collect();
+    assert_eq!(opens, vec![0, 4]);
+
+    let mut plain = Vec::new();
+    resample_5m(&m5, 3_600_000, &mut out);
+    moon_core::market::candles::resample(&m5, 3_600_000, &mut plain);
+    assert_eq!(out, plain);
+}
+
 /// The true range of a bar after one without a known close is its own range.
 ///
 /// By hand: three bars, the middle one with an unknown close; ATR(2) = (6 + 4) / 2 = 5: the newest

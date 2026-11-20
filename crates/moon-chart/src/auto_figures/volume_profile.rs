@@ -25,11 +25,10 @@
 //! The local 5-minute cache is written only while the terminal runs, so a day with a hole is
 //! normal, and a profile of part of a day is a different profile — its POC can sit at a price the
 //! missing hours never cared about. A day is profiled only when it is COVERED — the check every
-//! calendar detector shares ([`super::coverage`]): its first bar opens within one bar length of its
-//! start, a finished day's last bar closes at its end (the current day's last bar is close enough
-//! to the reference time), and no empty stretch between neighbouring bars is longer than
-//! [`MAX_GAP_MS`](super::coverage::MAX_GAP_MS) — a quiet market's short stretches without a trade
-//! are not holes, hours in a row are. A naked POC additionally needs the span AFTER its day, up to
+//! calendar detector shares ([`super::coverage`]): no empty stretch longer than
+//! [`MAX_GAP_MS`](super::coverage::MAX_GAP_MS) from its start to its first bar, between
+//! neighbouring bars, or from its last bar's close to its end (the current day's: to the reference
+//! time) — a quiet market's short stretches without a trade are not holes, hours in a row are. A naked POC additionally needs the span AFTER its day, up to
 //! the reference time, free of such a stretch ([`span_covered`]): "nothing traded at it since" is
 //! not a claim a hole of a day can support.
 //!

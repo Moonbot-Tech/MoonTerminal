@@ -29,9 +29,10 @@
 //! An open or a close (`period_levels`) needs its exact edge bar ([`opens_at`], [`closes_at`]); a
 //! high, a low or a profile needs the whole span (`extremes`, `volume_profile`).
 //!
-//! Limit: the check sees the bars it is given. On a timeframe coarser than [`MAX_GAP_MS`] (4 h,
-//! 1 d) one bar can be resampled from a few 5-minute rows with hours missing inside it, and no gap
-//! between bars shows that. The shipped day-extremes row runs on 5-minute bars, where it does.
+//! The check sees the bars it is given. A bar coarser than [`MAX_GAP_MS`] (4 h, 1 d) could hide
+//! hours missing inside it, so the 5-minute base is resampled by
+//! [`resample_5m`](super::resample_5m), which judges every such bucket by this same rule and leaves
+//! a holed one out: the hole then shows here as the gap between bars it is.
 
 /// The longest empty stretch, ms, between two neighbouring bars of a period that still counts as
 /// a market that did not trade rather than a hole in the record.
