@@ -57,7 +57,7 @@ const TF_W: f32 = 40.0;
 const ROW_GAP: f32 = 2.0;
 /// Slack over the computed line width, for a trigger that renders wider than asked.
 const ROW_SLACK: f32 = 10.0;
-/// The block opacities offered, in display order. The shipped 60 % is one of them, and so are
+/// The block opacities offered, in display order. The shipped 40 % is one of them, and so are
 /// both bounds the repair keeps (`AF_OPACITY_MIN`, `AF_OPACITY_MAX`), so every stored value lights
 /// the step nearest it.
 const OPACITY_STEPS: [f32; 6] = [0.1, 0.25, 0.4, 0.6, 0.8, 1.0];

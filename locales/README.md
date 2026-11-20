@@ -110,6 +110,7 @@ Industry standard / tech metrics we leave as they are in every language:
     Add @TMoonBot to your channel · Generate PIN code · Reset channel · Cancel buys · Apply (Special buttons — the same in Moonbot)
     RTT · MTU (network abbreviations in core-start telemetry)
     POC · VAH · VAL (volume-profile abbreviations on auto-figure lines and in their editor)
+    UTC (the time standard the auto-figure calendar periods are cut in)
     the status-bar metrics line (ticks / book / fps / present / CPU / RAM)
     line names on the Settings → Lines tab (Buy/Sell/Stop/…); dashed, crosses and knots are translated in `lines.<lang>.yml`
     technical Report columns: ID · TaskID · ExOrderID · Strat · BaseCur · Sell set

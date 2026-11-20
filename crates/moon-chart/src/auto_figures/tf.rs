@@ -53,6 +53,24 @@ pub fn auto_tf(visible_ms: f64) -> TfId {
         .map_or(finest, |(_, tf)| *tf)
 }
 
+/// `Auto`'s answer `tf`, with `M1` raised to `M5` on a chart coarser than one minute
+/// (`chart_tf_ms`). Every other answer as is — and so is `M1` when the chart has no bar length
+/// (`<= 0`) or is a 1-minute one.
+///
+/// `Auto` follows the zoom, and a close zoom on a 5-minute chart picks 1-minute rows — bars a
+/// coarser chart has only where that market was once shown on 1 minute, so the row drew nothing
+/// and said "not enough history" (LinKvo, 20.11.2026). M5 is the next step of `Auto`'s own table
+/// and the finest timeframe the 5-minute cache builds on any chart, so zooming in never turns the
+/// lines coarser: on an hourly chart the M5 band stays M5 into the closest zoom. A row the reader
+/// wants on 1-minute bars over a coarser chart pins it.
+pub fn lift_m1(tf: TfId, chart_tf_ms: i64) -> TfId {
+    if tf == TfId::M1 && chart_tf_ms > TfId::M1.ms() {
+        TfId::M5
+    } else {
+        tf
+    }
+}
+
 /// `Auto`'s memory between two zoom changes: the timeframe it last settled on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AutoTf {
@@ -102,7 +120,8 @@ impl AutoTf {
 }
 
 /// Where a row's bars come from. Every source is one the terminal already has: the chart's own
-/// series, or the local kline cache (5-minute rows for ALL markets, daily rows). A row never asks
+/// series, or the local kline cache (5-minute rows for ALL markets, daily rows, and 1-minute rows
+/// where a market's chart was shown on 1 minute). A row never asks
 /// the core for history of its own — that is what makes the core fetch klines from the exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarSource {
@@ -116,7 +135,11 @@ pub enum BarSource {
     Cache5m,
     /// The local daily cache.
     CacheDaily,
-    /// Nothing the terminal holds yields these bars — a 1-minute row on a coarser chart. The row
+    /// The local kline cache's 1-minute rows, for a 1-minute row on a coarser chart. They are
+    /// there only for markets whose chart the terminal has shown on 1 minute (the chart's history
+    /// is filed as it loads) — on others the row says it has no cache.
+    Cache1m,
+    /// Nothing the terminal holds yields these bars — a 1-minute row with no cache at all. The row
     /// draws nothing and says it lacks history.
     Unavailable,
 }
@@ -146,7 +169,8 @@ pub enum BarSource {
 ///     or no cache for the market); the daily cache for `D1`; the chart series resampled when the
 ///     row is a multiple of the chart's timeframe and the series covers `lookback_bars + 1` row
 ///     bars (the first, partial bucket is dropped); the 5-minute cache for any multiple of
-///     5 minutes; otherwise [`BarSource::Unavailable`].
+///     5 minutes; the 1-minute cache for `M1` on a market that has a cache; otherwise
+///     [`BarSource::Unavailable`].
 pub fn bar_source(
     row: TfId,
     chart_tf_ms: i64,
@@ -180,6 +204,9 @@ pub fn bar_source(
     }
     if row_ms % KIND_5M_MS == 0 {
         return BarSource::Cache5m;
+    }
+    if row == TfId::M1 && has_cache {
+        return BarSource::Cache1m;
     }
     BarSource::Unavailable
 }

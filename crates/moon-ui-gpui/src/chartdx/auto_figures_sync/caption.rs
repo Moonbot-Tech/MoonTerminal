@@ -29,8 +29,8 @@ const EVENT_SEP: &str = ", ";
 pub(crate) enum RowTitle {
     /// The user's own name for the row, verbatim.
     Named(Arc<str>),
-    /// A dictionary key: the row's preset, or its detector kind when it has neither name nor
-    /// preset.
+    /// A dictionary key: its preset's name as the row reads now (`AutoFigureRow::title_key` —
+    /// period, timeframe), or its detector kind when it has neither name nor preset name.
     Key(&'static str),
 }
 

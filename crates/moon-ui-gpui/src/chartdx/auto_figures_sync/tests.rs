@@ -298,7 +298,8 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
     let out = run(&job, Some(&cache));
     assert!(out[0].1.read_failed);
     assert!(out[0].1.found.is_empty());
-    // A 1-minute row on a 5-minute chart has no source at all: nothing, and no failure to retry.
+    // A 1-minute row on a 5-minute chart reads the cache's 1-minute rows: this market has none,
+    // which is an empty answer — no bars, and no failure to retry.
     let job = PaneJob {
         rows: vec![(0, key(TfId::M1, now, 50))],
         chart_tf_ms: 5 * MIN,
@@ -307,8 +308,8 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
         now_ms: now,
     };
     let out = run(&job, Some(&cache));
-    assert_eq!(out[0].1.source, BarSource::Unavailable);
-    assert!(!out[0].1.read_failed && out[0].1.short_history());
+    assert_eq!(out[0].1.source, BarSource::Cache1m);
+    assert!(!out[0].1.read_failed && out[0].1.bars == 0 && out[0].1.short_history());
 }
 
 #[test]

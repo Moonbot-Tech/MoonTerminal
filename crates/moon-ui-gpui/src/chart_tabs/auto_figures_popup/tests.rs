@@ -117,8 +117,8 @@ fn a_long_name_is_fitted_and_a_short_one_kept() {
 /// profile that never touched the setting lights its own step, and every stored value lights the
 /// step nearest it rather than a neighbour that misstates it.
 ///
-/// Breakage: `AF_OPACITY_DEFAULT` moved off the steps (the popup then lights 40 % or 80 % for a
-/// block drawn at 60 %), or a bound moved past the outermost step.
+/// Breakage: `AF_OPACITY_DEFAULT` moved off the steps (the popup then lights 25 % or 60 % for a
+/// block drawn at 40 %), or a bound moved past the outermost step.
 #[test]
 fn the_opacity_steps_hold_the_default_and_the_bounds() {
     use moon_core::config::auto_figures::{AF_OPACITY_DEFAULT, AF_OPACITY_MAX, AF_OPACITY_MIN};

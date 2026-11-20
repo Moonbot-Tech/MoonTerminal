@@ -179,7 +179,14 @@ impl Default for SwingParams {
     }
 }
 
-/// Which calendar period a `PeriodExtreme` row reads, in UTC.
+/// Which period a `PeriodExtreme` row reads: a UTC calendar day or week, or a rolling window of the
+/// last hours.
+///
+/// The rolling windows are what crypto, which trades around the clock, reads by default (LinKvo,
+/// 20.11.2026): "the last 24 hours" is equally full at any moment, where "today" is one hour long
+/// right after UTC midnight — and 24 hours always fit the core's 41-hour 5-minute ring. The
+/// calendar periods stay for the reader who trades from the daily candle, whose high and low every
+/// exchange draws from 00:00 UTC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtremePeriod {
@@ -196,6 +203,32 @@ pub enum ExtremePeriod {
     Week,
     /// The complete ISO week before the reference time's.
     PrevWeek,
+    /// The last 4 hours before the reference time, from closed bars: a window that moves with the
+    /// clock, so its high or low steps when the bar that set it leaves the window.
+    Last4h,
+    /// The last 12 hours, like [`Self::Last4h`].
+    Last12h,
+    /// The last 24 hours, like [`Self::Last4h`] — the exchanges' own "24h high / low".
+    Last24h,
+    /// The last 48 hours, like [`Self::Last4h`]. Longer than the core's ring: complete only once the
+    /// candle cache holds the hours before it.
+    Last48h,
+}
+
+impl ExtremePeriod {
+    /// The window's length in hours for a rolling period, `None` for a calendar one.
+    pub fn rolling_hours(self) -> Option<u32> {
+        match self {
+            ExtremePeriod::Day
+            | ExtremePeriod::PrevDay
+            | ExtremePeriod::Week
+            | ExtremePeriod::PrevWeek => None,
+            ExtremePeriod::Last4h => Some(4),
+            ExtremePeriod::Last12h => Some(12),
+            ExtremePeriod::Last24h => Some(24),
+            ExtremePeriod::Last48h => Some(48),
+        }
+    }
 }
 
 /// Which side of the period's range a row draws.
@@ -319,7 +352,8 @@ impl Default for SqueezeParams {
     }
 }
 
-/// Which UTC day a `VolumeProfile` row builds its profile over.
+/// Which span a `VolumeProfile` row builds its profile over: a UTC day, or a rolling window of the
+/// last hours (why both: [`ExtremePeriod`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfilePeriod {
@@ -329,10 +363,33 @@ pub enum ProfilePeriod {
     Day,
     /// The complete UTC day before the reference time's.
     PrevDay,
+    /// The last 4 hours before the reference time, from closed bars; the profile moves with the
+    /// clock as old bars leave the window and new ones close.
+    Last4h,
+    /// The last 12 hours, like [`Self::Last4h`].
+    Last12h,
+    /// The last 24 hours, like [`Self::Last4h`].
+    Last24h,
+    /// The last 48 hours, like [`Self::Last4h`]; longer than the core's ring.
+    Last48h,
 }
 
-/// `VolumeProfile`: levels from the volume traded at each price over a UTC day — its point of
-/// control (POC, the price bin with the most volume) and the edges of its value area.
+impl ProfilePeriod {
+    /// The window's length in hours for a rolling period, `None` for a calendar day.
+    pub fn rolling_hours(self) -> Option<u32> {
+        match self {
+            ProfilePeriod::Day | ProfilePeriod::PrevDay => None,
+            ProfilePeriod::Last4h => Some(4),
+            ProfilePeriod::Last12h => Some(12),
+            ProfilePeriod::Last24h => Some(24),
+            ProfilePeriod::Last48h => Some(48),
+        }
+    }
+}
+
+/// `VolumeProfile`: levels from the volume traded at each price over a UTC day or a rolling window
+/// of the last hours ([`ProfilePeriod`]) — its point of control (POC, the price bin with the most
+/// volume) and the edges of its value area.
 ///
 /// The profile is built by the detector itself (`moon_chart::auto_figures::volume_profile`): the
 /// day's range is cut into `bins` equal bins and each bar's `quote_volume` is spread uniformly over
@@ -343,7 +400,7 @@ pub enum ProfilePeriod {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VolumeProfileParams {
-    /// The day the profile is built over.
+    /// The span the profile is built over.
     pub period: ProfilePeriod,
     /// Draw the period's point of control.
     pub poc: bool,
@@ -629,12 +686,20 @@ const DAY_MS: i64 = 86_400_000;
 /// Bars of `tf` that cover `days` whole UTC days, rounded UP, plus one: the slack for a bar that
 /// opens exactly at the period's boundary. An upper bound, never short.
 fn bars_for_days(days: i64, tf: TfId) -> u32 {
+    bars_for_span(days * DAY_MS, tf)
+}
+
+/// Bars of `tf` that cover a span of `span_ms` plus one (see [`bars_for_days`]).
+fn bars_for_span(span_ms: i64, tf: TfId) -> u32 {
     // `TfId::ms` is a positive constant for every variant, so the division is safe; the ceiling
     // keeps a timeframe that does not divide the period from coming short.
     let tf_ms = tf.ms().max(1);
-    let bars = (days * DAY_MS + tf_ms - 1) / tf_ms + 1;
+    let bars = (span_ms + tf_ms - 1) / tf_ms + 1;
     u32::try_from(bars).unwrap_or(u32::MAX)
 }
+
+/// Milliseconds in one hour, for the rolling windows' spans.
+const HOUR_MS: i64 = 3_600_000;
 
 /// A pivot detector's lookback, raised to what its ATR needs when its tolerance is in ATR.
 fn with_atr(lookback: u32, unit: ToleranceUnit) -> u32 {
@@ -684,9 +749,11 @@ impl DetectorParams {
     /// Detectors read CLOSED bars only, so a row whose bar is as long as the period it measures
     /// never sees that period: on D1 the current day's bar is always still forming, and a `Day`
     /// row there would draw nothing for ever. So a current-day extreme and a day's open stop at
-    /// H4. A volume profile stops at H1: it spreads each bar's volume over the bar's whole range,
-    /// so a day of four-hour bars is six smears, not a profile. `D1` — no limit — for every other
-    /// kind. Applied to a `Fixed` timeframe by `sanitize`, and to a resolved `Auto` one by the
+    /// H4. A rolling extremes window stops at H1: its start falls between bar boundaries, and a
+    /// coarser first bar opens too late for its coverage. The four-hour window stops at M15, so it
+    /// still holds sixteen bars. A volume
+    /// profile stops at H1: it spreads each bar's volume over the bar's whole range, so a day of
+    /// four-hour bars is six smears, not a profile. `D1` — no limit — for every other kind. Applied to a `Fixed` timeframe by `sanitize`, and to a resolved `Auto` one by the
     /// caller.
     pub fn coarsest_tf(&self) -> TfId {
         match self {
@@ -694,6 +761,19 @@ impl DetectorParams {
                 period: ExtremePeriod::Day,
                 ..
             }) => TfId::H4,
+            // A rolling window starts at an arbitrary moment, and its coverage needs a bar opening
+            // within `coverage::MAX_GAP_MS` (an hour) of that start: so its bars are at most an
+            // hour long, whatever its length — on H4 the first bar opens up to four hours late and
+            // the window is reported as uncovered three times in four. Four hours of M15 still hold
+            // sixteen bars.
+            DetectorParams::PeriodExtreme(PeriodExtremeParams {
+                period: ExtremePeriod::Last4h,
+                ..
+            }) => TfId::M15,
+            DetectorParams::PeriodExtreme(PeriodExtremeParams {
+                period: ExtremePeriod::Last12h | ExtremePeriod::Last24h | ExtremePeriod::Last48h,
+                ..
+            }) => TfId::H1,
             DetectorParams::PeriodLevel(PeriodLevelParams { day_open: true, .. }) => TfId::H4,
             DetectorParams::VolumeProfile(_) => TfId::H1,
             _ => TfId::D1,
@@ -709,11 +789,11 @@ impl DetectorParams {
     ///   ATR reads that many bars. A flag's pole lies inside the lookback, so it adds nothing.
     /// - A period extreme: the bars that cover the requested period from its START up to the
     ///   latest possible reference time — the current day or week in full, the previous one plus
-    ///   all of the current one — plus one (see `bars_for_days`): the detector refuses a period
-    ///   whose first bar is missing.
-    /// - A volume profile: the same for its day (`Day` 1, `PrevDay` 2) plus one day per naked POC
-    ///   day asked for — each of those days and every day since must be read to know price has not
-    ///   come back.
+    ///   all of the current one, a rolling window its hours — plus one (see `bars_for_days`): the
+    ///   detector refuses a period whose start is missing.
+    /// - A volume profile: the same for its span (`Day` 1 day, `PrevDay` 2, a rolling window its
+    ///   hours) plus one day per naked POC day asked for — each of those days and every day since
+    ///   must be read to know price has not come back.
     /// - A period level: the longest of its enabled flags — the previous day's close 2 days, the
     ///   day's open 1, the week's open 7, the previous week's close 14. None enabled: one bar.
     /// - Round prices: one bar, the last close they are measured from.
@@ -734,20 +814,39 @@ impl DetectorParams {
             DetectorParams::Squeeze(p) => with_atr(p.level.lookback_bars, p.level.tolerance_unit),
             DetectorParams::Formation(p) => with_atr(p.lookback_bars, p.tolerance_unit),
             DetectorParams::PeriodExtreme(p) => {
-                let days: i64 = match p.period {
-                    ExtremePeriod::Day => 1,
-                    ExtremePeriod::PrevDay => 2,
-                    ExtremePeriod::Week => 7,
-                    ExtremePeriod::PrevWeek => 14,
+                let span = match p.period {
+                    ExtremePeriod::Day => DAY_MS,
+                    ExtremePeriod::PrevDay => 2 * DAY_MS,
+                    ExtremePeriod::Week => 7 * DAY_MS,
+                    ExtremePeriod::PrevWeek => 14 * DAY_MS,
+                    ExtremePeriod::Last4h => 4 * HOUR_MS,
+                    ExtremePeriod::Last12h => 12 * HOUR_MS,
+                    ExtremePeriod::Last24h => 24 * HOUR_MS,
+                    ExtremePeriod::Last48h => 48 * HOUR_MS,
                 };
-                bars_for_days(days, tf)
+                bars_for_span(span, tf)
             }
             DetectorParams::VolumeProfile(p) => {
-                let period: i64 = match p.period {
-                    ProfilePeriod::Day => 1,
-                    ProfilePeriod::PrevDay => 2,
+                // The naked POCs read their days and every day since: `naked_poc_days` whole days
+                // before the reference day, plus the reference day itself.
+                let naked = i64::from(p.naked_poc_days);
+                let span = match p.period {
+                    ProfilePeriod::Day => (1 + naked) * DAY_MS,
+                    ProfilePeriod::PrevDay => (2 + naked) * DAY_MS,
+                    ProfilePeriod::Last4h
+                    | ProfilePeriod::Last12h
+                    | ProfilePeriod::Last24h
+                    | ProfilePeriod::Last48h => {
+                        let hours = i64::from(p.period.rolling_hours().unwrap_or(24));
+                        let window = hours * HOUR_MS;
+                        if naked > 0 {
+                            window.max((1 + naked) * DAY_MS)
+                        } else {
+                            window
+                        }
+                    }
                 };
-                bars_for_days(period + i64::from(p.naked_poc_days), tf)
+                bars_for_span(span, tf)
             }
             DetectorParams::PeriodLevel(p) => {
                 let days = [

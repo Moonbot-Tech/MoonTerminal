@@ -120,15 +120,42 @@ fn place_key(place: CaptionPlace) -> &'static str {
     }
 }
 
-/// Locale key of one calendar period.
+/// Locale key of one extremes period: a rolling window or a UTC calendar period.
 fn period_key(period: ExtremePeriod) -> &'static str {
     match period {
         ExtremePeriod::Day => "auto_figures.edit.period.day",
         ExtremePeriod::PrevDay => "auto_figures.edit.period.prev_day",
         ExtremePeriod::Week => "auto_figures.edit.period.week",
         ExtremePeriod::PrevWeek => "auto_figures.edit.period.prev_week",
+        ExtremePeriod::Last4h => "auto_figures.edit.period.last4h",
+        ExtremePeriod::Last12h => "auto_figures.edit.period.last12h",
+        ExtremePeriod::Last24h => "auto_figures.edit.period.last24h",
+        ExtremePeriod::Last48h => "auto_figures.edit.period.last48h",
     }
 }
+
+/// The extremes periods the editor offers, rolling windows first — the default reading for a
+/// market that trades around the clock — then the UTC calendar ones.
+const EXTREME_PERIODS: [ExtremePeriod; 8] = [
+    ExtremePeriod::Last4h,
+    ExtremePeriod::Last12h,
+    ExtremePeriod::Last24h,
+    ExtremePeriod::Last48h,
+    ExtremePeriod::Day,
+    ExtremePeriod::PrevDay,
+    ExtremePeriod::Week,
+    ExtremePeriod::PrevWeek,
+];
+
+/// The profile periods the editor offers, in the same order as [`EXTREME_PERIODS`].
+const PROFILE_PERIODS: [ProfilePeriod; 6] = [
+    ProfilePeriod::Last4h,
+    ProfilePeriod::Last12h,
+    ProfilePeriod::Last24h,
+    ProfilePeriod::Last48h,
+    ProfilePeriod::Day,
+    ProfilePeriod::PrevDay,
+];
 
 /// Apply `f` to the row's detector parameters, when this build knows them.
 fn edit_params(r: &mut AutoFigureRow, f: impl FnOnce(&mut DetectorParams)) {
@@ -160,11 +187,15 @@ fn mark_mut(marks: &mut EventMarks, event: AutoEvent) -> &mut bool {
     }
 }
 
-/// Locale key of a volume profile's day.
+/// Locale key of a volume profile's span — the same words as [`period_key`].
 fn profile_period_key(period: ProfilePeriod) -> &'static str {
     match period {
         ProfilePeriod::Day => "auto_figures.edit.period.day",
         ProfilePeriod::PrevDay => "auto_figures.edit.period.prev_day",
+        ProfilePeriod::Last4h => "auto_figures.edit.period.last4h",
+        ProfilePeriod::Last12h => "auto_figures.edit.period.last12h",
+        ProfilePeriod::Last24h => "auto_figures.edit.period.last24h",
+        ProfilePeriod::Last48h => "auto_figures.edit.period.last48h",
     }
 }
 
@@ -557,14 +588,9 @@ fn search_pane(
                 t!(period_key(pe.period)).to_string(),
                 pick_items(
                     "afe-period-item",
-                    [
-                        ExtremePeriod::Day,
-                        ExtremePeriod::PrevDay,
-                        ExtremePeriod::Week,
-                        ExtremePeriod::PrevWeek,
-                    ]
-                    .into_iter()
-                    .map(|v| (v, t!(period_key(v)).to_string())),
+                    EXTREME_PERIODS
+                        .into_iter()
+                        .map(|v| (v, t!(period_key(v)).to_string())),
                     pe.period,
                     move |v, window, cx| {
                         write_row_reseed(&state_p, window, cx, |r| {
@@ -659,7 +685,7 @@ fn search_pane(
                 t!(profile_period_key(vp.period)).to_string(),
                 pick_items(
                     "afe-profile-period-item",
-                    [ProfilePeriod::Day, ProfilePeriod::PrevDay]
+                    PROFILE_PERIODS
                         .into_iter()
                         .map(|v| (v, t!(profile_period_key(v)).to_string())),
                     vp.period,

@@ -79,9 +79,9 @@ pub const AF_MOVE_PCT_MAX: f32 = 50.0;
 /// Longest a flag's pole may be looked for, in bars.
 pub const AF_IMPULSE_BARS_MAX: u32 = 100;
 /// The block's opacity ([`AutoFiguresCfg::opacity`]) a configuration that never stated one takes:
-/// LinKvo, 19.11.2026 — the auto lines are a backdrop to price and to the reader's own figures, not
-/// a layer over them.
-pub const AF_OPACITY_DEFAULT: f32 = 0.6;
+/// the auto lines are a backdrop to price and to the reader's own figures, not a layer over them
+/// (LinKvo, 19.11.2026), and 60 % still read as a layer on a live chart — 40 % (LinKvo, 20.11.2026).
+pub const AF_OPACITY_DEFAULT: f32 = 0.4;
 /// The block's opacity, bounds. Under a tenth the lines are gone while the feature still runs;
 /// one is the colours exactly as the rows state them.
 pub const AF_OPACITY_MIN: f32 = 0.1;

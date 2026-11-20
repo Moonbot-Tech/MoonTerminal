@@ -53,7 +53,7 @@ fn assert_shipped_rows(cfg: &AutoFiguresCfg) {
             Some(AutoFigurePreset::Levels1h),
             Some(AutoFigurePreset::TrendLines1h),
             Some(AutoFigurePreset::Squeeze),
-            Some(AutoFigurePreset::DayExtremes),
+            Some(AutoFigurePreset::Extremes24h),
         ]
     );
     let shape: Vec<_> = cfg
@@ -805,10 +805,7 @@ detector = { kind = "round_levels", grid = "tiny", range_pct = 5.0 }
 #[test]
 fn the_new_presets_are_offered_not_shipped() {
     let new = [
-        (
-            AutoFigurePreset::PrevDayProfile,
-            DetectorKind::VolumeProfile,
-        ),
+        (AutoFigurePreset::Profile24h, DetectorKind::VolumeProfile),
         (AutoFigurePreset::PeriodLevels, DetectorKind::PeriodLevel),
         (AutoFigurePreset::RoundLevels, DetectorKind::RoundLevels),
     ];
@@ -837,7 +834,7 @@ fn the_new_presets_are_offered_not_shipped() {
 #[test]
 fn the_day_deep_presets_stay_out_of_the_shipped_set() {
     assert!(!AutoFigurePreset::ALL.contains(&AutoFigurePreset::NakedPoc));
-    for preset in [AutoFigurePreset::Levels4h, AutoFigurePreset::PrevDayProfile] {
+    for preset in [AutoFigurePreset::Levels4h, AutoFigurePreset::Profile24h] {
         assert!(AutoFigurePreset::ALL.contains(&preset), "{preset:?}");
         assert!(
             !AutoFigurePreset::DEFAULT_SET.contains(&preset),
@@ -1442,7 +1439,7 @@ fn the_formation_policy_timeframe_and_bars() {
     );
 }
 
-/// The block's opacity: absent from a file is the default (60 %), the default is never written,
+/// The block's opacity: absent from a file is the default (40 %), the default is never written,
 /// a stored value comes back exactly, and the repair lands NaN on the default and the rest inside
 /// the bounds — idempotently.
 ///
@@ -1452,7 +1449,7 @@ fn the_formation_policy_timeframe_and_bars() {
 #[test]
 fn the_block_opacity_defaults_round_trips_and_is_repaired() {
     let old: Doc = toml::from_str("[auto_figures]\nenabled = true\n").expect("an old table loads");
-    assert_eq!(old.auto_figures.opacity, 0.6);
+    assert_eq!(old.auto_figures.opacity, 0.4);
     let (text, _) = round_trip(&AutoFiguresCfg::default());
     assert!(!text.contains("opacity"), "{text}");
 
@@ -1468,8 +1465,8 @@ fn the_block_opacity_defaults_round_trips_and_is_repaired() {
     );
 
     for (raw, repaired) in [
-        (f32::NAN, 0.6),
-        (f32::INFINITY, 0.6),
+        (f32::NAN, 0.4),
+        (f32::INFINITY, 0.4),
         (0.0, 0.1),
         (-1.0, 0.1),
         (7.0, 1.0),
@@ -1517,4 +1514,123 @@ detector = { kind = "swing" }
         Some(AutoFigurePreset::Levels1h)
     );
     assert_eq!(doc.auto_figures.rows[0].caption.show, CaptionShow::Always);
+}
+
+/// A preset row is named by what it reads NOW: the profile and extremes presets by their period —
+/// 24 hours by default, and whatever the reader switched it to; the hour-named levels and trend
+/// rows by their timeframe; a row switched to another kind by its detector (no preset name). Rows
+/// saved before 20.11.2026 keep their stored period and are named by it: the yesterday profile
+/// stored `period = "prev_day"`, and a day-extremes row stored nothing (the calendar day is the
+/// kind's default).
+///
+/// Breakage: the name read from the preset alone (a "yesterday" caption over today's lines, LinKvo
+/// 20.11.2026), a preset back on a calendar day, a wire name changed so old rows lose their preset,
+/// or an old day-extremes row silently turned into a 24-hour one.
+#[test]
+fn a_preset_row_is_named_by_what_it_reads_now() {
+    let mut profile = AutoFigurePreset::Profile24h.row();
+    let Some(DetectorParams::VolumeProfile(p)) = profile.detector.known() else {
+        panic!("{:?}", profile.detector);
+    };
+    assert_eq!(p.period, ProfilePeriod::Last24h);
+    assert_eq!(
+        profile.title_key(),
+        Some("auto_figures.preset.profile_last24h")
+    );
+    if let RowDetector::Known(DetectorParams::VolumeProfile(p)) = &mut profile.detector {
+        p.period = ProfilePeriod::Day;
+    }
+    assert_eq!(profile.title_key(), Some("auto_figures.preset.day_profile"));
+
+    let mut extremes = AutoFigurePreset::Extremes24h.row();
+    assert_eq!(
+        extremes.title_key(),
+        Some("auto_figures.preset.extremes_last24h")
+    );
+    if let RowDetector::Known(DetectorParams::PeriodExtreme(p)) = &mut extremes.detector {
+        p.period = ExtremePeriod::Week;
+    }
+    assert_eq!(
+        extremes.title_key(),
+        Some("auto_figures.preset.week_extremes")
+    );
+    extremes.detector = RowDetector::Known(DetectorParams::Swing(SwingParams::default()));
+    assert_eq!(extremes.title_key(), None);
+
+    let mut levels = AutoFigurePreset::Levels1h.row();
+    assert_eq!(levels.title_key(), Some("auto_figures.preset.levels_1h"));
+    levels.tf = TfSource::Fixed(TfId::H4);
+    assert_eq!(levels.title_key(), Some("auto_figures.preset.levels_4h"));
+    levels.tf = TfSource::Auto;
+    assert_eq!(levels.title_key(), Some("auto_figures.kind.swing"));
+
+    let file = r#"
+[[auto_figures.rows]]
+preset = "prev_day_profile"
+detector = { kind = "volume_profile", period = "prev_day" }
+
+[[auto_figures.rows]]
+preset = "day_extremes"
+tf = { mode = "fixed", tf = "m5" }
+detector = { kind = "period_extreme" }
+"#;
+    let doc: Doc = toml::from_str(file).expect("loads");
+    let rows = &doc.auto_figures.rows;
+    assert_eq!(rows[0].preset, Some(AutoFigurePreset::Profile24h));
+    assert_eq!(
+        rows[0].title_key(),
+        Some("auto_figures.preset.prev_day_profile")
+    );
+    assert_eq!(rows[1].preset, Some(AutoFigurePreset::Extremes24h));
+    let Some(DetectorParams::PeriodExtreme(p)) = rows[1].detector.known() else {
+        panic!("{:?}", rows[1].detector);
+    };
+    assert_eq!(p.period, ExtremePeriod::Day);
+    assert_eq!(
+        rows[1].title_key(),
+        Some("auto_figures.preset.day_extremes")
+    );
+}
+
+/// The rolling windows' needs and caps, by hand: a window of `h` hours on bars of `tf` is
+/// `h·60/tf + 1` bars (24 h of M5: 288 + 1; 48 h of H1: 48 + 1; 4 h of M15: 16 + 1), a rolling
+/// profile the same, and a rolling profile with naked POCs at least the naked days plus today
+/// (24 h with three naked days: four days of H1, 96 + 1). A rolling extreme stops at H1 — M15 for
+/// four hours — however long the window: its start falls between bar boundaries and coverage needs
+/// a bar within an hour of it.
+///
+/// Breakage: hours read as days (a 24-hour window asking for 24 days), the naked POCs ignored on a
+/// rolling profile, or the 48-hour window let onto H4 (uncovered three times in four).
+#[test]
+fn rolling_windows_need_their_hours_and_stop_at_an_hour() {
+    let extreme = |period| {
+        DetectorParams::PeriodExtreme(PeriodExtremeParams {
+            period,
+            which: ExtremeWhich::Both,
+        })
+    };
+    let profile = |period, naked_poc_days| {
+        DetectorParams::VolumeProfile(VolumeProfileParams {
+            period,
+            naked_poc_days,
+            ..VolumeProfileParams::default()
+        })
+    };
+    assert_eq!(extreme(ExtremePeriod::Last24h).bars_needed(TfId::M5), 289);
+    assert_eq!(extreme(ExtremePeriod::Last48h).bars_needed(TfId::H1), 49);
+    assert_eq!(extreme(ExtremePeriod::Last4h).bars_needed(TfId::M15), 17);
+    assert_eq!(
+        profile(ProfilePeriod::Last12h, 0).bars_needed(TfId::M5),
+        145
+    );
+    assert_eq!(profile(ProfilePeriod::Last24h, 3).bars_needed(TfId::H1), 97);
+
+    assert_eq!(extreme(ExtremePeriod::Last4h).coarsest_tf(), TfId::M15);
+    for period in [
+        ExtremePeriod::Last12h,
+        ExtremePeriod::Last24h,
+        ExtremePeriod::Last48h,
+    ] {
+        assert_eq!(extreme(period).coarsest_tf(), TfId::H1, "{period:?}");
+    }
 }

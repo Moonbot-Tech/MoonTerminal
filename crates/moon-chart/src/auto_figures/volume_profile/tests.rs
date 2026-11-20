@@ -356,3 +356,28 @@ fn bench_profile_matches_a_brute_force_spread() {
             .is_empty()
     );
 }
+
+/// A rolling profile is built from its last hours only: 30 hourly bars spanning 100..110 with 1
+/// traded, a heavy hour at 03:00 (104..105, 100 traded) and another at 20:00 (101..102, 51 traded).
+/// Over the last 24 hours (06:00–30:00) the 03:00 hour is gone, so the POC is the 101..102 bin,
+/// 101.5; the UTC day alone (24:00–30:00) holds neither heavy hour.
+///
+/// Breakage: the rolling window cut at the UTC day, or one that keeps the hours before it (the POC
+/// then sits at 104.5).
+#[test]
+fn a_rolling_profile_reads_its_last_hours() {
+    let now = MONDAY_2024_01_01_MS + 30.0 * H1;
+    let bars: Vec<ChartCandle> = (0..30)
+        .map(|h| match h {
+            3 => hb(h, 104.0, 105.0, 105.0, 100.0),
+            20 => hb(h, 101.0, 102.0, 102.0, 51.0),
+            _ => hb(h, 100.0, 110.0, 105.0, 1.0),
+        })
+        .collect();
+    let p = VolumeProfileParams {
+        vah: false,
+        val: false,
+        ..params(ProfilePeriod::Last24h, 10, 0)
+    };
+    assert_eq!(tagged(&run(&bars, p, now)), vec![(LineTag::Poc, 101.5)]);
+}

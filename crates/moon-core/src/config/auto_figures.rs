@@ -112,8 +112,10 @@ pub struct AutoFigureRow {
     /// it would freeze in the language the row was created in (the same reasoning as
     /// `ChartLabelRow::preset`).
     pub name: String,
-    /// Ready-made row this one was created from, if any. Purely a label: nothing downstream treats
-    /// a preset row differently, and editing its parameters does not clear it.
+    /// Ready-made row this one was created from, if any. A label: no detector, take or style treats
+    /// a preset row differently, and editing its parameters does not clear it. What it decides is
+    /// the row's NAME while [`Self::name`] is empty, read together with the row's current
+    /// parameters ([`Self::title_key`]).
     pub preset: Option<AutoFigurePreset>,
     /// Whether the row's lines are drawn. A hidden row keeps everything, and its detector does not
     /// run.
@@ -148,14 +150,19 @@ impl AutoFigureRow {
         }
     }
 
-    /// Locale key of the name this row takes when [`Self::name`] is empty, if it has one.
+    /// Locale key of the name this row takes when [`Self::name`] is empty, if it has one: its
+    /// preset's, read against the detector it holds now ([`AutoFigurePreset::title_key`]), so a
+    /// calendar row named by its period follows the period the reader picked.
     ///
     /// The model carries no dictionary, so the key is all it can hand over; the terminal turns it
     /// into words with `t!()`.
     pub fn title_key(&self) -> Option<&'static str> {
         self.name
             .is_empty()
-            .then(|| self.preset.map(AutoFigurePreset::locale_key))
+            .then(|| {
+                self.preset
+                    .and_then(|preset| preset.title_key(&self.detector, self.tf))
+            })
             .flatten()
     }
 

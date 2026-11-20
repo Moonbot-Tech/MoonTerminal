@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::Context;
-use moon_chart::auto_figures::tf::AutoTf;
+use moon_chart::auto_figures::tf::{self, AutoTf};
 use moon_core::config::auto_figures::{AutoFigureRow, AutoFiguresCfg, RowDetector, TfId, TfSource};
 use moon_core::session::CoreId;
 
@@ -250,6 +250,8 @@ struct RowPlan {
 ///     pane: The pane's slots; rows are resized to `cfg` and their keys updated.
 ///     visible_ms: The pane's measured time span, `None` before the first market sync.
 ///     chart_ready: Whether the pane holds candles of the chart's own timeframe.
+///     chart_tf_ms: The chart's bar length, ms — on a chart coarser than one minute an `Auto` row
+///         takes M5 for M1 ([`tf::lift_m1`]); `<= 0` changes nothing.
 ///     now: The instant the dwell and the back-offs are measured on.
 ///     now_ms: The same moment as Unix ms, for the bar arithmetic.
 ///
@@ -260,6 +262,7 @@ fn plan_rows(
     pane: &mut PaneSlots,
     visible_ms: Option<i64>,
     chart_ready: bool,
+    chart_tf_ms: i64,
     now: Instant,
     now_ms: f64,
 ) -> RowPlan {
@@ -293,7 +296,9 @@ fn plan_rows(
                         wake_ms(now_ms, at.saturating_duration_since(now)),
                     );
                 }
-                tf
+                // No M1 on a coarser chart: its 1-minute bars are cached only where the market was
+                // once shown on 1 minute.
+                tf::lift_m1(tf, chart_tf_ms)
             }
         };
         let tf = resolved.min(params.coarsest_tf());
@@ -593,7 +598,15 @@ impl ChartPanel {
                 }
             };
             let pane = &mut self.auto_figures.panes[at];
-            let plan = plan_rows(&cfg, pane, view.visible_ms, view.chart_ready, now, now_ms);
+            let plan = plan_rows(
+                &cfg,
+                pane,
+                view.visible_ms,
+                view.chart_ready,
+                view.chart_tf_ms,
+                now,
+                now_ms,
+            );
             if let Some(wake) = plan.wake {
                 next_wake = Some(next_wake.map_or(wake, |w| w.min(wake)));
             }

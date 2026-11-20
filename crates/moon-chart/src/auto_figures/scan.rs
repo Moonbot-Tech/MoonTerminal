@@ -60,14 +60,13 @@ use super::{DetectCtx, Found, bar_ok, detect, price_of, resample_5m, take, with_
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
 ///
-/// On the chart `Auto` follows the visible time span; a screener has no span. H1 is what the
-/// chart's own table (`tf.rs`, `AUTO_TF_TABLE`) picks for 4–8 days on screen, the middle of its
-/// range, and the default 200-bar lookback of a pivot row is 8.3 days of H1 bars, inside the
-/// cache's 15 days — so a default `Auto` row fills its history instead of always reporting it
-/// short (on H4 it would need 33 days), and it is never M1, which 5-minute rows cannot make. It
-/// is also no coarser than any detector's [`DetectorParams::coarsest_tf`], so the cap applied to
-/// every row never moves it.
-pub const AUTO_TF: TfId = TfId::H1;
+/// On the chart `Auto` follows the visible time span; a screener has no span. M15 because the
+/// scan's history is the core's 5-minute ring — about 41 hours for every market — plus what the
+/// cache has kept: a 150-bar row is 37.5 hours of M15, inside the ring, where on H1 it needed
+/// 150 hours and every market came back "not enough history" (LinKvo's screener, 20.11.2026). It
+/// is never M1, which 5-minute rows cannot make, and no coarser than any detector's
+/// [`DetectorParams::coarsest_tf`], so the cap applied to every row never moves it.
+pub const AUTO_TF: TfId = TfId::M15;
 
 /// How long past a bucket's close the newest bucket waits for its missing 5-minute rows, ms.
 ///

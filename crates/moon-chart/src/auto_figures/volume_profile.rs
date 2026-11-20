@@ -1,5 +1,6 @@
-//! `VolumeProfile`: the point of control and the value-area edges of a UTC day's volume profile,
-//! and the "naked" POCs of past days price has not traded at since.
+//! `VolumeProfile`: the point of control and the value-area edges of a volume profile over a UTC
+//! day or a rolling window of the last hours (`ProfilePeriod`), and the "naked" POCs of past days
+//! price has not traded at since. Below, "the day" stands for whichever span the row reads.
 //!
 //! # The profile
 //!
@@ -238,7 +239,29 @@ fn day_profile(
     bins: u16,
     tf: f64,
 ) -> Option<(Profile, f64)> {
-    let (start, end) = (day_start_ms(day), day_start_ms(day + 1));
+    span_profile(
+        bars,
+        day_start_ms(day),
+        day_start_ms(day + 1),
+        finished,
+        reference_ms,
+        bins,
+        tf,
+    )
+}
+
+/// The profile of the bars opening in `[start, end)` and the close it ended at — `None` when they
+/// do not cover the span ([`complete`]: up to `end` when `finished`, else up to `reference_ms`)
+/// or hold no volume. A calendar day ([`day_profile`]) and a rolling window share it.
+fn span_profile(
+    bars: &[ChartCandle],
+    start: f64,
+    end: f64,
+    finished: bool,
+    reference_ms: f64,
+    bins: u16,
+    tf: f64,
+) -> Option<(Profile, f64)> {
     let in_day = bars_in(bars, start, end);
     if !complete(&in_day, start, finished.then_some(end), reference_ms, tf) {
         return None;
@@ -299,13 +322,30 @@ fn profile_lines(
     // The previous day's POC drawn as the period's POC: a naked-POC pass over the same day would
     // draw it a second time, so it only re-tags this one.
     let mut prev_day_poc: Option<usize> = None;
-    let (day, finished) = match p.period {
-        ProfilePeriod::Day => (reference_day, false),
-        ProfilePeriod::PrevDay => (reference_day - 1, true),
+    // A rolling window ends at the reference time and is never "finished": like the current day,
+    // its coverage runs up to the reference time.
+    let (start, end, finished) = match p.period {
+        ProfilePeriod::Day => (
+            day_start_ms(reference_day),
+            day_start_ms(reference_day + 1),
+            false,
+        ),
+        ProfilePeriod::PrevDay => (
+            day_start_ms(reference_day - 1),
+            day_start_ms(reference_day),
+            true,
+        ),
+        ProfilePeriod::Last4h
+        | ProfilePeriod::Last12h
+        | ProfilePeriod::Last24h
+        | ProfilePeriod::Last48h => {
+            let hours = f64::from(p.period.rolling_hours().unwrap_or(24));
+            (reference_ms - hours * 3_600_000.0, reference_ms, false)
+        }
     };
     if p.poc || p.vah || p.val {
         if let Some((profile, last_close)) =
-            day_profile(bars, day, finished, reference_ms, p.bins, tf)
+            span_profile(bars, start, end, finished, reference_ms, p.bins, tf)
         {
             if let Some(poc) = profile.poc(last_close) {
                 let (va_lo, va_hi) = profile.value_area(poc, p.value_area_pct);

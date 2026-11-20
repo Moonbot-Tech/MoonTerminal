@@ -521,7 +521,7 @@ fn unreadable_rows_are_skipped() {
     assert_eq!(r.last_price, None);
 }
 
-/// From a set row: `Auto` is H1, `Fixed` is kept, both capped by the detector's coarsest
+/// From a set row: `Auto` is M15, `Fixed` is kept, both capped by the detector's coarsest
 /// timeframe; hidden rows and M1 rows are skipped, and the set index is carried.
 ///
 /// Breakage: `Auto` resolved to something else, the cap missed (a `Day` extreme on D1 never sees a
@@ -530,10 +530,13 @@ fn unreadable_rows_are_skipped() {
 fn rows_resolve_their_timeframe() {
     let swing = AutoFigureRow::new(DetectorParams::Swing(SwingParams::default()));
     assert_eq!(swing.tf, TfSource::Auto);
-    assert_eq!(ScanRow::from_row(0, &swing).map(|r| r.tf), Some(TfId::H1));
+    assert_eq!(ScanRow::from_row(0, &swing).map(|r| r.tf), Some(TfId::M15));
 
     let profile = AutoFigureRow::new(DetectorParams::VolumeProfile(VolumeProfileParams::default()));
-    assert_eq!(ScanRow::from_row(0, &profile).map(|r| r.tf), Some(TfId::H1));
+    assert_eq!(
+        ScanRow::from_row(0, &profile).map(|r| r.tf),
+        Some(TfId::M15)
+    );
 
     let day = AutoFigureRow {
         tf: TfSource::Fixed(TfId::D1),
@@ -565,26 +568,29 @@ fn rows_resolve_their_timeframe() {
 }
 
 /// On the real `chart-ace` 5-minute candles an `Auto` swing row scans exactly as the same row
-/// pinned to H1, finds levels inside the candles' range, and a buffer that scanned another market
+/// pinned to M15, finds levels inside the candles' range, and a buffer that scanned another market
 /// first gives the same answer as a fresh one. The shipped set runs on it without a panic.
 ///
-/// Breakage: `Auto` not resolved to H1, scratch leaking from one market into the next, or the
+/// Breakage: `Auto` not resolved to M15, scratch leaking from one market into the next, or the
 /// cache's real holes and partial buckets breaking the bar assembly.
 #[test]
-fn bench_scan_is_stable_and_auto_is_h1() {
+fn bench_scan_is_stable_and_auto_is_m15() {
     let bars = ace(5);
     let first = bars[0].t_open_ms;
     let last = bars[bars.len() - 1].t_open_ms;
     let now = last + 5.0 * MIN_MS;
-    // Half the hours the bench covers: comfortably inside its history.
-    let lookback = ((last - first) / HOUR_MS / 2.0) as u32;
-    assert!(lookback >= 20, "the bench covers {lookback} × 2 hours");
+    // Half the quarter-hours the bench covers: comfortably inside its history.
+    let lookback = ((last - first) / (15.0 * MIN_MS) / 2.0) as u32;
+    assert!(
+        lookback >= 20,
+        "the bench covers {lookback} × 2 quarter-hours"
+    );
     let auto = AutoFigureRow::new(DetectorParams::Swing(SwingParams {
         lookback_bars: lookback,
         ..SwingParams::default()
     }));
     let fixed = AutoFigureRow {
-        tf: TfSource::Fixed(TfId::H1),
+        tf: TfSource::Fixed(TfId::M15),
         ..auto.clone()
     };
     let auto_rows = ScanRow::from_rows(&[auto]);
@@ -593,7 +599,7 @@ fn bench_scan_is_stable_and_auto_is_h1() {
     let fresh = scan(&auto_rows, &bars, now);
     assert_eq!(answer(&fresh), answer(&scan(&fixed_rows, &bars, now)));
     assert_eq!((fresh.rows_scanned, fresh.short_history), (1, false));
-    assert!(fresh.lines > 0, "the bench holds H1 levels");
+    assert!(fresh.lines > 0, "the bench holds M15 levels");
     let (lo, hi) = range(&bars);
     let line = fresh.nearest.expect("a level");
     assert!(

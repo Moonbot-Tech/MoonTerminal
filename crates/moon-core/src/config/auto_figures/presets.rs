@@ -4,8 +4,8 @@
 //! ordinary row. The row remembers which preset it came from only so its name can be translated.
 //!
 //! The shipped set is LinKvo's decision of 19.11.2026 (`docs-internal/AUTO_FIGURES.md` §13.7): on
-//! by default, four rows — 1h levels, 1h sloped lines, the 15-minute squeeze and the day's
-//! extremes. It is sized to what the terminal can actually read for EVERY market today: the core's
+//! by default, four rows — 1h levels, 1h sloped lines, the 15-minute squeeze and the extremes of
+//! the last 24 hours (a rolling window since 20.11.2026; the UTC day before). It is sized to what the terminal can actually read for EVERY market today: the core's
 //! 5-minute ring (500 candles, about 41.6 hours, kept in the candle cache), the open chart's own
 //! series and the cache's recorded candles. A row deeper than the ring would report "not enough
 //! history" on almost every market — the cache holds whole days for only a handful of them — so
@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     AutoFigureRow, CaptionShow, DetectorParams, ExtremePeriod, ExtremeWhich, FormationParams,
     LineCaption, LineStyle, PeriodExtremeParams, PeriodLevelParams, ProfilePeriod,
-    RoundLevelsParams, SqueezeParams, SwingParams, TfId, TfSource, ToleranceUnit, TrendParams,
-    VolumeProfileParams,
+    RoundLevelsParams, RowDetector, SqueezeParams, SwingParams, TfId, TfSource, ToleranceUnit,
+    TrendParams, VolumeProfileParams,
 };
 use crate::config::chart_labels::LabelColor;
 use crate::figures::LineKind;
@@ -88,20 +88,34 @@ pub enum AutoFigurePreset {
     TrendLines1h,
     /// A level with a sloped line pressing into it, on 15-minute bars.
     Squeeze,
-    /// Today's high and low (UTC).
-    DayExtremes,
+    /// The high and low of the last 24 hours, a window that moves with the clock.
+    ///
+    /// Rolling rather than the UTC day (LinKvo, 20.11.2026): crypto trades around the clock, and
+    /// "today" is one hour long right after UTC midnight. The wire name stays `day_extremes`, which
+    /// shipped: a row a profile saved from it keeps its preset, and keeps the period it stored —
+    /// the calendar day, which is the period kind's default and so was never written.
+    #[serde(rename = "day_extremes")]
+    Extremes24h,
     /// Yesterday's high and low (UTC).
     ///
-    /// A row of its own rather than a second period inside `DayExtremes`: the contract's
+    /// A row of its own rather than a second period inside `Extremes24h`: the contract's
     /// `PeriodExtremeParams` holds ONE period, and a separate row gets its own style and caption,
     /// which is what tells "today" and "yesterday" apart on the chart. Offered in the "Add" menu,
     /// not in the shipped set — the four shipped rows are LinKvo's choice.
     PrevDayExtremes,
     /// Sloped support and resistance lines through pivots. Offered, not shipped.
     TrendLines,
-    /// Yesterday's volume profile (UTC): its POC and the two edges of its value area. Offered, not
-    /// shipped.
-    PrevDayProfile,
+    /// The volume profile of the last 24 hours: its POC and the two edges of its value area.
+    /// Offered, not shipped.
+    ///
+    /// A rolling 24 hours rather than yesterday's UTC day (LinKvo, 20.11.2026): it is the profile
+    /// price trades against now, equally full at any hour, and it always fits the core's ring,
+    /// where yesterday's day reaches back 48 hours. The wire name stays the one the
+    /// yesterday-profile preset was saved under, so rows created from it load with their preset;
+    /// their own stored period is untouched, and the row's name follows whatever period it holds
+    /// ([`Self::title_key`]).
+    #[serde(rename = "prev_day_profile")]
+    Profile24h,
     /// The POCs of the last five UTC days that price has not traded at since — and nothing else.
     ///
     /// No longer offered (not in [`Self::ALL`]): five whole days of profiles are history the cache
@@ -130,11 +144,11 @@ impl AutoFigurePreset {
         AutoFigurePreset::Levels1h,
         AutoFigurePreset::TrendLines1h,
         AutoFigurePreset::Squeeze,
-        AutoFigurePreset::DayExtremes,
+        AutoFigurePreset::Extremes24h,
         AutoFigurePreset::Levels4h,
         AutoFigurePreset::PrevDayExtremes,
         AutoFigurePreset::TrendLines,
-        AutoFigurePreset::PrevDayProfile,
+        AutoFigurePreset::Profile24h,
         AutoFigurePreset::PeriodLevels,
         AutoFigurePreset::RoundLevels,
         AutoFigurePreset::Triangles,
@@ -148,21 +162,22 @@ impl AutoFigurePreset {
         AutoFigurePreset::Levels1h,
         AutoFigurePreset::TrendLines1h,
         AutoFigurePreset::Squeeze,
-        AutoFigurePreset::DayExtremes,
+        AutoFigurePreset::Extremes24h,
     ];
 
-    /// Locale key of the preset's name, which is also the name its row takes. The keys are added
-    /// to `locales/` together with the popup that prints them.
+    /// Locale key of the preset's name — what the "Add" menu prints, and the name a new row from it
+    /// starts with. A row's name then follows its parameters ([`Self::title_key`]). The keys are
+    /// added to `locales/` together with the popup that prints them.
     pub fn locale_key(self) -> &'static str {
         match self {
             AutoFigurePreset::Levels1h => "auto_figures.preset.levels_1h",
             AutoFigurePreset::Levels4h => "auto_figures.preset.levels_4h",
             AutoFigurePreset::Squeeze => "auto_figures.preset.squeeze",
-            AutoFigurePreset::DayExtremes => "auto_figures.preset.day_extremes",
+            AutoFigurePreset::Extremes24h => "auto_figures.preset.extremes_last24h",
             AutoFigurePreset::PrevDayExtremes => "auto_figures.preset.prev_day_extremes",
             AutoFigurePreset::TrendLines => "auto_figures.preset.trend_lines",
             AutoFigurePreset::TrendLines1h => "auto_figures.preset.trend_lines_1h",
-            AutoFigurePreset::PrevDayProfile => "auto_figures.preset.prev_day_profile",
+            AutoFigurePreset::Profile24h => "auto_figures.preset.profile_last24h",
             AutoFigurePreset::NakedPoc => "auto_figures.preset.naked_poc",
             AutoFigurePreset::PeriodLevels => "auto_figures.preset.period_levels",
             AutoFigurePreset::RoundLevels => "auto_figures.preset.round_levels",
@@ -171,6 +186,70 @@ impl AutoFigurePreset {
             AutoFigurePreset::Flags => "auto_figures.preset.flags",
             AutoFigurePreset::DoubleTops => "auto_figures.preset.double_tops",
         }
+    }
+
+    /// Locale key of the name a row created from this preset takes while it holds `detector` on
+    /// `tf`; `None` when the row no longer runs the preset's kind of detector.
+    ///
+    /// A preset's name says what the row reads, and three things in it are parameters the reader
+    /// changes in the row: the PERIOD of a calendar or rolling row ("24h", "yesterday"), the
+    /// TIMEFRAME of a row named by it ("Levels 1h"), and the detector KIND itself (the editor can
+    /// switch it and keeps the preset). A name that kept saying the old value would contradict the
+    /// lines under it (LinKvo, 20.11.2026: a profile row switched to today still captioned
+    /// "yesterday"), so each is read from the row as it is now:
+    ///
+    /// - extremes and profile rows are named by their period;
+    /// - the hour-named levels and trend rows by their timeframe, falling back to the plain name of
+    ///   what they look for on any other one;
+    /// - a row switched to another kind has no preset name at all, and the caller names it by its
+    ///   detector. A detector this build does not know keeps the preset's name.
+    ///
+    /// Every other preset is named by what it looks for, which no parameter changes.
+    pub fn title_key(self, detector: &RowDetector, tf: TfSource) -> Option<&'static str> {
+        let Some(params) = detector.known() else {
+            return Some(self.locale_key());
+        };
+        if params.kind() != self.row().detector.known().map(DetectorParams::kind)? {
+            return None;
+        }
+        let hour = |want: TfId, named: &'static str, plain: &'static str| match tf {
+            TfSource::Fixed(have) if have == want => named,
+            _ => plain,
+        };
+        Some(match (self, params) {
+            (
+                AutoFigurePreset::Extremes24h | AutoFigurePreset::PrevDayExtremes,
+                DetectorParams::PeriodExtreme(p),
+            ) => match p.period {
+                ExtremePeriod::Day => "auto_figures.preset.day_extremes",
+                ExtremePeriod::PrevDay => "auto_figures.preset.prev_day_extremes",
+                ExtremePeriod::Week => "auto_figures.preset.week_extremes",
+                ExtremePeriod::PrevWeek => "auto_figures.preset.prev_week_extremes",
+                ExtremePeriod::Last4h => "auto_figures.preset.extremes_last4h",
+                ExtremePeriod::Last12h => "auto_figures.preset.extremes_last12h",
+                ExtremePeriod::Last24h => "auto_figures.preset.extremes_last24h",
+                ExtremePeriod::Last48h => "auto_figures.preset.extremes_last48h",
+            },
+            (AutoFigurePreset::Profile24h, DetectorParams::VolumeProfile(p)) => match p.period {
+                ProfilePeriod::Day => "auto_figures.preset.day_profile",
+                ProfilePeriod::PrevDay => "auto_figures.preset.prev_day_profile",
+                ProfilePeriod::Last4h => "auto_figures.preset.profile_last4h",
+                ProfilePeriod::Last12h => "auto_figures.preset.profile_last12h",
+                ProfilePeriod::Last24h => "auto_figures.preset.profile_last24h",
+                ProfilePeriod::Last48h => "auto_figures.preset.profile_last48h",
+            },
+            (AutoFigurePreset::Levels1h | AutoFigurePreset::Levels4h, _) => match tf {
+                TfSource::Fixed(TfId::H1) => "auto_figures.preset.levels_1h",
+                TfSource::Fixed(TfId::H4) => "auto_figures.preset.levels_4h",
+                _ => "auto_figures.kind.swing",
+            },
+            (AutoFigurePreset::TrendLines1h, _) => hour(
+                TfId::H1,
+                "auto_figures.preset.trend_lines_1h",
+                "auto_figures.preset.trend_lines",
+            ),
+            _ => self.locale_key(),
+        })
     }
 
     /// A new row built from this preset.
@@ -243,14 +322,14 @@ impl AutoFigurePreset {
                     ..LineStyle::default()
                 },
             ),
-            AutoFigurePreset::DayExtremes => (
+            AutoFigurePreset::Extremes24h => (
                 DetectorParams::PeriodExtreme(PeriodExtremeParams {
-                    period: ExtremePeriod::Day,
+                    period: ExtremePeriod::Last24h,
                     which: ExtremeWhich::Both,
                 }),
-                // The detector reads CLOSED bars only, so a new high or low of the day shows up
-                // when the bar that printed it closes: the lag is one bar of this timeframe. Five
-                // minutes keeps it at most five minutes; the pass stays cheap — one day is 288 bars.
+                // The detector reads CLOSED bars only, so a new high or low shows up when the bar
+                // that printed it closes: the lag is one bar of this timeframe. Five minutes keeps
+                // it at most five minutes; the pass stays cheap — 24 hours is 288 bars.
                 TfSource::Fixed(TfId::M5),
                 LineStyle {
                     line_kind: LineKind::Dash,
@@ -278,14 +357,14 @@ impl AutoFigurePreset {
                     ..LineStyle::default()
                 },
             ),
-            AutoFigurePreset::PrevDayProfile => (
+            AutoFigurePreset::Profile24h => (
                 DetectorParams::VolumeProfile(VolumeProfileParams {
-                    period: ProfilePeriod::PrevDay,
+                    period: ProfilePeriod::Last24h,
                     ..VolumeProfileParams::default()
                 }),
                 // A profile spreads each bar's volume over its range, so its resolution is the
                 // bar: five-minute bars put 288 of them into the day's 100 bins, fifteen-minute
-                // ones fewer than one per bin. Two days of them is 577 bars.
+                // ones fewer than one per bin.
                 TfSource::Fixed(TfId::M5),
                 LineStyle {
                     color: LabelColor::Fixed(rgb(palette::ORANGE)),

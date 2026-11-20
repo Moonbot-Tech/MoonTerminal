@@ -66,7 +66,7 @@ fn big_jumps_bad_spans_and_fixed_rows() {
 /// Where the bars come from, case by case.
 ///
 /// Breakage: a chart series used for a finer row, a resample from a series too shallow for the
-/// lookback, or a 1-minute row sent to the 5-minute cache.
+/// lookback, or a 1-minute row sent to the 5-minute cache instead of the 1-minute one.
 #[test]
 fn bar_sources() {
     let m5 = TfId::M5.ms();
@@ -88,9 +88,15 @@ fn bar_sources() {
     assert_eq!(src(TfId::H1, m5, f64::NAN, 200), BarSource::Cache5m);
     // A 5-minute row on an hourly chart cannot come from the chart: finer than its bars.
     assert_eq!(src(TfId::M5, TfId::H1.ms(), 1e15, 200), BarSource::Cache5m);
-    assert_eq!(src(TfId::M1, m5, 1e15, 200), BarSource::Unavailable);
+    // A 1-minute row on a coarser chart reads the cache's 1-minute rows; with no cache, nothing.
+    assert_eq!(src(TfId::M1, m5, 1e15, 200), BarSource::Cache1m);
+    assert_eq!(
+        bar_source(TfId::M1, m5, 1e15, 200, false),
+        BarSource::Unavailable
+    );
     assert_eq!(src(TfId::M15, 0, 0.0, 200), BarSource::Cache5m);
-    // A 1-minute row on a 1-minute chart: nothing else can build it, however short the series.
+    // A 1-minute row on a 1-minute chart keeps the series, however short: it is the freshest
+    // source of those bars, and the cache's 1-minute rows are filed from it.
     assert_eq!(
         src(TfId::M1, TfId::M1.ms(), 0.0, 200),
         BarSource::ChartSeries
@@ -104,8 +110,8 @@ fn bar_sources() {
 /// market with no cache at all) keeps the series whatever its depth.
 ///
 /// Breakage: the old "equal timeframe → chart series" short-cut (the week open is never found
-/// once the chart is open), or a fallback that sends an uncacheable row to the cache (it would
-/// read nothing — no cache, or no 1-minute rows in it).
+/// once the chart is open), or a fallback that sends a row the cache cannot build better to it
+/// (it would read nothing — no cache — or only what the chart itself filed there).
 #[test]
 fn an_equal_timeframe_series_too_short_for_the_row_gives_way_to_the_cache() {
     let m5 = TfId::M5.ms();
@@ -178,4 +184,23 @@ fn a_resampled_chart_must_cover_one_bucket_more_than_the_lookback() {
         bar_source(TfId::H1, m5, 201.0 * H, 200, true),
         BarSource::ChartResampled
     );
+}
+
+/// An `M1` answer on a chart coarser than one minute becomes M5 — the 5-minute chart's own, and
+/// on an hourly or 3-minute chart the same M5, so a closer zoom never gives coarser lines; on a
+/// 1-minute chart, or with no chart, it stays M1. Every other answer stays, on any chart.
+///
+/// Breakage: the lift dropped (the 1-minute row with no bars, LinKvo 20.11.2026), M1 lifted to the
+/// chart's own timeframe (a zoomed hourly chart jumping from M5 to H1), or other answers moved (a
+/// zoomed hourly chart forced off M15).
+#[test]
+fn auto_m1_is_lifted_on_a_coarser_chart() {
+    let m5 = TfId::M5.ms();
+    assert_eq!(lift_m1(TfId::M1, m5), TfId::M5);
+    assert_eq!(lift_m1(TfId::M1, TfId::H1.ms()), TfId::M5);
+    assert_eq!(lift_m1(TfId::M1, 180_000), TfId::M5);
+    assert_eq!(lift_m1(TfId::M1, TfId::M1.ms()), TfId::M1);
+    assert_eq!(lift_m1(TfId::M1, 0), TfId::M1);
+    assert_eq!(lift_m1(TfId::H4, m5), TfId::H4);
+    assert_eq!(lift_m1(TfId::M15, TfId::H1.ms()), TfId::M15);
 }

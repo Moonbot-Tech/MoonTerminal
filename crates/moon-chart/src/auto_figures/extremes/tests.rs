@@ -416,3 +416,29 @@ fn the_current_day_needs_its_recent_bars() {
     );
     assert!(run_5m(&bars, ExtremePeriod::Day, 2.0 * DAY + h(6.0)).is_empty());
 }
+
+/// A rolling window reads only its last hours, ending at the reference time: with 30 hours of
+/// 5-minute bars (110/100), a spike to 200 at 02:00 and a dip to 50 at 10:00, the last 24 hours
+/// (06:00–30:00) report 110 and 50 — the spike left the window; the last 4 hours 110 and 100. A
+/// window longer than the bars reports nothing: its start is missing.
+///
+/// Breakage: a rolling window cut at the UTC day (the dip and the spike swap places with the
+/// day's own bars), or one that keeps bars older than its hours.
+#[test]
+fn a_rolling_window_reads_its_last_hours() {
+    let h = |x: f64| x * HOUR_MS;
+    let mut bars = m5_bars(0.0, h(30.0));
+    let spike = (h(2.0) / M5) as usize;
+    let dip = (h(10.0) / M5) as usize;
+    bars[spike].high = 200.0;
+    bars[dip].low = 50.0;
+    assert_eq!(
+        run_5m(&bars, ExtremePeriod::Last24h, h(30.0)),
+        vec![110.0, 50.0]
+    );
+    assert_eq!(
+        run_5m(&bars, ExtremePeriod::Last4h, h(30.0)),
+        vec![110.0, 100.0]
+    );
+    assert!(run_5m(&bars, ExtremePeriod::Last48h, h(30.0)).is_empty());
+}

@@ -1,4 +1,10 @@
-//! `PeriodExtreme`: the high and/or low of a UTC calendar day or ISO week.
+//! `PeriodExtreme`: the high and/or low of a UTC calendar day or ISO week, or of a rolling window
+//! of the last hours.
+//!
+//! A rolling window (`ExtremePeriod::Last24h` and its siblings) is `[reference − hours, reference)`:
+//! it moves with the clock, is judged like a current period (covered up to the reference time),
+//! and its extreme steps when the bar that set it leaves the window. It is never "previous", so it
+//! reports no break: a close beyond it is its new extreme.
 //!
 //! "Current" is the period that holds the caller's reference time ([`DetectCtx::reference_ms`]:
 //! `now_ms`, never earlier than the last valid bar, or that bar when `now_ms` is unusable), and
@@ -69,17 +75,31 @@ pub fn week_start_day(day: i64) -> i64 {
     day - (day + 3).rem_euclid(7)
 }
 
-/// The `[start, end)` bounds, ms, of the period `p` names, relative to the reference day.
-pub fn period_bounds(period: ExtremePeriod, reference_day: i64) -> (f64, f64) {
+/// The `[start, end)` bounds, ms, of the period `period` names at the reference time
+/// `reference_ms`: a calendar period around the reference day, or a rolling window ending at the
+/// reference time itself.
+pub fn period_bounds(period: ExtremePeriod, reference_ms: f64) -> (f64, f64) {
+    if let Some(hours) = period.rolling_hours() {
+        return (reference_ms - f64::from(hours) * HOUR_MS, reference_ms);
+    }
+    let reference_day = day_of(reference_ms);
     let (start_day, len_days) = match period {
         ExtremePeriod::Day => (reference_day, 1),
         ExtremePeriod::PrevDay => (reference_day - 1, 1),
         ExtremePeriod::Week => (week_start_day(reference_day), 7),
         ExtremePeriod::PrevWeek => (week_start_day(reference_day) - 7, 7),
+        // Answered above: a rolling window has no calendar day.
+        ExtremePeriod::Last4h
+        | ExtremePeriod::Last12h
+        | ExtremePeriod::Last24h
+        | ExtremePeriod::Last48h => (reference_day, 1),
     };
     let start = (start_day * DAY_MS) as f64;
     (start, start + (len_days * DAY_MS) as f64)
 }
+
+/// Milliseconds in one hour, for the rolling windows.
+const HOUR_MS: f64 = 3_600_000.0;
 
 /// The extremes `p` asks for, high first, on bars `tf` ms long; nothing when the period's own bars
 /// do not cover it (module doc).
@@ -89,7 +109,7 @@ fn period_extremes(
     reference_ms: f64,
     tf: f64,
 ) -> Vec<Found> {
-    let (start, end) = period_bounds(p.period, day_of(reference_ms));
+    let (start, end) = period_bounds(p.period, reference_ms);
     // (index, bar) of the period's bars, and the extremes among them — the first bar to reach the
     // extreme wins a tie, so the touch marks where the level was set.
     let in_period = |b: &ChartCandle| bar_ok(b) && b.t_open_ms >= start && b.t_open_ms < end;

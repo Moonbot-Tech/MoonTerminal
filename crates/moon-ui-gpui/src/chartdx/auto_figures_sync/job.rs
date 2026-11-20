@@ -7,7 +7,8 @@
 //! `moon_chart::auto_figures::tf::bar_source` decides; this module only carries it out, and every
 //! source is one the terminal already holds. The chart's own closed candles (snapshotted by the
 //! panel), or the local kline cache — the 5-minute rows the background recorder keeps for every
-//! market, and the daily rows. NOTHING here asks a core for history: a second candle kind makes the
+//! market, the daily rows, and the 1-minute rows a market has where its chart was shown on 1 minute
+//! (for a 1-minute row on a coarser chart). NOTHING here asks a core for history: a second candle kind makes the
 //! core fetch klines from the exchange, and that is how a user's core got API-banned once.
 //!
 //! The 5-minute cache is written by a recorder on its own cycle, so its newest rows can lag the
@@ -220,7 +221,10 @@ pub(crate) fn plan_row(
 
 /// Whether a source reads the local kline cache.
 pub(crate) fn reads_cache(source: BarSource) -> bool {
-    matches!(source, BarSource::Cache5m | BarSource::CacheDaily)
+    matches!(
+        source,
+        BarSource::Cache5m | BarSource::CacheDaily | BarSource::Cache1m
+    )
 }
 
 /// The definitive answer for a row whose bars would come from the cache when the market has none
@@ -305,6 +309,7 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
         Some(base)
     });
     let d1 = read(1440, span(BarSource::CacheDaily));
+    let m1 = read(1, span(BarSource::Cache1m));
 
     plans
         .into_iter()
@@ -332,6 +337,14 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                 BarSource::CacheDaily => match d1.as_ref().and_then(Option::as_ref) {
                     Some(rows) => (
                         closed_bars(rows, TfId::D1.ms(), row_ms, key.last_closed_ms),
+                        false,
+                        false,
+                    ),
+                    None => (Vec::new(), true, false),
+                },
+                BarSource::Cache1m => match m1.as_ref().and_then(Option::as_ref) {
+                    Some(rows) => (
+                        closed_bars(rows, TfId::M1.ms(), row_ms, key.last_closed_ms),
                         false,
                         false,
                     ),
