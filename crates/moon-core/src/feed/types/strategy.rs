@@ -206,7 +206,6 @@ pub struct SchemaField {
     pub type_name: String,
     pub ui: SchemaFieldUi,
     /// Static value list used to populate the field's Combo editor.
-    #[allow(dead_code)]
     pub picklist: Vec<String>,
     /// Formatted default value when the schema provides one.
     pub default: Option<String>,
@@ -225,7 +224,6 @@ pub struct SchemaKind {
     pub ordinal: u8,
     /// Kind name from the core schema, except that an internal-only kind uses the shared `Unknown`
     /// label. Consumed by strategy creation and kind/filter UI.
-    #[allow(dead_code)]
     pub name: String,
     pub sections: Vec<SchemaSection>,
 }
