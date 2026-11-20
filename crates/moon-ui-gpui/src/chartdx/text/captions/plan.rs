@@ -176,7 +176,8 @@ impl RenderState {
                 // AFTER the wrap, never before: `measure_cell` reads a prose caption's width off
                 // the wrap, and asking it first would send the whole sentence through the
                 // truncation walk — which measures one character at a time — every frame.
-                budget -= self.measure_cell(ctx, texts, cell, budget);
+                let width = self.measure_cell(ctx, texts, cell, |_, _| budget);
+                budget -= width.unwrap_or(0.0);
             }
         }
     }
@@ -237,13 +238,7 @@ impl RenderState {
             let n = cell.items.len();
             for i in 0..n {
                 let ix = if downward { i } else { n - 1 - i };
-                let max_w = widths::line_budget(
-                    budget.total,
-                    budget.align,
-                    budget.taken,
-                    depth,
-                    budget.inset,
-                );
+                let max_w = budget.at_depth(depth);
                 self.wrap_item(ctx, texts, &mut cell.items[ix], max_w, &mut wrapped_modules);
                 depth += cell.items[ix].block_h();
             }

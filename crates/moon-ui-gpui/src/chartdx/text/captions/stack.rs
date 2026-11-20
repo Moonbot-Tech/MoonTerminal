@@ -95,19 +95,11 @@ impl RenderState {
             // drawing it. Taking that height from the styles rather than from a measurement is what
             // makes this possible without drawing the row twice.
             let top = if downward { y } else { y - row_h };
-            // A hungry row may run wider than the band's capped budget: lines that have cleared
-            // the neighbours wrap at the leftover of the zone, and the cell must be measured at
-            // that leftover or the already-wrapped lines are treated as overflow.
-            let mut col = column;
-            if let Some(budget) = hungry {
-                col.max_w = widths::line_budget(
-                    budget.total,
-                    budget.align,
-                    budget.taken,
-                    travelled + row_h,
-                    budget.inset,
-                );
-            }
+            // Measure and draw at the same depths. A column may have a short first line beside
+            // a neighbour and a full-width line just below it.
+            let hungry_line_width = hungry.map(|budget| {
+                move |offset, item_h| budget.item_width(travelled, row_h, offset, item_h, downward)
+            });
             // One box PER MODULE on this line: two modules can share a line — that is what the
             // placement axis is for — and one rectangle behind both would put a backing under the
             // module that switched it off.
@@ -116,7 +108,8 @@ impl RenderState {
                 idx,
                 texts,
                 &row.cells,
-                col,
+                column,
+                hungry_line_width,
                 top,
                 limit_y,
                 downward,
@@ -156,6 +149,7 @@ impl RenderState {
         texts: &[LabelText],
         cells: &[Cell],
         column: Column,
+        hungry_line_width: Option<impl Fn(f32, f32) -> f32>,
         top: f32,
         // Edge of the band this line lives in, and which way the band fills. A CELL can be taller
         // than the pane on its own — an arbitrage column is one line per venue — and the caller's
@@ -172,10 +166,16 @@ impl RenderState {
         if cells.is_empty() {
             return Ok(0.0);
         }
+        let can_widen = hungry_line_width.is_some();
+        let line_width = |offset, height| {
+            hungry_line_width
+                .as_ref()
+                .map_or(column.max_w, |width| width(offset, height))
+        };
         // A centred line must know its own width before it can be placed; the other two directions
         // walk out from their edge and never need the total.
         let start_x = if column.align > 0.0 && column.align < 1.0 {
-            column.x - self.measure_row(ctx, texts, cells, column.max_w) * 0.5
+            column.x - self.measure_row(ctx, texts, cells, line_width, can_widen) * 0.5
         } else {
             column.x
         };
@@ -184,7 +184,6 @@ impl RenderState {
         let rightwards = column.align < 1.0;
         let ax = if rightwards { 0.0 } else { 1.0 };
         let mut cursor = start_x;
-        let mut budget = column.max_w;
         for (n, cell) in cells.iter().enumerate() {
             // The base spacing keeps two columns from touching; the module's own gap is ADDED to
             // it, so `0` means "as before" and any value means "and this much more".
@@ -193,16 +192,15 @@ impl RenderState {
             // that gap has already been spent on the space above the line — spending it twice
             // would move the line diagonally instead of spacing it.
             let gap = if n == 0 { 0.0 } else { CAPTION_GAP + cell.gap };
-            budget -= gap;
-            // No room left on this line. Dropping the rest is deliberate: a caption clipped
-            // mid-number reads as a plausible WRONG number.
-            if budget < MIN_LEGIBLE_W {
+            let spent = (cursor - start_x).abs() + gap;
+            let cell_line_width = |offset, height| line_width(offset, height) - spent;
+            // A later cell in a hungry row can still fit by extending past a short neighbour.
+            let Some(cell_w) = self.measure_cell(ctx, texts, cell, cell_line_width) else {
+                if can_widen {
+                    continue;
+                }
                 break;
-            }
-            // The column is as wide as its widest caption, and every caption in it is anchored to
-            // the same edge — which is what makes a block read as a block. A CENTRED band is the
-            // exception: there each caption is centred inside that width.
-            let cell_w = self.measure_cell(ctx, texts, cell, budget);
+            };
             // The bar column, decided ONCE for the module: every track in it starts on the same
             // vertical, which is what lets two of them be compared at a glance. Placed after the
             // figures in reading order either way — a track before the number it belongs to reads
@@ -238,9 +236,9 @@ impl RenderState {
             // whole: a module whose captions stack — a detect line under its strategy — reads as a
             // ragged left edge otherwise, which is the one thing centring was asked for.
             let centred = column.align > 0.0 && column.align < 1.0;
-            let mut y = top;
             let mut drawn_w = 0.0_f32;
-            for (n_item, item) in cell.items.iter().enumerate() {
+            for (n_item, (offset, item)) in cell.positioned_items().enumerate() {
+                let mut y = top + offset;
                 // Out of pane. Which END of the stack is lost depends on which way the band fills,
                 // and getting that backwards is how an over-tall arbitrage column printed one venue
                 // outside the plot and dropped the two dozen that would have fitted:
@@ -264,16 +262,16 @@ impl RenderState {
                             break;
                         }
                     } else if !last {
-                        // Its whole block, not one line: an upward band reserved `block_h` for it,
-                        // and stepping over a wrapped caption by a single line would put every
-                        // caption below it two lines out of place.
-                        y += item.block_h();
                         continue;
                     }
                 }
                 let Some(entry) = texts.get(item.pos) else {
                     continue;
                 };
+                let budget = cell_line_width(offset, item.block_h());
+                if budget < MIN_LEGIBLE_W {
+                    continue;
+                }
                 // A line's own colour wins over the caption's style: an arbitrage row is coloured
                 // by its VENUE, which one style cannot say for a dozen lines.
                 let value_color = match entry.color {
@@ -602,7 +600,6 @@ impl RenderState {
                         }
                     }
                 }
-                y += item.line_h();
             }
             // The cursor moves by whichever is wider: what the column was measured at, or what it
             // actually drew. A centred caption sits INSIDE that width and never adds to it.
@@ -612,7 +609,6 @@ impl RenderState {
             } else {
                 anchor_x - advance
             };
-            budget -= advance;
         }
         // Whichever way the line walked, this is how much of the band it spent.
         Ok((cursor - start_x).abs())
