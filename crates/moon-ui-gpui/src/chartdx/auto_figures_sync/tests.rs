@@ -1084,6 +1084,107 @@ fn a_caption_names_the_tag_and_skips_what_a_line_lacks() {
     assert!(!caption_text(&[CaptionPart::Age], &values(None, 0, DAY0 as f64)).is_empty());
 }
 
+/// Unnamed period-extreme lines name their own period and side, while named rows keep the row name
+/// plus tag; merged captions use the same per-line name.
+///
+/// Breakage: restoring the combined row title on each line ("Day high and low · High"), or building
+/// a merged caption from a different name than the standalone one.
+#[test]
+fn unnamed_period_extremes_name_each_line_and_merged_caption() {
+    use super::caption::{CaptionValues, caption_halves, caption_text, line_title, merged_caption};
+    use moon_chart::auto_figures::LineTag;
+    use moon_core::config::auto_figures::{
+        AutoFigurePreset, AutoFigureRow, DetectorKind, ExtremePeriod, PeriodExtremeParams,
+    };
+
+    let en = crate::test_locale::force("en");
+    let row_for = |period| {
+        AutoFigureRow::new(DetectorParams::PeriodExtreme(PeriodExtremeParams {
+            period,
+            ..PeriodExtremeParams::default()
+        }))
+    };
+    let cases = [
+        (ExtremePeriod::Day, "Day high", "Day low"),
+        (
+            ExtremePeriod::PrevDay,
+            "Yesterday's high",
+            "Yesterday's low",
+        ),
+        (ExtremePeriod::Week, "Week high", "Week low"),
+        (
+            ExtremePeriod::PrevWeek,
+            "Last week's high",
+            "Last week's low",
+        ),
+        (ExtremePeriod::Last4h, "4h high", "4h low"),
+        (ExtremePeriod::Last12h, "12h high", "12h low"),
+        (ExtremePeriod::Last24h, "24h high", "24h low"),
+        (ExtremePeriod::Last48h, "48h high", "48h low"),
+    ];
+    for (period, high, low) in cases {
+        let title = RowTitle::of(&row_for(period), DetectorKind::PeriodExtreme);
+        assert_eq!(line_title(&title, Some(LineTag::High)), high);
+        assert_eq!(line_title(&title, Some(LineTag::Low)), low);
+    }
+
+    let mut day = row_for(ExtremePeriod::Day);
+    day.preset = Some(AutoFigurePreset::Extremes24h);
+    let title = RowTitle::of(&day, DetectorKind::PeriodExtreme);
+    assert_eq!(title.text(), "Day high and low");
+    let high = CaptionValues {
+        title: &title,
+        tag: Some(LineTag::High),
+        line_now: Some(0.2959),
+        price: Some(0.25),
+        touches: 0,
+        tf: TfId::H1,
+        first_ms: 0.0,
+        events: Default::default(),
+        now_ms: 0.0,
+        tick: None,
+    };
+    assert_eq!(
+        caption_text(&[CaptionPart::RowName, CaptionPart::Price], &high),
+        "Day high · 0.2959"
+    );
+    let (name, rest) = caption_halves(&[CaptionPart::RowName, CaptionPart::Price], &high);
+    let mut merged = String::new();
+    assert!(merged_caption(
+        &mut merged,
+        name.as_deref().into_iter(),
+        Some(&rest),
+    ));
+    assert_eq!(merged, "Day high · 0.2959");
+
+    let mut named = row_for(ExtremePeriod::Day);
+    named.name = "My levels".to_owned();
+    let named_title = RowTitle::of(&named, DetectorKind::PeriodExtreme);
+    assert_eq!(
+        line_title(&named_title, Some(LineTag::High)),
+        "My levels · High"
+    );
+    drop(en);
+
+    let _ru = crate::test_locale::force("ru");
+    let title = RowTitle::of(&day, DetectorKind::PeriodExtreme);
+    let low = CaptionValues {
+        title: &title,
+        tag: Some(LineTag::Low),
+        line_now: Some(0.2005),
+        ..high
+    };
+    assert_eq!(
+        caption_text(&[CaptionPart::RowName, CaptionPart::Price], &low),
+        "Минимум дня · 0.2005"
+    );
+    assert_eq!(line_title(&title, Some(LineTag::High)), "Максимум дня");
+    assert_eq!(
+        line_title(&named_title, Some(LineTag::High)),
+        "My levels · Максимум"
+    );
+}
+
 /// The caption's rebuild key follows the age only where the age is printed: a line with no moment
 /// of birth (a round price) keeps its key as the clock moves, an anchored line's key moves with
 /// its age bucket.

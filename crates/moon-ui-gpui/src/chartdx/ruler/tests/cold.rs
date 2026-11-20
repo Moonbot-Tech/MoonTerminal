@@ -38,6 +38,7 @@ const COLD_LOOKUPS: &[&str] = &[
     "core_cmds::pages::tests::api_keys_require_both_fields_and_an_idle_worker",
     "core_cmds::pages::tests::commands_and_failure_phases_select_the_expected_pages",
     "chartdx::text::tests::rectangle_measurements_reuse_ruler_duration_at_rest_and_while_drawing",
+    "chartdx::auto_figures_sync::tests::unnamed_period_extremes_name_each_line_and_merged_caption",
     "backend::core_new::worker::tests::other_check_failures_keep_their_diagnostics",
     "backend::core_new::worker::tests::password_refusal_names_login_and_provider_email",
     "panels::report::widths::tests::widths_refresh_scale_probe",

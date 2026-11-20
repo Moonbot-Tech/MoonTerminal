@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use moon_chart::auto_figures::LineTag;
 use moon_chart::auto_figures::events::EventSet;
-use moon_core::config::auto_figures::{AutoEvent, AutoFigureRow, CaptionPart, DetectorKind, TfId};
+use moon_core::config::auto_figures::{
+    AutoEvent, AutoFigureRow, CaptionPart, DetectorKind, DetectorParams, ExtremePeriod, TfId,
+};
 use rust_i18n::t;
 
 /// Separator between the parts of one caption. Not a dictionary entry: it is punctuation, the
@@ -32,6 +34,11 @@ pub(crate) enum RowTitle {
     /// A dictionary key: its preset's name as the row reads now (`AutoFigureRow::title_key` —
     /// period, timeframe), or its detector kind when it has neither name nor preset name.
     Key(&'static str),
+    /// An unnamed period-extreme row: its row-title key and the typed period each line is named by.
+    PeriodExtreme {
+        title_key: &'static str,
+        period: ExtremePeriod,
+    },
 }
 
 impl RowTitle {
@@ -40,7 +47,14 @@ impl RowTitle {
         if !row.name.is_empty() {
             return RowTitle::Named(row.name.as_str().into());
         }
-        RowTitle::Key(row.title_key().unwrap_or_else(|| kind_key(kind)))
+        let title_key = row.title_key().unwrap_or_else(|| kind_key(kind));
+        if let Some(DetectorParams::PeriodExtreme(params)) = row.detector.known() {
+            return RowTitle::PeriodExtreme {
+                title_key,
+                period: params.period,
+            };
+        }
+        RowTitle::Key(title_key)
     }
 
     /// The title in the current locale.
@@ -48,6 +62,7 @@ impl RowTitle {
         match self {
             RowTitle::Named(name) => name.to_string(),
             RowTitle::Key(key) => t!(*key).to_string(),
+            RowTitle::PeriodExtreme { title_key, .. } => t!(*title_key).to_string(),
         }
     }
 }
@@ -120,9 +135,41 @@ pub(crate) fn tag_key(tag: LineTag) -> &'static str {
     }
 }
 
-/// A line's name: its row's title, then what the line is when its detector says ("POC", "Week
-/// open"), so two lines of one row standing side by side are told apart.
+/// Dictionary key of one unnamed period-extreme line's full name; other tags have no special name.
+fn period_extreme_line_key(period: ExtremePeriod, tag: LineTag) -> Option<&'static str> {
+    match tag {
+        LineTag::High => Some(match period {
+            ExtremePeriod::Day => "auto_figures_chart.extreme.day.high",
+            ExtremePeriod::PrevDay => "auto_figures_chart.extreme.prev_day.high",
+            ExtremePeriod::Week => "auto_figures_chart.extreme.week.high",
+            ExtremePeriod::PrevWeek => "auto_figures_chart.extreme.prev_week.high",
+            ExtremePeriod::Last4h => "auto_figures_chart.extreme.last4h.high",
+            ExtremePeriod::Last12h => "auto_figures_chart.extreme.last12h.high",
+            ExtremePeriod::Last24h => "auto_figures_chart.extreme.last24h.high",
+            ExtremePeriod::Last48h => "auto_figures_chart.extreme.last48h.high",
+        }),
+        LineTag::Low => Some(match period {
+            ExtremePeriod::Day => "auto_figures_chart.extreme.day.low",
+            ExtremePeriod::PrevDay => "auto_figures_chart.extreme.prev_day.low",
+            ExtremePeriod::Week => "auto_figures_chart.extreme.week.low",
+            ExtremePeriod::PrevWeek => "auto_figures_chart.extreme.prev_week.low",
+            ExtremePeriod::Last4h => "auto_figures_chart.extreme.last4h.low",
+            ExtremePeriod::Last12h => "auto_figures_chart.extreme.last12h.low",
+            ExtremePeriod::Last24h => "auto_figures_chart.extreme.last24h.low",
+            ExtremePeriod::Last48h => "auto_figures_chart.extreme.last48h.low",
+        }),
+        _ => None,
+    }
+}
+
+/// A line's name: an unnamed period-extreme line is its own full period name; every other line
+/// keeps its row's title, then what the line is when its detector says ("POC", "Week open").
 pub(crate) fn line_title(title: &RowTitle, tag: Option<LineTag>) -> String {
+    if let RowTitle::PeriodExtreme { period, .. } = title
+        && let Some(key) = tag.and_then(|tag| period_extreme_line_key(*period, tag))
+    {
+        return t!(key).to_string();
+    }
     let mut out = title.text();
     if let Some(tag) = tag {
         if !out.is_empty() {

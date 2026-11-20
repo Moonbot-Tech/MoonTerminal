@@ -1487,21 +1487,28 @@ fn the_block_opacity_defaults_round_trips_and_is_repaired() {
     assert_eq!(hand.auto_figures.opacity, 1.0);
 }
 
-/// Every preset prints its captions on hover, and a row stored before that — its caption absent
-/// from the file — keeps printing it always. The stored row is a real "Levels 1h" row: its preset
-/// in the file is the variant's serde name (`levels1h`, not the locale key's `levels_1h`), and it is
-/// recognised as that preset — the case the rule is about, not an unnamed row.
+/// Period-extreme presets print their captions always, every other preset prints them on hover,
+/// and a row stored before that — its caption absent from the file — keeps printing it always. The
+/// stored row is a real "Levels 1h" row: its preset in the file is the variant's serde name
+/// (`levels1h`, not the locale key's `levels_1h`), and it is recognised as that preset — the case
+/// the rule is about, not an unnamed row.
 ///
-/// Breakage: a preset left on `Always`, or `LineCaption`'s own default moved to `OnHover`, which
-/// would silently switch every stored row the reader never touched.
+/// Breakage: a period-extreme preset left on `OnHover`, another preset left on `Always`, or
+/// `LineCaption`'s own default moved to `OnHover`, which would silently switch every stored row the
+/// reader never touched.
 #[test]
-fn presets_caption_on_hover_and_stored_rows_keep_theirs() {
-    for preset in AutoFigurePreset::ALL {
-        assert_eq!(
-            preset.row().caption.show,
-            CaptionShow::OnHover,
-            "{preset:?}"
-        );
+fn period_extreme_presets_caption_always_and_stored_rows_keep_theirs() {
+    assert_eq!(LineCaption::default().show, CaptionShow::Always);
+    for preset in AutoFigurePreset::ALL
+        .into_iter()
+        .chain([AutoFigurePreset::NakedPoc])
+    {
+        let row = preset.row();
+        let expected = match row.detector.known() {
+            Some(DetectorParams::PeriodExtreme(_)) => CaptionShow::Always,
+            _ => CaptionShow::OnHover,
+        };
+        assert_eq!(row.caption.show, expected, "{preset:?}");
     }
     let file = r#"
 [[auto_figures.rows]]
