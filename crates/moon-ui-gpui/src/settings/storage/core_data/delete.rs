@@ -146,6 +146,15 @@ impl SettingsView {
             if !report_jobs.is_empty() {
                 match &report_sink {
                     None => failed.push(t!("storage.core_data_col_reports").to_string()),
+                    // No writer will apply the wipe this session: say why instead of waiting out
+                    // a delete nobody answers. The way back is the notice in Report or Analytics.
+                    Some(_) if moon_core::db::report_recovery::recording_stopped() => {
+                        failed.push(format!(
+                            "{} ({})",
+                            t!("storage.core_data_col_reports"),
+                            t!("analytics.recording_off_settings")
+                        ));
+                    }
                     Some(sink) => {
                         let mut waits = Vec::new();
                         for (core_uid, resync, forget) in report_jobs {

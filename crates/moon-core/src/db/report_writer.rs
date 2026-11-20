@@ -298,6 +298,35 @@ pub(in crate::db) fn passive_wal_checkpoint(
     })
 }
 
+/// Number a fresh replica's valuation outbox above every acknowledgement the worker already sent.
+///
+/// The worker remembers its last acknowledgement until it sees an outbox event above it, and
+/// skips everything at or below it as already reflected. Its acknowledgements to a replica that
+/// was set aside were never applied, so a fresh outbox counting from 1 would have its first events
+/// skipped and never valued. Seeding `AUTOINCREMENT` past them makes the first new event the one
+/// that clears the worker's memory.
+///
+/// Args:
+///     conn: Writer connection on the freshly initialized replica.
+///     floor: Highest acknowledged sequence of the replica that was set aside.
+///
+/// Returns:
+///     SQLite success once the next outbox event is numbered above `floor`.
+fn seed_outbox_sequence(conn: &Connection, floor: i64) -> rusqlite::Result<()> {
+    // `valuation::OUTBOX_TABLE`, private to that module.
+    let updated = conn.execute(
+        "UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'valuation_outbox'",
+        [floor],
+    )?;
+    if updated == 0 {
+        conn.execute(
+            "INSERT INTO sqlite_sequence(name, seq) VALUES('valuation_outbox', ?1)",
+            [floor],
+        )?;
+    }
+    Ok(())
+}
+
 /// Start the sole report-replica writer and publish each report-changing commit.
 ///
 /// Args:
@@ -306,6 +335,9 @@ pub(in crate::db) fn passive_wal_checkpoint(
 /// Returns:
 ///     The writer handle after its thread spawns. Database and schema initialization run on
 ///     that thread; an early failure is logged and wakes the feeds that asked for start states.
+///     After a full check that could not run, the thread waits uninitialized for a fresh
+///     replica the user starts ([`report_recovery::start_fresh_replica`]), holding the feeds'
+///     catch-up until then.
 pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<ReportsHandle> {
     let (tx, rx): (std::sync::mpsc::SyncSender<DbMsg>, Receiver<DbMsg>) =
         std::sync::mpsc::sync_channel(REPORT_QUEUE_CAP);
@@ -324,7 +356,28 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
         .name("reports-db".into())
         .spawn(move || {
             let init_complete = WriterInitCompletion(writer_init);
-            let (allowed, wal_anchor) = permit.wait();
+            let (mut allowed, wal_anchor) = permit.wait();
+            // The highest valuation acknowledgement addressed to a replica that was set aside;
+            // the fresh outbox must number its events above it (`seed_outbox_sequence`).
+            let mut outbox_floor = 0i64;
+            // A check that could not run parks the writer, still uninitialized, until the user
+            // sets the replica aside: every core then declares its catch-up into the fresh one.
+            if !allowed && report_recovery::wait_for_fresh_replica(&wal_anchor) {
+                allowed = true;
+                // Addressed to the replica that was set aside — a valuation acknowledgement of
+                // its outbox would delete rows of the new one. Nothing that must survive is
+                // sent here: the feeds hold everything until the start states exist.
+                let mut stale = 0usize;
+                for msg in rx.try_iter() {
+                    stale += 1;
+                    if let DbMsg::ValuationAck { through_seq } = msg {
+                        outbox_floor = outbox_floor.max(through_seq);
+                    }
+                }
+                if stale > 0 {
+                    log::info!("reports: dropped {stale} messages queued for the set-aside replica");
+                }
+            }
             if !allowed || integrity::writes_blocked() {
                 log::error!("reports: writer stopped because startup integrity did not pass");
                 return;
@@ -339,6 +392,11 @@ pub fn spawn_writer(permit: report_recovery::ReportWritePermit) -> Option<Report
             if let Err(error) = init_db(&conn) {
                 log::error!("reports: schema initialization failed: {error}");
                 return;
+            }
+            if outbox_floor > 0 {
+                if let Err(error) = seed_outbox_sequence(&conn, outbox_floor) {
+                    log::warn!("reports: fresh valuation outbox sequence was not seeded: {error}");
+                }
             }
             let mut rep_state = match rep::init(&conn, writer_starts.clone()) {
                 Ok(state) => state,

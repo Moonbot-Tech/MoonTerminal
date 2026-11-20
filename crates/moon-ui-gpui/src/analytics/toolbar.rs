@@ -1023,26 +1023,54 @@ impl AnalyticsView {
         let recovery_note = moon_core::db::report_recovery::status();
         let recovered =
             recovery_note.map(|notice| crate::report_notice::recovery_notice_text(Some(notice)));
+        // The user's set-aside of an unchecked replica also goes away by itself, so it is polled
+        // like a running check, without asking for a verdict the check already gave.
+        let setting_aside = matches!(recovery_note, Some(RecoveryNotice::FreshReplicaRunning));
+        // Once a fresh replica records, the verdict that could not be reached describes the files
+        // set aside; only damage found since may outrank the notice, as after a recovery.
+        let fresh = matches!(
+            recovery_note,
+            Some(RecoveryNotice::FreshReplicaStarted { .. })
+        );
+        // The writer offers the fresh replica a moment after the incomplete-check notice is out.
+        // Nothing repaints this window for that, so it waits out the writer's decision with the
+        // same poll; once decided, the latched notice returns below and the poll stops.
+        let deciding = matches!(recovery_note, Some(RecoveryNotice::CheckIncomplete { .. }))
+            && moon_core::db::report_recovery::fresh_replica_offer_pending();
+        let transient = setting_aside || deciding;
         // A still-running check is the one notice that goes away by itself, so it must not
         // return here: the poll below is what notices the verdict and takes the notice down.
-        if matches!(
-            recovery_note,
-            Some(notice) if !matches!(
-                notice,
-                RecoveryNotice::Recovered { .. } | RecoveryNotice::CheckRunning
+        if !transient
+            && !fresh
+            && matches!(
+                recovery_note,
+                Some(notice) if !matches!(
+                    notice,
+                    RecoveryNotice::Recovered { .. } | RecoveryNotice::CheckRunning
+                )
             )
-        ) {
+        {
             return recovered;
         }
 
-        let Some(verdict) = moon_core::db::integrity::status() else {
+        let verdict = if transient {
+            None
+        } else {
+            moon_core::db::integrity::status()
+        };
+        let Some(verdict) = verdict else {
             // Still running. Re-poll once per armed timer, at the interval the check itself
             // suggests: short while a verdict is seconds away, stretched once the check has
             // run long enough to be announced — a large replica takes minutes, and this
-            // repaints the window on every firing.
+            // repaints the window on every firing. A set-aside copies the whole file, so it
+            // has an interval of its own.
             if !self.integrity_poll_armed {
                 self.integrity_poll_armed = true;
-                let wait = moon_core::db::integrity::poll_hint();
+                let wait = if setting_aside {
+                    moon_core::db::report_recovery::fresh_replica_poll_hint()
+                } else {
+                    moon_core::db::integrity::poll_hint()
+                };
                 cx.spawn(async move |this, cx| {
                     let executor = cx.update(|cx| cx.background_executor().clone());
                     executor.timer(wait).await;
@@ -1062,6 +1090,7 @@ impl AnalyticsView {
                 t!("analytics.integrity_damaged").to_string(),
                 lines.first().cloned().unwrap_or_default(),
             )),
+            Integrity::CheckFailed(_) if fresh => recovered,
             Integrity::CheckFailed(msg) => {
                 Some((t!("analytics.integrity_unchecked").to_string(), msg.clone()))
             }

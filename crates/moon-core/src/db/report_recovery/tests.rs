@@ -680,3 +680,386 @@ fn background_verdict_preserves_read_history_without_bypassing_writes() {
         }
     }
 }
+
+/// Write the three fixture members and return the bytes each one holds.
+///
+/// Args:
+///     files: Main, WAL and SHM paths.
+///
+/// Returns:
+///     The independent expected payload of each member, in the same order.
+fn write_fixture_set(files: &[PathBuf; 3]) -> [&'static [u8]; 3] {
+    let bytes = [
+        b"unchecked main".as_slice(),
+        b"unchecked wal".as_slice(),
+        b"unchecked shm".as_slice(),
+    ];
+    for (path, payload) in files.iter().zip(bytes) {
+        write_bytes(path, payload);
+    }
+    bytes
+}
+
+/// Names of the entries directly under a recovery root, sorted.
+fn root_entries(recovery_root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(recovery_root)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// `set_aside` must move the whole unchecked set into a finalized snapshot that says why.
+///
+/// Dropping the WAL or SHM from the move leaves a sidecar beside the fresh replica; skipping the
+/// finalization marker makes the next start resume an already finished move; recording the
+/// damage cause would tell whoever opens the folder that the files were corrupt, which no check
+/// established.
+#[test]
+fn an_unchecked_set_aside_moves_the_whole_set_into_a_finalized_snapshot() {
+    let root = test_root("set-aside");
+    let files = test_files(&root);
+    let bytes = write_fixture_set(&files);
+    let recovery_root = root.join("damaged-reports");
+
+    let SetAside::Done(snapshot) = set_aside(
+        &files,
+        &recovery_root,
+        1_785_427_200_000,
+        "fixture: file held".into(),
+    ) else {
+        panic!("an unheld set must be set aside");
+    };
+    for (source, payload) in files.iter().zip(bytes) {
+        assert!(
+            !source.exists(),
+            "the live path must be free for the fresh replica"
+        );
+        let retired =
+            paths::report_recovery_originals_dir(&snapshot).join(source.file_name().unwrap());
+        assert_eq!(std::fs::read(retired).unwrap(), payload);
+    }
+    assert!(paths::report_recovery_finalized_path(&snapshot).is_file());
+    let metadata = read_metadata(&snapshot).unwrap();
+    assert!(metadata.cause.contains("No damage was found"));
+    assert_eq!(metadata.diagnostics, vec!["fixture: file held".to_string()]);
+    assert!(pending_snapshots(&recovery_root).unwrap().is_empty());
+    // Not a damage recovery: real damage in the fresh replica the next hour is still recovered.
+    assert_eq!(
+        recent_snapshot(&recovery_root, 1_785_427_200_000 + 60 * 60 * 1_000).unwrap(),
+        None
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A set-aside that cannot even stage its copy must leave every live file as it was.
+///
+/// Letting the staging error through after a partial retirement, or removing a source before the
+/// copy is verified, fails the byte comparison below.
+#[test]
+fn a_set_aside_that_cannot_stage_leaves_the_files_in_place() {
+    let root = test_root("set-aside-blocked");
+    let files = test_files(&root);
+    let bytes = write_fixture_set(&files);
+    // A file where the recovery directory belongs: creating the staging under it fails.
+    let recovery_root = root.join("damaged-reports");
+    write_bytes(&recovery_root, b"not a directory");
+
+    let outcome = set_aside(&files, &recovery_root, 1_785_427_200_000, "fixture".into());
+    assert!(matches!(outcome, SetAside::Untouched(_)), "got {outcome:?}");
+    for (source, payload) in files.iter().zip(bytes) {
+        assert_eq!(std::fs::read(source).unwrap(), payload);
+    }
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A retirement that stopped half way must be put back and its published copy withdrawn.
+///
+/// Without the put-back the main file stays inside the snapshot while the user is told nothing
+/// moved. Leaving the copy published hands it to the next start's `resume_pending`, which would
+/// retire the live files again for a move the user saw fail.
+#[test]
+fn a_partly_retired_set_is_put_back_and_its_copy_withdrawn() {
+    let root = test_root("set-aside-restore");
+    let files = test_files(&root);
+    let bytes = write_fixture_set(&files);
+    let recovery_root = root.join("damaged-reports");
+    let snapshot = stage_and_publish(
+        &files,
+        &recovery_root,
+        1_785_427_200_000,
+        FRESH_REPLICA_CAUSE,
+        Vec::new(),
+    )
+    .unwrap();
+    // What `finalize_snapshot` leaves when the WAL rename fails after the main one succeeded.
+    std::fs::rename(
+        &files[0],
+        paths::report_recovery_originals_dir(&snapshot).join(files[0].file_name().unwrap()),
+    )
+    .unwrap();
+
+    assert!(restore_unfinalized(&files, &snapshot).unwrap());
+    for (source, payload) in files.iter().zip(bytes) {
+        assert_eq!(std::fs::read(source).unwrap(), payload);
+    }
+    assert!(pending_snapshots(&recovery_root).unwrap().is_empty());
+    assert!(
+        root_entries(&recovery_root).is_empty(),
+        "the unused copy must be removed: {:?}",
+        root_entries(&recovery_root)
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The usual reason a check cannot run is another program holding the file, and SQLite and most
+/// scanners open it without delete sharing: the copy then succeeds and the move fails. That must
+/// come back as a failure that left the files where they were, not as a half-moved set.
+#[cfg(windows)]
+#[test]
+fn a_main_file_held_without_delete_sharing_is_left_in_place() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: what SQLite asks for, so a rename is refused.
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+    let root = test_root("set-aside-held");
+    let files = test_files(&root);
+    let bytes = write_fixture_set(&files);
+    let recovery_root = root.join("damaged-reports");
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_WRITE)
+        .open(&files[0])
+        .unwrap();
+
+    let outcome = set_aside(&files, &recovery_root, 1_785_427_200_000, "fixture".into());
+    assert!(matches!(outcome, SetAside::Untouched(_)), "got {outcome:?}");
+    drop(held);
+    for (source, payload) in files.iter().zip(bytes) {
+        assert_eq!(std::fs::read(source).unwrap(), payload);
+    }
+    assert!(root_entries(&recovery_root).is_empty());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A published copy that cannot be withdrawn must be reported as stuck, never as untouched.
+///
+/// Reporting it untouched offers a retry, and the copy left published is one the next start's
+/// `resume_pending` finishes by retiring the live files — or, beside a retry's second snapshot,
+/// one that makes that start fail closed on two unfinished recoveries.
+#[cfg(windows)]
+#[test]
+fn a_copy_that_cannot_be_withdrawn_stays_published_and_is_reported() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`: a scanner holding the copy refuses the rename.
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+
+    let root = test_root("set-aside-withdraw");
+    let files = test_files(&root);
+    let bytes = write_fixture_set(&files);
+    let recovery_root = root.join("damaged-reports");
+    let snapshot = stage_and_publish(
+        &files,
+        &recovery_root,
+        1_785_427_200_000,
+        FRESH_REPLICA_CAUSE,
+        Vec::new(),
+    )
+    .unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_READ_WRITE)
+        .open(snapshot.join(files[0].file_name().unwrap()))
+        .unwrap();
+
+    assert!(!restore_unfinalized(&files, &snapshot).unwrap());
+    drop(held);
+    for (source, payload) in files.iter().zip(bytes) {
+        assert_eq!(std::fs::read(source).unwrap(), payload);
+    }
+    assert_eq!(pending_snapshots(&recovery_root).unwrap(), vec![snapshot]);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Wait for a condition another thread makes true, failing the test after ten seconds.
+///
+/// Args:
+///     what: Named in the failure.
+///     done: The condition, asked every 10 ms.
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// After a check that could not run, the real writer must wait for the user's fresh replica and
+/// record into it, and a set-aside that fails must leave history readable and the action offered.
+///
+/// Breaks on: the writer exiting on the closed gate as before (nothing ever offers the action and
+/// `ForgetCore` is never answered); the writer finishing its initialization before it parks (the
+/// feeds would declare catch-up into a replica nobody writes); a second press starting a second
+/// move; a failed move closing reads for good or offering nothing to retry; and treating the
+/// check that could not run as a pass (writes open before the move).
+#[test]
+fn an_unchecked_replica_is_set_aside_and_the_parked_writer_records_into_a_fresh_one() {
+    const CHILD: &str = "MOON_REPORT_FRESH_TEST_ROOT";
+    let Some(root) = std::env::var_os(CHILD) else {
+        // Process-global gates, lease and notices: one process per run, as in the test above.
+        let root = test_root("fresh-replica");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "db::report_recovery::tests::an_unchecked_replica_is_set_aside_and_the_parked_writer_records_into_a_fresh_one", "--nocapture"])
+            .env(CHILD, &root)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    assert!(paths::set_data_dir_override(PathBuf::from(root)));
+    let path = paths::reports_db_path();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE app_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE marker(value INTEGER); INSERT INTO marker VALUES(42);",
+    )
+    .unwrap();
+    drop(conn);
+    assert!(
+        LEASE
+            .set(Mutex::new(
+                acquire_lease(&paths::reports_recovery_lease_path()).unwrap()
+            ))
+            .is_ok()
+    );
+    // What `prepare` sets up before its worker: readable history, a pending gate, a running check.
+    READ_ACCESS_ENABLED.store(true, Ordering::Release);
+    assert!(CHECK_STARTED.set(Instant::now()).is_ok());
+    CHECK_PENDING.store(true, Ordering::Release);
+    let anchor = Arc::new(Mutex::new(startup_read_anchor(&path).unwrap()));
+    let gate = StartupGate::pending();
+    let handle = super::super::spawn_writer(ReportWritePermit {
+        gate: gate.clone(),
+        anchor: anchor.clone(),
+    })
+    .expect("writer thread");
+    assert!(
+        !fresh_replica_offered(),
+        "never offered while the check runs"
+    );
+    assert!(!begin_fresh_replica());
+    wait_until(
+        "the writer to wait for the verdict",
+        fresh_replica_offer_pending,
+    );
+
+    // The verdict the worker publishes after its last attempt, then the permit it resolves.
+    assert!(!finish_background(
+        Decision::Ready,
+        Integrity::CheckFailed("fixture: file held".into())
+    ));
+    let incomplete = status().expect("the incomplete-check notice");
+    gate.finish(false);
+    wait_until("the writer to park", fresh_replica_offered);
+    assert!(
+        !fresh_replica_offer_pending(),
+        "a surface waiting for the writer's decision would poll forever"
+    );
+    // Same words, new address: the UI compares notices by identity, and a surface that
+    // rendered before the writer parked must be told the button is there now.
+    let offered = status().expect("the offered notice");
+    assert_eq!(offered, incomplete);
+    assert!(!std::ptr::eq(offered, incomplete));
+    assert!(
+        anchor.lock().unwrap().is_none(),
+        "the anchor would block the move"
+    );
+    assert!(
+        !handle.tx.is_started(),
+        "feeds must keep their catch-up undeclared"
+    );
+    assert!(recording_stopped());
+    // A message sent meanwhile is held, not refused, and must not reach the fresh replica.
+    handle
+        .tx
+        .send(super::super::DbMsg::ValuationAck { through_seq: 7 });
+
+    // The move fails: the recovery directory cannot be created.
+    let blocker = paths::damaged_reports_dir();
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    assert!(begin_fresh_replica());
+    assert!(
+        !begin_fresh_replica(),
+        "a second press must not start a second move"
+    );
+    assert!(!fresh_replica_offered());
+    assert_eq!(status(), Some(&RecoveryNotice::FreshReplicaRunning));
+    run_fresh_replica();
+    assert_eq!(status(), Some(&RecoveryNotice::FreshReplicaFailed));
+    assert!(
+        fresh_replica_offered(),
+        "a failed move must be offered again"
+    );
+    assert!(wait_for_write_access().is_err());
+    let reader = super::super::open_reader().expect("history stays readable after a failed move");
+    assert_eq!(
+        reader
+            .query_row("SELECT value FROM marker", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        42
+    );
+    drop(reader);
+
+    // The cause is gone: the real thread moves the set and releases the writer.
+    std::fs::remove_file(&blocker).unwrap();
+    assert!(start_fresh_replica());
+    wait_until("the fresh writer", || handle.tx.is_started());
+    let Some(RecoveryNotice::FreshReplicaStarted { snapshot_dir }) = status() else {
+        panic!("expected a started fresh replica, got {:?}", status());
+    };
+    let retired = paths::report_recovery_originals_dir(snapshot_dir).join("reports.sqlite");
+    assert!(retired.is_file(), "the old main file must be kept");
+    assert!(!fresh_replica_offered());
+    assert!(!recording_stopped());
+    assert!(wait_for_write_access().is_ok());
+    // The writer answers on the fresh replica, which no longer holds the old rows.
+    let (done, answered) = std::sync::mpsc::sync_channel(1);
+    handle.tx.send(super::super::DbMsg::ForgetCore {
+        core_uid: 7,
+        resync: None,
+        forget: false,
+        done,
+    });
+    assert_eq!(answered.recv_timeout(Duration::from_secs(10)), Ok(true));
+    let reader = super::super::open_reader().expect("the fresh replica is readable");
+    assert!(
+        reader
+            .query_row("SELECT value FROM marker", [], |row| row.get::<_, i64>(0))
+            .is_err()
+    );
+    // The held acknowledgement numbers the fresh outbox above it, so the valuation worker, which
+    // still remembers 7, does not skip the fresh replica's first events as already reflected.
+    let next_seq: i64 = reader
+        .query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'valuation_outbox'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("the fresh outbox sequence was seeded");
+    assert!(next_seq >= 7, "fresh outbox would restart at {next_seq}");
+}

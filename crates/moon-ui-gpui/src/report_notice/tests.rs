@@ -142,3 +142,30 @@ fn incomplete_check_notice_describes_the_actual_access_mode() {
     assert!(!detail.contains("second terminal"));
     assert!(!detail.contains("fixture internal"));
 }
+
+/// The three states of the user's set-aside must each say what is true of recording.
+///
+/// Routing the running set-aside through the stopped-recording paragraph tells the user to fix a
+/// cause and restart while recording is seconds from starting by itself; dropping that paragraph
+/// from a failed one hides that nothing is recorded; appending it to a started replica claims
+/// the opposite of what happened, and losing the path loses where the old files went.
+#[test]
+fn fresh_replica_notices_state_where_the_files_are_and_whether_recording_runs() {
+    let _locale = crate::test_locale::force("en");
+    let (title, detail) = recovery_notice_text(Some(&RecoveryNotice::FreshReplicaRunning));
+    assert_eq!(title, "Setting the reports replica aside.");
+    assert!(detail.contains("recording starts right after it"));
+    assert!(!detail.contains("not being recorded"));
+
+    let (title, detail) = recovery_notice_text(Some(&RecoveryNotice::FreshReplicaFailed));
+    assert_eq!(title, "The reports replica could not be set aside.");
+    assert!(detail.contains("left where they were"));
+    assert!(detail.contains("not being recorded"));
+
+    let (title, detail) = recovery_notice_text(Some(&RecoveryNotice::FreshReplicaStarted {
+        snapshot_dir: std::path::PathBuf::from("saved-copy"),
+    }));
+    assert_eq!(title, "A fresh reports replica was started.");
+    assert!(detail.contains("preserved in saved-copy."));
+    assert!(!detail.contains("not being recorded"));
+}

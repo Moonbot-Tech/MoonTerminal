@@ -824,9 +824,34 @@ impl ReportPanel {
         let report_revision = backend.read(cx).report_revision.clone();
         cx.observe(&report_revision, |this, _revision, cx| {
             let notice = db::report_recovery::status();
-            if notice != this.recovery_notice {
+            // By identity, like the edge that published this revision: the notice offering a
+            // fresh replica repeats the incomplete-check one word for word, and only its new
+            // address says the button is there now.
+            let same = match (notice, this.recovery_notice) {
+                (Some(now), Some(shown)) => std::ptr::eq(now, shown),
+                (now, shown) => now.is_none() && shown.is_none(),
+            };
+            if !same {
+                use db::report_recovery::RecoveryNotice;
+                // Reads were closed while a set-aside ran, and no commit follows a failed one: a
+                // query refused meanwhile would stay failed over readable history until rows
+                // next commit. The coordinator tick may skip the running state of a short move,
+                // so its outcomes count as well.
+                let set_aside_ended = matches!(
+                    this.recovery_notice,
+                    Some(RecoveryNotice::FreshReplicaRunning)
+                ) || matches!(
+                    notice,
+                    Some(
+                        RecoveryNotice::FreshReplicaFailed
+                            | RecoveryNotice::FreshReplicaStarted { .. }
+                    )
+                );
                 this.recovery_notice = notice;
                 cx.notify();
+                if set_aside_ended {
+                    this.request_requery(cx);
+                }
             }
             let report_generation = this
                 .generation
