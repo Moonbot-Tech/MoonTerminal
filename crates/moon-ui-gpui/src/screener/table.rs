@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
+use rust_i18n::t;
 
 use moon_core::market::SharedScreenerRow;
 use moon_core::session::CoreId;
@@ -13,6 +14,7 @@ use moon_core::util::fmt::{self, DeltaSign};
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use crate::panels::num;
 
+use super::auto_figures::{AUTO_FIGURES_KEY, ScanBook, ScanLabels};
 use super::view::ScreenerView;
 
 pub(super) use crate::design::{moon, moon_alpha};
@@ -61,7 +63,20 @@ pub(super) const COLS: &[ColDef] = &[
     ("pnl", "PnL", 76.0, true),
     ("session_profit", "Session", 76.0, true),
     ("pos", "Pos", 66.0, true),
+    // The coin's best auto-figure event and the distance to its nearest line, from the last press
+    // of the Calculate button (`super::auto_figures`). Not a Moonbot column, so its header and its
+    // entry in the column menu are translated (`column_label`); the title here is the fallback.
+    (AUTO_FIGURES_KEY, "Auto figures", 150.0, false),
 ];
+
+/// The header and column-menu caption of a column: the untranslated Moonbot label of `COLS`, or
+/// the translated name of a column of the terminal's own.
+pub(super) fn column_label(key: &str, title: &'static str) -> SharedString {
+    match key {
+        AUTO_FIGURES_KEY => t!("auto_figures.title").to_string().into(),
+        _ => title.into(),
+    }
+}
 
 /// Return the displayed title for a Screener column key.
 ///
@@ -179,10 +194,14 @@ const COLS_ADDED_LATE: &[(u32, &str)] = &[
     (2, EXCHANGE_KEY),
     (2, TYPE_KEY),
     (2, LISTED_KEY),
+    // A display feature ships ON (CONTRIBUTING § UI): a stored set that predates the column is a
+    // set with the value ABSENT, not one where the user turned it off, so it is offered once like
+    // every late column — and a user who hides it afterwards keeps it hidden.
+    (3, AUTO_FIGURES_KEY),
 ];
 
 /// The migration version a layout is at once every late column has been offered to it.
-pub(super) const COLUMNS_MIGRATION: u32 = 2;
+pub(super) const COLUMNS_MIGRATION: u32 = 3;
 
 /// Add the columns a stored visible set predates.
 ///
@@ -209,6 +228,38 @@ pub(super) fn add_new_columns(keys: &mut Vec<String>, applied: u32) {
             keys.push((*column).to_string());
         }
     }
+}
+
+/// The sort to fall back to once the column the table is sorted by has been hidden, as
+/// `((key, descending), store)` — `store` says whether that sort is to be written over the stored
+/// preference.
+///
+/// The auto-figures column is never stored as the sort (its answers live for one window session,
+/// see `ScreenerView::set_sort`), so while it is the sort the STORED preference is still the one
+/// the user chose before it. Hiding it therefore goes back to that stored sort, and stores nothing:
+/// writing the fallback would erase the very preference the column's sort was careful to keep.
+/// Any other hidden sort column falls back through [`restore_sort`] as before, and that fallback
+/// is stored.
+///
+/// Args:
+///     sort_key: The column the table is sorted by, now hidden.
+///     sort_desc: Its direction.
+///     stored: The stored sort preference, already brought current ([`migrate_legacy_sort`]).
+///     visible: The visible columns after the hide.
+pub(super) fn sort_after_hiding(
+    sort_key: &str,
+    sort_desc: bool,
+    stored: Option<moon_core::config::TableSortPreference>,
+    visible: &HashSet<String>,
+) -> ((String, bool), bool) {
+    if sort_key == AUTO_FIGURES_KEY {
+        return (restore_sort(stored, visible), false);
+    }
+    let current = moon_core::config::TableSortPreference {
+        column: sort_key.to_string(),
+        ascending: !sort_desc,
+    };
+    (restore_sort(Some(current), visible), true)
 }
 
 /// Restore a visible Screener sort as `(key, descending)`.
@@ -436,6 +487,10 @@ pub(super) struct RowStyle {
     pub(super) both: SharedString,
     pub(super) spot_only: SharedString,
     pub(super) futures_only: SharedString,
+    /// The latest press's answers, its words, and whether its run is still being worked off.
+    pub(super) scan_book: std::rc::Rc<ScanBook>,
+    pub(super) scan_labels: ScanLabels,
+    pub(super) scan_running: bool,
 }
 
 /// The venue caption with its brand logo, clipped rather than wrapped in a narrow column.
@@ -594,6 +649,11 @@ pub(super) fn screener_row(
                 Some(v) => money_cell(v),
                 None => MoonDataCell::text("—").tone(MoonTone::Muted),
             },
+            AUTO_FIGURES_KEY => super::auto_figures::cell(
+                style.scan_book.get(r.provider, &r.market),
+                style.scan_running,
+                &style.scan_labels,
+            ),
             "pos" => {
                 if r.pos_size != 0.0 {
                     MoonDataCell::text(num(r.pos_size))

@@ -40,6 +40,22 @@
 //! reinterpretation shipped, so no v2 row poisoned by the old bug ever existed in the field —
 //! there is nothing for a v2 migration to correct.
 //!
+//! # The core's 5-minute ring: a kind of its own
+//!
+//! The rows of the core's own 5-minute ring (moonproto `candles_5m`, the recorder's
+//! `refresh/ring.rs`) are kept under [`RING_5M_KIND`], never under kind 5. A ring row carries only
+//! a high and a low that can be trusted — its open and close are the core's `open == high`,
+//! `close == low` placeholder — so it is not a candle any reader of kind 5 may take as one: the
+//! tuner's Pump/Dump deltas and BTC average, the Telegram mini app's chart, the detect thumbnails,
+//! the chart's prefix and the kind-1/kind-5 merge all read kind 5 as real candles, and so does
+//! every older executable. A kind no existing path asks for keeps every one of them seeing exactly
+//! what it saw before the ring was stored, with no schema step and no mark inside the row.
+//!
+//! Only the auto figures' bar assembly and the Screener's scan read [`RING_5M_KIND`], beside kind 5:
+//! a real candle wins its bucket, and a bar taken from the ring is marked as having no open and
+//! close BY ITS SOURCE (`moon_chart::auto_figures::with_ring_rows`), never by its shape. The kind
+//! is pruned with kind 5's retention ([`retention_days`]), so the two age out together.
+//!
 //! Database open and schema creation run synchronously. Startup retention and queued reads
 //! and writes run on a dedicated worker because `Connection` is not `Sync`. Retention runs
 //! before the first queued operation. Synchronous reads wait for startup retention before
@@ -79,21 +95,48 @@ std::thread_local! {
     static DELAY_PRUNE_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// The kind code the core's 5-minute ring rows are stored under (module doc, "The core's 5-minute
+/// ring").
+///
+/// Kinds are otherwise timeframes in minutes, and every reader asks for one by its timeframe; a
+/// million and five minutes is nearly two years, which no chart, resample or cache layer ever
+/// names, so no existing path — in this build or an older one — can read these rows as candles.
+/// The trailing 5 keeps the period readable in a raw query. An older executable's startup prune
+/// lists its kinds explicitly and leaves this one alone; this build prunes it like kind 5.
+pub const RING_5M_KIND: u32 = 1_000_005;
+
+/// The period of a kind-5 row and of a [`RING_5M_KIND`] row, ms — the one 5-minute bucket both
+/// kinds file their rows under.
+///
+/// The single source for every reader that buckets, resamples or ages these rows (the auto
+/// figures' bar assembly, the Screener's scan, the chart's auto-figure job, the ring recorder): a
+/// copy of the number in each of them is a copy that can drift from the cache's own bucket.
+pub const KIND_5M_MS: i64 = 5 * 60_000;
+
 /// Returns retention in days for a candle kind.
 ///
 /// Small timeframes are expensive while larger ones are cheap. The background recorder
 /// writes 5-minute data for ALL markets, about 15 MB/day for roughly 5,500 markets, so it
-/// retains 15 days to keep the database near 250 MB instead of multiple gigabytes
+/// retains 15 days to keep kind 5 near 250 MB instead of multiple gigabytes
 /// (measured 2026-07-15). Distant small-timeframe history is unnecessary because larger
 /// layers fill the tail. One-minute data comes from deep-history replies for open charts
 /// and is retained for 30 days.
+///
+/// The core's ring ([`RING_5M_KIND`]) is kept as long as kind 5: it fills kind 5's holes, and a
+/// hole older than kind 5's retention is one no reader looks at. Its size is NOT inside the
+/// 250 MB above, and it is not small: a ring covers every market of the core, so each calendar day
+/// a snapshot reaches gains up to 288 rows × 28 B ≈ 8 KB per market. With the terminal started
+/// (or reconnected) at least once a day, every day is reached — about 44 MB a day for 5,500
+/// markets and some 650 MB over the 15 days at the ceiling, on top of kind 5. Less when the
+/// terminal runs rarely (a snapshot reaches back only about 41.6 hours, so the days between two
+/// launches farther apart than that stay empty) or when a ring holds fewer rows than its 500.
 ///
 /// Crate-visible so the auto-figure presets can be checked against it: a shipped row deeper than
 /// what the cache keeps would report short history forever.
 pub(crate) fn retention_days(kind_min: u32) -> i64 {
     match kind_min {
         0..=1 => 30,
-        2..=5 => 15,
+        2..=5 | RING_5M_KIND => 15,
         _ => 3650,
     }
 }
@@ -185,8 +228,9 @@ pub(crate) enum Op {
     MergeBatch {
         items: Vec<MergeItem>,
         /// Signalled after the transaction settles, so a producer can wait for one chunk before
-        /// queueing the next. `None` means backpressure without a completion acknowledgement.
-        done: Option<mpsc::Sender<()>>,
+        /// queueing the next, with whether each item was stored (`write_batch`). `None` means
+        /// backpressure without a completion acknowledgement.
+        done: Option<mpsc::Sender<Vec<bool>>>,
     },
     Read {
         exchange: String,
@@ -203,15 +247,22 @@ pub(crate) enum Op {
     },
 }
 
-/// Releases a `merge_batch_blocking` caller when the worker's arm ends, however it ends.
+/// Releases a `merge_batch_blocking` / `merge_batch_confirmed` caller when the worker's arm ends,
+/// however it ends, with which items were stored — none, unless the arm got as far as recording
+/// `write_batch`'s answer in `stored`.
 ///
 /// A plain send at the bottom of that arm would leave the producer parked forever on any early
-/// return, which is the one failure this whole handshake must not introduce.
-struct SettledOnDrop(mpsc::Sender<()>);
+/// return, which is the one failure this whole handshake must not introduce; and an arm that
+/// unwound before its commit reports nothing stored, so a caller that keeps a cursor by the answer
+/// writes those rows again.
+struct SettledOnDrop {
+    done: mpsc::Sender<Vec<bool>>,
+    stored: Vec<bool>,
+}
 
 impl Drop for SettledOnDrop {
     fn drop(&mut self) {
-        let _ = self.0.send(());
+        let _ = self.done.send(std::mem::take(&mut self.stored));
     }
 }
 
@@ -345,8 +396,20 @@ impl KlineCache {
     ///
     /// For BACKGROUND writers only: it blocks the caller until the write lands.
     pub fn merge_batch_blocking(&self, items: Vec<MergeItem>) {
-        if items.is_empty() {
-            return;
+        let _ = self.merge_batch_confirmed(items);
+    }
+
+    /// [`Self::merge_batch_blocking`], answering whether each item was stored, in `items` order:
+    /// `true` once its merge ran without error inside a transaction that committed (a merge whose
+    /// every row the cache filters out counts — offering it again would store nothing either).
+    ///
+    /// For a writer that keeps a cursor of what it has stored and must move it only past rows that
+    /// landed: the recorder's pass over the core's ring (`source/refresh.rs`). All `false` when
+    /// the worker is gone or the transaction did not commit.
+    pub fn merge_batch_confirmed(&self, items: Vec<MergeItem>) -> Vec<bool> {
+        let count = items.len();
+        if count == 0 {
+            return Vec::new();
         }
         let (done, rx) = mpsc::channel();
         if self
@@ -357,10 +420,12 @@ impl KlineCache {
             })
             .is_err()
         {
-            return;
+            return vec![false; count];
         }
         // A dropped sender resolves this immediately, so a dead worker cannot park the producer.
-        let _ = rx.recv();
+        let mut stored = rx.recv().unwrap_or_default();
+        stored.resize(count, false);
+        stored
     }
 
     /// Reads rows whose `t_open` lies in the inclusive `[from_ms, to_ms]` range.
@@ -448,22 +513,24 @@ fn prune_expired(conn: &rusqlite::Connection) {
     // unconstrained here), so a per-kind loop would require 7 full scans per table. The CASE
     // expression folds all seven kinds' cutoffs into one scan, and `retention_days` stays the
     // single authority for the three distinct numbers it can produce across those seven kinds —
-    // bound as parameters here, never hard-coded into the SQL. Only the seven listed kinds are
-    // pruned, exactly as before; an unlisted kind's chunk is untouched by either statement.
+    // bound as parameters here, never hard-coded into the SQL. Only the listed kinds are pruned —
+    // the seven timeframes and the core's ring (`?4`, [`RING_5M_KIND`], kind 5's cutoff); an
+    // unlisted kind's chunk is untouched by either statement.
     let today = now_unix_ms() / DAY_MS;
     let cutoffs = rusqlite::params![
         today - retention_days(1),
         today - retention_days(5),
         today - retention_days(1440),
+        RING_5M_KIND,
     ];
     let _ = conn.execute(
-        "DELETE FROM chunks WHERE kind IN (0,1,5,30,60,240,1440)
-         AND day < CASE WHEN kind <= 1 THEN ?1 WHEN kind <= 5 THEN ?2 ELSE ?3 END",
+        "DELETE FROM chunks WHERE kind IN (0,1,5,30,60,240,1440,?4)
+         AND day < CASE WHEN kind <= 1 THEN ?1 WHEN kind <= 5 OR kind = ?4 THEN ?2 ELSE ?3 END",
         cutoffs,
     );
     let _ = conn.execute(
-        "DELETE FROM chunks_v2 WHERE kind IN (0,1,5,30,60,240,1440)
-         AND day < CASE WHEN kind <= 1 THEN ?1 WHEN kind <= 5 THEN ?2 ELSE ?3 END",
+        "DELETE FROM chunks_v2 WHERE kind IN (0,1,5,30,60,240,1440,?4)
+         AND day < CASE WHEN kind <= 1 THEN ?1 WHEN kind <= 5 OR kind = ?4 THEN ?2 ELSE ?3 END",
         cutoffs,
     );
 }
@@ -537,29 +604,36 @@ fn trace_first_merge(
 type TraceKey<'a> = (&'a str, &'a str, u32);
 
 /// Write one batch and preserve the existing per-item failure and trace behavior.
+///
+/// Returns:
+///     Whether each item was stored, in `items` order: its merge succeeded and the transaction
+///     committed. All `false` when the transaction could not be opened or committed.
 fn write_batch(
     conn: &rusqlite::Connection,
     items: Vec<MergeItem>,
     announced: &mut bool,
     seen: &mut std::collections::HashSet<(String, String, u32)>,
-) {
+) -> Vec<bool> {
     if items.is_empty() {
-        return;
+        return Vec::new();
     }
     let now = now_unix_ms();
     let tx = match conn.unchecked_transaction() {
         Ok(tx) => tx,
         Err(e) => {
             log::warn!("kline cache batch tx failed ({} items): {e}", items.len());
-            return;
+            return vec![false; items.len()];
         }
     };
     // An item failure does not abort the SQLite transaction. Log it, write the remaining items,
     // then commit the entire cycle once.
     let enabled = log::log_enabled!(MERGE_TRACE_LEVEL);
     let mut merged_any = false;
+    let mut stored = Vec::with_capacity(items.len());
     for it in &items {
-        match upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now) {
+        let merged = upsert_one(&tx, &it.exchange, &it.market, it.kind_min, &it.rows, now);
+        stored.push(merged.is_ok());
+        match merged {
             Ok(wrote) => {
                 merged_any |= wrote;
                 let key = (it.exchange.as_str(), it.market.as_str(), it.kind_min);
@@ -588,11 +662,15 @@ fn write_batch(
             if merged_any {
                 let _ = log_active_once(announced);
             }
+            stored
         }
-        Err(e) => log::warn!(
-            "kline cache batch commit failed ({} items): {e}",
-            items.len()
-        ),
+        Err(e) => {
+            log::warn!(
+                "kline cache batch commit failed ({} items): {e}",
+                items.len()
+            );
+            vec![false; items.len()]
+        }
     }
 }
 
@@ -628,8 +706,14 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bo
             }
             Op::MergeBatch { items, done } => {
                 // Released however this arm ends, so a blocking producer is never parked.
-                let _settled = done.map(SettledOnDrop);
-                write_batch(&conn, items, &mut announced, &mut seen);
+                let mut settled = done.map(|done| SettledOnDrop {
+                    done,
+                    stored: Vec::new(),
+                });
+                let stored = write_batch(&conn, items, &mut announced, &mut seen);
+                if let Some(settled) = settled.as_mut() {
+                    settled.stored = stored;
+                }
             }
             Op::Read {
                 exchange,
@@ -726,10 +810,19 @@ fn read_or_empty(
 /// see the module doc for why an `upsert_one` that instead decoded and rewrote it would risk
 /// destroying rows it failed to fully understand.
 ///
+/// A day whose merged rows come out byte-identical to the stored chunk is NOT rewritten. The
+/// recorder hands the core's whole ring (up to 500 rows, two or three days) to this one worker for
+/// every market again after each reconnect, and a ring that only re-sends what is stored would
+/// otherwise rewrite every day of every market — WAL pages, `updated_ms` and all — on the worker a
+/// chart read waits behind for at most 250 ms. The one exception keeps the downgrade rule of
+/// [`read_rows`] intact: when the legacy `chunks` row for that day is NEWER than the stored v2 one,
+/// the day is rewritten anyway, so the fresh `updated_ms` lets these rows win over it as before.
+///
 /// Returns:
 ///     Whether any chunk was written. `false` means every row failed the timestamp/`high` filter,
-///     which is a successful call that stored nothing — the distinction the liveness line needs,
-///     and one a bare `Ok(())` hid from its caller.
+///     or every day it touched already held exactly these rows; both are successful calls that
+///     stored nothing new — the distinction the liveness line needs, and one a bare `Ok(())` hid
+///     from its caller. The rows are in the cache either way once the call returns `Ok`.
 fn upsert_one(
     conn: &rusqlite::Connection,
     exchange: &str,
@@ -755,18 +848,20 @@ fn upsert_one(
     if by_day.is_empty() {
         return Ok(false);
     }
+    let mut wrote = false;
     for (day, day_rows) in by_day {
-        let existing: Option<Vec<u8>> = conn
+        let existing: Option<(Vec<u8>, i64)> = conn
             .query_row(
-                "SELECT rows FROM chunks_v2 WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
+                "SELECT rows, updated_ms FROM chunks_v2
+                 WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
                 rusqlite::params![exchange, market, kind_min, day],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .ok();
         let day_start = day * DAY_MS;
         let mut merged: BTreeMap<u32, ChartCandle> = BTreeMap::new();
-        if let Some(blob) = existing {
-            for c in unpack_rows_v2(&blob, day_start) {
+        if let Some((blob, _)) = &existing {
+            for c in unpack_rows_v2(blob, day_start) {
                 merged.insert((c.t_open_ms as i64 - day_start) as u32, c);
             }
         }
@@ -774,13 +869,41 @@ fn upsert_one(
             merged.insert((r.t_open_ms as i64 - day_start) as u32, *r);
         }
         let blob = pack_rows_v2(merged.values(), day_start);
+        let unchanged = existing.as_ref().is_some_and(|(stored, stored_ms)| {
+            *stored == blob
+                && !legacy_day_is_newer(conn, exchange, market, kind_min, day, *stored_ms)
+        });
+        if unchanged {
+            continue;
+        }
         conn.execute(
             "INSERT OR REPLACE INTO chunks_v2(exchange, market, kind, day, rows, updated_ms)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![exchange, market, kind_min, day, blob, now],
         )?;
+        wrote = true;
     }
-    Ok(true)
+    Ok(wrote)
+}
+
+/// Whether the legacy `chunks` row of one day was written after the `chunks_v2` row stamped
+/// `v2_updated_ms` — the downgrade case in which [`read_rows`] lets the legacy row win, so an
+/// unchanged v2 day must still be rewritten to win back (see [`upsert_one`]). A missing or
+/// unreadable legacy row is not newer.
+fn legacy_day_is_newer(
+    conn: &rusqlite::Connection,
+    exchange: &str,
+    market: &str,
+    kind_min: u32,
+    day: i64,
+    v2_updated_ms: i64,
+) -> bool {
+    conn.query_row(
+        "SELECT updated_ms FROM chunks WHERE exchange=?1 AND market=?2 AND kind=?3 AND day=?4",
+        rusqlite::params![exchange, market, kind_min, day],
+        |r| r.get::<_, i64>(0),
+    )
+    .is_ok_and(|v1_ms| v1_ms > v2_updated_ms)
 }
 
 /// Reads rows for one key across both tables, merging v1 under v2 per bucket offset.

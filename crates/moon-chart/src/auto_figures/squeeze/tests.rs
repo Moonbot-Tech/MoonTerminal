@@ -37,6 +37,7 @@ fn params(pressed_pct: f32) -> SqueezeParams {
         min_trend_touches: 3,
         trend_tolerance_pct: 0.2,
         pressed_pct,
+        ..SqueezeParams::default()
     }
 }
 

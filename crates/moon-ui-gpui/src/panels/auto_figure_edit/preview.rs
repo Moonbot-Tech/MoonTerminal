@@ -13,7 +13,9 @@
 //! The candles are SYNTHETIC and deterministic — a range that breaks up into a squeeze under a
 //! flat top — rather than a slice of the committed fixture: the fixture is a SQLite file the UI
 //! would have to open on the UI thread, and a made-up series can be shaped so that every detector
-//! has something to find.
+//! has something to find. A formation row gets a series of its own ([`demo_formation_bars`]): a
+//! two-line pattern is only reported while price is still inside it, and no one series holds a
+//! current triangle, channel, flag and double at once.
 
 use std::f64::consts::TAU;
 
@@ -23,7 +25,9 @@ use moon_chart::auto_figures::{DetectCtx, take};
 use moon_chart::figures::FigureBand;
 use moon_core::config::ChartTheme;
 use moon_core::config::LabelColor;
-use moon_core::config::auto_figures::{AutoFigureRow, DetectorParams, LineStyle, TfId, TfSource};
+use moon_core::config::auto_figures::{
+    AutoFigureRow, DetectorParams, FormationParams, LineStyle, TfId, TfSource,
+};
 use moon_core::figures::{Figure, FigureKind, LineKind};
 use moon_core::market::ChartCandle;
 
@@ -33,9 +37,19 @@ use crate::design;
 /// Most bars the preview builds and draws: about two pixels a bar across the dialog.
 pub(super) const MAX_BARS: usize = 240;
 /// Fewest: below this a pivot detector has nothing to work with.
-const MIN_BARS: usize = 80;
+pub(super) const MIN_BARS: usize = 80;
 /// Bars of one swing of the demo series.
 const SWING_BARS: f64 = 20.0;
+/// Shortest swing of the demo series, in bars: a pivot two bars wide still finds its turns.
+const MIN_SWING_BARS: f64 = 8.0;
+
+/// Bars of one swing of the demo series for a row that reads the newest `lookback` bars:
+/// [`SWING_BARS`], or fewer when the lookback is short, so the window it reads still holds five
+/// swings. A sloped line of three touches needs three troughs inside the window, and a 40-bar
+/// window (the shipped hour rows) over 20-bar swings holds two — the preview would show nothing.
+pub(super) fn demo_swing(lookback: u32) -> f64 {
+    (f64::from(lookback) / 5.0).clamp(MIN_SWING_BARS, SWING_BARS)
+}
 
 /// Everything one preview draws, computed once per edit rather than per frame.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,7 +77,10 @@ pub(super) fn preview_tf(row: &AutoFigureRow, params: &DetectorParams) -> TfId {
         TfSource::Auto => TfId::M15.min(cap),
     };
     match params {
-        DetectorParams::PeriodExtreme(_) => TfId::ALL
+        // The calendar kinds read whole days or weeks, so they step up the same way.
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_) => TfId::ALL
             .into_iter()
             .filter(|tf| *tf >= wanted && *tf <= cap)
             .find(|tf| params.bars_needed(*tf) as usize <= MAX_BARS)
@@ -76,13 +93,16 @@ pub(super) fn preview_tf(row: &AutoFigureRow, params: &DetectorParams) -> TfId {
 ///
 /// Two phases, so that every detector finds something: a range between two flat levels for the
 /// first 40 %, then a squeeze — lows rising along a line into a flat top above the old range.
-/// The wicks carry a small fixed jitter so pivots do not sit at one exact price.
-pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64) -> Vec<ChartCandle> {
+/// The wicks carry a small fixed jitter so pivots do not sit at one exact price, and every bar
+/// carries turnover, so the volume detectors have a profile to build. The old range lies below
+/// everything after it, so its days' POCs stay untouched — naked. Each swing is `swing` bars long
+/// ([`demo_swing`]).
+pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64, swing: f64) -> Vec<ChartCandle> {
     let tf_ms = tf.ms() as f64;
     let last_open = (now_ms / tf_ms).floor() * tf_ms - tf_ms;
     let split = (n as f64 * 0.4).round();
     let path = |i: f64| -> f64 {
-        let wave = (1.0 - (TAU * i / SWING_BARS).cos()) / 2.0;
+        let wave = (1.0 - (TAU * i / swing).cos()) / 2.0;
         if i < split {
             95.0 + 4.0 * wave
         } else {
@@ -105,28 +125,157 @@ pub(super) fn demo_bars(tf: TfId, n: usize, now_ms: f64) -> Vec<ChartCandle> {
             let close = path(i_f + 0.5);
             let hi = open.max(close) * (1.0 + 0.0004 * jitter());
             let lo = open.min(close) * (1.0 - 0.0004 * jitter());
+            // Turnover grows with the bar's range, with the same fixed jitter: the volume profile
+            // gets a day with a clear POC and value area, and "strongest by volume" has something
+            // to rank. Base volume is the turnover over the mid price, as a cache row carries it.
+            let quote_volume = 1_000.0 * (1.0 + (hi - lo)) * (0.5 + jitter());
             ChartCandle {
                 t_open_ms: last_open - (n - 1 - i) as f64 * tf_ms,
                 open: open as f32,
                 high: hi as f32,
                 low: lo as f32,
                 close: close as f32,
-                volume: 0.0,
-                quote_volume: 0.0,
+                volume: (quote_volume / ((hi + lo) / 2.0)) as f32,
+                quote_volume: quote_volume as f32,
             }
         })
         .collect()
 }
 
-/// The touch tolerance a row's zone band shows, in % of price — the same reading the chart's
-/// publication makes (`panels::chart::auto_figures`), which keeps its own copy private.
-fn tolerance_pct(params: &DetectorParams) -> f32 {
-    match params {
-        DetectorParams::Swing(p) => p.tolerance_pct,
-        DetectorParams::Squeeze(p) => p.level.tolerance_pct,
-        DetectorParams::Trend(p) => p.tolerance_pct,
-        DetectorParams::PeriodExtreme(_) => 0.0,
+/// One formation demo: its turning points as `(bars before the last bar, price)`, oldest first.
+type Scenario = &'static [(f64, f64)];
+
+/// A symmetric triangle still forming at the last bar: tops 112 → 110.5 (−0.05 a bar), bottoms
+/// 104 → 105.5 (+0.05 a bar), apex past the right edge, price between the sides at the end.
+const TRIANGLE: Scenario = &[
+    (70.0, 106.0),
+    (60.0, 112.0),
+    (55.0, 104.0),
+    (50.0, 111.5),
+    (45.0, 104.5),
+    (40.0, 111.0),
+    (35.0, 105.0),
+    (30.0, 110.5),
+    (25.0, 105.5),
+    (15.0, 107.8),
+    (10.0, 107.2),
+    (5.0, 107.9),
+    (0.0, 107.5),
+];
+
+/// A rising channel of three touches a side (+1/16 a bar, 2.5 wide), price inside it at the end;
+/// 40 bars long, past any flag's cap.
+const CHANNEL: Scenario = &[
+    (60.0, 101.0),
+    (50.0, 100.0),
+    (42.0, 103.0),
+    (34.0, 101.0),
+    (26.0, 104.0),
+    (18.0, 102.0),
+    (10.0, 105.0),
+    (2.0, 103.5),
+    (0.0, 103.8),
+];
+
+/// A bull flag: a pole 100 → 108 over eight bars, then a falling channel (−1/6 a bar, 2 wide —
+/// a quarter of the pole) of 15 bars, price inside it at the end.
+const FLAG: Scenario = &[
+    (40.0, 101.0),
+    (30.0, 100.0),
+    (22.0, 108.0),
+    (19.0, 105.5),
+    (16.0, 107.0),
+    (13.0, 104.5),
+    (10.0, 106.0),
+    (7.0, 103.5),
+    (3.0, 104.0),
+    (0.0, 103.6),
+];
+
+/// A double top: 110 and 110.2 twenty bars apart over a trough of 106 (3.6 % deep), price back
+/// between the neckline and the tops at the end.
+const DOUBLE_TOP: Scenario = &[
+    (52.0, 105.0),
+    (40.0, 110.0),
+    (30.0, 106.0),
+    (20.0, 110.2),
+    (10.0, 107.5),
+    (5.0, 108.3),
+    (0.0, 107.8),
+];
+
+/// The demo a formation row is previewed on: the first kind it looks for, in the editor's order —
+/// a triangle (or wedge), a channel, a flag, a double. A row looking for nothing gets the triangle;
+/// it finds nothing on it, which is what the preview should then say.
+fn formation_scenario(p: &FormationParams) -> Scenario {
+    if p.triangle || p.wedge {
+        TRIANGLE
+    } else if p.channel {
+        CHANNEL
+    } else if p.flag {
+        FLAG
+    } else if p.double {
+        DOUBLE_TOP
+    } else {
+        TRIANGLE
     }
+}
+
+/// A deterministic demo series of `n` closed bars of `tf` holding the formation `p` looks for
+/// first ([`formation_scenario`]), ending at the last bar closed before `now_ms`.
+///
+/// The pattern is laid out from the RIGHT edge, so the shorter lookback of a flag row (100 bars)
+/// and the longer one of a triangle row (150) both hold all of it; before its first turning point
+/// the series waves gently (±0.4 %) around that point's price. Each bar opens and closes on the
+/// path half a bar either side of its own point and reaches the path at that point, so a turning
+/// point is a pivot of exactly its own bar; the wicks carry the same small fixed jitter as
+/// [`demo_bars`] (well inside the 0.2 % touch tolerance), and every bar carries turnover.
+pub(super) fn demo_formation_bars(
+    p: &FormationParams,
+    tf: TfId,
+    n: usize,
+    now_ms: f64,
+) -> Vec<ChartCandle> {
+    let points = formation_scenario(p);
+    let tf_ms = tf.ms() as f64;
+    let last_open = (now_ms / tf_ms).floor() * tf_ms - tf_ms;
+    // Price at `j` bars before the last bar, linear between the turning points.
+    let path = |j: f64| -> f64 {
+        let (j0, p0) = points[0];
+        if j >= j0 {
+            return p0 * (1.0 + 0.004 * (TAU * (j - j0) / 12.0).sin());
+        }
+        for w in points.windows(2) {
+            let ((ja, pa), (jb, pb)) = (w[0], w[1]);
+            if j <= ja && j >= jb {
+                return pa + (pb - pa) * (ja - j) / (ja - jb);
+            }
+        }
+        points[points.len() - 1].1
+    };
+    let mut seed: u32 = 0x2545_F491;
+    let mut jitter = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        f64::from(seed >> 8) / f64::from(1u32 << 24)
+    };
+    (0..n)
+        .map(|i| {
+            let j = (n - 1 - i) as f64;
+            let (open, mid, close) = (path(j + 0.5), path(j), path(j - 0.5));
+            let hi = open.max(close).max(mid) * (1.0 + 0.0003 * jitter());
+            let lo = open.min(close).min(mid) * (1.0 - 0.0003 * jitter());
+            let quote_volume = 1_000.0 * (1.0 + (hi - lo)) * (0.5 + jitter());
+            ChartCandle {
+                t_open_ms: last_open - (n - 1 - i) as f64 * tf_ms,
+                open: open as f32,
+                high: hi as f32,
+                low: lo as f32,
+                close: close as f32,
+                volume: (quote_volume / ((hi + lo) / 2.0)) as f32,
+                quote_volume: quote_volume as f32,
+            }
+        })
+        .collect()
 }
 
 /// Run the row over the demo candles and build what it draws. `row` must already be sanitized:
@@ -136,8 +285,12 @@ fn tolerance_pct(params: &DetectorParams) -> f32 {
 pub(super) fn compute(row: &AutoFigureRow, now_ms: f64, theme: &ChartTheme) -> Option<PreviewData> {
     let params = row.detector.known()?;
     let tf = preview_tf(row, params);
-    let n = (params.bars_needed(tf) as usize).clamp(MIN_BARS, MAX_BARS);
-    let bars = demo_bars(tf, n, now_ms);
+    let needed = params.bars_needed(tf);
+    let n = (needed as usize).clamp(MIN_BARS, MAX_BARS);
+    let bars = match params {
+        DetectorParams::Formation(p) => demo_formation_bars(p, tf, n, now_ms),
+        _ => demo_bars(tf, n, now_ms, demo_swing(needed)),
+    };
     let ctx = DetectCtx {
         tf_ms: tf.ms(),
         now_ms,
@@ -151,12 +304,16 @@ pub(super) fn compute(row: &AutoFigureRow, now_ms: f64, theme: &ChartTheme) -> O
         let Some(f) = found.get(ix) else {
             continue;
         };
-        let above = f.shape.price_at(now_ms).is_some_and(|p| p >= ref_price);
+        // A formation's side of price is its nearer side's, as `take` judged it.
+        let above = f
+            .shape
+            .price_near(now_ms, ref_price)
+            .is_some_and(|p| p >= ref_price);
         let rgb = resolve_rgb(row.style.color, above, theme);
+        // The zone band comes from the tolerance the detector reports with each figure.
         append_shapes(
             f,
             &ResolvedStyle::new(&row.style, rgb),
-            tolerance_pct(params),
             now_ms,
             &mut figures,
             &mut bands,

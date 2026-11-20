@@ -2,6 +2,7 @@
 //! and where a row's bars come from once its timeframe is known. Decisions only — no I/O.
 
 use moon_core::config::auto_figures::TfId;
+use moon_core::market::kline_cache::KIND_5M_MS;
 
 /// `Auto`'s table: the visible span, in HOURS, at which each timeframe starts, widest first (the
 /// shape of `hvol::AUTO_TF_TABLE`).
@@ -50,6 +51,24 @@ pub fn auto_tf(visible_ms: f64) -> TfId {
         .iter()
         .find(|(at_least, _)| hours >= *at_least)
         .map_or(finest, |(_, tf)| *tf)
+}
+
+/// `Auto`'s answer `tf`, with `M1` raised to `M5` on a chart coarser than one minute
+/// (`chart_tf_ms`). Every other answer as is — and so is `M1` when the chart has no bar length
+/// (`<= 0`) or is a 1-minute one.
+///
+/// `Auto` follows the zoom, and a close zoom on a 5-minute chart picks 1-minute rows — bars a
+/// coarser chart has only where that market was once shown on 1 minute, so the row drew nothing
+/// and said "not enough history" (LinKvo, 20.11.2026). M5 is the next step of `Auto`'s own table
+/// and the finest timeframe the 5-minute cache builds on any chart, so zooming in never turns the
+/// lines coarser: on an hourly chart the M5 band stays M5 into the closest zoom. A row the reader
+/// wants on 1-minute bars over a coarser chart pins it.
+pub fn lift_m1(tf: TfId, chart_tf_ms: i64) -> TfId {
+    if tf == TfId::M1 && chart_tf_ms > TfId::M1.ms() {
+        TfId::M5
+    } else {
+        tf
+    }
 }
 
 /// `Auto`'s memory between two zoom changes: the timeframe it last settled on.
@@ -101,7 +120,8 @@ impl AutoTf {
 }
 
 /// Where a row's bars come from. Every source is one the terminal already has: the chart's own
-/// series, or the local kline cache (5-minute rows for ALL markets, daily rows). A row never asks
+/// series, or the local kline cache (5-minute rows for ALL markets, daily rows, and 1-minute rows
+/// where a market's chart was shown on 1 minute). A row never asks
 /// the core for history of its own — that is what makes the core fetch klines from the exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarSource {
@@ -110,49 +130,71 @@ pub enum BarSource {
     /// The chart's series resampled up to the row's timeframe, a whole multiple of the chart's,
     /// when the series is deep enough for the row's lookback.
     ChartResampled,
-    /// The local 5-minute cache, resampled when the row's timeframe is wider than 5 minutes.
+    /// The local 5-minute cache, resampled when the row's timeframe is wider than 5 minutes —
+    /// also for a row on the chart's own timeframe whose series is too short for it.
     Cache5m,
     /// The local daily cache.
     CacheDaily,
-    /// Nothing the terminal holds yields these bars — a 1-minute row on a coarser chart. The row
+    /// The local kline cache's 1-minute rows, for a 1-minute row on a coarser chart. They are
+    /// there only for markets whose chart the terminal has shown on 1 minute (the chart's history
+    /// is filed as it loads) — on others the row says it has no cache.
+    Cache1m,
+    /// Nothing the terminal holds yields these bars — a 1-minute row with no cache at all. The row
     /// draws nothing and says it lacks history.
     Unavailable,
 }
 
-/// Five minutes, ms — the bar of the always-recorded local cache.
-const CACHE_BASE_MS: i64 = 5 * 60_000;
-
 /// Decide where a row's bars come from.
+///
+/// The choice is made for the DETECTOR's need (`lookback_bars`), never for anything fetched beside
+/// it: a source picked for a longer events tail would send a row that needs one bar (round prices)
+/// to the cache, and on a market without one it would draw nothing although the chart holds all
+/// it needs.
+///
+/// An equal timeframe the series does NOT cover goes to the cache on purpose: the chart's own
+/// series is often shorter than a calendar row's period (a week of 5-minute bars is 2017 of them),
+/// and the cache path appends the chart's fresh tail to the cache's rows, so the row gets the depth
+/// of the one and the newest bars of the other.
 ///
 /// Args:
 ///     row: The row's resolved timeframe.
 ///     chart_tf_ms: The chart series' bar length, ms; `<= 0` when there is no chart series.
 ///     chart_history_ms: How much time the chart series covers, ms.
 ///     lookback_bars: Bars of `row` the detector reads.
+///     has_cache: Whether this market has a local kline cache at all.
 ///
 /// Returns:
-///     In order: the chart series on an equal timeframe; the daily cache for `D1`; the chart series
-///     resampled when the row is a multiple of the chart's timeframe and the series covers
-///     `lookback_bars + 1` row bars (the first, partial bucket is dropped); the 5-minute cache for any multiple of 5 minutes; otherwise
+///     In order: the chart series on an equal timeframe when it covers `lookback_bars + 1` bars,
+///     or when the cache cannot stand in for it (a timeframe that is not a multiple of 5 minutes,
+///     or no cache for the market); the daily cache for `D1`; the chart series resampled when the
+///     row is a multiple of the chart's timeframe and the series covers `lookback_bars + 1` row
+///     bars (the first, partial bucket is dropped); the 5-minute cache for any multiple of
+///     5 minutes; the 1-minute cache for `M1` on a market that has a cache; otherwise
 ///     [`BarSource::Unavailable`].
 pub fn bar_source(
     row: TfId,
     chart_tf_ms: i64,
     chart_history_ms: f64,
     lookback_bars: u32,
+    has_cache: bool,
 ) -> BarSource {
     let row_ms = row.ms();
+    // One bucket more than the lookback: a series that does not start on a bucket boundary yields
+    // a PARTIAL first bucket, which the bar assembly drops (a partial high or low would place a
+    // level where the market never turned). Asking for exactly `lookback` buckets of history would
+    // then deliver `lookback - 1` bars and report a short history the cache could have filled. The
+    // same margin is asked of an equal-timeframe series, so the two chart sources agree on "deep
+    // enough".
+    let needed_ms = (f64::from(lookback_bars) + 1.0) * row_ms as f64;
     if chart_tf_ms > 0 && row_ms == chart_tf_ms {
-        return BarSource::ChartSeries;
+        let cache_can_build = has_cache && row_ms % KIND_5M_MS == 0;
+        if chart_history_ms >= needed_ms || !cache_can_build {
+            return BarSource::ChartSeries;
+        }
     }
     if row == TfId::D1 {
         return BarSource::CacheDaily;
     }
-    // One bucket more than the lookback: a series that does not start on a bucket boundary yields
-    // a PARTIAL first bucket, which the bar assembly drops (a partial high or low would place a
-    // level where the market never turned). Asking for exactly `lookback` buckets of history would
-    // then deliver `lookback - 1` bars and report a short history the cache could have filled.
-    let needed_ms = (f64::from(lookback_bars) + 1.0) * row_ms as f64;
     if chart_tf_ms > 0
         && row_ms > chart_tf_ms
         && row_ms % chart_tf_ms == 0
@@ -160,8 +202,11 @@ pub fn bar_source(
     {
         return BarSource::ChartResampled;
     }
-    if row_ms % CACHE_BASE_MS == 0 {
+    if row_ms % KIND_5M_MS == 0 {
         return BarSource::Cache5m;
+    }
+    if row == TfId::M1 && has_cache {
+        return BarSource::Cache1m;
     }
     BarSource::Unavailable
 }

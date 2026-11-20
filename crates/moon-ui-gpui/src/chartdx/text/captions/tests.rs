@@ -503,7 +503,13 @@ fn the_shipped_buttons_share_one_line_along_the_bottom() {
         .rows
         .iter()
         .enumerate()
-        .filter(|(_, row)| row.holds_action())
+        // The two TRADING buttons; the auto-figures eye stands alone on the opposite edge.
+        .filter(|(_, row)| {
+            row.parts[0]
+                .field
+                .action()
+                .is_some_and(|action| action.commands_core())
+        })
         .map(|(ix, _)| ix)
         .collect();
     assert_eq!(rows.len(), 2, "the shipped set places both buttons");

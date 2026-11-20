@@ -25,9 +25,11 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use moon_chart::auto_figures::draw::{ResolvedStyle, append_shapes, time_span};
+use moon_chart::auto_figures::draw::{
+    ResolvedStyle, append_shapes, drawn_side, pin_figures, time_span,
+};
 use moon_chart::auto_figures::events::EventSet;
-use moon_chart::auto_figures::{Found, FoundShape};
+use moon_chart::auto_figures::{Found, FoundShape, LineTag, PairSide};
 use moon_chart::figures::{FigureBand, FigureBuffers};
 use moon_chart::layers::{MARKER_SHAPE_KNOT, MarkerInstance};
 use moon_core::config::ChartTheme;
@@ -36,7 +38,7 @@ use moon_core::figures::proj::PxPoint;
 use moon_core::figures::{Figure, Proj};
 use moon_core::session::CoreId;
 
-use super::caption::{CaptionValues, RowTitle, caption_quantum, caption_text};
+use super::caption::{CaptionValues, RowTitle, caption_halves, caption_quantum, caption_text};
 use super::select::LineKey;
 use super::{AutoPaneFigures, resolve_rgb};
 
@@ -60,7 +62,12 @@ pub(crate) struct SegmentBase {
 pub(crate) struct AutoLineRec {
     pub key: LineKey,
     pub shape: FoundShape,
-    /// The drawn stretch, Unix ms, `±∞` for "to that plot edge" — where the caption may sit.
+    /// For a two-line formation, the side it was kept by (`KeptLine::side`): the one its caption is
+    /// placed on and prices; `None` for every other shape.
+    pub side: Option<PairSide>,
+    /// The drawn stretch, Unix ms, `±∞` for "to that plot edge" — where the caption may sit. For a
+    /// two-line formation, the stretch its kept side is drawn over (`draw::drawn_side`): a
+    /// converging side ends at its apex or the run's reference time, not at the plot edge.
     pub span: (f64, f64),
     pub touches: usize,
     pub tf: TfId,
@@ -68,12 +75,22 @@ pub(crate) struct AutoLineRec {
     pub events: EventSet,
     /// `0xRRGGBB`, the line's own resolved colour.
     pub color: u32,
+    /// The block's opacity the line was drawn at (`AutoPaneFigures::opacity`): its caption prints
+    /// at the same alpha, so a faded line never carries a loud name.
+    pub opacity: f32,
     pub caption: LineCaption,
     pub title: RowTitle,
+    /// What the line is, where its detector draws several kinds (`Found::tag`).
+    pub tag: Option<LineTag>,
     /// Which of [`AutoPaneDrawn::figures`] draw this line.
     figs: Range<usize>,
     /// The caption, built by [`refresh_auto_captions`]; `None` when it prints nothing.
     pub text: Option<Arc<str>>,
+    /// The caption's name, when it prints one, and the caption without it — the halves the text
+    /// pass joins when lines of several rows share a price (`caption::caption_halves`). Built with
+    /// [`Self::text`], so the three always describe the same caption.
+    pub name: Option<Arc<str>>,
+    pub rest: Option<Arc<str>>,
 }
 
 impl AutoLineRec {
@@ -156,12 +173,47 @@ impl AutoPaneDrawn {
         self.lines.iter().find(|l| l.key == key)
     }
 
-    /// The figure-tool values line `key` is drawn as — what pinning copies into the store.
+    /// The figure-tool values pinning line `key` copies into the store
+    /// (`moon_chart::auto_figures::draw::pin_figures`): one per side for a two-line formation —
+    /// two levels or two segments — and what the line is drawn as for every other shape.
+    ///
+    /// Rebuilt from the published figure the line was drawn from, with the row's style, the line's
+    /// own colour and the run's reference time, so what is pinned is the line on screen — but at
+    /// FULL opacity (`ResolvedStyle::new`), never the block's: once pinned it is the reader's own
+    /// figure, drawn like every other, and the block's fade must not stay baked into its colour
+    /// after the auto line is gone. Hence never a copy of the drawn figures, which carry that
+    /// fade. Empty when the line, or the figure it came from, is no longer in the published set.
     pub(crate) fn line_figures(&self, key: LineKey) -> Vec<Figure> {
-        self.line(key)
-            .and_then(|l| self.figures.get(l.figs.clone()))
-            .map(<[Figure]>::to_vec)
-            .unwrap_or_default()
+        let Some(line) = self.line(key) else {
+            return Vec::new();
+        };
+        let Some((row, found)) = self.set.as_ref().and_then(|set| {
+            set.rows
+                .iter()
+                .filter(|r| r.row_ix == key.row_ix)
+                .find_map(|r| {
+                    r.outcome
+                        .found
+                        .iter()
+                        .find(|f| LineKey::of(r.row_ix, f) == key)
+                        .map(|f| (r, f))
+                })
+        }) else {
+            return Vec::new();
+        };
+        let rgb = [
+            (line.color >> 16) as u8,
+            (line.color >> 8) as u8,
+            line.color as u8,
+        ];
+        let mut out = Vec::new();
+        pin_figures(
+            found,
+            &ResolvedStyle::new(&row.style, rgb),
+            row.ref_ms,
+            &mut out,
+        );
+        out
     }
 }
 
@@ -171,10 +223,16 @@ fn rgb_u32(rgb: [u8; 3]) -> u32 {
 }
 
 /// Where a line's event mark sits: at the close of the last closed bar of its timeframe — the
-/// moment the bar events are about, and close to the live edge for the approach — on the line.
-fn event_mark_at(found: &Found, last_closed_ms: i64, tf: TfId) -> Option<(f64, f64)> {
+/// moment the bar events are about, and close to the live edge for the approach — on the line, or
+/// for a two-line formation on the side it was kept by (`side`).
+fn event_mark_at(
+    found: &Found,
+    side: Option<PairSide>,
+    last_closed_ms: i64,
+    tf: TfId,
+) -> Option<(f64, f64)> {
     let t = (last_closed_ms + tf.ms()) as f64;
-    Some((t, found.shape.price_at(t)?))
+    Some((t, found.shape.side_price_at(t, side)?))
 }
 
 /// Append `set`'s geometry to `out` and record what was drawn in `drawn`.
@@ -207,17 +265,18 @@ pub(crate) fn append_auto_geometry(
             };
             let rgb = resolve_rgb(row.style.color, kept.above, theme);
             let start = drawn.figures.len();
+            // The zone band is the tolerance the detector reports with the figure.
             append_shapes(
                 found,
-                &ResolvedStyle::new(&row.style, rgb),
-                row.tolerance_pct,
+                &ResolvedStyle::new(&row.style, rgb).with_opacity(set.opacity),
                 row.ref_ms,
                 &mut drawn.figures,
                 &mut bands,
             );
             let tf = row.outcome.key.tf;
             if !kept.events.is_empty()
-                && let Some((t, price)) = event_mark_at(found, row.outcome.key.last_closed_ms, tf)
+                && let Some((t, price)) =
+                    event_mark_at(found, kept.side, row.outcome.key.last_closed_ms, tf)
             {
                 let c = |v: u8| f32::from(v) / 255.0;
                 marks.push(MarkerInstance::at_price(
@@ -226,22 +285,27 @@ pub(crate) fn append_auto_geometry(
                     EVENT_MARK_SIZE * ppp,
                     EVENT_MARK_THICKNESS * ppp,
                     MARKER_SHAPE_KNOT,
-                    [c(rgb[0]), c(rgb[1]), c(rgb[2]), 1.0],
+                    [c(rgb[0]), c(rgb[1]), c(rgb[2]), set.opacity.clamp(0.0, 1.0)],
                 ));
             }
             drawn.lines.push(AutoLineRec {
                 key: LineKey::of(row.row_ix, found),
                 shape: found.shape,
-                span: time_span(found, row.style.extend),
+                side: kept.side,
+                span: line_span(found, kept.side, row),
                 touches: found.touches.len(),
                 tf,
                 first_ms: found.first_ms,
                 events: kept.events,
                 color: rgb_u32(rgb),
+                opacity: set.opacity,
                 caption: row.caption.clone(),
                 title: row.title.clone(),
+                tag: found.tag,
                 figs: start..drawn.figures.len(),
                 text: None,
+                name: None,
+                rest: None,
             });
         }
     }
@@ -253,6 +317,33 @@ pub(crate) fn append_auto_geometry(
     out.markers.extend_from_slice(&marks);
 }
 
+/// The stretch `found` is drawn over: for a two-line formation the one its `side` (the upper when
+/// none was kept) is drawn over, through the same decision that drew it; for every other shape the
+/// span its row's `extend` gives it.
+fn line_span(found: &Found, side: Option<PairSide>, row: &super::AutoRowDrawn) -> (f64, f64) {
+    let side = side.unwrap_or(PairSide::Upper);
+    drawn_side(found, side, row.style.extend, row.ref_ms)
+        .map_or_else(|| time_span(found, row.style.extend), |d| d.span())
+}
+
+/// The moment `line`'s printed price is read at: `now_ms`, clamped into the line's drawn stretch.
+///
+/// A line drawn to the plot edge is read now. A line that ENDS — a formation's side capped at its
+/// apex, a segment between two touches — is read at its end once now is past it: the caption sits
+/// on the drawn line and prints the price where the line is drawn, not a price extrapolated past
+/// the end (where a triangle's sides claim prices the pattern never did). That is also the point
+/// the right-end caption's height is read at, so the printed value and the caption's place agree.
+fn price_ms(line: &AutoLineRec, now_ms: f64) -> f64 {
+    let (lo, hi) = line.span;
+    if now_ms > hi {
+        hi
+    } else if now_ms < lo {
+        lo
+    } else {
+        now_ms
+    }
+}
+
 /// Everything `line`'s caption prints, at `now_ms` against `price`.
 fn caption_values(
     line: &AutoLineRec,
@@ -262,7 +353,8 @@ fn caption_values(
 ) -> CaptionValues<'_> {
     CaptionValues {
         title: &line.title,
-        line_now: line.shape.price_at(now_ms),
+        tag: line.tag,
+        line_now: line.shape.side_price_at(price_ms(line, now_ms), line.side),
         price,
         touches: line.touches,
         tf: line.tf,
@@ -307,13 +399,15 @@ pub(crate) fn refresh_auto_captions(
     let mut changed = false;
     for i in 0..drawn.lines.len() {
         let line = &drawn.lines[i];
-        let text = caption_text(
-            &line.caption.parts,
-            &caption_values(line, price, now_ms, tick),
-        );
+        let values = caption_values(line, price, now_ms, tick);
+        let text = caption_text(&line.caption.parts, &values);
+        let (name, rest) = caption_halves(&line.caption.parts, &values);
         let next = (!text.is_empty()).then(|| Arc::<str>::from(text));
-        if drawn.lines[i].text != next {
-            drawn.lines[i].text = next;
+        let line = &mut drawn.lines[i];
+        line.name = name.map(Arc::from);
+        line.rest = (!rest.is_empty()).then(|| Arc::from(rest));
+        if line.text != next {
+            line.text = next;
             changed = true;
         }
     }

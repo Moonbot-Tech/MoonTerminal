@@ -18,7 +18,10 @@ use crate::chartdx::auto_figures_sync::job::{AutoRowOutcome, reads_cache};
 pub(crate) enum RowStatus {
     /// The newest bucket of the 5-minute cache is still filling; the answer is usable, not final.
     Lagging,
-    /// Fewer closed bars than the detector asks for.
+    /// The row read less history than a complete answer takes (`AutoRowOutcome::short_history`):
+    /// under 90 % of the bars the detector asks for when it samples them (swing, trend, squeeze),
+    /// any bar short for a calendar row (period extreme, period level, volume profile), whose line
+    /// can hang on the one bar missing.
     ShortHistory,
     /// Nothing the terminal holds yields these bars: a timeframe finer than the chart's own.
     Unavailable,

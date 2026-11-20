@@ -6,9 +6,13 @@
 //! the hit test reads what the pane last DREW (`ChartEngine::auto_line_at`), so a hit is always on
 //! a line that is on screen.
 //!
-//! The card is a GPUI overlay like the trade-arrow card: theme colours and the font slider come for
-//! free, and the GPUI tree repaints only when the hovered line changes. The hover itself is handed
-//! to the engine too, which prints an `OnHover` caption for it — a present, no rebuild.
+//! The card is shown only while the news card's modifier is held (Ctrl, Command on macOS — LinKvo,
+//! 19.11.2026), read through the news card's own tracking of it (`ChartPanel::card_modifier_held`).
+//! It is a GPUI overlay like the news card: theme colours and the font slider come for free, and
+//! the GPUI tree repaints only when what the card shows changes — the hovered line while the
+//! modifier is held, or the modifier while a line is hovered. A bare pointer crossing lines
+//! repaints nothing in GPUI: the hover is still handed to the engine, which prints an `OnHover`
+//! caption for it — a present, no rebuild.
 
 use gpui::*;
 use moon_ui::{
@@ -22,7 +26,9 @@ use moon_core::util::now_unix_ms_i64;
 
 use super::super::ChartPanel;
 use crate::chartdx::auto_figures_sync::LineKey;
-use crate::chartdx::auto_figures_sync::caption::{age_text, events_text, tf_key};
+use crate::chartdx::auto_figures_sync::caption::{
+    age_text, events_text, has_anchor, line_title, tf_key,
+};
 use crate::design;
 
 /// Card width in logical pixels, before the UI-scale slider: four short rows of name and value.
@@ -47,9 +53,34 @@ pub(in crate::panels::chart) struct AutoHoverState {
     probe: Option<(f32, f32)>,
 }
 
+impl AutoHoverState {
+    /// Record `hit` as the line under the pointer. `None` when it did not change; otherwise whether
+    /// the GPUI tree must repaint — only while the card modifier is `held`, since only then is the
+    /// card on screen, before or after. Without the modifier a storm of crossings repaints
+    /// nothing; releasing the modifier while a line is hovered repaints once, through the
+    /// modifier tracking (`note_news_modifiers`), so no card outlives it.
+    fn apply(&mut self, hit: Option<AutoHover>, held: bool) -> Option<bool> {
+        if self.hover == hit {
+            return None;
+        }
+        self.hover = hit;
+        Some(held)
+    }
+
+    /// The line whose card is shown: the hovered one, and only while the modifier is `held`.
+    fn card(&self, held: bool) -> Option<AutoHover> {
+        self.hover.filter(|_| held)
+    }
+
+    /// Whether a line is hovered — whether a change of the modifier changes the card.
+    fn is_hovered(&self) -> bool {
+        self.hover.is_some()
+    }
+}
+
 impl ChartPanel {
     /// Update the hovered auto line from a pointer position. Returns whether the GPUI tree must
-    /// repaint, which it must only when the card changes.
+    /// repaint, which it must only when the card changes — never without the card modifier.
     ///
     /// `within` is false when the pointer left the chart slot, which clears the hover.
     pub(in crate::panels::chart) fn sync_auto_hover(
@@ -69,7 +100,14 @@ impl ChartPanel {
         self.apply_auto_hover(hit)
     }
 
-    /// Drop the hover when the pointer leaves the chart slot. Returns whether the card was shown.
+    /// Whether an auto line is under the pointer, so a change of the card modifier changes what
+    /// the card shows (`note_news_modifiers`).
+    pub(in crate::panels::chart) fn auto_line_hovered(&self) -> bool {
+        self.auto_figures.hover.is_hovered()
+    }
+
+    /// Drop the hover when the pointer leaves the chart slot. Returns whether the GPUI tree must
+    /// repaint (a card was on screen).
     pub(in crate::panels::chart) fn clear_auto_hover(&mut self) -> bool {
         self.auto_figures.hover.probe = None;
         self.apply_auto_hover(None)
@@ -111,26 +149,29 @@ impl ChartPanel {
         Some(AutoHover { pane, key })
     }
 
-    /// Apply a hit result: hand it to the engine for the `OnHover` captions. Returns whether the
-    /// card changed.
+    /// Apply a hit result: hand it to the engine for the `OnHover` captions (a present, whatever
+    /// the modifier). Returns whether the GPUI tree must repaint for the card.
     fn apply_auto_hover(&mut self, hit: Option<AutoHover>) -> bool {
-        if self.auto_figures.hover.hover == hit {
+        let held = self.card_modifier_held();
+        let Some(repaint) = self.auto_figures.hover.apply(hit, held) else {
             return false;
-        }
-        self.auto_figures.hover.hover = hit;
+        };
         self.chart.set_auto_hover(hit.map(|h| (h.pane, h.key)));
-        true
+        repaint
     }
 
-    /// The hover card, or `None` when no auto line is hovered: the row's name, then its
-    /// timeframe, touch count, age and current event.
+    /// The hover card, or `None` when no auto line is hovered or the card modifier is not `held`
+    /// (the live state, read at render like the news card's): the line's name (its row's, and what
+    /// the line is when its detector says), then its timeframe, touch count, age and current
+    /// event — the touches and the age only where the line has them.
     pub(in crate::panels::chart) fn auto_hover_card(
         &self,
         sf: f32,
+        held: bool,
         palette: MoonPalette,
         cx: &App,
     ) -> Option<AnyElement> {
-        let hover = self.auto_figures.hover.hover?;
+        let hover = self.auto_figures.hover.card(held)?;
         let (cursor_x, cursor_y) = self.input.cursor?;
         let now_ms = now_unix_ms_i64() as f64;
         let (title, rows) = self.chart.with_auto_line(hover.pane, hover.key, |line| {
@@ -140,24 +181,27 @@ impl ChartPanel {
             } else {
                 event
             };
-            (
-                line.title.text(),
-                [
-                    (
-                        t!("auto_figures_chart.card.tf"),
-                        t!(tf_key(line.tf)).to_string(),
-                    ),
-                    (
-                        t!("auto_figures_chart.card.touches"),
-                        line.touches.to_string(),
-                    ),
-                    (
-                        t!("auto_figures_chart.card.age"),
-                        age_text(now_ms - line.first_ms),
-                    ),
-                    (t!("auto_figures_chart.card.event"), event),
-                ],
-            )
+            // A row with nothing true to say is left out, as the caption leaves it out: no touch
+            // count for a line nothing touched (a profile line, a round price), no age for one
+            // with no moment of birth (a round price).
+            let mut rows = vec![(
+                t!("auto_figures_chart.card.tf"),
+                t!(tf_key(line.tf)).to_string(),
+            )];
+            if line.touches > 0 {
+                rows.push((
+                    t!("auto_figures_chart.card.touches"),
+                    line.touches.to_string(),
+                ));
+            }
+            if has_anchor(line.first_ms) {
+                rows.push((
+                    t!("auto_figures_chart.card.age"),
+                    age_text(now_ms - line.first_ms),
+                ));
+            }
+            rows.push((t!("auto_figures_chart.card.event"), event));
+            (line_title(&line.title, line.tag), rows)
         })?;
         let sf = sf.max(0.1);
         let slot = self.chart.slot_dev_size();
@@ -288,8 +332,9 @@ impl ChartPanel {
     }
 
     /// Copy the line into the figure store as ordinary local figures of the tools and style it is
-    /// drawn with — a squeeze as its level and its sloped line — and select the first, so it can be
-    /// moved, restyled and armed as an alert at once. The auto line itself stays: the next run
+    /// drawn with — a squeeze as its level and its sloped line, a two-line formation as exactly two
+    /// figures, one per side (two levels or two segments, `AutoPaneDrawn::line_figures`) — and
+    /// select the first, so it can be moved, restyled and armed as an alert at once. The auto line itself stays: the next run
     /// draws it again whatever the store holds.
     fn pin_auto_line(&mut self, hit: AutoHover, cx: &mut Context<Self>) {
         let Some((core, market)) = self.fig_pane_key(hit.pane) else {
@@ -322,7 +367,8 @@ impl ChartPanel {
         self.sync_fig_visual(cx);
     }
 
-    /// Hide the line on this pane until it changes market. Not persisted.
+    /// Hide the line on this pane until it changes market. Not persisted. A two-line formation is
+    /// one line here (one `LineKey`): hiding it hides both of its sides.
     fn hide_auto_line(&mut self, hit: AutoHover, cx: &mut Context<Self>) {
         let Some(target) = self.fig_pane_key(hit.pane) else {
             return;
@@ -365,3 +411,6 @@ impl ChartPanel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -10,8 +10,9 @@
 //! terminal, which knows both.
 
 use super::{
-    AutoFigureRow, AutoFiguresCfg, BrokenPolicy, DetectorParams, EventMarks, LineCaption,
-    LineStyle, RowDetector, SqueezeParams, SwingParams, Take, TfSource, TrendParams,
+    AutoFigureRow, AutoFiguresCfg, BrokenPolicy, DetectorParams, EventMarks, FormationParams,
+    LineCaption, LineStyle, RoundLevelsParams, RowDetector, SqueezeParams, SwingParams, Take,
+    TfSource, TrendParams, VolumeProfileParams,
 };
 
 /// Most rows one configuration keeps. Every visible row is a detector run, so an unbounded list —
@@ -46,10 +47,55 @@ pub const AF_TOLERANCE_MIN: f32 = 0.01;
 pub const AF_SLOPE_MAX: f32 = 100.0;
 /// Longest a broken level may be kept, in bars.
 pub const AF_BROKEN_KEEP_MAX: u16 = 1_000;
+/// A touch tolerance in ATR, bounds. Under a twentieth of an ATR a band is narrower than the
+/// noise of one bar; past five ATRs it swallows a week of swings into one level.
+pub const AF_TOLERANCE_ATR_MIN: f32 = 0.05;
+pub const AF_TOLERANCE_ATR_MAX: f32 = 5.0;
+/// A volume profile's value area, % of the period's volume. Below a tenth it is the POC alone; at
+/// 100 it is the whole range.
+pub const AF_VALUE_AREA_MIN: f32 = 10.0;
+pub const AF_VALUE_AREA_MAX: f32 = 100.0;
+/// Most past days a row looks for naked POCs on. The days come from the local 5-minute cache,
+/// which keeps 15 days; ten leaves room for the profiled day and a cache a few days short.
+pub const AF_NAKED_POC_DAYS_MAX: u8 = 10;
+/// A volume profile's bin count, bounds: under 20 the POC is a fifth of the range wide; past 500 a
+/// day of five-minute bars leaves most bins empty and the POC lands on noise.
+pub const AF_PROFILE_BINS_MIN: u16 = 20;
+pub const AF_PROFILE_BINS_MAX: u16 = 500;
+/// How far from the last close round prices are looked for, % of price. Under half a percent a
+/// `Major` grid can hold none; past 50 % the "nearby" round numbers are another market.
+pub const AF_ROUND_RANGE_MIN: f32 = 0.5;
+pub const AF_ROUND_RANGE_MAX: f32 = 50.0;
+/// Shortest formation span and shortest flag cap, in bars: three bars cannot hold two pivots of a
+/// side and one of the other.
+pub const AF_FORMATION_BARS_MIN: u32 = 3;
+/// A channel's width-change bound, % of the starting width. Under one percent no real pair of
+/// lines is parallel; at 90 a pair whose width falls to a tenth still counts as a channel.
+pub const AF_PARALLEL_WIDTH_MIN: f32 = 1.0;
+pub const AF_PARALLEL_WIDTH_MAX: f32 = 90.0;
+/// A price move — a flag's pole, a double's trough — upper bound, % of price. Wider than
+/// [`AF_PCT_MAX`], a bound for touch-like bands: a pole of 20 % is an ordinary day for an altcoin.
+pub const AF_MOVE_PCT_MAX: f32 = 50.0;
+/// Longest a flag's pole may be looked for, in bars.
+pub const AF_IMPULSE_BARS_MAX: u32 = 100;
+/// The block's opacity ([`AutoFiguresCfg::opacity`]) a configuration that never stated one takes:
+/// the auto lines are a backdrop to price and to the reader's own figures, not a layer over them
+/// (LinKvo, 19.11.2026), and 60 % still read as a layer on a live chart — 40 % (LinKvo, 20.11.2026).
+pub const AF_OPACITY_DEFAULT: f32 = 0.4;
+/// The block's opacity, bounds. Under a tenth the lines are gone while the feature still runs;
+/// one is the colours exactly as the rows state them.
+pub const AF_OPACITY_MIN: f32 = 0.1;
+pub const AF_OPACITY_MAX: f32 = 1.0;
 
 impl AutoFiguresCfg {
     /// Repair whatever a hand-edited or older file can state. Idempotent.
     pub fn sanitize(&mut self) {
+        // NaN to the default, the rest into the bounds: both land on values this rule keeps.
+        self.opacity = if self.opacity.is_finite() {
+            self.opacity.clamp(AF_OPACITY_MIN, AF_OPACITY_MAX)
+        } else {
+            AF_OPACITY_DEFAULT
+        };
         self.rows.truncate(AF_ROWS_MAX);
         for row in &mut self.rows {
             row.sanitize();
@@ -119,6 +165,12 @@ fn sanitize_detector(params: &mut DetectorParams) {
         DetectorParams::PeriodExtreme(_) => {}
         DetectorParams::Trend(p) => sanitize_trend(p),
         DetectorParams::Squeeze(p) => sanitize_squeeze(p),
+        DetectorParams::VolumeProfile(p) => sanitize_profile(p),
+        // Four switches: every combination is meaningful, all off included (the row draws nothing,
+        // like a hidden one).
+        DetectorParams::PeriodLevel(_) => {}
+        DetectorParams::RoundLevels(p) => sanitize_round(p),
+        DetectorParams::Formation(p) => sanitize_formation(p),
     }
 }
 
@@ -129,6 +181,7 @@ fn sanitize_swing(p: &mut SwingParams) {
     p.pivot_right = p.pivot_right.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
     p.lookback_bars = lookback(p.lookback_bars, p.pivot_left, p.pivot_right);
     p.tolerance_pct = pct(p.tolerance_pct, d.tolerance_pct, AF_TOLERANCE_MIN);
+    p.tolerance_atr = atr_share(p.tolerance_atr, d.tolerance_atr);
     p.min_touches = p.min_touches.clamp(1, AF_TOUCHES_MAX);
     sanitize_broken(&mut p.broken);
 }
@@ -148,6 +201,7 @@ fn sanitize_trend(p: &mut TrendParams) {
     p.pivot_right = p.pivot_right.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
     p.lookback_bars = lookback(p.lookback_bars, p.pivot_left, p.pivot_right);
     p.tolerance_pct = pct(p.tolerance_pct, d.tolerance_pct, AF_TOLERANCE_MIN);
+    p.tolerance_atr = atr_share(p.tolerance_atr, d.tolerance_atr);
     // Two pivots define a line; a "trend" through one is any line at all.
     p.min_touches = p.min_touches.clamp(2, AF_TOUCHES_MAX);
     // The bounds are by absolute value, so a negative one is read as its magnitude.
@@ -171,7 +225,59 @@ fn sanitize_squeeze(p: &mut SqueezeParams) {
         d.trend_tolerance_pct,
         AF_TOLERANCE_MIN,
     );
+    p.trend_tolerance_atr = atr_share(p.trend_tolerance_atr, d.trend_tolerance_atr);
     p.pressed_pct = pct(p.pressed_pct, d.pressed_pct, AF_TOLERANCE_MIN);
+}
+
+/// The value area, the naked-POC days and the bin count into their ranges.
+fn sanitize_profile(p: &mut VolumeProfileParams) {
+    let d = VolumeProfileParams::default();
+    p.value_area_pct =
+        finite_or(p.value_area_pct, d.value_area_pct).clamp(AF_VALUE_AREA_MIN, AF_VALUE_AREA_MAX);
+    p.naked_poc_days = p.naked_poc_days.min(AF_NAKED_POC_DAYS_MAX);
+    p.bins = p.bins.clamp(AF_PROFILE_BINS_MIN, AF_PROFILE_BINS_MAX);
+}
+
+/// The search range around the last close into its bounds.
+fn sanitize_round(p: &mut RoundLevelsParams) {
+    let d = RoundLevelsParams::default();
+    p.range_pct = finite_or(p.range_pct, d.range_pct).clamp(AF_ROUND_RANGE_MIN, AF_ROUND_RANGE_MAX);
+}
+
+/// Pivot widths, lookback, both tolerances, the per-side touches, the span bounds and the flag and
+/// double numbers into their ranges, and the broken-line policy.
+///
+/// Every kind switch off is left as it is: like a period-level row with every flag off, the row
+/// draws nothing, which is what such a row asks for. `min_bars` and `flag_max_bars` are bounded by
+/// the lookback (a formation longer than the bars searched is never found), which `lookback`
+/// settles first — so a second run sees the same bound and changes nothing.
+fn sanitize_formation(p: &mut FormationParams) {
+    let d = FormationParams::default();
+    p.pivot_left = p.pivot_left.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
+    p.pivot_right = p.pivot_right.clamp(AF_PIVOT_MIN, AF_PIVOT_MAX);
+    p.lookback_bars = lookback(p.lookback_bars, p.pivot_left, p.pivot_right);
+    p.tolerance_pct = pct(p.tolerance_pct, d.tolerance_pct, AF_TOLERANCE_MIN);
+    p.tolerance_atr = atr_share(p.tolerance_atr, d.tolerance_atr);
+    // Two pivots define a side; a side through one is any line at all.
+    p.min_touches = p.min_touches.clamp(2, AF_TOUCHES_MAX);
+    p.min_bars = p.min_bars.clamp(AF_FORMATION_BARS_MIN, p.lookback_bars);
+    p.parallel_width_pct = finite_or(p.parallel_width_pct, d.parallel_width_pct)
+        .clamp(AF_PARALLEL_WIDTH_MIN, AF_PARALLEL_WIDTH_MAX);
+    p.impulse_pct =
+        finite_or(p.impulse_pct, d.impulse_pct).clamp(AF_TOLERANCE_MIN, AF_MOVE_PCT_MAX);
+    p.impulse_bars = p.impulse_bars.clamp(1, AF_IMPULSE_BARS_MAX);
+    p.flag_max_bars = p
+        .flag_max_bars
+        .clamp(AF_FORMATION_BARS_MIN, p.lookback_bars);
+    p.double_tolerance_pct = pct(
+        p.double_tolerance_pct,
+        d.double_tolerance_pct,
+        AF_TOLERANCE_MIN,
+    );
+    p.double_tolerance_atr = atr_share(p.double_tolerance_atr, d.double_tolerance_atr);
+    p.double_depth_pct =
+        finite_or(p.double_depth_pct, d.double_depth_pct).clamp(AF_TOLERANCE_MIN, AF_MOVE_PCT_MAX);
+    sanitize_broken(&mut p.broken);
 }
 
 /// At least one line: a row that keeps none is a hidden row, and the eye switch says that.
@@ -179,9 +285,14 @@ fn sanitize_take(take: &mut Take) {
     take.count = take.count.clamp(1, AF_TAKE_MAX);
 }
 
-/// The approach distance: zero is allowed (a mark only on an exact touch), negative is not.
+/// The approach distance: zero is allowed (a mark only on an exact touch), negative is not. The
+/// stop-hunt pierce and the confluence distance are touch-like bands: zero would make every wick
+/// a hunt and only identical prices one place, so both keep the touch tolerance's floor.
 fn sanitize_events(events: &mut EventMarks) {
-    events.approach_pct = pct(events.approach_pct, EventMarks::default().approach_pct, 0.0);
+    let d = EventMarks::default();
+    events.approach_pct = pct(events.approach_pct, d.approach_pct, 0.0);
+    events.stop_hunt_pct = pct(events.stop_hunt_pct, d.stop_hunt_pct, AF_TOLERANCE_MIN);
+    events.confluence_pct = pct(events.confluence_pct, d.confluence_pct, AF_TOLERANCE_MIN);
 }
 
 /// A lookback long enough to confirm one pivot of the given widths, within the global bounds.
@@ -194,6 +305,12 @@ fn lookback(bars: u32, left: u8, right: u8) -> u32 {
 /// `min..=AF_PCT_MAX`.
 fn pct(v: f32, default: f32, min: f32) -> f32 {
     finite_or(v, default).clamp(min, AF_PCT_MAX)
+}
+
+/// A share of the ATR: a non-finite value takes `default`, the rest is clamped to
+/// `AF_TOLERANCE_ATR_MIN..=AF_TOLERANCE_ATR_MAX`.
+fn atr_share(v: f32, default: f32) -> f32 {
+    finite_or(v, default).clamp(AF_TOLERANCE_ATR_MIN, AF_TOLERANCE_ATR_MAX)
 }
 
 /// `v`, or `default` when `v` is NaN or infinite. `f32::clamp` passes NaN straight through, so

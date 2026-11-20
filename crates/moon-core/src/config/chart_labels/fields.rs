@@ -220,6 +220,16 @@ pub enum ChartLabelField {
     /// there. It is drawn hollow while the core has said nothing yet, and the button is disabled
     /// then: pressing it would queue a state for a list this terminal has never seen.
     ActFavorite,
+    /// Show or hide the auto figures on THIS chart — an eye, open while they are drawn, crossed
+    /// out while they are not.
+    ///
+    /// A display toggle, and the one button here that commands nothing: it overrides the tab's
+    /// auto-figures switch for the pane's current coin only, writes nothing to disk and sends
+    /// nothing to the core. A button on the chart rather than a row in the popup because the
+    /// question it answers — "do I want those lines on THIS coin right now" — is asked while
+    /// looking at the coin, and the popup answers per tab kind. The choice lasts until the pane
+    /// changes market (`docs-internal/AUTO_FIGURES.md` §13.1).
+    ActAutoFigures,
     /// How long the core's temporary ban on this coin still has to run.
     ///
     /// The lock's readout, and a caption of its own so it can be placed anywhere — beside the
@@ -235,7 +245,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 61] = [
+    pub const ALL: [ChartLabelField; 62] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -295,6 +305,7 @@ impl ChartLabelField {
         ChartLabelField::ActPanicSell,
         ChartLabelField::ActTempBan,
         ChartLabelField::ActFavorite,
+        ChartLabelField::ActAutoFigures,
         ChartLabelField::TempBanLeft,
         ChartLabelField::StrategyFilters,
     ];
@@ -362,6 +373,7 @@ impl ChartLabelField {
             | ChartLabelField::ActPanicSell
             | ChartLabelField::ActTempBan
             | ChartLabelField::ActFavorite
+            | ChartLabelField::ActAutoFigures
             | ChartLabelField::TempBanLeft => ChartLabelGroup::Action,
         }
     }
@@ -429,6 +441,7 @@ impl ChartLabelField {
             ChartLabelField::ActPanicSell => "chart_labels.field.act_panic_sell",
             ChartLabelField::ActTempBan => "chart_labels.field.act_temp_ban",
             ChartLabelField::ActFavorite => "chart_labels.field.act_favorite",
+            ChartLabelField::ActAutoFigures => "chart_labels.field.act_auto_figures",
             ChartLabelField::TempBanLeft => "chart_labels.field.temp_ban_left",
             ChartLabelField::StrategyFilters => "chart_labels.field.strategy_filters",
         }
@@ -790,6 +803,7 @@ impl ChartLabelField {
             ChartLabelField::ActPanicSell => Some(ChartAction::PanicSell),
             ChartLabelField::ActTempBan => Some(ChartAction::TempBan),
             ChartLabelField::ActFavorite => Some(ChartAction::Favorite),
+            ChartLabelField::ActAutoFigures => Some(ChartAction::AutoFigures),
             _ => None,
         }
     }
@@ -798,7 +812,7 @@ impl ChartLabelField {
 /// What a pressable caption does when it is clicked.
 ///
 /// Named apart from the field so the terminal's dispatch matches on INTENT rather than on a
-/// catalogue entry: the catalogue holds fifty-odd figures, three of which happen to act, and a
+/// catalogue entry: the catalogue holds fifty-odd figures, a handful of which act, and a
 /// dispatch written against it would have to restate that filter at every call site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChartAction {
@@ -810,6 +824,9 @@ pub enum ChartAction {
     TempBan,
     /// Mark the coin in the CORE's own favourites list, or unmark it there.
     Favorite,
+    /// Show or hide the auto figures on this pane until its market changes. Local to the chart:
+    /// nothing is sent and nothing is saved.
+    AutoFigures,
 }
 
 impl ChartAction {
@@ -823,11 +840,31 @@ impl ChartAction {
 
     /// Whether this button is a SQUARE carrying a symbol rather than a labelled control.
     ///
-    /// The lock is one: what it says is its own state — open or closed — and a word beside it would
-    /// only repeat the picture. The caption pass reserves a square for it instead of measuring a
+    /// The lock, the star and the eye are: what each says is its own state — on or off — and a word
+    /// beside it would only repeat the picture. The caption pass reserves a square for it instead of measuring a
     /// label, so it keeps its shape whatever the reader sets the caption size to.
     pub fn square(self) -> bool {
-        matches!(self, ChartAction::TempBan | ChartAction::Favorite)
+        matches!(
+            self,
+            ChartAction::TempBan | ChartAction::Favorite | ChartAction::AutoFigures
+        )
+    }
+
+    /// Whether pressing this sends a command to the pane's CORE.
+    ///
+    /// Asked by everything that gates a press on the core: the workspace rail, which decides
+    /// whether this window may command that core at all. A button that only changes what this
+    /// chart draws must stay pressable on a core the rail has moved out of this window's scope — a
+    /// faded eye over a chart the reader is only looking at would be a refusal with no reason
+    /// behind it.
+    pub fn commands_core(self) -> bool {
+        match self {
+            ChartAction::CancelBuy
+            | ChartAction::PanicSell
+            | ChartAction::TempBan
+            | ChartAction::Favorite => true,
+            ChartAction::AutoFigures => false,
+        }
     }
 }
 

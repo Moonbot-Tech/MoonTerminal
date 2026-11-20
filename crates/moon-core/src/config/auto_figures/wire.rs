@@ -20,9 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
-    AutoFigurePreset, AutoFigureRow, AutoFiguresCfg, CaptionPart, CaptionPlace, CaptionShow,
-    DetectorKind, DetectorParams, EventMarks, Extend, LineCaption, LineStyle, RowDetector, Take,
-    TfSource, UnknownDetector, presets,
+    AF_OPACITY_DEFAULT, AutoFigurePreset, AutoFigureRow, AutoFiguresCfg, CaptionPart, CaptionPlace,
+    CaptionShow, DetectorKind, DetectorParams, EventMarks, Extend, LineCaption, LineStyle,
+    RowDetector, StrengthBasis, Take, TakeOrder, TakeSide, TfSource, UnknownDetector, presets,
 };
 use crate::config::chart_labels::LabelColor;
 use crate::config::layout::de_lenient;
@@ -39,6 +39,8 @@ pub(super) struct CfgRead {
     /// Raw values, parsed one by one, so a row that cannot be read is dropped alone.
     #[serde(default, deserialize_with = "de_lenient")]
     rows: Option<Vec<Value>>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    opacity: Option<f32>,
 }
 
 /// The configuration as WRITTEN.
@@ -49,6 +51,9 @@ pub(super) struct CfgWrite {
     /// Written only when OFF; absent reads as on.
     #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
+    /// Written only when it is not [`AF_OPACITY_DEFAULT`], so a profile follows the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opacity: Option<f32>,
     /// Written only when it is not the shipped set.
     #[serde(skip_serializing_if = "Option::is_none")]
     rows: Option<Vec<RowWire>>,
@@ -73,6 +78,7 @@ impl From<CfgRead> for AutoFiguresCfg {
         let mut cfg = AutoFiguresCfg {
             enabled: wire.enabled.unwrap_or(true),
             rows,
+            opacity: wire.opacity.unwrap_or(AF_OPACITY_DEFAULT),
         };
         cfg.sanitize();
         cfg
@@ -83,6 +89,7 @@ impl From<AutoFiguresCfg> for CfgWrite {
     fn from(cfg: AutoFiguresCfg) -> Self {
         Self {
             enabled: (!cfg.enabled).then_some(false),
+            opacity: (cfg.opacity != AF_OPACITY_DEFAULT).then_some(cfg.opacity),
             rows: (cfg.rows != presets::shipped_rows())
                 .then(|| cfg.rows.into_iter().map(RowWire::from).collect()),
         }
@@ -127,13 +134,13 @@ pub(super) struct RowWire {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "de_lenient"
     )]
-    take: Option<Take>,
+    take: Option<TakeWire>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "de_lenient"
     )]
-    events: Option<EventMarks>,
+    events: Option<EventsWire>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -163,8 +170,8 @@ impl From<AutoFigureRow> for RowWire {
             preset: row.preset,
             visible: changed(row.visible, true),
             tf: changed(row.tf, TfSource::default()),
-            take: changed(row.take, Take::default()),
-            events: changed(row.events, EventMarks::default()),
+            take: changed(row.take, Take::default()).map(TakeWire::from),
+            events: changed(row.events, EventMarks::default()).map(EventsWire::from),
             style: changed(row.style, LineStyle::default()),
             caption: changed(row.caption, LineCaption::default()),
             detector: Some(detector_value(&row.detector)),
@@ -188,10 +195,10 @@ impl TryFrom<Value> for AutoFigureRow {
             visible: wire.visible.unwrap_or(true),
             detector,
             tf: wire.tf.unwrap_or_default(),
-            take: wire.take.unwrap_or_default(),
+            take: wire.take.map(Take::from).unwrap_or_default(),
             style: wire.style.unwrap_or_default(),
             caption: wire.caption.unwrap_or_default(),
-            events: wire.events.unwrap_or_default(),
+            events: wire.events.map(EventMarks::from).unwrap_or_default(),
         })
     }
 }
@@ -435,4 +442,183 @@ where
             })
             .collect()
     }))
+}
+
+/// `Some(v)` when `v` differs from `d`, compared bit for bit so a NaN (unequal to everything) is
+/// still written rather than silently replaced — `sanitize` repairs a NaN, the writer does not.
+fn diff_f32(v: f32, d: f32) -> Option<f32> {
+    (v.to_bits() != d.to_bits()).then_some(v)
+}
+
+/// `Some(v)` when `v` differs from `d`.
+fn diff<T: PartialEq>(v: T, d: T) -> Option<T> {
+    (v != d).then_some(v)
+}
+
+/// [`Take`] on disk: only the fields that differ from [`Take::default`], each read on its own.
+///
+/// Field by field rather than the whole struct, for the same two reasons as [`StyleWire`]: a
+/// default a later build improves reaches every row that never changed THAT field, and a value an
+/// older build cannot read (a newer `strength` basis) costs that field, not the row's count and
+/// side.
+#[derive(Serialize, Deserialize)]
+pub(super) struct TakeWire {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    count: Option<u8>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    side: Option<TakeSide>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    order: Option<TakeOrder>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    strength: Option<StrengthBasis>,
+}
+
+impl From<TakeWire> for Take {
+    fn from(w: TakeWire) -> Self {
+        let d = Take::default();
+        Self {
+            count: w.count.unwrap_or(d.count),
+            side: w.side.unwrap_or(d.side),
+            order: w.order.unwrap_or(d.order),
+            strength: w.strength.unwrap_or(d.strength),
+        }
+    }
+}
+
+impl From<Take> for TakeWire {
+    fn from(t: Take) -> Self {
+        let d = Take::default();
+        Self {
+            count: diff(t.count, d.count),
+            side: diff(t.side, d.side),
+            order: diff(t.order, d.order),
+            strength: diff(t.strength, d.strength),
+        }
+    }
+}
+
+/// [`EventMarks`] on disk: only the fields that differ from [`EventMarks::default`], each read on
+/// its own — see [`TakeWire`] for why.
+#[derive(Serialize, Deserialize)]
+pub(super) struct EventsWire {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    approach: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    squeeze: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    breakout: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    false_break: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    bounce: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    role_flip: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    stop_hunt: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    confluence: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    approach_pct: Option<f32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    stop_hunt_pct: Option<f32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_lenient"
+    )]
+    confluence_pct: Option<f32>,
+}
+
+impl From<EventsWire> for EventMarks {
+    fn from(w: EventsWire) -> Self {
+        let d = EventMarks::default();
+        Self {
+            approach: w.approach.unwrap_or(d.approach),
+            squeeze: w.squeeze.unwrap_or(d.squeeze),
+            breakout: w.breakout.unwrap_or(d.breakout),
+            false_break: w.false_break.unwrap_or(d.false_break),
+            bounce: w.bounce.unwrap_or(d.bounce),
+            role_flip: w.role_flip.unwrap_or(d.role_flip),
+            stop_hunt: w.stop_hunt.unwrap_or(d.stop_hunt),
+            confluence: w.confluence.unwrap_or(d.confluence),
+            approach_pct: w.approach_pct.unwrap_or(d.approach_pct),
+            stop_hunt_pct: w.stop_hunt_pct.unwrap_or(d.stop_hunt_pct),
+            confluence_pct: w.confluence_pct.unwrap_or(d.confluence_pct),
+        }
+    }
+}
+
+impl From<EventMarks> for EventsWire {
+    fn from(e: EventMarks) -> Self {
+        let d = EventMarks::default();
+        Self {
+            approach: diff(e.approach, d.approach),
+            squeeze: diff(e.squeeze, d.squeeze),
+            breakout: diff(e.breakout, d.breakout),
+            false_break: diff(e.false_break, d.false_break),
+            bounce: diff(e.bounce, d.bounce),
+            role_flip: diff(e.role_flip, d.role_flip),
+            stop_hunt: diff(e.stop_hunt, d.stop_hunt),
+            confluence: diff(e.confluence, d.confluence),
+            approach_pct: diff_f32(e.approach_pct, d.approach_pct),
+            stop_hunt_pct: diff_f32(e.stop_hunt_pct, d.stop_hunt_pct),
+            confluence_pct: diff_f32(e.confluence_pct, d.confluence_pct),
+        }
+    }
 }

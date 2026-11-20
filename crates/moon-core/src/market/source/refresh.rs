@@ -10,6 +10,8 @@ use crate::feed::{Level, MarketDirty, MarketDirtyFlags, OrderBook, SharedMoonCli
 use crate::market::SharedMarketStore;
 use crate::session::CoreId;
 
+mod ring;
+
 use super::{
     MarketDataSource, MarketDataSourceInner, ORDERBOOK_PULL_PERIOD_MS, bump_generation,
     bump_market_revisions, cadence_phase_ms, cadence_slot, market_diag, market_diag_due,
@@ -94,20 +96,120 @@ impl MarketDataSource {
     /// five times less often with chunks about five times smaller, roughly 7 KB per coin per day.
     /// History therefore survives restarts and core outages even for coins never opened, while deep
     /// requests provide 1-minute precision for open coins through cache kind 1.
+    ///
+    /// The same pass keeps the core's own 5-minute ring in the cache under its own kind
+    /// (`kline_cache::RING_5M_KIND`, the `ring` module): the only source for the hours the core ran
+    /// and the terminal did not.
     fn spawn_kline_recorder(&self) {
         let source = self.clone();
         let _ = std::thread::Builder::new()
             .name("kline-recorder".into())
             .spawn(move || {
                 let mut last_written: HashMap<(CoreId, String), i64> = HashMap::new();
+                let mut ring_marks: HashMap<(CoreId, String), ring::RingMark> = HashMap::new();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(60));
-                    source.record_sealed_5m(&mut last_written);
+                    // Before the recorder pass, not after: a first pass merges a day of buckets
+                    // per market and can run for a long while, and the diagnostic line should not
+                    // wait on it.
+                    if crate::candles_5m_diag::enabled() {
+                        source.sweep_candles_5m_diag();
+                    }
+                    source.record_sealed_5m(&mut last_written, &mut ring_marks);
                 }
             });
     }
 
-    fn record_sealed_5m(&self, last_written: &mut HashMap<(CoreId, String), i64>) {
+    /// Elected providers with their kline-cache exchange key, client slot, and whether the
+    /// venue's wire `volume` is quote money (`crate::venue::deep_volume_is_quote`, which the
+    /// chart's snapshot layer reads for the same ring rows).
+    ///
+    /// The one traversal both the recorder and the ring-depth channel walk, so the channel reports
+    /// exactly the providers whose rings the recorder reads. Called under the caller's read lock.
+    fn recorder_providers(
+        inner: &MarketDataSourceInner,
+    ) -> Vec<(CoreId, String, SharedMoonClient, bool)> {
+        inner
+            .provider_exchange
+            .iter()
+            .filter_map(|(p, e)| {
+                inner.clients.get(p).map(|c| {
+                    (
+                        *p,
+                        format!("{}:{:08x}", e.code, e.dex),
+                        c.clone(),
+                        crate::venue::deep_volume_is_quote(e.code),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Write one `channels.candles_5m` line per provider: how deep its 5-minute candle rings are.
+    ///
+    /// Reads the client's snapshot only; nothing is sent to the core. Each ring is folded under
+    /// its own read lock by [`crate::candles_5m_diag::ring_facts`], and the source lock is held
+    /// only for the provider list, never across the scan.
+    fn sweep_candles_5m_diag(&self) {
+        let providers: Vec<(CoreId, String, SharedMoonClient, String)> = {
+            let inner = self.inner.read().expect("market source poisoned");
+            Self::recorder_providers(&inner)
+                .into_iter()
+                .map(|(p, ex, slot, _)| {
+                    let venue = inner
+                        .core_venue
+                        .get(&p)
+                        .map(|venue| match venue.resolved() {
+                            Some(v) => v.brand.display().to_string(),
+                            None => venue.reported.clone(),
+                        })
+                        .unwrap_or_else(|| "unidentified".to_string());
+                    (p, ex, slot, venue)
+                })
+                .collect()
+        };
+        for (provider, ex, slot, venue) in providers {
+            // Switched off mid-sweep: the writer would discard the rest anyway.
+            if !crate::candles_5m_diag::enabled() {
+                return;
+            }
+            let Some(client) = slot.get() else { continue };
+            let Some(snap) = client.snapshot_versioned() else {
+                continue;
+            };
+            let mut depth = crate::candles_5m_diag::ProviderDepth::default();
+            for handle in snap.markets().iter() {
+                let name = handle.name();
+                match snap
+                    .market_history_readers(name)
+                    .and_then(|readers| readers.candles_5m)
+                {
+                    Some(ring) => depth.add_ring(
+                        name,
+                        ring.capacity(),
+                        crate::candles_5m_diag::ring_facts(&ring),
+                    ),
+                    None => depth.add_without_ring(),
+                }
+            }
+            crate::candles_5m_diag::record(
+                &format!("provider={provider} ({venue} · ex={ex})"),
+                &depth,
+                crate::util::time::now_unix_ms_i64(),
+            );
+        }
+    }
+
+    /// One recorder pass: every elected provider's markets, their sealed 5-minute buckets folded
+    /// from the trade rings into the cache (`last_written` is each market's cursor), and each new
+    /// snapshot of the core's 5-minute ring stored under its own kind (`ring_marks`, moved only
+    /// past what the cache confirmed; see the `ring` module). Runs on the recorder's own thread;
+    /// the cache writes block it, never the UI.
+    fn record_sealed_5m(
+        &self,
+        last_written: &mut HashMap<(CoreId, String), i64>,
+        ring_marks: &mut HashMap<(CoreId, String), ring::RingMark>,
+    ) {
         const TF: i64 = 300_000;
         /// How far back the FIRST pass for a market reaches into the core's trade ring.
         ///
@@ -126,17 +228,7 @@ impl MarketDataSource {
             let Some(cache) = inner.kline_cache.clone() else {
                 return;
             };
-            let providers: Vec<(CoreId, String, SharedMoonClient)> = inner
-                .provider_exchange
-                .iter()
-                .filter_map(|(p, e)| {
-                    inner
-                        .clients
-                        .get(p)
-                        .map(|c| (*p, format!("{}:{:08x}", e.code, e.dex), c.clone()))
-                })
-                .collect();
-            (cache, providers)
+            (cache, Self::recorder_providers(&inner))
         };
         let now_ms = crate::util::time::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -148,8 +240,13 @@ impl MarketDataSource {
         // pass: a first pass carries a day of buckets per market, and a chart read shares this
         // worker's queue.
         let mut batch: Vec<crate::market::kline_cache::MergeItem> = Vec::new();
-        for (provider, ex, slot) in providers {
-            let Some(client) = slot.get() else { continue };
+        // The ring's rows go through their own batch, under their own kind, each item beside the
+        // mark its market takes once the cache confirms it stored.
+        let mut ring_batch = RingBatch::default();
+        for (provider, ex, slot, volume_is_quote) in providers {
+            let Some((client, epoch)) = slot.get_with_epoch() else {
+                continue;
+            };
             let Some(snap) = client.snapshot_versioned() else {
                 continue;
             };
@@ -159,6 +256,29 @@ impl MarketDataSource {
                 let Some(readers) = snap.market_history_readers(name) else {
                     continue;
                 };
+                if let Some(ring) = readers.candles_5m.as_ref() {
+                    let key = (provider, name.to_string());
+                    let read = ring_snapshot_rows(
+                        ring,
+                        ring_marks.get(&key).copied(),
+                        epoch,
+                        volume_is_quote,
+                        cur_bucket,
+                    );
+                    match read {
+                        RingRead::Empty => {}
+                        // Nothing to store: the mark moves at once.
+                        RingRead::Seen(mark) => {
+                            ring_marks.insert(key, mark);
+                        }
+                        RingRead::Snapshot(rows, mark) => {
+                            ring_batch.push(&ex, name, rows, key, mark);
+                            if ring_batch.items.len() >= MERGE_CHUNK_MARKETS {
+                                ring_batch.flush(&cache, ring_marks);
+                            }
+                        }
+                    }
+                }
                 let Some(reader) = readers.futures_trades.or(readers.spot_trades) else {
                     continue;
                 };
@@ -244,6 +364,12 @@ impl MarketDataSource {
             }
         }
         cache.merge_batch_blocking(batch);
+        ring_batch.flush(&cache, ring_marks);
+        crate::candles_5m_diag::record_ring_pass(
+            ring_batch.markets,
+            ring_batch.rows,
+            ring_batch.stored,
+        );
     }
 
     /// Set stable provider exchange identities used as kline-cache keys.
@@ -806,6 +932,130 @@ impl MarketDataSource {
             ));
         }
         changed
+    }
+}
+
+/// What one pass found in one market's 5-minute ring.
+#[derive(Debug, PartialEq)]
+enum RingRead {
+    /// The ring holds no row with a usable stamp; the previous mark stands.
+    Empty,
+    /// Nothing new to store (only live seals since the last pass, `ring` module): the mark to keep.
+    Seen(ring::RingMark),
+    /// A snapshot not stored yet: its rows as the cache stores them, and the mark to keep once
+    /// they are stored. The rows may be empty when none passed `ring::ring_candle`.
+    Snapshot(Vec<crate::market::candles::ChartCandle>, ring::RingMark),
+}
+
+/// Read one market's 5-minute ring for a recorder pass (`ring` module): the whole ring when it
+/// holds a snapshot not stored yet after `prev`, otherwise only the mark.
+///
+/// The ring's end (the mark's cursor) is read BEFORE its rows, each under its own short lock: a
+/// clear and refill landing between the two then leaves the mark with the old cursor, past the new
+/// ring's end, and the next pass finds it clipped and stores the new snapshot — read after, the
+/// mark would carry the new ring's cursor beside the old rows, and the new snapshot would never be
+/// stored. The rows themselves are walked twice under ONE read lock, neither walk copying the
+/// ring: once for the oldest usable stamp, which decides, and once to convert the rows when the
+/// whole ring is taken.
+fn ring_snapshot_rows(
+    ring: &moonproto::state::SeqRingReader<moonproto::state::Candle5mRow>,
+    prev: Option<ring::RingMark>,
+    epoch: u64,
+    volume_is_quote: bool,
+    cur_bucket_ms: i64,
+) -> RingRead {
+    let cursor = ring.cursor_from_now();
+    // A zero-row read from the previous cursor, for its `clipped` alone.
+    let clipped =
+        prev.is_some_and(|mark| ring.with_from_cursor(mark.cursor, 0, |v| v.meta().clipped));
+    ring.with_last(ring.capacity(), |view| {
+        let mut oldest = i64::MAX;
+        view.for_each(|c| {
+            let t = c.time().unix_millis();
+            if ring::ring_open_ms(t, cur_bucket_ms).is_some() {
+                oldest = oldest.min(t);
+            }
+        });
+        if oldest == i64::MAX {
+            return RingRead::Empty;
+        }
+        let mark = ring::RingMark {
+            epoch,
+            oldest_ms: oldest,
+            cursor,
+        };
+        if !ring::holds_new_snapshot(prev, epoch, oldest, clipped) {
+            return RingRead::Seen(mark);
+        }
+        let mut rows = Vec::with_capacity(view.len());
+        view.for_each(|c| {
+            let wire = ring::WireRow {
+                stamp_ms: c.time().unix_millis(),
+                open: c.open(),
+                high: c.high(),
+                low: c.low(),
+                close: c.close(),
+                volume: c.volume(),
+            };
+            rows.extend(ring::ring_candle(wire, volume_is_quote, cur_bucket_ms));
+        });
+        RingRead::Snapshot(rows, mark)
+    })
+}
+
+/// The ring snapshots of one recorder pass on their way to the cache, each with the mark its
+/// market takes once the cache confirms the rows stored, and the pass's counts for the
+/// `candles_5m` diagnostic channel.
+#[derive(Default)]
+struct RingBatch {
+    /// Items not yet sent, under [`crate::market::kline_cache::RING_5M_KIND`].
+    items: Vec<crate::market::kline_cache::MergeItem>,
+    /// `items`' markets and marks, in the same order.
+    marks: Vec<((CoreId, String), ring::RingMark)>,
+    /// Markets whose ring held a new snapshot this pass.
+    markets: usize,
+    /// Rows offered in all.
+    rows: usize,
+    /// Markets the cache confirmed stored.
+    stored: usize,
+}
+
+impl RingBatch {
+    /// Queue one market's snapshot rows and the mark it takes once they are stored.
+    fn push(
+        &mut self,
+        exchange: &str,
+        market: &str,
+        rows: Vec<crate::market::candles::ChartCandle>,
+        key: (CoreId, String),
+        mark: ring::RingMark,
+    ) {
+        self.markets += 1;
+        self.rows += rows.len();
+        self.items.push(crate::market::kline_cache::MergeItem {
+            exchange: exchange.to_string(),
+            market: market.to_string(),
+            kind_min: crate::market::kline_cache::RING_5M_KIND,
+            rows,
+        });
+        self.marks.push((key, mark));
+    }
+
+    /// Send the queued items in ONE transaction, waiting for it to settle, and move each market's
+    /// mark only when its item was confirmed stored — a market whose write failed keeps its old
+    /// mark, so the next pass takes its whole ring again.
+    fn flush(
+        &mut self,
+        cache: &crate::market::kline_cache::KlineCache,
+        ring_marks: &mut HashMap<(CoreId, String), ring::RingMark>,
+    ) {
+        let stored = cache.merge_batch_confirmed(std::mem::take(&mut self.items));
+        for ((key, mark), ok) in std::mem::take(&mut self.marks).into_iter().zip(stored) {
+            if ok {
+                self.stored += 1;
+                ring_marks.insert(key, mark);
+            }
+        }
     }
 }
 

@@ -20,14 +20,30 @@ fn a_stored_column_set_gains_the_late_column() {
     add_new_columns(&mut arranged, 0);
     assert_eq!(
         arranged,
-        ["market", "vol24", "coin", "exchange", "type", "listed"]
+        [
+            "market",
+            "vol24",
+            "coin",
+            "exchange",
+            "type",
+            "listed",
+            "auto_figures"
+        ]
     );
 
     // Already carrying them — a set written after the columns existed — stays as it is.
     add_new_columns(&mut arranged, 0);
     assert_eq!(
         arranged,
-        ["market", "vol24", "coin", "exchange", "type", "listed"]
+        [
+            "market",
+            "vol24",
+            "coin",
+            "exchange",
+            "type",
+            "listed",
+            "auto_figures"
+        ]
     );
 
     let mut empty: Vec<String> = Vec::new();
@@ -46,7 +62,14 @@ fn a_later_migration_does_not_put_back_an_earlier_column_the_user_hid() {
     add_new_columns(&mut coin_hidden, 1);
     assert_eq!(
         coin_hidden,
-        ["market", "vol24", "exchange", "type", "listed"]
+        [
+            "market",
+            "vol24",
+            "exchange",
+            "type",
+            "listed",
+            "auto_figures"
+        ]
     );
 
     let mut up_to_date = vec!["market".to_string()];
@@ -400,4 +423,58 @@ pub(in crate::screener) fn sort_entries(entries: &mut [super::Entry], key: &str,
             destinations.swap(source, destination);
         }
     }
+}
+
+/// The auto-figures column ships ON for everyone: a layout with no stored set shows every `COLS`
+/// key, and a set stored before the column existed gains it once, as every late column does. A
+/// layout already migrated past it — whoever has since hidden the column — is left alone.
+///
+/// Mutation: drop the column from `COLS` (a fresh layout never shows it), drop it from
+/// `COLS_ADDED_LATE` (everyone who ever arranged their columns never sees it), or file it under an
+/// old version (a layout already offered the location columns never gets it).
+#[test]
+fn the_auto_figures_column_ships_on_for_a_stored_set_once() {
+    use super::super::auto_figures::AUTO_FIGURES_KEY;
+    assert!(COLS.iter().any(|column| column.0 == AUTO_FIGURES_KEY));
+    let mut arranged = vec!["market".to_string(), "vol24".to_string()];
+    add_new_columns(&mut arranged, 2);
+    assert_eq!(arranged, ["market", "vol24", "auto_figures"]);
+    let mut hidden_since = vec!["market".to_string(), "vol24".to_string()];
+    add_new_columns(&mut hidden_since, super::COLUMNS_MIGRATION);
+    assert_eq!(hidden_since, ["market", "vol24"]);
+}
+
+/// Hiding the auto-figures column while the table is sorted by it goes back to the sort STORED
+/// before it, and stores nothing: that sort is the user's, and the column's own sort was never
+/// written (session-only answers). Hiding any other sorted column still falls back and stores.
+///
+/// By hand: stored `d1h` ascending, sorted by `auto_figures`, which is then hidden — the table
+/// sorts by `d1h` ascending again, nothing written. Sorted by `d1h` and `d1h` hidden — the usual
+/// `vol24` descending fallback, written.
+///
+/// Breakage: the old path, which ran the hidden auto sort through the fallback (`vol24`) and
+/// stored that as "no preference", erasing `d1h`.
+#[test]
+fn hiding_the_auto_figures_sort_restores_the_stored_one() {
+    use super::super::auto_figures::AUTO_FIGURES_KEY;
+    let stored = Some(TableSortPreference {
+        column: "d1h".to_string(),
+        ascending: true,
+    });
+    let visible: HashSet<String> = ["market", "vol24", "d1h"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        super::sort_after_hiding(AUTO_FIGURES_KEY, true, stored.clone(), &visible),
+        (("d1h".to_string(), false), false)
+    );
+    let without_d1h: HashSet<String> = ["market", "vol24"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        super::sort_after_hiding("d1h", false, stored, &without_d1h),
+        (("vol24".to_string(), true), true)
+    );
 }

@@ -105,7 +105,8 @@ pub struct ChartActionButton {
     pub action: moon_core::config::ChartAction,
     /// Whether what it controls is currently ON: panic armed, a ban running.
     pub active: bool,
-    /// Whether the workspace rail lets this window command the core.
+    /// Whether it may be pressed: the workspace rail lets this window command the core — or the
+    /// button commands no core at all, like the auto-figures eye.
     pub enabled: bool,
     /// The label the caption pass built and measured the rectangle against, and the size it was
     /// measured at: the control draws at that size, so the reader's caption-size step moves the
@@ -133,12 +134,14 @@ pub struct WantedActions {
     pub panic_sell: bool,
     pub temp_ban: bool,
     pub favorite: bool,
+    /// The auto-figures eye: the one button that reads the PANEL's own state, not the core's.
+    pub auto_figures: bool,
 }
 
 impl WantedActions {
     /// Whether this chart places any button at all.
     pub fn any(self) -> bool {
-        self.cancel_buy || self.panic_sell || self.temp_ban || self.favorite
+        self.cancel_buy || self.panic_sell || self.temp_ban || self.favorite || self.auto_figures
     }
 }
 
@@ -160,6 +163,9 @@ pub struct MarketActionState {
     /// Whether that market is marked on the core, or `None` while the core has not reported its
     /// configuration — see `ActionInputs::favorite` on why that is a third state.
     pub favorite: Option<bool>,
+    /// Whether the pane draws auto figures right now: the tab's switch, or the eye's override for
+    /// this coin. The panel's own state — the engine only draws what it is handed.
+    pub auto_figures: bool,
 }
 
 pub(crate) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;

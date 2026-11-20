@@ -26,3 +26,20 @@ fn chart_action_labels_land_on_the_chart_caption_at_every_zoom(cx: &mut gpui::Te
         });
     }
 }
+
+/// The auto-figures eye draws two DIFFERENT icons, and both ship in MoonUI's assets.
+///
+/// Breaks on: an icon path MoonUI does not ship (the button would draw an empty square), or both
+/// states mapping to one icon (the button would stop saying which state the pane is in).
+#[test]
+fn the_eye_draws_a_shipped_icon_for_each_state() {
+    use gpui::AssetSource as _;
+    let (shown, hidden) = (super::eye_icon(true), super::eye_icon(false));
+    assert_ne!(shown, hidden, "the two states draw different icons");
+    for path in [shown, hidden] {
+        assert!(
+            matches!(moon_ui::MoonAssets.load(path), Ok(Some(_))),
+            "{path} is not in MoonUI's assets"
+        );
+    }
+}

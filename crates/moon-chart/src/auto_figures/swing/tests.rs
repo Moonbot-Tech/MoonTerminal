@@ -10,6 +10,7 @@ fn params(min_touches: u8, broken: BrokenPolicy) -> DetectorParams {
         tolerance_pct: 0.5,
         min_touches,
         broken,
+        ..SwingParams::default()
     })
 }
 

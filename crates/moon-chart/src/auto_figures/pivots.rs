@@ -1,4 +1,5 @@
-//! Pivot highs and lows — the turning points `Swing`, `Trend` and `Squeeze` are built from.
+//! Pivot highs and lows — the turning points `Swing`, `Trend`, `Squeeze` and `Formation` are built
+//! from.
 //!
 //! A pivot high at bar `i` has a high STRICTLY above each of the `left` bars before it and at least
 //! as high as each of the `right` bars after it; a pivot low mirrors that with lows. The asymmetry

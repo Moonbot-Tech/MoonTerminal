@@ -1,5 +1,6 @@
 //! Immutable market rows and compact identities prepared away from the UI thread.
 
+use super::auto_figures::AUTO_FIGURES_KEY;
 use super::table::{Entry, sort_indices};
 use moon_core::market::listing::Listing;
 use moon_core::session::CoreId;
@@ -114,7 +115,8 @@ impl Prepared {
     /// Whether the Listed list ALONE hides a row whose answer is still on its way.
     ///
     /// What lets an empty table say "Listed is still being collected" and mean it: the row is on
-    /// a core the table shows, passes the Market box and the Vol. minimum, is waiting, and is
+    /// a core the table shows, passes the Market box, the Vol. minimum and the auto-figures
+    /// filter, is waiting, and is
     /// kept out by nothing but the ticks. A table emptied by a text that matches nothing, or by a
     /// selection that admits waiting rows and found none, is simply empty.
     ///
@@ -167,7 +169,10 @@ impl Prepared {
             .iter()
             .flat_map(|(_, members)| members.iter().map(|&(_, core)| core))
             .collect();
+        // The auto-figures column sorts by the latest press's answers, which a publication prepared
+        // in the background never sees: it is sorted here, on every pass, and never from the cache.
         let cached_sort = key == self.sort_key
+            && key != AUTO_FIGURES_KEY
             && desc == self.sort_desc
             && core_order.windows(2).all(|pair| pair[0] < pair[1]);
         let mut total = vec![false; self.markets];
@@ -187,6 +192,7 @@ impl Prepared {
             if text_matches[row.search]
                 && (!volume_active || row.volume >= min_vol)
                 && coin.admits_listing(row.listing)
+                && coin.admits_scan(&self.entries[index])
             {
                 shown[row.market] = true;
                 indices.push(index);
@@ -204,7 +210,11 @@ impl Prepared {
                     admit(index);
                 }
             }
-            sort_indices(&self.entries, &mut indices, key, desc);
+            if key == AUTO_FIGURES_KEY {
+                coin.sort_by_scan(&self.entries, &mut indices, desc);
+            } else {
+                sort_indices(&self.entries, &mut indices, key, desc);
+            }
         }
         (
             indices,
@@ -214,10 +224,11 @@ impl Prepared {
     }
 }
 
-/// Whether a row passes the Market box and the Vol. minimum: every row filter but the Listed
-/// list, which its two callers ask about separately.
+/// Whether a row passes the Market box, the Vol. minimum and the auto-figures filter: every row
+/// filter but the Listed list, which its two callers ask about separately.
 fn passes_text_and_volume(entry: &Entry, coin: &super::view::CoinQuery, min_vol: f64) -> bool {
-    (coin.is_empty() || super::view::matches_coin_filter(entry, coin))
+    coin.admits_scan(entry)
+        && (coin.is_empty() || super::view::matches_coin_filter(entry, coin))
         && !(min_vol > 0.0 && entry.row.vol_24h < min_vol)
         && !(min_vol > 0.0 && entry.row.vol_24h.is_nan())
 }

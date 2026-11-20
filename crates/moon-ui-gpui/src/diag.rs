@@ -463,6 +463,20 @@ diag_counters!(
     AUTOFIGURES_DETECT_US => "autofigures_detect_us",
     AUTOFIGURES_LINES => "autofigures_lines",
     AUTOFIGURES_EVENTS => "autofigures_events",
+    // The Screener's all-markets auto-figure scan (`screener::auto_figures`), started by its
+    // Calculate button and by nothing else.
+    //
+    //   * `autofigures_scan_markets` — markets whose cache rows were read AND scanned: one per
+    //     (exchange key, market), however many cores show it. A market with no cache address, or
+    //     one whose cache read did not happen, counts nothing. Legitimately 0 whenever no press is
+    //     being worked off, and a burst adding up to the Screener's market count over the seconds
+    //     after one; anything between presses is a defect — nothing else may start the scan.
+    //   * `autofigures_scan_us` — microseconds the scan's slices took on the background executor:
+    //     the cache reads (the wait on the kline-cache worker included), the resample and every
+    //     detector of every Main row, recorded once per slice. Off the UI thread by construction,
+    //     so this is CPU and cache wait, not frame time.
+    AUTOFIGURES_SCAN_MARKETS => "autofigures_scan_markets",
+    AUTOFIGURES_SCAN_US => "autofigures_scan_us",
     FIRETEST_MOUSE_SENT => "firetest_mouse_sent",
     FIRETEST_MOUSE_POST_FAIL => "firetest_mouse_post_fail",
     FIRETEST_TEXT_DRAW => "firetest_text_draw",

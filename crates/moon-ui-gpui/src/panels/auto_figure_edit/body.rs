@@ -7,11 +7,13 @@
 //! dozen numbers) never pushes OK off the screen.
 
 use gpui::*;
+use moon_chart::auto_figures::LineTag;
 use moon_core::config::LabelColor;
 use moon_core::config::auto_figures::{
     AutoEvent, AutoFigureRow, BrokenPolicy, CaptionPart, CaptionPlace, CaptionShow, DetectorKind,
-    DetectorParams, Extend, ExtremePeriod, ExtremeWhich, TakeOrder, TakeSide, TfId, TfSource,
-    TrendSide,
+    DetectorParams, EventMarks, Extend, ExtremePeriod, ExtremeWhich, FormationParams,
+    ProfilePeriod, RoundGrid, RowDetector, StrengthBasis, TakeOrder, TakeSide, TfId, TfSource,
+    ToleranceUnit, TrendSide,
 };
 use moon_core::figures::LineKind;
 use moon_ui::{
@@ -21,10 +23,10 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::fields::{NumField, broken_of, broken_of_mut};
+use super::fields::{NumField, broken_of, broken_of_mut, unit_of, unit_of_mut};
 use super::preview::{self, PreviewData};
 use super::{AutoFigureEditState, kind_key, reseed_inputs, switch_detector};
-use crate::chartdx::auto_figures_sync::caption::{event_key, tf_key};
+use crate::chartdx::auto_figures_sync::caption::{event_key, tag_key, tf_key};
 use crate::design::{self, moon};
 use crate::panels::popup_group;
 
@@ -118,14 +120,118 @@ fn place_key(place: CaptionPlace) -> &'static str {
     }
 }
 
-/// Locale key of one calendar period.
+/// Locale key of one extremes period: a rolling window or a UTC calendar period.
 fn period_key(period: ExtremePeriod) -> &'static str {
     match period {
         ExtremePeriod::Day => "auto_figures.edit.period.day",
         ExtremePeriod::PrevDay => "auto_figures.edit.period.prev_day",
         ExtremePeriod::Week => "auto_figures.edit.period.week",
         ExtremePeriod::PrevWeek => "auto_figures.edit.period.prev_week",
+        ExtremePeriod::Last4h => "auto_figures.edit.period.last4h",
+        ExtremePeriod::Last12h => "auto_figures.edit.period.last12h",
+        ExtremePeriod::Last24h => "auto_figures.edit.period.last24h",
+        ExtremePeriod::Last48h => "auto_figures.edit.period.last48h",
     }
+}
+
+/// The extremes periods the editor offers, rolling windows first — the default reading for a
+/// market that trades around the clock — then the UTC calendar ones.
+const EXTREME_PERIODS: [ExtremePeriod; 8] = [
+    ExtremePeriod::Last4h,
+    ExtremePeriod::Last12h,
+    ExtremePeriod::Last24h,
+    ExtremePeriod::Last48h,
+    ExtremePeriod::Day,
+    ExtremePeriod::PrevDay,
+    ExtremePeriod::Week,
+    ExtremePeriod::PrevWeek,
+];
+
+/// The profile periods the editor offers, in the same order as [`EXTREME_PERIODS`].
+const PROFILE_PERIODS: [ProfilePeriod; 6] = [
+    ProfilePeriod::Last4h,
+    ProfilePeriod::Last12h,
+    ProfilePeriod::Last24h,
+    ProfilePeriod::Last48h,
+    ProfilePeriod::Day,
+    ProfilePeriod::PrevDay,
+];
+
+/// Apply `f` to the row's detector parameters, when this build knows them.
+fn edit_params(r: &mut AutoFigureRow, f: impl FnOnce(&mut DetectorParams)) {
+    if let RowDetector::Known(d) = &mut r.detector {
+        f(d);
+    }
+}
+
+/// Pull a pinned timeframe under the coarsest one the row's detector can answer on — after an edit
+/// that may have lowered it (a day's open needs intraday bars), now rather than at OK, so the
+/// timeframe dropdown never shows a choice the row refuses.
+fn cap_tf(r: &mut AutoFigureRow) {
+    if let (Some(d), TfSource::Fixed(tf)) = (r.detector.known(), &mut r.tf) {
+        *tf = (*tf).min(d.coarsest_tf());
+    }
+}
+
+/// Where a row's switch for `event` is stored.
+fn mark_mut(marks: &mut EventMarks, event: AutoEvent) -> &mut bool {
+    match event {
+        AutoEvent::Approach => &mut marks.approach,
+        AutoEvent::Squeeze => &mut marks.squeeze,
+        AutoEvent::Breakout => &mut marks.breakout,
+        AutoEvent::FalseBreak => &mut marks.false_break,
+        AutoEvent::Bounce => &mut marks.bounce,
+        AutoEvent::RoleFlip => &mut marks.role_flip,
+        AutoEvent::StopHunt => &mut marks.stop_hunt,
+        AutoEvent::Confluence => &mut marks.confluence,
+    }
+}
+
+/// Locale key of a volume profile's span — the same words as [`period_key`].
+fn profile_period_key(period: ProfilePeriod) -> &'static str {
+    match period {
+        ProfilePeriod::Day => "auto_figures.edit.period.day",
+        ProfilePeriod::PrevDay => "auto_figures.edit.period.prev_day",
+        ProfilePeriod::Last4h => "auto_figures.edit.period.last4h",
+        ProfilePeriod::Last12h => "auto_figures.edit.period.last12h",
+        ProfilePeriod::Last24h => "auto_figures.edit.period.last24h",
+        ProfilePeriod::Last48h => "auto_figures.edit.period.last48h",
+    }
+}
+
+/// One labelled checkbox whose change is handed the window.
+fn checkbox(
+    id: String,
+    label: String,
+    checked: bool,
+    on_change: impl Fn(bool, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+    MoonCheckbox::new(SharedString::from(id))
+        .label(label)
+        .checked(checked)
+        .on_change(move |v: &bool, window, cx| on_change(*v, window, cx))
+        .into_any_element()
+}
+
+/// A caption over a wrapping row of checkboxes — the caption parts' layout.
+fn check_group(caption: String, boxes: Vec<AnyElement>, p: MoonPalette, cx: &App) -> AnyElement {
+    v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 2.0))
+        .child(
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(moon(p.text))
+                .child(caption),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .gap(design::ui_px(cx, 8.0))
+                .children(boxes),
+        )
+        .into_any_element()
 }
 
 /// A caption over a row of segments, the pick handed back with the window — the captions
@@ -353,6 +459,92 @@ pub(super) fn dialog_body(
         .into_any_element()
 }
 
+/// One kind a formation row can look for: its checkbox's id suffix, its label key, and the
+/// switch it reads and writes.
+struct FormationKind {
+    id: &'static str,
+    label: &'static str,
+    get: fn(&FormationParams) -> bool,
+    set: fn(&mut FormationParams, bool),
+}
+
+/// The formation kinds in the order the editor lists them. The two-line kinds are named by the
+/// same word their caption prints ([`tag_key`]); the doubles are one switch for tops and bottoms,
+/// so they carry a label of their own.
+const FORMATION_KINDS: [FormationKind; 5] = [
+    FormationKind {
+        id: "triangle",
+        label: "auto_figures.tag.triangle",
+        get: |p| p.triangle,
+        set: |p, v| p.triangle = v,
+    },
+    FormationKind {
+        id: "wedge",
+        label: "auto_figures.tag.wedge",
+        get: |p| p.wedge,
+        set: |p, v| p.wedge = v,
+    },
+    FormationKind {
+        id: "channel",
+        label: "auto_figures.tag.channel",
+        get: |p| p.channel,
+        set: |p, v| p.channel = v,
+    },
+    FormationKind {
+        id: "flag",
+        label: "auto_figures.tag.flag",
+        get: |p| p.flag,
+        set: |p, v| p.flag = v,
+    },
+    FormationKind {
+        id: "double",
+        label: "auto_figures.edit.formation_double",
+        get: |p| p.double,
+        set: |p, v| p.double = v,
+    },
+];
+
+/// The checkboxes of the formation kinds a row looks for.
+///
+/// A tick RESEEDS the numeric inputs: which numbers the row has depends on these switches (the
+/// pole and the flag cap exist only with flags on, a double's tolerance and depth only with
+/// doubles, the touch tolerance and the per-side touches only with a two-line kind — `fields`).
+/// Ids are snake case (`afe-formation-triangle`), the atlas's names for these controls.
+fn formation_kinds(
+    state: &Entity<AutoFigureEditState>,
+    fp: &FormationParams,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let boxes = FORMATION_KINDS
+        .iter()
+        .map(|kind| {
+            let state = state.clone();
+            let set = kind.set;
+            checkbox(
+                format!("afe-formation-{}", kind.id),
+                t!(kind.label).to_string(),
+                (kind.get)(fp),
+                move |v, window, cx| {
+                    write_row_reseed(&state, window, cx, |r| {
+                        edit_params(r, |d| {
+                            if let DetectorParams::Formation(x) = d {
+                                set(x, v);
+                            }
+                        })
+                    })
+                },
+            )
+        })
+        .collect();
+    check_group(
+        t!("auto_figures.edit.formation_kinds").to_string(),
+        boxes,
+        p,
+        cx,
+    )
+}
+
 /// What the row looks for: the detector and its numbers, the timeframe, which lines it keeps and
 /// what happens to a broken one.
 fn search_pane(
@@ -396,14 +588,9 @@ fn search_pane(
                 t!(period_key(pe.period)).to_string(),
                 pick_items(
                     "afe-period-item",
-                    [
-                        ExtremePeriod::Day,
-                        ExtremePeriod::PrevDay,
-                        ExtremePeriod::Week,
-                        ExtremePeriod::PrevWeek,
-                    ]
-                    .into_iter()
-                    .map(|v| (v, t!(period_key(v)).to_string())),
+                    EXTREME_PERIODS
+                        .into_iter()
+                        .map(|v| (v, t!(period_key(v)).to_string())),
                     pe.period,
                     move |v, window, cx| {
                         write_row_reseed(&state_p, window, cx, |r| {
@@ -490,10 +677,180 @@ fn search_pane(
                 },
             ));
         }
+        DetectorParams::VolumeProfile(vp) => {
+            let state_p = state.clone();
+            col = col.child(dropdown_row(
+                "afe-profile-period",
+                t!("auto_figures.edit.period").to_string(),
+                t!(profile_period_key(vp.period)).to_string(),
+                pick_items(
+                    "afe-profile-period-item",
+                    PROFILE_PERIODS
+                        .into_iter()
+                        .map(|v| (v, t!(profile_period_key(v)).to_string())),
+                    vp.period,
+                    move |v, _window, cx| {
+                        write_row(&state_p, cx, |r| {
+                            edit_params(r, |d| {
+                                if let DetectorParams::VolumeProfile(x) = d {
+                                    x.period = v;
+                                }
+                            })
+                        })
+                    },
+                ),
+                p,
+                cx,
+            ));
+            // Which of the profiled day's lines are drawn, named by the same word their caption
+            // prints. Naked POCs are a count of days below, independent of these.
+            let boxes = [
+                (LineTag::Poc, vp.poc),
+                (LineTag::Vah, vp.vah),
+                (LineTag::Val, vp.val),
+            ]
+            .into_iter()
+            .map(|(tag, on)| {
+                let state = state.clone();
+                checkbox(
+                    format!("afe-vp-{tag:?}").to_lowercase(),
+                    t!(tag_key(tag)).to_string(),
+                    on,
+                    move |v, _window, cx| {
+                        write_row(&state, cx, |r| {
+                            edit_params(r, |d| {
+                                if let DetectorParams::VolumeProfile(x) = d {
+                                    match tag {
+                                        LineTag::Poc => x.poc = v,
+                                        LineTag::Vah => x.vah = v,
+                                        _ => x.val = v,
+                                    }
+                                }
+                            })
+                        })
+                    },
+                )
+            })
+            .collect();
+            col = col.child(check_group(
+                t!("auto_figures.edit.profile_lines").to_string(),
+                boxes,
+                p,
+                cx,
+            ));
+        }
+        DetectorParams::PeriodLevel(pl) => {
+            let boxes = [
+                (LineTag::PrevDayClose, pl.prev_day_close),
+                (LineTag::DayOpen, pl.day_open),
+                (LineTag::WeekOpen, pl.week_open),
+                (LineTag::PrevWeekClose, pl.prev_week_close),
+            ]
+            .into_iter()
+            .map(|(tag, on)| {
+                let state = state.clone();
+                checkbox(
+                    format!("afe-pl-{tag:?}").to_lowercase(),
+                    t!(tag_key(tag)).to_string(),
+                    on,
+                    move |v, _window, cx| {
+                        write_row(&state, cx, |r| {
+                            edit_params(r, |d| {
+                                if let DetectorParams::PeriodLevel(x) = d {
+                                    match tag {
+                                        LineTag::PrevDayClose => x.prev_day_close = v,
+                                        LineTag::DayOpen => x.day_open = v,
+                                        LineTag::WeekOpen => x.week_open = v,
+                                        _ => x.prev_week_close = v,
+                                    }
+                                }
+                            });
+                            // The day's open cannot be read on daily bars.
+                            cap_tf(r);
+                        })
+                    },
+                )
+            })
+            .collect();
+            col = col.child(check_group(
+                t!("auto_figures.edit.period_lines").to_string(),
+                boxes,
+                p,
+                cx,
+            ));
+        }
+        DetectorParams::RoundLevels(rl) => {
+            let state_g = state.clone();
+            let grids = [RoundGrid::Major, RoundGrid::Half, RoundGrid::Minor];
+            col = col.child(seg_row(
+                "afe-round-grid",
+                t!("auto_figures.edit.grid").to_string(),
+                grids
+                    .iter()
+                    .map(|g| {
+                        let key = match g {
+                            RoundGrid::Major => "auto_figures.edit.grid.major",
+                            RoundGrid::Half => "auto_figures.edit.grid.half",
+                            RoundGrid::Minor => "auto_figures.edit.grid.minor",
+                        };
+                        (t!(key).to_string(), *g == rl.grid)
+                    })
+                    .collect(),
+                p,
+                cx,
+                move |ix, _window, cx| {
+                    if let Some(v) = grids.get(ix).copied() {
+                        write_row(&state_g, cx, |r| {
+                            edit_params(r, |d| {
+                                if let DetectorParams::RoundLevels(x) = d {
+                                    x.grid = v;
+                                }
+                            })
+                        });
+                    }
+                },
+            ));
+        }
+        DetectorParams::Formation(fp) => {
+            col = col.child(formation_kinds(state, &fp, p, cx));
+        }
         DetectorParams::Swing(_) | DetectorParams::Squeeze(_) => {}
     }
+    // The unit of a pivot detector's touch tolerance — one for both halves of a squeeze. It
+    // decides WHICH tolerance fields exist below, so a pick reseeds the inputs.
+    if let Some(unit) = unit_of(&params) {
+        let state_u = state.clone();
+        let units = [ToleranceUnit::Pct, ToleranceUnit::Atr];
+        col = col.child(seg_row(
+            "afe-tolerance-unit",
+            t!("auto_figures.edit.tolerance_unit").to_string(),
+            units
+                .iter()
+                .map(|u| {
+                    let key = match u {
+                        ToleranceUnit::Pct => "auto_figures.edit.tolerance_unit.pct",
+                        ToleranceUnit::Atr => "auto_figures.edit.tolerance_unit.atr",
+                    };
+                    (t!(key).to_string(), *u == unit)
+                })
+                .collect(),
+            p,
+            cx,
+            move |ix, window, cx| {
+                if let Some(v) = units.get(ix).copied() {
+                    write_row_reseed(&state_u, window, cx, |r| {
+                        edit_params(r, |d| {
+                            if let Some(u) = unit_of_mut(d) {
+                                *u = v;
+                            }
+                        })
+                    });
+                }
+            },
+        ));
+    }
     for field in NumField::DETECTOR {
-        if field.get(row).is_some()
+        if field.has(row)
             && let Some(input) = input_of(field)
         {
             col = col.child(num_row(field, &input, p, cx));
@@ -579,6 +936,32 @@ fn search_pane(
             },
         )
     });
+    // What "strongest" ranks by — read only under that order, so offered only there.
+    if row.take.order == TakeOrder::Strongest {
+        let state = state.clone();
+        let bases = [StrengthBasis::Touches, StrengthBasis::Volume];
+        take = take.child(seg_row(
+            "afe-take-strength",
+            t!("auto_figures.edit.take_strength").to_string(),
+            bases
+                .iter()
+                .map(|b| {
+                    let key = match b {
+                        StrengthBasis::Touches => "auto_figures.edit.take_strength.touches",
+                        StrengthBasis::Volume => "auto_figures.edit.take_strength.volume",
+                    };
+                    (t!(key).to_string(), *b == row.take.strength)
+                })
+                .collect(),
+            p,
+            cx,
+            move |ix, _w, cx| {
+                if let Some(v) = bases.get(ix).copied() {
+                    write_row(&state, cx, |r| r.take.strength = v);
+                }
+            },
+        ));
+    }
 
     let mut pane = v_flex()
         .w_full()
@@ -866,46 +1249,39 @@ fn look_pane(
     let mut events = h_flex().w_full().flex_wrap().gap(design::ui_px(cx, 8.0));
     // Named through the same `event_key` the line captions print, so a mark and its checkbox
     // cannot disagree on the word.
-    let marks: [(&str, AutoEvent, bool); 5] = [
+    // The element ids are the atlas's names for these controls (`afe-ev-approach`, …): kept as
+    // they were, snake case, so a reshoot finds the old checkboxes where they stood.
+    let marks: [(&str, AutoEvent, bool); 8] = [
         ("approach", AutoEvent::Approach, true),
         ("squeeze", AutoEvent::Squeeze, is_squeeze),
         ("breakout", AutoEvent::Breakout, true),
         ("false_break", AutoEvent::FalseBreak, true),
         ("bounce", AutoEvent::Bounce, true),
+        ("role_flip", AutoEvent::RoleFlip, true),
+        ("stop_hunt", AutoEvent::StopHunt, true),
+        ("confluence", AutoEvent::Confluence, true),
     ];
     for (id, event, shown) in marks {
-        let key = event_key(event);
         if !shown {
             continue;
         }
         let state = state.clone();
-        let ev = row.events;
-        let on = match id {
-            "approach" => ev.approach,
-            "squeeze" => ev.squeeze,
-            "breakout" => ev.breakout,
-            "false_break" => ev.false_break,
-            _ => ev.bounce,
-        };
-        events = events.child(
-            MoonCheckbox::new(SharedString::from(format!("afe-ev-{id}")))
-                .label(t!(key).to_string())
-                .checked(on)
-                .on_change(move |v: &bool, _w, cx| {
-                    let v = *v;
-                    write_row(&state, cx, |r| match id {
-                        "approach" => r.events.approach = v,
-                        "squeeze" => r.events.squeeze = v,
-                        "breakout" => r.events.breakout = v,
-                        "false_break" => r.events.false_break = v,
-                        _ => r.events.bounce = v,
-                    });
-                }),
-        );
+        events = events.child(checkbox(
+            format!("afe-ev-{id}"),
+            t!(event_key(event)).to_string(),
+            row.events.marks(event),
+            move |v, _w, cx| write_row(&state, cx, |r| *mark_mut(&mut r.events, event) = v),
+        ));
     }
     let mut events_col = v_flex().w_full().gap(design::ui_px(cx, 6.0)).child(events);
-    if let Some(input) = input_of(NumField::ApproachPct) {
-        events_col = events_col.child(num_row(NumField::ApproachPct, &input, p, cx));
+    for field in [
+        NumField::ApproachPct,
+        NumField::StopHuntPct,
+        NumField::ConfluencePct,
+    ] {
+        if let Some(input) = input_of(field) {
+            events_col = events_col.child(num_row(field, &input, p, cx));
+        }
     }
 
     v_flex()

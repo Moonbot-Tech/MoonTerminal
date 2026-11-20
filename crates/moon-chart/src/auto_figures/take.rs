@@ -1,11 +1,13 @@
 //! Which of a detector's figures a row keeps: a side filter against the current price, a ranking,
 //! and a count — per side when the row takes both.
 //!
-//! A figure's side is decided by its primary line's price at the moment asked for
-//! ([`super::FoundShape::price_at`]: the level of a horizontal or squeeze, the projection of a sloped
-//! line). A line exactly at the reference price counts as above it. Cost O(F log F).
+//! A figure's side is decided by its line's price at the moment asked for
+//! ([`super::FoundShape::price_near`]: the level of a horizontal or squeeze, the projection of a
+//! sloped line, and for a two-line formation the side NEARER the reference price — price inside a
+//! channel is kept above or below by the boundary it is closer to, and ranked by the distance to
+//! it). A line exactly at the reference price counts as above it. Cost O(F log F).
 
-use moon_core::config::auto_figures::{Take, TakeOrder, TakeSide};
+use moon_core::config::auto_figures::{StrengthBasis, Take, TakeOrder, TakeSide};
 
 use super::Found;
 
@@ -23,21 +25,47 @@ use super::Found;
 ///     positive finite price — without a reference there is no side and no distance to rank by. A
 ///     figure with no usable price at `at_ms` is never kept.
 pub fn select(found: &[Found], take: &Take, ref_price: f64, at_ms: f64) -> Vec<usize> {
+    select_skipping(found, take, ref_price, at_ms, &[])
+}
+
+/// [`select`] with some figures out of the running: `skip[i] == true` is never kept, and the slot
+/// it would have taken goes to the next figure of its side. An index past the end of `skip` is not
+/// skipped, so an empty `skip` is plain [`select`].
+///
+/// What the cross-row twin pass hands in (`super::twins`): a formation another row draws under a
+/// more precise name is dropped BEFORE the count, so it never costs its own row a line.
+pub fn select_skipping(
+    found: &[Found],
+    take: &Take,
+    ref_price: f64,
+    at_ms: f64,
+    skip: &[bool],
+) -> Vec<usize> {
     if take.count == 0 || !(ref_price.is_finite() && ref_price > 0.0) {
         return Vec::new();
     }
     let count = usize::from(take.count);
     // (index, distance to the reference, strength) per side.
-    let mut above: Vec<(usize, f64, f32)> = Vec::new();
-    let mut below: Vec<(usize, f64, f32)> = Vec::new();
+    let mut above: Vec<(usize, f64, f64)> = Vec::new();
+    let mut below: Vec<(usize, f64, f64)> = Vec::new();
     for (i, f) in found.iter().enumerate() {
-        let Some(price) = f.shape.price_at(at_ms) else {
+        if skip.get(i).copied().unwrap_or(false) {
+            continue;
+        }
+        let Some(price) = f.shape.price_near(at_ms, ref_price) else {
             continue;
         };
-        let strength = if f.strength.is_finite() {
-            f.strength
+        // What "strongest" means for this row: the detector's own rank, or the money traded on
+        // the touching bars. Widened to f64 so a large volume keeps its digits; a non-finite
+        // value ranks last rather than poisoning the sort.
+        let strength = match take.strength {
+            StrengthBasis::Touches => f64::from(f.strength),
+            StrengthBasis::Volume => f.touch_volume,
+        };
+        let strength = if strength.is_finite() {
+            strength
         } else {
-            f32::NEG_INFINITY
+            f64::NEG_INFINITY
         };
         let row = (i, (price - ref_price).abs(), strength);
         if price >= ref_price {
@@ -46,7 +74,7 @@ pub fn select(found: &[Found], take: &Take, ref_price: f64, at_ms: f64) -> Vec<u
             below.push(row);
         }
     }
-    let rank = |v: &mut Vec<(usize, f64, f32)>| {
+    let rank = |v: &mut Vec<(usize, f64, f64)>| {
         v.sort_by(|a, b| match take.order {
             TakeOrder::Nearest => a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)),
             TakeOrder::Strongest => {

@@ -298,6 +298,47 @@ ENV: MOON_ARB_COVERAGE_DIAG=1",
     },
     KeyDoc {
         section: "channels",
+        key: "candles_5m",
+        default: "false",
+        doc: "\
+Core 5-minute candle ring depth -> `logs/candles_5m_diag.log`: for every elected market-data
+provider (one core per exchange), how many sealed 5-minute candles its retained ring actually holds
+per market. Answers \"how much 5-minute history does a core really hand over, for which markets\" —
+the ring's capacity (`cap`, 500 = about 41.6 hours) is only an upper bound, and what the core's
+snapshot fills it with is visible nowhere else.
+
+One line per provider on every kline-recorder pass (about a minute apart; the first pass after
+start backfills and can take longer), read from memory only — nothing is requested from the core:
+  markets / ring / nonempty   catalog size, markets that have a ring, rings holding any candle (an
+                              empty ring can also be one the client cleared because its snapshot
+                              was too old to trust, moonproto STALE_CANDLES_SNAPSHOT_MS)
+  count[min/med/p90/max]      candles per non-empty ring
+  span_h[...]                 newest minus oldest candle stamp, hours
+  age_min[med/max]            minutes since the newest candle; sealed candles are stamped at the
+                              period END, so a live market reads 0-5. Negative = core clock ahead.
+  honest_oc                   share of candles with open != high or close != low. Near 0% means
+                              the snapshot carries only high and low, with open/close copied
+                              from them (the shape measured on 2026-07-12).
+  vol>0                       share of candles with a positive volume
+  || deepest / median / shallowest   three example markets with the same figures each
+Percentiles are nearest-rank: every printed figure is a value some market actually has.
+
+One more line per pass, `ring->cache markets= rows= stored=`, accounts for the rings the recorder
+copies into the candle cache under a kind of their own (read only by auto figures and the Screener):
+  markets                     markets whose ring held a snapshot not stored yet
+  rows                        rows those snapshots offered in all
+  stored                      markets the cache confirmed written
+A steady pass reads `markets=0`: only a connect, a reconnect or a new snapshot brings rows.
+`stored` below `markets` is a failed write; those markets are taken whole again on the next pass.
+
+The first line appears up to a minute after switching on. Written by the graphical terminal only:
+the sweep runs on its kline recorder's background thread, which the server station does not start.
+COST: low — one pass over every ring of every provider per minute, on a background thread. On
+disk, about half a kilobyte per provider per minute, in a file nothing rotates. Nothing while off.
+ENV: MOON_CANDLES_5M_DIAG=1",
+    },
+    KeyDoc {
+        section: "channels",
         key: "assets",
         default: "false",
         doc: "\

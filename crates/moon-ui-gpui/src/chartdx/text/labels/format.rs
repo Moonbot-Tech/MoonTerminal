@@ -256,6 +256,15 @@ pub(super) const STAR_OFF: &str = "\u{2606}";
 pub(super) const LOCK_OPEN: &str = "\u{1F513}";
 pub(super) const LOCK_CLOSED: &str = "\u{1F512}";
 
+/// The auto-figures eye's caption text, in its two states: the same pair every visibility toggle
+/// in the popups prints (`👁` shown, `–` hidden).
+///
+/// The chart's own control draws MoonUI's `eye` / `eye-off` icons instead (there is no crossed-out
+/// eye in a font), so this text is what the caption pass compares and what the label popup's
+/// preview prints — it has to differ between the states so a press re-formats the caption.
+pub(super) const EYE_SHOWN: &str = "\u{1F441}";
+pub(super) const EYE_HIDDEN: &str = "\u{2013}";
+
 /// Whole units of `step` in `value`, rounded UP, with a negative value answering zero.
 pub(super) fn ceil_div(value: i64, step: i64) -> i64 {
     let value = value.max(0);

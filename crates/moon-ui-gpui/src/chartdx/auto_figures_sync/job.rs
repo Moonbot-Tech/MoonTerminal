@@ -7,7 +7,8 @@
 //! `moon_chart::auto_figures::tf::bar_source` decides; this module only carries it out, and every
 //! source is one the terminal already holds. The chart's own closed candles (snapshotted by the
 //! panel), or the local kline cache — the 5-minute rows the background recorder keeps for every
-//! market, and the daily rows. NOTHING here asks a core for history: a second candle kind makes the
+//! market, the daily rows, and the 1-minute rows a market has where its chart was shown on 1 minute
+//! (for a 1-minute row on a coarser chart). NOTHING here asks a core for history: a second candle kind makes the
 //! core fetch klines from the exchange, and that is how a user's core got API-banned once.
 //!
 //! The 5-minute cache is written by a recorder on its own cycle, so its newest rows can lag the
@@ -20,6 +21,18 @@
 //!
 //! A market with no cache address at all gets a definitive empty answer for its cache rows
 //! ([`without_cache`]), which is never retried; only a read that did not happen is.
+//!
+//! ## The core's ring beside the 5-minute cache
+//!
+//! The cache keeps the core's own 5-minute ring under a kind of its own
+//! (`moon_core::market::kline_cache::RING_5M_KIND`), stored by the recorder on every connect: the
+//! only record of the hours the core ran and the terminal did not. A 5-minute cache read takes it
+//! beside kind 5 and assembles the two (`moon_chart::auto_figures::with_ring_rows`): a real
+//! candle wins its bucket, and a ring row fills a bucket none holds as a bar with an UNKNOWN open
+//! and close — marked by the kind it came from, never by its shape. Its high and low still make
+//! pivots, levels and profiles; no break, event, body or pole reads a close it does not have. The
+//! read fails, and the row is retried, when either kind's read did not happen. The chart's own
+//! series is taken as the chart draws it and never reads the ring kind.
 //!
 //! ## The recompute key
 //!
@@ -37,7 +50,7 @@ use moon_chart::auto_figures::{self, DetectCtx, Found};
 use moon_core::config::auto_figures::{DetectorParams, TfId};
 use moon_core::market::ChartCandle;
 use moon_core::market::candles::resample;
-use moon_core::market::kline_cache::KlineCache;
+use moon_core::market::kline_cache::{KIND_5M_MS, KlineCache, RING_5M_KIND};
 
 /// How long after a bar's close the row waits before treating it as closed, ms.
 ///
@@ -45,9 +58,6 @@ use moon_core::market::kline_cache::KlineCache;
 /// candle event and the recorder's write both land a moment later. Two seconds of a five-minute
 /// bar is nothing to a reader, and it spares recomputing on a bar that is still being finished.
 pub(crate) const SETTLE_MS: i64 = 2_000;
-
-/// The 5-minute bar of the always-recorded local cache, ms.
-const CACHE_BASE_MS: i64 = 5 * 60_000;
 
 /// Open time of the last bar of `tf` that has closed and settled by `now_ms`.
 pub(crate) fn last_closed_open_ms(now_ms: f64, tf: TfId) -> i64 {
@@ -132,11 +142,13 @@ pub(crate) struct AutoRowOutcome {
     pub key: RowKey,
     /// Where the bars came from.
     pub source: BarSource,
-    /// Closed bars the detector read.
+    /// Closed bars the detector read — at most `needed`, whatever was fetched for the events.
     pub bars: usize,
     /// Bars it needs for a full answer (`DetectorParams::bars_needed`).
     pub needed: u32,
-    /// Close of the newest bar read — the reference price when the chart has no last price yet.
+    /// Where price was at the newest bar read (`moon_chart::auto_figures::last_price`: its close,
+    /// or the middle of its range for a ring bar without one) — the reference price when the chart
+    /// has no last price yet.
     pub last_close: Option<f64>,
     /// The cache read this row depended on did not happen (worker busy or gone): transient, so the
     /// row is retried rather than trusted. A market with NO cache address is not this — that is a
@@ -147,16 +159,24 @@ pub(crate) struct AutoRowOutcome {
     pub lagging: bool,
     /// Every figure the detector found, before `take::select`.
     pub found: Vec<Found>,
-    /// The newest closed bars the detector read, oldest first — only as many as the row's events
-    /// can look at ([`recent_len`]). The events pass runs on every price change and must not
-    /// re-read the cache or re-resample for that; these few bars are all it needs.
+    /// The newest closed bars of the row's timeframe, oldest first — as many as the row's events
+    /// can look at ([`events_tail`]), taken from everything fetched rather than from the detector's
+    /// own `needed` bars, which can be fewer (round prices need one). Best-effort: the source is
+    /// chosen for the detector ([`plan_row`]), so a chart source shorter than the tail gives what
+    /// it has, and the events read fewer bars back. The events pass runs on
+    /// every price change and must not re-read the cache or re-resample for that; these few bars
+    /// are all it needs.
     pub recent: Vec<ChartCandle>,
 }
 
 impl AutoRowOutcome {
-    /// Whether the row ran on less history than it asks for — "not enough history" in the popup.
+    /// Whether the row ran on less history than it asks for — "not enough history" in the popup:
+    /// short of `moon_chart::auto_figures::history::history_full` (90 % of `needed` bars for a
+    /// row that samples its bars, all of them for a calendar row — the rule the screener's scan
+    /// reads too), measured against the DETECTOR's need only (the events tail fetched beside it is
+    /// not history the answer lacks).
     pub fn short_history(&self) -> bool {
-        self.bars < self.needed as usize
+        !moon_chart::auto_figures::history::history_full(self.bars, self.needed, &self.key.detector)
     }
 }
 
@@ -171,18 +191,40 @@ pub(crate) fn chart_extent(chart: &[ChartCandle], chart_tf_ms: i64) -> (i64, f64
     (tf, history)
 }
 
-/// Where a row's bars come from, and how many it needs.
-pub(crate) fn plan_row(key: &RowKey, chart_tf_ms: i64, chart_history_ms: f64) -> (BarSource, u32) {
+/// Where a row's bars come from, and how many its DETECTOR needs.
+///
+/// The source is chosen for the detector's `needed` alone, never for [`fetch_len`]: the events
+/// tail is best-effort from whatever the chosen source gives — a cache read reaches back
+/// `fetch_len` bars, a chart source hands over every bar of its series. Sizing the choice by the
+/// tail sent every row that needs few bars (round prices, period levels, H1/H4 extremes, the
+/// profile) past a chart that holds all they need, to the cache — and on a market with no cache
+/// they drew nothing at all.
+///
+/// Args:
+///     key: The row's recompute key.
+///     chart_tf_ms: The chart series' bar length, ms (`chart_extent`).
+///     chart_history_ms: Time the chart series covers, ms (`chart_extent`).
+///     has_cache: Whether the market has a local kline cache — without one, a row the chart can
+///         serve on its own timeframe keeps the chart rather than an empty cache answer.
+pub(crate) fn plan_row(
+    key: &RowKey,
+    chart_tf_ms: i64,
+    chart_history_ms: f64,
+    has_cache: bool,
+) -> (BarSource, u32) {
     let needed = key.detector.bars_needed(key.tf);
     (
-        tf::bar_source(key.tf, chart_tf_ms, chart_history_ms, needed),
+        tf::bar_source(key.tf, chart_tf_ms, chart_history_ms, needed, has_cache),
         needed,
     )
 }
 
 /// Whether a source reads the local kline cache.
 pub(crate) fn reads_cache(source: BarSource) -> bool {
-    matches!(source, BarSource::Cache5m | BarSource::CacheDaily)
+    matches!(
+        source,
+        BarSource::Cache5m | BarSource::CacheDaily | BarSource::Cache1m
+    )
 }
 
 /// The definitive answer for a row whose bars would come from the cache when the market has none
@@ -202,16 +244,24 @@ pub(crate) fn without_cache(key: RowKey, source: BarSource, needed: u32) -> Auto
     }
 }
 
-/// Spare bars kept beyond the false-break window, so a few unusable bars (skipped by the events
-/// pass) at the tail do not shorten what it can look back over.
+/// Spare bars kept beyond what the events pass reads, so a few unusable bars (skipped by it, and
+/// not counted) at the tail do not shorten what it can look back over.
 const RECENT_SLACK: usize = 4;
 
-/// How many of a row's newest closed bars its events need: the false-break window of its policy,
-/// the bar before the break and the last bar (`events::line_events` reads `window + 2` valid
-/// bars), plus [`RECENT_SLACK`].
-pub(crate) fn recent_len(detector: &DetectorParams) -> usize {
-    let window = usize::from(events::false_break_window(detector.broken_policy()));
-    window.saturating_add(2 + RECENT_SLACK)
+/// How many of a row's newest closed bars its events need: everything `events::line_events`
+/// reads under the row's policy — [`events::bars_read`]: the role-flip lookback, the false-break
+/// window and the bars around them — plus [`RECENT_SLACK`].
+///
+/// Independent of the detector's `bars_needed` on purpose: a row of round prices needs one bar
+/// for its lines and still has breakouts, bounces and role flips to show on them.
+pub(crate) fn events_tail(detector: &DetectorParams) -> usize {
+    events::bars_read(detector.broken_policy()).saturating_add(RECENT_SLACK)
+}
+
+/// How many closed bars a row fetches: the larger of the detector's `needed` and its
+/// [`events_tail`].
+pub(crate) fn fetch_len(detector: &DetectorParams, needed: u32) -> u32 {
+    needed.max(u32::try_from(events_tail(detector)).unwrap_or(u32::MAX))
 }
 
 /// Run every row of `job`. Each cache kind is read at most once, wide enough for every row that
@@ -234,7 +284,7 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
         .rows
         .iter()
         .map(|&(ix, key)| {
-            let (source, needed) = plan_row(&key, chart_tf_ms, chart_history_ms);
+            let (source, needed) = plan_row(&key, chart_tf_ms, chart_history_ms, cache.is_some());
             (ix, key, needed, source)
         })
         .collect();
@@ -243,15 +293,23 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
         plans
             .iter()
             .filter(|p| p.3 == want)
-            .map(|&(_, key, needed, _)| read_window(key, needed))
+            .map(|&(_, key, needed, _)| read_window(key, fetch_len(&key.detector, needed)))
             .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
     };
     let read = |kind_min: u32, window: Option<(i64, i64)>| -> Option<Option<Vec<ChartCandle>>> {
         let (from, to) = window?;
         Some(cache.and_then(|c| c.read(kind_min, from, to)))
     };
-    let m5 = read(5, span(BarSource::Cache5m));
+    // The 5-minute base: kind 5 with the core's ring in the buckets it leaves empty (module doc).
+    let m5 = span(BarSource::Cache5m).map(|window| {
+        let real = read(5, Some(window)).flatten()?;
+        let ring = read(RING_5M_KIND, Some(window)).flatten()?;
+        let mut base = Vec::with_capacity(real.len() + ring.len());
+        auto_figures::with_ring_rows(&real, &ring, &mut base);
+        Some(base)
+    });
     let d1 = read(1440, span(BarSource::CacheDaily));
+    let m1 = read(1, span(BarSource::Cache1m));
 
     plans
         .into_iter()
@@ -284,8 +342,23 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                     ),
                     None => (Vec::new(), true, false),
                 },
+                BarSource::Cache1m => match m1.as_ref().and_then(Option::as_ref) {
+                    Some(rows) => (
+                        closed_bars(rows, TfId::M1.ms(), row_ms, key.last_closed_ms),
+                        false,
+                        false,
+                    ),
+                    None => (Vec::new(), true, false),
+                },
                 BarSource::Unavailable => (Vec::new(), false, false),
             };
+            // The events tail comes from everything fetched, the detector's input from its own
+            // need: either may be the longer one (`fetch_len`).
+            let recent = tail(
+                &bars,
+                u32::try_from(events_tail(&key.detector)).unwrap_or(u32::MAX),
+            )
+            .to_vec();
             let bars = tail(&bars, needed);
             let found = if bars.is_empty() {
                 Vec::new()
@@ -307,11 +380,11 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                     source,
                     bars: bars.len(),
                     needed,
-                    last_close: bars.last().map(|b| f64::from(b.close)),
+                    last_close: auto_figures::last_price(bars),
                     read_failed,
                     lagging,
                     found,
-                    recent: bars[bars.len().saturating_sub(recent_len(&key.detector))..].to_vec(),
+                    recent,
                 },
             )
         })
@@ -323,15 +396,16 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
 ///
 /// The newest bucket counts its 5-minute rows against the number it holds (`row_ms / 5 min`); one
 /// short, inside [`LAG_CAP_MS`] past the bucket's close, is dropped from the input and reported as
-/// lagging. Past the cap it is used as it is. Only the NEWEST bucket is checked: an older gap is
-/// a market that did not trade, which no wait will fill.
+/// lagging. Past the cap it is used as it is. Only the NEWEST bucket waits: an older gap is a
+/// market that did not trade or a terminal that was not running, which no wait will fill — and
+/// telling those two apart is the calendar detectors' own check (`auto_figures::coverage`).
 pub(crate) fn cache_bars(
     rows: &[ChartCandle],
     row_ms: i64,
     last_closed_ms: i64,
     now_ms: f64,
 ) -> (Vec<ChartCandle>, bool) {
-    let expected = (row_ms / CACHE_BASE_MS).max(1) as usize;
+    let expected = (row_ms / KIND_5M_MS).max(1) as usize;
     let (open, close) = (last_closed_ms as f64, (last_closed_ms + row_ms) as f64);
     let have = rows
         .iter()
@@ -343,11 +417,12 @@ pub(crate) fn cache_bars(
     } else {
         last_closed_ms
     };
-    (closed_bars(rows, CACHE_BASE_MS, row_ms, through), lagging)
+    (closed_bars(rows, KIND_5M_MS, row_ms, through), lagging)
 }
 
-/// The open-time window a row reads from the cache: its `needed` bars ending with the last closed
-/// one, plus one bar of slack on the left for a first bucket the resample has to drop as partial.
+/// The open-time window a row reads from the cache: its `needed` bars (what it fetches,
+/// [`fetch_len`]) ending with the last closed one, plus one bar of slack on the left for a first
+/// bucket the resample has to drop as partial.
 fn read_window(key: RowKey, needed: u32) -> (i64, i64) {
     let row_ms = key.tf.ms();
     let to = key.last_closed_ms + row_ms - 1;
@@ -366,8 +441,12 @@ fn tail(bars: &[ChartCandle], n: u32) -> &[ChartCandle] {
 ///
 /// Equal timeframes pass through. A wider one is resampled, and a bucket the source does not
 /// cover from its start is dropped — the first one, when the source begins mid-bucket — because a
-/// partial high or low would place a level where the market never turned. A bucket is closed when
-/// it opens at or before `last_closed_ms`; the one still forming is dropped.
+/// partial high or low would place a level where the market never turned. From 5-minute rows the
+/// resample is [`auto_figures::resample_5m`], the one the screener's scan uses, so the two see the
+/// same bars: a bucket with short empty slots is kept — the cache holds a row only where something
+/// traded, so a quiet market's bucket is the bar of what it did trade — and one holding more than
+/// an hour of nothing is dropped as a hole. A bucket is closed when it opens at or before `last_closed_ms`; the one
+/// still forming is dropped.
 pub(crate) fn closed_bars(
     rows: &[ChartCandle],
     src_ms: i64,
@@ -386,7 +465,11 @@ pub(crate) fn closed_bars(
             .collect();
     }
     let mut out = Vec::new();
-    resample(rows, row_ms, &mut out);
+    if src_ms == KIND_5M_MS {
+        auto_figures::resample_5m(rows, row_ms, &mut out);
+    } else {
+        resample(rows, row_ms, &mut out);
+    }
     if let (Some(first_bucket), Some(first_row)) = (out.first(), rows.first())
         && first_row.t_open_ms > first_bucket.t_open_ms
     {
@@ -408,11 +491,11 @@ pub(crate) fn with_chart_tail(
     last_closed_5m: i64,
 ) -> Vec<ChartCandle> {
     let mut rows = cache_rows.to_vec();
-    if chart_tf_ms <= 0 || CACHE_BASE_MS % chart_tf_ms != 0 || chart.is_empty() {
+    if chart_tf_ms <= 0 || KIND_5M_MS % chart_tf_ms != 0 || chart.is_empty() {
         return rows;
     }
     let after = rows.last().map_or(f64::NEG_INFINITY, |r| r.t_open_ms);
-    let folded = closed_bars(chart, chart_tf_ms, CACHE_BASE_MS, last_closed_5m);
+    let folded = closed_bars(chart, chart_tf_ms, KIND_5M_MS, last_closed_5m);
     rows.extend(folded.into_iter().filter(|b| b.t_open_ms > after));
     rows
 }

@@ -1,13 +1,17 @@
 //! The editor's numeric fields: one entry per number a row can carry, with the row it reads and
 //! writes and the unit its label names.
 //!
-//! A table rather than one input per struct field written out by hand: the four detectors share
-//! most of their numbers (`Squeeze` nests a whole `SwingParams`), and the editor has to know for
-//! EACH field whether the row in front of it has one at all. Answering that once, in `get`, is what
-//! keeps a field from showing on a detector that ignores it — the same rule the captions editor
-//! follows when it offers a setting only on the fields that read it.
+//! A table rather than one input per struct field written out by hand: the detectors share most of
+//! their numbers (`Squeeze` nests a whole `SwingParams`), and the editor has to know for EACH field
+//! whether the row in front of it has one at all. Answering that once, in `get`, is what keeps a
+//! field from showing on a detector that ignores it — the same rule the captions editor follows
+//! when it offers a setting only on the fields that read it. A tolerance is the clearest case: a
+//! row reads either its `%` or its ATR field, by its `tolerance_unit`, so only that one is shown.
 
-use moon_core::config::auto_figures::{AutoFigureRow, BrokenPolicy, DetectorParams, RowDetector};
+use moon_core::config::auto_figures::{
+    AutoFigureRow, BrokenPolicy, DetectorParams, FormationParams, RowDetector, SwingParams,
+    ToleranceUnit,
+};
 
 /// One number of a row, as the editor shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,25 +22,59 @@ pub(super) enum NumField {
     PivotLeft,
     /// Bars a pivot must out-rank on its right.
     PivotRight,
-    /// Touch tolerance, % of price.
+    /// Touch tolerance, % of price — while the row's tolerance unit is `Pct`.
     Tolerance,
+    /// Touch tolerance as a share of the ATR — while the row's tolerance unit is `Atr`.
+    ToleranceAtr,
     /// Fewest pivots a level or line needs.
     MinTouches,
+    /// Formation only, while a two-line kind is on: fewest pivots on EACH side.
+    SideTouches,
     /// Trend only: bar bodies allowed through the line.
     BodyBreaks,
     /// Trend only: slope bounds, % of price per bar.
     SlopeMin,
     SlopeMax,
-    /// Squeeze only: the sloped half's touches and tolerance, and the "pressed" distance.
+    /// Squeeze only: the sloped half's touches, its tolerance in % or in ATR (by the formation's
+    /// one unit), and the "pressed" distance.
     TrendTouches,
     TrendTolerance,
+    TrendToleranceAtr,
     Pressed,
+    /// Volume profile only: the value area, % of the day's volume.
+    ValueArea,
+    /// Volume profile only: past days searched for naked POCs.
+    NakedPocDays,
+    /// Volume profile only: price bins the day's range is cut into.
+    Bins,
+    /// Round prices only: how far from the last close they are looked for, % of price.
+    RoundRange,
+    /// Formation only: the shortest formation, in bars.
+    MinBars,
+    /// Formation only, while a two-line kind is on: how much the width may change and the sides
+    /// still be parallel, % of the starting width.
+    ParallelWidth,
+    /// Formation only, while flags are on: the pole's size, % of price, and the bars it is
+    /// looked for in.
+    ImpulsePct,
+    ImpulseBars,
+    /// Formation only, while flags are on: the longest flag, in bars.
+    FlagMaxBars,
+    /// Formation only, while doubles are on: how far a double's two extremes may differ — in % or
+    /// in ATR, by the row's one unit — and its shallowest trough, %.
+    DoubleTolerance,
+    DoubleToleranceAtr,
+    DoubleDepth,
     /// Bars a broken line is kept, while the policy is `Keep`.
     BrokenBars,
     /// Lines kept (per side when the side is `Both`).
     TakeCount,
     /// Approach distance of the event marks, % of price.
     ApproachPct,
+    /// Smallest wick pierce that makes a stop hunt, % of the line's price.
+    StopHuntPct,
+    /// Largest distance to another timeframe's line that is still one place, % of price.
+    ConfluencePct,
     /// Stroke width, logical pixels.
     Thickness,
     /// Zone opacity, shown in percent while a zone is on.
@@ -45,59 +83,108 @@ pub(super) enum NumField {
 
 impl NumField {
     /// Every field, in the order the editor lays the detector's out.
-    pub(super) const ALL: [NumField; 16] = [
+    pub(super) const ALL: [NumField; 33] = [
         NumField::Lookback,
         NumField::PivotLeft,
         NumField::PivotRight,
         NumField::Tolerance,
+        NumField::ToleranceAtr,
         NumField::MinTouches,
+        NumField::SideTouches,
         NumField::BodyBreaks,
         NumField::SlopeMin,
         NumField::SlopeMax,
         NumField::TrendTouches,
         NumField::TrendTolerance,
+        NumField::TrendToleranceAtr,
         NumField::Pressed,
+        NumField::ValueArea,
+        NumField::NakedPocDays,
+        NumField::Bins,
+        NumField::RoundRange,
+        NumField::MinBars,
+        NumField::ParallelWidth,
+        NumField::ImpulsePct,
+        NumField::ImpulseBars,
+        NumField::FlagMaxBars,
+        NumField::DoubleTolerance,
+        NumField::DoubleToleranceAtr,
+        NumField::DoubleDepth,
         NumField::BrokenBars,
         NumField::TakeCount,
         NumField::ApproachPct,
+        NumField::StopHuntPct,
+        NumField::ConfluencePct,
         NumField::Thickness,
         NumField::ZoneOpacity,
     ];
 
     /// The fields that describe the DETECTOR, in layout order — the left pane's numbers. The rest
     /// (take, events, look) are placed by the pane that owns them.
-    pub(super) const DETECTOR: [NumField; 11] = [
+    pub(super) const DETECTOR: [NumField; 26] = [
         NumField::Lookback,
         NumField::PivotLeft,
         NumField::PivotRight,
         NumField::Tolerance,
+        NumField::ToleranceAtr,
         NumField::MinTouches,
+        NumField::SideTouches,
         NumField::BodyBreaks,
         NumField::SlopeMin,
         NumField::SlopeMax,
         NumField::TrendTouches,
         NumField::TrendTolerance,
+        NumField::TrendToleranceAtr,
         NumField::Pressed,
+        NumField::ValueArea,
+        NumField::NakedPocDays,
+        NumField::Bins,
+        NumField::RoundRange,
+        NumField::MinBars,
+        NumField::ParallelWidth,
+        NumField::ImpulsePct,
+        NumField::ImpulseBars,
+        NumField::FlagMaxBars,
+        NumField::DoubleTolerance,
+        NumField::DoubleToleranceAtr,
+        NumField::DoubleDepth,
     ];
 
-    /// Locale key of the field's label. Every label names its unit — bars, %, touches, px — so a
-    /// number is never read in the wrong one.
+    /// Locale key of the field's label. Every label names its unit — bars, %, ATR, touches, days,
+    /// px — so a number is never read in the wrong one.
     pub(super) fn locale_key(self) -> &'static str {
         match self {
             NumField::Lookback => "auto_figures.edit.lookback",
             NumField::PivotLeft => "auto_figures.edit.pivot_left",
             NumField::PivotRight => "auto_figures.edit.pivot_right",
             NumField::Tolerance => "auto_figures.edit.tolerance",
+            NumField::ToleranceAtr => "auto_figures.edit.tolerance_atr",
             NumField::MinTouches => "auto_figures.edit.min_touches",
+            NumField::SideTouches => "auto_figures.edit.side_touches",
             NumField::BodyBreaks => "auto_figures.edit.body_breaks",
             NumField::SlopeMin => "auto_figures.edit.slope_min",
             NumField::SlopeMax => "auto_figures.edit.slope_max",
             NumField::TrendTouches => "auto_figures.edit.trend_touches",
             NumField::TrendTolerance => "auto_figures.edit.trend_tolerance",
+            NumField::TrendToleranceAtr => "auto_figures.edit.trend_tolerance_atr",
             NumField::Pressed => "auto_figures.edit.pressed",
+            NumField::ValueArea => "auto_figures.edit.value_area",
+            NumField::NakedPocDays => "auto_figures.edit.naked_poc_days",
+            NumField::Bins => "auto_figures.edit.bins",
+            NumField::RoundRange => "auto_figures.edit.round_range",
+            NumField::MinBars => "auto_figures.edit.min_bars",
+            NumField::ParallelWidth => "auto_figures.edit.parallel_width",
+            NumField::ImpulsePct => "auto_figures.edit.impulse_pct",
+            NumField::ImpulseBars => "auto_figures.edit.impulse_bars",
+            NumField::FlagMaxBars => "auto_figures.edit.flag_max_bars",
+            NumField::DoubleTolerance => "auto_figures.edit.double_tolerance",
+            NumField::DoubleToleranceAtr => "auto_figures.edit.double_tolerance_atr",
+            NumField::DoubleDepth => "auto_figures.edit.double_depth",
             NumField::BrokenBars => "auto_figures.edit.broken_bars",
             NumField::TakeCount => "auto_figures.edit.take_count",
             NumField::ApproachPct => "auto_figures.edit.approach_pct",
+            NumField::StopHuntPct => "auto_figures.edit.stop_hunt_pct",
+            NumField::ConfluencePct => "auto_figures.edit.confluence_pct",
             NumField::Thickness => "auto_figures.edit.thickness",
             NumField::ZoneOpacity => "auto_figures.edit.zone_opacity",
         }
@@ -110,50 +197,88 @@ impl NumField {
 
     /// Whether the field holds a whole number.
     pub(super) fn integer(self) -> bool {
-        !matches!(
+        matches!(
             self,
-            NumField::Tolerance
-                | NumField::SlopeMin
-                | NumField::SlopeMax
-                | NumField::TrendTolerance
-                | NumField::Pressed
-                | NumField::ApproachPct
-                | NumField::Thickness
-                | NumField::ZoneOpacity
+            NumField::Lookback
+                | NumField::PivotLeft
+                | NumField::PivotRight
+                | NumField::MinTouches
+                | NumField::SideTouches
+                | NumField::MinBars
+                | NumField::ImpulseBars
+                | NumField::FlagMaxBars
+                | NumField::BodyBreaks
+                | NumField::TrendTouches
+                | NumField::NakedPocDays
+                | NumField::Bins
+                | NumField::BrokenBars
+                | NumField::TakeCount
         )
     }
 
     /// The field's value on `row`, or `None` when this row has no such number — a field of
-    /// another detector, a broken-bar count under `Remove`, a zone opacity with the zone off, or
-    /// any detector field of a row this build cannot interpret.
+    /// another detector, a tolerance in the unit the row does not read, a broken-bar count under
+    /// `Remove`, a zone opacity with the zone off, or any detector field of a row this build cannot
+    /// interpret — or when the stored value is not a finite number, which the input cannot show.
     pub(super) fn get(self, row: &AutoFigureRow) -> Option<f64> {
-        let swing_like = |d: &DetectorParams| match d {
-            DetectorParams::Swing(p) => Some(*p),
-            DetectorParams::Squeeze(p) => Some(p.level),
-            _ => None,
-        };
+        self.stored(row).filter(|v| v.is_finite())
+    }
+
+    /// Whether `row` has this field at all, whatever its value holds.
+    ///
+    /// Separate from [`Self::get`] because presence must not hang on the value: a row that once
+    /// held a non-finite number in a field would otherwise lose the field — hidden from the form,
+    /// and refused by [`Self::set`] — with no way for the reader to type it back to a real number.
+    pub(super) fn has(self, row: &AutoFigureRow) -> bool {
+        self.stored(row).is_some()
+    }
+
+    /// The field's stored value on `row` as is, finite or not; `None` exactly when the row has no
+    /// such number (see [`Self::get`]).
+    fn stored(self, row: &AutoFigureRow) -> Option<f64> {
         let known = row.detector.known();
-        let v = match self {
+        match self {
             NumField::Lookback => known.and_then(|d| match d {
                 DetectorParams::Trend(p) => Some(f64::from(p.lookback_bars)),
+                DetectorParams::Formation(p) => Some(f64::from(p.lookback_bars)),
                 d => swing_like(d).map(|p| f64::from(p.lookback_bars)),
             }),
             NumField::PivotLeft => known.and_then(|d| match d {
                 DetectorParams::Trend(p) => Some(f64::from(p.pivot_left)),
+                DetectorParams::Formation(p) => Some(f64::from(p.pivot_left)),
                 d => swing_like(d).map(|p| f64::from(p.pivot_left)),
             }),
             NumField::PivotRight => known.and_then(|d| match d {
                 DetectorParams::Trend(p) => Some(f64::from(p.pivot_right)),
+                DetectorParams::Formation(p) => Some(f64::from(p.pivot_right)),
                 d => swing_like(d).map(|p| f64::from(p.pivot_right)),
             }),
-            NumField::Tolerance => known.and_then(|d| match d {
-                DetectorParams::Trend(p) => Some(f64::from(p.tolerance_pct)),
-                d => swing_like(d).map(|p| f64::from(p.tolerance_pct)),
-            }),
+            NumField::Tolerance => known
+                .filter(|d| unit_of(d) == Some(ToleranceUnit::Pct))
+                .and_then(|d| match d {
+                    DetectorParams::Trend(p) => Some(f64::from(p.tolerance_pct)),
+                    DetectorParams::Formation(p) => {
+                        two_line(p).then_some(f64::from(p.tolerance_pct))
+                    }
+                    d => swing_like(d).map(|p| f64::from(p.tolerance_pct)),
+                }),
+            NumField::ToleranceAtr => known
+                .filter(|d| unit_of(d) == Some(ToleranceUnit::Atr))
+                .and_then(|d| match d {
+                    DetectorParams::Trend(p) => Some(f64::from(p.tolerance_atr)),
+                    DetectorParams::Formation(p) => {
+                        two_line(p).then_some(f64::from(p.tolerance_atr))
+                    }
+                    d => swing_like(d).map(|p| f64::from(p.tolerance_atr)),
+                }),
             NumField::MinTouches => known.and_then(|d| match d {
                 DetectorParams::Trend(p) => Some(f64::from(p.min_touches)),
                 d => swing_like(d).map(|p| f64::from(p.min_touches)),
             }),
+            NumField::SideTouches => known
+                .and_then(formation_of)
+                .filter(|p| two_line(p))
+                .map(|p| f64::from(p.min_touches)),
             NumField::BodyBreaks => known.and_then(|d| match d {
                 DetectorParams::Trend(p) => Some(f64::from(p.max_body_breaks)),
                 _ => None,
@@ -171,19 +296,74 @@ impl NumField {
                 _ => None,
             }),
             NumField::TrendTolerance => known.and_then(|d| match d {
-                DetectorParams::Squeeze(p) => Some(f64::from(p.trend_tolerance_pct)),
+                DetectorParams::Squeeze(p) if p.level.tolerance_unit == ToleranceUnit::Pct => {
+                    Some(f64::from(p.trend_tolerance_pct))
+                }
+                _ => None,
+            }),
+            NumField::TrendToleranceAtr => known.and_then(|d| match d {
+                DetectorParams::Squeeze(p) if p.level.tolerance_unit == ToleranceUnit::Atr => {
+                    Some(f64::from(p.trend_tolerance_atr))
+                }
                 _ => None,
             }),
             NumField::Pressed => known.and_then(|d| match d {
                 DetectorParams::Squeeze(p) => Some(f64::from(p.pressed_pct)),
                 _ => None,
             }),
+            NumField::ValueArea => known.and_then(|d| match d {
+                DetectorParams::VolumeProfile(p) => Some(f64::from(p.value_area_pct)),
+                _ => None,
+            }),
+            NumField::NakedPocDays => known.and_then(|d| match d {
+                DetectorParams::VolumeProfile(p) => Some(f64::from(p.naked_poc_days)),
+                _ => None,
+            }),
+            NumField::Bins => known.and_then(|d| match d {
+                DetectorParams::VolumeProfile(p) => Some(f64::from(p.bins)),
+                _ => None,
+            }),
+            NumField::RoundRange => known.and_then(|d| match d {
+                DetectorParams::RoundLevels(p) => Some(f64::from(p.range_pct)),
+                _ => None,
+            }),
+            NumField::MinBars => known.and_then(formation_of).map(|p| f64::from(p.min_bars)),
+            NumField::ParallelWidth => known
+                .and_then(formation_of)
+                .filter(|p| two_line(p))
+                .map(|p| f64::from(p.parallel_width_pct)),
+            NumField::ImpulsePct => known
+                .and_then(formation_of)
+                .filter(|p| p.flag)
+                .map(|p| f64::from(p.impulse_pct)),
+            NumField::ImpulseBars => known
+                .and_then(formation_of)
+                .filter(|p| p.flag)
+                .map(|p| f64::from(p.impulse_bars)),
+            NumField::FlagMaxBars => known
+                .and_then(formation_of)
+                .filter(|p| p.flag)
+                .map(|p| f64::from(p.flag_max_bars)),
+            NumField::DoubleTolerance => known
+                .and_then(formation_of)
+                .filter(|p| p.double && p.tolerance_unit == ToleranceUnit::Pct)
+                .map(|p| f64::from(p.double_tolerance_pct)),
+            NumField::DoubleToleranceAtr => known
+                .and_then(formation_of)
+                .filter(|p| p.double && p.tolerance_unit == ToleranceUnit::Atr)
+                .map(|p| f64::from(p.double_tolerance_atr)),
+            NumField::DoubleDepth => known
+                .and_then(formation_of)
+                .filter(|p| p.double)
+                .map(|p| f64::from(p.double_depth_pct)),
             NumField::BrokenBars => known.and_then(broken_of).and_then(|b| match b {
                 BrokenPolicy::Keep { bars } => Some(f64::from(bars)),
                 BrokenPolicy::Remove => None,
             }),
             NumField::TakeCount => Some(f64::from(row.take.count)),
             NumField::ApproachPct => Some(f64::from(row.events.approach_pct)),
+            NumField::StopHuntPct => Some(f64::from(row.events.stop_hunt_pct)),
+            NumField::ConfluencePct => Some(f64::from(row.events.confluence_pct)),
             NumField::Thickness => Some(f64::from(row.style.thickness)),
             // Rounded to a thousandth of a percent: the fraction is stored, and 0.07 × 100 in
             // binary is 7.00000003 — which the field would otherwise read back.
@@ -191,25 +371,28 @@ impl NumField {
                 .style
                 .zone
                 .map(|a| (f64::from(a) * 100_000.0).round() / 1000.0),
-        };
-        v.filter(|v| v.is_finite())
+        }
     }
 
-    /// Write `v` into `row`, returning whether the row has this field at all.
+    /// Write `v` into `row`, returning whether the row has this field at all — exactly when
+    /// [`Self::has`] says so, so a tolerance in the unit the row does not read is never written
+    /// behind the reader's back. A non-finite `v` is refused and writes nothing.
     ///
     /// Clamped only to what the TYPE can hold — never to the model's ranges, which `sanitize`
     /// owns. Applying those here would rewrite a number while it is being typed: "1" on the way to
     /// "150" would snap to the lookback minimum and the field would fight the keyboard. The editor
-    /// sanitizes a copy for its preview and the row itself on OK.
+    /// sanitizes a copy for its preview and the row itself on OK. For an `f32` field that clamp is
+    /// to `±f32::MAX`: a plain `as f32` turns "1e39" into infinity, and a row holding infinity
+    /// would print "inf" and feed it to the preview and the sanitizer.
     pub(super) fn set(self, row: &mut AutoFigureRow, v: f64) -> bool {
-        if !v.is_finite() {
+        if !v.is_finite() || !self.has(row) {
             return false;
         }
         let v = if self.integer() { v.round() } else { v };
         let as_u8 = v.clamp(0.0, f64::from(u8::MAX)) as u8;
         let as_u16 = v.clamp(0.0, f64::from(u16::MAX)) as u16;
         let as_u32 = v.clamp(0.0, f64::from(u32::MAX)) as u32;
-        let as_f32 = v as f32;
+        let as_f32 = v.clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32;
         match self {
             NumField::TakeCount => {
                 row.take.count = as_u8;
@@ -219,14 +402,19 @@ impl NumField {
                 row.events.approach_pct = as_f32;
                 return true;
             }
+            NumField::StopHuntPct => {
+                row.events.stop_hunt_pct = as_f32;
+                return true;
+            }
+            NumField::ConfluencePct => {
+                row.events.confluence_pct = as_f32;
+                return true;
+            }
             NumField::Thickness => {
                 row.style.thickness = as_f32;
                 return true;
             }
             NumField::ZoneOpacity => {
-                if row.style.zone.is_none() {
-                    return false;
-                }
                 row.style.zone = Some(as_f32 / 100.0);
                 return true;
             }
@@ -239,15 +427,23 @@ impl NumField {
             (NumField::Lookback, DetectorParams::Swing(p)) => p.lookback_bars = as_u32,
             (NumField::Lookback, DetectorParams::Squeeze(p)) => p.level.lookback_bars = as_u32,
             (NumField::Lookback, DetectorParams::Trend(p)) => p.lookback_bars = as_u32,
+            (NumField::Lookback, DetectorParams::Formation(p)) => p.lookback_bars = as_u32,
             (NumField::PivotLeft, DetectorParams::Swing(p)) => p.pivot_left = as_u8,
             (NumField::PivotLeft, DetectorParams::Squeeze(p)) => p.level.pivot_left = as_u8,
             (NumField::PivotLeft, DetectorParams::Trend(p)) => p.pivot_left = as_u8,
+            (NumField::PivotLeft, DetectorParams::Formation(p)) => p.pivot_left = as_u8,
             (NumField::PivotRight, DetectorParams::Swing(p)) => p.pivot_right = as_u8,
             (NumField::PivotRight, DetectorParams::Squeeze(p)) => p.level.pivot_right = as_u8,
             (NumField::PivotRight, DetectorParams::Trend(p)) => p.pivot_right = as_u8,
+            (NumField::PivotRight, DetectorParams::Formation(p)) => p.pivot_right = as_u8,
             (NumField::Tolerance, DetectorParams::Swing(p)) => p.tolerance_pct = as_f32,
             (NumField::Tolerance, DetectorParams::Squeeze(p)) => p.level.tolerance_pct = as_f32,
             (NumField::Tolerance, DetectorParams::Trend(p)) => p.tolerance_pct = as_f32,
+            (NumField::Tolerance, DetectorParams::Formation(p)) => p.tolerance_pct = as_f32,
+            (NumField::ToleranceAtr, DetectorParams::Swing(p)) => p.tolerance_atr = as_f32,
+            (NumField::ToleranceAtr, DetectorParams::Squeeze(p)) => p.level.tolerance_atr = as_f32,
+            (NumField::ToleranceAtr, DetectorParams::Trend(p)) => p.tolerance_atr = as_f32,
+            (NumField::ToleranceAtr, DetectorParams::Formation(p)) => p.tolerance_atr = as_f32,
             (NumField::MinTouches, DetectorParams::Swing(p)) => p.min_touches = as_u8,
             (NumField::MinTouches, DetectorParams::Squeeze(p)) => p.level.min_touches = as_u8,
             (NumField::MinTouches, DetectorParams::Trend(p)) => p.min_touches = as_u8,
@@ -258,7 +454,29 @@ impl NumField {
             (NumField::TrendTolerance, DetectorParams::Squeeze(p)) => {
                 p.trend_tolerance_pct = as_f32
             }
+            (NumField::TrendToleranceAtr, DetectorParams::Squeeze(p)) => {
+                p.trend_tolerance_atr = as_f32
+            }
             (NumField::Pressed, DetectorParams::Squeeze(p)) => p.pressed_pct = as_f32,
+            (NumField::ValueArea, DetectorParams::VolumeProfile(p)) => p.value_area_pct = as_f32,
+            (NumField::NakedPocDays, DetectorParams::VolumeProfile(p)) => p.naked_poc_days = as_u8,
+            (NumField::Bins, DetectorParams::VolumeProfile(p)) => p.bins = as_u16,
+            (NumField::RoundRange, DetectorParams::RoundLevels(p)) => p.range_pct = as_f32,
+            (NumField::SideTouches, DetectorParams::Formation(p)) => p.min_touches = as_u8,
+            (NumField::MinBars, DetectorParams::Formation(p)) => p.min_bars = as_u32,
+            (NumField::ParallelWidth, DetectorParams::Formation(p)) => {
+                p.parallel_width_pct = as_f32
+            }
+            (NumField::ImpulsePct, DetectorParams::Formation(p)) => p.impulse_pct = as_f32,
+            (NumField::ImpulseBars, DetectorParams::Formation(p)) => p.impulse_bars = as_u32,
+            (NumField::FlagMaxBars, DetectorParams::Formation(p)) => p.flag_max_bars = as_u32,
+            (NumField::DoubleTolerance, DetectorParams::Formation(p)) => {
+                p.double_tolerance_pct = as_f32
+            }
+            (NumField::DoubleToleranceAtr, DetectorParams::Formation(p)) => {
+                p.double_tolerance_atr = as_f32
+            }
+            (NumField::DoubleDepth, DetectorParams::Formation(p)) => p.double_depth_pct = as_f32,
             (NumField::BrokenBars, d) => match broken_of_mut(d) {
                 Some(BrokenPolicy::Keep { bars }) => *bars = as_u16,
                 _ => return false,
@@ -278,6 +496,59 @@ impl NumField {
             // binary tail (0.25 reads as 0.25, but 0.15 as 0.15000000596).
             format!("{}", v as f32)
         }
+    }
+}
+
+/// The horizontal-level half of a pivot detector: a swing row's own, a squeeze's `level`.
+fn swing_like(d: &DetectorParams) -> Option<SwingParams> {
+    match d {
+        DetectorParams::Swing(p) => Some(*p),
+        DetectorParams::Squeeze(p) => Some(p.level),
+        _ => None,
+    }
+}
+
+/// A formation row's parameters.
+fn formation_of(d: &DetectorParams) -> Option<&FormationParams> {
+    match d {
+        DetectorParams::Formation(p) => Some(p),
+        _ => None,
+    }
+}
+
+/// Whether a formation row looks for any two-line kind — the kinds that read the touch tolerance,
+/// the per-side touches and the parallel band; a row of doubles alone reads none of them.
+fn two_line(p: &FormationParams) -> bool {
+    p.triangle || p.wedge || p.channel || p.flag
+}
+
+/// The unit a pivot detector's tolerance is read in — a squeeze's one unit for both halves, a
+/// formation's for its touches and its doubles' equality alike — or `None` for a detector without
+/// a touch tolerance.
+pub(super) fn unit_of(d: &DetectorParams) -> Option<ToleranceUnit> {
+    match d {
+        DetectorParams::Swing(p) => Some(p.tolerance_unit),
+        DetectorParams::Trend(p) => Some(p.tolerance_unit),
+        DetectorParams::Squeeze(p) => Some(p.level.tolerance_unit),
+        DetectorParams::Formation(p) => Some(p.tolerance_unit),
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::RoundLevels(_) => None,
+    }
+}
+
+/// Mutable twin of [`unit_of`]: where the unit a row's tolerance is read in is stored.
+pub(super) fn unit_of_mut(d: &mut DetectorParams) -> Option<&mut ToleranceUnit> {
+    match d {
+        DetectorParams::Swing(p) => Some(&mut p.tolerance_unit),
+        DetectorParams::Trend(p) => Some(&mut p.tolerance_unit),
+        DetectorParams::Squeeze(p) => Some(&mut p.level.tolerance_unit),
+        DetectorParams::Formation(p) => Some(&mut p.tolerance_unit),
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::RoundLevels(_) => None,
     }
 }
 
@@ -306,14 +577,19 @@ pub(super) fn parse_number(text: &str, integer: bool) -> Option<f64> {
     normalized.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-/// The broken-line policy a detector carries, if it has one of its own. A period extreme has none:
-/// its line is a fact of the calendar.
+/// The broken-line policy a detector carries, if it has one of its own. A period extreme, a
+/// period level, a volume level and a round price have none: each line is a fact of the calendar,
+/// the profile or the price grid.
 pub(super) fn broken_of(d: &DetectorParams) -> Option<BrokenPolicy> {
     match d {
         DetectorParams::Swing(p) => Some(p.broken),
         DetectorParams::Trend(p) => Some(p.broken),
         DetectorParams::Squeeze(p) => Some(p.level.broken),
-        DetectorParams::PeriodExtreme(_) => None,
+        DetectorParams::Formation(p) => Some(p.broken),
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::RoundLevels(_) => None,
     }
 }
 
@@ -323,6 +599,10 @@ pub(super) fn broken_of_mut(d: &mut DetectorParams) -> Option<&mut BrokenPolicy>
         DetectorParams::Swing(p) => Some(&mut p.broken),
         DetectorParams::Trend(p) => Some(&mut p.broken),
         DetectorParams::Squeeze(p) => Some(&mut p.level.broken),
-        DetectorParams::PeriodExtreme(_) => None,
+        DetectorParams::Formation(p) => Some(&mut p.broken),
+        DetectorParams::PeriodExtreme(_)
+        | DetectorParams::VolumeProfile(_)
+        | DetectorParams::PeriodLevel(_)
+        | DetectorParams::RoundLevels(_) => None,
     }
 }

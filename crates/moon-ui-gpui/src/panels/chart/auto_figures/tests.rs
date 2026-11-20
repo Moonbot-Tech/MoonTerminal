@@ -4,13 +4,14 @@ use std::time::{Duration, Instant};
 use moon_chart::auto_figures::tf::BarSource;
 use moon_chart::auto_figures::{Found, FoundShape};
 use moon_core::config::auto_figures::{
-    AutoFigureRow, DetectorKind, DetectorParams, SwingParams, TfId,
+    AutoFigurePreset, AutoFigureRow, AutoFiguresCfg, DetectorKind, DetectorParams, SwingParams,
+    TfId,
 };
 use moon_core::market::ChartCandle;
 
 use super::{
-    AUTO_TF_DWELL, DwellTf, RowSlot, accept, drawable, needs_run, realign, retry_due_ms, slot_map,
-    split_no_cache,
+    AUTO_TF_DWELL, DwellTf, PaneSlots, RowSlot, accept, drawable, drop_gone_panes, needs_publish,
+    needs_run, pane_shows, plan_rows, realign, retry_due_ms, slot_map, split_no_cache,
 };
 use crate::chartdx::auto_figures_sync::job::{AutoRowOutcome, RowKey};
 
@@ -43,6 +44,9 @@ fn outcome(key: RowKey, levels: &[f64]) -> AutoRowOutcome {
                 first_ms: 1.0,
                 last_ms: 2.0,
                 broken: None,
+                touch_volume: 0.0,
+                tolerance_frac: 0.0,
+                tag: None,
             })
             .collect(),
         recent: Vec::new(),
@@ -267,4 +271,194 @@ fn swapped_rows_carry_their_slots_and_a_foreign_answer_is_not_drawn() {
     // A newer bar of the same row is not foreign: the last answer stays on screen meanwhile.
     stale.current = Some(key(HOUR));
     assert!(drawable(&stale).is_some());
+}
+
+/// A wall clock ten minutes into a four-hour bucket (2023-11-14 20:10 UTC), so an hour later the
+/// M5, M15 and H1 rows have a new closed bar while the H4 row does not.
+const EYE_NOW_MS: f64 = (1_699_992_000_000_i64 + 10 * 60_000) as f64;
+
+/// A pane on a market, with nothing evaluated yet.
+fn eye_pane() -> PaneSlots {
+    PaneSlots::new((7, "BTCUSDT".to_string()))
+}
+
+/// How many rows of `cfg` put anything on the chart — what a full evaluation runs.
+fn drawn_rows(cfg: &AutoFiguresCfg) -> usize {
+    cfg.rows.iter().filter(|r| r.is_drawn()).count()
+}
+
+/// Answer every job of `jobs` the way a finished run would, so the slots hold a cache.
+fn answer(pane: &mut PaneSlots, jobs: &[(usize, RowKey)], now: Instant) {
+    for (ix, key) in jobs {
+        assert!(accept(&mut pane.rows[*ix], outcome(*key, &[100.0]), now));
+    }
+}
+
+/// Hiding a pane with the eye evaluates nothing — no job, no wake — even once its bars moved on,
+/// and leaves every cached answer where it was.
+///
+/// Breakage: the eye routed as "publish an empty set" while the keys go on being evaluated, which
+/// starts a detector run per bar close for lines nobody can see.
+#[test]
+fn hiding_with_the_eye_runs_no_detector_and_keeps_the_cache() {
+    let now = Instant::now();
+    let cfg = AutoFiguresCfg::shipped();
+    let mut pane = eye_pane();
+    let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    assert_eq!(
+        first.jobs.len(),
+        drawn_rows(&cfg),
+        "a shown pane runs every row once"
+    );
+    answer(&mut pane, &first.jobs, now);
+
+    pane.eye = Some(false);
+    let later = EYE_NOW_MS + (5 * HOUR) as f64;
+    let hidden = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, later);
+    assert!(hidden.jobs.is_empty(), "a hidden pane starts no detector");
+    assert!(
+        hidden.wake.is_none(),
+        "and arms no wake for a bar nobody sees"
+    );
+    assert!(
+        pane.rows.iter().all(|s| s.done.is_some()),
+        "the answers stay cached for the next show"
+    );
+}
+
+/// Showing the pane again on the same bar takes the cached answers — no run, and a publication so
+/// they are drawn at once — and after the bars moved it runs ONLY the rows whose key moved.
+///
+/// Breakage: the show dropping the slots (every row recomputed), or waiting for a run to publish
+/// (nothing drawn until the next bar close).
+///
+/// The shipped set plus the 4h levels: every shipped row closes a bar within the hour, and "only
+/// the stale rows" needs a row whose bar did not.
+#[test]
+fn showing_again_takes_the_cache_and_runs_only_stale_rows() {
+    let now = Instant::now();
+    let mut cfg = AutoFiguresCfg::shipped();
+    cfg.rows.push(AutoFigurePreset::Levels4h.row());
+    let mut pane = eye_pane();
+    let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    answer(&mut pane, &first.jobs, now);
+    pane.published = true;
+
+    // Hidden: the sync takes the lines off, which is what clears `published`.
+    pane.eye = Some(false);
+    assert!(
+        plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS)
+            .jobs
+            .is_empty()
+    );
+    pane.published = false;
+
+    // Shown on the same bar: nothing to run, and the cache is published as it is.
+    pane.eye = Some(true);
+    let same = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    assert!(same.jobs.is_empty(), "the same key takes the cached answer");
+    assert!(
+        needs_publish(&pane, false),
+        "and the cached lines are put back without waiting for a run"
+    );
+
+    // Hidden over an hour, shown again: only the rows whose bar closed meanwhile run.
+    pane.eye = Some(false);
+    let later = EYE_NOW_MS + HOUR as f64;
+    assert!(
+        plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, later)
+            .jobs
+            .is_empty()
+    );
+    pane.eye = Some(true);
+    let moved = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, later);
+    assert!(
+        !moved.jobs.is_empty() && moved.jobs.len() < drawn_rows(&cfg),
+        "some rows moved and some did not: {} of {}",
+        moved.jobs.len(),
+        drawn_rows(&cfg)
+    );
+    for (ix, slot) in pane.rows.iter().enumerate() {
+        let (Some(done), Some(current)) = (slot.done.as_ref(), slot.current.as_ref()) else {
+            continue;
+        };
+        let runs = moved.jobs.iter().any(|(j, _)| *j == ix);
+        assert_eq!(
+            runs,
+            done.key != *current,
+            "row {ix} runs exactly when its cached answer is for another key"
+        );
+    }
+}
+
+/// On a tab kind whose popup switch is OFF the eye still shows the kind's rows on this pane — they
+/// run and are drawn — and on a kind whose switch is ON the eye hides them; with no row drawn at
+/// all it has nothing to show.
+///
+/// Breakage: the eye only able to hide (the shipped-off kinds could never be shown per coin), or
+/// the popup's switch read before the eye.
+#[test]
+fn the_eye_outranks_the_tab_switch_but_not_the_rows() {
+    let now = Instant::now();
+    let off = AutoFiguresCfg::shipped_off();
+    let mut pane = eye_pane();
+    assert!(
+        plan_rows(&off, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS)
+            .jobs
+            .is_empty(),
+        "the switch is off and the eye untouched: nothing runs"
+    );
+    pane.eye = Some(true);
+    let shown = plan_rows(&off, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    assert_eq!(
+        shown.jobs.len(),
+        drawn_rows(&off),
+        "the eye shows the kind's rows on this pane"
+    );
+
+    assert!(!pane_shows(&AutoFiguresCfg::shipped(), Some(false)));
+    let mut none_drawn = AutoFiguresCfg::shipped();
+    none_drawn.rows.iter_mut().for_each(|r| r.visible = false);
+    assert!(
+        !pane_shows(&none_drawn, Some(true)),
+        "the eye cannot draw rows the popup hid"
+    );
+}
+
+/// The eye's choice ends with the market: a pane that moves to another coin leaves its slots —
+/// eye included — behind, and the new coin follows the tab's switch again. A pane merely hidden on
+/// the same coin keeps its slots, and a frozen trade window keeps nothing.
+///
+/// Breakage: the override keyed by pane index instead of `(core, market)`, which would carry "hide"
+/// onto the next coin opened in that pane.
+#[test]
+fn the_eye_ends_with_the_market() {
+    let cfg = AutoFiguresCfg::shipped();
+    let btc = (7, "BTCUSDT".to_string());
+    let eth = (7, "ETHUSDT".to_string());
+    let mut panes = vec![eye_pane()];
+    panes[0].eye = Some(false);
+
+    // Same coin, still on screen: kept, eye and all.
+    assert!(drop_gone_panes(&mut panes, &[(0, btc.clone())], false).is_empty());
+    assert_eq!(panes[0].eye, Some(false));
+
+    // The pane switched to another coin: the old slots go, and nothing carries over.
+    assert_eq!(
+        drop_gone_panes(&mut panes, &[(0, eth.clone())], false),
+        vec![btc]
+    );
+    assert!(panes.is_empty());
+    let eye = panes.iter().find(|p| p.target == eth).and_then(|p| p.eye);
+    assert!(
+        pane_shows(&cfg, eye),
+        "the new coin follows the tab's switch"
+    );
+
+    // A trade window keeps nothing even for a target still on screen.
+    let mut frozen = vec![eye_pane()];
+    assert_eq!(
+        drop_gone_panes(&mut frozen, &[(0, (7, "BTCUSDT".to_string()))], true).len(),
+        1
+    );
 }

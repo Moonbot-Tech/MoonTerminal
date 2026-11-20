@@ -12,11 +12,19 @@ fn level(price: f64, strength: f32) -> Found {
         first_ms: 0.0,
         last_ms: 0.0,
         broken: None,
+        touch_volume: 0.0,
+        tolerance_frac: 0.0,
+        tag: None,
     }
 }
 
 fn take(count: u8, side: TakeSide, order: TakeOrder) -> Take {
-    Take { count, side, order }
+    Take {
+        count,
+        side,
+        order,
+        ..Take::default()
+    }
 }
 
 /// Levels at 90, 95, 99 below and 101, 110, 120 above a price of 100.
@@ -90,6 +98,41 @@ fn degenerate_inputs() {
     assert_eq!(select(&odd, &both, 100.0, 0.0), vec![2, 1]);
 }
 
+/// "Strongest by volume" ranks by the money traded on the touching bars, not by the touch count:
+/// the level touched most is NOT the one kept when another took more volume. Ties fall back to
+/// nearest first.
+///
+/// Breakage: `strength` ignored (the touch rank wins), the volume read from the wrong field, or
+/// the sort direction reversed.
+#[test]
+fn strongest_by_volume_ranks_by_touch_volume() {
+    let with_volume = |price: f64, strength: f32, touch_volume: f64| Found {
+        touch_volume,
+        ..level(price, strength)
+    };
+    let found = vec![
+        // Most touches, least money.
+        with_volume(101.0, 9.0, 10.0),
+        with_volume(110.0, 2.0, 5_000.0),
+        with_volume(105.0, 3.0, 800.0),
+        // Ties with the next on volume; nearer, so it goes first.
+        with_volume(103.0, 1.0, 800.0),
+    ];
+    let by_touches = take(2, TakeSide::Above, TakeOrder::Strongest);
+    assert_eq!(select(&found, &by_touches, 100.0, 0.0), vec![0, 2]);
+    let by_volume = Take {
+        strength: StrengthBasis::Volume,
+        ..by_touches
+    };
+    assert_eq!(select(&found, &by_volume, 100.0, 0.0), vec![1, 3]);
+    // Under `Nearest` the basis changes nothing.
+    let nearest = Take {
+        order: TakeOrder::Nearest,
+        ..by_volume
+    };
+    assert_eq!(select(&found, &nearest, 100.0, 0.0), vec![0, 3]);
+}
+
 /// A sloped line is sided by its projection at the moment asked for, not by its endpoints.
 ///
 /// Breakage: siding a line by `p0` or `p1`.
@@ -150,4 +193,55 @@ fn real_levels_respect_count_and_side() {
             );
         }
     }
+}
+
+/// A horizontal two-line formation from `lower` to `upper`.
+fn pair(upper: f64, lower: f64) -> Found {
+    let side = |p: f64| super::super::Seg {
+        t0_ms: 0.0,
+        p0: p,
+        t1_ms: 1.0,
+        p1: p,
+    };
+    Found {
+        shape: FoundShape::Pair {
+            upper: side(upper),
+            lower: side(lower),
+        },
+        ..level(upper, 1.0)
+    }
+}
+
+/// A formation is kept on the side of its NEARER line: a channel 99..101 is above a price of 100.6
+/// (its top is nearer) and below one of 99.3 (its bottom is), and its distance is to that line — so
+/// with the 101 level beside it, nearest first puts whichever is closer first.
+///
+/// Breakage: the side taken from the upper line alone (a price inside the channel would always see
+/// it above), or the distance measured to the far side.
+#[test]
+fn a_formation_takes_the_side_of_its_nearer_line() {
+    let both = take(1, TakeSide::Both, TakeOrder::Nearest);
+    assert_eq!(select(&[pair(101.0, 99.0)], &both, 100.6, 0.0), [0]);
+    let above = take(1, TakeSide::Above, TakeOrder::Nearest);
+    assert_eq!(select(&[pair(101.0, 99.0)], &above, 100.6, 0.0), [0]);
+    assert!(select(&[pair(101.0, 99.0)], &above, 99.3, 0.0).is_empty());
+    let below = take(1, TakeSide::Below, TakeOrder::Nearest);
+    assert_eq!(select(&[pair(101.0, 99.0)], &below, 99.3, 0.0), [0]);
+    // At 99.3 the channel's bottom (0.3 away) is nearer than a lone level at 98.9 (0.4 away).
+    let found = [level(98.9, 1.0), pair(101.0, 99.0)];
+    assert_eq!(select(&found, &below, 99.3, 0.0), [1]);
+}
+
+/// A skipped figure gives its slot to the next one of its side: with one per side, nearest first,
+/// and 101 skipped, the kept pair is 110 above and 99 below — the next-nearest above takes the
+/// slot. Without the skip it is 101 and 99.
+///
+/// Breakage: the skip applied after the count (the slot left empty, only 99 kept), or ignored.
+#[test]
+fn a_skipped_figure_hands_its_slot_on() {
+    let found = ladder();
+    let one = take(1, TakeSide::Both, TakeOrder::Nearest);
+    assert_eq!(select(&found, &one, 100.0, 0.0), [2, 3]);
+    let skip = [false, false, true];
+    assert_eq!(select_skipping(&found, &one, 100.0, 0.0, &skip), [4, 3]);
 }

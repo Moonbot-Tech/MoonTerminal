@@ -437,6 +437,72 @@ fn a_merge_of_only_invalid_rows_reports_that_it_wrote_nothing() {
     assert!(wrote, "a row that passes the filter is written");
 }
 
+/// Reads one v2 chunk's blob and `updated_ms`, for the rewrite tests below.
+fn v2_chunk(conn: &rusqlite::Connection, kind: u32, day: i64) -> (Vec<u8>, i64) {
+    conn.query_row(
+        "SELECT rows, updated_ms FROM chunks_v2
+         WHERE exchange='x' AND market='PAIR' AND kind=?1 AND day=?2",
+        rusqlite::params![kind, day],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .expect("v2 chunk")
+}
+
+/// Every reconnect hands the cache the core's whole ring again, for every market; when that ring
+/// only repeats what is stored, rewriting each day put thousands of identical chunk writes on the
+/// single worker chart reads queue behind. Deleting the unchanged-day skip in `upsert_one` makes
+/// the second write below stamp the newer `updated_ms` and report a write.
+#[test]
+fn a_repeated_snapshot_leaves_unchanged_days_unwritten() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("schema");
+    let day = 20_010_i64;
+    let rows: Vec<ChartCandle> = (0..3)
+        .map(|i| candle((day * DAY_MS + i * 300_000) as f64, 10.0 + i as f32))
+        .collect();
+    assert!(upsert_one(&conn, "x", "PAIR", RING_5M_KIND, &rows, 100).expect("first write"));
+    let first = v2_chunk(&conn, RING_5M_KIND, day);
+
+    let wrote = upsert_one(&conn, "x", "PAIR", RING_5M_KIND, &rows, 200).expect("repeat");
+    assert!(!wrote, "the same rows again change nothing");
+    assert_eq!(
+        v2_chunk(&conn, RING_5M_KIND, day),
+        first,
+        "the stored chunk keeps its bytes and its stamp"
+    );
+
+    let mut moved = rows.clone();
+    moved[1].high += 1.0;
+    assert!(upsert_one(&conn, "x", "PAIR", RING_5M_KIND, &moved, 300).expect("changed"));
+    assert_eq!(
+        v2_chunk(&conn, RING_5M_KIND, day).1,
+        300,
+        "a day with a changed row is rewritten"
+    );
+}
+
+/// The downgrade rule of `read_rows` lets a legacy chunk written AFTER the v2 one win; an
+/// unchanged v2 day skipped under it would leave the older executable's rows shadowing the ones
+/// just merged. So the skip yields to a newer legacy row and the day is stamped again.
+#[test]
+fn an_unchanged_day_is_still_rewritten_under_a_newer_legacy_chunk() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("schema");
+    let day = 20_011_i64;
+    let row = candle((day * DAY_MS) as f64, 10.0);
+    assert!(upsert_one(&conn, "x", "PAIR", 5, &[row], 100).expect("first write"));
+    let legacy = packed_rows(&[candle((day * DAY_MS) as f64, 20.0)], day * DAY_MS, false);
+    conn.execute(
+        "INSERT INTO chunks(exchange, market, kind, day, rows, updated_ms)
+         VALUES('x', 'PAIR', 5, ?1, ?2, 150)",
+        rusqlite::params![day, legacy],
+    )
+    .expect("newer legacy chunk");
+
+    assert!(upsert_one(&conn, "x", "PAIR", 5, &[row], 200).expect("repeat"));
+    assert_eq!(v2_chunk(&conn, 5, day).1, 200, "the v2 day wins back");
+}
+
 /// The liveness line is a heartbeat, and a heartbeat repeated per key is not one: the per-key form
 /// reset its deduplication set on every launch and wrote ~4700 lines within minutes of each start,
 /// 32803 a day. One line per writer, whatever it goes on to merge.
@@ -861,4 +927,79 @@ fn kline_merge_backlog_scale_probe() {
         queued_rows,
         sends[500]
     );
+}
+
+/// The core's ring kind ages out with kind 5, fifteen days, and is not kept for the ten years an
+/// unknown large kind would fall into.
+///
+/// By hand: a ring chunk 16 days old is past fifteen days and goes; one 14 days old stays.
+///
+/// Breakage: the ring kind left out of the startup prune (it would grow for ten years, 5 500
+/// markets of rows a day), or pruned at another kind's cutoff.
+#[test]
+fn the_ring_kind_is_pruned_like_kind_5() {
+    let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+    init_schema(&conn).expect("v2 schema");
+    let today = now_unix_ms() / DAY_MS;
+    for day in [today - 16, today - 14] {
+        conn.execute(
+            "INSERT INTO chunks_v2(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "x",
+                "PAIR",
+                RING_5M_KIND,
+                day,
+                packed_rows(&[candle((day * DAY_MS) as f64, 10.0)], day * DAY_MS, true),
+                0
+            ],
+        )
+        .expect("seed ring chunk");
+    }
+    prune_expired(&conn);
+    let days: Vec<i64> = conn
+        .prepare("SELECT day FROM chunks_v2 WHERE kind=?1 ORDER BY day")
+        .expect("query")
+        .query_map([RING_5M_KIND], |row| row.get(0))
+        .expect("rows")
+        .collect::<Result<_, _>>()
+        .expect("days");
+    assert_eq!(days, vec![today - 14]);
+}
+
+/// A confirmed batch answers per item once the transaction committed, and rows stored under the
+/// ring kind stay out of every kind-5 read.
+///
+/// Breakage: `merge_batch_confirmed` answering before the commit (the read after it would miss the
+/// row) or answering `false` for a stored item (the recorder would rewrite every ring each pass),
+/// or the ring kind landing in kind 5, where the tuner, the mini app and the chart read it.
+#[test]
+fn a_confirmed_ring_batch_lands_under_its_own_kind() {
+    let dir = BenchDir::new("kline-ring-kind");
+    let cache = KlineCache::open(dir.0.join("klines.sqlite")).expect("open cache");
+    let day = (now_unix_ms() / DAY_MS) * DAY_MS;
+    let ring_row = candle(day as f64, 10.0);
+    let stored = cache.merge_batch_confirmed(vec![
+        MergeItem {
+            exchange: "x".into(),
+            market: "PAIR".into(),
+            kind_min: RING_5M_KIND,
+            rows: vec![ring_row],
+        },
+        MergeItem {
+            exchange: "x".into(),
+            market: "OTHER".into(),
+            kind_min: RING_5M_KIND,
+            rows: Vec::new(),
+        },
+    ]);
+    assert_eq!(stored, vec![true, true]);
+    let ring = cache
+        .read_range("x", "PAIR", RING_5M_KIND, day, day + DAY_MS - 1)
+        .expect("ring read");
+    assert_eq!(ring, vec![ring_row]);
+    let real = cache
+        .read_range("x", "PAIR", 5, day, day + DAY_MS - 1)
+        .expect("kind 5 read");
+    assert!(real.is_empty(), "{real:?}");
+    assert!(cache.merge_batch_confirmed(Vec::new()).is_empty());
 }

@@ -148,6 +148,9 @@ pub(in crate::chartdx) struct ActionInputs {
     /// star either way — there is nothing else it could draw — and the button beside it is disabled
     /// on `None`; see `Backend::fav_market`.
     pub favorite: Option<bool>,
+    /// Whether this pane draws auto figures right now — the tab's switch, or the eye's override
+    /// for this coin. Two states: the panel always knows its own answer.
+    pub auto_figures: bool,
 }
 
 /// Open-position figures for ONE basis.

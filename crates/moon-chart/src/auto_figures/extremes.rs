@@ -1,4 +1,10 @@
-//! `PeriodExtreme`: the high and/or low of a UTC calendar day or ISO week.
+//! `PeriodExtreme`: the high and/or low of a UTC calendar day or ISO week, or of a rolling window
+//! of the last hours.
+//!
+//! A rolling window (`ExtremePeriod::Last24h` and its siblings) is `[reference − hours, reference)`:
+//! it moves with the clock, is judged like a current period (covered up to the reference time),
+//! and its extreme steps when the bar that set it leaves the window. It is never "previous", so it
+//! reports no break: a close beyond it is its new extreme.
 //!
 //! "Current" is the period that holds the caller's reference time ([`DetectCtx::reference_ms`]:
 //! `now_ms`, never earlier than the last valid bar, or that bar when `now_ms` is unusable), and
@@ -11,19 +17,27 @@
 //! high it prints shows up when it closes. The lag is at most one bar of the row's timeframe, which
 //! is why the shipped extreme rows run on 5-minute bars.
 //!
-//! A period the input does not cover from its start is reported as nothing rather than as a
-//! partial extreme: when the first valid bar opens after the period began, the bars before it — and
-//! possibly the real high or low — are simply missing, and a wrong level drawn with confidence is
-//! worse than an honest gap. A previous period's extreme also reports, informationally, the latest
-//! later break of it in `broken`; it is never dropped (`DetectorParams::broken_policy` gives this
-//! kind the default policy only for the event layer's false-break window). Cost O(n).
+//! A period its own bars do not cover is reported as nothing rather than as a partial extreme
+//! ([`super::coverage`]): no empty stretch longer than
+//! [`MAX_GAP_MS`](super::coverage::MAX_GAP_MS) from its start to its first bar, between
+//! neighbouring bars, or from its last bar's close to its end (the current one's: to the reference
+//! time). The cache holds holes of hours, and the bars before
+//! the input's first one are not the only ones that can be missing: a day of three bars in the
+//! middle of an otherwise long input is three bars, and its real high or low is simply not in
+//! them. A quiet market's short stretches without a trade are not holes. Without a usable bar length (`tf_ms <= 0`) nothing can be checked and nothing is
+//! found. A previous period's extreme also reports, informationally, the latest later break of it
+//! in `broken`; it is never dropped (`DetectorParams::broken_policy` gives this kind the default
+//! policy only for the event layer's false-break window). Cost O(n).
 
 use moon_core::config::auto_figures::{
     DetectorKind, DetectorParams, ExtremePeriod, ExtremeWhich, PeriodExtremeParams,
 };
 use moon_core::market::candles::ChartCandle;
 
-use super::{DetectCtx, Detector, Found, FoundShape, Side, Touch, bar_ok, scan_break};
+use super::coverage::covered;
+use super::{
+    DetectCtx, Detector, Found, FoundShape, LineTag, Side, Touch, bar_ok, scan_break, touch_volume,
+};
 
 /// One UTC day, ms.
 pub const DAY_MS: i64 = 86_400_000;
@@ -40,10 +54,13 @@ impl Detector for PeriodExtreme {
         let DetectorParams::PeriodExtreme(p) = params else {
             return Vec::new();
         };
+        if ctx.tf_ms <= 0 {
+            return Vec::new();
+        }
         let Some(reference_ms) = ctx.reference_ms(bars) else {
             return Vec::new();
         };
-        period_extremes(bars, p, reference_ms)
+        period_extremes(bars, p, reference_ms, ctx.tf_ms as f64)
     }
 }
 
@@ -58,36 +75,51 @@ pub fn week_start_day(day: i64) -> i64 {
     day - (day + 3).rem_euclid(7)
 }
 
-/// The `[start, end)` bounds, ms, of the period `p` names, relative to the reference day.
-pub fn period_bounds(period: ExtremePeriod, reference_day: i64) -> (f64, f64) {
+/// The `[start, end)` bounds, ms, of the period `period` names at the reference time
+/// `reference_ms`: a calendar period around the reference day, or a rolling window ending at the
+/// reference time itself.
+pub fn period_bounds(period: ExtremePeriod, reference_ms: f64) -> (f64, f64) {
+    if let Some(hours) = period.rolling_hours() {
+        return (reference_ms - f64::from(hours) * HOUR_MS, reference_ms);
+    }
+    let reference_day = day_of(reference_ms);
     let (start_day, len_days) = match period {
         ExtremePeriod::Day => (reference_day, 1),
         ExtremePeriod::PrevDay => (reference_day - 1, 1),
         ExtremePeriod::Week => (week_start_day(reference_day), 7),
         ExtremePeriod::PrevWeek => (week_start_day(reference_day) - 7, 7),
+        // Answered above: a rolling window has no calendar day.
+        ExtremePeriod::Last4h
+        | ExtremePeriod::Last12h
+        | ExtremePeriod::Last24h
+        | ExtremePeriod::Last48h => (reference_day, 1),
     };
     let start = (start_day * DAY_MS) as f64;
     (start, start + (len_days * DAY_MS) as f64)
 }
 
-/// The extremes `p` asks for, high first.
-fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: f64) -> Vec<Found> {
-    let Some(first) = bars.iter().find(|b| bar_ok(b)) else {
-        return Vec::new();
-    };
-    let (start, end) = period_bounds(p.period, day_of(reference_ms));
-    if first.t_open_ms > start {
-        return Vec::new();
-    }
+/// Milliseconds in one hour, for the rolling windows.
+const HOUR_MS: f64 = 3_600_000.0;
+
+/// The extremes `p` asks for, high first, on bars `tf` ms long; nothing when the period's own bars
+/// do not cover it (module doc).
+fn period_extremes(
+    bars: &[ChartCandle],
+    p: &PeriodExtremeParams,
+    reference_ms: f64,
+    tf: f64,
+) -> Vec<Found> {
+    let (start, end) = period_bounds(p.period, reference_ms);
     // (index, bar) of the period's bars, and the extremes among them — the first bar to reach the
     // extreme wins a tie, so the touch marks where the level was set.
+    let in_period = |b: &ChartCandle| bar_ok(b) && b.t_open_ms >= start && b.t_open_ms < end;
     let mut first_in: Option<f64> = None;
     let mut last_in: Option<f64> = None;
     let mut high: Option<(usize, f32)> = None;
     let mut low: Option<(usize, f32)> = None;
     let mut last_idx_in = 0;
     for (i, b) in bars.iter().enumerate() {
-        if !bar_ok(b) || b.t_open_ms < start || b.t_open_ms >= end {
+        if !in_period(b) {
             continue;
         }
         first_in.get_or_insert(b.t_open_ms);
@@ -104,14 +136,23 @@ fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: 
         return Vec::new();
     };
     let previous = matches!(p.period, ExtremePeriod::PrevDay | ExtremePeriod::PrevWeek);
-    let make = |(idx, price): (usize, f32), origin: Side| -> Found {
+    let opens = bars.iter().filter(|b| in_period(b)).map(|b| b.t_open_ms);
+    if !covered(opens, start, previous.then_some(end), reference_ms, tf) {
+        return Vec::new();
+    }
+    let make = |(idx, price): (usize, f32), origin: Side, tag: LineTag| -> Found {
         let price = f64::from(price);
+        let touches = vec![Touch {
+            t_ms: bars[idx].t_open_ms,
+            price,
+        }];
         Found {
             shape: FoundShape::Horizontal { price },
-            touches: vec![Touch {
-                t_ms: bars[idx].t_open_ms,
-                price,
-            }],
+            // The one bar that set the extreme is its one touch.
+            touch_volume: touch_volume(bars, &touches),
+            touches,
+            // A period's extreme is a price, not a cluster: there is no band.
+            tolerance_frac: 0.0,
             strength: 1.0,
             first_ms,
             last_ms,
@@ -120,17 +161,18 @@ fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: 
             } else {
                 None
             },
+            tag: Some(tag),
         }
     };
     let mut out = Vec::with_capacity(2);
     if matches!(p.which, ExtremeWhich::High | ExtremeWhich::Both) {
         if let Some(h) = high {
-            out.push(make(h, Side::Below));
+            out.push(make(h, Side::Below, LineTag::High));
         }
     }
     if matches!(p.which, ExtremeWhich::Low | ExtremeWhich::Both) {
         if let Some(l) = low {
-            out.push(make(l, Side::Above));
+            out.push(make(l, Side::Above, LineTag::Low));
         }
     }
     out

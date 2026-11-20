@@ -1,8 +1,9 @@
 //! The auto-figure row editor: one dialog that owns everything ABOUT a row, while the auto-figures
 //! popup keeps only the list — order, visibility, removal.
 //!
-//! A row is a detector with up to eleven numbers, a timeframe, a selection, a line style, a
-//! caption and five event marks. Inside a popover that would be a list of expanders; here the
+//! A row is a detector with numbers of its own (`NumField::DETECTOR` lists seventeen across the
+//! kinds; one row shows up to eight of them), a timeframe, a selection, a line style, a caption
+//! and eight event marks. Inside a popover that would be a list of expanders; here the
 //! left pane answers "what does this row look for", the right one "how does it look", and the
 //! preview at the bottom shows both at once on demo candles, through the chart's own detector and
 //! figure builder (see [`preview`]).

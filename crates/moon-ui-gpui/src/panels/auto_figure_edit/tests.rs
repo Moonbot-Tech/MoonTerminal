@@ -3,12 +3,15 @@
 use moon_core::config::ChartTheme;
 use moon_core::config::auto_figures::{
     AutoFigurePreset, AutoFigureRow, BrokenPolicy, DetectorKind, DetectorParams, ExtremePeriod,
-    PeriodExtremeParams, TfId, TfSource,
+    PeriodExtremeParams, RowDetector, TfId, TfSource, ToleranceUnit,
 };
 use moon_core::figures::LineKind;
 
-use super::fields::{NumField, parse_number};
-use super::preview::{MAX_BARS, compute, dash_pattern, dashes, demo_bars, preview_tf};
+use super::fields::{NumField, parse_number, unit_of_mut};
+use super::preview::{
+    MAX_BARS, MIN_BARS, compute, dash_pattern, dashes, demo_bars, demo_formation_bars, demo_swing,
+    preview_tf,
+};
 use super::{row_title, switch_detector};
 
 /// A fixed Wednesday noon, UTC: well inside a day and a week, so "today" and "this week" both
@@ -19,31 +22,63 @@ fn row_of(kind: DetectorKind) -> AutoFigureRow {
     AutoFigureRow::new(kind.default_params())
 }
 
+/// `kind`'s default row with its touch tolerance in ATR — the same row for a kind without one.
+fn atr_row_of(kind: DetectorKind) -> AutoFigureRow {
+    let mut row = row_of(kind);
+    if let RowDetector::Known(d) = &mut row.detector
+        && let Some(unit) = unit_of_mut(d)
+    {
+        *unit = ToleranceUnit::Atr;
+    }
+    row
+}
+
 /// Which numbers each detector shows is the editor's whole layout rule: a field shown on a kind
-/// that ignores it is a control that changes nothing. Mutation: let `BodyBreaks` answer for a
-/// swing, or a period extreme answer a lookback.
+/// that ignores it is a control that changes nothing — and a tolerance shown in the unit the row
+/// does not read is one too. Mutation: let `BodyBreaks` answer for a swing, a period extreme answer
+/// a lookback, or the `%` tolerance answer on a row in ATR.
 #[test]
 fn each_detector_shows_exactly_its_own_numbers() {
-    let shown = |kind| {
+    let shown = |row: AutoFigureRow| {
         NumField::DETECTOR
             .into_iter()
-            .filter(|f| f.get(&row_of(kind)).is_some())
+            .filter(|f| f.has(&row))
             .collect::<Vec<_>>()
     };
     use NumField::*;
     assert_eq!(
-        shown(DetectorKind::Swing),
+        shown(row_of(DetectorKind::Swing)),
         vec![Lookback, PivotLeft, PivotRight, Tolerance, MinTouches]
     );
-    assert_eq!(shown(DetectorKind::PeriodExtreme), Vec::<NumField>::new());
     assert_eq!(
-        shown(DetectorKind::Trend),
+        shown(atr_row_of(DetectorKind::Swing)),
+        vec![Lookback, PivotLeft, PivotRight, ToleranceAtr, MinTouches]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::PeriodExtreme)),
+        Vec::<NumField>::new()
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::Trend)),
         vec![
             Lookback, PivotLeft, PivotRight, Tolerance, MinTouches, BodyBreaks, SlopeMin, SlopeMax
         ]
     );
     assert_eq!(
-        shown(DetectorKind::Squeeze),
+        shown(atr_row_of(DetectorKind::Trend)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            ToleranceAtr,
+            MinTouches,
+            BodyBreaks,
+            SlopeMin,
+            SlopeMax
+        ]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::Squeeze)),
         vec![
             Lookback,
             PivotLeft,
@@ -55,23 +90,143 @@ fn each_detector_shows_exactly_its_own_numbers() {
             Pressed
         ]
     );
+    // One unit for both halves of the formation.
+    assert_eq!(
+        shown(atr_row_of(DetectorKind::Squeeze)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            ToleranceAtr,
+            MinTouches,
+            TrendTouches,
+            TrendToleranceAtr,
+            Pressed
+        ]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::VolumeProfile)),
+        vec![ValueArea, NakedPocDays, Bins]
+    );
+    assert_eq!(
+        shown(row_of(DetectorKind::PeriodLevel)),
+        Vec::<NumField>::new()
+    );
+    assert_eq!(shown(row_of(DetectorKind::RoundLevels)), vec![RoundRange]);
+    assert_eq!(
+        shown(row_of(DetectorKind::Formation)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            Tolerance,
+            SideTouches,
+            MinBars,
+            ParallelWidth,
+            ImpulsePct,
+            ImpulseBars,
+            FlagMaxBars,
+            DoubleTolerance,
+            DoubleDepth
+        ]
+    );
+    // One unit for the touches and a double's equality alike.
+    assert_eq!(
+        shown(atr_row_of(DetectorKind::Formation)),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            ToleranceAtr,
+            SideTouches,
+            MinBars,
+            ParallelWidth,
+            ImpulsePct,
+            ImpulseBars,
+            FlagMaxBars,
+            DoubleToleranceAtr,
+            DoubleDepth
+        ]
+    );
 }
 
-/// Every field a row shows writes the number it then reads back, for every kind — the table's
-/// `get` and `set` name the same struct field. Mutation: point one `set` arm at a neighbour (the
-/// squeeze's tolerance into its sloped half's).
+/// A formation row shows the numbers of the kinds it looks for, and only those: the pole and the
+/// flag cap with flags on, a double's tolerance and depth with doubles on, the touch tolerance,
+/// the per-side touches and the parallel band with any two-line kind. The presets are the worked
+/// cases: the double-top row has no touch tolerance, the flag row no double depth.
+///
+/// Mutation: answer `ImpulsePct` without reading `flag`, or the touch tolerance on a row of
+/// doubles alone — a field that then changes nothing the row reads.
+#[test]
+fn a_formation_row_shows_the_numbers_of_its_kinds() {
+    let shown = |row: AutoFigureRow| {
+        NumField::DETECTOR
+            .into_iter()
+            .filter(|f| f.has(&row))
+            .collect::<Vec<_>>()
+    };
+    use NumField::*;
+    assert_eq!(
+        shown(AutoFigurePreset::DoubleTops.row()),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            MinBars,
+            DoubleTolerance,
+            DoubleDepth
+        ]
+    );
+    assert_eq!(
+        shown(AutoFigurePreset::Flags.row()),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            Tolerance,
+            SideTouches,
+            MinBars,
+            ParallelWidth,
+            ImpulsePct,
+            ImpulseBars,
+            FlagMaxBars
+        ]
+    );
+    assert_eq!(
+        shown(AutoFigurePreset::Triangles.row()),
+        vec![
+            Lookback,
+            PivotLeft,
+            PivotRight,
+            Tolerance,
+            SideTouches,
+            MinBars,
+            ParallelWidth
+        ]
+    );
+}
+
+/// Every field a row shows writes the number it then reads back, for every kind and both
+/// tolerance units — the table's `get` and `set` name the same struct field — and a field the row
+/// does not show writes nothing. Mutation: point one `set` arm at a neighbour (the squeeze's
+/// tolerance into its sloped half's, an ATR share into the `%` field), or let `set` write a
+/// tolerance of the unit the row does not read.
 #[test]
 fn every_shown_field_writes_what_it_reads() {
     for kind in DetectorKind::ALL {
-        for field in NumField::ALL {
-            let mut row = row_of(kind);
-            row.style.zone = Some(0.2);
-            if field.get(&row).is_none() {
-                assert!(!field.set(&mut row, 7.0), "{field:?} wrote into {kind:?}");
-                continue;
+        for row in [row_of(kind), atr_row_of(kind)] {
+            for field in NumField::ALL {
+                let mut row = row.clone();
+                row.style.zone = Some(0.2);
+                if !field.has(&row) {
+                    let before = row.clone();
+                    assert!(!field.set(&mut row, 7.0), "{field:?} wrote into {kind:?}");
+                    assert_eq!(row, before, "{field:?} changed {kind:?}");
+                    continue;
+                }
+                assert!(field.set(&mut row, 7.0), "{field:?} on {kind:?}");
+                assert_eq!(field.get(&row), Some(7.0), "{field:?} on {kind:?}");
             }
-            assert!(field.set(&mut row, 7.0), "{field:?} on {kind:?}");
-            assert_eq!(field.get(&row), Some(7.0), "{field:?} on {kind:?}");
         }
     }
 }
@@ -85,6 +240,37 @@ fn a_typed_number_is_kept_until_the_row_is_sanitized() {
     assert_eq!(NumField::Lookback.get(&row), Some(1.0));
     row.sanitize();
     assert!(NumField::Lookback.get(&row).unwrap() >= 10.0);
+}
+
+/// A number too big for an `f32` field ("1e39" parses as a finite `f64`) is stored as the largest
+/// finite `f32`, never as infinity, and the next keystroke still writes. A row that already holds
+/// a non-finite value keeps the field, and typing repairs it.
+///
+/// Mutation: a plain `as f32` (the row holds infinity), or presence judged by the value — the
+/// field then answers `None`, `set` refuses every later keystroke and the form hides the field.
+#[test]
+fn a_huge_number_never_makes_a_field_unwritable() {
+    let mut row = row_of(DetectorKind::Swing);
+    let typed = parse_number("1e39", false).expect("a finite f64");
+    assert!(NumField::Tolerance.set(&mut row, typed));
+    let stored = NumField::Tolerance.get(&row).expect("still a number");
+    assert!(stored.is_finite());
+    assert!(NumField::Tolerance.set(&mut row, 0.5));
+    assert_eq!(NumField::Tolerance.get(&row), Some(0.5));
+
+    if let RowDetector::Known(DetectorParams::Swing(p)) = &mut row.detector {
+        p.tolerance_pct = f32::INFINITY;
+    }
+    assert!(
+        NumField::Tolerance.has(&row),
+        "the field is still the row's"
+    );
+    assert_eq!(NumField::Tolerance.get(&row), None, "nothing printable");
+    assert!(NumField::Tolerance.set(&mut row, 0.25));
+    assert_eq!(NumField::Tolerance.get(&row), Some(0.25));
+    // Not a number at all is still refused, and a field the row lacks still writes nothing.
+    assert!(!NumField::Tolerance.set(&mut row, f64::INFINITY));
+    assert!(!NumField::BodyBreaks.set(&mut row, 3.0));
 }
 
 /// Mutation: drop the comma replacement — a Russian or Ukrainian keyboard types "0,25".
@@ -143,8 +329,8 @@ fn a_row_is_titled_by_its_own_name_first() {
 /// preview that shifted between two renders would flicker. Mutation: seed the jitter from a clock.
 #[test]
 fn the_demo_series_is_deterministic_and_closed() {
-    let a = demo_bars(TfId::M15, 200, NOON);
-    let b = demo_bars(TfId::M15, 200, NOON);
+    let a = demo_bars(TfId::M15, 200, NOON, demo_swing(200));
+    let b = demo_bars(TfId::M15, 200, NOON, demo_swing(200));
     assert_eq!(a, b);
     let last = a.last().unwrap();
     assert!(last.t_open_ms + TfId::M15.ms() as f64 <= NOON);
@@ -155,8 +341,10 @@ fn the_demo_series_is_deterministic_and_closed() {
 }
 
 /// The demo candles are built so that every shipped detector finds something: a preview that
-/// draws nothing for the default rows would show the reader nothing to judge. Mutation: flatten
-/// the demo series, or drop the take selection.
+/// draws nothing for the default rows would show the reader nothing to judge — the volume, period
+/// and round-price presets included. Mutation: flatten
+/// the demo series, drop the take selection, or take the turnover off the demo bars (the volume
+/// presets then have no profile).
 #[test]
 fn every_default_detector_finds_something_on_the_demo_candles() {
     let theme = ChartTheme::default();
@@ -167,6 +355,42 @@ fn every_default_detector_finds_something_on_the_demo_candles() {
         assert!(data.found > 0, "{preset:?} found nothing");
         assert!(data.kept > 0 && data.kept <= data.found, "{preset:?}");
         assert!(!data.figures.is_empty(), "{preset:?} drew nothing");
+    }
+}
+
+/// Each formation preset finds its OWN kind on the demo series it previews on — not merely
+/// something — so the preview shows the reader the pattern the row is named for.
+///
+/// Mutation: hand a formation row the ordinary demo series (no channel, no flag, no double top is
+/// current on it), or lay a scenario out so its pattern is broken or past its apex at the last bar.
+#[test]
+fn each_formation_preset_finds_its_own_kind_on_its_demo() {
+    use moon_chart::auto_figures::{DetectCtx, LineTag};
+    for (preset, tag) in [
+        (AutoFigurePreset::Triangles, LineTag::Triangle),
+        (AutoFigurePreset::Channels, LineTag::Channel),
+        (AutoFigurePreset::Flags, LineTag::Flag),
+        (AutoFigurePreset::DoubleTops, LineTag::DoubleTop),
+    ] {
+        let mut row = preset.row();
+        row.sanitize();
+        let params = *row.detector.known().expect("a known detector");
+        let DetectorParams::Formation(fp) = params else {
+            panic!("{preset:?} is not a formation row");
+        };
+        let tf = preview_tf(&row, &params);
+        let n = (params.bars_needed(tf) as usize).clamp(MIN_BARS, MAX_BARS);
+        let bars = demo_formation_bars(&fp, tf, n, NOON);
+        let ctx = DetectCtx {
+            tf_ms: tf.ms(),
+            now_ms: NOON,
+        };
+        let found = moon_chart::auto_figures::detect(&params, &bars, &ctx);
+        assert!(
+            found.iter().any(|f| f.tag == Some(tag)),
+            "{preset:?}: {:?}",
+            found.iter().map(|f| f.tag).collect::<Vec<_>>()
+        );
     }
 }
 

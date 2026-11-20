@@ -39,10 +39,10 @@ use arb::{push_arb_rows, push_filter_rows};
 pub(crate) use filter_line::FilterLineTarget;
 pub(in crate::chartdx) use format::hours_and_minutes;
 use format::{
-    LOCK_CLOSED, LOCK_OPEN, STAR_OFF, STAR_ON, caption_prefix, colored_sign, cut, detect_line,
-    figure, fmt_countdown, fmt_tf_countdown, liquidations, marked, no_cursor_dash, non_empty,
-    not_measured, plain, price_label, signed_pct_label, span_label, tags_text, volume,
-    volume_amount, volume_bar, window,
+    EYE_HIDDEN, EYE_SHOWN, LOCK_CLOSED, LOCK_OPEN, STAR_OFF, STAR_ON, caption_prefix, colored_sign,
+    cut, detect_line, figure, fmt_countdown, fmt_tf_countdown, liquidations, marked,
+    no_cursor_dash, non_empty, not_measured, plain, price_label, signed_pct_label, span_label,
+    tags_text, volume, volume_amount, volume_bar, window,
 };
 pub(in crate::chartdx) use inputs::{ActionInputs, BasisStats, LabelInputs, basis_index};
 pub(in crate::chartdx) use pnl::collect_open_stats;
@@ -585,6 +585,16 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             let glyph = match inputs.actions.ban_until_ms.is_some() {
                 true => LOCK_CLOSED,
                 false => LOCK_OPEN,
+            };
+            (glyph.to_string(), None)
+        }),
+        // The eye: its text only tells the two states apart — the chart's control draws the
+        // `eye` / `eye-off` icon over it. Live charts only, like every button: a closed trade has
+        // no auto figures to show.
+        ChartLabelField::ActAutoFigures => inputs.actions.live.then(|| {
+            let glyph = match inputs.actions.auto_figures {
+                true => EYE_SHOWN,
+                false => EYE_HIDDEN,
             };
             (glyph.to_string(), None)
         }),
