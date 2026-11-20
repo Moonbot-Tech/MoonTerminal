@@ -862,8 +862,9 @@ pub(super) fn mouse_down_right(
         return;
     }
     // An auto line's menu after the order menu: a trading line under the same point is the one
-    // a right click is for, and an auto line is never more than a reading aid.
-    if within && this.try_open_auto_figure_menu(pos, e.position, window, cx) {
+    // a right click is for, and an auto line is never more than a reading aid. With the kind's
+    // "lines only with Ctrl" on, a bare press finds no line and reaches the right-button drag below.
+    if within && this.try_open_auto_figure_menu(pos, e.position, e.modifiers, window, cx) {
         this.suppress_rmb_up = true;
         cx.stop_propagation();
         return;

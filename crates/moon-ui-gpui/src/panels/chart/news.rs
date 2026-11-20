@@ -268,10 +268,14 @@ impl ChartPanel {
         if self.news.ctrl == ctrl {
             return;
         }
+        let auto_before = self.auto_line_hovered();
         self.news.ctrl = ctrl;
-        // Only a mark or an auto line under the cursor can produce a card; a bare Ctrl hotkey must
-        // not repaint. The auto-line card is gated by this same modifier (`auto_figures::menu`).
-        if self.news.hover.is_some() || self.auto_line_hovered() {
+        // Lines kept for this modifier are reached or released by it, under a resting cursor.
+        self.regate_auto_hover(cx);
+        // Only a mark or an auto line under the cursor can produce a card — before the change or
+        // after it, since the gate above can take a line away; a bare Ctrl hotkey must not
+        // repaint. The auto-line card is gated by this same modifier (`auto_figures::menu`).
+        if self.news.hover.is_some() || auto_before || self.auto_line_hovered() {
             cx.notify();
         }
     }

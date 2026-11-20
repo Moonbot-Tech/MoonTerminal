@@ -519,6 +519,15 @@ impl ChartInput {
         }
     }
 
+    /// Whether a chart drag holds the left or the right button right now — a press accepted by
+    /// the chart and not yet released (stale state is cleared by [`Self::sync_pressed`]).
+    ///
+    /// For the hover paths that must not pick up a line under a cursor that is panning or
+    /// zooming the chart.
+    pub fn button_held(&self) -> bool {
+        self.lmb_down || self.rmb_down
+    }
+
     /// Return whether right-button movement crossed the price-zoom threshold since its press.
     ///
     /// The parent Main stack uses this to distinguish a zoom drag from the short right click that

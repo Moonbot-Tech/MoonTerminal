@@ -41,6 +41,8 @@ pub(super) struct CfgRead {
     rows: Option<Vec<Value>>,
     #[serde(default, deserialize_with = "de_lenient")]
     opacity: Option<f32>,
+    #[serde(default, deserialize_with = "de_lenient")]
+    modifier_only: Option<bool>,
 }
 
 /// The configuration as WRITTEN.
@@ -54,6 +56,9 @@ pub(super) struct CfgWrite {
     /// Written only when it is not [`AF_OPACITY_DEFAULT`], so a profile follows the default.
     #[serde(skip_serializing_if = "Option::is_none")]
     opacity: Option<f32>,
+    /// Written only when OFF; absent reads as on, so a profile follows the shipped behaviour.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    modifier_only: Option<bool>,
     /// Written only when it is not the shipped set.
     #[serde(skip_serializing_if = "Option::is_none")]
     rows: Option<Vec<RowWire>>,
@@ -79,6 +84,7 @@ impl From<CfgRead> for AutoFiguresCfg {
             enabled: wire.enabled.unwrap_or(true),
             rows,
             opacity: wire.opacity.unwrap_or(AF_OPACITY_DEFAULT),
+            modifier_only: wire.modifier_only.unwrap_or(true),
         };
         cfg.sanitize();
         cfg
@@ -90,6 +96,7 @@ impl From<AutoFiguresCfg> for CfgWrite {
         Self {
             enabled: (!cfg.enabled).then_some(false),
             opacity: (cfg.opacity != AF_OPACITY_DEFAULT).then_some(cfg.opacity),
+            modifier_only: (!cfg.modifier_only).then_some(false),
             rows: (cfg.rows != presets::shipped_rows())
                 .then(|| cfg.rows.into_iter().map(RowWire::from).collect()),
         }

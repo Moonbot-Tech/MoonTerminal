@@ -5,6 +5,7 @@ _version: 1
 auto_figures.title: "Auto figures"
 auto_figures.button_tip: "Auto figures: levels, trend lines and squeezes the chart finds by itself"
 auto_figures.enabled: "Show auto figures"
+auto_figures.modifier_only: "Lines react to the mouse only with Ctrl"
 auto_figures.opacity: "Opacity"
 auto_figures.for_kind: "Settings for: %{kind}"
 auto_figures.frame_rows: "Rows"

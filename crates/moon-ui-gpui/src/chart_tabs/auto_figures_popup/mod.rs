@@ -13,6 +13,9 @@
 //!
 //! Master switch off keeps every row — dimmed and still editable — and stops the detectors.
 //!
+//! Under it, whether the lines take the mouse only while Ctrl is held (`AutoFiguresCfg::
+//! modifier_only`, on by default), so a right-drag across the chart does not catch on them.
+//!
 //! Under the switch, one opacity for the whole block (`AutoFiguresCfg::opacity`): a row of steps,
 //! the graphics popup's control for its own opacities, because every other control here reads its
 //! value straight from the configuration and a slider would need a state entity on each host.
@@ -295,6 +298,17 @@ fn render_popup<T: AutoFiguresPopupHost>(
                 write_cfg(&entity, app, |c| c.enabled = on);
             })
     };
+    // Whether the lines take the mouse only under Ctrl (`AutoFiguresCfg::modifier_only`).
+    let modifier_only = {
+        let entity = entity.clone();
+        MoonCheckbox::new(SharedString::from(format!("{id}-modifier-only")))
+            .label(t!("auto_figures.modifier_only").to_string())
+            .checked(cfg.modifier_only)
+            .on_change(move |on: &bool, _w, app| {
+                let on = *on;
+                write_cfg(&entity, app, |c| c.modifier_only = on);
+            })
+    };
     let opacity = {
         let entity = entity.clone();
         let current = nearest(&OPACITY_STEPS, cfg.opacity);
@@ -377,6 +391,7 @@ fn render_popup<T: AutoFiguresPopupHost>(
         .child(header)
         .child(scope)
         .child(master)
+        .child(modifier_only)
         .child(opacity)
         .child(popup_group("af-list", t!("auto_figures.frame_rows")).child(list_group))
         .child(

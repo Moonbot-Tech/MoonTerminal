@@ -13,6 +13,12 @@
 //! modifier is held, or the modifier while a line is hovered. A bare pointer crossing lines
 //! repaints nothing in GPUI: the hover is still handed to the engine, which prints an `OnHover`
 //! caption for it — a present, no rebuild.
+//!
+//! With the kind's "lines only with Ctrl" on (`AutoFiguresCfg::modifier_only`, the shipped value —
+//! LinKvo, 20.11.2026) the same modifier gates the hit test itself: a bare pointer finds no line,
+//! so nothing is highlighted, no `OnHover` caption prints, and a right press over a line falls
+//! through to the chart's own right-button drag instead of opening the menu. Pressing the modifier
+//! over a resting line reaches it without a pointer move (`regate_auto_hover`).
 
 use gpui::*;
 use moon_ui::{
@@ -96,8 +102,28 @@ impl ChartPanel {
             return false;
         }
         self.auto_figures.hover.probe = Some(pos);
-        let hit = self.auto_hit(pos, cx);
+        let hit = self.auto_hit(pos, self.card_modifier_held(), cx);
         self.apply_auto_hover(hit)
+    }
+
+    /// The card modifier changed: when the lines are kept for it, re-run the hit test at the
+    /// resting cursor, so pressing it over a line reaches the line without a pointer move and
+    /// letting it go releases the line at once. Without the gate the hover does not depend on the
+    /// modifier, and only the card changes (`note_news_modifiers` repaints for that).
+    ///
+    /// Not while a chart drag holds a button: a pointer hover is never updated mid-drag
+    /// (`mouse_move` updates it only with no button down), and Ctrl pressed during a right-drag
+    /// must not light up the line the cursor is panning across.
+    pub(in crate::panels::chart) fn regate_auto_hover(&mut self, cx: &mut Context<Self>) {
+        if self.input.button_held() || !self.auto_lines_need_modifier(cx) {
+            return;
+        }
+        let held = self.card_modifier_held();
+        let hit = self
+            .input
+            .cursor
+            .and_then(|pos| self.auto_hit(pos, held, cx));
+        self.apply_auto_hover(hit);
     }
 
     /// Whether an auto line is under the pointer, so a change of the card modifier changes what
@@ -118,20 +144,47 @@ impl ChartPanel {
     /// The chart scrolls and re-selects lines between pointer events, so a line can leave from
     /// under a resting cursor; the render path calls this so the card never outlives its line. No
     /// notify: this runs inside render, and the card is built from the fresh state right after.
-    pub(in crate::panels::chart) fn revalidate_auto_hover(&mut self, cx: &mut Context<Self>) {
+    ///
+    /// `held` is the card modifier's LIVE state, the one the card itself is built from: a chart
+    /// off the focus path never hears the modifier change, and a line kept for the modifier must
+    /// not stay reached after it was let go.
+    pub(in crate::panels::chart) fn revalidate_auto_hover(
+        &mut self,
+        held: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.auto_figures.hover.hover.is_none() {
             return;
         }
-        let hit = self.input.cursor.and_then(|pos| self.auto_hit(pos, cx));
+        let hit = self
+            .input
+            .cursor
+            .and_then(|pos| self.auto_hit(pos, held, cx));
         self.apply_auto_hover(hit);
     }
 
-    /// The auto line at `pos` (panel-local device pixels), if any.
+    /// Whether this chart's kind keeps its auto lines for the card modifier
+    /// (`AutoFiguresCfg::modifier_only`). Read from the backend rather than the copy the last
+    /// sync applied, so a popup flip takes effect on the very next pointer event.
+    fn auto_lines_need_modifier(&self, cx: &App) -> bool {
+        self.backend
+            .read(cx)
+            .layout
+            .auto_figures_for(self.default_kind)
+            .modifier_only
+    }
+
+    /// The auto line at `pos` (panel-local device pixels), if any, with the card modifier `held`
+    /// or not.
     ///
     /// A user figure under the pointer wins: it is the thing that can be grabbed, and two
-    /// highlights for one point would leave the reader guessing which one a click acts on.
-    fn auto_hit(&self, pos: (f32, f32), _cx: &Context<Self>) -> Option<AutoHover> {
+    /// highlights for one point would leave the reader guessing which one a click acts on. Lines
+    /// kept for the modifier are not there at all without it.
+    fn auto_hit(&self, pos: (f32, f32), held: bool, cx: &App) -> Option<AutoHover> {
         if self.orderbook_only || self.fig_hover.is_some() {
+            return None;
+        }
+        if !held && self.auto_lines_need_modifier(cx) {
             return None;
         }
         let pane = self.chart_gesture_pane_at(pos)?;
@@ -150,7 +203,9 @@ impl ChartPanel {
     }
 
     /// Apply a hit result: hand it to the engine for the `OnHover` captions (a present, whatever
-    /// the modifier). Returns whether the GPUI tree must repaint for the card.
+    /// the modifier — though with the kind's `modifier_only` on, `auto_hit` finds nothing without
+    /// it, so a bare pointer hands over no line at all). Returns whether the GPUI tree must
+    /// repaint for the card.
     fn apply_auto_hover(&mut self, hit: Option<AutoHover>) -> bool {
         let held = self.card_modifier_held();
         let Some(repaint) = self.auto_figures.hover.apply(hit, held) else {
@@ -275,14 +330,18 @@ impl ChartPanel {
 
     /// Open the menu of a right-clicked auto line. Returns `true` when it opened, so the caller
     /// suppresses the paired release; `false` leaves the right click to whatever is under it.
+    ///
+    /// `modifiers` are the press's own: whether a line kept for the card modifier is reached is
+    /// decided by the press, not by the last tracked modifier event.
     pub(in crate::panels::chart) fn try_open_auto_figure_menu(
         &mut self,
         local_pos: (f32, f32),
         menu_pos: Point<Pixels>,
+        modifiers: Modifiers,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(hit) = self.auto_hit(local_pos, cx) else {
+        let Some(hit) = self.auto_hit(local_pos, modifiers.secondary(), cx) else {
             return false;
         };
         let view = cx.entity();
