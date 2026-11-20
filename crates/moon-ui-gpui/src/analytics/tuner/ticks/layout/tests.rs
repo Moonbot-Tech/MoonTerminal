@@ -732,6 +732,7 @@ fn model(face: usize) -> SummaryModel {
         } else {
             Vec::new()
         },
+        stopped: None,
         details: (face == 2 || face == 3 || face == 4)
             .then(|| {
                 (

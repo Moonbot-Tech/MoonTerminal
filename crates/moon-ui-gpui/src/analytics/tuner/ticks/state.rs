@@ -525,11 +525,51 @@ pub(in crate::analytics::tuner) enum SuggState {
     },
 }
 
+/// What stopped a running search and threw its answer away ([`TicksState::stop_search`]).
+///
+/// The card says it once the run is gone: a search of an hour that a reload ends otherwise
+/// leaves an idle card behind, and the trader who comes back to it reads "everything reset"
+/// with nothing to tell a scope change from a lost run (2026-11-20, v0.68.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) enum SearchStop {
+    /// The deals the search ran over changed: the strategies, cores, period or filters, or a
+    /// report setting the scope is read under (display zone, valuation mode, core names).
+    Scope,
+    /// The table was read again from scratch.
+    Reload,
+    /// The model settings every row is judged under changed.
+    Model,
+    /// The Analytics window closed; nobody is left to read the card.
+    WindowClosed,
+}
+
+impl SearchStop {
+    /// The reason as the axis log spells it.
+    fn log_name(self) -> &'static str {
+        match self {
+            Self::Scope => "scope change",
+            Self::Reload => "manual reload",
+            Self::Model => "model settings",
+            Self::WindowClosed => "window closed",
+        }
+    }
+
+    /// Locale key of the card's line about the stop; `None` where no card is left to show it.
+    pub(in crate::analytics::tuner) fn note_key(self) -> Option<&'static str> {
+        match self {
+            Self::Scope => Some("analytics.ticks.sum.cut_scope"),
+            Self::Reload => Some("analytics.ticks.sum.cut_reload"),
+            Self::Model => Some("analytics.ticks.sum.cut_model"),
+            Self::WindowClosed => None,
+        }
+    }
+}
+
 impl Drop for TicksState {
     /// A search outlives nothing: closing the window while one runs would otherwise leave it
     /// on the shared pool to the end, its answer going nowhere.
     fn drop(&mut self) {
-        self.stop_search("window closed");
+        self.stop_search(SearchStop::WindowClosed);
     }
 }
 
@@ -694,6 +734,12 @@ pub(in crate::analytics) struct TicksState {
     /// A station-tape wake arrived while a search was running and waits for its landing
     /// (`AnalyticsView::station_tape_woke`); a search that is stopped drops it (`stop_search`).
     pub(in crate::analytics::tuner) station_wake_pending: bool,
+    /// A strategy write asked the table to be read again while a search was running, and the
+    /// read waits for the search to land ([`TicksState::defer_reread`]). A full reload of the
+    /// table reads the written values and consumes it; a report reload does not (`load.rs`).
+    pub(in crate::analytics::tuner) reread_pending: bool,
+    /// What stopped the last search that never landed; said on the card until the next start.
+    pub(in crate::analytics::tuner) stopped_by: Option<SearchStop>,
     /// Whether that task is still in its loop — it ends with the batch, and the next batch
     /// attaches a fresh one.
     pub(in crate::analytics::tuner) fetch_listening: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -883,6 +929,8 @@ impl Default for TicksState {
             station_generation: 0,
             station_refusal_revision: 0,
             station_wake_pending: false,
+            reread_pending: false,
+            stopped_by: None,
             fetch_listening: Default::default(),
             tape_reading: false,
             scope_rev: 0,
@@ -1092,9 +1140,14 @@ impl TicksState {
         self.report_behind = false;
         self.tape_behind = false;
         self.pending_search = None;
+        // The new scope's load reads the strategies' values as they stand, whichever path it
+        // comes by; a write re-read held for the previous scope's search is owed no more.
+        self.reread_pending = false;
         self.retire_rows();
-        // A running search and its last answer describe the previous scope's deals.
-        self.stop_search("scope change");
+        // A running search and its last answer describe the previous scope's deals. A note
+        // about an earlier cut goes with them; only a search this change cuts is said.
+        self.stopped_by = None;
+        self.stop_search(SearchStop::Scope);
         // Nor does the last search's holdout: В1's caption would print it beside a column
         // rescored over deals it never saw.
         self.last_result = None;
@@ -1143,16 +1196,37 @@ impl TicksState {
         self.data.data().is_none() || self.dirty
     }
 
+    /// Hold a strategy write's re-read of the table back while a search runs.
+    ///
+    /// The write's own re-read, and the one its confirmation watch asks for up to
+    /// `STRATEGY_EDIT_WATCH_TIMEOUT` later, are full reloads, and a full reload stops the
+    /// search: saving a variant and starting the next search lost that search without a word
+    /// as soon as the core confirmed the save. The written values change no deal the search
+    /// copied, so the read waits for its landing instead (`variants.rs`).
+    ///
+    /// Returns:
+    ///     `true` when a search is running and the read was deferred; `false` when the caller
+    ///     reads now.
+    pub(in crate::analytics::tuner) fn defer_reread(&mut self) -> bool {
+        if !matches!(self.sugg, SuggState::Running { .. }) {
+            return false;
+        }
+        self.reread_pending = true;
+        true
+    }
+
     /// Ask a running search to stop and forget it; its completion is dropped by the
-    /// generation.
-    pub(in crate::analytics::tuner) fn stop_search(&mut self, reason: &str) {
+    /// generation. A run actually cut short is remembered with its reason, for the card.
+    pub(in crate::analytics::tuner) fn stop_search(&mut self, reason: SearchStop) {
         if let SuggState::Running { handle, total, .. } = &self.sugg {
             log::info!(
                 target: moon_core::diagnostics::TICKS_AXIS_TARGET,
-                "[x] ticks search: stopped by {reason} at {}/{total} restart(s)",
+                "[x] ticks search: stopped by {} at {}/{total} restart(s)",
+                reason.log_name(),
                 handle.completed()
             );
             handle.cancel();
+            self.stopped_by = Some(reason);
         }
         self.sugg = SuggState::Idle;
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
@@ -1198,6 +1272,7 @@ impl TicksState {
     ) {
         self.write_confirm = None;
         self.sugg_refusal = None;
+        self.stopped_by = None;
         self.sugg = SuggState::Running {
             handle,
             total,

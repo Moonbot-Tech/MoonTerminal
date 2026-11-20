@@ -535,6 +535,9 @@ pub(in crate::analytics::tuner) fn summary_card_el(
             }
             body = body.child(changed);
         }
+        if let Some(note) = &m.stopped {
+            body = body.child(warning(note.clone(), p, cx));
+        }
         if (m.can_reset || m.train.is_some()) && !m.warnings.is_empty() {
             let mut warns = v_flex().w_full().gap(design::ui_px(cx, 6.0));
             for warn in &m.warnings {

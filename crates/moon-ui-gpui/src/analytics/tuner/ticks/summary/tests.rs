@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::super::state::{NowValue, TicksData, TicksState};
+use super::super::state::{NowValue, SearchStop, TicksData, TicksState};
 use super::{Against, SummaryModel, Unchecked, Verdict, Why, WriteConfirm, verdict_of};
 use crate::analytics::tuner::shared::{InlineWrite, SaveAuthority, SaveTarget};
 use moon_core::db::metrics::Tally;
@@ -653,10 +653,123 @@ fn finish_search_keeps_the_generation_until_a_hard_stop() {
         model.verdict,
         Verdict::Running { stopping: true, .. }
     ));
-    state.stop_search("scope change");
+    state.stop_search(SearchStop::Scope);
     assert_ne!(state.sugg_seq, seq);
     assert!(matches!(state.sugg, super::super::state::SuggState::Idle));
     assert!(handle.is_cancelled() && !handle.keeps());
+}
+
+/// A strategy write's re-read is held for a running search instead of reloading the table
+/// under it: the save's confirmation watch re-read the table up to two minutes after Save, and
+/// that reload stopped the search started meanwhile (v0.68.3, a run of an hour lost unseen).
+#[test]
+fn a_write_reread_waits_for_a_running_search() {
+    crate::test_locale::warm();
+    let mut state = TicksState::default();
+    assert!(!state.defer_reread(), "an idle card reads at once");
+    assert!(!state.reread_pending);
+    let handle = moon_core::db::tuner::threshold_search::SearchHandle::new();
+    state.start_search(
+        handle.clone(),
+        13,
+        1,
+        std::time::Instant::now(),
+        None,
+        (23, 9),
+    );
+    let seq = state.sugg_seq;
+    assert!(state.defer_reread());
+    assert!(state.reread_pending);
+    assert_eq!(state.sugg_seq, seq);
+    assert!(matches!(
+        state.sugg,
+        super::super::state::SuggState::Running { .. }
+    ));
+    assert!(!handle.is_cancelled());
+    // A hard stop leaves the held read owed: whatever reloads next reads the written values.
+    state.stop_search(SearchStop::Model);
+    assert!(state.reread_pending);
+    // A scope change reads the new scope whole; the held read is not carried to it.
+    state.invalidate();
+    assert!(!state.reread_pending);
+}
+
+/// The strategy write's re-read of the Entry/Exit axis goes through the deferring entry, and
+/// the search's landing runs what was held. Reverting either — the write's arm back to the full
+/// `reload_ticks`, or the landing forgetting the flag — brings back the lost hour-long search or
+/// leaves the written values unread; the state test above cannot see either, as both live on
+/// the view.
+#[test]
+fn the_write_reread_is_deferred_and_run_at_landing() {
+    let tuner = include_str!("../../mod.rs");
+    let active = tuner
+        .split_once("fn reload_active_tuner(")
+        .expect("reload_active_tuner")
+        .1
+        .split_once("\n    }")
+        .expect("function boundary")
+        .0;
+    assert!(active.contains("StratMode::Ticks => self.reload_ticks_after_write(cx)"));
+    assert!(!active.contains("StratMode::Ticks => self.reload_ticks(cx)"));
+    let variants = include_str!("../variants.rs");
+    let landing = variants
+        .split_once("ticks search: #{seq} answered after")
+        .expect("search completion")
+        .1
+        .split_once("fn poll_ticks_search")
+        .expect("completion boundary")
+        .0;
+    assert!(landing.contains("if this.ticks.reread_pending {"));
+}
+
+/// A search a reload or a scope change cut short says so on the card, with the column empty,
+/// until the next search starts; a stop with nothing running says nothing.
+#[test]
+fn a_cut_search_says_why_on_the_card() {
+    let _locale = crate::test_locale::force("en");
+    let mut state = TicksState::default();
+    state.stop_search(SearchStop::Reload);
+    assert_eq!(state.stopped_by, None);
+    let start = |state: &mut TicksState| {
+        state.start_search(
+            moon_core::db::tuner::threshold_search::SearchHandle::new(),
+            13,
+            1,
+            std::time::Instant::now(),
+            None,
+            (23, 9),
+        );
+    };
+    start(&mut state);
+    let running = SummaryModel::from_state(&state, String::new(), false);
+    assert_eq!(running.stopped, None);
+    state.invalidate();
+    let cut = SummaryModel::from_state(&state, String::new(), false);
+    assert!(!cut.can_reset, "the cut run landed nothing");
+    let scope_note = cut.stopped.expect("the scope change is said");
+    assert_ne!(scope_note, "analytics.ticks.sum.cut_scope", "translated");
+    start(&mut state);
+    assert_eq!(
+        SummaryModel::from_state(&state, String::new(), false).stopped,
+        None
+    );
+    state.stop_search(SearchStop::Reload);
+    let reload_note = SummaryModel::from_state(&state, String::new(), false)
+        .stopped
+        .expect("the reload is said");
+    assert_ne!(reload_note, scope_note);
+    // Another scope with no search running: the earlier cut is not this scope's to say.
+    state.invalidate();
+    assert_eq!(
+        SummaryModel::from_state(&state, String::new(), false).stopped,
+        None
+    );
+    start(&mut state);
+    state.stop_search(SearchStop::WindowClosed);
+    assert_eq!(
+        SummaryModel::from_state(&state, String::new(), false).stopped,
+        None
+    );
 }
 
 /// A stopped run shows its answer as a finished one, with the Stop said among the warnings.
