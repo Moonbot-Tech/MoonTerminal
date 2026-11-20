@@ -169,8 +169,10 @@ fn no_volume_and_holes_give_nothing() {
     holed.drain(1..3);
     assert!(run(&holed, p, now).is_empty());
 
-    // The day's first hour missing.
-    assert!(run(&four_bars(1.0)[1..], p, now).is_empty());
+    // The day's first two hours missing: more than an hour of nothing before its first bar. One
+    // missing hour is a quiet start, not a hole.
+    assert!(run(&four_bars(1.0)[2..], p, now).is_empty());
+    assert!(!run(&four_bars(1.0)[1..], p, now).is_empty());
 }
 
 /// A complete day of 24 hourly bars, each spanning 100..110 with 1 traded, except hour `extra`,
@@ -189,9 +191,10 @@ fn full_day(day: i64, extra: i64) -> Vec<ChartCandle> {
         .collect()
 }
 
-/// The previous day's profile needs the day complete to its last hour.
+/// The previous day's profile needs the day complete to its end, within the hour of nothing a
+/// quiet market may leave.
 ///
-/// Breakage: a finished day missing its evening profiled anyway.
+/// Breakage: a finished day missing its evening profiled anyway, or a quiet last hour rejected.
 #[test]
 fn the_previous_day_needs_its_end() {
     let now = MONDAY_2024_01_01_MS + DAY + 2.0 * H1;
@@ -202,7 +205,12 @@ fn the_previous_day_needs_its_end() {
     };
     let bars = full_day(0, 7);
     assert_eq!(tagged(&run(&bars, p, now)), vec![(LineTag::Poc, 104.5)]);
-    assert!(run(&bars[..23], p, now).is_empty());
+    // The last hour quiet is still a whole day; the last two hours missing are a hole.
+    assert_eq!(
+        tagged(&run(&bars[..23], p, now)),
+        vec![(LineTag::Poc, 104.5)]
+    );
+    assert!(run(&bars[..22], p, now).is_empty());
 }
 
 /// Naked POCs. Monday's POC (104.5) with Tuesday's six hours trading 106..108 above it is naked;

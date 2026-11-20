@@ -19,13 +19,19 @@
 //!   ([`opens_at`]) — the period's own first bar, not merely a bar of the input before it;
 //! - a FINISHED period's END is present when its last bar's close, one bar length after its open,
 //!   reaches it ([`closes_at`]);
-//! - a period is COVERED ([`covered`]) when its start is present, no two neighbouring bars of it
-//!   leave more than [`MAX_GAP_MS`] empty between them, and its end is present when it is finished
-//!   — or, when it is the current one, the time since its last bar's close is no longer than
-//!   [`MAX_GAP_MS`] plus the one bar still forming (the rest of the period has not happened yet).
+//! - a period is COVERED ([`covered`]) when no empty stretch longer than [`MAX_GAP_MS`] lies
+//!   anywhere in it: from its start to its first bar, between two neighbouring bars, and from its
+//!   last bar's close to its end when it is finished — or, when it is the current one, from that
+//!   close up to the caller's reference time, plus the one bar still forming (the rest of the
+//!   period has not happened yet). The edges are judged by the same hour as the inside: a quiet
+//!   coin's first trade of the day at 00:20 is not a missing start.
 //!
-//! An open or a close (`period_levels`) needs only its edge bar; a high, a low or a profile needs
-//! the whole span (`extremes`, `volume_profile`).
+//! An open or a close (`period_levels`) needs its exact edge bar ([`opens_at`], [`closes_at`]); a
+//! high, a low or a profile needs the whole span (`extremes`, `volume_profile`).
+//!
+//! Limit: the check sees the bars it is given. On a timeframe coarser than [`MAX_GAP_MS`] (4 h,
+//! 1 d) one bar can be resampled from a few 5-minute rows with hours missing inside it, and no gap
+//! between bars shows that. The shipped day-extremes row runs on 5-minute bars, where it does.
 
 /// The longest empty stretch, ms, between two neighbouring bars of a period that still counts as
 /// a market that did not trade rather than a hole in the record.
@@ -85,9 +91,10 @@ pub(crate) fn covered(
         return false;
     }
     let mut opens = opens.into_iter().peekable();
+    // The first bar belongs to the period and leaves at most the allowed stretch before it.
     if !opens
         .peek()
-        .is_some_and(|&first| opens_at(first, start, tf))
+        .is_some_and(|&first| first >= start && first - start <= MAX_GAP_MS)
     {
         return false;
     }
@@ -95,7 +102,7 @@ pub(crate) fn covered(
         return false;
     };
     match end {
-        Some(end) => closes_at(last, end, tf),
+        Some(end) => end - (last + tf) <= MAX_GAP_MS,
         None => tail_ok(last, reference, tf),
     }
 }

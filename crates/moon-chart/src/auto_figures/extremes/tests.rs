@@ -276,7 +276,7 @@ fn a_period_is_judged_by_its_own_bars() {
 
 /// A period missing its start, its end or a stretch inside reports nothing, each with the day
 /// before it whole: Wednesday from 07:50; Tuesday from 03:00; Tuesday with no bars from 06:00 to
-/// 14:00 (an eight-hour stretch); Tuesday without its last bar, 23:55.
+/// 14:00 (an eight-hour stretch); Tuesday with nothing after 22:55 (more than an hour to its end).
 ///
 /// Breakage: a period checked only at its start (the hole inside and the missing end pass), or
 /// only against the input's first bar (every one of them passes).
@@ -305,9 +305,25 @@ fn a_period_missing_its_start_end_or_middle_is_not_reported() {
     holed.extend(m5_bars(DAY + h(14.0), 2.0 * DAY + h(1.0)));
     assert!(run_5m(&holed, ExtremePeriod::PrevDay, one_am).is_empty());
 
-    let mut no_end = m5_bars(0.0, 2.0 * DAY - M5);
+    let mut no_end = m5_bars(0.0, 2.0 * DAY - h(1.0) - M5);
     no_end.extend(m5_bars(2.0 * DAY, 2.0 * DAY + h(1.0)));
     assert!(run_5m(&no_end, ExtremePeriod::PrevDay, one_am).is_empty());
+}
+
+/// A quiet coin's day: its first trade at 00:20 and its last bar opening at 23:30 leave less than
+/// an hour of nothing at either edge, so the day is whole and its extremes are reported.
+///
+/// Breakage: the edges held to one bar length again, which hides every illiquid coin's day.
+#[test]
+fn a_quiet_start_and_end_still_cover_the_day() {
+    let h = |x: f64| x * HOUR_MS;
+    let mut quiet = m5_bars(0.0, DAY);
+    quiet.extend(m5_bars(DAY + 20.0 * 60_000.0, DAY + h(23.5) + M5));
+    let one_am = 2.0 * DAY + h(1.0);
+    assert_eq!(
+        run_5m(&quiet, ExtremePeriod::PrevDay, one_am),
+        vec![110.0, 100.0]
+    );
 }
 
 /// A two-hour hole hides a period even when nearly every bar is there: Tuesday without 12:00–14:00
