@@ -1369,13 +1369,20 @@ impl CandleSeries {
             // A bucket this series has not been accumulating itself still holds its BASE candle,
             // whose volume already covers the whole period from the source. Adding trade quantity
             // on top of it would double count, so the first live trade in such a bucket takes the
-            // bucket over instead of joining it. Before the per-bucket merge the series always
-            // ended in a trade-derived candle and this could not arise.
+            // bucket's volume over instead of joining it. Before the per-bucket merge the series
+            // always ended in a trade-derived candle and this could not arise. Its open, high and
+            // low stay: those prices traded in this very bucket, and a candle reset to the one
+            // tick would drop them — the whole day of a daily candle whose ring holds hours.
             let live_here = open_ms >= self.live_from;
             let n = self.candles.len();
             match self.candles.last_mut() {
                 Some(last) if last.t_open_ms == open_ms && !live_here => {
-                    *last = candle_from_tick(open_ms, t);
+                    *last = ChartCandle {
+                        open: last.open,
+                        high: last.high.max(t.price),
+                        low: last.low.min(t.price),
+                        ..candle_from_tick(open_ms, t)
+                    };
                     self.live_from = open_ms;
                     self.dirty_from = self.dirty_from.min(n - 1);
                     changed = true;

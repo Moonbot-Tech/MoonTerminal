@@ -285,6 +285,35 @@ fn push_trades_takes_over_a_base_bucket_instead_of_adding_to_it() {
     assert_eq!(s.candles()[5].close, 44.0);
 }
 
+/// Taking over a base bucket must not erase the prices that already traded in it.
+///
+/// A daily chart whose trade ring holds only the last hours: the one local bucket (today) is
+/// partial, the base covers it, so `rebuild` keeps the base candle as the complete one — today
+/// opened at 10, reached 11 and 9. The first live trade at 10.3 then takes the bucket over. By
+/// hand: the bucket's high is at least max(11, 10.3) = 11, its low at most min(9, 10.3) = 9, and
+/// its open is still the day's first price, 10 — a candle cannot exclude a price that traded in it.
+#[test]
+fn push_trades_takeover_keeps_the_base_buckets_traded_range() {
+    const DAY: i64 = 86_400_000;
+    let day = 20_000.0 * DAY as f64;
+    let base = [candle(day, 10.0, 11.0, 9.0, 10.2, 500.0)];
+    let mut s = CandleSeries::default();
+    s.rebuild(DAY, &base, DAY, &[tick(day + 20.0 * 60.0 * M, 10.2, 1.0)]);
+    assert_eq!(s.candles().len(), 1);
+    assert_eq!(
+        s.candles()[0].high,
+        11.0,
+        "rebuild keeps the complete base candle"
+    );
+
+    assert!(s.push_trades(&[tick(day + 21.0 * 60.0 * M, 10.3, 2.0)]));
+    let c = s.candles()[0];
+    assert_eq!(c.open, 10.0, "the day's open is not the first live trade");
+    assert_eq!(c.high, 11.0, "the base's high traded in this bucket");
+    assert_eq!(c.low, 9.0, "the base's low traded in this bucket");
+    assert_eq!(c.close, 10.3);
+}
+
 #[test]
 fn rebuild_without_server_takes_partial_first() {
     let trades = [tick(7.0 * M, 5.0, 1.0), tick(12.0 * M, 6.0, 1.0)];
