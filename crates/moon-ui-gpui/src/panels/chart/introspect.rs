@@ -2,6 +2,13 @@
 
 use super::*;
 
+// What the private filming overlay asks of a chart; compiled only beside it, so a clone without
+// the overlay carries no code nothing calls.
+#[cfg(uidoc)]
+mod screen;
+#[cfg(uidoc)]
+pub(crate) use screen::ScreenAutoLine;
+
 impl ChartPanel {
     /// Returns the number of open chart panes for the tab's count badge.
     pub fn pane_count(&self) -> usize {

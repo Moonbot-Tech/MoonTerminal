@@ -60,6 +60,9 @@ mod axes_controls;
 mod construct;
 mod controls;
 mod introspect;
+// Named by the private filming overlay, which keeps what the probe answered between frames.
+#[cfg(uidoc)]
+pub(crate) use introspect::ScreenAutoLine;
 mod lifecycle;
 mod settings_sig;
 

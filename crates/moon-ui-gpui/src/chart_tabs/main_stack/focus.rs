@@ -46,6 +46,15 @@ impl MainChartStack {
         handles
     }
 
+    /// The chart panel currently selected in this stack, for the private filming overlay, which
+    /// asks it where its auto lines are; compiled only beside that overlay, its one caller.
+    #[cfg(uidoc)]
+    pub(crate) fn active_panel(&self) -> Option<&Entity<ChartPanel>> {
+        self.active
+            .and_then(|ix| self.charts.get(ix))
+            .map(|entry| &entry.panel)
+    }
+
     pub(crate) fn active_target(&self, cx: &App) -> Option<(CoreId, String)> {
         self.active
             .and_then(|ix| self.charts.get(ix))
