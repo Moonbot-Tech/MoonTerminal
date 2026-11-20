@@ -109,8 +109,8 @@ use super::squeeze::MAX_BODY_BREAKS;
 use super::trend::{Line, LineSpec, MAX_LINE_PIVOTS, find_lines};
 use super::{
     Broken, DetectCtx, Detector, Found, FoundShape, LineTag, Seg, Side, Touch, atr, bar_ok,
-    close_of, open_of, pct_frac, positive, scan_break, survives, tolerance_frac, touch_strength,
-    touch_volume, window, within,
+    close_of, close_side, open_of, pct_frac, positive, scan_break, survives, tolerance_frac,
+    touch_strength, touch_volume, window, within,
 };
 
 /// Closes allowed outside the pair, by more than the touch tolerance, between the formation's first
@@ -432,8 +432,9 @@ fn range_levels(upper: &Line, lower: &Line) -> Option<(f64, f64)> {
 }
 
 /// Valid closes in `win[first..=last]` outside the pair by more than `tol` of the side's price —
-/// above the upper side or below the lower; a bar whose close is unknown has none. Counting stops
-/// one past [`MAX_SPAN_BREAKS`], which already rejects the pair.
+/// above the upper side or below the lower, by [`close_side`]: a bar whose close is unknown counts
+/// when its whole range lies that far out, and not when its range reaches back inside. Counting
+/// stops one past [`MAX_SPAN_BREAKS`], which already rejects the pair.
 fn span_breaks(
     win: &[ChartCandle],
     first: usize,
@@ -447,15 +448,13 @@ fn span_breaks(
     };
     span.iter()
         .filter(|b| bar_ok(b))
-        .filter_map(|b| close_of(b).map(|close| (b, close)))
-        .filter(|(b, close)| {
-            let close = *close;
+        .filter(|b| {
             let above = upper
                 .price_at(b.t_open_ms)
-                .is_some_and(|u| close > u * (1.0 + tol));
+                .is_some_and(|u| close_side(b, u * (1.0 + tol)) == Some(Side::Above));
             let below = lower
                 .price_at(b.t_open_ms)
-                .is_some_and(|l| close < l * (1.0 - tol));
+                .is_some_and(|l| close_side(b, l * (1.0 - tol)) == Some(Side::Below));
             above || below
         })
         .take(MAX_SPAN_BREAKS + 1)

@@ -383,8 +383,10 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
 ///
 /// The newest bucket counts its 5-minute rows against the number it holds (`row_ms / 5 min`); one
 /// short, inside [`LAG_CAP_MS`] past the bucket's close, is dropped from the input and reported as
-/// lagging. Past the cap it is used as it is. Only the NEWEST bucket is checked: an older gap is
-/// a market that did not trade, which no wait will fill.
+/// lagging. Past the cap it is used as it is — unless, like any older bucket, it holds fewer than
+/// half of its rows, which makes it a hole ([`closed_bars`]). Only the NEWEST bucket waits: an
+/// older gap is a market that did not trade or a terminal that was not running, which no wait will
+/// fill.
 pub(crate) fn cache_bars(
     rows: &[ChartCandle],
     row_ms: i64,
@@ -427,8 +429,10 @@ fn tail(bars: &[ChartCandle], n: u32) -> &[ChartCandle] {
 ///
 /// Equal timeframes pass through. A wider one is resampled, and a bucket the source does not
 /// cover from its start is dropped — the first one, when the source begins mid-bucket — because a
-/// partial high or low would place a level where the market never turned. A bucket is closed when
-/// it opens at or before `last_closed_ms`; the one still forming is dropped.
+/// partial high or low would place a level where the market never turned. From 5-minute rows —
+/// the cache's base, or a 5-minute chart — a bucket assembled from fewer than half of its rows is
+/// a hole and is dropped too (`auto_figures::resample_5m`, the screener's resample as well). A
+/// bucket is closed when it opens at or before `last_closed_ms`; the one still forming is dropped.
 pub(crate) fn closed_bars(
     rows: &[ChartCandle],
     src_ms: i64,
@@ -447,7 +451,11 @@ pub(crate) fn closed_bars(
             .collect();
     }
     let mut out = Vec::new();
-    resample(rows, row_ms, &mut out);
+    if src_ms == KIND_5M_MS {
+        auto_figures::resample_5m(rows, row_ms, &mut out);
+    } else {
+        resample(rows, row_ms, &mut out);
+    }
     if let (Some(first_bucket), Some(first_row)) = (out.first(), rows.first())
         && first_row.t_open_ms > first_bucket.t_open_ms
     {

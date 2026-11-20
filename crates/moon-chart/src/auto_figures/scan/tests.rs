@@ -1,7 +1,7 @@
 use super::super::test_bars::{MONDAY_2024_01_01_MS, ace, bar, range};
 use super::*;
 use moon_core::config::auto_figures::{
-    AutoFiguresCfg, ExtremePeriod, FormationParams, PeriodExtremeParams, RoundGrid,
+    AutoFiguresCfg, ExtremePeriod, FormationParams, PeriodExtremeParams, ProfilePeriod, RoundGrid,
     RoundLevelsParams, SwingParams, TakeSide, VolumeProfileParams,
 };
 
@@ -275,6 +275,67 @@ fn a_lagging_newest_bucket_waits_up_to_the_cap() {
     assert_eq!(early.best, None);
     let late = scan(&rows, &bars, close + 6.0 * MIN_MS);
     assert_eq!(late.best.map(|b| b.event), Some(AutoEvent::Breakout));
+}
+
+/// An hour assembled from fewer than half of its twelve 5-minute rows is a hole, not a bar: three
+/// whole hours at 3.4, then a fourth of five rows at 3.55, judged past the lag cap, show no
+/// breakout of 3.5 — the fourth hour's bar would be 25 minutes of it. Six rows, exactly half, are
+/// a bar, and its close breaks the level.
+///
+/// Breakage: every resampled bucket taken as whole (a breakout drawn from five 5-minute rows), or
+/// the half counted the wrong way (six rows dropped).
+#[test]
+fn an_hour_from_fewer_than_half_its_rows_is_a_hole() {
+    let rows = [round_row(0, TfId::H1, EventMarks::default())];
+    let now = MONDAY_2024_01_01_MS + 4.0 * HOUR_MS + 6.0 * MIN_MS;
+    let with = |n: usize| {
+        let mut bars = hourly(&[3.4, 3.4, 3.4]);
+        bars.extend((36..36 + n).map(|i| bar(i, 3.55, 3.55, 3.55, 3.55)));
+        bars
+    };
+    let sparse = scan(&rows, &with(5), now);
+    assert_eq!((sparse.rows_scanned, sparse.best), (1, None), "{sparse:?}");
+    let half = scan(&rows, &with(6), now);
+    assert_eq!(
+        half.best.map(|b| b.event),
+        Some(AutoEvent::Breakout),
+        "{half:?}"
+    );
+}
+
+/// A day the cache holds one 5-minute row of per four hours has six H4 bars — all of its H4
+/// buckets — and a profile of them would be "complete" in H4 bars. Those buckets are holes, so the
+/// H4 profile of that day draws nothing.
+///
+/// By hand: Monday and Tuesday whole, Wednesday six rows (one at the start of each four hours),
+/// Thursday's first four hours whole, judged just past them. The row needs 13 H4 bars (two days
+/// and the bar after); Monday's 6, Tuesday's 6 and Thursday's first give 13 without Wednesday's,
+/// so the row runs, and Wednesday — its previous day — has no bar to profile.
+///
+/// Breakage: the sparse buckets taken as bars (a POC, VAH and VAL of six 5-minute rows).
+#[test]
+fn a_profile_does_not_see_a_day_of_sparse_buckets() {
+    let profile = ScanRow {
+        row_ix: 0,
+        params: DetectorParams::VolumeProfile(VolumeProfileParams {
+            period: ProfilePeriod::PrevDay,
+            naked_poc_days: 0,
+            ..VolumeProfileParams::default()
+        }),
+        tf: TfId::H4,
+        take: Take::default(),
+        marks: EventMarks::default(),
+    };
+    assert_eq!(profile.params.bars_needed(TfId::H4), 13);
+    let day = 288;
+    let flat = |i: usize, p: f32| bar(i, p, p + 0.01, p - 0.01, p);
+    let mut bars: Vec<ChartCandle> = (0..2 * day).map(|i| flat(i, 3.4)).collect();
+    bars.extend((0..6).map(|k| flat(2 * day + k * 48, 3.6)));
+    bars.extend((3 * day..3 * day + 48).map(|i| flat(i, 3.4)));
+    let now = MONDAY_2024_01_01_MS + 3.0 * 24.0 * HOUR_MS + 4.0 * HOUR_MS + 6.0 * MIN_MS;
+    let r = scan(&[profile], &bars, now);
+    assert_eq!((r.rows_scanned, r.rows_short), (1, 0), "{r:?}");
+    assert_eq!((r.lines, r.nearest), (0, None), "{r:?}");
 }
 
 /// 90 % of `bars_needed` is enough, less is "short": a 10-bar swing row runs on 9 closed hours and
@@ -716,45 +777,57 @@ fn hourly_ring(ranges: &[(f32, f32)]) -> Vec<ChartCandle> {
         .collect()
 }
 
-/// A market the cache knows only from the core's ring finds its levels and no break: three hours
-/// spanning 3.38–3.45 and one spanning 3.52–3.58 — read as closes at the lows, 3.38 then 3.52, the
-/// 3.5 level would be "broken" on the last hour. The same bars read as REAL candles do break it:
-/// the mark comes from the kind the rows were read from, not from their shape. And with real
-/// candles for the last two hours (closing 3.4 and 3.55) over the same ring, the real candles win
-/// their buckets and the breakout is theirs.
+/// A market the cache knows only from the core's ring breaks a level only with a bar that lies
+/// wholly beyond it.
 ///
-/// By hand: the round level is placed from the last price, the middle of the last ring row's range,
-/// (3.58 + 3.52) / 2 = 3.55, so 3.5 is the only half-order level within 10 %; the scan keeps it
-/// either way. Its distance in the real case is (3.5 - 3.55) / 3.55 = -1.408 %.
+/// - Three hours spanning 3.51–3.53, above the 3.5 level, then one spanning 3.47–3.56: read as
+///   closes at the lows, the last hour would "close" at 3.47 under the level — a breakout made of
+///   the ring's placeholders. As a ring bar it straddles 3.5 and has no side: no event. The same
+///   rows read as REAL candles do break it: the mark comes from the kind the rows were read from,
+///   not from their shape.
+/// - Three hours spanning 3.38–3.45, then one spanning 3.52–3.58: the last hour lies wholly above
+///   3.5, so wherever it closed, it closed above — the breakout real candles of those ranges show.
+/// - Real candles for the last two hours of the first ring (closing 3.52, then 3.45) win their
+///   buckets, and the breakout down is theirs.
 ///
-/// Breakage: the ring's placeholder lows taken as closes (a breakout made of ring bars), the mark
-/// taken from the shape (the real candles of that shape lose their closes), a ring row shadowing
-/// a real candle, or the ring dropped (no level, no history).
+/// By hand: the round level is placed from the last price — the middle of the last ring row's
+/// range, 3.515 and 3.55, or the real close of 3.45 — and 3.5 is the only half-order level within
+/// 10 % of each. The straddling case is (3.5 − 3.515) / 3.515 = −0.427 % away, past the 0.3 %
+/// approach. Distances: (3.5 − 3.55) / 3.55 = −1.408 %, (3.5 − 3.45) / 3.45 = +1.449 %.
+///
+/// Breakage: the ring's placeholder lows taken as closes (a breakout made of ring bars), a ring bar
+/// that never breaks anything (the level hangs unbroken over a market that left it), the mark taken
+/// from the shape, a ring row shadowing a real candle, or the ring dropped (no level, no history).
 #[test]
-fn a_ring_breaks_nothing_and_real_closes_break_the_level() {
+fn a_ring_breaks_a_level_only_with_a_bar_wholly_beyond_it() {
     let rows = [round_row(0, TfId::H1, EventMarks::default())];
     let now = MONDAY_2024_01_01_MS + 4.0 * HOUR_MS;
-    let ring = hourly_ring(&[(3.45, 3.38), (3.45, 3.38), (3.45, 3.38), (3.58, 3.52)]);
-    let r = scan_with_ring(&rows, &[], &ring, now);
+    let straddling = hourly_ring(&[(3.53, 3.51), (3.53, 3.51), (3.53, 3.51), (3.56, 3.47)]);
+    let r = scan_with_ring(&rows, &[], &straddling, now);
     assert_eq!((r.rows_scanned, r.lines), (1, 1), "{r:?}");
     assert_eq!(r.best, None, "{r:?}");
-    assert_eq!(r.last_price, Some(f64::from((3.58f32 + 3.52f32) / 2.0)));
-
-    let as_real = scan(&rows, &ring, now);
+    let as_real = scan(&rows, &straddling, now);
     assert_eq!(
         as_real.best.map(|b| b.event),
         Some(AutoEvent::Breakout),
         "{as_real:?}"
     );
 
-    let real: Vec<ChartCandle> = hourly(&[3.4, 3.4, 3.4, 3.55])
+    let beyond = hourly_ring(&[(3.45, 3.38), (3.45, 3.38), (3.45, 3.38), (3.58, 3.52)]);
+    let r = scan_with_ring(&rows, &[], &beyond, now);
+    assert_eq!(r.last_price, Some(f64::from((3.58f32 + 3.52f32) / 2.0)));
+    assert_eq!(r.best.map(|b| b.event), Some(AutoEvent::Breakout), "{r:?}");
+    let d = r.nearest.expect("the 3.5 line").distance_pct;
+    assert!((d + 1.408_45).abs() < 1e-3, "{d}");
+
+    let real: Vec<ChartCandle> = hourly(&[3.52, 3.52, 3.52, 3.45])
         .into_iter()
         .skip(24)
         .collect();
-    let r = scan_with_ring(&rows, &real, &ring, now);
+    let r = scan_with_ring(&rows, &real, &straddling, now);
     assert_eq!(r.best.map(|b| b.event), Some(AutoEvent::Breakout), "{r:?}");
     let d = r.nearest.expect("the 3.5 line").distance_pct;
-    assert!((d + 1.408_45).abs() < 1e-4, "{d}");
+    assert!((d - 1.449_28).abs() < 1e-3, "{d}");
 }
 
 /// The market's live price, when the caller has one, is what sides and distances are measured

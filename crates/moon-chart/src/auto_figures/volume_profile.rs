@@ -24,10 +24,14 @@
 //!
 //! The local 5-minute cache is written only while the terminal runs, so a day with a hole is
 //! normal, and a profile of part of a day is a different profile — its POC can sit at a price the
-//! missing hours never cared about. A day is profiled only when it is COMPLETE enough
-//! ([`MIN_COVERAGE`]): its first bar opens within one bar length of its start, a finished day's
-//! last bar closes at its end, and the bars present are at least [`MIN_COVERAGE`] of the bars the
-//! covered span should hold. The current day is measured up to its last closed bar. A naked POC
+//! missing hours never cared about. A day is profiled only when it is COMPLETE enough — the check
+//! every calendar detector shares ([`super::coverage`]): its first bar opens within one bar length
+//! of its start, a finished day's last bar closes at its end, and the bars present are at least
+//! [`MIN_COVERAGE`] of the bars the covered span should hold. The current day is measured up to its
+//! last closed bar. The share is counted in bars of the row's timeframe; a coarse bar the bar
+//! assembly built from a few 5-minute rows never reaches the detector
+//! ([`super::resample_5m`]), so a day of H4 or D1 buckets each holding one 5-minute row is not a
+//! "whole" day of six or one bars. A naked POC
 //! additionally needs the span AFTER its day, up to the reference time, covered to the same share:
 //! "nothing traded at it since" is not a claim a hole of a day can support.
 //!
@@ -51,15 +55,10 @@ use moon_core::config::auto_figures::{
 };
 use moon_core::market::candles::ChartCandle;
 
+use super::coverage::{MIN_COVERAGE, covered};
 use super::extremes::day_of;
 use super::period_levels::day_start_ms;
 use super::{DetectCtx, Detector, Found, FoundShape, LineTag, bar_ok, positive};
-
-/// Share of a span's bars that must be present for it to count as complete.
-///
-/// The same 90 % the plan names for "enough history" (`docs-internal/AUTO_FIGURES.md` §13.3): a
-/// few missing bars move a POC by noise, a missing hour can move it to another price.
-pub const MIN_COVERAGE: f64 = 0.9;
 
 /// The `VolumeProfile` registry row.
 pub struct VolumeProfile;
@@ -162,22 +161,12 @@ fn bars_in(bars: &[ChartCandle], start: f64, end: f64) -> Vec<&ChartCandle> {
 }
 
 /// Whether `day` (its valid bars, ascending) covers its day from `start` — to `end` when the day is
-/// finished, to its last bar's close when it is the current one — with at least [`MIN_COVERAGE`]
-/// of the bars that span should hold.
+/// finished, to its last bar's close when it is the current one ([`covered`]).
 fn complete(day: &[&ChartCandle], start: f64, end: Option<f64>, tf: f64) -> bool {
     let (Some(first), Some(last)) = (day.first(), day.last()) else {
         return false;
     };
-    if first.t_open_ms >= start + tf {
-        return false;
-    }
-    let span_end = match end {
-        Some(end) if last.t_open_ms + tf < end => return false,
-        Some(end) => end,
-        None => last.t_open_ms + tf,
-    };
-    let expected = ((span_end - start) / tf).round().max(1.0);
-    day.len() as f64 >= MIN_COVERAGE * expected
+    covered(first.t_open_ms, last.t_open_ms, day.len(), start, end, tf)
 }
 
 /// The profile of `day`'s bars over `bins` bins, or `None` when nothing traded.

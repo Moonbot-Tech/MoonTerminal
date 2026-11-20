@@ -521,3 +521,60 @@ fn a_bar_through_a_narrow_formation_is_one_crossing() {
     assert_eq!(story(&[100.0, 100.0, 98.5, 101.0]), (true, false));
     assert_eq!(story(&[100.0, 100.0, 101.0, 100.0]), (false, true));
 }
+
+/// Bars without a close (the core's ring bars) tell a bar event by their whole range: a bar wholly
+/// beyond a line is on that side, exactly as a real candle of that range would be whatever its
+/// close, and a bar straddling the line is on no side.
+///
+/// By hand, a level at 100: ranges 98–99.8 then 100.5–102 cross it upward (the breakout); back to
+/// 98.5–99.5 within the false-break window (the false break); a last range of 99–101 spans the
+/// line, so no bar event at all. A 99..101 channel left by a bar spanning 101.5–102 after two
+/// inside it is the breakout through its top.
+///
+/// Breakage: a ring bar that never decides a side (no breakout, ever, on a market known only from
+/// the ring), or a straddling ring bar given a side.
+#[test]
+fn ring_bars_cross_a_line_their_whole_range_crosses() {
+    let ring = |ranges: &[(f32, f32)]| -> Vec<ChartCandle> {
+        ranges
+            .iter()
+            .enumerate()
+            .map(|(i, &(h, l))| bar(i, f32::NAN, h, l, f32::NAN))
+            .collect()
+    };
+    let l = [level(100.0)];
+    let e = events_of(&l, &ring(&[(99.8, 98.0), (102.0, 100.5)]), 101.0, KEEP3);
+    assert!(
+        e.contains(AutoEvent::Breakout) && !e.contains(AutoEvent::FalseBreak),
+        "{e:?}"
+    );
+    let e = events_of(
+        &l,
+        &ring(&[(99.8, 98.0), (102.0, 100.5), (99.5, 98.5)]),
+        99.0,
+        KEEP3,
+    );
+    assert!(
+        e.contains(AutoEvent::FalseBreak) && !e.contains(AutoEvent::Breakout),
+        "{e:?}"
+    );
+    let e = events_of(&l, &ring(&[(99.8, 98.0), (101.0, 99.0)]), 100.2, KEEP3);
+    for bar_event in [
+        AutoEvent::Breakout,
+        AutoEvent::FalseBreak,
+        AutoEvent::Bounce,
+        AutoEvent::RoleFlip,
+        AutoEvent::StopHunt,
+    ] {
+        assert!(!e.contains(bar_event), "{bar_event:?} in {e:?}");
+    }
+
+    let f = [pair(101.0, 99.0)];
+    let e = events_of(
+        &f,
+        &ring(&[(100.5, 99.5), (100.5, 99.5), (102.0, 101.5)]),
+        101.8,
+        KEEP3,
+    );
+    assert!(e.contains(AutoEvent::Breakout), "{e:?}");
+}

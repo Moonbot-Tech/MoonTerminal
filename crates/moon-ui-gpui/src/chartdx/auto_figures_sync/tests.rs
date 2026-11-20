@@ -168,6 +168,33 @@ fn a_half_written_newest_bucket_waits_for_the_cache_but_not_forever() {
     assert!(!cache_bars(&full, 60 * MIN, ten, one_minute_after_close).1);
 }
 
+/// A bucket of the cache assembled from fewer than half of its 5-minute rows is a hole, not a bar:
+/// the 09:00 hour of five rows is left out between two whole hours, the 10:00 hour of six — exactly
+/// half — is kept; a day of one row is no daily bar.
+///
+/// Breakage: every resampled bucket taken as whole (an hour's high and low from 25 minutes, a day
+/// from five), or the half counted the wrong way (the six-row hour dropped).
+#[test]
+fn a_bucket_from_fewer_than_half_its_rows_is_a_hole() {
+    let hour = |h: i64| DAY0 + h * 3_600_000;
+    let mut rows = series(hour(8), 5 * MIN, 12);
+    rows.extend(series(hour(9), 5 * MIN, 5));
+    rows.extend(series(hour(10), 5 * MIN, 6));
+    rows.extend(series(hour(11), 5 * MIN, 12));
+    let past_the_cap = (hour(12) + 6 * MIN) as f64;
+    let (bars, lagging) = cache_bars(&rows, 60 * MIN, hour(11), past_the_cap);
+    assert!(!lagging);
+    let opens: Vec<i64> = bars.iter().map(|b| b.t_open_ms as i64).collect();
+    assert_eq!(opens, vec![hour(8), hour(10), hour(11)]);
+
+    let day = 24 * 3_600_000;
+    let mut rows = series(DAY0, 5 * MIN, 288);
+    rows.extend(series(DAY0 + day, 5 * MIN, 1));
+    let days = closed_bars(&rows, 5 * MIN, day, DAY0 + day);
+    let opens: Vec<i64> = days.iter().map(|b| b.t_open_ms as i64).collect();
+    assert_eq!(opens, vec![DAY0]);
+}
+
 /// A cache that counts its reads and answers from fixed rows.
 struct FakeCache {
     m5: Option<Vec<ChartCandle>>,

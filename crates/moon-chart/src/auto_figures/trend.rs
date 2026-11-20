@@ -45,8 +45,9 @@ use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, close_of, line_price_at,
-    open_of, scan_break, survives, tolerance_frac, touch_strength, touch_volume, window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, close_of, close_side,
+    line_price_at, open_of, scan_break, survives, tolerance_frac, touch_strength, touch_volume,
+    window,
 };
 
 /// Most pivots of one kind a line search considers: the most recent ones. Bounds the O(P³) pair
@@ -312,9 +313,11 @@ fn touches_line(q: &Pivot, a: &Pivot, b: &Pivot, tol_frac: f64) -> bool {
 }
 
 /// Bars between the line's first and last touch whose BODY crosses it by more than the tolerance:
-/// above a resistance through highs, below a support through lows. Counting stops one past
-/// `max_body_breaks` — that already rejects the line — so a bad candidate costs only the bars up to
-/// its deciding break.
+/// above a resistance through highs, below a support through lows. A bar without a known open and
+/// close (a ring bar) has a body somewhere inside its range: it crosses when its whole range lies
+/// beyond that limit ([`close_side`]), and is not judged when its range reaches the line. Counting
+/// stops one past `max_body_breaks` — that already rejects the line — so a bad candidate costs only
+/// the bars up to its deciding break.
 fn body_breaks(win: &[ChartCandle], line: &Line, spec: &LineSpec) -> usize {
     let Some(span) = win.get(line.first_idx..=line.last_idx) else {
         return usize::MAX;
@@ -322,17 +325,22 @@ fn body_breaks(win: &[ChartCandle], line: &Line, spec: &LineSpec) -> usize {
     span.iter()
         .filter(|b| bar_ok(b))
         .filter(|b| {
-            // A bar without a known open and close (a ring bar) has no body to break the line.
-            let (Some(open), Some(close)) = (open_of(b), close_of(b)) else {
-                return false;
-            };
             let Some(at) = line.price_at(b.t_open_ms) else {
                 return false;
             };
+            let (limit, beyond) = match spec.kind {
+                PivotKind::High => (at * (1.0 + spec.tol_frac), Side::Above),
+                PivotKind::Low => (at * (1.0 - spec.tol_frac), Side::Below),
+            };
+            let (Some(open), Some(close)) = (open_of(b), close_of(b)) else {
+                // No whole body known: its close beyond the limit, or else its whole range (a
+                // ring bar), puts the body there; anything else is not judged.
+                return close_side(b, limit) == Some(beyond);
+            };
             let (top, bottom) = (open.max(close), open.min(close));
-            match spec.kind {
-                PivotKind::High => top > at * (1.0 + spec.tol_frac),
-                PivotKind::Low => bottom < at * (1.0 - spec.tol_frac),
+            match beyond {
+                Side::Above => top > limit,
+                Side::Below => bottom < limit,
             }
         })
         .take(spec.max_body_breaks.saturating_add(1))

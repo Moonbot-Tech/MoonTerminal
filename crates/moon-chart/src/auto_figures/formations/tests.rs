@@ -778,3 +778,61 @@ fn a_shadow_on_the_touch_bar_is_no_pole() {
     assert_eq!(p.dir, -1, "{p:?}");
     assert!((p.frac - 0.001).abs() < 1e-6, "{p:?}");
 }
+
+/// The broken formations of [`a_broken_formation_follows_the_policy`] as bars without an open and
+/// close (the core's ring): a path bar spans ±[`H`] around its close, and the bars that broke the
+/// neckline and the triangle's top with their closes lie wholly beyond them — so the ring form
+/// breaks them on the same bars.
+///
+/// By hand: bar 28 of the double top spans 104.05 · (1 ± H), its low ≈ 103.998 still above the
+/// 103.95 neckline; bar 29 spans 103.025 · (1 ± H), its high ≈ 103.077 below it. The triangle's
+/// last bar spans 106 · (1 ± H), wholly above the top side's 104.2.
+///
+/// Breakage: a bar without a close that never breaks a formation (the broken pattern kept under
+/// `Remove` and never flagged).
+#[test]
+fn ring_bars_break_a_formation_by_their_whole_range() {
+    let ring = |bars: Vec<ChartCandle>| -> Vec<ChartCandle> {
+        bars.into_iter()
+            .map(|b| ChartCandle {
+                open: f32::NAN,
+                close: f32::NAN,
+                ..b
+            })
+            .collect()
+    };
+    let remove = FormationParams {
+        broken: BrokenPolicy::Remove,
+        ..FormationParams::default()
+    };
+    let bars = ring(path(&[
+        (0, 100.0),
+        (6, 110.0),
+        (14, 104.0),
+        (22, 110.2),
+        (30, 102.0),
+        (31, 102.5),
+    ]));
+    let keep = run(&bars, FormationParams::default());
+    assert_eq!(tags(&keep), [Some(LineTag::DoubleTop)], "{keep:?}");
+    let broken = keep[0].broken.expect("the neckline broke");
+    assert_eq!(broken.at_ms, t(29));
+    assert_eq!(broken.bars_since, 2);
+    assert!(!broken.returned);
+    assert!(run(&bars, remove).is_empty());
+
+    let bars = ring(path(&[
+        (0, 100.0),
+        (5, 110.0),
+        (10, 92.0),
+        (15, 108.0),
+        (20, 94.0),
+        (25, 106.0),
+        (30, 96.0),
+        (34, 106.0),
+    ]));
+    let keep = run(&bars, FormationParams::default());
+    assert_eq!(tags(&keep), [Some(LineTag::Triangle)], "{keep:?}");
+    assert!(keep[0].broken.is_some());
+    assert!(run(&bars, remove).is_empty());
+}

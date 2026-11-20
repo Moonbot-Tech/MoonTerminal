@@ -7,7 +7,9 @@
 //!
 //! The 5-minute cache these bars come from is written only while the terminal runs, so a period's
 //! first or last bar is often simply missing. A price taken from the bar NEXT to a hole is not the
-//! period's open or close, and a wrong level drawn with confidence is worse than none:
+//! period's open or close, and a wrong level drawn with confidence is worse than none. A price
+//! needs only its own edge bar, not the rest of the period — the edge rules are the ones every
+//! calendar detector shares ([`super::coverage`]):
 //! - an OPEN needs the period's first bar — a valid bar opening within one bar length
 //!   (`DetectCtx::tf_ms`) of the period's start;
 //! - a CLOSE needs the period's last bar — a valid bar of the period whose own close, one bar
@@ -23,6 +25,7 @@
 use moon_core::config::auto_figures::{DetectorKind, DetectorParams, PeriodLevelParams};
 use moon_core::market::candles::ChartCandle;
 
+use super::coverage::{closes_at, opens_at};
 use super::extremes::{DAY_MS, day_of, week_start_day};
 use super::{
     DetectCtx, Detector, Found, FoundShape, LineTag, Touch, bar_ok, positive, touch_volume,
@@ -61,7 +64,7 @@ fn first_bar_at(bars: &[ChartCandle], start: f64, tf: f64) -> Option<usize> {
     let i = bars
         .iter()
         .position(|b| bar_ok(b) && b.t_open_ms >= start)?;
-    (bars[i].t_open_ms < start + tf).then_some(i)
+    opens_at(bars[i].t_open_ms, start, tf).then_some(i)
 }
 
 /// Index of the period's LAST bar: the last valid bar of `[start, end)`, when its close (`tf` after
@@ -70,7 +73,7 @@ fn last_bar_at(bars: &[ChartCandle], start: f64, end: f64, tf: f64) -> Option<us
     let i = bars
         .iter()
         .rposition(|b| bar_ok(b) && b.t_open_ms >= start && b.t_open_ms < end)?;
-    (bars[i].t_open_ms + tf >= end).then_some(i)
+    closes_at(bars[i].t_open_ms, end, tf).then_some(i)
 }
 
 /// The levels `p` asks for, in flag order: previous day's close, day's open, week's open, previous

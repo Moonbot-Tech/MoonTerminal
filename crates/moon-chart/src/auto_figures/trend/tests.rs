@@ -241,3 +241,30 @@ fn the_line_search_is_capped_to_the_newest_pivots() {
     assert_eq!(found[0].first_ms, bars[4_600].t_open_ms);
     assert_eq!(found[0].last_ms, bars[4_998].t_open_ms);
 }
+
+/// A bar without an open and close (a ring bar) between the touches breaks the line with its body
+/// when its whole range lies beyond the line — its body, wherever it was, lay there too — and a
+/// ring bar spanning the line has no body to judge.
+///
+/// By hand: the support runs 91 at bar 4, and the row's tolerance puts its body limit at
+/// 91 · (1 − 0.0015) ≈ 90.86. A bar spanning 90.0–90.5 lies wholly under it, as a ring bar and as a
+/// real candle of that range alike; a ring bar spanning 90–98 crosses it with an unknown body.
+///
+/// Breakage: a ring bar that never breaks a body (a support drawn through a bar the market traded
+/// wholly below), or a straddling ring bar counted as a body break.
+#[test]
+fn a_ring_bar_wholly_beyond_the_line_is_a_body_break() {
+    let mut real = rising_lows();
+    real[4] = bar(4, 90.4, 90.5, 90.0, 90.1);
+    assert!(run(&real, params()).is_empty());
+    let mut ring = rising_lows();
+    ring[4] = bar(4, f32::NAN, 90.5, 90.0, f32::NAN);
+    assert!(run(&ring, params()).is_empty());
+    let mut one = params();
+    one.max_body_breaks = 1;
+    assert_eq!(run(&ring, one).len(), 1);
+
+    let mut spanning = rising_lows();
+    spanning[4] = bar(4, f32::NAN, 98.0, 90.0, f32::NAN);
+    assert_eq!(run(&spanning, params()).len(), 1);
+}

@@ -570,16 +570,20 @@ fn the_live_price_measures_the_distance() {
 }
 
 /// A market the cache knows only from the core's ring kind is scanned on it: its ring hours give
-/// the 3.5 level from their ranges (3.38–3.45 ×3, then 3.52–3.58) and no breakout, as ring bars
-/// have no close. When the ring read does not happen, the market is "unread", not scanned on half
-/// its base.
+/// the 3.5 level from their ranges (3.51–3.53 ×3, then 3.47–3.56) and no breakout — the last hour
+/// straddles the level, and a ring bar has no close to say on which side it ended (read as the
+/// placeholder close at its low, 3.47, it would break the level downward). When the ring read does
+/// not happen, the market is "unread", not scanned on half its base.
+///
+/// By hand: the last price is the middle of the last ring row, 3.515, so 3.5 is the only
+/// half-order level within 10 %, (3.5 − 3.515) / 3.515 = −0.427 % away, past the 0.3 % approach.
 ///
 /// Breakage: the ring kind never read by the scan (the market short of history), the ring's
 /// placeholder lows read as closes (a breakout of 3.5 made of ring bars), or a failed ring read
 /// scanned as if the kind were empty.
 #[test]
 fn the_ring_kind_fills_the_base_and_a_failed_ring_read_is_unread() {
-    let ring: Vec<ChartCandle> = [(3.45f32, 3.38f32), (3.45, 3.38), (3.45, 3.38), (3.58, 3.52)]
+    let ring: Vec<ChartCandle> = [(3.53f32, 3.51f32), (3.53, 3.51), (3.53, 3.51), (3.56, 3.47)]
         .iter()
         .enumerate()
         .flat_map(|(h, &(hi, lo))| {

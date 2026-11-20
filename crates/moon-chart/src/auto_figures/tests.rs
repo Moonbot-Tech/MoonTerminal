@@ -531,14 +531,17 @@ fn ace_as_ring() -> (Vec<ChartCandle>, Vec<ChartCandle>) {
     (honest, ring)
 }
 
-/// Ring bars give their turns and no closes: swing levels on the ring's H1 bars are the honest
-/// bars' levels (the pivots are the same highs and lows), and none of them is broken — a ring bar
-/// has no close to break anything with — so every level the honest bars keep, the ring keeps.
+/// Ring bars give their turns, and break a level only with a bar whose whole range lies beyond it:
+/// swing levels on the ring's H1 bars are the honest bars' levels (the pivots are the same highs
+/// and lows), every ring level reported broken was broken by such a bar, and some were — a market
+/// known only from the ring is not one where nothing ever breaks. A `Keep` window as long as the
+/// type allows keeps every broken level in the answer, so the comparison sees all of them.
 ///
-/// Breakage: the range-only form read as real closes (ring "closes" at every low break the levels
-/// the honest bars keep, and the ring loses some), or ring bars dropped as unreadable (no levels).
+/// Breakage: the range-only form read as real closes (a ring "close" at the low breaks a level the
+/// bar straddles), a ring bar that never breaks anything (no ring level broken), or ring bars
+/// dropped as unreadable (no levels).
 #[test]
-fn ring_bars_give_their_turns_and_break_nothing() {
+fn ring_bars_give_their_turns_and_break_by_their_whole_range() {
     let (honest, ring) = ace_as_ring();
     assert!(ring.iter().all(|b| b.open.is_nan() && b.close.is_nan()));
     let h1 = |rows: &[ChartCandle]| {
@@ -552,15 +555,13 @@ fn ring_bars_give_their_turns_and_break_nothing() {
     };
     let swing = DetectorParams::Swing(SwingParams {
         lookback_bars: 200,
+        broken: BrokenPolicy::Keep { bars: u16::MAX },
         ..SwingParams::default()
     });
+    let ring_h1 = h1(&ring);
     let real = detect(&swing, &h1(&honest), &ctx);
-    let from_ring = detect(&swing, &h1(&ring), &ctx);
+    let from_ring = detect(&swing, &ring_h1, &ctx);
     assert!(!from_ring.is_empty());
-    assert!(
-        from_ring.iter().all(|f| f.broken.is_none()),
-        "{from_ring:?}"
-    );
     let price = |f: &Found| f.shape.price_at(0.0).expect("a level");
     for f in &real {
         assert!(
@@ -569,6 +570,130 @@ fn ring_bars_give_their_turns_and_break_nothing() {
             price(f)
         );
     }
+    let mut broken = 0;
+    for f in &from_ring {
+        let Some(b) = f.broken else {
+            continue;
+        };
+        broken += 1;
+        let bar = ring_h1
+            .iter()
+            .find(|x| x.t_open_ms == b.at_ms)
+            .expect("the breaking bar is one of the input");
+        let p = price(f);
+        assert!(
+            f64::from(bar.low) > p || f64::from(bar.high) < p,
+            "the ring level at {p} broke on a bar spanning it: {bar:?}"
+        );
+    }
+    assert!(broken > 0, "no ring level broke: {from_ring:?}");
+}
+
+/// One swing resistance, as real candles and as ring bars with the same highs and lows: the bar
+/// that breaks it lies wholly above it, so both forms report the same level and the same break.
+///
+/// By hand: pivot highs of 110 at bars 3 and 9 (three lower highs on each side), and the last bar
+/// spans 111–112, above 110 — its close, whatever it is, is above the level. The only pivot low
+/// (100 at bar 6) is one touch, short of the two a level needs.
+///
+/// Breakage: a bar without a close that never breaks anything (the ring keeps the level unbroken).
+#[test]
+fn a_ring_breaks_a_swing_level_like_real_candles_when_its_range_is_beyond() {
+    let real = from_hl(&[
+        (105.0, 100.0),
+        (106.0, 101.0),
+        (107.0, 102.0),
+        (110.0, 104.0),
+        (107.0, 102.0),
+        (106.0, 101.0),
+        (105.0, 100.0),
+        (106.0, 101.0),
+        (107.0, 102.0),
+        (110.0, 104.0),
+        (107.0, 102.0),
+        (106.0, 101.0),
+        (105.0, 100.0),
+        (108.0, 103.0),
+        (112.0, 111.0),
+    ]);
+    let ring: Vec<ChartCandle> = real
+        .iter()
+        .map(|b| ChartCandle {
+            open: f32::NAN,
+            close: f32::NAN,
+            ..*b
+        })
+        .collect();
+    let swing = DetectorParams::Swing(SwingParams {
+        lookback_bars: 200,
+        ..SwingParams::default()
+    });
+    let ctx = DetectCtx {
+        tf_ms: M5_MS,
+        now_ms: 0.0,
+    };
+    let answer = |bars: &[ChartCandle]| -> Vec<(FoundShape, Option<Broken>)> {
+        detect(&swing, bars, &ctx)
+            .into_iter()
+            .map(|f| (f.shape, f.broken))
+            .collect()
+    };
+    let from_real = answer(&real);
+    assert_eq!(
+        from_real,
+        vec![(
+            FoundShape::Horizontal { price: 110.0 },
+            Some(Broken {
+                at_ms: real[14].t_open_ms,
+                bars_since: 0,
+                returned: false,
+            })
+        )]
+    );
+    assert_eq!(answer(&ring), from_real);
+}
+
+/// A bar without a close is on a side of a line when its whole range is: a ring bar wholly above
+/// a level held from below breaks it, one straddling the level neither breaks it nor ends the
+/// break, and one wholly back below is the return — the answer real candles with the same ranges
+/// give, whatever their closes inside those ranges. A range that only reaches the line is on no
+/// side.
+///
+/// Breakage: an unknown close that never decides a side (no break at all), or one read as a side
+/// while the range straddles the line (a break or a return the market may not have made).
+#[test]
+fn a_ring_bar_is_on_the_side_its_whole_range_is_on() {
+    use super::test_bars::bar;
+    let ring = |i, high, low| bar(i, f32::NAN, high, low, f32::NAN);
+    let line = |_: f64| Some(100.0);
+    let rings = [
+        ring(0, 99.0, 95.0),
+        ring(1, 103.0, 101.0),
+        ring(2, 102.0, 98.0),
+        ring(3, 99.0, 96.0),
+    ];
+    let expected = Broken {
+        at_ms: rings[1].t_open_ms,
+        bars_since: 2,
+        returned: true,
+    };
+    assert_eq!(scan_break(&rings, 0, Side::Below, line), Some(expected));
+    let real = [
+        bar(0, 97.0, 99.0, 95.0, 97.0),
+        bar(1, 102.0, 103.0, 101.0, 102.5),
+        bar(2, 101.0, 102.0, 98.0, 101.0),
+        bar(3, 98.0, 99.0, 96.0, 97.0),
+    ];
+    assert_eq!(scan_break(&real, 0, Side::Below, line), Some(expected));
+
+    let straddling = [
+        ring(0, 99.0, 95.0),
+        ring(1, 102.0, 98.0),
+        ring(2, 100.5, 99.5),
+    ];
+    assert_eq!(scan_break(&straddling, 0, Side::Below, line), None);
+    let reaching = [ring(0, 99.0, 95.0), ring(1, 103.0, 100.0)];
+    assert_eq!(scan_break(&reaching, 0, Side::Below, line), None);
 }
 
 /// The bar assembly marks by SOURCE: every row of the ring kind loses its open and close and keeps

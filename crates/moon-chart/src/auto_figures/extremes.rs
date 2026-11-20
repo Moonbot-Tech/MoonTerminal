@@ -11,18 +11,24 @@
 //! high it prints shows up when it closes. The lag is at most one bar of the row's timeframe, which
 //! is why the shipped extreme rows run on 5-minute bars.
 //!
-//! A period the input does not cover from its start is reported as nothing rather than as a
-//! partial extreme: when the first valid bar opens after the period began, the bars before it — and
-//! possibly the real high or low — are simply missing, and a wrong level drawn with confidence is
-//! worse than an honest gap. A previous period's extreme also reports, informationally, the latest
-//! later break of it in `broken`; it is never dropped (`DetectorParams::broken_policy` gives this
-//! kind the default policy only for the event layer's false-break window). Cost O(n).
+//! A period its own bars do not cover is reported as nothing rather than as a partial extreme
+//! ([`super::coverage`]): its first bar within one bar length (`DetectCtx::tf_ms`) of its start,
+//! a previous period's last bar closing at its end, and at least
+//! [`MIN_COVERAGE`](super::coverage::MIN_COVERAGE) of the bars the span should hold — the whole
+//! previous period, the current one up to its last closed bar. The cache holds holes of hours, and
+//! the bars before the input's first one are not the only ones that can be missing: a day of three
+//! bars in the middle of an otherwise long input is three bars, and its real high or low is simply
+//! not in them. Without a usable bar length (`tf_ms <= 0`) nothing can be checked and nothing is
+//! found. A previous period's extreme also reports, informationally, the latest later break of it
+//! in `broken`; it is never dropped (`DetectorParams::broken_policy` gives this kind the default
+//! policy only for the event layer's false-break window). Cost O(n).
 
 use moon_core::config::auto_figures::{
     DetectorKind, DetectorParams, ExtremePeriod, ExtremeWhich, PeriodExtremeParams,
 };
 use moon_core::market::candles::ChartCandle;
 
+use super::coverage::covered;
 use super::{
     DetectCtx, Detector, Found, FoundShape, LineTag, Side, Touch, bar_ok, scan_break, touch_volume,
 };
@@ -42,10 +48,13 @@ impl Detector for PeriodExtreme {
         let DetectorParams::PeriodExtreme(p) = params else {
             return Vec::new();
         };
+        if ctx.tf_ms <= 0 {
+            return Vec::new();
+        }
         let Some(reference_ms) = ctx.reference_ms(bars) else {
             return Vec::new();
         };
-        period_extremes(bars, p, reference_ms)
+        period_extremes(bars, p, reference_ms, ctx.tf_ms as f64)
     }
 }
 
@@ -72,19 +81,20 @@ pub fn period_bounds(period: ExtremePeriod, reference_day: i64) -> (f64, f64) {
     (start, start + (len_days * DAY_MS) as f64)
 }
 
-/// The extremes `p` asks for, high first.
-fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: f64) -> Vec<Found> {
-    let Some(first) = bars.iter().find(|b| bar_ok(b)) else {
-        return Vec::new();
-    };
+/// The extremes `p` asks for, high first, on bars `tf` ms long; nothing when the period's own bars
+/// do not cover it (module doc).
+fn period_extremes(
+    bars: &[ChartCandle],
+    p: &PeriodExtremeParams,
+    reference_ms: f64,
+    tf: f64,
+) -> Vec<Found> {
     let (start, end) = period_bounds(p.period, day_of(reference_ms));
-    if first.t_open_ms > start {
-        return Vec::new();
-    }
     // (index, bar) of the period's bars, and the extremes among them — the first bar to reach the
     // extreme wins a tie, so the touch marks where the level was set.
     let mut first_in: Option<f64> = None;
     let mut last_in: Option<f64> = None;
+    let mut count = 0usize;
     let mut high: Option<(usize, f32)> = None;
     let mut low: Option<(usize, f32)> = None;
     let mut last_idx_in = 0;
@@ -95,6 +105,7 @@ fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: 
         first_in.get_or_insert(b.t_open_ms);
         last_in = Some(b.t_open_ms);
         last_idx_in = i;
+        count += 1;
         if high.is_none_or(|(_, h)| b.high > h) {
             high = Some((i, b.high));
         }
@@ -106,6 +117,9 @@ fn period_extremes(bars: &[ChartCandle], p: &PeriodExtremeParams, reference_ms: 
         return Vec::new();
     };
     let previous = matches!(p.period, ExtremePeriod::PrevDay | ExtremePeriod::PrevWeek);
+    if !covered(first_ms, last_ms, count, start, previous.then_some(end), tf) {
+        return Vec::new();
+    }
     let make = |(idx, price): (usize, f32), origin: Side, tag: LineTag| -> Found {
         let price = f64::from(price);
         let touches = vec![Touch {

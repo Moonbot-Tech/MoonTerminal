@@ -36,11 +36,15 @@
 //! it survives a resample with the meaning it should have: a bucket's open is its first sub-bar's
 //! and its close its last's, so a coarse bar whose last 5 minutes came from the ring has an unknown
 //! close and one ending on a real candle has the real close. Every reader of a close or an open
-//! then asks [`close_of`] / [`open_of`] and leaves an unknown one out:
+//! then asks [`close_of`] / [`open_of`] — or, for the side of a line, [`close_side`] — and leaves
+//! an unknown one out:
 //!
 //! - breaks (`scan_break`), the closes outside a formation's span, the bodies a trend line may not
-//!   cross, the bar events (breakout, false break, bounce, role flip, stop hunt) and a flag's pole
-//!   read only known closes and opens — a bar without them neither breaks nor holds anything;
+//!   cross and the bar events (breakout, false break, bounce, role flip, stop hunt) ask which side
+//!   of the line a bar closed on ([`close_side`]): a known close answers, and a bar without one
+//!   answers only when its whole range lies on one side — its close, wherever it was, lay there
+//!   too. A bar whose range reaches the line has no side: it neither breaks nor holds anything;
+//! - a flag's pole reads only known opens and closes — its size is a price, not a side;
 //! - the ATR takes a bar's own range as its true range when the previous close is unknown;
 //! - a period level (a day's open, yesterday's close) is the first or last bar's own price, and is
 //!   not found when that bar has none — no other bar's price is that one;
@@ -55,10 +59,11 @@
 //! a break the market did not make.
 
 use moon_core::config::auto_figures::{BrokenPolicy, DetectorKind, DetectorParams, ToleranceUnit};
-use moon_core::market::candles::ChartCandle;
+use moon_core::market::candles::{ChartCandle, bucket_open_ms, resample};
 use moon_core::market::kline_cache::KIND_5M_MS;
 
 pub mod confluence;
+pub mod coverage;
 pub mod draw;
 pub mod events;
 pub mod extremes;
@@ -460,6 +465,28 @@ pub(crate) fn open_of(b: &ChartCandle) -> Option<f64> {
     positive(f64::from(b.open))
 }
 
+/// The side of `line` bar `b` CLOSED on — the one question every break and bar event asks.
+///
+/// A known close answers it ([`side_of`]). A bar without one (a ring bar, see the module doc) still
+/// closed somewhere inside its own range, so when the WHOLE range lies on one side of the line
+/// (`low > line`, `high < line`) the close did too and that side is the answer, as it would be for
+/// a real candle of that range whatever its close. A range that reaches or straddles the line
+/// leaves the side unknown: `None`, as exactly on the line. Without it a market the cache knows
+/// only from the ring never broke anything — its levels hung unbroken over price that had left
+/// them by a whole bar. `None` too when `line` is not a number.
+pub(crate) fn close_side(b: &ChartCandle, line: f64) -> Option<Side> {
+    if let Some(close) = close_of(b) {
+        return side_of(close, line);
+    }
+    if f64::from(b.low) > line {
+        Some(Side::Above)
+    } else if f64::from(b.high) < line {
+        Some(Side::Below)
+    } else {
+        None
+    }
+}
+
 /// Where price was at the end of `bars`, for what needs only "about where": the newest valid bar's
 /// close, or the middle of its range when its close is unknown — the close lies inside that range,
 /// so the middle is off by at most half of one bar. `None` when no bar is valid.
@@ -512,6 +539,50 @@ pub fn with_ring_rows(real: &[ChartCandle], ring: &[ChartCandle], out: &mut Vec<
     if out.len() > before || !out.is_sorted_by(|a, b| a.t_open_ms <= b.t_open_ms) {
         out.sort_by(|a, b| a.t_open_ms.total_cmp(&b.t_open_ms));
     }
+}
+
+/// Least share of its 5-minute rows a coarser bucket must be assembled from to be a bar: fewer is a
+/// hole ([`resample_5m`]).
+///
+/// The cache holds what the recorder wrote while the terminal ran and what the core's ring held, so
+/// a 4-hour bucket of one 5-minute row is common (on a live BTCUSDT cache, 21 of 70 H4 bars and 9
+/// of 15 daily ones were short, 16 of the H4 ones at a quarter of their rows or less). Its high and
+/// low are those of a few minutes, not of the bucket: a pivot, a swing and an ATR read from it see a
+/// market that never turned there, and a profile counts the day it belongs to as whole. Half is
+/// the line between "a bar with gaps" — its range is most of the bucket's — and "a few minutes
+/// standing for hours". The newest bucket, which the recorder may still be writing, is judged by
+/// the same share once its reader's lag cap has passed.
+pub const MIN_BUCKET_FILL: f64 = 0.5;
+
+/// `m5` (5-minute rows, ascending — the bar assembly's base, [`with_ring_rows`], real candles and
+/// ring rows alike) resampled to `tf_ms` into `out`, without the buckets assembled from fewer than
+/// [`MIN_BUCKET_FILL`] of the 5-minute rows they span (`tf_ms / 5 min`): those are holes, not bars.
+///
+/// The one resample of the 5-minute base for every reader of it — the chart's rows and the
+/// screener's scan — so both drop the same buckets. A `tf_ms` of five minutes or less passes every
+/// bucket. Buckets are cut exactly as `moon_core::market::candles::resample` cuts them, and a
+/// bucket's rows are counted the way it folds them. Cost O(n).
+pub fn resample_5m(m5: &[ChartCandle], tf_ms: i64, out: &mut Vec<ChartCandle>) {
+    resample(m5, tf_ms, out);
+    let expected = tf_ms / KIND_5M_MS;
+    if expected <= 1 {
+        return;
+    }
+    let need = MIN_BUCKET_FILL * expected as f64;
+    // `resample` opens a bucket with every row whose bucket differs from the last one opened, so
+    // the rows come in the same runs as `out`'s buckets: each bucket takes the row that opened it,
+    // then every following row of the same bucket.
+    let mut rows = m5.iter().peekable();
+    out.retain(|bucket| {
+        let mut n = usize::from(rows.next().is_some());
+        while rows
+            .next_if(|r| bucket_open_ms(r.t_open_ms, tf_ms) == bucket.t_open_ms)
+            .is_some()
+        {
+            n += 1;
+        }
+        n as f64 >= need
+    });
 }
 
 /// The most recent `lookback` bars — all of them when fewer exist, none for `lookback = 0`.
@@ -619,10 +690,11 @@ pub(crate) fn within(price: f64, line: f64, frac: f64) -> bool {
 ///
 /// An episode ends at a close back on `origin`'s side; a close beyond after that starts a new one,
 /// so a level that broke, came back and broke again reports its SECOND break — the one a
-/// `Keep { bars }` countdown must run from. A close exactly on the line, and a bar whose close is
-/// unknown (module doc), neither ends nor starts an episode; such a bar still counts in
-/// `bars_since`, which is time passing. `line_at` gives the line's price at a bar's open time; a bar where it gives `None` is
-/// skipped. Cost O(bars after `from_idx`).
+/// `Keep { bars }` countdown must run from. A bar's side is [`close_side`]: a close exactly on the
+/// line, and a bar whose close is unknown (module doc) with a range reaching the line, neither ends
+/// nor starts an episode; such a bar still counts in `bars_since`, which is time passing. `line_at`
+/// gives the line's price at a bar's open time; a bar where it gives `None` is skipped. Cost
+/// O(bars after `from_idx`).
 pub(crate) fn scan_break(
     bars: &[ChartCandle],
     from_idx: usize,
@@ -639,7 +711,7 @@ pub(crate) fn scan_break(
         let Some(line) = line_at(b.t_open_ms) else {
             continue;
         };
-        let Some(side) = close_of(b).and_then(|close| side_of(close, line)) else {
+        let Some(side) = close_side(b, line) else {
             continue;
         };
         last_side = Some(side);
