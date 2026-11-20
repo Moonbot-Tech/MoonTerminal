@@ -6,6 +6,10 @@
 //! into its `originals/` subdirectory. No damaged source is deleted. A completion marker lets the
 //! next process distinguish a finished recovery from a crash during finalization.
 //!
+//! A full check that could not run is never a pass, so it moves nothing by itself. It parks the
+//! writer instead, and the user may set the unchecked set aside through the same snapshot path
+//! ([`start_fresh_replica`]); a set-aside that fails puts back whatever it moved.
+//!
 //! A dedicated SQLite transaction provides the process-lifetime interprocess lease. Every current
 //! MoonTerminal writer must own the private [`ReportWritePermit`], so a second current process
 //! cannot inspect, replace, or write the same portable replica concurrently.
@@ -76,6 +80,55 @@ static CHECK_STARTED: OnceLock<Instant> = OnceLock::new();
 
 /// The one notice that is not latched: it stands only while the full check is still running.
 static CHECK_RUNNING_NOTICE: RecoveryNotice = RecoveryNotice::CheckRunning;
+
+/// Where the user's way out of a check that could not run stands ([`start_fresh_replica`]).
+static FRESH: Mutex<FreshReplica> = Mutex::new(FreshReplica::Unavailable);
+
+/// Opens for the parked writer once a fresh replica is in place; never resolves closed.
+static FRESH_GATE: StartupGate = StartupGate {
+    allowed: Mutex::new(None),
+    ready: Condvar::new(),
+};
+
+/// The outcome the set-aside latched: a started fresh replica, or a set left half moved.
+static FRESH_NOTICE: OnceLock<RecoveryNotice> = OnceLock::new();
+
+/// Shown while the user's set-aside runs; derived from [`FRESH`], like the running check's.
+static FRESH_RUNNING_NOTICE: RecoveryNotice = RecoveryNotice::FreshReplicaRunning;
+
+/// Shown after a set-aside that left every file where it was; the next attempt replaces it.
+static FRESH_FAILED_NOTICE: RecoveryNotice = RecoveryNotice::FreshReplicaFailed;
+
+/// Snapshot cause recorded for a set-aside the user asked for. It is not a damage verdict.
+const FRESH_REPLICA_CAUSE: &str = "The full integrity check could not run, and the user set the \
+                                   replica aside to start a fresh one. No damage was found.";
+
+/// How often a surface showing the running set-aside asks whether it has finished.
+///
+/// The copy of a replica of several gigabytes takes minutes, and every answer repaints the
+/// window that asked, so this is slower than the integrity poll's first interval.
+const FRESH_POLL_HINT: Duration = Duration::from_secs(2);
+
+/// Lifecycle of the user's fresh-replica action, one per process.
+///
+/// Only the writer, parked after a check that could not run, moves it out of `Unavailable`: the
+/// action is offered exactly when a writer is waiting to open what it creates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FreshReplica {
+    /// No writer is waiting: the check passed, is still running, or recovery stopped otherwise.
+    Unavailable,
+    /// A writer is parked and the current files are untouched; the user may start.
+    Offered,
+    /// The set-aside runs on its own thread; a second start is refused.
+    Running,
+    /// The last attempt left every file in place; the user may try again.
+    Failed,
+    /// The files were set aside and the writer was released. Terminal.
+    Started,
+    /// The files could be neither set aside nor put back; the next start finishes the move.
+    /// Terminal.
+    Stuck,
+}
 
 /// Private capability required to start the reports writer.
 ///
@@ -178,6 +231,17 @@ pub enum RecoveryNotice {
         /// Technical reason recorded for diagnostics.
         detail: String,
     },
+    /// The user is setting the replica aside after a check that could not run; reads are
+    /// closed until it finishes. Not latched: [`status`] derives it from the running action.
+    FreshReplicaRunning,
+    /// The user's set-aside failed and left every file where it was; recording is still off and
+    /// the action is offered again. Not latched: the next attempt replaces it.
+    FreshReplicaFailed,
+    /// The user set the unchecked replica aside and a fresh one records again.
+    FreshReplicaStarted {
+        /// Published directory containing the previous main/WAL/SHM files and metadata.
+        snapshot_dir: PathBuf,
+    },
 }
 
 /// Internal preflight decision before it is mapped onto a writer permit and UI notice.
@@ -236,11 +300,343 @@ pub fn status() -> Option<&'static RecoveryNotice> {
 }
 
 /// [`status`] as of a given moment, so the age of a running check can be tested without waiting.
+///
+/// The user's set-aside outranks the startup notice it answers: every value it publishes is a
+/// later fact about the same replica.
 fn status_at(now: Instant) -> Option<&'static RecoveryNotice> {
     if CHECK_PENDING.load(Ordering::Acquire) && check_is_slow(CHECK_STARTED.get().copied(), now) {
         return Some(&CHECK_RUNNING_NOTICE);
     }
-    NOTICE.get()
+    match fresh_state() {
+        FreshReplica::Running => Some(&FRESH_RUNNING_NOTICE),
+        FreshReplica::Failed => Some(&FRESH_FAILED_NOTICE),
+        FreshReplica::Started | FreshReplica::Stuck => FRESH_NOTICE.get().or_else(|| NOTICE.get()),
+        FreshReplica::Unavailable | FreshReplica::Offered => NOTICE.get(),
+    }
+}
+
+/// Current fresh-replica lifecycle, read under its lock.
+fn fresh_state() -> FreshReplica {
+    *FRESH.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Whether the user can set the current replica aside and start a fresh one right now.
+///
+/// True only after a full check that could not run, with the writer parked waiting for exactly
+/// this ([`wait_for_fresh_replica`]), no set-aside running, and the files still in place. A check
+/// still in progress never offers it: the writer parks only after the verdict.
+pub fn fresh_replica_offered() -> bool {
+    matches!(fresh_state(), FreshReplica::Offered | FreshReplica::Failed)
+        && !CHECK_PENDING.load(Ordering::Acquire)
+}
+
+/// How long a surface showing [`RecoveryNotice::FreshReplicaRunning`] waits before asking again.
+pub fn fresh_replica_poll_hint() -> Duration {
+    FRESH_POLL_HINT
+}
+
+/// Whether report writes are off for the rest of this session as things stand.
+///
+/// `false` while the full check is still deciding — a write sent then waits for the writer —
+/// and once a writer is authorized. A caller that would hand the writer work it must confirm
+/// asks this first: a message to a writer that never opens is never answered.
+pub fn recording_stopped() -> bool {
+    !write_access_pending() && !access_permitted()
+}
+
+/// Set the current replica aside and start a fresh one, off the calling thread.
+///
+/// The way out of a check that could not run, offered only while [`fresh_replica_offered`]. The
+/// main/WAL/SHM files are copied, verified and moved into a recovery snapshot exactly as for
+/// confirmed damage; the parked writer then opens a new replica and every core's catch-up,
+/// which waited for it, is declared from the start. A check that could not run is still not a
+/// pass: nothing is written to the unchecked files.
+///
+/// Returns:
+///     `true` when the set-aside started; `false` when it is not offered — including a second
+///     press while one runs — or its thread could not start, which [`status`] then reports.
+pub fn start_fresh_replica() -> bool {
+    if !begin_fresh_replica() {
+        return false;
+    }
+    match std::thread::Builder::new()
+        .name("reports-fresh".into())
+        .spawn(run_fresh_replica)
+    {
+        Ok(_) => true,
+        Err(error) => {
+            log::error!("reports: the fresh-replica thread did not start: {error}");
+            *FRESH.lock().unwrap_or_else(|p| p.into_inner()) = FreshReplica::Failed;
+            false
+        }
+    }
+}
+
+/// Claim the set-aside for one caller: the only transition into `Running`.
+///
+/// Returns:
+///     `true` for exactly one caller while the action is offered.
+fn begin_fresh_replica() -> bool {
+    let mut state = FRESH.lock().unwrap_or_else(|p| p.into_inner());
+    if !matches!(*state, FreshReplica::Offered | FreshReplica::Failed)
+        || CHECK_PENDING.load(Ordering::Acquire)
+    {
+        return false;
+    }
+    *state = FreshReplica::Running;
+    true
+}
+
+/// Body of the set-aside thread: close reads, move the files, and release the parked writer.
+///
+/// Reads close first because a reader's open handle keeps Windows from renaming the file, and a
+/// rename under a live reader would hand it a vanished replica. They reopen on any outcome that
+/// leaves the files in place.
+fn run_fresh_replica() {
+    let files = paths::reports_db_files();
+    let recovery_root = paths::damaged_reports_dir();
+    let reason = match NOTICE.get() {
+        Some(RecoveryNotice::CheckIncomplete { detail }) => detail.clone(),
+        _ => "reports full integrity check did not complete".to_string(),
+    };
+    let _unfinished = FreshRun;
+    READ_ACCESS_ENABLED.store(false, Ordering::Release);
+    let Some(readers) = super::reader_budget::quiesce() else {
+        READ_ACCESS_ENABLED.store(true, Ordering::Release);
+        log::error!("reports: readers did not drain; the replica was not set aside");
+        *FRESH.lock().unwrap_or_else(|p| p.into_inner()) = FreshReplica::Failed;
+        return;
+    };
+    match set_aside(&files, &recovery_root, now_unix_ms_i64(), reason) {
+        SetAside::Done(snapshot_dir) => {
+            log::warn!(
+                "reports: unchecked replica set aside in {}; starting a fresh replica",
+                snapshot_dir.display()
+            );
+            // Damage a reader recorded on the parked replica went with its files, exactly as
+            // after a recovery; left latched, the writer would stop on the fresh one.
+            integrity::clear_after_recovery();
+            ACCESS_ENABLED.store(true, Ordering::Release);
+            READ_ACCESS_ENABLED.store(true, Ordering::Release);
+            // Before the state: `status` reads this notice once the state says `Started`.
+            let _ = FRESH_NOTICE.set(RecoveryNotice::FreshReplicaStarted { snapshot_dir });
+            *FRESH.lock().unwrap_or_else(|p| p.into_inner()) = FreshReplica::Started;
+            WRITE_ACCESS.finish(true);
+            FRESH_GATE.finish(true);
+        }
+        SetAside::Untouched(error) => {
+            READ_ACCESS_ENABLED.store(true, Ordering::Release);
+            log::error!(
+                "reports: the replica could not be set aside and was left in place: {error:#}"
+            );
+            *FRESH.lock().unwrap_or_else(|p| p.into_inner()) = FreshReplica::Failed;
+        }
+        SetAside::Stuck { error, in_place } => {
+            // Reads reopen only over a complete live set; a half-moved one stays closed.
+            READ_ACCESS_ENABLED.store(in_place, Ordering::Release);
+            let detail = format!(
+                "the replica could not be set aside and its published copy could not be \
+                 withdrawn; the next start finishes the move: {error:#}"
+            );
+            log::error!("reports: {detail}");
+            let _ = FRESH_NOTICE.set(RecoveryNotice::Failed { detail });
+            *FRESH.lock().unwrap_or_else(|p| p.into_inner()) = FreshReplica::Stuck;
+        }
+    }
+    drop(readers);
+}
+
+/// Ends a set-aside thread that panicked as stuck rather than as running forever.
+///
+/// The outcome arms move the state out of `Running` themselves; this covers a panic between,
+/// which would otherwise leave the running notice up and the action withdrawn for the session.
+/// Stuck, not failed: the files may be half moved, so no retry is offered and reads stay closed.
+struct FreshRun;
+
+impl Drop for FreshRun {
+    fn drop(&mut self) {
+        let mut state = FRESH.lock().unwrap_or_else(|p| p.into_inner());
+        if *state == FreshReplica::Running {
+            let detail = "the fresh-replica thread stopped before it finished".to_string();
+            log::error!("reports: {detail}");
+            let _ = FRESH_NOTICE.set(RecoveryNotice::Failed { detail });
+            *state = FreshReplica::Stuck;
+        }
+    }
+}
+
+/// Park the writer after a check that could not run, until the user starts a fresh replica.
+///
+/// Before this the writer exited, and nothing in the session could bring recording back. Parked,
+/// it has not finished initializing, so every core keeps its report catch-up undeclared — exactly
+/// as while a check runs — and declares it from the start once the fresh replica is open.
+///
+/// Args:
+///     anchor: The permit's read-only WAL anchor, closed here: no writer will need it, and its
+///         open handle would keep the main file from being moved.
+///
+/// Returns:
+///     `true` once a fresh replica is in place; `false` at once when the verdict was anything
+///     but a check that could not run. Otherwise it does not return until the user acts.
+pub(crate) fn wait_for_fresh_replica(anchor: &Mutex<Option<Connection>>) -> bool {
+    if !offer_fresh_replica(anchor) {
+        return false;
+    }
+    log::warn!(
+        "reports: recording waits for a fresh replica, which Report and Analytics offer after a \
+         check that could not run"
+    );
+    FRESH_GATE.wait()
+}
+
+/// Offer the fresh-replica action when the published verdict is a check that could not run.
+///
+/// Args:
+///     anchor: WAL anchor to close before the action can move the main file.
+///
+/// Returns:
+///     Whether the action is now offered; it is offered at most once per process.
+fn offer_fresh_replica(anchor: &Mutex<Option<Connection>>) -> bool {
+    if !matches!(NOTICE.get(), Some(RecoveryNotice::CheckIncomplete { .. }))
+        || integrity::writes_blocked()
+        || access_permitted()
+    {
+        return false;
+    }
+    anchor.lock().unwrap_or_else(|p| p.into_inner()).take();
+    let mut state = FRESH.lock().unwrap_or_else(|p| p.into_inner());
+    if *state != FreshReplica::Unavailable {
+        return false;
+    }
+    *state = FreshReplica::Offered;
+    true
+}
+
+/// Outcome of moving an unchecked file set into a recovery snapshot.
+#[derive(Debug)]
+enum SetAside {
+    /// Every member is in the finalized snapshot and the live paths are free.
+    Done(PathBuf),
+    /// Nothing moved, or everything that moved was put back and its copy withdrawn: the live set
+    /// is as it was and no later start touches it.
+    Untouched(anyhow::Error),
+    /// The published snapshot stays, unfinalized, so the next start's [`resume_pending`] finishes
+    /// what the user asked for; no retry may publish a second one. Either a member could not be
+    /// put back (`in_place` false) or every member is back but the copy could not be withdrawn.
+    Stuck {
+        /// Why the move stopped.
+        error: anyhow::Error,
+        /// Whether every member is at its live path again.
+        in_place: bool,
+    },
+}
+
+/// Copy, verify and move an unchecked file set aside the way confirmed damage is, or put it back.
+///
+/// The usual reason the check could not run is that something holds the file, so the move is
+/// expected to fail now and then. A failed copy never touched the sources; a failed retirement
+/// is rolled back, and the published copy is withdrawn so that no later start completes a move
+/// the user saw fail. A copy that cannot be withdrawn makes the outcome stuck, not untouched.
+///
+/// Args:
+///     files: Current main/WAL/SHM paths.
+///     recovery_root: Directory for published snapshots.
+///     now_ms: Snapshot timestamp.
+///     reason: Why the check could not run, kept in the snapshot's metadata.
+///
+/// Returns:
+///     Where the files are now.
+fn set_aside(files: &[PathBuf; 3], recovery_root: &Path, now_ms: i64, reason: String) -> SetAside {
+    let snapshot = match stage_and_publish(
+        files,
+        recovery_root,
+        now_ms,
+        FRESH_REPLICA_CAUSE,
+        vec![reason],
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return SetAside::Untouched(error),
+    };
+    let error = match finalize_snapshot(files, &snapshot, now_ms) {
+        Ok(()) => return SetAside::Done(snapshot),
+        Err(error) => error,
+    };
+    match restore_unfinalized(files, &snapshot) {
+        Ok(true) => SetAside::Untouched(error),
+        Ok(false) => SetAside::Stuck {
+            error,
+            in_place: true,
+        },
+        Err(restore) => SetAside::Stuck {
+            error: error.context(format!("{restore:#}")),
+            in_place: false,
+        },
+    }
+}
+
+/// Put retired members back at their live paths and withdraw the published snapshot.
+///
+/// Withdrawing renames the snapshot back to a staging name before anything is removed: an
+/// unpublished directory is one [`cleanup_abandoned_staging`] clears, never one
+/// [`resume_pending`] would finish by retiring the live files again.
+///
+/// Args:
+///     files: Canonical main/WAL/SHM paths.
+///     snapshot: Published, unfinalized snapshot of those files.
+///
+/// Returns:
+///     Whether the snapshot was withdrawn, once every retired member is back at its live path.
+///     `false` leaves it published: the next start would finish the move, so the caller must
+///     not offer a retry that publishes a second one. A withdrawn copy whose removal failed is
+///     only logged — as staging, nothing will ever act on it.
+fn restore_unfinalized(files: &[PathBuf; 3], snapshot: &Path) -> anyhow::Result<bool> {
+    let originals = paths::report_recovery_originals_dir(snapshot);
+    for source in files {
+        let Some(name) = source.file_name() else {
+            anyhow::bail!("report source has no file name: {}", source.display());
+        };
+        let retired = originals.join(name);
+        if !regular_file_state(&retired)? {
+            continue;
+        }
+        if regular_file_state(source)? {
+            anyhow::bail!(
+                "report source exists at both live and retired paths: {}",
+                source.display()
+            );
+        }
+        std::fs::rename(&retired, source).with_context(|| {
+            format!(
+                "put report source back from {} to {}",
+                retired.display(),
+                source.display()
+            )
+        })?;
+    }
+    let withdrawn = snapshot.with_file_name(format!(
+        "{STAGING_PREFIX}{}-{}",
+        std::process::id(),
+        STAGING_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    if let Err(error) = std::fs::rename(snapshot, &withdrawn) {
+        log::error!(
+            "reports: the files are back in place, but the recovery copy {} could not be \
+             withdrawn: {error}",
+            snapshot.display()
+        );
+        return Ok(false);
+    }
+    let cleared = match withdrawn.parent() {
+        Some(root) => cleanup_abandoned_staging(files, root),
+        None => Ok(()),
+    };
+    if let Err(error) = cleared {
+        log::error!(
+            "reports: the files are back in place, but the unused recovery copy was not removed: \
+             {error:#}"
+        );
+    }
+    Ok(true)
 }
 
 /// Whether a full check that began at `started` has run long enough to be announced.
@@ -864,7 +1260,11 @@ fn recent_snapshot(recovery_root: &Path, now_ms: i64) -> anyhow::Result<Option<P
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         }
-        let _ = read_metadata(&snapshot)?;
+        // A set-aside the user asked for is not a damage recovery, so it never trips the breaker
+        // that stops a chain of automatic replacements.
+        if read_metadata(&snapshot)?.cause == FRESH_REPLICA_CAUSE {
+            continue;
+        }
         let finalized_ms = read_finalized_ms(&snapshot)?;
         let age = now_ms.saturating_sub(finalized_ms);
         if age <= RECOVERY_COOLDOWN_MS
@@ -892,6 +1292,40 @@ fn create_snapshot(
     files: &[PathBuf; 3],
     recovery_root: &Path,
     now_ms: i64,
+    diagnostics: Vec<String>,
+) -> anyhow::Result<PathBuf> {
+    let snapshot = stage_and_publish(
+        files,
+        recovery_root,
+        now_ms,
+        "SQLite reported database corruption. Storage errors, interrupted writes, or file \
+         synchronization software can be involved.",
+        diagnostics,
+    )?;
+    finalize_snapshot(files, &snapshot, now_ms)
+        .with_context(|| format!("finalize published snapshot {}", snapshot.display()))?;
+    Ok(snapshot)
+}
+
+/// Copy and verify one file set into staging, describe it, and publish it with one rename.
+///
+/// The sources are only read: until [`finalize_snapshot`] retires them, a failure anywhere here
+/// leaves the live set exactly as it was and removes the staging it built.
+///
+/// Args:
+///     files: Current main/WAL/SHM paths.
+///     recovery_root: Directory for published snapshots.
+///     now_ms: Recovery timestamp.
+///     cause: Generic explanation recorded in the metadata.
+///     diagnostics: What the integrity check reported.
+///
+/// Returns:
+///     Published, not yet finalized snapshot directory.
+fn stage_and_publish(
+    files: &[PathBuf; 3],
+    recovery_root: &Path,
+    now_ms: i64,
+    cause: &str,
     diagnostics: Vec<String>,
 ) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(recovery_root)
@@ -925,9 +1359,7 @@ fn create_snapshot(
         let metadata = RecoveryMetadata {
             schema_version: METADATA_SCHEMA,
             created_unix_ms: now_ms,
-            cause: "SQLite reported database corruption. Storage errors, interrupted writes, or \
-                    file synchronization software can be involved."
-                .to_string(),
+            cause: cause.to_string(),
             diagnostics,
             files: snapshots,
         };
@@ -939,16 +1371,13 @@ fn create_snapshot(
         return Err(error);
     }
 
-    let snapshot = match publish_snapshot(&staging, recovery_root, now_ms) {
-        Ok(snapshot) => snapshot,
+    match publish_snapshot(&staging, recovery_root, now_ms) {
+        Ok(snapshot) => Ok(snapshot),
         Err(error) => {
             let _ = std::fs::remove_dir_all(&staging);
-            return Err(error);
+            Err(error)
         }
-    };
-    finalize_snapshot(files, &snapshot, now_ms)
-        .with_context(|| format!("finalize published snapshot {}", snapshot.display()))?;
-    Ok(snapshot)
+    }
 }
 
 /// Copy one source member and prove that the copy has identical length and SHA-256.

@@ -94,10 +94,17 @@ impl Render for AnalyticsView {
                     // non-banner form (alert.rs `when(!self.banner, ..title..)`),
                     // so the banner variant would drop the localized heading and
                     // show the bare SQLite diagnostic line.
-                    div()
+                    v_flex()
+                        .gap(design::ui_px(cx, 6.0))
                         .px(design::ui_px(cx, 10.0))
                         .pb(design::ui_px(cx, 6.0))
-                        .child(MoonAlert::warning("an-integrity-banner", detail).title(title)),
+                        .child(MoonAlert::warning("an-integrity-banner", detail).title(title))
+                        // The way out of a check that could not run, under the notice it answers.
+                        .children(crate::report_notice::fresh_replica_action(
+                            "an-fresh-replica",
+                            cx.entity().downgrade(),
+                            cx,
+                        )),
                 )
             })
             // A bulk write whose queue succeeded but whose real outcome is still unknown. Above

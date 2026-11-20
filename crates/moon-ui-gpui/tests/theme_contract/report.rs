@@ -23,6 +23,11 @@ fn report_and_analytics_share_the_recovery_notice_composer() {
     assert!(integrity.contains("crate::report_notice::recovery_notice_text(Some(notice))"));
     let report = read_src("panels/report/render.rs");
     assert!(report.contains("Err(note) => note_el(\"rep-table-note\", note, 12.0, p, cx)"));
+    // The way out of a check that could not run is offered under the notice on both surfaces;
+    // losing it on one leaves its users with recording off and nothing to press.
+    let analytics = code_only(&read_src("analytics/render.rs"));
+    assert!(analytics.contains("crate::report_notice::fresh_replica_action("));
+    assert!(code_only(&report).contains("crate::report_notice::fresh_replica_action("));
 }
 
 /// A recovered replica permits reads, so routing its notice only through access denial hides

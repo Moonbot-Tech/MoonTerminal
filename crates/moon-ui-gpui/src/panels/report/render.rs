@@ -527,23 +527,36 @@ impl Render for ReportPanel {
         };
         // These states permit reads, so their notice must accompany ready content as well.
         // A query failure must not hide the separate fact that new trades are not recorded.
+        // The way out of an incomplete check rides under its notice, and a failed attempt keeps
+        // history readable and offers it again.
         let recovery_notice = self
             .recovery_notice
             .filter(|notice| match notice {
                 db::report_recovery::RecoveryNotice::CheckRunning => true,
                 db::report_recovery::RecoveryNotice::CheckIncomplete { .. } => true,
-                db::report_recovery::RecoveryNotice::Recovered { .. } => {
+                db::report_recovery::RecoveryNotice::FreshReplicaFailed => true,
+                // A failed read already carries the same text through its access-denied note.
+                db::report_recovery::RecoveryNotice::Recovered { .. }
+                | db::report_recovery::RecoveryNotice::FreshReplicaRunning
+                | db::report_recovery::RecoveryNotice::FreshReplicaStarted { .. } => {
                     !matches!(self.data, LoadState::Failed(_))
                 }
                 _ => false,
             })
             .map(|notice| {
                 let (title, detail) = crate::report_notice::recovery_notice_text(Some(notice));
-                div()
+                let action = crate::report_notice::fresh_replica_action(
+                    "rep-fresh-replica",
+                    cx.entity().downgrade(),
+                    cx,
+                );
+                v_flex()
                     .flex_none()
+                    .gap(design::ui_px(cx, 6.0))
                     .px(design::ui_px(cx, 12.0))
                     .py(design::ui_px(cx, 6.0))
                     .child(moon_ui::MoonAlert::info("rep-recovered-note", detail).title(title))
+                    .children(action)
             });
 
         // Exact totals over the full filtered period. WHY the row is split into a never-yielding
