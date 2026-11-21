@@ -382,8 +382,23 @@ impl AssetsView {
                 &self.cached_aggs,
                 &HashSet::new(),
                 self.cached_scope_marker.as_ref(),
+                self.footer_tip(),
+                cx.entity().downgrade(),
                 cx,
             ))
+    }
+
+    /// The footer balance group's tooltip for the panel as it is now.
+    ///
+    /// The one place that says what the tooltip covers — every in-scope core and the scope
+    /// marker — read by the footer as it renders and by the open tooltip on every repaint, so the
+    /// two cannot drift apart.
+    pub(super) fn footer_tip(&self) -> super::balances::SummaryTip {
+        super::balances::summary_tip_of(
+            &self.cached_aggs,
+            &HashSet::new(),
+            self.cached_scope_marker.as_ref(),
+        )
     }
 
     /// Design-space horizontal padding on each side of a roster row. SHARED by the row that draws

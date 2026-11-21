@@ -1,11 +1,28 @@
 // Explicit imports, NOT `use super::*`: the parent re-exports `gpui::*`, which carries its
 // own `test` and shadows the built-in attribute — `#[test]` then expands recursively.
 use super::{
-    CoreAgg, DASH, agg_text, facts, in_scope, is_complete, money_or_dash, scope_amount_text,
-    scope_totals, summary_tooltip,
+    CoreAgg, DASH, SummaryTip, agg_text, facts, in_scope, is_complete, money_or_dash,
+    scope_amount_text, scope_totals, summary_tip,
 };
 use moon_core::session::{BalanceState, CoreId};
 use std::collections::HashSet;
+
+/// Everything the tooltip says, one line per row, fact and note — for `contains` checks.
+fn flat(tip: &SummaryTip) -> String {
+    let mut lines: Vec<String> = tip
+        .rows
+        .iter()
+        .map(|(label, amount)| format!("{label} {amount}"))
+        .collect();
+    lines.extend(tip.facts.iter().cloned());
+    lines.extend(tip.notes.iter().cloned());
+    lines.join("\n")
+}
+
+/// The tooltip of `t` with no scope marker.
+fn tooltip(t: &super::ScopeTotals) -> String {
+    flat(&summary_tip(t, &[]))
+}
 
 /// Build a test aggregate with a deterministic display name.
 fn agg(id: CoreId, free: f64, total: f64, state: BalanceState) -> CoreAgg {
@@ -139,7 +156,7 @@ fn non_finite_values_are_dropped() {
         "a dropped contribution is not a complete total"
     );
     // The scope still covers both cores, so the caption cannot understate what it describes.
-    assert_eq!(t.cores(), 2);
+    assert_eq!(t.all_cores, 2);
     assert_eq!(money_or_dash(f64::NAN), DASH);
     assert_eq!(money_or_dash(f64::INFINITY), DASH);
 }
@@ -205,8 +222,7 @@ fn facts_list_every_reason_in_priority_order() {
 }
 
 /// The load-bearing narrow-dock guarantee: the row clips its trailing facts from the right,
-/// so anything that can vanish must remain readable in the tooltip. A total whose reason for
-/// being partial must not lose its explanation when the trailing facts are clipped.
+/// so anything that can vanish must remain readable in the tooltip.
 #[test]
 fn tooltip_carries_every_fact_that_can_clip() {
     let _locale = crate::test_locale::force("en");
@@ -218,10 +234,19 @@ fn tooltip_carries_every_fact_that_can_clip() {
     ];
     let t = scope_totals(&aggs, &HashSet::new());
     let tail = facts(&t);
-    let tip = summary_tooltip(&t, &tail);
-    for fact in &tail {
-        assert!(tip.contains(fact), "tooltip lost {fact:?}");
+    let marker = ["· mode: MANUAL".to_string()];
+    let tip = summary_tip(&t, &marker);
+    // The core count is worded differently in the tooltip; every reason for a partial sum, and
+    // the scope marker's facts, are repeated as the row says them.
+    assert_eq!(tip.facts[0], rust_i18n::t!("assets.cores_n", n = 4));
+    for fact in tail[1..].iter().chain(&marker) {
+        let fact = fact.trim_start_matches("· ");
+        assert!(tip.facts.iter().any(|f| f == fact), "tooltip lost {fact:?}");
     }
+    assert!(
+        !tip.complete,
+        "a partial total is drawn muted in the tooltip too"
+    );
 }
 
 /// The tooltip obeys the same "no data is not zero" rule as the row it explains.
@@ -231,12 +256,70 @@ fn tooltip_shows_dash_when_nothing_reported() {
     let aggs = vec![agg(1, 0.0, 0.0, BalanceState::Awaiting)];
     let t = scope_totals(&aggs, &HashSet::new());
     assert_eq!(scope_amount_text(&t, t.total), DASH);
-    let tip = summary_tooltip(&t, &facts(&t));
-    assert!(tip.contains(DASH));
+    let tip = summary_tip(&t, &[]);
+    assert!(tip.rows.iter().all(|(_, amount)| amount == DASH));
     assert!(
-        !tip.contains("0.0$"),
+        !flat(&tip).contains("0.0$"),
         "an unreported scope must not read as an empty one"
     );
+}
+
+/// Breakage: the row printing the contribution count as "cores" — a 12-core window with two
+/// cores folded into shared accounts read "Cores: 10". It must count every core in the window.
+#[test]
+fn the_row_counts_every_core_in_the_window() {
+    let _locale = crate::test_locale::force("en");
+    use moon_core::config::TotalMode;
+    use moon_core::venue::Brand;
+    let aggs = vec![
+        on_account(1, 100.0, Brand::Bybit, TotalMode::Auto),
+        on_account(2, 100.0, Brand::Bybit, TotalMode::Auto),
+        agg(3, 10.0, 10.0, BalanceState::Live),
+    ];
+    let t = scope_totals(&aggs, &HashSet::new());
+    assert_eq!(
+        facts(&t),
+        [format!(
+            "· {}",
+            rust_i18n::t!("assets.balances_cores_n", n = 3)
+        )]
+    );
+}
+
+/// Breakage: the count rebuilt from the fold's buckets — `fold_accounts` puts a core with no
+/// usable reading in none of them when its account already has one, and likewise every core but
+/// the first of a shared account where none has reported. Three cores then read "cores: 2"
+/// exactly while a shared account was connecting.
+#[test]
+fn the_row_counts_cores_the_fold_puts_in_no_bucket() {
+    let _locale = crate::test_locale::force("en");
+    use moon_core::config::TotalMode;
+    use moon_core::venue::Brand;
+    let three = format!("· {}", rust_i18n::t!("assets.balances_cores_n", n = 3));
+    let awaiting = |id| CoreAgg {
+        state: BalanceState::Awaiting,
+        ..on_account(id, 0.0, Brand::Bybit, TotalMode::Auto)
+    };
+    // One core of the shared account reports, its sibling has no snapshot yet.
+    let one_waiting = vec![
+        on_account(1, 100.0, Brand::Bybit, TotalMode::Auto),
+        awaiting(2),
+        agg(3, 10.0, 10.0, BalanceState::Live),
+    ];
+    let t = scope_totals(&one_waiting, &HashSet::new());
+    assert_eq!(facts(&t)[0], three);
+    assert_eq!(
+        summary_tip(&t, &[]).facts[0],
+        rust_i18n::t!("assets.cores_n", n = 3)
+    );
+    // Neither core of the shared account has reported.
+    let both_waiting = vec![
+        awaiting(1),
+        awaiting(2),
+        agg(3, 10.0, 10.0, BalanceState::Live),
+    ];
+    let t = scope_totals(&both_waiting, &HashSet::new());
+    assert_eq!(facts(&t)[0], three);
 }
 
 /// An aggregate on a known account, so `scope_totals` can fold it.
@@ -260,8 +343,8 @@ fn on_account(
 }
 
 /// Breakage: `balances.rs::scope_totals` summing the raw rows instead of `aggregate_accounts` —
-/// two cores on one account would show that account twice in the footer. The folded count must
-/// reach the facts and the tooltip must name which core was folded into which.
+/// two cores on one account would show that account twice in the footer. The tooltip must name
+/// which core was folded into which.
 #[test]
 fn two_cores_on_one_account_are_one_account_in_the_footer() {
     let _locale = crate::test_locale::force("en");
@@ -273,26 +356,24 @@ fn two_cores_on_one_account_are_one_account_in_the_footer() {
     ];
     let t = scope_totals(&aggs, &HashSet::new());
     assert_eq!((t.free, t.total), (100.0, 100.0));
-    let f = facts(&t);
-    let folded = format!("· {}", rust_i18n::t!("assets.balances_folded_n", n = 1));
-    assert!(f.contains(&folded), "facts {f:?} lack the folded count");
-    let tip = summary_tooltip(&t, &f);
+    let tip = tooltip(&t);
     let line = rust_i18n::t!(
-        "assets.balances_folded_into",
-        cores = "core-2",
-        core = "core-1"
+        "assets.balances_tip_shared",
+        cores = "core-1 + core-2",
+        brand = "Bybit"
     );
     assert!(
         tip.contains(line.as_ref()),
-        "tooltip {tip:?} lacks the fold line"
+        "tooltip {tip:?} lacks the shared-account line"
     );
+    assert!(tip.contains(rust_i18n::t!("assets.cores_n", n = 2).as_ref()));
     assert!(
         !tip.contains(rust_i18n::t!("assets.balances_folded_hl_caveat").as_ref()),
         "a non-Hyperliquid fold carries no Hyperliquid caveat"
     );
 }
 
-/// Breakage: `summary_tooltip` dropping the excluded list or `facts` the excluded count — a core
+/// Breakage: `summary_tip` dropping the excluded list or `facts` the excluded count — a core
 /// the user left out of the total would vanish from it without a word.
 #[test]
 fn an_excluded_core_is_named_in_facts_and_tooltip() {
@@ -308,7 +389,8 @@ fn an_excluded_core_is_named_in_facts_and_tooltip() {
     let f = facts(&t);
     let excluded = format!("· {}", rust_i18n::t!("assets.balances_excluded_n", n = 1));
     assert!(f.contains(&excluded), "facts {f:?} lack the excluded count");
-    let tip = summary_tooltip(&t, &f);
+    // The tooltip names the excluded cores instead of repeating their count beside the list.
+    let tip = tooltip(&t);
     let line = rust_i18n::t!("assets.balances_excluded_list", cores = "core-2");
     assert!(
         tip.contains(line.as_ref()),
@@ -316,7 +398,7 @@ fn an_excluded_core_is_named_in_facts_and_tooltip() {
     );
 }
 
-/// Breakage: `summary_tooltip` losing the Hyperliquid caveat — a folded Hyperliquid account
+/// Breakage: `summary_tip` losing the Hyperliquid caveat — a folded Hyperliquid account
 /// would read as exact when its cores report the shared wallet differently.
 #[test]
 fn a_hyperliquid_fold_carries_its_caveat() {
@@ -328,6 +410,20 @@ fn a_hyperliquid_fold_carries_its_caveat() {
         on_account(2, 90.0, Brand::Hyperliquid, TotalMode::Auto),
     ];
     let t = scope_totals(&aggs, &HashSet::new());
-    let tip = summary_tooltip(&t, &facts(&t));
+    let tip = tooltip(&t);
     assert!(tip.contains(rust_i18n::t!("assets.balances_folded_hl_caveat").as_ref()));
+}
+
+/// A clean scope says no more than it must: the amounts and the core count, no notes — the
+/// row already names its subject, so a closing line restating it would only lengthen the hover.
+#[test]
+fn a_clean_scope_has_no_notes() {
+    let _locale = crate::test_locale::force("en");
+    let aggs = vec![agg(1, 10.0, 20.0, BalanceState::Live)];
+    let tip = summary_tip(&scope_totals(&aggs, &HashSet::new()), &[]);
+    assert_eq!(
+        tip.facts,
+        [rust_i18n::t!("assets.cores_n", n = 1).to_string()]
+    );
+    assert!(tip.notes.is_empty(), "{:?}", tip.notes);
 }
