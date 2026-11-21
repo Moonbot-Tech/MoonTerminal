@@ -18,8 +18,8 @@ use super::schema_v7::{MoonBotConfig, SHORTCUT_ACTIONS, ShortcutAction};
 use super::shortcut::{self, DecodedShortcut};
 use crate::config::groups::TakeProfitMode;
 use crate::config::hotkeys::{HotkeysConfig, KeySlot, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN};
-use crate::config::orders::OrdersStyleSet;
-use crate::config::theme::ChartThemeSet;
+use crate::config::orders::{OrdersStyle, OrdersStyleSet};
+use crate::config::theme::{ChartTheme, ChartThemeSet};
 
 /// Typed value of an importable item, so application code does not parse strings.
 #[derive(Debug, Clone, PartialEq)]
@@ -369,158 +369,150 @@ fn map_colors(mb: &MoonBotConfig, cur: &PlanContext, plan: &mut MoonBotImportPla
             mb.theme.colors_dark()
         };
         let Some(section) = section else { continue };
-        let theme_side = if light { "light" } else { "dark" };
         let theme = cur.theme.get(light);
         let orders = cur.orders.get(light);
         for (key, value) in &section.entries {
-            let Some((rgb, alpha)) = parse_tcolor(value) else {
-                plan.unsupported.push(Unsupported {
+            match map_color(key, value, light, theme, orders) {
+                Ok(change) => plan.chart.push(change),
+                Err(reason) => plan.unsupported.push(Unsupported {
                     name: PreviewCaption::ColorField {
                         key: key.clone(),
                         light,
                     },
-                    reason: ImportReason::InvalidColor {
-                        value: value.clone(),
-                    },
-                });
-                continue;
-            };
-            // Our color fields have no alpha; do not silently discard meaningful alpha.
-            if alpha != 0 && alpha != 0xFF {
-                plan.unsupported.push(Unsupported {
-                    name: PreviewCaption::ColorField {
-                        key: key.clone(),
-                        light,
-                    },
-                    reason: ImportReason::ColorAlpha { alpha },
-                });
-                continue;
+                    reason,
+                }),
             }
-            // Explicit MoonBot key → Terminal field mapping (spec section 8). Keys outside
-            // this table go to unsupported: they are decoded but not applied.
-            let (target_id, label, current_rgb): (&str, PreviewCaption, [u8; 3]) =
-                match key.as_str() {
-                    "graphBK" => ("theme.bg", PreviewCaption::ChartBackground, theme.bg),
-                    "graphNet" => ("theme.grid", PreviewCaption::Grid, theme.grid),
-                    "graphCursor" => ("theme.cross", PreviewCaption::Crosshair, theme.cross),
-                    "graphFont" => (
-                        "theme.labels",
-                        PreviewCaption::NeutralLabels,
-                        theme.axis_label,
-                    ),
-                    "CandleGreen" => ("theme.candle_up", PreviewCaption::CandleUp, theme.candle_up),
-                    "CandleRed" => (
-                        "theme.candle_down",
-                        PreviewCaption::CandleDown,
-                        theme.candle_down,
-                    ),
-                    "CandleNeutral" => (
-                        "theme.candle_neutral",
-                        PreviewCaption::CandleNeutral,
-                        theme.candle_neutral,
-                    ),
-                    "OrderBookGreen" => ("theme.book_bid", PreviewCaption::BookBid, theme.book_bid),
-                    "OrderBookRed" => ("theme.book_ask", PreviewCaption::BookAsk, theme.book_ask),
-                    "BuyOrder" => (
-                        "orders.buy.color",
-                        PreviewCaption::BuyLine,
-                        orders.buy.color,
-                    ),
-                    "BuyPendingOrder" => (
-                        "orders.buy.pending_color",
-                        PreviewCaption::BuyPendingLine,
-                        orders.buy.pending_color.unwrap_or(orders.buy.color),
-                    ),
-                    "SellOrder" => (
-                        "orders.sell.color",
-                        PreviewCaption::SellLine,
-                        orders.sell.color,
-                    ),
-                    "BuyShort" => (
-                        "orders.buy_short.color",
-                        PreviewCaption::BuyShortLine,
-                        orders.buy_short.color,
-                    ),
-                    "SellShort" => (
-                        "orders.sell_short.color",
-                        PreviewCaption::SellShortLine,
-                        orders.sell_short.color,
-                    ),
-                    "Trailing" => (
-                        "orders.trailing.color",
-                        PreviewCaption::TrailingLine,
-                        orders.trailing.color,
-                    ),
-                    "LiqPrice" => (
-                        "orders.liq.color",
-                        PreviewCaption::LiquidationLine,
-                        orders.liq.color,
-                    ),
-                    "BookLevelGreen" | "BookLevelRed" => {
-                        let bid = key == "BookLevelGreen";
-                        let rgba = theme.resolved_book_level(bid);
-                        (
-                            if bid {
-                                "theme.book_level_bid"
-                            } else {
-                                "theme.book_level_ask"
-                            },
-                            PreviewCaption::ConfigField(key.clone()),
-                            [rgba[0], rgba[1], rgba[2]].map(|v| (v * 255.0).round() as u8),
-                        )
-                    }
-                    "BuyOrderDone" => {
-                        plan.unsupported.push(Unsupported {
-                            name: PreviewCaption::ColorField {
-                                key: key.clone(),
-                                light,
-                            },
-                            reason: ImportReason::ClosedOrderOpacity,
-                        });
-                        continue;
-                    }
-                    "MarkPrice" | "LiqOrdersLong" | "LiqOrdersShort" => {
-                        plan.unsupported.push(Unsupported {
-                            name: PreviewCaption::ColorField {
-                                key: key.clone(),
-                                light,
-                            },
-                            reason: ImportReason::NoStyle,
-                        });
-                        continue;
-                    }
-                    _ => {
-                        plan.unsupported.push(Unsupported {
-                            name: PreviewCaption::ColorField {
-                                key: key.clone(),
-                                light,
-                            },
-                            reason: ImportReason::UnmappedColor,
-                        });
-                        continue;
-                    }
-                };
-            // The theme side is NOT in the label: preview groups colors into "Light"/"Dark"
-            // columns, with the side encoded in the item id. Matching values are also shown
-            // (`same`) to provide the complete import picture.
-            plan.chart.push(SettingChange {
-                id: format!("{target_id}.{theme_side}"),
-                label,
-                current: PreviewValue::Data(rgb_hex(current_rgb)),
-                new: PreviewValue::Data(rgb_hex(rgb)),
-                value: PlannedValue::Rgb(rgb),
-                // An automatic colour is not a stored override, even if its rounded swatch matches.
-                same: match key.as_str() {
-                    "BookLevelGreen" => theme.book_level_bid == Some(rgb),
-                    "BookLevelRed" => theme.book_level_ask == Some(rgb),
-                    _ => current_rgb == rgb,
-                },
-            });
         }
     }
-    // Do not apply Charts/ArbColors sections from the Ini block without an explicit mapping
-    // table (spec section 9). Expand keys BY NAME with their values; this list determines which
-    // mappings/fields should be added to Terminal next.
+    map_unmapped_ini_sections(mb, plan);
+}
+
+/// Maps one MoonBot colour entry of one theme side to its preview item, or names why it is not
+/// imported.
+fn map_color(
+    key: &str,
+    value: &str,
+    light: bool,
+    theme: &ChartTheme,
+    orders: &OrdersStyle,
+) -> Result<SettingChange, ImportReason> {
+    let Some((rgb, alpha)) = parse_tcolor(value) else {
+        return Err(ImportReason::InvalidColor {
+            value: value.to_owned(),
+        });
+    };
+    // Our color fields have no alpha; do not silently discard meaningful alpha.
+    if alpha != 0 && alpha != 0xFF {
+        return Err(ImportReason::ColorAlpha { alpha });
+    }
+    let (target_id, label, current_rgb) = color_target(key, theme, orders)?;
+    let theme_side = if light { "light" } else { "dark" };
+    // The theme side is NOT in the label: preview groups colors into "Light"/"Dark"
+    // columns, with the side encoded in the item id. Matching values are also shown
+    // (`same`) to provide the complete import picture.
+    Ok(SettingChange {
+        id: format!("{target_id}.{theme_side}"),
+        label,
+        current: PreviewValue::Data(rgb_hex(current_rgb)),
+        new: PreviewValue::Data(rgb_hex(rgb)),
+        value: PlannedValue::Rgb(rgb),
+        // An automatic colour is not a stored override, even if its rounded swatch matches.
+        same: match key {
+            "BookLevelGreen" => theme.book_level_bid == Some(rgb),
+            "BookLevelRed" => theme.book_level_ask == Some(rgb),
+            _ => current_rgb == rgb,
+        },
+    })
+}
+
+/// Explicit MoonBot key → Terminal field mapping (spec section 8): the target field id, its
+/// caption and its current value. Keys outside this table go to unsupported: they are decoded
+/// but not applied.
+fn color_target(
+    key: &str,
+    theme: &ChartTheme,
+    orders: &OrdersStyle,
+) -> Result<(&'static str, PreviewCaption, [u8; 3]), ImportReason> {
+    Ok(match key {
+        "graphBK" => ("theme.bg", PreviewCaption::ChartBackground, theme.bg),
+        "graphNet" => ("theme.grid", PreviewCaption::Grid, theme.grid),
+        "graphCursor" => ("theme.cross", PreviewCaption::Crosshair, theme.cross),
+        "graphFont" => (
+            "theme.labels",
+            PreviewCaption::NeutralLabels,
+            theme.axis_label,
+        ),
+        "CandleGreen" => ("theme.candle_up", PreviewCaption::CandleUp, theme.candle_up),
+        "CandleRed" => (
+            "theme.candle_down",
+            PreviewCaption::CandleDown,
+            theme.candle_down,
+        ),
+        "CandleNeutral" => (
+            "theme.candle_neutral",
+            PreviewCaption::CandleNeutral,
+            theme.candle_neutral,
+        ),
+        "OrderBookGreen" => ("theme.book_bid", PreviewCaption::BookBid, theme.book_bid),
+        "OrderBookRed" => ("theme.book_ask", PreviewCaption::BookAsk, theme.book_ask),
+        "BuyOrder" => (
+            "orders.buy.color",
+            PreviewCaption::BuyLine,
+            orders.buy.color,
+        ),
+        "BuyPendingOrder" => (
+            "orders.buy.pending_color",
+            PreviewCaption::BuyPendingLine,
+            orders.buy.pending_color.unwrap_or(orders.buy.color),
+        ),
+        "SellOrder" => (
+            "orders.sell.color",
+            PreviewCaption::SellLine,
+            orders.sell.color,
+        ),
+        "BuyShort" => (
+            "orders.buy_short.color",
+            PreviewCaption::BuyShortLine,
+            orders.buy_short.color,
+        ),
+        "SellShort" => (
+            "orders.sell_short.color",
+            PreviewCaption::SellShortLine,
+            orders.sell_short.color,
+        ),
+        "Trailing" => (
+            "orders.trailing.color",
+            PreviewCaption::TrailingLine,
+            orders.trailing.color,
+        ),
+        "LiqPrice" => (
+            "orders.liq.color",
+            PreviewCaption::LiquidationLine,
+            orders.liq.color,
+        ),
+        "BookLevelGreen" | "BookLevelRed" => {
+            let bid = key == "BookLevelGreen";
+            let rgba = theme.resolved_book_level(bid);
+            (
+                if bid {
+                    "theme.book_level_bid"
+                } else {
+                    "theme.book_level_ask"
+                },
+                PreviewCaption::ConfigField(key.to_owned()),
+                [rgba[0], rgba[1], rgba[2]].map(|v| (v * 255.0).round() as u8),
+            )
+        }
+        "BuyOrderDone" => return Err(ImportReason::ClosedOrderOpacity),
+        "MarkPrice" | "LiqOrdersLong" | "LiqOrdersShort" => return Err(ImportReason::NoStyle),
+        _ => return Err(ImportReason::UnmappedColor),
+    })
+}
+
+/// Do not apply Charts/ArbColors sections from the Ini block without an explicit mapping
+/// table (spec section 9). Expand keys BY NAME with their values; this list determines which
+/// mappings/fields should be added to Terminal next.
+fn map_unmapped_ini_sections(mb: &MoonBotConfig, plan: &mut MoonBotImportPlan) {
     for name in ["Charts", "ArbColors"] {
         if let Some(s) = mb.ini.section(name) {
             for (key, value) in &s.entries {
