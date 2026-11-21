@@ -47,10 +47,13 @@ assets.balances_folded_hl_caveat: "（Hyperliquid：终端看不到账户模式�
 assets.balances_excluded_list: "按核心设置不计入：%{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "核心：%{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from, and total plus that money. Below them, after the
+# existing `assets.cores_n`, one line per exchange account several cores share (`core-1 + core-2`;
+# the `+` joiner is built in code).
 assets.balances_tip_free: "可用"
+assets.balances_tip_idle: "未交易"
+assets.balances_tip_together: "两项合计"
 assets.balances_tip_shared: "%{cores} — 共享 %{brand} 账户，仅计一次"
 assets.balances_tip_shared_unknown: "%{cores} — 共享交易所账户，仅计一次"
 assets.section_positions: "仓位"
@@ -118,6 +121,12 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
 assets.wallet.filtered_empty_few: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
 assets.wallet.filtered_empty_many: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
+# Hover on the amber mark after a core name in the wallets core list: money the bots cannot
+# trade with. What it is first, then the wallet and coin lines (built in code), the data's age,
+# and what to do.
+assets.wallet.idle_what: "机器人不从这些钱包交易"
+assets.wallet.idle_as_of: "数据时间 %{t}"
+assets.wallet.idle_action: "手动划转：点击核心"
 assets.wallets_hint: "钱包 · 在容器之间拖动币种"
 assets.refresh_hint: "刷新核心余额"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

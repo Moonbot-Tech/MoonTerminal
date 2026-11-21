@@ -9,9 +9,7 @@ use std::collections::HashSet;
 
 /// Everything the tooltip says, one line per row, fact and note — for `contains` checks.
 fn flat(tip: &SummaryTip) -> String {
-    let mut lines: Vec<String> = tip
-        .rows
-        .iter()
+    let mut lines: Vec<String> = all_rows(tip)
         .map(|(label, amount)| format!("{label} {amount}"))
         .collect();
     lines.extend(tip.facts.iter().cloned());
@@ -19,9 +17,14 @@ fn flat(tip: &SummaryTip) -> String {
     lines.join("\n")
 }
 
-/// The tooltip of `t` with no scope marker.
+/// Every `(label, amount)` row of the tooltip, top to bottom.
+fn all_rows(tip: &SummaryTip) -> impl Iterator<Item = &(String, String)> {
+    tip.rows.iter().chain(&tip.idle_rows)
+}
+
+/// The tooltip of `t` with no scope marker and no idle money.
 fn tooltip(t: &super::ScopeTotals) -> String {
-    flat(&summary_tip(t, &[]))
+    flat(&summary_tip(t, &[], 0.0))
 }
 
 /// Build a test aggregate with a deterministic display name.
@@ -235,7 +238,7 @@ fn tooltip_carries_every_fact_that_can_clip() {
     let t = scope_totals(&aggs, &HashSet::new());
     let tail = facts(&t);
     let marker = ["· mode: MANUAL".to_string()];
-    let tip = summary_tip(&t, &marker);
+    let tip = summary_tip(&t, &marker, 0.0);
     // The core count is worded differently in the tooltip; every reason for a partial sum, and
     // the scope marker's facts, are repeated as the row says them.
     assert_eq!(tip.facts[0], rust_i18n::t!("assets.cores_n", n = 4));
@@ -256,8 +259,9 @@ fn tooltip_shows_dash_when_nothing_reported() {
     let aggs = vec![agg(1, 0.0, 0.0, BalanceState::Awaiting)];
     let t = scope_totals(&aggs, &HashSet::new());
     assert_eq!(scope_amount_text(&t, t.total), DASH);
-    let tip = summary_tip(&t, &[]);
+    let tip = summary_tip(&t, &[], 0.0);
     assert!(tip.rows.iter().all(|(_, amount)| amount == DASH));
+    assert!(tip.idle_rows.is_empty());
     assert!(
         !flat(&tip).contains("0.0$"),
         "an unreported scope must not read as an empty one"
@@ -378,13 +382,88 @@ fn a_hyperliquid_fold_carries_its_caveat() {
     assert!(tip.contains(rust_i18n::t!("assets.balances_folded_hl_caveat").as_ref()));
 }
 
+/// Breakage: `summary_tip` dropping the idle-money row, or printing it at zero — money no core
+/// reports would be missing from the one place that says the total is not all the money, and a
+/// zero row would be noise on a fleet with nothing to move.
+#[test]
+fn idle_money_is_named_only_when_there_is_some() {
+    let _locale = crate::test_locale::force("en");
+    let aggs = vec![agg(1, 10.0, 20.0, BalanceState::Live)];
+    let t = scope_totals(&aggs, &HashSet::new());
+    let idle = rust_i18n::t!("assets.balances_tip_idle").to_string();
+    let row = |tip: &SummaryTip| all_rows(tip).find(|(label, _)| *label == idle).cloned();
+    assert_eq!(
+        row(&summary_tip(&t, &[], 150.0)),
+        Some((idle.clone(), money_or_dash(150.0)))
+    );
+    assert_eq!(row(&summary_tip(&t, &[], 0.0)), None);
+    assert_eq!(
+        summary_tip(&t, &[], 0.0).rows.len(),
+        2,
+        "free and total only"
+    );
+}
+
+/// Breakage: idle money added INTO the total — the footer's total is the cores' balances, the
+/// same figure the shell header and the Telegram bot show, so it must stay that; "Combined" is
+/// the sum beside it, and only for a complete total.
+#[test]
+fn combined_adds_idle_money_beside_a_complete_total_only() {
+    let _locale = crate::test_locale::force("en");
+    let combined = rust_i18n::t!("assets.balances_tip_together").to_string();
+    let total = rust_i18n::t!("assets.balances_total").to_string();
+    let live = vec![agg(1, 10.0, 20.0, BalanceState::Live)];
+    let tip = summary_tip(&scope_totals(&live, &HashSet::new()), &[], 5.0);
+    let amount_of = |tip: &SummaryTip, label: &str| {
+        all_rows(tip)
+            .find(|(l, _)| l == label)
+            .map(|(_, amount)| amount.clone())
+    };
+    assert_eq!(amount_of(&tip, &total), Some(money_or_dash(20.0)));
+    assert_eq!(amount_of(&tip, &combined), Some(money_or_dash(25.0)));
+    assert_eq!(
+        tip.rows.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>(),
+        [
+            rust_i18n::t!("assets.balances_tip_free").as_ref(),
+            total.as_str()
+        ],
+        "the cores' balances stay apart from money no core reports"
+    );
+    assert_eq!(
+        tip.idle_rows.last().map(|(l, _)| l),
+        Some(&combined),
+        "combined comes last"
+    );
+
+    for degraded in [
+        BalanceState::Stale,
+        BalanceState::Awaiting,
+        BalanceState::Unpriced,
+    ] {
+        let aggs = vec![
+            agg(1, 10.0, 20.0, BalanceState::Live),
+            agg(2, 1.0, 1.0, degraded),
+        ];
+        let tip = summary_tip(&scope_totals(&aggs, &HashSet::new()), &[], 5.0);
+        assert_eq!(
+            amount_of(&tip, &combined),
+            None,
+            "{degraded:?}: a partial total plus idle money is no one's balance"
+        );
+        assert!(
+            amount_of(&tip, &rust_i18n::t!("assets.balances_tip_idle")).is_some(),
+            "{degraded:?}: the idle money itself is still named"
+        );
+    }
+}
+
 /// A clean scope says no more than it must: the amounts and the core count, no notes — the
 /// row already names its subject, so a closing line restating it would only lengthen the hover.
 #[test]
 fn a_clean_scope_has_no_notes() {
     let _locale = crate::test_locale::force("en");
     let aggs = vec![agg(1, 10.0, 20.0, BalanceState::Live)];
-    let tip = summary_tip(&scope_totals(&aggs, &HashSet::new()), &[]);
+    let tip = summary_tip(&scope_totals(&aggs, &HashSet::new()), &[], 0.0);
     assert_eq!(
         tip.facts,
         [rust_i18n::t!("assets.cores_n", n = 1).to_string()]

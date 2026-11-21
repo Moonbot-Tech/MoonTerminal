@@ -47,10 +47,13 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: режим счёта (един
 assets.balances_excluded_list: "Не в итоге по настройке ядра: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "ядер: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from, and total plus that money. Below them, after the
+# existing `assets.cores_n`, one line per exchange account several cores share (`core-1 + core-2`;
+# the `+` joiner is built in code).
 assets.balances_tip_free: "Свободно"
+assets.balances_tip_idle: "Вне торговли"
+assets.balances_tip_together: "Вместе"
 assets.balances_tip_shared: "%{cores} — общий счёт %{brand}, учтён один раз"
 assets.balances_tip_shared_unknown: "%{cores} — общий биржевой счёт, учтён один раз"
 assets.section_positions: "Позиции"
@@ -118,6 +121,12 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} актив скрыт фильтром по стоимости %{thr}$"
 assets.wallet.filtered_empty_few: "Все %{n} актива скрыты фильтром по стоимости %{thr}$"
 assets.wallet.filtered_empty_many: "Все %{n} активов скрыты фильтром по стоимости %{thr}$"
+# Hover on the amber mark after a core name in the wallets core list: money the bots cannot
+# trade with. What it is first, then the wallet and coin lines (built in code), the data's age,
+# and what to do.
+assets.wallet.idle_what: "Боты не торгуют с этих кошельков"
+assets.wallet.idle_as_of: "Данные на %{t}"
+assets.wallet.idle_action: "Перевод вручную: нажмите на ядро"
 assets.wallets_hint: "Кошельки · перетащи монету между контейнерами"
 assets.refresh_hint: "Обновить балансы ядра"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

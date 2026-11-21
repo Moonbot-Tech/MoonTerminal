@@ -307,6 +307,8 @@ fn facts(t: &ScopeTotals) -> Vec<String> {
 /// ```text
 /// Free          1 200.00$
 /// Total         3 400.00$
+/// Not traded      150.00$
+/// Combined      3 550.00$
 /// Cores: 12 · offline: 1
 /// core-1 + core-2 — shared Bybit account, counted once
 /// ```
@@ -316,6 +318,10 @@ fn facts(t: &ScopeTotals) -> Vec<String> {
 pub(super) struct SummaryTip {
     /// `(label, amount)` rows of the cores' balances: free, then total — what the row shows.
     rows: Vec<(String, String)>,
+    /// `(label, amount)` rows beyond them, drawn a step apart: money in wallets no core trades
+    /// from ([`super::idle`]) and, for a complete total only, the total and that money together.
+    /// Empty when there is no such money.
+    idle_rows: Vec<(String, String)>,
     /// Whether the total is complete and current ([`is_complete`]); anything less draws the
     /// amounts muted, the same trust signal the row gives.
     complete: bool,
@@ -329,6 +335,11 @@ pub(super) struct SummaryTip {
 
 /// Build the footer tooltip's content.
 ///
+/// The "not traded" row names the money the core list marks ([`super::idle`]): it sits in wallets
+/// no core trades from, so no core reports it and it is not part of the total — the same total the
+/// shell header and the Telegram bot show. So it is never added into "Total"; "Combined" adds it
+/// beside, and only to a complete total: a partial total plus idle money is no one's balance.
+///
 /// It is also the recovery path for a narrow dock, where the row clips its trailing facts: every
 /// fact the row can lose is here too. The excluded-core count is carried by the list of those
 /// cores, which says the same and more.
@@ -337,6 +348,7 @@ pub(super) struct SummaryTip {
 ///     aggs: Per-core balance aggregates, the ones [`summary_group`] sums for the row.
 ///     sel: Retained core selection, or empty for every core.
 ///     marker: Workspace scope marker of the row, or `None`.
+///     idle_total: USDT outside the trading wallets of the counted accounts; `0` omits its rows.
 ///
 /// Returns:
 ///     The tooltip content.
@@ -344,14 +356,15 @@ pub(super) fn summary_tip_of(
     aggs: &[CoreAgg],
     sel: &HashSet<CoreId>,
     marker: Option<&ScopeMarker>,
+    idle_total: f64,
 ) -> SummaryTip {
     let marker_facts = marker.map(ScopeMarker::facts).unwrap_or_default();
-    summary_tip(&scope_totals(aggs, sel), &marker_facts)
+    summary_tip(&scope_totals(aggs, sel), &marker_facts, idle_total)
 }
 
 /// [`summary_tip_of`] over already-folded totals and the marker's facts as the row renders them
 /// (`· …`).
-fn summary_tip(t: &ScopeTotals, marker_facts: &[String]) -> SummaryTip {
+fn summary_tip(t: &ScopeTotals, marker_facts: &[String], idle_total: f64) -> SummaryTip {
     let complete = is_complete(t);
     let rows = vec![
         (
@@ -363,6 +376,19 @@ fn summary_tip(t: &ScopeTotals, marker_facts: &[String]) -> SummaryTip {
             scope_amount_text(t, t.total),
         ),
     ];
+    let mut idle_rows = Vec::new();
+    if idle_total > 0.0 {
+        idle_rows.push((
+            t!("assets.balances_tip_idle").to_string(),
+            money_or_dash(idle_total),
+        ));
+        if complete {
+            idle_rows.push((
+                t!("assets.balances_tip_together").to_string(),
+                money_or_dash(t.total + idle_total),
+            ));
+        }
+    }
     let mut facts = vec![t!("assets.cores_n", n = t.all_cores()).to_string()];
     facts.extend(
         [
@@ -416,6 +442,7 @@ fn summary_tip(t: &ScopeTotals, marker_facts: &[String]) -> SummaryTip {
     }
     SummaryTip {
         rows,
+        idle_rows,
         complete,
         facts,
         notes,
@@ -501,11 +528,20 @@ impl Render for SummaryTipView {
                 .mono(false)
                 .uppercase(false)
         };
-        // A column of one kind of cell: the labels, or the amounts ending at one edge.
+        // A column of one kind of cell: the balances, then — a step apart, so money no core
+        // reports never reads as part of the total above it — the idle rows.
         let column = |pick: fn(&(String, String)) -> &str, mono: bool, color: u32| {
+            let cells = |rows: &[(String, String)]| {
+                v_flex()
+                    .when(mono, |col| col.items_end())
+                    .children(rows.iter().map(|row| cell(pick(row), mono, color)))
+            };
             v_flex()
                 .when(mono, |col| col.items_end())
-                .children(tip.rows.iter().map(|row| cell(pick(row), mono, color)))
+                .child(cells(&tip.rows))
+                .when(!tip.idle_rows.is_empty(), |col| {
+                    col.child(cells(&tip.idle_rows).mt(design::ui_px(cx, 4.0)))
+                })
         };
         let figures = h_flex()
             .items_start()
@@ -555,7 +591,8 @@ impl Render for SummaryTipView {
 ///     aggs: Per-core balance aggregates for the current scope.
 ///     sel: Retained core selection, or empty for every scoped core.
 ///     marker: Workspace scope marker for this group, or `None` for the global window.
-///     tip: The tooltip for these totals ([`summary_tip_of`]).
+///     tip: The tooltip for these totals ([`summary_tip_of`]), which also names the money the
+///         bots cannot trade with because it is not part of them.
 ///     panel: The panel the footer belongs to; the open tooltip re-reads it on every repaint.
 ///     cx: Application context used for rendering.
 pub(super) fn summary_group(

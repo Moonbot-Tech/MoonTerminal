@@ -47,10 +47,13 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: terminal hesap kipini göremez,
 assets.balances_excluded_list: "Çekirdek ayarıyla dışarıda: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "çekirdek: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from, and total plus that money. Below them, after the
+# existing `assets.cores_n`, one line per exchange account several cores share (`core-1 + core-2`;
+# the `+` joiner is built in code).
 assets.balances_tip_free: "Serbest"
+assets.balances_tip_idle: "İşlem dışı"
+assets.balances_tip_together: "Genel toplam"
 assets.balances_tip_shared: "%{cores} — ortak %{brand} hesabı, bir kez sayıldı"
 assets.balances_tip_shared_unknown: "%{cores} — ortak borsa hesabı, bir kez sayıldı"
 assets.section_positions: "Pozisyonlar"
@@ -118,6 +121,12 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} varlık %{thr}$ değer filtresiyle gizli"
 assets.wallet.filtered_empty_few: "%{n} varlığın tümü %{thr}$ değer filtresiyle gizli"
 assets.wallet.filtered_empty_many: "%{n} varlığın tümü %{thr}$ değer filtresiyle gizli"
+# Hover on the amber mark after a core name in the wallets core list: money the bots cannot
+# trade with. What it is first, then the wallet and coin lines (built in code), the data's age,
+# and what to do.
+assets.wallet.idle_what: "Botlar bu cüzdanlardan işlem yapmıyor"
+assets.wallet.idle_as_of: "%{t} itibarıyla"
+assets.wallet.idle_action: "Elle aktarın: çekirdeğe tıklayın"
 assets.wallets_hint: "Cüzdanlar · bir coin'i kaplar arasında sürükleyin"
 assets.refresh_hint: "Çekirdek bakiyelerini yenile"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

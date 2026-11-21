@@ -94,7 +94,7 @@ pub(super) fn core_brand(b: &Backend, core: CoreId) -> Option<Brand> {
 ///
 /// Returns:
 ///     The wallet's name on that core's exchange, in the active language.
-fn wallet_kind_label(kind: WalletKind, brand: Option<Brand>) -> String {
+pub(super) fn wallet_kind_label(kind: WalletKind, brand: Option<Brand>) -> String {
     t!(kind.label_key(brand)).to_string()
 }
 

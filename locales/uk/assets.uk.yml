@@ -47,10 +47,13 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: термінал не бачи�
 assets.balances_excluded_list: "Не в підсумку за налаштуванням ядра: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "ядер: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from, and total plus that money. Below them, after the
+# existing `assets.cores_n`, one line per exchange account several cores share (`core-1 + core-2`;
+# the `+` joiner is built in code).
 assets.balances_tip_free: "Вільно"
+assets.balances_tip_idle: "Поза торгівлею"
+assets.balances_tip_together: "Усе разом"
 assets.balances_tip_shared: "%{cores} — спільний рахунок %{brand}, враховано один раз"
 assets.balances_tip_shared_unknown: "%{cores} — спільний біржовий рахунок, враховано один раз"
 assets.section_positions: "Позиції"
@@ -118,6 +121,12 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} актив схований фільтром вартості %{thr}$"
 assets.wallet.filtered_empty_few: "Усі %{n} активи сховані фільтром вартості %{thr}$"
 assets.wallet.filtered_empty_many: "Усі %{n} активів сховані фільтром вартості %{thr}$"
+# Hover on the amber mark after a core name in the wallets core list: money the bots cannot
+# trade with. What it is first, then the wallet and coin lines (built in code), the data's age,
+# and what to do.
+assets.wallet.idle_what: "Боти не торгують з цих гаманців"
+assets.wallet.idle_as_of: "Дані на %{t}"
+assets.wallet.idle_action: "Переказ вручну: натисніть на ядро"
 assets.wallets_hint: "Гаманці · перетягніть монету між контейнерами"
 assets.refresh_hint: "Оновити баланси ядра"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

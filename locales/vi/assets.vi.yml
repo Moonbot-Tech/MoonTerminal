@@ -47,10 +47,13 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: terminal không thấy chế đ
 assets.balances_excluded_list: "Loại theo cài đặt core: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "lõi: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from, and total plus that money. Below them, after the
+# existing `assets.cores_n`, one line per exchange account several cores share (`core-1 + core-2`;
+# the `+` joiner is built in code).
 assets.balances_tip_free: "Khả dụng"
+assets.balances_tip_idle: "Không giao dịch"
+assets.balances_tip_together: "Gộp lại"
 assets.balances_tip_shared: "%{cores} — tài khoản %{brand} chung, chỉ tính một lần"
 assets.balances_tip_shared_unknown: "%{cores} — tài khoản sàn chung, chỉ tính một lần"
 assets.section_positions: "Vị thế"
@@ -118,6 +121,12 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
 assets.wallet.filtered_empty_few: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
 assets.wallet.filtered_empty_many: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
+# Hover on the amber mark after a core name in the wallets core list: money the bots cannot
+# trade with. What it is first, then the wallet and coin lines (built in code), the data's age,
+# and what to do.
+assets.wallet.idle_what: "Bot không giao dịch từ các ví này"
+assets.wallet.idle_as_of: "Dữ liệu lúc %{t}"
+assets.wallet.idle_action: "Chuyển thủ công: bấm vào lõi"
 assets.wallets_hint: "Ví · kéo coin giữa các ngăn"
 assets.refresh_hint: "Làm mới số dư core"
 # --- Wallet-section display settings (the gear beside the refresh button) ---
