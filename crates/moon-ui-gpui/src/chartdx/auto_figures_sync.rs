@@ -274,6 +274,9 @@ pub(crate) struct AutoPaneView {
     pub visible_ms: Option<i64>,
     /// The pane's last traded price, once known.
     pub last_price: Option<f64>,
+    /// Whether the pane's series has CoinCard deep history (`ChartHistoryRead::deep_present`) —
+    /// part of a row's recompute key.
+    pub deep_history: bool,
 }
 
 impl ChartDataState {
@@ -466,6 +469,7 @@ impl ChartDataState {
                 .any(|r| is_native(r, chart_tf_ms as f32)),
             visible_ms: pr.time_scale_ms,
             last_price: pr.cached_last_price.map(f64::from),
+            deep_history: pr.deep_history,
         })
     }
 
@@ -485,12 +489,14 @@ impl ChartDataState {
         if pr.core != Some(core) || pr.market != market {
             return Vec::new();
         }
-        native_closed_candles(
+        let mut candles = native_closed_candles(
             &pr.candle_rows,
             pr.candle_rows_epoch,
             self.candle_view.tf_ms(),
             now_ms,
-        )
+        );
+        mark_range_only(&mut candles, &pr.range_only_opens);
+        candles
     }
 }
 
@@ -637,6 +643,33 @@ pub(crate) fn native_closed_candles(
     // The composed list is sorted, but a snapped duplicate would read as two touches of one bar.
     out.dedup_by(|b, a| a.t_open_ms == b.t_open_ms);
     out
+}
+
+/// Give the chart candles that are the core's range-only ring rows an UNKNOWN open and close
+/// (`NaN`), the way the kline cache's ring rows reach the detectors
+/// (`moon_chart::auto_figures::with_ring_rows`): `range_only_opens` are their bucket opens
+/// (ascending), as the history layer reports them by SOURCE
+/// (`ChartHistoryBuffers::range_only_opens`) — never read from a candle's shape, and never
+/// covering a bucket a cached kline, deep history or the trades filled.
+///
+/// The chart draws those candles with an open and a close oriented from their range
+/// (`moon_core::market::candles::orient_range_rows`), right for the eye and wrong for a detector:
+/// read as closes they stretched the ATR and moved a level by a pivot (AKEUSDT 21.11.2026,
+/// `logs/auto_figures_diag.log`: the chart's first run read 9 of 40 hour bars closing at their
+/// low, the cache none).
+pub(crate) fn mark_range_only(candles: &mut [ChartCandle], range_only_opens: &[i64]) {
+    if range_only_opens.is_empty() {
+        return;
+    }
+    for c in candles.iter_mut() {
+        if range_only_opens
+            .binary_search(&(c.t_open_ms as i64))
+            .is_ok()
+        {
+            c.open = f32::NAN;
+            c.close = f32::NAN;
+        }
+    }
 }
 
 /// A row's line colour against the theme: the caption colour, the theme's sign colours by the

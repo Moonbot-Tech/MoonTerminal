@@ -39,6 +39,7 @@ fn a_row_block_names_its_source_bars_and_kept_lines() {
         tf: TfId::H1,
         last_closed_ms: 7_200_000,
         chart_ready: true,
+        chart_deep_history: false,
     };
     let found = [Found {
         shape: FoundShape::Horizontal { price: 1.0 },

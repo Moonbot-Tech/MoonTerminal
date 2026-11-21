@@ -2136,3 +2136,82 @@ fn aggregate_late_resend_scale_probe() {
         before[3], after[3]
     );
 }
+
+/// A rebuild remembers exactly the buckets the trades filled — per bucket, so a base bucket after
+/// the first trade-built one that no trade reached is not among them.
+///
+/// Breakage: everything from the first trade-built bucket on reported as trade-built (a thin
+/// market's untraded ring buckets losing their range-only mark).
+#[test]
+fn a_rebuild_reports_the_buckets_the_trades_filled() {
+    let base: Vec<ChartCandle> = (0..4)
+        .map(|i| ChartCandle {
+            t_open_ms: (i * 60_000) as f64,
+            open: 1.0,
+            high: 2.0,
+            low: 0.5,
+            close: 1.5,
+            volume: 0.0,
+            quote_volume: 0.0,
+        })
+        .collect();
+    // Trades in the minutes opening at 1 and 3, none at 2. The first trade bucket is partial and
+    // the base covers it, so the base keeps it; minute 2 has no trade and keeps its base candle.
+    let trades = [
+        tick(60_000.0, 1.2, 1.0),
+        tick(60_500.0, 1.3, 1.0),
+        tick(180_000.0, 1.1, 1.0),
+    ];
+    let mut series = CandleSeries::default();
+    series.rebuild(60_000, &base, 60_000, &trades);
+    assert_eq!(series.trade_built_opens(), &[180_000][..]);
+}
+
+/// The buckets a merge takes from its first part alone: the ring's buckets no later part has, in
+/// the series timeframe. A cached or deep row overriding a bucket removes it; a part `merge_bases`
+/// would skip (a 5-minute part under a 1-minute series) contributes no key.
+///
+/// Breakage: a bucket another source overrides still reported as range-only (its real close
+/// erased by the reader), or a ring bucket no source overrides left out (its display close read
+/// as a price — AKEUSDT 21.11.2026).
+#[test]
+fn first_part_only_keys_are_the_ring_buckets_nothing_else_fills() {
+    let at = |m: i64| ChartCandle {
+        t_open_ms: (m * 60_000) as f64,
+        open: 1.0,
+        high: 2.0,
+        low: 0.5,
+        close: 1.5,
+        volume: 0.0,
+        quote_volume: 0.0,
+    };
+    let ring: Vec<_> = (0..6).map(|i| at(i * 5)).collect(); // 00:00 .. 00:25
+    let cached = [at(10)];
+    let deep: Vec<_> = (4..6).map(|i| at(i * 5)).collect(); // 00:20, 00:25
+    let parts = [
+        BasePart {
+            rows: &ring,
+            tf_ms: 300_000,
+        },
+        BasePart {
+            rows: &cached,
+            tf_ms: 300_000,
+        },
+        BasePart {
+            rows: &deep,
+            tf_ms: 300_000,
+        },
+    ];
+    let mut keys = Vec::new();
+    first_part_only_keys(300_000, &parts, &mut keys);
+    assert_eq!(keys, vec![0, 5 * 60_000, 15 * 60_000]);
+
+    // At 15 minutes a later part wins a WHOLE bucket, as in the merge: 00:00 holds the cached
+    // 00:10 row, 00:15 the deep rows — neither is the ring's alone.
+    first_part_only_keys(900_000, &parts, &mut keys);
+    assert!(keys.is_empty(), "{keys:?}");
+
+    // Under a 1-minute series a 5-minute part is skipped, as the merge skips it.
+    first_part_only_keys(60_000, &parts, &mut keys);
+    assert!(keys.is_empty());
+}

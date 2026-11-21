@@ -19,6 +19,7 @@ fn outcome(source: BarSource, bars: usize, needed: u32) -> AutoRowOutcome {
             tf: TfId::H1,
             last_closed_ms: 0,
             chart_ready: true,
+            chart_deep_history: false,
         },
         source,
         bars,

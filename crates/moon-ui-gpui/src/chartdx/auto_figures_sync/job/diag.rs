@@ -98,13 +98,15 @@ pub(crate) fn row_lines(diag: &JobDiag, row: &RowSeen<'_>, now_ms: f64, out: &mu
     let (lo, hi) = (range(|b| b.low, f32::min), range(|b| b.high, f32::max));
     let no_close = row.bars.iter().filter(|b| b.close.is_nan()).count();
     out.push(format!(
-        "  row {} {:?} {:?} key_closed={} chart_ready={} source={:?} bars={}/{} {span} low={lo} \
+        "  row {} {:?} {:?} key_closed={} chart_ready={} deep_history={} source={:?} bars={}/{} \
+         {span} low={lo} \
          high={hi} no_close={no_close} read_failed={} lagging={}",
         row.ix,
         row.key.detector.kind(),
         row.key.tf,
         at(row.key.last_closed_ms as f64),
         row.key.chart_ready,
+        row.key.chart_deep_history,
         row.source,
         row.bars.len(),
         row.needed,

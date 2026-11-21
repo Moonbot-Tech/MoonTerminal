@@ -90,6 +90,13 @@ pub struct ChartHistoryCursor {
     /// was not. Rows arrive end-stamped and range-only, so they are shifted and oriented on the way
     /// in and stored ready to use.
     pub(super) ring_rows_5m: Vec<ChartCandle>,
+    /// Series bucket opens the last rebuild took from the core's range-only ring alone
+    /// (`candles::first_part_only_keys`, minus the trade-built tail), shipped with every full
+    /// candle emit as [`ChartHistoryBuffers::range_only_opens`].
+    pub(super) range_only_opens: Vec<i64>,
+    /// Whether the last rebuild merged CoinCard deep history, reported on every read as
+    /// [`ChartHistoryRead::deep_present`].
+    pub(super) deep_present: bool,
     /// Bumped whenever the coarse layers above are reread, so the composed fill below can tell a
     /// stale cache from a stale series without comparing the row vectors themselves.
     pub(super) cache_generation: u64,
@@ -241,6 +248,8 @@ impl ChartHistoryCursor {
         self.server_candles.clear();
         // The composed fill is derived from the series, so it cannot outlive an invalidated one.
         self.ring_rows_5m.clear();
+        self.range_only_opens.clear();
+        self.deep_present = false;
         self.coarse_fill.clear();
         self.coarse_fill_key = None;
         self.coarse_fill_max_tf = None;
@@ -287,10 +296,17 @@ pub struct ChartHistoryBuffers {
     /// The core's five-second mini-candles older than the oldest raw trade in `ticks`, oldest
     /// first. Filled when `ChartHistoryRead::path_update` requests replacement or append.
     pub path_minis: Vec<crate::market::candles::PathMini>,
+    /// Bucket opens (ms, ascending) of the series candles that are the core's range-only
+    /// 5-minute ring rows: high and low real, open and close only oriented for display. Filled
+    /// with a FULL candle emit (`candles_changed` and no `candles_patch_from`), together with the
+    /// candles it describes; empty otherwise. Readers that decide by a close (the chart's auto
+    /// figures) read those candles without one.
+    pub range_only_opens: Vec<i64>,
 }
 
 impl ChartHistoryBuffers {
     pub(super) fn clear(&mut self) {
+        self.range_only_opens.clear();
         self.ticks.clear();
         self.path_minis.clear();
         self.liquidations.clear();
@@ -379,4 +395,11 @@ pub struct ChartHistoryRead {
     /// composed entries from index `i` on; the list's new length is `i + out.candles.len()`. Only
     /// sent when the receiver's `shipped_revision` equals the revision this reader last emitted.
     pub candles_patch_from: Option<usize>,
+    /// Whether the series holds CoinCard deep history with authoritative OHLC. Normally turns true
+    /// once, when deep history first arrives and replaces the ring's range-only candles; it can
+    /// drop back for a rebuild while a newly requested deep kind (another pane of the provider
+    /// asked for a finer one) has not arrived yet. A reader keyed on the series' content (the
+    /// chart's auto figures) recomputes on each change. `false` for readers without deep history
+    /// (dense mode, a replay, the fixture), whose candles hold no ring row.
+    pub deep_present: bool,
 }

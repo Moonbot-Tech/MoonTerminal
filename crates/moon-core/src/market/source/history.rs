@@ -927,29 +927,37 @@ impl MarketDataSource {
                 {
                     use crate::market::candles::BasePart;
                     let cache_tf_ms = cursor.cache_rows_kind as i64 * 60_000;
+                    let parts = [
+                        BasePart {
+                            rows: &snap_part,
+                            tf_ms: SNAP5_TF_MS,
+                        },
+                        BasePart {
+                            rows: &finer_part,
+                            tf_ms: cache_tf_ms,
+                        },
+                        BasePart {
+                            rows: &cache_part,
+                            tf_ms: cache_tf_ms,
+                        },
+                        BasePart {
+                            rows: &deep_part,
+                            tf_ms: deep_kind_min as i64 * 60_000,
+                        },
+                    ];
                     crate::market::candles::merge_bases(
                         cp.tf_ms,
-                        &[
-                            BasePart {
-                                rows: &snap_part,
-                                tf_ms: SNAP5_TF_MS,
-                            },
-                            BasePart {
-                                rows: &finer_part,
-                                tf_ms: cache_tf_ms,
-                            },
-                            BasePart {
-                                rows: &cache_part,
-                                tf_ms: cache_tf_ms,
-                            },
-                            BasePart {
-                                rows: &deep_part,
-                                tf_ms: deep_kind_min as i64 * 60_000,
-                            },
-                        ],
+                        &parts,
                         &mut cursor.server_candles,
                     );
+                    // Which merged buckets are the ring's alone (range-only), by source.
+                    crate::market::candles::first_part_only_keys(
+                        cp.tf_ms,
+                        &parts,
+                        &mut cursor.range_only_opens,
+                    );
                 }
+                cursor.deep_present = have_deep;
                 cursor.candle_trade_rows.clear();
                 if let Some(reader) = trade_reader.as_ref() {
                     // Extend the series tail through now, which is already included in to_ms. The
@@ -976,6 +984,15 @@ impl MarketDataSource {
                     base_tf_ms,
                     &cursor.candle_ticks,
                 );
+                // A bucket the trades filled carries their open and close: no longer the ring's.
+                // Per bucket, as the overlay works — a ring bucket after the first trade-built one
+                // that no trade reached is still range-only. One the live trades take over after
+                // this rebuild stays marked until the next full emit: its close reads as unknown,
+                // the safe side.
+                let traded = cursor.candle_series.trade_built_opens();
+                cursor
+                    .range_only_opens
+                    .retain(|open| traded.binary_search(open).is_err());
             } else if let (Some(reader), Some(cur)) =
                 (trade_reader.as_ref(), cursor.candle_trades.as_mut())
             {
@@ -990,6 +1007,7 @@ impl MarketDataSource {
                 }
             }
             read.candles_revision = cursor.candle_series.revision();
+            read.deep_present = cursor.deep_present;
             let dirty = cursor.candle_series.take_dirty_from();
             // Compose the series with its cache-only coarser layers. The kind-5 layer comes from
             // the recorder and possible deep-history writeback, the daily layer from backfill and
@@ -1043,6 +1061,9 @@ impl MarketDataSource {
                     }
                     _ => {
                         read.candles_patch_from = None;
+                        // A full emit carries which of its candles are the ring's alone.
+                        out.range_only_opens
+                            .extend_from_slice(&cursor.range_only_opens);
                         0
                     }
                 };

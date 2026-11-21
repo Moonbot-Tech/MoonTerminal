@@ -3,7 +3,7 @@
 //! The engine half (`chartdx::auto_figures_sync`) only stores and draws what it is handed; this
 //! half decides WHEN a row's detector runs. The rule is one key per row
 //! ([`RowKey`]: detector parameters, resolved timeframe, open time of the last closed bar of that
-//! timeframe, chart-history presence) and a run only when it moved. Concretely the causal chain is:
+//! timeframe, chart-history presence, deep history in the chart's series) and a run only when it moved. Concretely the causal chain is:
 //!
 //! - a bar of the row's timeframe closes → the key's time part moves at the next evaluation →
 //!   ONE job for that pane, carrying only the rows whose key moved;
@@ -250,6 +250,7 @@ struct RowPlan {
 ///     pane: The pane's slots; rows are resized to `cfg` and their keys updated.
 ///     visible_ms: The pane's measured time span, `None` before the first market sync.
 ///     chart_ready: Whether the pane holds candles of the chart's own timeframe.
+///     chart_deep_history: Whether the pane's series has CoinCard deep history yet (`RowKey`).
 ///     chart_tf_ms: The chart's bar length, ms — on a chart coarser than one minute an `Auto` row
 ///         takes M5 for M1 ([`tf::lift_m1`]); `<= 0` changes nothing.
 ///     now: The instant the dwell and the back-offs are measured on.
@@ -262,6 +263,7 @@ fn plan_rows(
     pane: &mut PaneSlots,
     visible_ms: Option<i64>,
     chart_ready: bool,
+    chart_deep_history: bool,
     chart_tf_ms: i64,
     now: Instant,
     now_ms: f64,
@@ -307,6 +309,7 @@ fn plan_rows(
             tf,
             last_closed_ms: last_closed_open_ms(now_ms, tf),
             chart_ready,
+            chart_deep_history,
         };
         slot.current = Some(key);
         earliest(&mut plan.wake, next_key_change_ms(now_ms, tf));
@@ -603,6 +606,7 @@ impl ChartPanel {
                 pane,
                 view.visible_ms,
                 view.chart_ready,
+                view.deep_history,
                 view.chart_tf_ms,
                 now,
                 now_ms,

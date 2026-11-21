@@ -37,10 +37,12 @@
 //! ## The recompute key
 //!
 //! [`RowKey`] is everything a row's answer depends on: its detector parameters, its resolved
-//! timeframe, the open time of the last CLOSED bar of that timeframe, and whether the chart had
-//! candles at all. Its time part changes only when a bar of the row's own timeframe closes, so an
-//! H4 row runs six times a day whatever the chart does in between. Price ticks, the mouse, a pan
-//! and a zoom of a `Fixed` row are deliberately not in it.
+//! timeframe, the open time of the last CLOSED bar of that timeframe, whether the chart had
+//! candles at all, and whether its series has deep history yet — which normally turns true once,
+//! when the exchange's candles replace the core's range-only ring the chart opened on, so a row
+//! that read the ring reads the real closes. Its time part changes only when a bar of the row's own
+//! timeframe closes, so an H4 row runs six times a day whatever the chart does in between. Price
+//! ticks, the mouse, a pan and a zoom of a `Fixed` row are deliberately not in it.
 
 use std::sync::Arc;
 
@@ -86,6 +88,12 @@ pub(crate) struct RowKey {
     /// its history arrived recomputes once when it does, instead of keeping an answer computed on
     /// nothing until the next bar closes.
     pub chart_ready: bool,
+    /// Whether the chart's series had CoinCard deep history when the key was taken
+    /// (`ChartHistoryRead::deep_present`). A market opens on the core's range-only ring, whose
+    /// candles the row reads without closes; when deep history replaces them this turns true and
+    /// the row recomputes on real closes, instead of keeping the ring's answer until its next bar
+    /// closes. A pan or a zoom does not move it.
+    pub chart_deep_history: bool,
 }
 
 /// Where the cache rows of one market are read from.
