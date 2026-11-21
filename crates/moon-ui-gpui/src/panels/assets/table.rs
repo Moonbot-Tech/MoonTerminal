@@ -691,6 +691,32 @@ impl AssetsView {
                             .child(t!("assets.wallets_hint").to_string()),
                     ),
             )
+            // Whose containers are open: the highlighted roster row can be scrolled out of
+            // sight, and a transfer must never land on a core the user did not mean.
+            .when_some(
+                selected.and_then(|core| aggs.iter().find(|agg| agg.id == core)),
+                |header, agg| {
+                    header
+                        .child(
+                            div()
+                                .text_size(design::t_body(cx))
+                                .text_color(rgb(p.text_muted))
+                                .child("·"),
+                        )
+                        .child(
+                            div()
+                                .id("assets-wallets-core")
+                                .min_w_0()
+                                .truncate()
+                                .text_size(design::t_body(cx))
+                                .text_color(rgb(p.text))
+                                .tooltip(crate::panels::common::text_tooltip_value(
+                                    agg.name.clone(),
+                                ))
+                                .child(agg.name.clone()),
+                        )
+                },
+            )
             .child(div().flex_1());
         if let Some(core) = selected {
             header = header.child(
