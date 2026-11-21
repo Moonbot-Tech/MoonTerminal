@@ -20,12 +20,16 @@ const POLL: Duration = Duration::from_millis(200);
 /// silent, and the library itself gives up only after five minutes without progress; a core that
 /// does serve one starts sending within seconds, so this leaves room for a slow first part.
 const FIRST_PART: Duration = Duration::from_secs(60);
+/// How long the transfer may go without a new part once it has started: the library's own limit
+/// (it ends a download after five minutes without progress). A fixed clock over the whole
+/// transfer would cut a slow link that is still receiving parts.
+const NO_PROGRESS: Duration = Duration::from_secs(300);
 /// The pointer every failure ends with: the snapshot MoonBot saves by hand works on any build.
 const USE_ZIP: &str = "save the snapshot in Moonbot (VPS setup -> Get settings) and pass the ZIP";
 /// Name prefix of the library's download target in the temp folder; the process id follows.
 const TEMP_PREFIX: &str = "moon-core-move-settings-";
-/// Age past which a target is a leftover of a killed run: a live one is never older than a
-/// connect plus a transfer, a few minutes.
+/// Age past which a target is a leftover of a killed run: a live transfer gets a new part at
+/// least every [`NO_PROGRESS`], and a settings archive of a few MB arrives in minutes.
 const STALE: Duration = Duration::from_secs(3600);
 
 /// A settings snapshot as the core served it.
@@ -38,8 +42,8 @@ pub struct CoreSnapshot {
     pub exchange: Option<String>,
 }
 
-/// Download the settings snapshot of the core at `cfg`. `timeout` bounds the connect and, again,
-/// the transfer.
+/// Download the settings snapshot of the core at `cfg`. `timeout` bounds the connect; the
+/// transfer runs for as long as parts keep arriving (see [`Progress`]).
 pub fn download(cfg: ClientConfig, timeout: Duration) -> anyhow::Result<CoreSnapshot> {
     let temp = std::env::temp_dir();
     remove_stale(&temp);
@@ -49,7 +53,7 @@ pub fn download(cfg: ClientConfig, timeout: Duration) -> anyhow::Result<CoreSnap
     // the file itself and refuses one that exists.
     let file = TempFile(temp.join(format!("{TEMP_PREFIX}{}.zip", std::process::id())));
     let _ = std::fs::remove_file(&file.0);
-    let result = fetch(&client, &file.0, timeout);
+    let result = fetch(&client, &file.0);
     // The library holds the file open until its runtime thread ends; a removal before that only
     // marks it, so `file` is dropped after the thread has exited and the copy is gone on return.
     let _ = client.disconnect();
@@ -101,19 +105,14 @@ fn remove_stale(temp: &Path) {
 
 /// Ask for the snapshot into `path` and wait for the library's verdict on it.
 ///
-/// The library reports nothing until the transfer ends, so "the core answers at all" is read off
-/// the file it writes: still empty after [`FIRST_PART`] means no part arrived — an old build, as
-/// a rule, though a core that could not start the export in that time reads the same.
-fn fetch(
-    client: &MoonClient,
-    path: &Path,
-    timeout: Duration,
-) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+/// The library reports nothing until the transfer ends, so progress is read off the file it
+/// writes; [`Progress`] decides when to give up.
+fn fetch(client: &MoonClient, path: &Path) -> anyhow::Result<Zeroizing<Vec<u8>>> {
     client
         .settings()
         .download_settings_snapshot(path.to_path_buf())
         .map_err(|e| anyhow::anyhow!("ask for the settings snapshot: {e}; or {USE_ZIP}"))?;
-    let start = Instant::now();
+    let mut progress = Progress::new(Instant::now());
     let mut events = Vec::new();
     loop {
         client.drain_events_into(&mut events);
@@ -143,19 +142,55 @@ fn fetch(
             );
             return Ok(bytes);
         }
-        let elapsed = start.elapsed();
+        let received = std::fs::metadata(path).map_or(0, |m| m.len());
+        progress.check(received, Instant::now())?;
+        std::thread::sleep(POLL);
+    }
+}
+
+/// When a transfer still running is given up, judged by the bytes on disk.
+struct Progress {
+    /// When the snapshot was asked for.
+    start: Instant,
+    /// The most bytes seen on disk so far.
+    received: u64,
+    /// When `received` last grew (`start` until the first part).
+    moved: Instant,
+}
+
+impl Progress {
+    fn new(now: Instant) -> Self {
+        Self {
+            start: now,
+            received: 0,
+            moved: now,
+        }
+    }
+
+    /// Record `received` bytes on disk at `now`; an error when the transfer is to be given up.
+    ///
+    /// Still empty after [`FIRST_PART`] means no part arrived — an old build, as a rule, though
+    /// a core that could not start the export in that time reads the same. Once parts arrive,
+    /// only [`NO_PROGRESS`] without a new one ends the wait.
+    fn check(&mut self, received: u64, now: Instant) -> anyhow::Result<()> {
+        if received > self.received {
+            self.received = received;
+            self.moved = now;
+        }
         anyhow::ensure!(
-            elapsed < FIRST_PART || std::fs::metadata(path).is_ok_and(|m| m.len() > 0),
+            self.received > 0 || now.duration_since(self.start) < FIRST_PART,
             "the core sent no part of its settings snapshot within {}s: most likely its build \
              does not serve one; {USE_ZIP}",
             FIRST_PART.as_secs()
         );
         anyhow::ensure!(
-            elapsed < timeout,
-            "timed out after {}s downloading the settings snapshot; {USE_ZIP}",
-            timeout.as_secs()
+            now.duration_since(self.moved) < NO_PROGRESS,
+            "the core sent no new part of its settings snapshot for {}s ({} bytes received); \
+             {USE_ZIP}",
+            NO_PROGRESS.as_secs(),
+            self.received
         );
-        std::thread::sleep(POLL);
+        Ok(())
     }
 }
 
