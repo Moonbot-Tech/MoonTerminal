@@ -96,6 +96,7 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     cfg.channels.arb_coverage = true;
     cfg.channels.candles_5m = true;
     cfg.channels.orders = "GateF/BTC".to_string();
+    cfg.channels.auto_figures = " AKE ".to_string();
     cfg.limits.log_ring_lines = 12_345;
     cfg.limits.balance_repeat_window_sec = 9;
     cfg.limits.market_trace_min_interval_ms = 250;
@@ -111,6 +112,9 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
         with_orders_selector(|s| s.to_string()).as_deref(),
         Some("GateF/BTC")
     );
+    // The auto-figure selector: trimmed, a case-insensitive substring of the market.
+    assert!(auto_figures_follows("AKEUSDT") && auto_figures_follows("akeusdt"));
+    assert!(!auto_figures_follows("BTCUSDT"));
     assert_eq!(ring_lines(), 12_345);
     assert_eq!(balance_repeat_window(), Duration::from_secs(9));
     assert_eq!(market_trace_min_interval(), Duration::from_millis(250));
@@ -132,6 +136,10 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
             && !orders()
     );
     assert!(
+        !auto_figures_follows("AKEUSDT"),
+        "an off auto-figure channel follows nothing"
+    );
+    assert!(
         with_orders_selector(|_| ()).is_none(),
         "an off channel must not hand out a selector at all, so callers cannot accidentally follow \
          a stale target"
@@ -141,8 +149,17 @@ fn applying_a_config_publishes_and_retracts_every_switch() {
     // live selector would follow every market on every core.
     let mut blank = DiagCfg::default();
     blank.channels.orders = "   ".to_string();
+    blank.channels.auto_figures = "   ".to_string();
     apply(&blank);
-    let blank_is_off = !orders();
+    let blank_is_off = !orders() && !auto_figures_follows("AKEUSDT");
     apply(&DiagCfg::default());
     assert!(blank_is_off);
+
+    // "1" follows every market.
+    let mut every = DiagCfg::default();
+    every.channels.auto_figures = "1".to_string();
+    apply(&every);
+    let follows_all = auto_figures_follows("ANYUSDT");
+    apply(&DiagCfg::default());
+    assert!(follows_all);
 }

@@ -262,6 +262,7 @@ fn rows_take_their_bars_from_the_chart_or_the_cache_and_read_it_once() {
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out.len(), 3);
@@ -296,6 +297,7 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert!(out[0].1.read_failed);
@@ -309,6 +311,7 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out[0].1.source, BarSource::Cache1m);
@@ -896,6 +899,7 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let out = run(&job, None);
     assert_eq!(out[0].1.bars, 1, "round prices read one bar");
@@ -929,6 +933,7 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let cache = m5_cache();
     for with_cache in [true, false] {
@@ -996,6 +1001,7 @@ fn a_row_on_the_charts_timeframe_reads_the_cache_when_the_series_is_too_short() 
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     let o = &out[0].1;
@@ -1724,6 +1730,7 @@ fn ring_kind_rows_have_no_close_and_real_rows_keep_theirs() {
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     let o = &out[0].1;
@@ -1756,6 +1763,7 @@ fn a_ring_read_that_did_not_happen_is_a_failure() {
         cache: None,
         now_ms: now,
         price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out[0].1.source, BarSource::Cache5m);

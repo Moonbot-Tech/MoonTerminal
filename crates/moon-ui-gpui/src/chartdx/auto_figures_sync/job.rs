@@ -52,6 +52,8 @@ use moon_core::market::ChartCandle;
 use moon_core::market::candles::resample;
 use moon_core::market::kline_cache::{KIND_5M_MS, KlineCache, RING_5M_KIND};
 
+pub(crate) mod diag;
+
 /// How long after a bar's close the row waits before treating it as closed, ms.
 ///
 /// The bar's last trades are still in flight when the clock crosses the boundary — the core's
@@ -125,6 +127,9 @@ pub(crate) struct PaneJob {
     /// (`moon_chart::auto_figures::DetectCtx::price_tick`). Read when the job is built, so a tick
     /// that arrives later takes effect on the row's next key change (its next bar close).
     pub price_tick: Option<f64>,
+    /// Set when the auto-figure diagnostics channel follows this market: the job then writes what
+    /// every row read and found ([`diag`]). `None` costs nothing.
+    pub diag: Option<diag::JobDiag>,
 }
 
 /// How long past a bucket's close a resampled row keeps waiting for the 5-minute cache to fill
@@ -315,7 +320,8 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
     let d1 = read(1440, span(BarSource::CacheDaily));
     let m1 = read(1, span(BarSource::Cache1m));
 
-    plans
+    let mut diag_lines: Vec<String> = Vec::new();
+    let outcomes = plans
         .into_iter()
         .map(|(ix, key, needed, source)| {
             if reads_cache(source) && cache.is_none() {
@@ -378,6 +384,19 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                     },
                 )
             };
+            if let Some(d) = &job.diag {
+                let seen = diag::RowSeen {
+                    ix,
+                    key: &key,
+                    source,
+                    needed,
+                    bars,
+                    found: &found,
+                    read_failed,
+                    lagging,
+                };
+                diag::row_lines(d, &seen, job.now_ms, &mut diag_lines);
+            }
             (
                 ix,
                 AutoRowOutcome {
@@ -393,7 +412,16 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                 },
             )
         })
-        .collect()
+        .collect();
+    if let Some(d) = &job.diag {
+        // The 5-minute base as the cache gave it, when a row read it: rows, and ring rows.
+        let base = m5.as_ref().map(|read| {
+            read.as_ref()
+                .map(|rows| (rows.len(), rows.iter().filter(|r| r.close.is_nan()).count()))
+        });
+        diag::write(&diag::job_line(d, job, base), &diag_lines);
+    }
+    outcomes
 }
 
 /// The 5-minute rows (cache plus chart tail) as closed bars of `row_ms`, and whether the newest

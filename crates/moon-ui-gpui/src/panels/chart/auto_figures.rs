@@ -718,6 +718,17 @@ impl ChartPanel {
             });
         // Once per job (a bar close), never per frame: the detectors' tolerance floor.
         let price_tick = source.price_tick(target.0, &target.1);
+        // The diagnostics channel, asked once per job: one atomic load while it is off.
+        let diag = moon_core::diagnostics::auto_figures_follows(&target.1).then(|| {
+            let cfg_rows = self.auto_figures.cfg.as_ref().map(|c| c.rows.as_slice());
+            job::diag::JobDiag {
+                label: format!("{:?}/{}", target.0, target.1),
+                takes: rows
+                    .iter()
+                    .filter_map(|&(ix, _)| cfg_rows?.get(ix).map(|row| (ix, row.take)))
+                    .collect(),
+            }
+        });
         // A market with no cache address is a definitive "no cache", not a failed read: its cache
         // rows are answered here, empty and final — no job, no detector, no retry — and run again
         // only when their key moves.
@@ -735,6 +746,7 @@ impl ChartPanel {
             cache,
             now_ms,
             price_tick,
+            diag,
         };
         // Detached on purpose: replacing a handle would CANCEL a run whose rows are still marked
         // pending, and they would never be retried. A late result is recognised by its key.

@@ -78,6 +78,11 @@ pub struct Channels {
     /// The station's tape, recorded beside the terminal's own captures — the one key
     /// here that CONNECTS: one extra client per exchange. See `crate::market::tape_recorder`.
     pub tape_recorder: bool,
+    /// Auto-figure SELECTOR, not a flag: `""` off, `"1"` every market, `"AKE"` markets whose name
+    /// contains it (case-insensitive). Every detector run of a chart's auto-figure rows on such a
+    /// market: where its bars came from, how many and which, what the detector found and what the
+    /// row keeps. See `super::auto_figures_follows`.
+    pub auto_figures: String,
 }
 
 /// `[limits]` — sizes, collapse windows, and probe thresholds.
@@ -146,6 +151,7 @@ impl DiagCfg {
             || c.tape_recorder
             || !c.orders.trim().is_empty()
             || !c.coin_naming.trim().is_empty()
+            || !c.auto_figures.trim().is_empty()
     }
 
     /// Human-readable list of active switches for the warning line, or `None` when all are off.
@@ -186,6 +192,10 @@ impl DiagCfg {
         let orders = self.channels.orders.trim();
         if !orders.is_empty() {
             on.push(format!("channels.orders={orders}"));
+        }
+        let auto_figures = self.channels.auto_figures.trim();
+        if !auto_figures.is_empty() {
+            on.push(format!("channels.auto_figures={auto_figures}"));
         }
         let filter = self.log.filter.trim();
         if !filter.is_empty() {
@@ -247,6 +257,10 @@ pub fn apply_env(cfg: &mut DiagCfg, get: impl Fn(&str) -> Option<String>) {
     // everything" in the existing selector, so it must not be confused with the unset case.
     if let Some(v) = get("MOON_ORDER_DIAG") {
         cfg.channels.orders = if v.is_empty() { "1".to_string() } else { v };
+    }
+    // A selector like the order channel's, with the same reading of an empty value.
+    if let Some(v) = get("MOON_AUTO_FIGURES_DIAG") {
+        cfg.channels.auto_figures = if v.is_empty() { "1".to_string() } else { v };
     }
     // A list of coins, so an empty value cannot mean "everything" the way the order selector's
     // does: dumping every market of every core is not an answer anyone can read.
