@@ -536,3 +536,146 @@ fn book_level_theme_import_plans_and_applies_explicit_colours() {
     let repeated = build_plan(&mb, &ctx(&h, &cfg.theme, &o));
     assert!(repeated.chart.iter().all(|v| v.same));
 }
+
+/// Every colour key the mapping table names, on both theme sides, plus the refusal paths.
+fn every_color_key(alpha: &str) -> Vec<(String, String)> {
+    [
+        "graphBK",
+        "graphNet",
+        "graphCursor",
+        "graphFont",
+        "CandleGreen",
+        "CandleRed",
+        "CandleNeutral",
+        "OrderBookGreen",
+        "OrderBookRed",
+        "BuyOrder",
+        "BuyPendingOrder",
+        "SellOrder",
+        "BuyShort",
+        "SellShort",
+        "Trailing",
+        "LiqPrice",
+        "BookLevelGreen",
+        "BookLevelRed",
+        "BuyOrderDone",
+        "MarkPrice",
+        "LiqOrdersLong",
+        "LiqOrdersShort",
+        "Unknown",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, key)| {
+        let shade = (i * 11) as u8;
+        (
+            key.to_string(),
+            format!("{alpha}{shade:02X}33{:02X}", 255 - shade),
+        )
+    })
+    .chain([
+        ("Junk".to_string(), "junk".to_string()),
+        ("Half".to_string(), "80112233".to_string()),
+    ])
+    .collect()
+}
+
+/// Pins the whole colour mapping output, item by item and in order, so a reshaped mapping that
+/// drops, reorders or relabels a key, or changes a `same` verdict, fails here.
+#[test]
+fn every_color_key_maps_in_order() {
+    let (h, mut t, o) = (
+        HotkeysConfig::default(),
+        ChartThemeSet::default(),
+        OrdersStyleSet::default(),
+    );
+    // An explicit level override that matches the imported light value exercises the stored
+    // comparison; the dark side stays automatic.
+    t.light.book_level_bid = Some([0xB0, 0x33, 0x4F]);
+    let mut mb = mb_config();
+    mb.theme.sections = vec![
+        IniSection {
+            name: "ColorsDark".into(),
+            entries: every_color_key("00"),
+        },
+        IniSection {
+            name: "ColorsLight".into(),
+            entries: every_color_key("ff"),
+        },
+    ];
+    mb.ini.sections = vec![
+        IniSection {
+            name: "Charts".into(),
+            entries: vec![("Some".into(), "1".into())],
+        },
+        IniSection {
+            name: "ArbColors".into(),
+            entries: vec![("Other".into(), "2".into())],
+        },
+    ];
+    let mut plan = MoonBotImportPlan::default();
+    map_colors(&mb, &ctx(&h, &t, &o), &mut plan);
+    let chart: Vec<String> = plan.chart.iter().map(|c| format!("{c:?}")).collect();
+    let unsupported: Vec<String> = plan.unsupported.iter().map(|u| format!("{u:?}")).collect();
+    assert_eq!(chart, EXPECTED_CHART);
+    assert_eq!(unsupported, EXPECTED_UNSUPPORTED);
+    assert!(plan.terminal.is_empty() && plan.hotkeys.is_empty() && plan.group_items.is_empty());
+}
+
+const EXPECTED_CHART: &[&str] = &[
+    "SettingChange { id: \"theme.bg.light\", label: ChartBackground, current: Data(\"#FFFFFF\"), new: Data(\"#0033FF\"), value: Rgb([0, 51, 255]), same: false }",
+    "SettingChange { id: \"theme.grid.light\", label: Grid, current: Data(\"#ECEFF2\"), new: Data(\"#0B33F4\"), value: Rgb([11, 51, 244]), same: false }",
+    "SettingChange { id: \"theme.cross.light\", label: Crosshair, current: Data(\"#808080\"), new: Data(\"#1633E9\"), value: Rgb([22, 51, 233]), same: false }",
+    "SettingChange { id: \"theme.labels.light\", label: NeutralLabels, current: Data(\"#000000\"), new: Data(\"#2133DE\"), value: Rgb([33, 51, 222]), same: false }",
+    "SettingChange { id: \"theme.candle_up.light\", label: CandleUp, current: Data(\"#1A9E5C\"), new: Data(\"#2C33D3\"), value: Rgb([44, 51, 211]), same: false }",
+    "SettingChange { id: \"theme.candle_down.light\", label: CandleDown, current: Data(\"#E63B3B\"), new: Data(\"#3733C8\"), value: Rgb([55, 51, 200]), same: false }",
+    "SettingChange { id: \"theme.candle_neutral.light\", label: CandleNeutral, current: Data(\"#969696\"), new: Data(\"#4233BD\"), value: Rgb([66, 51, 189]), same: false }",
+    "SettingChange { id: \"theme.book_bid.light\", label: BookBid, current: Data(\"#76C59D\"), new: Data(\"#4D33B2\"), value: Rgb([77, 51, 178]), same: false }",
+    "SettingChange { id: \"theme.book_ask.light\", label: BookAsk, current: Data(\"#F08989\"), new: Data(\"#5833A7\"), value: Rgb([88, 51, 167]), same: false }",
+    "SettingChange { id: \"orders.buy.color.light\", label: BuyLine, current: Data(\"#000000\"), new: Data(\"#63339C\"), value: Rgb([99, 51, 156]), same: false }",
+    "SettingChange { id: \"orders.buy.pending_color.light\", label: BuyPendingLine, current: Data(\"#B00000\"), new: Data(\"#6E3391\"), value: Rgb([110, 51, 145]), same: false }",
+    "SettingChange { id: \"orders.sell.color.light\", label: SellLine, current: Data(\"#0000FF\"), new: Data(\"#793386\"), value: Rgb([121, 51, 134]), same: false }",
+    "SettingChange { id: \"orders.buy_short.color.light\", label: BuyShortLine, current: Data(\"#8B008B\"), new: Data(\"#84337B\"), value: Rgb([132, 51, 123]), same: false }",
+    "SettingChange { id: \"orders.sell_short.color.light\", label: SellShortLine, current: Data(\"#800000\"), new: Data(\"#8F3370\"), value: Rgb([143, 51, 112]), same: false }",
+    "SettingChange { id: \"orders.trailing.color.light\", label: TrailingLine, current: Data(\"#00008B\"), new: Data(\"#9A3365\"), value: Rgb([154, 51, 101]), same: false }",
+    "SettingChange { id: \"orders.liq.color.light\", label: LiquidationLine, current: Data(\"#FF0000\"), new: Data(\"#A5335A\"), value: Rgb([165, 51, 90]), same: false }",
+    "SettingChange { id: \"theme.book_level_bid.light\", label: ConfigField(\"BookLevelGreen\"), current: Data(\"#B0334F\"), new: Data(\"#B0334F\"), value: Rgb([176, 51, 79]), same: true }",
+    "SettingChange { id: \"theme.book_level_ask.light\", label: ConfigField(\"BookLevelRed\"), current: Data(\"#FFABAB\"), new: Data(\"#BB3344\"), value: Rgb([187, 51, 68]), same: false }",
+    "SettingChange { id: \"theme.bg.dark\", label: ChartBackground, current: Data(\"#1E1E1E\"), new: Data(\"#0033FF\"), value: Rgb([0, 51, 255]), same: false }",
+    "SettingChange { id: \"theme.grid.dark\", label: Grid, current: Data(\"#282828\"), new: Data(\"#0B33F4\"), value: Rgb([11, 51, 244]), same: false }",
+    "SettingChange { id: \"theme.cross.dark\", label: Crosshair, current: Data(\"#808080\"), new: Data(\"#1633E9\"), value: Rgb([22, 51, 233]), same: false }",
+    "SettingChange { id: \"theme.labels.dark\", label: NeutralLabels, current: Data(\"#D3D3D3\"), new: Data(\"#2133DE\"), value: Rgb([33, 51, 222]), same: false }",
+    "SettingChange { id: \"theme.candle_up.dark\", label: CandleUp, current: Data(\"#1A9E5C\"), new: Data(\"#2C33D3\"), value: Rgb([44, 51, 211]), same: false }",
+    "SettingChange { id: \"theme.candle_down.dark\", label: CandleDown, current: Data(\"#E63B3B\"), new: Data(\"#3733C8\"), value: Rgb([55, 51, 200]), same: false }",
+    "SettingChange { id: \"theme.candle_neutral.dark\", label: CandleNeutral, current: Data(\"#808080\"), new: Data(\"#4233BD\"), value: Rgb([66, 51, 189]), same: false }",
+    "SettingChange { id: \"theme.book_bid.dark\", label: BookBid, current: Data(\"#1C6440\"), new: Data(\"#4D33B2\"), value: Rgb([77, 51, 178]), same: false }",
+    "SettingChange { id: \"theme.book_ask.dark\", label: BookAsk, current: Data(\"#8C2E2E\"), new: Data(\"#5833A7\"), value: Rgb([88, 51, 167]), same: false }",
+    "SettingChange { id: \"orders.buy.color.dark\", label: BuyLine, current: Data(\"#D2691E\"), new: Data(\"#63339C\"), value: Rgb([99, 51, 156]), same: false }",
+    "SettingChange { id: \"orders.buy.pending_color.dark\", label: BuyPendingLine, current: Data(\"#FF6A00\"), new: Data(\"#6E3391\"), value: Rgb([110, 51, 145]), same: false }",
+    "SettingChange { id: \"orders.sell.color.dark\", label: SellLine, current: Data(\"#7FC9FF\"), new: Data(\"#793386\"), value: Rgb([121, 51, 134]), same: false }",
+    "SettingChange { id: \"orders.buy_short.color.dark\", label: BuyShortLine, current: Data(\"#B0C4DE\"), new: Data(\"#84337B\"), value: Rgb([132, 51, 123]), same: false }",
+    "SettingChange { id: \"orders.sell_short.color.dark\", label: SellShortLine, current: Data(\"#D3D3D3\"), new: Data(\"#8F3370\"), value: Rgb([143, 51, 112]), same: false }",
+    "SettingChange { id: \"orders.trailing.color.dark\", label: TrailingLine, current: Data(\"#6495ED\"), new: Data(\"#9A3365\"), value: Rgb([154, 51, 101]), same: false }",
+    "SettingChange { id: \"orders.liq.color.dark\", label: LiquidationLine, current: Data(\"#FF4500\"), new: Data(\"#A5335A\"), value: Rgb([165, 51, 90]), same: false }",
+    "SettingChange { id: \"theme.book_level_bid.dark\", label: ConfigField(\"BookLevelGreen\"), current: Data(\"#237D50\"), new: Data(\"#B0334F\"), value: Rgb([176, 51, 79]), same: false }",
+    "SettingChange { id: \"theme.book_level_ask.dark\", label: ConfigField(\"BookLevelRed\"), current: Data(\"#AF3A3A\"), new: Data(\"#BB3344\"), value: Rgb([187, 51, 68]), same: false }",
+];
+
+const EXPECTED_UNSUPPORTED: &[&str] = &[
+    "Unsupported { name: ColorField { key: \"BuyOrderDone\", light: true }, reason: ClosedOrderOpacity }",
+    "Unsupported { name: ColorField { key: \"MarkPrice\", light: true }, reason: NoStyle }",
+    "Unsupported { name: ColorField { key: \"LiqOrdersLong\", light: true }, reason: NoStyle }",
+    "Unsupported { name: ColorField { key: \"LiqOrdersShort\", light: true }, reason: NoStyle }",
+    "Unsupported { name: ColorField { key: \"Unknown\", light: true }, reason: UnmappedColor }",
+    "Unsupported { name: ColorField { key: \"Junk\", light: true }, reason: InvalidColor { value: \"junk\" } }",
+    "Unsupported { name: ColorField { key: \"Half\", light: true }, reason: ColorAlpha { alpha: 4 } }",
+    "Unsupported { name: ColorField { key: \"BuyOrderDone\", light: false }, reason: ClosedOrderOpacity }",
+    "Unsupported { name: ColorField { key: \"MarkPrice\", light: false }, reason: NoStyle }",
+    "Unsupported { name: ColorField { key: \"LiqOrdersLong\", light: false }, reason: NoStyle }",
+    "Unsupported { name: ColorField { key: \"LiqOrdersShort\", light: false }, reason: NoStyle }",
+    "Unsupported { name: ColorField { key: \"Unknown\", light: false }, reason: UnmappedColor }",
+    "Unsupported { name: ColorField { key: \"Junk\", light: false }, reason: InvalidColor { value: \"junk\" } }",
+    "Unsupported { name: ColorField { key: \"Half\", light: false }, reason: ColorAlpha { alpha: 4 } }",
+    "Unsupported { name: IniEntry { section: \"Charts\", key: \"Some\", value: \"1\" }, reason: UnmappedSection }",
+    "Unsupported { name: IniEntry { section: \"ArbColors\", key: \"Other\", value: \"2\" }, reason: UnmappedSection }",
+];
