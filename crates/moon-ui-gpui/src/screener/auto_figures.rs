@@ -396,6 +396,13 @@ pub(super) trait ScanSource {
         from_ms: i64,
         to_ms: i64,
     ) -> Option<Vec<ChartCandle>>;
+
+    /// The exchange's price tick of `market` as `core` knows it, the floor of every row's
+    /// tolerance (`moon_chart::auto_figures::DetectCtx::price_tick`); `None` when it has not
+    /// arrived. A source without ticks scans with the rows' own tolerances.
+    fn price_tick(&self, _core: CoreId, _market: &str) -> Option<f64> {
+        None
+    }
 }
 
 /// The terminal's own source: the market source for addresses and its one kline cache for rows.
@@ -445,6 +452,10 @@ impl ScanSource for CacheSource {
             to_ms,
         )
     }
+
+    fn price_tick(&self, core: CoreId, market: &str) -> Option<f64> {
+        self.source.price_tick(core, market)
+    }
 }
 
 /// One market to read and scan, the providers that take its answer, and its live price (the first
@@ -454,6 +465,8 @@ struct Unit {
     market: String,
     providers: Vec<CoreId>,
     price: Option<f64>,
+    /// The market's exchange tick, the first target's that has one ([`ScanSource::price_tick`]).
+    tick: Option<f64>,
 }
 
 /// One press's work, carried from slice to slice: the targets still to resolve, the markets to
@@ -526,7 +539,15 @@ impl ScanWork {
             let scan = match read {
                 None => MarketScan::Unread,
                 Some((bars, ring)) => {
-                    scan_market(rows, &bars, &ring, *now_ms as f64, unit.price, result);
+                    scan_market(
+                        rows,
+                        &bars,
+                        &ring,
+                        *now_ms as f64,
+                        unit.price,
+                        unit.tick,
+                        result,
+                    );
                     crate::diag::bump(&crate::diag::AUTOFIGURES_SCAN_MARKETS);
                     MarketScan::Scanned(result.answer())
                 }
@@ -559,15 +580,20 @@ impl ScanWork {
                     let unit = &mut self.units[*slot.get()];
                     unit.providers.push(target.provider);
                     unit.price = unit.price.or(target.price);
+                    if unit.tick.is_none() {
+                        unit.tick = source.price_tick(target.core, &unit.market);
+                    }
                 }
                 MapEntry::Vacant(slot) => {
                     let (exchange, market) = slot.key().clone();
                     slot.insert(self.units.len());
+                    let tick = source.price_tick(target.core, &market);
                     self.units.push(Unit {
                         exchange,
                         market,
                         providers: vec![target.provider],
                         price: target.price,
+                        tick,
                     });
                 }
             }

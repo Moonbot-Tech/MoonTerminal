@@ -15,10 +15,19 @@
 //!   formation is over.
 //!
 //! `pressed` is set when the sloped line, projected to the last valid bar, is within `pressed_pct`
-//! of the level — measured as a fraction of the LEVEL price — on either side of it.
+//! of the level — measured as a fraction of the LEVEL price — on either side of it, AND price is
+//! still inside the formation: not past the level by more than its break buffer (a broken level
+//! presses nothing — the 21.11.2026 audit found half the screener's squeezes on a level price
+//! stood beyond), and, while the line has not yet reached the level, not past the line by more
+//! than the line's break buffer. "Past" is the last bar's close side (`super::close_side`), as a
+//! break reads it: a ring bar without a close is past a line only when its whole range is. A
+//! squeeze kept flagged broken by `Keep { bars }` is still drawn, and is not pressed while price
+//! stands beyond its level; once price is back inside within the policy — a false break — it
+//! can press again.
 //!
 //! Each level and each sloped line takes part in at most one formation: valid pairs are taken
-//! greedily, the one whose projected gap to the level is smallest first.
+//! greedily, the converging ones (line still on the level's original side) before those already
+//! past the level, and within each the one whose projected gap to the level is smallest first.
 //!
 //! Both halves use ONE tolerance unit, `level.tolerance_unit`: under `Pct` the level reads
 //! `level.tolerance_pct` and the line `trend_tolerance_pct`; under `Atr` the level reads
@@ -42,8 +51,8 @@ use super::pivots::{PivotKind, find_pivots};
 use super::swing::{Level, levels_from};
 use super::trend::{Line, LineSpec, find_lines};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, pct_frac, scan_break,
-    tolerance_frac, touch_strength, touch_volume, window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, break_buffer, close_side,
+    pct_frac, scan_break, tolerance_frac, touch_strength, touch_volume, window,
 };
 
 /// Bodies allowed to cross the sloped half between its first and last touch. One, not zero: a
@@ -63,7 +72,7 @@ impl Detector for Squeeze {
         let DetectorParams::Squeeze(p) = params else {
             return Vec::new();
         };
-        squeezes(bars, p, ctx.tf_ms)
+        squeezes(bars, p, ctx.tf_ms, ctx.price_tick)
     }
 }
 
@@ -75,8 +84,13 @@ struct Pair {
 }
 
 /// The level's and the sloped line's tolerances as fractions of price, in the formation's one unit
-/// (`level.tolerance_unit`), from one ATR over all of `bars`; `None` under ATR without an ATR.
-fn squeeze_tolerances(bars: &[ChartCandle], p: &SqueezeParams) -> Option<(f64, f64)> {
+/// (`level.tolerance_unit`), from one ATR over all of `bars`, each at least two of the market's
+/// `price_tick` when it is known; `None` under ATR without an ATR.
+fn squeeze_tolerances(
+    bars: &[ChartCandle],
+    p: &SqueezeParams,
+    price_tick: Option<f64>,
+) -> Option<(f64, f64)> {
     let unit = p.level.tolerance_unit;
     let atr = match unit {
         ToleranceUnit::Pct => None,
@@ -88,6 +102,7 @@ fn squeeze_tolerances(bars: &[ChartCandle], p: &SqueezeParams) -> Option<(f64, f
         p.level.tolerance_atr,
         atr,
         bars,
+        price_tick,
     )?;
     let line = tolerance_frac(
         unit,
@@ -95,19 +110,27 @@ fn squeeze_tolerances(bars: &[ChartCandle], p: &SqueezeParams) -> Option<(f64, f
         p.trend_tolerance_atr,
         atr,
         bars,
+        price_tick,
     )?;
     Some((level, line))
 }
 
-/// Every squeeze of `bars` under `p`; see the module doc for the procedure.
-fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
-    let Some((level_frac, line_frac)) = squeeze_tolerances(bars, p) else {
+/// Every squeeze of `bars` under `p`; see the module doc for the procedure. `price_tick` is the
+/// market's tick when known ([`DetectCtx::price_tick`]).
+fn squeezes(
+    bars: &[ChartCandle],
+    p: &SqueezeParams,
+    tf_ms: i64,
+    price_tick: Option<f64>,
+) -> Vec<Found> {
+    let Some((level_frac, line_frac)) = squeeze_tolerances(bars, p, price_tick) else {
         return Vec::new();
     };
     let win = window(bars, p.level.lookback_bars);
-    let Some(last_t) = win.iter().rev().find(|b| bar_ok(b)).map(|b| b.t_open_ms) else {
+    let Some(last) = win.iter().rev().find(|b| bar_ok(b)) else {
         return Vec::new();
     };
+    let last_t = last.t_open_ms;
     let mut pivots = Vec::new();
     find_pivots(win, p.level.pivot_left, p.level.pivot_right, &mut pivots);
     // `levels_from` has already applied the level's policy: what is left is either unbroken or
@@ -137,7 +160,7 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
     for (li, level) in levels.iter().enumerate() {
         let lines = lines_for(level.origin);
         for (si, line) in lines.iter().enumerate() {
-            if let Some(gap) = pair_gap(win, level, line, last_t, pressed_frac) {
+            if let Some(gap) = pair_gap(win, level, line, last_t, pressed_frac, line_frac) {
                 pairs.push((
                     level.origin,
                     Pair {
@@ -149,9 +172,12 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
             }
         }
     }
+    // Converging pairs first, then the smallest gap either way (module doc): a pair already past
+    // the level must not take a level from one still pressing into it.
     pairs.sort_by(|a, b| {
-        a.1.gap
-            .total_cmp(&b.1.gap)
+        (a.1.gap < 0.0)
+            .cmp(&(b.1.gap < 0.0))
+            .then(a.1.gap.abs().total_cmp(&b.1.gap.abs()))
             .then(a.1.level.cmp(&b.1.level))
             .then(a.1.line.cmp(&b.1.line))
     });
@@ -182,7 +208,8 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
                 p0: line.p0,
                 t1_ms: line.t1_ms,
                 p1: line.p1,
-                pressed: pair.gap <= pressed_frac,
+                pressed: pair.gap <= pressed_frac
+                    && price_inside(level, line, last, line_frac, pair.gap),
             },
             first_ms: touches.first().map_or(0.0, |t| t.t_ms),
             last_ms: touches.last().map_or(0.0, |t| t.t_ms),
@@ -191,11 +218,44 @@ fn squeezes(bars: &[ChartCandle], p: &SqueezeParams, tf_ms: i64) -> Vec<Found> {
             touches,
             broken: level.broken,
             // The band is drawn around the level, so it is the level's tolerance.
-            tolerance_frac: level_frac,
+            tolerance_frac: level.tolerance_frac,
             tag: None,
+            // Events judge a squeeze by its level, so the level's side.
+            origin: Some(level.origin),
         });
     }
     out
+}
+
+/// Whether the last bar `last` closed inside the formation of `level` and `line`: not past the
+/// level, on the side away from its origin, by more than the level's break buffer; and, while the
+/// line has not reached the level (`gap > 0`), not past the line, on the level's origin side, by
+/// more than the line's break buffer (`line_frac` is the line's touch tolerance), the line read at
+/// the bar's open time. Past the apex (`gap <= 0`) only the level counts: the line has met it.
+/// "Past" is [`close_side`] against the buffered line, so a bar without a close is past only when
+/// its whole range is — the rule every break follows.
+fn price_inside(level: &Level, line: &Line, last: &ChartCandle, line_frac: f64, gap: f64) -> bool {
+    let past = |at: f64, buffer: f64, side: Side| {
+        let shifted = match side {
+            Side::Above => at * (1.0 + buffer),
+            Side::Below => at * (1.0 - buffer),
+        };
+        close_side(last, shifted) == Some(side)
+    };
+    let beyond_level = level.origin.opposite();
+    if past(
+        level.price,
+        break_buffer(level.tolerance_frac),
+        beyond_level,
+    ) {
+        return false;
+    }
+    if gap <= 0.0 {
+        return true;
+    }
+    // Past rising lows is below them, past falling highs above them: the level's origin side.
+    line.price_at(last.t_open_ms)
+        .is_some_and(|at| !past(at, break_buffer(line_frac), level.origin))
 }
 
 /// The touches of both halves in time order, each pivot once.
@@ -217,23 +277,30 @@ fn merge_touches(level: &[Touch], line: &[Touch]) -> Vec<Touch> {
 /// form a squeeze (see the module doc).
 ///
 /// Two ways a formation is OVER and is refused here, both seen live on the bench: a valid close
-/// after the line's last touch on the wrong side of the line (price left the pressing line, so it
-/// presses nothing — `scan_break` on the line, from its last touch), and a line projected past the
-/// level by more than `pressed_frac` (the two crossed a while ago; what remains is two unrelated
-/// lines). A gap in `[-pressed_frac, 0]` is a squeeze at its apex and still counts as pressed.
+/// after the line's last touch on the wrong side of the line by more than the break buffer of the
+/// line's tolerance `line_frac` (price left the pressing line, so it presses nothing —
+/// `scan_break` on the line, from its last touch), and a line projected past the level by more
+/// than `pressed_frac` (the two crossed a while ago; what remains is two unrelated lines). A gap
+/// in `[-pressed_frac, 0]` is a squeeze at its apex and still counts as pressed.
 fn pair_gap(
     win: &[ChartCandle],
     level: &Level,
     line: &Line,
     last_t: f64,
     pressed_frac: f64,
+    line_frac: f64,
 ) -> Option<f64> {
     if level.price <= 0.0 || line.t1_ms <= level.touches.first()?.t_ms {
         return None;
     }
     // Price sits on the line's side opposite the level: above rising lows, below falling highs.
     let line_origin = level.origin.opposite();
-    if scan_break(win, line.last_idx, line_origin, |t| line.price_at(t)).is_some() {
+    let buffer = break_buffer(line_frac);
+    if scan_break(win, line.last_idx, line_origin, buffer, |t| {
+        line.price_at(t)
+    })
+    .is_some()
+    {
         return None;
     }
     let converging = match level.origin {

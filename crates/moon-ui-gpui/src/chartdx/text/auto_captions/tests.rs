@@ -37,6 +37,7 @@ fn formation(tag: LineTag, upper: (f64, f64, f64, f64), lower: (f64, f64, f64, f
         p1,
     };
     Found {
+        origin: None,
         shape: FoundShape::Pair {
             upper: seg(upper),
             lower: seg(lower),

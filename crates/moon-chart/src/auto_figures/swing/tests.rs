@@ -21,6 +21,7 @@ fn run(bars: &[ChartCandle], p: &DetectorParams) -> Vec<Found> {
         &DetectCtx {
             tf_ms: M5_MS,
             now_ms: 0.0,
+            price_tick: None,
         },
     )
 }
@@ -75,10 +76,13 @@ fn tolerance_and_min_touches_are_honoured() {
 }
 
 /// A close above the resistance after its last touch breaks it: `Remove` drops it, `Keep{3}` keeps
-/// it flagged for three bars and drops it on the fourth, unless price has come back below.
+/// it flagged for three bars and drops it on the fourth. A close back below within the three bars
+/// was a false break and the level stands; a return on the fourth comes too late — the stay above
+/// outlasted the policy, and the level stays dropped however long price then holds below.
 ///
-/// Breakage: testing the high instead of the close, counting bars from the wrong end, or applying
-/// the policy the wrong way round.
+/// Breakage: testing the high instead of the close, counting bars from the wrong end, applying
+/// the policy the wrong way round, or letting a late return resurrect the level (the 21.11.2026
+/// audit: supports price had stood under for hours drawn again after one close above).
 #[test]
 fn broken_policy_remove_vs_keep() {
     let mut bars = three_tops();
@@ -93,7 +97,6 @@ fn broken_policy_remove_vs_keep() {
     let broken = flagged[0].broken.expect("flagged broken");
     assert_eq!(broken.bars_since, 0);
     assert_eq!(broken.at_ms, bars[n].t_open_ms);
-    assert!(!broken.returned);
 
     for k in 1..=3 {
         bars.push(bar(n + k, 102.0, 104.0, 101.0, 103.0));
@@ -109,11 +112,31 @@ fn broken_policy_remove_vs_keep() {
         "dropped on the fourth bar"
     );
 
-    let mut returned = bars;
-    returned.push(bar(n + 4, 101.0, 101.0, 97.0, 98.0));
-    let back = run(&returned, &keep);
-    assert_eq!(back.len(), 1, "price came back below: the level stands");
-    assert!(back[0].broken.is_some_and(|b| b.returned));
+    // Back below on the third bar after the break: inside the policy, a false break.
+    let mut in_time = bars[..n + 3].to_vec();
+    in_time.push(bar(n + 3, 101.0, 101.0, 97.0, 98.0));
+    let back = run(&in_time, &keep);
+    assert_eq!(
+        back.len(),
+        1,
+        "back below within three bars: the level stands"
+    );
+    assert!(back[0].broken.is_some_and(|b| b.longest_bars == 3));
+
+    // Back below only on the fourth: the stay above already outlasted the policy.
+    let mut late = bars;
+    late.push(bar(n + 4, 101.0, 101.0, 97.0, 98.0));
+    assert!(
+        run(&late, &keep).is_empty(),
+        "a late return does not resurrect it"
+    );
+    for k in 5..=8 {
+        late.push(bar(n + k, 98.0, 99.0, 96.0, 97.0));
+    }
+    assert!(
+        run(&late, &keep).is_empty(),
+        "nor does holding below afterwards"
+    );
 }
 
 /// Short and empty input, a zero lookback, and zero-width pivots never panic.
@@ -157,6 +180,7 @@ fn real_candles_keep_the_structural_invariants() {
             &DetectCtx {
                 tf_ms: i64::from(kind) * 60_000,
                 now_ms: 0.0,
+                price_tick: None,
             },
         );
         assert!(
@@ -165,6 +189,7 @@ fn real_candles_keep_the_structural_invariants() {
         );
         let (lo, hi) = range(&bars[bars.len() - 2_000..]);
         let frac = f64::from(sp.tolerance_pct) / 100.0;
+        let widest = frac * MAX_ZONE_TOLERANCES;
         for f in &found {
             let FoundShape::Horizontal { price } = f.shape else {
                 panic!("horizontal");
@@ -174,9 +199,16 @@ fn real_candles_keep_the_structural_invariants() {
                 "level {price} outside [{lo}, {hi}]"
             );
             assert!(f.touches.len() >= usize::from(sp.min_touches));
+            // The level's own tolerance: the row's, or a merged zone's reach, never wider than
+            // the widest zone a merge may make.
+            let own = f.tolerance_frac;
+            assert!(
+                own >= frac - 1e-12 && own <= widest + 1e-12,
+                "own tolerance {own}"
+            );
             for t in &f.touches {
                 assert!(
-                    within(t.price, price, frac + 1e-12),
+                    within(t.price, price, own + 1e-12),
                     "touch {} vs level {price}",
                     t.price
                 );
@@ -191,8 +223,7 @@ fn real_candles_keep_the_structural_invariants() {
 /// bars from there, so the level is still kept two bars after the new break even though the first
 /// one was six bars ago.
 ///
-/// Breakage: reporting the first-ever break, which would count six bars and drop the level, and
-/// would call the fresh break "returned".
+/// Breakage: reporting the first-ever break, which would count six bars and drop the level.
 #[test]
 fn a_second_break_restarts_the_keep_countdown() {
     let mut bars = three_tops();
@@ -209,5 +240,100 @@ fn a_second_break_restarts_the_keep_countdown() {
     let broken = found[0].broken.expect("flagged broken");
     assert_eq!(broken.at_ms, bars[n + 4].t_open_ms);
     assert_eq!(broken.bars_since, 2);
-    assert!(!broken.returned);
+}
+
+/// A pivot of `kind` at bar `idx` and `price`, as `find_pivots` would report it.
+fn pivot(idx: usize, price: f64, kind: PivotKind) -> Pivot {
+    Pivot {
+        idx,
+        t_ms: idx as f64 * M5_MS as f64,
+        price,
+        kind,
+    }
+}
+
+/// Bars closing at `closes`, each with a range of ±0.1.
+fn closing(closes: &[f32]) -> Vec<ChartCandle> {
+    closes
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| bar(i, c, c + 0.1, c - 0.1, c))
+        .collect()
+}
+
+/// A resistance touched at bars 1 and 8: price closing above it in between for longer than the
+/// policy keeps a broken level makes the first touch history of a level that broke, and two
+/// touches become one — no level. A short visit above (two bars) is a false break and leaves both.
+///
+/// The oracle: tolerance 0.5 % of 100 puts the break buffer at 100.25, and closes at 102 clear it.
+///
+/// Breakage: reading breaks only after the last touch (the 21.11.2026 audit found 653 kept levels
+/// price had crossed back and forth between their touches), or cutting the history at a false
+/// break.
+#[test]
+fn a_pass_through_between_touches_cuts_the_level_s_history() {
+    let p = SwingParams {
+        min_touches: 2,
+        broken: BrokenPolicy::Keep { bars: 3 },
+        ..SwingParams::default()
+    };
+    let pivots = [
+        pivot(1, 100.0, PivotKind::High),
+        pivot(8, 100.0, PivotKind::High),
+    ];
+    let mut closes = [98.0f32; 10];
+    let held = levels_from(&closing(&closes), &pivots, &p, 0.005);
+    assert_eq!(held.len(), 1, "no pass: one level of two touches");
+    assert_eq!(held[0].touches.len(), 2);
+
+    for c in &mut closes[2..=3] {
+        *c = 102.0;
+    }
+    let short = levels_from(&closing(&closes), &pivots, &p, 0.005);
+    assert_eq!(short.len(), 1, "two bars above is a false break: {short:?}");
+    assert_eq!(short[0].touches.len(), 2);
+
+    for c in &mut closes[2..=6] {
+        *c = 102.0;
+    }
+    let passed = levels_from(&closing(&closes), &pivots, &p, 0.005);
+    assert!(
+        passed.is_empty(),
+        "five bars above: one touch left: {passed:?}"
+    );
+}
+
+/// Two greedy cuts of one zone — 100 / 100.45 and 100.55 / 100.7 under a 0.5 % tolerance, means
+/// 0.4 apart — merge into one group; cuts whose means are farther apart than the tolerance, or a
+/// merge wider than two tolerances, stay apart.
+///
+/// Breakage: no merge (one zone drawn as two levels, 425 split pairs in the 21.11.2026 audit), or
+/// a merge that chains neighbouring zones into one wide band.
+#[test]
+fn neighbouring_cuts_of_one_zone_merge() {
+    let prices = |ps: &[f64]| -> Vec<Pivot> {
+        ps.iter()
+            .enumerate()
+            .map(|(i, &p)| pivot(i, p, PivotKind::High))
+            .collect()
+    };
+    let groups = |ps: &[Pivot]| {
+        let sorted: Vec<&Pivot> = ps.iter().collect();
+        price_groups(&sorted, 0.005)
+    };
+    let one_zone = prices(&[100.0, 100.45, 100.55, 100.7]);
+    assert_eq!(groups(&one_zone), vec![0..4]);
+
+    let two_zones = prices(&[100.0, 100.4, 100.6, 101.0]);
+    assert_eq!(groups(&two_zones), vec![0..2, 2..4], "means 0.6 apart");
+
+    // Means 100.3375 and 100.635 are close, but together the cuts span 1.01 %.
+    let too_wide = prices(&[
+        100.0, 100.45, 100.45, 100.45, 100.51, 100.51, 100.51, 101.01,
+    ]);
+    assert_eq!(
+        groups(&too_wide),
+        vec![0..4, 4..8],
+        "wider than two tolerances"
+    );
 }

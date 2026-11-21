@@ -38,6 +38,7 @@ fn run(bars: &[ChartCandle], p: VolumeProfileParams, now_ms: f64) -> Vec<Found> 
         &DetectCtx {
             tf_ms: 3_600_000,
             now_ms,
+            price_tick: None,
         },
     )
 }
@@ -286,6 +287,7 @@ fn bench_profile_matches_a_brute_force_spread() {
     let ctx = DetectCtx {
         tf_ms: 300_000,
         now_ms: now,
+        price_tick: None,
     };
     let p = params(ProfilePeriod::PrevDay, 100, 0);
     let found = VolumeProfile.detect(&upto, &DetectorParams::VolumeProfile(p), &ctx);
@@ -348,6 +350,7 @@ fn bench_profile_matches_a_brute_force_spread() {
     let ctx = DetectCtx {
         tf_ms: 300_000,
         now_ms: now,
+        price_tick: None,
     };
     let day = params(ProfilePeriod::Day, 100, 0);
     assert!(

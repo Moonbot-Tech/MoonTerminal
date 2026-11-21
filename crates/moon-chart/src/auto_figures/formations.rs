@@ -109,8 +109,8 @@ use super::squeeze::MAX_BODY_BREAKS;
 use super::trend::{Line, LineSpec, MAX_LINE_PIVOTS, find_lines};
 use super::{
     Broken, DetectCtx, Detector, Found, FoundShape, LineTag, Seg, Side, Touch, atr, bar_ok,
-    close_of, close_side, open_of, pct_frac, positive, scan_break, survives, tolerance_frac,
-    touch_strength, touch_volume, window, within,
+    break_buffer, close_of, close_side, open_of, pct_frac, positive, scan_break, survives,
+    tolerance_frac, touch_strength, touch_volume, window, within,
 };
 
 /// Closes allowed outside the pair, by more than the touch tolerance, between the formation's first
@@ -138,12 +138,18 @@ impl Detector for Formation {
         let DetectorParams::Formation(p) = params else {
             return Vec::new();
         };
-        formations(bars, p, ctx.tf_ms)
+        formations(bars, p, ctx.tf_ms, ctx.price_tick)
     }
 }
 
-/// Every formation of `bars` under `p`; see the module doc for the procedure.
-fn formations(bars: &[ChartCandle], p: &FormationParams, tf_ms: i64) -> Vec<Found> {
+/// Every formation of `bars` under `p`; see the module doc for the procedure. `price_tick` is the
+/// market's tick when known ([`DetectCtx::price_tick`]).
+fn formations(
+    bars: &[ChartCandle],
+    p: &FormationParams,
+    tf_ms: i64,
+    price_tick: Option<f64>,
+) -> Vec<Found> {
     let two_line = p.triangle || p.wedge || p.channel || p.flag;
     if !two_line && !p.double {
         return Vec::new();
@@ -152,7 +158,8 @@ fn formations(bars: &[ChartCandle], p: &FormationParams, tf_ms: i64) -> Vec<Foun
         ToleranceUnit::Pct => None,
         ToleranceUnit::Atr => atr(bars, ATR_PERIOD),
     };
-    let tol = |pct: f32, share: f32| tolerance_frac(p.tolerance_unit, pct, share, atr, bars);
+    let tol =
+        |pct: f32, share: f32| tolerance_frac(p.tolerance_unit, pct, share, atr, bars, price_tick);
     let (Some(touch_tol), Some(double_tol)) = (
         tol(p.tolerance_pct, p.tolerance_atr),
         tol(p.double_tolerance_pct, p.double_tolerance_atr),
@@ -268,6 +275,8 @@ fn two_line_formations(
             broken: c.broken,
             tolerance_frac: tol,
             tag: Some(c.tag),
+            // Each side of a pair has its own fixed side, judged by the event layer.
+            origin: None,
         });
     }
 }
@@ -391,12 +400,13 @@ fn classify(
     let range = (tag == LineTag::Channel && du == 0 && dl == 0)
         .then(|| range_levels(upper, lower))
         .flatten();
+    let buffer = break_buffer(tol);
     let broken = match range {
         Some((hi, lo)) => latest(
-            scan_break(win, last_idx, Side::Below, |_| Some(hi)),
-            scan_break(win, last_idx, Side::Above, |_| Some(lo)),
+            scan_break(win, last_idx, Side::Below, buffer, |_| Some(hi)),
+            scan_break(win, last_idx, Side::Above, buffer, |_| Some(lo)),
         ),
-        None => latest_break(win, last_idx, upper, lower),
+        None => latest_break(win, last_idx, upper, lower, buffer),
     };
     if !survives(broken, p.broken) {
         return None;
@@ -462,23 +472,34 @@ fn span_breaks(
 }
 
 /// The latest break episode after `from_idx` of either side: a close above the upper side or below
-/// the lower one. When both sides were broken, the episode that began later is the formation's —
-/// price that left through the top and then fell through the bottom has left through the bottom.
+/// the lower one, by more than `buffer` (a fraction of the side's price, `break_buffer` of the
+/// touch tolerance). When both sides were broken, the episode that began later is the
+/// formation's — price that left through the top and then fell through the bottom has left
+/// through the bottom.
 fn latest_break(
     win: &[ChartCandle],
     from_idx: usize,
     upper: &Line,
     lower: &Line,
+    buffer: f64,
 ) -> Option<Broken> {
-    let up = scan_break(win, from_idx, Side::Below, |t| upper.price_at(t));
-    let down = scan_break(win, from_idx, Side::Above, |t| lower.price_at(t));
+    let up = scan_break(win, from_idx, Side::Below, buffer, |t| upper.price_at(t));
+    let down = scan_break(win, from_idx, Side::Above, buffer, |t| lower.price_at(t));
     latest(up, down)
 }
 
-/// The later-starting of two break episodes, the first on a tie.
+/// The later-starting of two break episodes, the first on a tie — with the longer of the two
+/// sides' longest stays beyond, so that a side that outlasted the policy still drops the
+/// formation when the other side broke later (`survives` reads `longest_bars` alone).
 fn latest(a: Option<Broken>, b: Option<Broken>) -> Option<Broken> {
     match (a, b) {
-        (Some(a), Some(b)) => Some(if b.at_ms > a.at_ms { b } else { a }),
+        (Some(a), Some(b)) => {
+            let longest_bars = a.longest_bars.max(b.longest_bars);
+            Some(Broken {
+                longest_bars,
+                ..if b.at_ms > a.at_ms { b } else { a }
+            })
+        }
         (a, b) => a.or(b),
     }
 }
@@ -616,8 +637,9 @@ fn doubles(
         } else {
             (neck_seg, level_seg)
         };
-        let up = scan_break(win, second.idx, Side::Below, |_| Some(upper.p0));
-        let down = scan_break(win, second.idx, Side::Above, |_| Some(lower.p0));
+        let buffer = break_buffer(tol);
+        let up = scan_break(win, second.idx, Side::Below, buffer, |_| Some(upper.p0));
+        let down = scan_break(win, second.idx, Side::Above, buffer, |_| Some(lower.p0));
         let broken = latest(up, down);
         if !survives(broken, p.broken) {
             continue;
@@ -650,6 +672,7 @@ fn doubles(
             } else {
                 LineTag::DoubleBottom
             }),
+            origin: None,
         });
     }
 }

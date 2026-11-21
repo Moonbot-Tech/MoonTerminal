@@ -11,6 +11,7 @@ use crate::chartdx::auto_figures_sync::LineKey;
 /// The hover of a level at `price` on pane 0.
 fn hover(price: f64) -> AutoHover {
     let found = Found {
+        origin: None,
         shape: FoundShape::Horizontal { price },
         touches: Vec::new(),
         strength: 1.0,

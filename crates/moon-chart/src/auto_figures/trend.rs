@@ -22,9 +22,9 @@
 //! bars handed in, as `Swing` computes it; no ATR (too few bars) finds nothing. The slope bounds
 //! stay in % per bar whatever the unit.
 //!
-//! A broken line — a close beyond it after its last touch, the latest such episode — is handled by
-//! the row's `TrendParams::broken` exactly as a level is: `Remove` drops it, `Keep { bars }` keeps
-//! it flagged.
+//! A broken line — a close beyond it after its last touch by more than the break buffer, the
+//! latest such episode — is handled by the row's `TrendParams::broken` exactly as a level is:
+//! `Remove` drops it, `Keep { bars }` keeps it flagged until some stay beyond outlasts `bars`.
 //!
 //! Cost. A line search reads at most [`MAX_LINE_PIVOTS`] pivots of its kind — the most recent ones
 //! — whatever the lookback and pivot width, because the scanner will call it with any parameters
@@ -45,9 +45,9 @@ use moon_core::market::candles::ChartCandle;
 
 use super::pivots::{Pivot, PivotKind, find_pivots};
 use super::{
-    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, close_of, close_side,
-    line_price_at, open_of, scan_break, survives, tolerance_frac, touch_strength, touch_volume,
-    window,
+    DetectCtx, Detector, Found, FoundShape, Side, Touch, atr, bar_ok, break_buffer, close_of,
+    close_side, line_price_at, open_of, scan_break, survives, tolerance_frac, touch_strength,
+    touch_volume, window,
 };
 
 /// Most pivots of one kind a line search considers: the most recent ones. Bounds the O(P³) pair
@@ -77,6 +77,7 @@ impl Detector for Trend {
             p.tolerance_atr,
             atr,
             bars,
+            ctx.price_tick,
         ) else {
             return Vec::new();
         };
@@ -104,7 +105,7 @@ impl Detector for Trend {
                     PivotKind::Low => Side::Above,
                 };
                 let (t0, p0, t1, p1) = (line.t0_ms, line.p0, line.t1_ms, line.p1);
-                let broken = scan_break(win, line.last_idx, origin, |t| {
+                let broken = scan_break(win, line.last_idx, origin, break_buffer(tol_frac), |t| {
                     line_price_at(t0, p0, t1, p1, t)
                 });
                 if !survives(broken, p.broken) {
@@ -130,6 +131,7 @@ impl Detector for Trend {
                     touches: line.touches,
                     tolerance_frac: spec.tol_frac,
                     tag: None,
+                    origin: Some(origin),
                 });
             }
         }

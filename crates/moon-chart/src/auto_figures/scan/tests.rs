@@ -87,6 +87,39 @@ fn answer(r: &ScanResult) -> Answer {
     )
 }
 
+/// The market's tick reaches the detectors: a tick far coarser than the row's tolerance floors
+/// the band at two ticks, which regroups the levels, so the scan's answer is not the one without it.
+///
+/// Breakage: `scan_market` dropping its tick before `detect` (the chart and the screener would
+/// group the same market by different bands).
+#[test]
+fn the_market_tick_floors_the_scan_s_tolerances() {
+    use moon_core::config::auto_figures::SwingParams;
+    let bars = ace(5);
+    let now = bars.last().map_or(0.0, |b| b.t_open_ms) + 300_000.0;
+    let rows = [ScanRow {
+        row_ix: 0,
+        params: DetectorParams::Swing(SwingParams::default()),
+        tf: TfId::M5,
+        take: Take::default(),
+        marks: EventMarks::default(),
+    }];
+    let mut plain = ScanResult::default();
+    scan_market(&rows, &bars, &[], now, None, None, &mut plain);
+    let price = plain.last_price.expect("a price");
+    let mut coarse = ScanResult::default();
+    scan_market(
+        &rows,
+        &bars,
+        &[],
+        now,
+        None,
+        Some(price * 0.05),
+        &mut coarse,
+    );
+    assert_ne!(answer(&coarse), answer(&plain), "the tick changed nothing");
+}
+
 fn scan(rows: &[ScanRow], bars: &[ChartCandle], now_ms: f64) -> ScanResult {
     scan_with_ring(rows, bars, &[], now_ms)
 }
@@ -99,7 +132,7 @@ fn scan_with_ring(
     now_ms: f64,
 ) -> ScanResult {
     let mut out = ScanResult::default();
-    scan_market(rows, bars, ring, now_ms, None, &mut out);
+    scan_market(rows, bars, ring, now_ms, None, None, &mut out);
     out
 }
 
@@ -616,11 +649,12 @@ fn bench_scan_is_stable_and_auto_is_m15() {
         &[],
         other_now,
         None,
+        None,
         &mut reused,
     );
-    scan_market(&auto_rows, &bars, &[], now, None, &mut reused);
+    scan_market(&auto_rows, &bars, &[], now, None, None, &mut reused);
     assert_eq!(answer(&reused), answer(&fresh));
-    scan_market(&auto_rows, &bars, &[], now, None, &mut reused);
+    scan_market(&auto_rows, &bars, &[], now, None, None, &mut reused);
     assert_eq!(answer(&reused), answer(&fresh));
 
     let shipped = ScanRow::from_rows(&AutoFiguresCfg::shipped().rows);
@@ -845,10 +879,10 @@ fn a_live_price_is_the_reference() {
     let rows = [round_row(0, TfId::H1, EventMarks::default())];
     let (bars, now) = breakout_series();
     let mut out = ScanResult::default();
-    scan_market(&rows, &bars, &[], now, Some(3.6), &mut out);
+    scan_market(&rows, &bars, &[], now, Some(3.6), None, &mut out);
     assert_eq!(out.last_price, Some(3.6));
     let d = out.nearest.expect("the 3.5 line").distance_pct;
     assert!((d + 2.777_78).abs() < 1e-4, "{d}");
-    scan_market(&rows, &bars, &[], now, Some(0.0), &mut out);
+    scan_market(&rows, &bars, &[], now, Some(0.0), None, &mut out);
     assert_eq!(out.last_price, Some(f64::from(3.55f32)));
 }

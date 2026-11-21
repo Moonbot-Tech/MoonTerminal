@@ -294,6 +294,8 @@ pub(super) fn compute(row: &AutoFigureRow, now_ms: f64, theme: &ChartTheme) -> O
     let ctx = DetectCtx {
         tf_ms: tf.ms(),
         now_ms,
+        // A demo preview has no market, so no tick: the row's own tolerance.
+        price_tick: None,
     };
     let found = moon_chart::auto_figures::detect(params, &bars, &ctx);
     let ref_price = bars.last().map_or(f64::NAN, |b| f64::from(b.close));

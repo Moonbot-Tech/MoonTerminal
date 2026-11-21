@@ -708,17 +708,16 @@ impl ChartPanel {
             .chart
             .auto_pane_candles(idx, target.0, &target.1, now_ms)
             .into();
-        let cache = self
-            .backend
-            .read(cx)
-            .session
-            .market_source()
+        let source = self.backend.read(cx).session.market_source();
+        let cache = source
             .kline_address(target.0, &target.1)
             .map(|(cache, exchange)| CacheAddr {
                 cache,
                 exchange,
                 market: target.1.clone(),
             });
+        // Once per job (a bar close), never per frame: the detectors' tolerance floor.
+        let price_tick = source.price_tick(target.0, &target.1);
         // A market with no cache address is a definitive "no cache", not a failed read: its cache
         // rows are answered here, empty and final — no job, no detector, no retry — and run again
         // only when their key moves.
@@ -735,6 +734,7 @@ impl ChartPanel {
             chart,
             cache,
             now_ms,
+            price_tick,
         };
         // Detached on purpose: replacing a handle would CANCEL a run whose rows are still marked
         // pending, and they would never be retried. A late result is recognised by its key.

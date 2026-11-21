@@ -38,6 +38,7 @@ fn outcome(key: RowKey, levels: &[f64]) -> AutoRowOutcome {
         found: levels
             .iter()
             .map(|&price| Found {
+                origin: None,
                 shape: FoundShape::Horizontal { price },
                 touches: Vec::new(),
                 strength: 2.0,

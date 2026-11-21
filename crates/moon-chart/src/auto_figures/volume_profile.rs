@@ -285,6 +285,7 @@ fn line(profile: &Profile, price: f64, bin: usize, tag: LineTag) -> Option<Found
         touch_volume: vol,
         tolerance_frac: profile.width / price,
         tag: Some(tag),
+        origin: None,
     })
 }
 

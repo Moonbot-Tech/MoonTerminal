@@ -48,6 +48,7 @@ fn run(bars: &[ChartCandle], p: SqueezeParams) -> Vec<Found> {
         &DetectCtx {
             tf_ms: M5_MS,
             now_ms: 0.0,
+            price_tick: None,
         },
     )
 }
@@ -174,7 +175,8 @@ fn degenerate_inputs_are_safe() {
                 &DetectorParams::Squeeze(params(0.5)),
                 &DetectCtx {
                     tf_ms: 0,
-                    now_ms: 0.0
+                    now_ms: 0.0,
+                    price_tick: None,
                 },
             )
             .is_empty()
@@ -183,10 +185,11 @@ fn degenerate_inputs_are_safe() {
 
 /// On the real `chart-ace` candles: the level lies in the series' range, every touch is within its
 /// tolerance of the level or of the sloped line at its time, the line converges toward the level
-/// from the level's other side, and `pressed` agrees with an independent projection.
+/// from the level's other side, and `pressed` agrees with an independent projection and with the
+/// last close standing inside the formation.
 ///
-/// Breakage: a sloped half from the level's own side, a diverging line, or `pressed` computed
-/// against the wrong base.
+/// Breakage: a sloped half from the level's own side, a diverging line, `pressed` computed
+/// against the wrong base, or `pressed` with price outside the formation.
 #[test]
 fn real_candles_keep_the_structural_invariants() {
     let mut formations = 0;
@@ -215,7 +218,8 @@ fn real_candles_keep_the_structural_invariants() {
             assert!(level >= lo && level <= hi);
             let line_at = |t: f64| super::super::line_price_at(t0_ms, p0, t1_ms, p1, t);
             for t in &f.touches {
-                let on_level = within(t.price, level, level_frac + 1e-12);
+                // The level's own tolerance: a merged zone's is wider than the row's.
+                let on_level = within(t.price, level, f.tolerance_frac.max(level_frac) + 1e-12);
                 let on_line =
                     line_at(t.t_ms).is_some_and(|l| within(t.price, l, line_frac + 1e-12));
                 assert!(on_level || on_line, "touch {t:?} is on neither half");
@@ -232,7 +236,23 @@ fn real_candles_keep_the_structural_invariants() {
             } else {
                 (projected - level) / level
             };
-            assert_eq!(pressed, gap <= f64::from(p.pressed_pct) / 100.0);
+            // Inside the formation, from the last real close and half of each band — computed
+            // here, not taken from the detector.
+            let close = f64::from(win[win.len() - 1].close);
+            let (lb, qb) = (f.tolerance_frac / 2.0, line_frac / 2.0);
+            let past_level = if resistance {
+                close > level * (1.0 + lb)
+            } else {
+                close < level * (1.0 - lb)
+            };
+            let past_line = gap > 0.0
+                && if resistance {
+                    close < projected * (1.0 - qb)
+                } else {
+                    close > projected * (1.0 + qb)
+                };
+            let expected = gap <= f64::from(p.pressed_pct) / 100.0 && !past_level && !past_line;
+            assert_eq!(pressed, expected, "gap {gap}, close {close}");
         }
         formations += found.len();
     }
@@ -257,6 +277,7 @@ fn pairing(bars: &[ChartCandle], slope: f64) -> (Level, Line) {
         origin: Side::Below,
         strength: 1.0,
         broken: None,
+        tolerance_frac: 0.0025,
     };
     let line = Line {
         t0_ms: t(0),
@@ -298,12 +319,12 @@ fn a_line_closed_through_after_its_last_touch_is_no_squeeze() {
     let last_t = bars[8].t_open_ms;
     let (level, line) = pairing(&bars, 1.0);
     // Line at bar 8 is 98: 2 % under 100.
-    let gap = pair_gap(&bars, &level, &line, last_t, 0.005).expect("a holding line pairs");
+    let gap = pair_gap(&bars, &level, &line, last_t, 0.005, 0.0).expect("a holding line pairs");
     assert!((gap - 0.02).abs() < 1e-12);
 
     let mut broken = bars.clone();
     broken[6] = bar(6, 96.0, 96.5, 94.0, 95.0);
-    assert!(pair_gap(&broken, &level, &line, last_t, 0.005).is_none());
+    assert!(pair_gap(&broken, &level, &line, last_t, 0.005, 0.0).is_none());
 }
 
 /// A line projected PAST the level by more than `pressed_pct` at the last bar has crossed it — the
@@ -323,8 +344,9 @@ fn a_line_well_past_the_level_is_no_squeeze() {
     let bars = from_hl(&hl);
     let last_t = bars[8].t_open_ms;
     let (level, line) = pairing(&bars, 2.4);
-    assert!(pair_gap(&bars, &level, &line, last_t, 0.05).is_none());
-    let gap = pair_gap(&bars, &level, &line, last_t, 0.10).expect("within 10 % it still pairs");
+    assert!(pair_gap(&bars, &level, &line, last_t, 0.05, 0.0).is_none());
+    let gap =
+        pair_gap(&bars, &level, &line, last_t, 0.10, 0.0).expect("within 10 % it still pairs");
     assert!((gap + 0.092).abs() < 1e-9, "{gap}");
 }
 
@@ -332,6 +354,48 @@ fn run_tf(bars: &[ChartCandle], p: SqueezeParams, tf_ms: i64) -> Vec<Found> {
     Squeeze.detect(
         bars,
         &DetectorParams::Squeeze(p),
-        &DetectCtx { tf_ms, now_ms: 0.0 },
+        &DetectCtx {
+            tf_ms,
+            now_ms: 0.0,
+            price_tick: None,
+        },
     )
+}
+
+/// A squeeze presses only while price stands inside it: not past the level by more than its break
+/// buffer, and — before the line reaches the level — not past the line by more than the line's.
+/// Past the apex only the level counts.
+///
+/// The oracle: the resistance at 100 with tolerance 0.25 % has its buffer at 100.125; the rising
+/// lows line is at 98 on bar 8, its buffer (half of 0.2 %) at 97.902.
+///
+/// Breakage: `pressed` from the gap alone (DRAMUSDT 21.11.2026: a squeeze drawn and marked while
+/// price stood under both its lines).
+#[test]
+fn price_must_stand_between_the_level_and_the_line() {
+    let hl: Vec<(f32, f32)> = (0..9).map(|i| (i as f32 + 93.0, i as f32 + 91.0)).collect();
+    let bars = from_hl(&hl);
+    let (level, line) = pairing(&bars, 1.0);
+    // The last bar, bar 8, closing at `price` (its range on the close).
+    let inside = |price: f64, gap: f64| {
+        let p = price as f32;
+        price_inside(&level, &line, &bar(8, p, p, p, p), 0.002, gap)
+    };
+    assert!(inside(99.0, 0.02));
+    assert!(inside(100.1, 0.02), "inside the level's buffer: not broken");
+    assert!(!inside(100.5, 0.02), "past the resistance");
+    assert!(inside(97.95, 0.02), "inside the line's buffer");
+    assert!(!inside(97.5, 0.02), "under the rising lows");
+    assert!(inside(97.0, -0.001), "past the apex only the level counts");
+
+    // A ring bar (no close) is past the level only when its whole range is.
+    let ring = |high: f32, low: f32| bar(8, f32::NAN, high, low, f32::NAN);
+    assert!(price_inside(&level, &line, &ring(100.6, 99.8), 0.002, 0.02));
+    assert!(!price_inside(
+        &level,
+        &line,
+        &ring(100.9, 100.3),
+        0.002,
+        0.02
+    ));
 }

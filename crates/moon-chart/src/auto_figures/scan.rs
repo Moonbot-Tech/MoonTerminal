@@ -396,6 +396,8 @@ pub fn matches(result: &ScanResult, filter: &ScanFilter) -> bool {
 ///         lines are projected to. Not a finite number: no bar is closed and every row is short.
 ///     live_price: The market's current price as the screener holds it, when it does; a value that
 ///         is not a positive finite number is ignored and the cache's last price used instead.
+///     price_tick: The market's exchange tick, when known — the floor of every row's tolerance,
+///         as on the chart (`super::DetectCtx::price_tick`).
 ///     out: Overwritten with the answer; its buffers are reused.
 pub fn scan_market(
     rows: &[ScanRow],
@@ -403,6 +405,7 @@ pub fn scan_market(
     ring_5m: &[ChartCandle],
     now_ms: f64,
     live_price: Option<f64>,
+    price_tick: Option<f64>,
     out: &mut ScanResult,
 ) {
     out.reset();
@@ -437,7 +440,12 @@ pub fn scan_market(
         if last_price.is_none() {
             continue;
         }
-        let found = detect(&row.params, read, &DetectCtx { tf_ms, now_ms });
+        let ctx = DetectCtx {
+            tf_ms,
+            now_ms,
+            price_tick,
+        };
+        let found = detect(&row.params, read, &ctx);
         // The events get their OWN tail, not the detector's: a row needing one bar (round prices,
         // a period level) still judges a breakout by the closes before it. Every bar here is
         // valid (the 5-minute rows were filtered), so `bars_read` of them is exactly what

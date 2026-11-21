@@ -16,6 +16,7 @@ fn line(shape: FoundShape) -> Found {
         touch_volume: 0.0,
         tolerance_frac: 0.0,
         tag: None,
+        origin: None,
     }
 }
 
@@ -577,4 +578,86 @@ fn ring_bars_cross_a_line_their_whole_range_crosses() {
         KEEP3,
     );
     assert!(e.contains(AutoEvent::Breakout), "{e:?}");
+}
+
+/// A level as `Swing` reports it: held from `origin`, grouped by `tolerance_frac`.
+fn held(price: f64, origin: Side, tolerance_frac: f64) -> Found {
+    Found {
+        origin: Some(origin),
+        tolerance_frac,
+        ..level(price)
+    }
+}
+
+/// A line with a held side reads its crossings against that side, the way its `broken` does: a
+/// return INTO it is a false break, a return to the broken side after a short visit back is the
+/// line breaking again, and a crossing back after a stay longer than the window is neither (the
+/// detector has dropped such a line). A line without a held side keeps the closes-only reading.
+///
+/// The oracle is RAYDIUMUSDT on 21.11.2026: a support closed under for three hours, back above for
+/// one, under again — the detector called the last bar a new break, the events a false break.
+///
+/// Breakage: dropping the held side from the false-break test (a "false break" back onto the broken
+/// side), or from the breakout test (a "breakout" back onto the held side).
+#[test]
+fn crossings_follow_the_side_the_line_held() {
+    let support = [held(100.0, Side::Above, 0.0)];
+    let resistance = [held(100.0, Side::Below, 0.0)];
+    let failed_reclaim = closes(&[101.0, 99.0, 99.0, 99.0, 101.0, 99.0]);
+    let e = events_of(&support, &failed_reclaim, 99.0, KEEP3);
+    assert!(
+        e.contains(AutoEvent::Breakout) && !e.contains(AutoEvent::FalseBreak),
+        "{e:?}"
+    );
+    let e = events_of(&[level(100.0)], &failed_reclaim, 99.0, KEEP3);
+    assert!(e.contains(AutoEvent::FalseBreak), "no held side: {e:?}");
+
+    let e = events_of(&resistance, &closes(&[99.0, 101.0, 99.0]), 99.0, KEEP3);
+    assert!(e.contains(AutoEvent::FalseBreak) && !e.contains(AutoEvent::Breakout));
+
+    let late_return = closes(&[101.0, 99.0, 99.0, 99.0, 99.0, 101.0]);
+    let e = events_of(&support, &late_return, 101.0, KEEP3);
+    assert!(
+        !e.contains(AutoEvent::Breakout) && !e.contains(AutoEvent::FalseBreak),
+        "{e:?}"
+    );
+}
+
+/// A close past the line by no more than the break buffer — half the line's tolerance — is on no
+/// side: no breakout. Past the buffer it is one.
+///
+/// The oracle: tolerance 1 % of a level of 100 puts the buffer at 100.5.
+///
+/// Breakage: reading the side without the buffer (a close one tick past the level breaks it while a
+/// pivot at that price would be a touch).
+#[test]
+fn a_close_inside_the_break_buffer_is_no_breakout() {
+    let resistance = [held(100.0, Side::Below, 0.01)];
+    let e = events_of(&resistance, &closes(&[99.0, 100.3]), 100.3, KEEP3);
+    assert!(!e.contains(AutoEvent::Breakout), "{e:?}");
+    let e = events_of(&resistance, &closes(&[99.0, 100.8]), 100.8, KEEP3);
+    assert!(e.contains(AutoEvent::Breakout), "{e:?}");
+}
+
+/// A pressed squeeze whose level the last bar broke shows the breakout, not the squeeze: the break
+/// ended the formation.
+///
+/// Breakage: inserting the squeeze mark whatever the bar did (38 lines in the 21.11.2026 audit).
+#[test]
+fn a_breakout_ends_the_squeeze_mark() {
+    let squeeze = [line(FoundShape::Squeeze {
+        level: 100.0,
+        t0_ms: 0.0,
+        p0: 95.0,
+        t1_ms: 1.0,
+        p1: 96.0,
+        pressed: true,
+    })];
+    let e = events_of(&squeeze, &closes(&[99.0, 101.0]), 101.0, KEEP3);
+    assert!(
+        e.contains(AutoEvent::Breakout) && !e.contains(AutoEvent::Squeeze),
+        "{e:?}"
+    );
+    let e = events_of(&squeeze, &closes(&[99.0, 99.0]), 99.0, KEEP3);
+    assert!(e.contains(AutoEvent::Squeeze), "{e:?}");
 }

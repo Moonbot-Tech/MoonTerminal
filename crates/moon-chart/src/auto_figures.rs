@@ -43,7 +43,9 @@
 //!   cross and the bar events (breakout, false break, bounce, role flip, stop hunt) ask which side
 //!   of the line a bar closed on ([`close_side`]): a known close answers, and a bar without one
 //!   answers only when its whole range lies on one side — its close, wherever it was, lay there
-//!   too. A bar whose range reaches the line has no side: it neither breaks nor holds anything;
+//!   too. A bar whose range reaches the line has no side: it neither breaks nor holds anything.
+//!   Breaks and bar events ask it through [`line_side`], which moves the line by the break buffer
+//!   ([`BREAK_BUFFER_SHARE`]) on the side the figure did not hold;
 //! - a flag's pole reads only known opens and closes — its size is a price, not a side;
 //! - the ATR takes a bar's own range as its true range when the previous close is unknown;
 //! - a period level (a day's open, yesterday's close) is the first or last bar's own price, and is
@@ -95,7 +97,8 @@ pub struct Touch {
 
 /// A figure — a horizontal level, a squeeze's level, a sloped trend line or a side of a two-line
 /// formation (`FoundShape::Pair`: a close above its upper side or below its lower one) — that a
-/// bar has CLOSED beyond after its last touch.
+/// bar has CLOSED beyond after its last touch, by more than the break buffer
+/// ([`BREAK_BUFFER_SHARE`] of the figure's touch tolerance).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Broken {
     /// Open time of the first bar of the LATEST break episode: a close back on the original side
@@ -103,9 +106,41 @@ pub struct Broken {
     pub at_ms: f64,
     /// Closed bars after the breaking one, up to the last bar of the input.
     pub bars_since: u32,
-    /// The last valid close is back on the figure's original side — the break has, so far, been a
-    /// false one.
-    pub returned: bool,
+    /// How long the LONGEST break episode after the last touch lasted, in bars: from its breaking
+    /// bar to the bar that closed back on the original side, or to the last bar of the input for
+    /// an episode still open (then it equals [`Self::bars_since`]).
+    ///
+    /// One deadline for both: under `Keep { bars }` the figure lives through the `bars` bars after
+    /// the breaking one, and on the bar after them it is gone whether that bar closed back or not
+    /// — a return there comes too late, which is why a closed episode is measured to its return
+    /// bar and an open one to the last bar.
+    ///
+    /// What a `Keep { bars }` policy judges by ([`survives`]): an earlier stay beyond the figure
+    /// that outlasted the policy disproved it, and price coming back later does not undo that —
+    /// otherwise a support price stood under for hours came back to life on the first close above
+    /// it (DRAMUSDT 21.11.2026: broken for 13 and then 14 bars and still drawn as a squeeze).
+    pub longest_bars: u32,
+}
+
+/// Share of a figure's touch tolerance a close must clear the line by to count as beyond it — a
+/// break, and the bar events' "other side".
+///
+/// Without it a close one tick past a level's price broke it, while a pivot at that same price
+/// was a touch: one price, two meanings (21.11.2026 audit: in 902 of 2408 kept broken lines the
+/// deepest close of the latest break lay inside the touch band). Half the band: a close past the
+/// middle of the band is no longer "at" the level. A close back on the ORIGINAL side needs no
+/// buffer — any close there ends an episode — so a buffer never keeps a level broken longer.
+pub const BREAK_BUFFER_SHARE: f64 = 0.5;
+
+/// The break buffer of a figure with touch tolerance `tolerance_frac` (fraction of price), as a
+/// fraction of price: [`BREAK_BUFFER_SHARE`] of it, or zero for a tolerance that is not a positive
+/// finite number (period extremes, round prices — lines without a band).
+pub fn break_buffer(tolerance_frac: f64) -> f64 {
+    if tolerance_frac.is_finite() && tolerance_frac > 0.0 {
+        tolerance_frac * BREAK_BUFFER_SHARE
+    } else {
+        0.0
+    }
 }
 
 /// The geometry of a found figure.
@@ -123,7 +158,9 @@ pub enum FoundShape {
     /// A level plus the converging sloped line from its other side (rising lows under a
     /// resistance, falling highs over a support). The sloped half runs through its first and last
     /// touch like [`FoundShape::Sloped`]; `pressed` says the sloped half, projected to the last
-    /// closed bar, came within the row's `pressed_pct` of the level (or past it).
+    /// closed bar, came within the row's `pressed_pct` of the level (or past it) while that bar
+    /// closed inside the formation — not beyond the level, nor beyond a line that has not reached
+    /// it yet, each by more than its break buffer (`squeeze` module doc).
     Squeeze {
         level: f64,
         t0_ms: f64,
@@ -343,6 +380,16 @@ pub struct Found {
     /// What the line is, where a detector draws several kinds of line in one row (see
     /// [`LineTag`]); `None` where every line of the detector is the same kind.
     pub tag: Option<LineTag>,
+    /// The side the figure held price on — the side of its latest touch: `Below` for a resistance
+    /// (a pivot high touched it), `Above` for a support. The side `broken` is measured from, handed
+    /// to the event layer so that its false break and breakout tell the story the detector's
+    /// `broken` tells ([`events`]).
+    ///
+    /// Set by the detectors whose figures a break disproves and whose row's policy then drops
+    /// them: `Swing`, `Trend` and `Squeeze` (its level). `None` for a two-line formation — each of
+    /// its sides has a fixed side, judged by the event layer itself — and for lines a break does
+    /// not end: period extremes, period levels, round prices and profile lines.
+    pub origin: Option<Side>,
 }
 
 /// What a detector legitimately needs beyond its bars and parameters.
@@ -357,7 +404,18 @@ pub struct DetectCtx {
     /// arguments. Only calendar detectors read it ("today" is the UTC day of this moment); a
     /// value that is not a positive finite number falls back to the last valid bar's open time.
     pub now_ms: f64,
+    /// The exchange's price tick of the market, in price units, when the caller knows it — the
+    /// grid prices stand on (`moon_core::market::source::MarketSource::price_tick`). A touch
+    /// tolerance is never narrower than [`TICK_FLOOR_STEPS`] of it ([`tolerance_frac`]): on a coin
+    /// whose tick is coarser than the row's tolerance every tick was a level of its own
+    /// (1000BTTUSDT, tick 0.32 % of price, 21.11.2026). `None` (no core, a demo preview) leaves
+    /// the tolerance as the row sets it.
+    pub price_tick: Option<f64>,
 }
+
+/// Fewest price ticks a touch tolerance spans ([`DetectCtx::price_tick`]): two, so that pivots on
+/// neighbouring ticks share a level.
+pub const TICK_FLOOR_STEPS: f64 = 2.0;
 
 impl DetectCtx {
     /// The reference time a calendar detector uses: `now_ms` when usable, never earlier than the
@@ -481,6 +539,36 @@ pub(crate) fn close_side(b: &ChartCandle, line: f64) -> Option<Side> {
     if f64::from(b.low) > line {
         Some(Side::Above)
     } else if f64::from(b.high) < line {
+        Some(Side::Below)
+    } else {
+        None
+    }
+}
+
+/// The side of `line` bar `b` closed on once the break buffer is applied — what a break episode
+/// and the bar events read.
+///
+/// A close past the line on a side the figure did NOT hold price on must clear it by `buffer_frac`
+/// of the line's price (`line · (1 ± buffer_frac)`, by [`close_side`]) to count as that side; a
+/// close on the `origin` side counts at once. With no origin (a line without a held side) both
+/// sides need the buffer. A close inside the buffer has no side: it neither breaks, nor returns,
+/// nor holds — like a close exactly on the line. A zero buffer is [`close_side`] itself.
+pub(crate) fn line_side(
+    b: &ChartCandle,
+    line: f64,
+    origin: Option<Side>,
+    buffer_frac: f64,
+) -> Option<Side> {
+    let buf = |side: Side| {
+        if origin == Some(side) {
+            0.0
+        } else {
+            buffer_frac
+        }
+    };
+    if close_side(b, line * (1.0 + buf(Side::Above))) == Some(Side::Above) {
+        Some(Side::Above)
+    } else if close_side(b, line * (1.0 - buf(Side::Below))) == Some(Side::Below) {
         Some(Side::Below)
     } else {
         None
@@ -664,15 +752,22 @@ pub fn atr(bars: &[ChartCandle], period: u32) -> Option<f64> {
 /// band. `None` under `Atr` when there is no ATR (`atr` is `None`) or no valid bar: the detector
 /// then finds nothing rather than silently falling back to a percentage the row did not ask for.
 /// A share that is not a positive finite number reads as zero, like a bad percentage.
+///
+/// A positive tolerance is raised to [`TICK_FLOOR_STEPS`] of `price_tick` (the exchange's tick,
+/// [`DetectCtx::price_tick`]) as a fraction of [`last_price`]: a band narrower than the grid
+/// prices stand on cannot group anything. A zero tolerance stays zero — it means "no band", which
+/// the tick does not change — and so does every tolerance when the tick is unknown or not a
+/// positive finite number.
 pub(crate) fn tolerance_frac(
     unit: ToleranceUnit,
     pct: f32,
     atr_share: f32,
     atr: Option<f64>,
     bars: &[ChartCandle],
+    price_tick: Option<f64>,
 ) -> Option<f64> {
-    match unit {
-        ToleranceUnit::Pct => Some(pct_frac(pct)),
+    let frac = match unit {
+        ToleranceUnit::Pct => pct_frac(pct),
         ToleranceUnit::Atr => {
             let atr = atr?;
             let close = last_price(bars)?;
@@ -682,9 +777,24 @@ pub(crate) fn tolerance_frac(
                 0.0
             };
             let frac = share * atr / close;
-            frac.is_finite().then_some(frac)
+            if !frac.is_finite() {
+                return None;
+            }
+            frac
         }
+    };
+    if !(frac > 0.0) {
+        return Some(frac);
     }
+    let floor = price_tick
+        .and_then(positive)
+        .zip(last_price(bars))
+        .map_or(0.0, |(tick, price)| TICK_FLOOR_STEPS * tick / price);
+    Some(if floor.is_finite() {
+        frac.max(floor)
+    } else {
+        frac
+    })
 }
 
 /// `price` lies within `frac` of `line`, measured as a fraction of the LINE's price.
@@ -692,26 +802,30 @@ pub(crate) fn within(price: f64, line: f64, frac: f64) -> bool {
     line > 0.0 && (price - line).abs() <= line * frac
 }
 
-/// The LATEST break episode after `from_idx`: the first close of the most recent run of closes
-/// beyond the line on the side opposite `origin`, with the bars since that close and whether the
-/// last valid close is back on `origin`'s side.
+/// The break episodes after `from_idx`, summarised: the LATEST one — the first close of the most
+/// recent run of closes beyond the line on the side opposite `origin` — with the bars since that
+/// close and the length of the LONGEST episode.
 ///
 /// An episode ends at a close back on `origin`'s side; a close beyond after that starts a new one,
-/// so a level that broke, came back and broke again reports its SECOND break — the one a
-/// `Keep { bars }` countdown must run from. A bar's side is [`close_side`]: a close exactly on the
-/// line, and a bar whose close is unknown (module doc) with a range reaching the line, neither ends
-/// nor starts an episode; such a bar still counts in `bars_since`, which is time passing. `line_at`
-/// gives the line's price at a bar's open time; a bar where it gives `None` is skipped. Cost
-/// O(bars after `from_idx`).
+/// so a level that broke, came back and broke again reports its SECOND break as the latest — and
+/// still remembers how long the first one lasted ([`Broken::longest_bars`]). A bar's side is
+/// [`line_side`] with `buffer_frac` (normally [`break_buffer`] of the figure's tolerance): a close
+/// past the line by no more than the buffer, a close exactly on it, and a bar whose close is
+/// unknown (module doc) with a range reaching the shifted line neither end nor start an episode;
+/// such a bar still counts in `bars_since` and in an episode's length, which are time passing.
+/// `line_at` gives the line's price at a bar's open time; a bar where it gives `None` is skipped.
+/// Cost O(bars after `from_idx`).
 pub(crate) fn scan_break(
     bars: &[ChartCandle],
     from_idx: usize,
     origin: Side,
+    buffer_frac: f64,
     line_at: impl Fn(f64) -> Option<f64>,
 ) -> Option<Broken> {
     let mut broken_at: Option<usize> = None;
-    let mut beyond = false;
-    let mut last_side: Option<Side> = None;
+    // Start of the episode still open, if one is.
+    let mut open: Option<usize> = None;
+    let mut longest = 0usize;
     for (k, b) in bars.iter().enumerate().skip(from_idx.saturating_add(1)) {
         if !bar_ok(b) {
             continue;
@@ -719,34 +833,40 @@ pub(crate) fn scan_break(
         let Some(line) = line_at(b.t_open_ms) else {
             continue;
         };
-        let Some(side) = close_side(b, line) else {
+        let Some(side) = line_side(b, line, Some(origin), buffer_frac) else {
             continue;
         };
-        last_side = Some(side);
         if side == origin {
-            beyond = false;
-        } else if !beyond {
-            beyond = true;
+            if let Some(start) = open.take() {
+                longest = longest.max(k - start);
+            }
+        } else if open.is_none() {
+            open = Some(k);
             broken_at = Some(k);
         }
     }
     let at = broken_at?;
     let last = bars.len().saturating_sub(1);
+    if let Some(start) = open {
+        longest = longest.max(last - start);
+    }
     Some(Broken {
         at_ms: bars[at].t_open_ms,
         bars_since: u32::try_from(last - at).unwrap_or(u32::MAX),
-        returned: last_side == Some(origin),
+        longest_bars: u32::try_from(longest).unwrap_or(u32::MAX),
     })
 }
 
 /// Whether a figure with this break survives `policy`: always when unbroken; never under
-/// `Remove`; under `Keep { bars }` while at most `bars` bars have closed after the break, or after
-/// that once the last close is back on the original side.
+/// `Remove`; under `Keep { bars }` while no break episode has lasted more than `bars` bars
+/// ([`Broken::longest_bars`]) — a close back on the original side within them was a false break
+/// and the figure stays, a stay beyond longer than that drops it for good, however price moves
+/// afterwards.
 pub(crate) fn survives(broken: Option<Broken>, policy: BrokenPolicy) -> bool {
     match (broken, policy) {
         (None, _) => true,
         (Some(_), BrokenPolicy::Remove) => false,
-        (Some(b), BrokenPolicy::Keep { bars }) => b.bars_since <= u32::from(bars) || b.returned,
+        (Some(b), BrokenPolicy::Keep { bars }) => b.longest_bars <= u32::from(bars),
     }
 }
 

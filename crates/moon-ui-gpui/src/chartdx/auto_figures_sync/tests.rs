@@ -261,6 +261,7 @@ fn rows_take_their_bars_from_the_chart_or_the_cache_and_read_it_once() {
         chart,
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out.len(), 3);
@@ -294,6 +295,7 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
         chart: Vec::new().into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let out = run(&job, Some(&cache));
     assert!(out[0].1.read_failed);
@@ -306,6 +308,7 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
         chart: series(DAY0, 5 * MIN, 10).into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out[0].1.source, BarSource::Cache1m);
@@ -377,6 +380,7 @@ fn level_row(levels: &[f64]) -> AutoRowDrawn {
             .iter()
             .enumerate()
             .map(|(i, &price)| Found {
+                origin: None,
                 shape: FoundShape::Horizontal { price },
                 touches: vec![Touch { t_ms: 1.0, price }; 3],
                 strength: 1.0,
@@ -516,6 +520,7 @@ fn captions_are_rebuilt_only_when_a_printed_value_moves() {
 #[test]
 fn a_periods_high_and_low_are_different_lines() {
     let bar = |t: i64, price: f64| Found {
+        origin: None,
         shape: FoundShape::Horizontal { price },
         touches: vec![Touch {
             t_ms: t as f64,
@@ -666,6 +671,7 @@ fn a_caption_price_is_quantized_at_its_printed_precision() {
 #[test]
 fn two_trend_lines_from_one_pivot_are_different_lines() {
     let line = |t1: f64, p1: f64| Found {
+        origin: None,
         shape: FoundShape::Sloped {
             t0_ms: 0.0,
             p0: 100.0,
@@ -782,6 +788,7 @@ fn lines_of_two_timeframes_close_together_are_marked_as_confluence() {
 fn lines_sharing_their_anchors_are_told_apart_by_tag_and_round_price() {
     use moon_chart::auto_figures::LineTag;
     let line = |price: f64, first_ms: f64, touch: Option<f64>, tag: Option<LineTag>| Found {
+        origin: None,
         shape: FoundShape::Horizontal { price },
         touches: touch
             .map(|t| vec![Touch { t_ms: t, price }])
@@ -829,6 +836,7 @@ fn lines_sharing_their_anchors_are_told_apart_by_tag_and_round_price() {
 fn a_hidden_poc_stays_hidden_when_it_turns_naked() {
     use moon_chart::auto_figures::LineTag;
     let poc = |first_ms: f64, tag| Found {
+        origin: None,
         shape: FoundShape::Horizontal { price: 100.0 },
         touches: Vec::new(),
         strength: 1.0,
@@ -887,6 +895,7 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         chart: chart.clone(),
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let out = run(&job, None);
     assert_eq!(out[0].1.bars, 1, "round prices read one bar");
@@ -919,6 +928,7 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         chart,
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let cache = m5_cache();
     for with_cache in [true, false] {
@@ -985,6 +995,7 @@ fn a_row_on_the_charts_timeframe_reads_the_cache_when_the_series_is_too_short() 
         chart: chart.clone(),
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let out = run(&job, Some(&cache));
     let o = &out[0].1;
@@ -1251,6 +1262,7 @@ fn formation(
         price: 110.0,
     }));
     Found {
+        origin: None,
         shape: FoundShape::Pair {
             upper: side(upper_t0, 110.0),
             lower: side(lower_t0, 100.0),
@@ -1600,6 +1612,7 @@ fn a_twin_leaves_its_rows_count_and_hands_its_marks_to_the_flag() {
         lower.p0 -= by;
         lower.p1 -= by;
         Found {
+            origin: None,
             shape: FoundShape::Pair { upper, lower },
             ..f
         }
@@ -1710,6 +1723,7 @@ fn ring_kind_rows_have_no_close_and_real_rows_keep_theirs() {
         chart: Vec::new().into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let out = run(&job, Some(&cache));
     let o = &out[0].1;
@@ -1741,6 +1755,7 @@ fn a_ring_read_that_did_not_happen_is_a_failure() {
         chart: Vec::new().into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out[0].1.source, BarSource::Cache5m);

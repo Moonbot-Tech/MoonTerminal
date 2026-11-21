@@ -41,6 +41,7 @@ fn run(bars: &[ChartCandle], now_ms: f64) -> Vec<(LineTag, f64)> {
             &DetectCtx {
                 tf_ms: 3_600_000,
                 now_ms,
+                price_tick: None,
             },
         )
         .into_iter()
@@ -141,6 +142,7 @@ fn tiny_prices_bad_lengths_and_bad_bars() {
         &DetectCtx {
             tf_ms: 0,
             now_ms: now,
+            price_tick: None,
         },
     );
     assert!(zero.is_empty());
@@ -179,6 +181,7 @@ fn bench_boundaries_match_the_bars_at_them() {
         &DetectCtx {
             tf_ms: 300_000,
             now_ms: now,
+            price_tick: None,
         },
     );
     let got: Vec<(LineTag, f64)> = found
@@ -217,6 +220,7 @@ fn bench_boundaries_match_the_bars_at_them() {
     let ctx = DetectCtx {
         tf_ms: 300_000,
         now_ms: now,
+        price_tick: None,
     };
     assert!(PeriodLevel.detect(&upto, &only_prev_day, &ctx).is_empty());
 }

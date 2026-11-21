@@ -157,11 +157,14 @@ fn period_extremes(
             first_ms,
             last_ms,
             broken: if previous {
-                scan_break(bars, last_idx_in, origin, |_| Some(price))
+                // A period's extreme has no band, so no break buffer.
+                scan_break(bars, last_idx_in, origin, 0.0, |_| Some(price))
             } else {
                 None
             },
             tag: Some(tag),
+            // Never dropped by a break, so the event layer reads it without a held side.
+            origin: None,
         }
     };
     let mut out = Vec::with_capacity(2);

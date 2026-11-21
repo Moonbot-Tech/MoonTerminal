@@ -121,6 +121,10 @@ pub(crate) struct PaneJob {
     pub cache: Option<CacheAddr>,
     /// The moment the keys were taken, Unix ms — the detectors' reference time.
     pub now_ms: f64,
+    /// The market's exchange tick when the core has sent it — the floor of every row's tolerance
+    /// (`moon_chart::auto_figures::DetectCtx::price_tick`). Read when the job is built, so a tick
+    /// that arrives later takes effect on the row's next key change (its next bar close).
+    pub price_tick: Option<f64>,
 }
 
 /// How long past a bucket's close a resampled row keeps waiting for the 5-minute cache to fill
@@ -370,6 +374,7 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                     &DetectCtx {
                         tf_ms: row_ms,
                         now_ms: job.now_ms,
+                        price_tick: job.price_tick,
                     },
                 )
             };

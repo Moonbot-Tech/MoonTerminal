@@ -11,6 +11,7 @@ fn levels(close: f32, grid: RoundGrid, range_pct: f32) -> Vec<(f64, f32)> {
             &DetectCtx {
                 tf_ms: 300_000,
                 now_ms: 0.0,
+                price_tick: None,
             },
         )
         .into_iter()
@@ -106,6 +107,7 @@ fn bounded_and_empty() {
         &DetectCtx {
             tf_ms: 300_000,
             now_ms: 0.0,
+            price_tick: None,
         },
     );
     assert!(found.is_empty());
@@ -133,6 +135,7 @@ fn bench_close_grid() {
         &DetectCtx {
             tf_ms: 300_000,
             now_ms: 0.0,
+            price_tick: None,
         },
     );
     assert!(!found.is_empty());
