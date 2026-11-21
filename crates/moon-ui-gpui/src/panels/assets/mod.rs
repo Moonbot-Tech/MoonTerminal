@@ -30,6 +30,7 @@ mod cache;
 mod collect;
 mod columns;
 mod dust;
+mod idle;
 mod render;
 mod roster_width;
 mod settings;
@@ -157,6 +158,11 @@ pub struct AssetsView {
     /// Key of [`Self::cached_wallets`]: see [`Self::wallet_cache_key`].
     cached_wallet_key: Option<WalletCacheKey>,
     cached_wallets: Rc<Vec<WalletColumnSnapshot>>,
+    /// Money the bots cannot trade with — in a wallet its account's cores do not trade from —
+    /// keyed by the core row that carries the mark ([`idle`]). Rebuilt with the other caches; the
+    /// signature covers every configured core, not only the scoped ones (`cache::idle_sig`),
+    /// because an account is judged by all its cores.
+    cached_idle: Rc<std::collections::HashMap<CoreId, idle::IdleMark>>,
     /// Finite USDT value summed across the currently visible table rows.
     cached_total_value: f64,
     /// Visible rows whose value was not finite and so contributed nothing to `cached_total_value`.
@@ -425,6 +431,7 @@ impl AssetsView {
             cached_all_futures: false,
             cached_wallet_key: None,
             cached_wallets: Rc::new(Vec::new()),
+            cached_idle: Rc::new(std::collections::HashMap::new()),
             cached_total_value: 0.0,
             cached_value_excluded: 0,
             cached_scope_marker: None,

@@ -26,8 +26,6 @@ assets.footer_table_hint: "Các dòng bảng sau bộ lọc bụi; Σ là tổng
 # Appended to the tooltip above when some visible rows have no valid value: the row count
 # includes them but Σ cannot, so a shortened sum must say what it left out.
 assets.footer_rows_unpriced: "%{n} dòng không có giá trị hợp lệ — Σ không tính chúng"
-# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
-assets.balances_scope_hint: "Vốn trên các core trong phạm vi — không phải tổng bảng"
 assets.balances_total: "Tổng"
 assets.balances_free: "khả dụng"
 # The retained figure is not confirmed current for the connection.
@@ -41,16 +39,23 @@ assets.balances_awaiting: "đang đợi: %{n}"
 assets.balances_unpriced_n: "chưa có giá: %{n}"
 # Some cores were summed from a retained snapshot, so the total is not "as of now".
 assets.balances_stale_n: "ngoại tuyến: %{n}"
-# Cores left out of the total because another core already counts the same exchange account.
-assets.balances_folded_n: "cùng tài khoản: %{n}"
 # Cores the user set to stay out of the total (per-core setting).
 assets.balances_excluded_n: "đã loại: %{n}"
-# Tooltip line per shared account: which cores were folded into which counted one.
-assets.balances_folded_into: "%{cores} dùng chung tài khoản của %{core}: tính một lần"
 # Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
 assets.balances_folded_hl_caveat: "(Hyperliquid: terminal không thấy chế độ tài khoản, unified hay standard; nếu các ví tách riêng, đặt core thành \"Riêng\" trong Cài đặt → Kết nối → Tổng)"
 # Tooltip line naming the cores excluded by their own setting.
 assets.balances_excluded_list: "Loại theo cài đặt core: %{cores}"
+# Footer row: every core in the window (not the number of accounts the sum covers).
+assets.balances_cores_n: "lõi: %{n}"
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from, and total plus that money. Below them, after the
+# existing `assets.cores_n`, one line per exchange account several cores share (`core-1 + core-2`;
+# the `+` joiner is built in code).
+assets.balances_tip_free: "Khả dụng"
+assets.balances_tip_idle: "Không giao dịch"
+assets.balances_tip_together: "Gộp lại"
+assets.balances_tip_shared: "%{cores} — tài khoản %{brand} chung, chỉ tính một lần"
+assets.balances_tip_shared_unknown: "%{cores} — tài khoản sàn chung, chỉ tính một lần"
 assets.section_positions: "Vị thế"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Mọi core"
@@ -116,6 +121,12 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
 assets.wallet.filtered_empty_few: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
 assets.wallet.filtered_empty_many: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
+# Hover on the amber mark after a core name in the wallets core list: money the bots cannot
+# trade with. What it is first, then the wallet and coin lines (built in code), the data's age,
+# and what to do.
+assets.wallet.idle_what: "Bot không giao dịch từ các ví này"
+assets.wallet.idle_as_of: "Dữ liệu lúc %{t}"
+assets.wallet.idle_action: "Chuyển thủ công: bấm vào lõi"
 assets.wallets_hint: "Ví · kéo coin giữa các ngăn"
 assets.refresh_hint: "Làm mới số dư core"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

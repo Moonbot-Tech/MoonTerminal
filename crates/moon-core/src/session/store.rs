@@ -379,6 +379,12 @@ pub struct CoreData {
     pub schema_rev: u64,
     pub assets_rev: u64,
     pub transfer_rev: u64,
+    /// Unix-ms the latest transfer-assets snapshot arrived, `0` before the first one.
+    ///
+    /// Cores on one exchange account read the same wallets but are refreshed one at a time — a
+    /// transfer refreshes only the core it was made from — so a reader comparing their snapshots
+    /// needs to know which one is newest. Revisions are per core and cannot be compared.
+    pub transfer_at_ms: i64,
     pub license_rev: u64,
     pub client_settings_rev: u64,
     pub core_config_rev: u64,
@@ -612,6 +618,7 @@ impl CoreData {
             assets_stale: false,
             assets_rev: 0,
             transfer_rev: 0,
+            transfer_at_ms: 0,
             license_rev: 0,
             client_settings_rev: 0,
             core_config_rev: 0,
@@ -1180,6 +1187,7 @@ impl CoreData {
             FeedMsg::TransferAssets(transfer) => {
                 self.transfer_assets = transfer;
                 self.transfer_rev = self.transfer_rev.wrapping_add(1);
+                self.transfer_at_ms = crate::util::now_unix_ms_i64();
             }
             FeedMsg::License(license) => {
                 if self.license != Some(license) {

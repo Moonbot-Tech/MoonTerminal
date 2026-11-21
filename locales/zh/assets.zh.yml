@@ -26,8 +26,6 @@ assets.footer_table_hint: "经小额资产过滤后的表格行；Σ 为它们�
 # Appended to the tooltip above when some visible rows have no valid value: the row count
 # includes them but Σ cannot, so a shortened sum must say what it left out.
 assets.footer_rows_unpriced: "%{n} 行没有有效价值——Σ 未计入它们"
-# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
-assets.balances_scope_hint: "范围内各核心的资金——并非表格合计"
 assets.balances_total: "总计"
 assets.balances_free: "可用"
 # The retained figure is not confirmed current for the connection.
@@ -41,16 +39,23 @@ assets.balances_awaiting: "等待中：%{n}"
 assets.balances_unpriced_n: "无汇率：%{n}"
 # Some cores were summed from a retained snapshot, so the total is not "as of now".
 assets.balances_stale_n: "离线：%{n}"
-# Cores left out of the total because another core already counts the same exchange account.
-assets.balances_folded_n: "同一账户：%{n}"
 # Cores the user set to stay out of the total (per-core setting).
 assets.balances_excluded_n: "不计入：%{n}"
-# Tooltip line per shared account: which cores were folded into which counted one.
-assets.balances_folded_into: "%{cores} 与 %{core} 为同一账户：只计一次"
 # Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
 assets.balances_folded_hl_caveat: "（Hyperliquid：终端看不到账户模式（统一或标准）；如果钱包是分开的，请在“设置 → 连接 → 计入资产总计”中将该核心设为“单独”）"
 # Tooltip line naming the cores excluded by their own setting.
 assets.balances_excluded_list: "按核心设置不计入：%{cores}"
+# Footer row: every core in the window (not the number of accounts the sum covers).
+assets.balances_cores_n: "核心：%{n}"
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from, and total plus that money. Below them, after the
+# existing `assets.cores_n`, one line per exchange account several cores share (`core-1 + core-2`;
+# the `+` joiner is built in code).
+assets.balances_tip_free: "可用"
+assets.balances_tip_idle: "未交易"
+assets.balances_tip_together: "两项合计"
+assets.balances_tip_shared: "%{cores} — 共享 %{brand} 账户，仅计一次"
+assets.balances_tip_shared_unknown: "%{cores} — 共享交易所账户，仅计一次"
 assets.section_positions: "仓位"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "全部核心"
@@ -116,6 +121,12 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
 assets.wallet.filtered_empty_few: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
 assets.wallet.filtered_empty_many: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
+# Hover on the amber mark after a core name in the wallets core list: money the bots cannot
+# trade with. What it is first, then the wallet and coin lines (built in code), the data's age,
+# and what to do.
+assets.wallet.idle_what: "机器人不从这些钱包交易"
+assets.wallet.idle_as_of: "数据时间 %{t}"
+assets.wallet.idle_action: "手动划转：点击核心"
 assets.wallets_hint: "钱包 · 在容器之间拖动币种"
 assets.refresh_hint: "刷新核心余额"
 # --- Wallet-section display settings (the gear beside the refresh button) ---
