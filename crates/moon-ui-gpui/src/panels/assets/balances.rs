@@ -17,6 +17,7 @@ use moon_core::session::balances::{
     AccountAggregate, BalanceFigures, FoldedGroup, TotalMember, aggregate_accounts,
 };
 use moon_core::venue::{AccountMergeKey, Brand};
+use moon_ui::{MoonText, MoonTooltip};
 use rust_i18n::t;
 
 /// Per-core subtotal: free/total balance in USDT plus how much it can be trusted.
@@ -76,6 +77,15 @@ impl ScopeTotals {
     /// out of step with the sum it labels. Folded and user-excluded cores are reported apart.
     fn cores(&self) -> usize {
         self.counted + self.awaiting + self.unpriced
+    }
+
+    /// Every core in scope: the contributions plus the cores folded into another core's account
+    /// and the cores the user left out of the total.
+    ///
+    /// This, not [`Self::cores`], is the count a user checks against their own fleet: "12 cores"
+    /// is a fact about the window, while 10 independent contributions is a fact about accounts.
+    fn all_cores(&self) -> usize {
+        self.cores() + self.folded + self.excluded_by_user
     }
 }
 
@@ -264,70 +274,267 @@ fn scope_amount_text(t: &ScopeTotals, v: f64) -> String {
 /// `Unpriced` is reported apart from `Awaiting` because it needs valid pricing rather than merely
 /// the first snapshot.
 ///
-/// Returns fully localized text, `· ` separator included, so the row and the tooltip render
-/// byte-identical strings — that is what makes "the tooltip carries everything that can clip"
+/// Returns fully localized text, `· ` separator included, as the row draws it. The tooltip
+/// repeats the stale, unpriced and awaiting facts word for word, without the separator
+/// ([`summary_tip`]) — that is what makes "the tooltip carries everything that can clip"
 /// checkable in a test.
 fn facts(t: &ScopeTotals) -> Vec<String> {
+    // Every core in the window, never the number of contributions: the row used to print the
+    // contribution count as "Cores" beside a separate "same account: N", which read as 10 cores
+    // when the window held 12. Which cores share an account is the tooltip's job.
     [
-        (t.cores(), "assets.cores_n", true),
-        (t.folded, "assets.balances_folded_n", false),
-        (t.excluded_by_user, "assets.balances_excluded_n", false),
-        (t.stale, "assets.balances_stale_n", false),
-        (t.unpriced, "assets.balances_unpriced_n", false),
-        (t.awaiting, "assets.balances_awaiting", false),
+        (t.all_cores(), "assets.balances_cores_n", true),
+        (
+            t.excluded_by_user,
+            "assets.balances_excluded_n",
+            t.excluded_by_user > 0,
+        ),
+        (t.stale, "assets.balances_stale_n", t.stale > 0),
+        (t.unpriced, "assets.balances_unpriced_n", t.unpriced > 0),
+        (t.awaiting, "assets.balances_awaiting", t.awaiting > 0),
     ]
     .into_iter()
-    .filter(|(n, _, always)| *n > 0 || *always)
+    .filter(|(_, _, shown)| *shown)
     .map(|(n, key, _)| format!("· {}", t!(key, n = n)))
     .collect()
 }
 
-/// Build tooltip text with free first, total after the slash, then every trailing fact.
+/// What the footer tooltip says, before it is drawn: the amounts as label/figure rows, then what
+/// they cover in short lines.
 ///
-/// The recovery path for a narrow dock. The row clips its least important content from the right,
-/// so on a cramped panel the reason a total is partial can sit off-screen while the total itself
-/// is still on it; the tooltip is where that reason stays reachable. The closing line names the
-/// scope because the same row also carries the table's Σ, and the two are different quantities.
+/// The row is terse (`free … / Total … · cores: 12`); the tooltip spells it out:
 ///
-/// Takes the already-rendered `tail` rather than recomputing it, so "the tooltip repeats the row
-/// verbatim" holds by construction instead of by both sides calling the same function the same way.
-fn summary_tooltip(t: &ScopeTotals, tail: &[String]) -> String {
-    // Same order as the rendered footer and the shell header: free, then total.
-    let mut out = format!(
-        "{} {} / {} {}",
-        t!("assets.balances_free"),
-        scope_amount_text(t, t.free),
-        t!("assets.balances_total"),
-        scope_amount_text(t, t.total),
+/// ```text
+/// Free          1 200.00$
+/// Total         3 400.00$
+/// Cores: 12 · offline: 1
+/// core-1 + core-2 — shared Bybit account, counted once
+/// ```
+///
+/// Built apart from [`SummaryTipView`] so a test reads exactly what the hover says.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct SummaryTip {
+    /// `(label, amount)` rows of the cores' balances: free, then total — what the row shows.
+    rows: Vec<(String, String)>,
+    /// Whether the total is complete and current ([`is_complete`]); anything less draws the
+    /// amounts muted, the same trust signal the row gives.
+    complete: bool,
+    /// What the total covers: every core in scope, then every reason the total may be partial,
+    /// in the row's own words — the facts a narrow dock clips off the row.
+    facts: Vec<String>,
+    /// One line each: the shared accounts, the Hyperliquid caveat, and the cores left out by
+    /// their own setting. Empty for a scope with none of them.
+    notes: Vec<String>,
+}
+
+/// Build the footer tooltip's content.
+///
+/// It is also the recovery path for a narrow dock, where the row clips its trailing facts: every
+/// fact the row can lose is here too. The excluded-core count is carried by the list of those
+/// cores, which says the same and more.
+///
+/// Args:
+///     aggs: Per-core balance aggregates, the ones [`summary_group`] sums for the row.
+///     sel: Retained core selection, or empty for every core.
+///     marker: Workspace scope marker of the row, or `None`.
+///
+/// Returns:
+///     The tooltip content.
+pub(super) fn summary_tip_of(
+    aggs: &[CoreAgg],
+    sel: &HashSet<CoreId>,
+    marker: Option<&ScopeMarker>,
+) -> SummaryTip {
+    let marker_facts = marker.map(ScopeMarker::facts).unwrap_or_default();
+    summary_tip(&scope_totals(aggs, sel), &marker_facts)
+}
+
+/// [`summary_tip_of`] over already-folded totals and the marker's facts as the row renders them
+/// (`· …`).
+fn summary_tip(t: &ScopeTotals, marker_facts: &[String]) -> SummaryTip {
+    let complete = is_complete(t);
+    let rows = vec![
+        (
+            t!("assets.balances_tip_free").to_string(),
+            scope_amount_text(t, t.free),
+        ),
+        (
+            t!("assets.balances_total").to_string(),
+            scope_amount_text(t, t.total),
+        ),
+    ];
+    let mut facts = vec![t!("assets.cores_n", n = t.all_cores()).to_string()];
+    facts.extend(
+        [
+            (t.stale, "assets.balances_stale_n"),
+            (t.unpriced, "assets.balances_unpriced_n"),
+            (t.awaiting, "assets.balances_awaiting"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, key)| t!(key, n = n).to_string()),
     );
-    for fact in tail {
-        out.push(' ');
-        out.push_str(fact);
-    }
-    out.push('\n');
-    out.push_str(&t!("assets.balances_scope_hint"));
-    // Name every fold and exclusion: the counts in the row say THAT cores were left out, only
-    // here does the user see WHICH, to check an automatic fold against their own accounts.
-    for group in &t.fold_detail {
-        out.push('\n');
-        out.push_str(&t!(
-            "assets.balances_folded_into",
-            cores = group.folded.join(", "),
-            core = group.kept
-        ));
-        if group.brand == Some(Brand::Hyperliquid) {
-            out.push(' ');
-            out.push_str(&t!("assets.balances_folded_hl_caveat"));
-        }
+    facts.extend(
+        marker_facts
+            .iter()
+            .map(|fact| fact.trim_start_matches("· ").to_string()),
+    );
+    // Name every shared account: the totals count it once, and only here does the user see
+    // WHICH cores were folded, to check an automatic fold against their own accounts.
+    let mut notes: Vec<String> = t
+        .fold_detail
+        .iter()
+        .map(|group| {
+            let mut cores = vec![group.kept.as_str()];
+            cores.extend(group.folded.iter().map(String::as_str));
+            let cores = cores.join(" + ");
+            match group.brand {
+                Some(brand) => t!(
+                    "assets.balances_tip_shared",
+                    cores = cores,
+                    brand = brand.display()
+                )
+                .to_string(),
+                None => t!("assets.balances_tip_shared_unknown", cores = cores).to_string(),
+            }
+        })
+        .collect();
+    if t.fold_detail
+        .iter()
+        .any(|group| group.brand == Some(Brand::Hyperliquid))
+    {
+        notes.push(t!("assets.balances_folded_hl_caveat").to_string());
     }
     if !t.excluded_names.is_empty() {
-        out.push('\n');
-        out.push_str(&t!(
-            "assets.balances_excluded_list",
-            cores = t.excluded_names.join(", ")
-        ));
+        notes.push(
+            t!(
+                "assets.balances_excluded_list",
+                cores = t.excluded_names.join(", ")
+            )
+            .to_string(),
+        );
     }
-    out
+    SummaryTip {
+        rows,
+        complete,
+        facts,
+        notes,
+    }
+}
+
+/// Widest the footer tooltip grows, in design pixels: room for a shared-account line on one line.
+const TIP_MAX_W: f32 = 360.0;
+
+/// The footer tooltip: [`SummaryTip`] in the terminal's own tooltip box, kept current.
+///
+/// Words in the UI face, figures in mono — the rule every tooltip here follows
+/// (`panels::common::text_tooltip`). The rows are two columns rather than one string per row:
+/// every amount ends at one edge, so the figures read down as a column whatever their labels'
+/// lengths, and no row wraps. The lines under them use the box's secondary text, the size and tone
+/// `MoonTooltip` gives its own detail line.
+///
+/// GPUI builds a tooltip's view once, when the hover starts, while free balances move about once
+/// a second: a snapshot would soon disagree with the row it half covers. So the view re-reads the
+/// panel's footer ([`AssetsView::footer_tip`]) every time the panel repaints.
+struct SummaryTipView {
+    /// What the tooltip says now.
+    tip: SummaryTip,
+    /// Refreshes `tip` when the panel repaints; `None` once the panel is gone.
+    _refresh: Option<Subscription>,
+}
+
+impl SummaryTipView {
+    /// Build the tooltip view for the footer of `panel`.
+    ///
+    /// Args:
+    ///     panel: The Assets panel whose footer is hovered.
+    ///     tip: The tooltip as the footer just rendered it, shown until the next repaint.
+    ///     cx: Context of the new view.
+    ///
+    /// Returns:
+    ///     The view, subscribed to the panel's repaints while the panel lives.
+    fn new(panel: &WeakEntity<AssetsView>, tip: SummaryTip, cx: &mut Context<Self>) -> Self {
+        let refresh = panel.upgrade().map(|panel| {
+            cx.observe(&panel, |this: &mut Self, panel, cx| {
+                let tip = panel.read(cx).footer_tip();
+                if tip != this.tip {
+                    this.tip = tip;
+                    cx.notify();
+                }
+            })
+        });
+        Self {
+            tip,
+            _refresh: refresh,
+        }
+    }
+}
+
+impl Render for SummaryTipView {
+    /// Draw the amounts as two columns, then the facts and notes in the box's secondary text.
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let tip = &self.tip;
+        // A partial total mutes its labels too: a label brighter than its amount would put the
+        // weight on the words.
+        let (label_color, figure_color) = if tip.complete {
+            (p.text_soft, p.text)
+        } else {
+            (p.text_muted, p.text_muted)
+        };
+        // `MoonTooltip`'s own metrics: 10.5/14 for its text, 9.5/13 for its detail line.
+        let cell = |text: &str, mono: bool, color: u32| {
+            MoonText::new(text.to_string())
+                .color(color)
+                .font_size(10.5)
+                .line_height(14.0)
+                .weight(if mono { 500.0 } else { 400.0 })
+                .mono(mono)
+                .uppercase(false)
+        };
+        let small = |text: String| {
+            MoonText::new(text)
+                .color(p.text_muted)
+                .font_size(9.5)
+                .line_height(13.0)
+                .weight(400.0)
+                .mono(false)
+                .uppercase(false)
+        };
+        // A column of one kind of cell: the labels, or the amounts ending at one edge.
+        let column = |pick: fn(&(String, String)) -> &str, mono: bool, color: u32| {
+            v_flex()
+                .when(mono, |col| col.items_end())
+                .children(tip.rows.iter().map(|row| cell(pick(row), mono, color)))
+        };
+        let figures = h_flex()
+            .items_start()
+            .gap(design::ui_px(cx, 16.0))
+            .child(column(|(label, _)| label, false, label_color))
+            .child(column(|(_, amount)| amount, true, figure_color));
+        // One line of facts that wraps only BETWEEN facts: each is unbreakable, so "offline: 2"
+        // never splits across lines.
+        let facts = h_flex().flex_wrap().gap_x(design::ui_px(cx, 3.0)).children(
+            tip.facts.iter().enumerate().map(|(i, fact)| {
+                small(if i == 0 {
+                    fact.clone()
+                } else {
+                    format!("· {fact}")
+                })
+            }),
+        );
+        MoonTooltip::empty("assets-balance-tip")
+            .mono(false)
+            .max_width(TIP_MAX_W)
+            .child(figures)
+            .child(
+                v_flex()
+                    .mt(design::ui_px(cx, 8.0))
+                    .gap(design::ui_px(cx, 1.0))
+                    .child(facts)
+                    .children(tip.notes.iter().map(|note| small(note.clone()).wrap())),
+            )
+    }
 }
 
 /// Render the account side of the footer as free then total across every in-scope core.
@@ -342,17 +549,21 @@ fn summary_tooltip(t: &ScopeTotals, tail: &[String]) -> String {
 ///
 /// Narrow-dock behaviour is the point of the two-child split below: the essentials resist
 /// shrinking while the tail is one clipping box. Trust survives that clipping twice over —
-/// through the amount colour ([`is_complete`]) and through the tooltip ([`summary_tooltip`]).
+/// through the amount colour ([`is_complete`]) and through the tooltip ([`summary_tip`]).
 ///
 /// Args:
 ///     aggs: Per-core balance aggregates for the current scope.
 ///     sel: Retained core selection, or empty for every scoped core.
 ///     marker: Workspace scope marker for this group, or `None` for the global window.
+///     tip: The tooltip for these totals ([`summary_tip_of`]).
+///     panel: The panel the footer belongs to; the open tooltip re-reads it on every repaint.
 ///     cx: Application context used for rendering.
 pub(super) fn summary_group(
     aggs: &[CoreAgg],
     sel: &HashSet<CoreId>,
     marker: Option<&ScopeMarker>,
+    tip: SummaryTip,
+    panel: WeakEntity<AssetsView>,
     cx: &App,
 ) -> impl IntoElement {
     let p = MoonPalette::active(cx);
@@ -363,7 +574,6 @@ pub(super) fn summary_group(
     if let Some(marker) = marker {
         tail.extend(marker.facts());
     }
-    let tip = summary_tooltip(&totals, &tail);
     let color = if is_complete(&totals) {
         p.text
     } else {
@@ -376,7 +586,7 @@ pub(super) fn summary_group(
         .min_w_0()
         .gap(design::ui_px(cx, 5.0))
         .tooltip(move |_window, cx| {
-            cx.new(|_| moon_ui::MoonTooltipView::new(tip.clone()))
+            cx.new(|cx| SummaryTipView::new(&panel, tip.clone(), cx))
                 .into()
         })
         // Free first, total after the slash — the same reading order as the shell header's
