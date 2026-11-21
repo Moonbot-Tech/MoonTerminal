@@ -4,8 +4,10 @@
 //!
 //! ## Where a row's bars come from
 //!
-//! `moon_chart::auto_figures::tf::bar_source` decides; this module only carries it out, and every
-//! source is one the terminal already holds. The chart's own closed candles (snapshotted by the
+//! `moon_chart::auto_figures::tf::bar_source` decides, with one input adjusted here: while the
+//! chart's series is still the core's range-only ring and deep history has not arrived, a chart
+//! whose tail the cache can take counts as covering nothing (see `run_rows`). Every source is one
+//! the terminal already holds. The chart's own closed candles (snapshotted by the
 //! panel), or the local kline cache — the 5-minute rows the background recorder keeps for every
 //! market, the daily rows, and the 1-minute rows a market has where its chart was shown on 1 minute
 //! (for a 1-minute row on a coarser chart). NOTHING here asks a core for history: a second candle kind makes the
@@ -32,7 +34,9 @@
 //! and close — marked by the kind it came from, never by its shape. Its high and low still make
 //! pivots, levels and profiles; no break, event, body or pole reads a close it does not have. The
 //! read fails, and the row is retried, when either kind's read did not happen. The chart's own
-//! series is taken as the chart draws it and never reads the ring kind.
+//! series never reads the ring kind; its candles that ARE the core's ring — the series a market
+//! opens on, until deep history replaces it — arrive marked with an unknown open and close by the
+//! history layer (`super::mark_range_only`), the same mark the cache gives the ring kind.
 //!
 //! ## The recompute key
 //!
@@ -297,11 +301,32 @@ pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, Au
 /// [`run`] without the job-level stopwatch.
 fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowOutcome)> {
     let (chart_tf_ms, chart_history_ms) = chart_extent(&job.chart, job.chart_tf_ms);
+    // A chart series that is still the core's range-only ring — candles the history marked by
+    // source, which reach this job with an unknown close (`super::mark_range_only`) — is worse
+    // than the cache, which may have recorded those very hours with real candles and gives the
+    // ring's rows the same unknown close anyway (AKEUSDT 21.11.2026: for a quarter of a second the
+    // chart's ring drew a level the recorded candles did not have). So for a row whose key has no
+    // deep history yet, such a series counts as covering nothing, and the row reads the cache with
+    // the chart's newest bars appended (`with_chart_tail`) — but only on a chart whose bars the
+    // tail can take (1 and 5 minutes); on a coarser chart the series' newest bars would be lost,
+    // and it is read as it is. Once deep history arrives the key moves and the row reads the
+    // chart's series again, whatever old ring buckets are still marked in it. Without a cache the
+    // series is all there is. The cost: while the rule holds, a cache read that did not happen
+    // retries the row instead of answering it from the ring.
+    let ring_chart = cache.is_some()
+        && job.chart_tf_ms > 0
+        && KIND_5M_MS % job.chart_tf_ms == 0
+        && job.chart.iter().any(|c| c.close.is_nan());
     let plans: Vec<_> = job
         .rows
         .iter()
         .map(|&(ix, key)| {
-            let (source, needed) = plan_row(&key, chart_tf_ms, chart_history_ms, cache.is_some());
+            let history_ms = if ring_chart && !key.chart_deep_history {
+                0.0
+            } else {
+                chart_history_ms
+            };
+            let (source, needed) = plan_row(&key, chart_tf_ms, history_ms, cache.is_some());
             (ix, key, needed, source)
         })
         .collect();

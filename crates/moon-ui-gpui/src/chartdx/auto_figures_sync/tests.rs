@@ -1923,8 +1923,8 @@ fn a_captions_name_and_rest_are_built_with_it() {
 /// The chart's first series of a market is the core's 5-minute ring, drawn with an open and a
 /// close oriented from each range (`orient_range_rows`). Marked by the bucket opens the history
 /// reports as the ring's alone, those candles reach the detector without a close, exactly as the
-/// cache's ring rows do: the same ring read as the chart's series and read from the cache gives
-/// the same answer.
+/// cache's ring rows do: the same ring read as the chart's series — on a market without a cache,
+/// where the series is all a row has — and read from the cache gives the same answer.
 ///
 /// The oracle is the cache path, which the 21.11.2026 audit replayed against recorded candles.
 ///
@@ -1986,7 +1986,8 @@ fn the_chart_s_ring_rows_read_like_the_cache_s() {
         diag: None,
     };
     let from_cache = run(&job(Vec::new()), Some(&cache));
-    let from_chart = run(&job(chart), Some(&cache));
+    // No cache for the chart run: with one, a ring series yields to it (the next test).
+    let from_chart = run(&job(chart), None);
     assert_eq!(from_cache[0].1.source, BarSource::Cache5m);
     assert_eq!(from_chart[0].1.source, BarSource::ChartResampled);
     assert!(!from_cache[0].1.found.is_empty(), "the ring holds a level");
@@ -2016,4 +2017,110 @@ fn only_the_listed_ring_buckets_lose_their_close() {
     assert!(bars[1].close.is_nan() && bars[1].open.is_nan());
     assert_eq!((bars[0].open, bars[0].close), (1.0, 1.5));
     assert_eq!(bars[2].close, 1.5);
+}
+
+/// A chart series that is still the core's ring — its candles marked without a close until deep
+/// history arrives — yields to a cache that recorded the same hours with real candles: the row
+/// reads the cache (and the chart's tail), and finds what the cache alone finds.
+///
+/// The oracle is the cache-only run. AKEUSDT 21.11.2026 after the first fix: the chart's first
+/// run read 39 of 40 hour bars without a close, its ATR came from the bars' own ranges, and for a
+/// quarter of a second it drew 0.005066 where the recorded candles — and deep history after it —
+/// gave 0.005074.
+///
+/// Breakage: the source chosen by the chart series' length alone, whatever its candles hold.
+#[test]
+fn a_chart_still_on_the_ring_yields_to_recorded_candles() {
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let from = DAY0 - 2 * 86_400_000;
+    let n = 2 * 288 + 144;
+    let real: Vec<ChartCandle> = (0..n)
+        .map(|i| {
+            let x = i as f32;
+            let high = 100.0 + 5.0 * (x / 23.0).sin() + (i % 7) as f32 * 0.3;
+            let low = high - 1.0 - (i % 5) as f32 * 0.2;
+            ChartCandle {
+                t_open_ms: (from + i64::from(i) * 5 * MIN) as f64,
+                open: low + 0.3,
+                high,
+                low,
+                close: high - 0.2 - (i % 3) as f32 * 0.1,
+                volume: 1.0,
+                quote_volume: 1.0,
+            }
+        })
+        .collect();
+    // The chart's ring: the same ranges, open and close unknown (the history's range-only mark).
+    let chart: Vec<ChartCandle> = real
+        .iter()
+        .map(|c| ChartCandle {
+            open: f32::NAN,
+            close: f32::NAN,
+            ..*c
+        })
+        .collect();
+    let key = RowKey {
+        detector: DetectorParams::Swing(SwingParams {
+            lookback_bars: 40,
+            pivot_left: 2,
+            pivot_right: 1,
+            tolerance_unit: moon_core::config::auto_figures::ToleranceUnit::Atr,
+            ..SwingParams::default()
+        }),
+        tf: TfId::H1,
+        last_closed_ms: last_closed_open_ms(now, TfId::H1),
+        chart_ready: true,
+        chart_deep_history: false,
+    };
+    let cache = RingCache {
+        m5: real,
+        ring: Some(Vec::new()),
+    };
+    let job = |chart: Vec<ChartCandle>| PaneJob {
+        rows: vec![(0, key)],
+        chart_tf_ms: 5 * MIN,
+        chart: chart.into(),
+        cache: None,
+        now_ms: now,
+        price_tick: None,
+        diag: None,
+    };
+    let from_cache = run(&job(Vec::new()), Some(&cache));
+    let with_ring_chart = run(&job(chart.clone()), Some(&cache));
+    assert_eq!(with_ring_chart[0].1.source, BarSource::Cache5m);
+    assert!(
+        !from_cache[0].1.found.is_empty(),
+        "the candles hold a level"
+    );
+    assert_eq!(with_ring_chart[0].1.found, from_cache[0].1.found);
+
+    // Once deep history has arrived the row reads the chart's series again, even with old ring
+    // buckets still marked in it.
+    let deep_key = RowKey {
+        chart_deep_history: true,
+        ..key
+    };
+    let deep = PaneJob {
+        rows: vec![(0, deep_key)],
+        ..job(chart.clone())
+    };
+    assert_eq!(
+        run(&deep, Some(&cache))[0].1.source,
+        BarSource::ChartResampled
+    );
+
+    // A chart coarser than five minutes keeps its series: the cache could not take its tail.
+    let hourly: Vec<ChartCandle> = {
+        let mut out = Vec::new();
+        moon_core::market::candles::resample(&chart, 3_600_000, &mut out);
+        out
+    };
+    let coarse = PaneJob {
+        chart_tf_ms: 3_600_000,
+        ..job(hourly)
+    };
+    assert_eq!(
+        run(&coarse, Some(&cache))[0].1.source,
+        BarSource::ChartSeries
+    );
 }
