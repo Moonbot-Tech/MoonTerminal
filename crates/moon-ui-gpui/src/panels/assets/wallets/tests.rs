@@ -2,7 +2,7 @@
 
 use moon_core::feed::WalletKind;
 
-use super::{PendingTransfer, pending_transfer_matches_wallet_core};
+use super::{PendingTransfer, pending_transfer_matches_wallet_core, qty_text};
 
 /// Build one pending transfer captured for `core`.
 ///
@@ -46,4 +46,15 @@ fn confirm_transfer_revalidates_pending_core_at_dispatch() {
     assert!(
         compact.contains("if!pending_transfer_matches_wallet_core(&pt,effective_wallet_core){")
     );
+}
+
+/// Breakage: `qty_text` printing `150.25 / 150.25` — the repeated figure is what pushes a narrow
+/// column's quantity into an ellipsis; and merging two DIFFERENT figures would hide locked coins.
+#[test]
+fn a_quantity_prints_once_when_available_equals_total() {
+    assert_eq!(qty_text(150.25, 150.25), "150.2");
+    assert_eq!(qty_text(250.5, 400.75), "250.5 / 400.7");
+    // A difference below the printed places is not a different quantity.
+    assert_eq!(qty_text(1.2341, 1.2342), "1.234");
+    assert_eq!(qty_text(0.0, 5.0), "0.0 / 5.0");
 }
