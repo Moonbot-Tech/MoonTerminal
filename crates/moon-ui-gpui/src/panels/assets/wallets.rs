@@ -71,6 +71,15 @@ pub(super) fn wallet_count_label(shown_count: usize, total_count: usize) -> Stri
 /// and the dust-threshold bit pattern.
 pub(super) type WalletCacheKey = (Option<CoreId>, Option<Brand>, u64, u64);
 
+/// Whether a wallet coin worth `value_usdt` clears the panel's dust threshold `thr`.
+///
+/// THE one rule for it: the wallet columns hide what fails it and the idle-money marks
+/// ([`super::idle`]) count only what passes, so a coin a mark names is always one the user finds
+/// in the wallet the mark sends them to. A non-positive threshold hides nothing.
+pub(super) fn above_dust(value_usdt: f64, thr: f64) -> bool {
+    thr <= 0.0 || value_usdt > thr
+}
+
 /// Return the brand of `core`'s exchange, `None` before its venue is known or for an unknown one.
 ///
 /// Args:
@@ -94,7 +103,7 @@ pub(super) fn core_brand(b: &Backend, core: CoreId) -> Option<Brand> {
 ///
 /// Returns:
 ///     The wallet's name on that core's exchange, in the active language.
-fn wallet_kind_label(kind: WalletKind, brand: Option<Brand>) -> String {
+pub(super) fn wallet_kind_label(kind: WalletKind, brand: Option<Brand>) -> String {
     t!(kind.label_key(brand)).to_string()
 }
 

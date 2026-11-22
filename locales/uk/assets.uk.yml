@@ -47,12 +47,17 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: термінал не бачи�
 assets.balances_excluded_list: "Не в підсумку за налаштуванням ядра: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "ядер: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from. Below them, after the existing `assets.cores_n`, one
+# line per exchange account several cores share (`core-1 + core-2`; the `+` joiner is built in
+# code), then two notes on that money: how old its figure is, and that it is not judged while
+# cores have not identified themselves.
 assets.balances_tip_free: "Вільно"
+assets.balances_tip_idle: "Поза торгівлею"
 assets.balances_tip_shared: "%{cores} — спільний рахунок %{brand}, враховано один раз"
 assets.balances_tip_shared_unknown: "%{cores} — спільний біржовий рахунок, враховано один раз"
+assets.balances_tip_idle_as_of: "Поза торгівлею: дані на %{t}"
+assets.balances_tip_idle_withheld: "Поза торгівлею: не оцінюється, доки є ядра без зв'язку або нерозпізнані (чекаємо: %{n})"
 assets.section_positions: "Позиції"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Усі ядра"
@@ -118,6 +123,9 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} актив схований фільтром вартості %{thr}$"
 assets.wallet.filtered_empty_few: "Усі %{n} активи сховані фільтром вартості %{thr}$"
 assets.wallet.filtered_empty_many: "Усі %{n} активів сховані фільтром вартості %{thr}$"
+# Hover on the amber mark after a core name in the wallets core list: after the wallet and
+# coin lines (built in code), the age of those figures.
+assets.wallet.idle_as_of: "Дані на %{t}"
 assets.wallets_hint: "Гаманці · перетягніть монету між контейнерами"
 assets.refresh_hint: "Оновити баланси ядра"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

@@ -47,12 +47,17 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: el terminal no ve el modo de cu
 assets.balances_excluded_list: "Excluidos por ajuste del núcleo: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "núcleos: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from. Below them, after the existing `assets.cores_n`, one
+# line per exchange account several cores share (`core-1 + core-2`; the `+` joiner is built in
+# code), then two notes on that money: how old its figure is, and that it is not judged while
+# cores have not identified themselves.
 assets.balances_tip_free: "Libre"
+assets.balances_tip_idle: "Sin operar"
 assets.balances_tip_shared: "%{cores} — cuenta compartida de %{brand}, contada una vez"
 assets.balances_tip_shared_unknown: "%{cores} — cuenta compartida del exchange, contada una vez"
+assets.balances_tip_idle_as_of: "Sin operar: actualizado %{t}"
+assets.balances_tip_idle_withheld: "Sin operar: no se evalúa mientras haya núcleos sin conexión o sin identificar (faltan: %{n})"
 assets.section_positions: "Posiciones"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Todos los núcleos"
@@ -118,6 +123,9 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} activo está oculto por el filtro de valor de %{thr}$"
 assets.wallet.filtered_empty_few: "Los %{n} activos están ocultos por el filtro de valor de %{thr}$"
 assets.wallet.filtered_empty_many: "Los %{n} activos están ocultos por el filtro de valor de %{thr}$"
+# Hover on the amber mark after a core name in the wallets core list: after the wallet and
+# coin lines (built in code), the age of those figures.
+assets.wallet.idle_as_of: "Actualizado: %{t}"
 assets.wallets_hint: "Carteras · arrastra una moneda entre contenedores"
 assets.refresh_hint: "Actualizar saldos del núcleo"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

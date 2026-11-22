@@ -47,12 +47,17 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: terminal không thấy chế đ
 assets.balances_excluded_list: "Loại theo cài đặt core: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "core: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from. Below them, after the existing `assets.cores_n`, one
+# line per exchange account several cores share (`core-1 + core-2`; the `+` joiner is built in
+# code), then two notes on that money: how old its figure is, and that it is not judged while
+# cores have not identified themselves.
 assets.balances_tip_free: "Khả dụng"
+assets.balances_tip_idle: "Không giao dịch"
 assets.balances_tip_shared: "%{cores} — tài khoản %{brand} chung, chỉ tính một lần"
 assets.balances_tip_shared_unknown: "%{cores} — tài khoản sàn chung, chỉ tính một lần"
+assets.balances_tip_idle_as_of: "Không giao dịch: dữ liệu lúc %{t}"
+assets.balances_tip_idle_withheld: "Không giao dịch: chưa đánh giá khi còn core ngoại tuyến hoặc chưa nhận diện (còn chờ: %{n})"
 assets.section_positions: "Vị thế"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Mọi core"
@@ -118,6 +123,9 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
 assets.wallet.filtered_empty_few: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
 assets.wallet.filtered_empty_many: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
+# Hover on the amber mark after a core name in the wallets core list: after the wallet and
+# coin lines (built in code), the age of those figures.
+assets.wallet.idle_as_of: "Dữ liệu lúc %{t}"
 assets.wallets_hint: "Ví · kéo coin giữa các ngăn"
 assets.refresh_hint: "Làm mới số dư core"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

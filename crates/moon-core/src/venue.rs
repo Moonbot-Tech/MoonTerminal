@@ -382,6 +382,63 @@ pub fn merge_key(
     })
 }
 
+/// The exchange account whose transfer wallets a core lists.
+///
+/// A type of its own, not an [`AccountMergeKey`]: equal merge keys promise the SAME MONEY and a
+/// balance total folds them, while two cores with one wallet account may still report different
+/// balances — a Gate spot core and a futures core on one account trade from different wallets of
+/// it. Keeping the types apart means this key can never be handed to a total.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WalletAccountKey {
+    brand: Brand,
+    account: AccountKey,
+}
+
+/// Key of the exchange account whose transfer wallets a core lists.
+///
+/// The Spot, Futures and Quarterly wallets belong to the exchange ACCOUNT, not to the market a
+/// core trades, so the market is never part of this key. And unlike [`merge_key`] it also names
+/// the account on brands whose balances never fold (Gate, HTX): that their cores are on one
+/// account does not prove two trading balances are one figure, but it does say whose wallets
+/// they list. A reader that kept such cores apart would see one account twice and could take one
+/// core's trading wallet for money the other core leaves unused.
+///
+/// Gate and Bybit are keyed by the user id, which the core reports in the `binance_account_id`
+/// field, never by the deposit address: that address is not one value per account, so two
+/// connected cores of one account could differ in it, while the user id is the same on both. A
+/// Gate account states it in two shapes — the address itself, or `User-<id>` when the exchange
+/// would not give it. A Bybit account has one BTC address per network and its core keeps
+/// whichever the exchange listed last. A core of either brand that has not reported its user id
+/// therefore has no key: falling back to the address is what would split the account.
+///
+/// Args:
+///     venue: The venue the core resolved to, `None` when its code is unknown.
+///     identity: What the core stated in `AuthCheck`, `None` when it stated nothing.
+///
+/// Returns:
+///     The key, or `None` when either half or the brand's account field is missing.
+pub fn wallets_key(
+    venue: Option<Venue>,
+    identity: Option<AccountIdentity>,
+) -> Option<WalletAccountKey> {
+    let venue = venue?;
+    let identity = identity?;
+    let account = match venue.brand {
+        // The exchange's own account number; the brand in the key keeps the three apart.
+        Brand::Binance | Brand::Bybit | Brand::Gate => {
+            AccountKey::BinanceUid(identity.binance_uid?)
+        }
+        _ => match identity.account_id {
+            Some(id) => AccountKey::Id(id),
+            None => AccountKey::Address(identity.address?),
+        },
+    };
+    Some(WalletAccountKey {
+        brand: venue.brand,
+        account,
+    })
+}
+
 /// Resolve the venue a platform ordinal names.
 ///
 /// The ordinals are `TBotPlatform` values and therefore part of the wire protocol, so they are

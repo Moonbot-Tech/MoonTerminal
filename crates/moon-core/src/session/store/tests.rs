@@ -1954,3 +1954,22 @@ fn an_aged_batch_is_trimmed_back_to_the_cap() {
             .any(|note| note.id == 1_000)
     );
 }
+
+/// Breakage: the time of a wallet list dying with the list — a replacement feed starts from
+/// empty, unanswered lists, and without the time it leaves behind nothing says that another core
+/// of the same account now holds an OLDER list than this one once did.
+#[test]
+fn a_wallet_list_that_is_replaced_by_an_unanswered_one_leaves_its_time_behind() {
+    let snapshot = |arrived_ms| crate::feed::TransferAssetsSnapshot {
+        arrived_ms,
+        ..Default::default()
+    };
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::TransferAssets(snapshot([1_000, 2_000, 0])));
+    core.apply(FeedMsg::TransferAssets(snapshot([0, 0, 0])));
+    assert_eq!(core.transfer_assets.arrived_ms, [0, 0, 0]);
+    assert_eq!(core.transfer_seen_ms, [1_000, 2_000, 0]);
+    // A later answer only ever moves it forward.
+    core.apply(FeedMsg::TransferAssets(snapshot([3_000, 500, 0])));
+    assert_eq!(core.transfer_seen_ms, [3_000, 2_000, 0]);
+}

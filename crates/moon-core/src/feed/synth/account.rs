@@ -86,7 +86,7 @@ pub(super) fn send_account_state(
     tx: &FeedTx,
 ) {
     let _ = tx.send(FeedMsg::Assets(assets(core_uid, market, price)));
-    let _ = tx.send(FeedMsg::TransferAssets(transfer_assets(core_uid)));
+    let _ = tx.send(FeedMsg::TransferAssets(transfer_assets(core_uid, now)));
     let _ = tx.send(FeedMsg::License(license(core_uid, now)));
     let _ = tx.send(FeedMsg::CoreVersion {
         version: 772,
@@ -202,8 +202,9 @@ fn assets(core_uid: u64, market: &str, price: f64) -> AssetsSnapshot {
     }
 }
 
-/// The wallets of the transfer tree: cash on spot and futures, nothing on quarterly.
-fn transfer_assets(core_uid: u64) -> TransferAssetsSnapshot {
+/// The wallets of the transfer tree: cash on spot and futures, nothing on quarterly, every one
+/// of them answered at `now` (unix-ms).
+fn transfer_assets(core_uid: u64, now: f64) -> TransferAssetsSnapshot {
     let row = |amount: f64| TransferAssetRow {
         currency: "USDT".to_string(),
         amount,
@@ -215,6 +216,7 @@ fn transfer_assets(core_uid: u64) -> TransferAssetsSnapshot {
         spot: vec![row(640.0 * scale)],
         futures: vec![row(3_120.0 * scale)],
         quarterly: Vec::new(),
+        arrived_ms: [now as i64; 3],
     }
 }
 

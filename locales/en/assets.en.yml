@@ -47,12 +47,17 @@ assets.balances_folded_hl_caveat: "(Hyperliquid: the terminal cannot see the acc
 assets.balances_excluded_list: "Excluded by core setting: %{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "cores: %{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from. Below them, after the existing `assets.cores_n`, one
+# line per exchange account several cores share (`core-1 + core-2`; the `+` joiner is built in
+# code), then two notes on that money: how old its figure is, and that it is not judged while
+# cores have not identified themselves.
 assets.balances_tip_free: "Free"
+assets.balances_tip_idle: "Not traded"
 assets.balances_tip_shared: "%{cores} — shared %{brand} account, counted once"
 assets.balances_tip_shared_unknown: "%{cores} — shared exchange account, counted once"
+assets.balances_tip_idle_as_of: "Not traded: as of %{t}"
+assets.balances_tip_idle_withheld: "Not traded: not judged while a core is offline or unidentified (waiting for %{n})"
 assets.section_positions: "Positions"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "All cores"
@@ -118,6 +123,9 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} asset is hidden by the %{thr}$ value filter"
 assets.wallet.filtered_empty_few: "All %{n} assets are hidden by the %{thr}$ value filter"
 assets.wallet.filtered_empty_many: "All %{n} assets are hidden by the %{thr}$ value filter"
+# Hover on the amber mark after a core name in the wallets core list: after the wallet and
+# coin lines (built in code), the age of those figures.
+assets.wallet.idle_as_of: "As of %{t}"
 assets.wallets_hint: "Wallets · drag a coin between containers"
 assets.refresh_hint: "Refresh core balances"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

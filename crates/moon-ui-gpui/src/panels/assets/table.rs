@@ -389,14 +389,27 @@ impl AssetsView {
 
     /// The footer balance group's tooltip for the panel as it is now.
     ///
-    /// The one place that says what the tooltip covers — every in-scope core and the scope
-    /// marker. Read only by the tooltip itself, as it opens and on every repaint while it is open
-    /// ([`super::balances::summary_group`]); the footer row does not build it.
-    pub(super) fn footer_tip(&self) -> super::balances::SummaryTip {
+    /// The one place that says what the tooltip covers — every in-scope core, the scope marker,
+    /// and the idle money of the accounts the total counts. Read only by the tooltip itself, as
+    /// it opens and on every repaint while it is open ([`super::balances::summary_group`]); the
+    /// footer row does not build it.
+    ///
+    /// The age of the idle sum is worded here rather than cached: it is read in the header's
+    /// clock zone and against today's date, and both move without the panel's data moving.
+    pub(super) fn footer_tip(&self, cx: &App) -> super::balances::SummaryTip {
+        let footer = self.cached_idle_footer;
+        let idle = super::balances::IdleNote {
+            total: footer.total,
+            as_of: footer
+                .as_of_ms
+                .and_then(|at_ms| as_of_text(at_ms, self.backend.read(cx))),
+            waiting_for: footer.waiting_for,
+        };
         super::balances::summary_tip_of(
             &self.cached_aggs,
             &HashSet::new(),
             self.cached_scope_marker.as_ref(),
+            &idle,
         )
     }
 
@@ -408,6 +421,10 @@ impl AssetsView {
     /// Design-space gap between a roster row's name cell and its figure, shared by
     /// [`AssetsView::wallet_core_row`] and the width arithmetic after the same UI scaling.
     const ROSTER_ROW_GAP: f32 = 16.0;
+
+    /// Design-space gap between a core name and its idle-money mark, shared by
+    /// [`AssetsView::wallet_core_row`] and the width arithmetic.
+    const ROSTER_MARK_GAP: f32 = 8.0;
 
     /// Build one selectable core row of the wallet section's left list.
     ///
@@ -433,6 +450,8 @@ impl AssetsView {
         let cid = agg.id;
         let active = selected == Some(cid);
         let core_name = agg.name.clone();
+        let marker = self.idle_marker(cid, p, cx);
+        let marked = marker.is_some();
         let mut item = h_flex()
             .id(SharedString::from(format!("asset-core-{cid}")))
             .w_full()
@@ -443,21 +462,36 @@ impl AssetsView {
             .gap(design::ui_px(cx, Self::ROSTER_ROW_GAP))
             .cursor_pointer()
             .text_color(rgb(p.text))
-            // The name yields FIRST and the figure never does: the roster is sized to show both
+            // The figure never yields: the roster is sized to show the whole row
             // (`roster_width::auto_base`), but a user drag or a genuinely narrow dock can still
-            // undercut that, and a half-drawn balance is worse than a shortened name — the name
-            // survives on hover, a clipped number reads as a different number. Hence `truncate`
-            // here and `flex_none` on the figure below.
+            // undercut that, and a half-drawn balance is worse than a shortened label — a clipped
+            // number reads as a different number. Hence `flex_none` on the figure below. Of the
+            // two labels the idle-money mark yields first (it repeats in its hover): beside a mark
+            // the name keeps its width, so a squeezed row shortens the mark alone, and only once
+            // the mark is gone does the box clip the name. A name with no mark shortens with an
+            // ellipsis. Either way the hover carries the full name.
             .child(
-                div()
-                    .id(SharedString::from(format!("asset-core-name-{cid}")))
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    // No `occlude`, unlike the resize handle: the click belongs to the row, and
-                    // this cell only needs a hover target for the tooltip.
-                    .tooltip(crate::panels::common::text_tooltip_value(core_name.clone()))
-                    .child(core_name),
+                    .overflow_hidden()
+                    .items_center()
+                    .gap(design::ui_px(cx, Self::ROSTER_MARK_GAP))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("asset-core-name-{cid}")))
+                            .min_w_0()
+                            .when(marked, |name| name.flex_shrink_0())
+                            .truncate()
+                            // No `occlude`, unlike the resize handle: the click belongs to the
+                            // row, and this cell only needs a hover target for the tooltip.
+                            .tooltip(crate::panels::common::text_tooltip_value(core_name.clone()))
+                            .child(core_name),
+                    )
+                    // Money the bots cannot trade with — in a wallet this core's account does not
+                    // trade from — tagged right after the name: the one thing a user scans this
+                    // list for before moving funds by hand. Absent otherwise.
+                    .when_some(marker, |name, marker| name.child(marker)),
             )
             // Per-core trust, rendered by the module that owns the vocabulary — so a core
             // shown as current here cannot be one the footer total counts as stale.
@@ -512,6 +546,60 @@ impl AssetsView {
             item = item.hover(|s| s.bg(rgb(p.shell_high)));
         }
         item.into_any_element()
+    }
+
+    /// Text of a core's idle-money mark — each unused wallet by its name on the core's exchange
+    /// and its value, e.g. `Funding 120.00$` — or `None` when the core carries no mark.
+    ///
+    /// Shared by the row and the roster's width measurement, so the column is sized to the very
+    /// string the row draws.
+    fn idle_text(&self, cid: CoreId, cx: &App) -> Option<String> {
+        let mark = self.cached_idle.marks.get(&cid)?;
+        let brand = super::core_brand(self.backend.read(cx), cid);
+        Some(idle_mark_text(mark, brand))
+    }
+
+    /// The idle-money mark of a core row: quiet amber text right after the name.
+    ///
+    /// Its hover adds only what the mark cannot carry: which coins each wallet holds, and how old
+    /// the figures are. No heading and no instruction: a line about what "the bots" do read as a
+    /// statement about the core the mark stands beside, and what to do with the money is the
+    /// user's call — the row click opens the core's containers as it always did.
+    fn idle_marker(&self, cid: CoreId, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
+        let mark = self.cached_idle.marks.get(&cid)?;
+        let b = self.backend.read(cx);
+        let brand = super::core_brand(b, cid);
+        let mut lines: Vec<String> = mark
+            .wallets
+            .iter()
+            .map(|wallet| {
+                let coins: Vec<String> = wallet
+                    .coins
+                    .iter()
+                    .map(|(coin, value)| format!("{coin} {}", money(*value)))
+                    .collect();
+                format!(
+                    "{}: {}",
+                    super::wallets::wallet_kind_label(wallet.kind, brand),
+                    coins.join(" · ")
+                )
+            })
+            .collect();
+        if let Some(at) = as_of_text(mark.as_of_ms, b) {
+            lines.push(t!("assets.wallet.idle_as_of", t = at).to_string());
+        }
+        let tip = lines.join("\n");
+        Some(
+            div()
+                .id(SharedString::from(format!("asset-core-idle-{cid}")))
+                .min_w_0()
+                .truncate()
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.amber))
+                .tooltip(crate::panels::common::text_tooltip(tip))
+                .child(idle_mark_text(mark, brand))
+                .into_any_element(),
+        )
     }
 
     /// Record where a roster-column divider drag began.
@@ -624,11 +712,16 @@ impl AssetsView {
         // flex space and already sits inside that right padding.
         let chrome = 2.0 * f32::from(design::ui_px(cx, Self::ROSTER_ROW_PAD))
             + f32::from(design::ui_px(cx, Self::ROSTER_ROW_GAP));
+        let gap = f32::from(design::ui_px(cx, Self::ROSTER_MARK_GAP));
         let widest_row = self
             .cached_aggs
             .iter()
             .map(|agg| {
+                let marker = self.idle_text(agg.id, cx).map_or(0.0, |text| {
+                    gap + design::mono_caption_text_width(cx, &text, FontWeight::NORMAL.0)
+                });
                 design::mono_body_text_width(cx, &agg.name, FontWeight::NORMAL.0)
+                    + marker
                     + super::balances::figure_width(Some(agg), cx)
             })
             .fold(0.0f32, f32::max);
@@ -912,6 +1005,47 @@ impl AssetsView {
                     .child(div().flex_1().h_full().min_w_0().child(right)),
             )
     }
+}
+
+/// When a wallet list arrived, as the idle-money mark and the footer tooltip show it.
+///
+/// A time of day alone would read the same for a list fetched yesterday as for one fetched a
+/// minute ago, so another day's time carries its date. The zone is the header clock's and "today"
+/// is read now, both at the moment of the call: neither moves with the panel's data.
+///
+/// Args:
+///     at_ms: Unix-ms the list arrived.
+///     b: Backend, for the header clock zone.
+///
+/// Returns:
+///     `14:05`, or `21.11 14:05` for another day; `None` for a time that cannot be shown.
+fn as_of_text(at_ms: i64, b: &Backend) -> Option<String> {
+    let zone = moon_core::util::display_time::zone_or_utc(b.header_clock_zone());
+    let now_secs = moon_core::util::now_unix_ms_i64() / 1000;
+    let text = moon_core::util::display_time::format_short_minute(at_ms / 1000, zone, now_secs);
+    (!text.is_empty()).then_some(text)
+}
+
+/// Text of an idle-money mark: each unused wallet by its name on the core's exchange and its value.
+///
+/// Args:
+///     mark: The account's unused wallets.
+///     brand: Exchange of the core carrying the mark, which names the wallets.
+///
+/// Returns:
+///     `Funding 120.00$`, or `Spot 40.00$ · Quarterly 12.00$` when several wallets hold money.
+fn idle_mark_text(mark: &super::idle::IdleMark, brand: Option<moon_core::venue::Brand>) -> String {
+    mark.wallets
+        .iter()
+        .map(|wallet| {
+            format!(
+                "{} {}",
+                super::wallets::wallet_kind_label(wallet.kind, brand),
+                money(wallet.value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// Build the divider strip pinned to the roster column's right edge.

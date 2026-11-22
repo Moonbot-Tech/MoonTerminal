@@ -226,6 +226,15 @@ pub struct TransferAssetsSnapshot {
     pub spot: Vec<TransferAssetRow>,
     pub futures: Vec<TransferAssetRow>,
     pub quarterly: Vec<TransferAssetRow>,
+    /// Unix-ms each wallet's list last arrived from the core, in [`WalletKind::ALL`] order; `0`
+    /// for a wallet the core has not answered yet. Read it through [`Self::arrived_at`].
+    ///
+    /// Per wallet, not one time for the snapshot: the core answers each wallet request on its
+    /// own, and the snapshot is republished whole whenever any answer lands. A refresh that gets
+    /// a fresh `Spot` list while the `Futures` request fails leaves the old `Futures` list in the
+    /// snapshot, and that list must keep its old time — a reader comparing the snapshots of two
+    /// cores on one account would otherwise take the stale list for the newest one.
+    pub arrived_ms: [i64; 3],
 }
 
 impl TransferAssetsSnapshot {
@@ -236,6 +245,15 @@ impl TransferAssetsSnapshot {
             WalletKind::Futures => &self.futures,
             WalletKind::Quarterly => &self.quarterly,
         }
+    }
+
+    /// Return when the selected wallet's list last arrived from the core.
+    ///
+    /// Returns:
+    ///     Unix-ms of the arrival, or `None` for a wallet the core has not answered yet.
+    pub fn arrived_at(&self, kind: WalletKind) -> Option<i64> {
+        let at_ms = self.arrived_ms[usize::from(kind.to_u8())];
+        (at_ms > 0).then_some(at_ms)
     }
 }
 
