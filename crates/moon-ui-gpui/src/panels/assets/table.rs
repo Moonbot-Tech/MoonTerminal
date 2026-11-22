@@ -750,11 +750,29 @@ impl AssetsView {
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let facet = design::is_facet(cx);
-        // Keep the selected core while it remains in scope; otherwise fall back to the first core.
+        // The core the containers belong to is the one the wallet cache was built for
+        // (`rebuild_wallet_cache`), and it is read from that cache, never derived a second time
+        // from the listed cores. A retained Classic pick can sit outside the current filter: the
+        // containers then still show that core's balances, and a core re-derived here from the
+        // filtered list named a different one over them — in the header, on the highlighted row
+        // and in every drag, whose id the transfer dialog then rejects. Only when there is no
+        // wallet core at all does the first listed core stand in, as before.
         let selected = self
-            .effective_wallet_core(self.backend.read(cx))
-            .filter(|c| aggs.iter().any(|a| a.id == *c))
+            .cached_wallet_key
+            .and_then(|(core, ..)| core)
             .or_else(|| aggs.first().map(|a| a.id));
+        // Its name, also when the filter has taken its row out of the list.
+        let selected_name = selected.and_then(|core| {
+            aggs.iter()
+                .find(|agg| agg.id == core)
+                .map(|agg| agg.name.clone())
+                .or_else(|| {
+                    self.scope_cores(self.backend.read(cx))
+                        .into_iter()
+                        .find(|(id, _)| *id == core)
+                        .map(|(_, name)| name)
+                })
+        });
 
         // Section header, styled like the Positions and Cores headers.
         let collapsed = self.wallets_collapsed;
@@ -798,6 +816,27 @@ impl AssetsView {
                             .child(t!("assets.wallets_hint").to_string()),
                     ),
             )
+            // Whose containers are open: the highlighted roster row can be scrolled out of
+            // sight, and a transfer must never land on a core the user did not mean.
+            .when_some(selected_name, |header, name| {
+                header
+                    .child(
+                        div()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text_muted))
+                            .child("·"),
+                    )
+                    .child(
+                        div()
+                            .id("assets-wallets-core")
+                            .min_w_0()
+                            .truncate()
+                            .text_size(design::t_body(cx))
+                            .text_color(rgb(p.text))
+                            .tooltip(crate::panels::common::text_tooltip_value(name.clone()))
+                            .child(name),
+                    )
+            })
             .child(div().flex_1());
         if let Some(core) = selected {
             header = header.child(
