@@ -249,10 +249,11 @@ impl ChartPanel {
                     line.touches.to_string(),
                 ));
             }
-            if has_anchor(line.first_ms) {
+            // Aged from where the line is drawn from: a squeeze's level, not its sloped half.
+            if has_anchor(line.born_ms) {
                 rows.push((
                     t!("auto_figures_chart.card.age"),
-                    age_text(now_ms - line.first_ms),
+                    age_text(now_ms - line.born_ms),
                 ));
             }
             rows.push((t!("auto_figures_chart.card.event"), event));

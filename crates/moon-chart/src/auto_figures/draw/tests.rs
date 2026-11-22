@@ -66,6 +66,8 @@ fn falling_squeeze() -> Found {
     Found {
         shape: FoundShape::Squeeze {
             level: 100.0,
+            level_t0_ms: 500.0,
+            level_t1_ms: 2_000.0,
             t0_ms: 1_000.0,
             p0: 110.0,
             t1_ms: 3_000.0,
@@ -260,6 +262,8 @@ fn a_squeeze_draws_its_level_and_its_sloped_line() {
     let found = Found {
         shape: FoundShape::Squeeze {
             level: 120.0,
+            level_t0_ms: 500.0,
+            level_t1_ms: 3_000.0,
             t0_ms: 1_000.0,
             p0: 100.0,
             t1_ms: 3_000.0,

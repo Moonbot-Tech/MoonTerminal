@@ -71,7 +71,14 @@ pub(crate) struct AutoLineRec {
     pub span: (f64, f64),
     pub touches: usize,
     pub tf: TfId,
+    /// The figure's first anchor (`Found::first_ms`): for a squeeze the earliest touch of either
+    /// half, which the filming probe needs on screen. Only that probe reads it, and it is built
+    /// with the private overlay alone (`panels::chart::introspect`), so the field is too.
+    #[cfg(uidoc)]
     pub first_ms: f64,
+    /// What the caption's and the hover card's age count from (`Found::born_ms`): for a squeeze
+    /// its level's first touch, where the level is drawn from.
+    pub born_ms: f64,
     pub events: EventSet,
     /// `0xRRGGBB`, the line's own resolved colour.
     pub color: u32,
@@ -295,7 +302,9 @@ pub(crate) fn append_auto_geometry(
                 span: line_span(found, kept.side, row),
                 touches: found.touches.len(),
                 tf,
+                #[cfg(uidoc)]
                 first_ms: found.first_ms,
+                born_ms: found.born_ms(),
                 events: kept.events,
                 color: rgb_u32(rgb),
                 opacity: set.opacity,
@@ -358,7 +367,7 @@ fn caption_values(
         price,
         touches: line.touches,
         tf: line.tf,
-        first_ms: line.first_ms,
+        first_ms: line.born_ms,
         events: line.events,
         now_ms,
         tick,

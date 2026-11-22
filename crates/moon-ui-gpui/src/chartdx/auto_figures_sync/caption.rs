@@ -253,7 +253,8 @@ pub(crate) struct CaptionValues<'a> {
     pub price: Option<f64>,
     pub touches: usize,
     pub tf: TfId,
-    /// When the line was born: its first anchor, Unix ms.
+    /// When the line was born, Unix ms — what its age counts from (`Found::born_ms`): its first
+    /// anchor, or a squeeze's level's first touch.
     pub first_ms: f64,
     pub events: EventSet,
     pub now_ms: f64,

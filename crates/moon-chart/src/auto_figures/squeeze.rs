@@ -204,6 +204,10 @@ fn squeezes(
         out.push(Found {
             shape: FoundShape::Squeeze {
                 level: level.price,
+                // The level's own touches: what the horizontal is drawn between, where the
+                // formation's anchors below reach back to the line's first touch.
+                level_t0_ms: level.touches.first().map_or(0.0, |t| t.t_ms),
+                level_t1_ms: level.touches.last().map_or(0.0, |t| t.t_ms),
                 t0_ms: line.t0_ms,
                 p0: line.p0,
                 t1_ms: line.t1_ms,

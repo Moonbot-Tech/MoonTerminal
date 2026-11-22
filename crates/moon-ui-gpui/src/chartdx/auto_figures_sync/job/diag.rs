@@ -156,13 +156,21 @@ fn shape(s: &FoundShape) -> String {
     match *s {
         FoundShape::Horizontal { price } => format!("level {price}"),
         FoundShape::Sloped { p0, p1, .. } => format!("line {p0} -> {p1}"),
+        // The level's own touches: what its horizontal is drawn from, where the found figure's
+        // span below opens on the formation's first touch, often the line's.
         FoundShape::Squeeze {
             level,
+            level_t0_ms,
+            level_t1_ms,
             p0,
             p1,
             pressed,
             ..
-        } => format!("squeeze level {level} line {p0} -> {p1} pressed={pressed}"),
+        } => format!(
+            "squeeze level {level} [{} .. {}] line {p0} -> {p1} pressed={pressed}",
+            at(level_t0_ms),
+            at(level_t1_ms)
+        ),
         FoundShape::Pair { upper, lower } => {
             format!(
                 "pair upper {} -> {} lower {} -> {}",
