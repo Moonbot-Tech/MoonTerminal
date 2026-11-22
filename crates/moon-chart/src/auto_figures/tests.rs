@@ -167,6 +167,8 @@ fn line_price_is_linear_in_time_and_positive() {
     assert_eq!(line_price_at(0.0, f64::NAN, 10.0, 50.0, 3.0), None);
     let squeeze = FoundShape::Squeeze {
         level: 100.0,
+        level_t0_ms: 0.0,
+        level_t1_ms: 10.0,
         t0_ms: 0.0,
         p0: 90.0,
         t1_ms: 10.0,

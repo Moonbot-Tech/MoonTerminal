@@ -142,6 +142,8 @@ fn squeeze_and_sloped_lines() {
     let bars = closes(&[99.0, 99.0]);
     let pressed = line(FoundShape::Squeeze {
         level: 100.0,
+        level_t0_ms: 0.0,
+        level_t1_ms: 1.0,
         t0_ms: 0.0,
         p0: 90.0,
         t1_ms: 1.0,
@@ -647,6 +649,8 @@ fn a_close_inside_the_break_buffer_is_no_breakout() {
 fn a_breakout_ends_the_squeeze_mark() {
     let squeeze = [line(FoundShape::Squeeze {
         level: 100.0,
+        level_t0_ms: 0.0,
+        level_t1_ms: 1.0,
         t0_ms: 0.0,
         p0: 95.0,
         t1_ms: 1.0,

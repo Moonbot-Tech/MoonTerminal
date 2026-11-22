@@ -161,8 +161,16 @@ pub enum FoundShape {
     /// closed bar, came within the row's `pressed_pct` of the level (or past it) while that bar
     /// closed inside the formation — not beyond the level, nor beyond a line that has not reached
     /// it yet, each by more than its break buffer (`squeeze` module doc).
+    ///
+    /// `level_t0_ms` / `level_t1_ms` are the LEVEL's own first and last touch — after its history
+    /// before a pass through it was cut (`swing` module doc) — and the level is drawn from them,
+    /// not from [`Found::first_ms`]: that is the formation's earliest touch, often the sloped
+    /// half's, and a level drawn from there runs back through prices it did not hold (LTC_USDT
+    /// 22.11.2026: a support drawn from the evening before, across hours price stood under it).
     Squeeze {
         level: f64,
+        level_t0_ms: f64,
+        level_t1_ms: f64,
         t0_ms: f64,
         p0: f64,
         t1_ms: f64,
@@ -350,7 +358,10 @@ pub struct Found {
     /// same detector; see each detector for its formula.
     pub strength: f32,
     /// Open time of the earliest and the latest bar the figure is anchored to — its first and last
-    /// touch for pivot detectors, the period's bars for a period extreme.
+    /// touch for pivot detectors, the period's bars for a period extreme. For a squeeze these are
+    /// the earliest and latest touch of EITHER half — what names the figure across runs — while
+    /// its level is drawn, and aged, from the level's own touches (`FoundShape::Squeeze`,
+    /// [`Found::born_ms`]).
     pub first_ms: f64,
     pub last_ms: f64,
     /// The latest break episode after the last touch, set when the row's `BrokenPolicy` still
@@ -390,6 +401,19 @@ pub struct Found {
     /// its sides has a fixed side, judged by the event layer itself — and for lines a break does
     /// not end: period extremes, period levels, round prices and profile lines.
     pub origin: Option<Side>,
+}
+
+impl Found {
+    /// The moment the figure's age is counted from, Unix ms: [`Found::first_ms`], except a
+    /// squeeze's, which is its LEVEL's first touch — the caption sits on the level, and an age
+    /// counted from the sloped half's first touch would say the level held for hours it did not.
+    /// `0` (no anchor) stays `0`.
+    pub fn born_ms(&self) -> f64 {
+        match self.shape {
+            FoundShape::Squeeze { level_t0_ms, .. } => level_t0_ms,
+            _ => self.first_ms,
+        }
+    }
 }
 
 /// What a detector legitimately needs beyond its bars and parameters.

@@ -349,23 +349,35 @@ fn apex_ms(upper: &Seg, lower: &Seg) -> f64 {
     (upper.p0 - su * upper.t0_ms - lower.p0 + sl * lower.t0_ms) / closing
 }
 
-/// The time span `extend` gives a figure anchored to its first and last touch, `±∞` meaning "to
-/// that plot edge". An unusable anchor time widens to the edge rather than dropping the line.
+/// The time span `extend` gives a figure's level, `±∞` meaning "to that plot edge". An unusable
+/// anchor time widens to the edge rather than dropping the line.
+///
+/// Anchored to the figure's first and last touch ([`Found::first_ms`] / [`Found::last_ms`]) —
+/// except a squeeze, whose level is anchored to its OWN touches (`level_t0_ms` / `level_t1_ms`):
+/// the formation's first touch is often the sloped half's, and a level drawn from there claims to
+/// have held where it did not. Its sloped half is drawn from its own touches as well, so each half
+/// starts where it was found, as each side of a pair does.
 ///
 /// Public because the terminal places a line's caption on the stretch that is DRAWN: a caption
 /// at the left end of a level must sit where the level starts, not where the plot does.
 pub fn time_span(found: &Found, extend: Extend) -> (f64, f64) {
-    let first = if found.first_ms.is_finite() && found.first_ms > 0.0 {
-        found.first_ms
+    let (first_ms, last_ms) = match found.shape {
+        FoundShape::Squeeze {
+            level_t0_ms,
+            level_t1_ms,
+            ..
+        } => (level_t0_ms, level_t1_ms),
+        _ => (found.first_ms, found.last_ms),
+    };
+    let first = if first_ms.is_finite() && first_ms > 0.0 {
+        first_ms
     } else {
         f64::NEG_INFINITY
     };
     match extend {
         Extend::RightEdge => (first, f64::INFINITY),
         Extend::BothEdges => (f64::NEG_INFINITY, f64::INFINITY),
-        Extend::BetweenTouches if found.last_ms.is_finite() && found.last_ms > first => {
-            (first, found.last_ms)
-        }
+        Extend::BetweenTouches if last_ms.is_finite() && last_ms > first => (first, last_ms),
         // A single touch has no stretch "between" — the level still exists, so it runs right.
         Extend::BetweenTouches => (first, f64::INFINITY),
     }

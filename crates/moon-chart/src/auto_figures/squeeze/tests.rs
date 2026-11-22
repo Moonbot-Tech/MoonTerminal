@@ -75,6 +75,8 @@ fn rising_lows_under_a_ceiling() {
     assert_eq!(found.len(), 1, "{found:?}");
     let FoundShape::Squeeze {
         level,
+        level_t0_ms,
+        level_t1_ms,
         t0_ms,
         p0,
         t1_ms,
@@ -85,6 +87,12 @@ fn rising_lows_under_a_ceiling() {
         panic!("a squeeze shape");
     };
     assert!((level - 100.0).abs() < 1e-9);
+    // The level's own touches (bars 4..12), not the formation's, which open on the line's bar 2.
+    assert_eq!(
+        (level_t0_ms, level_t1_ms),
+        (bars[4].t_open_ms, bars[12].t_open_ms)
+    );
+    assert_eq!(found[0].first_ms, bars[2].t_open_ms);
     assert_eq!((t0_ms, p0), (bars[2].t_open_ms, 90.0));
     assert_eq!((t1_ms, p1), (bars[10].t_open_ms, 94.0));
     assert!(!pressed, "96 is 4 % under 100, outside 3.9 %");
@@ -211,6 +219,7 @@ fn real_candles_keep_the_structural_invariants() {
                 t1_ms,
                 p1,
                 pressed,
+                ..
             } = f.shape
             else {
                 panic!("squeeze");
@@ -398,4 +407,120 @@ fn price_must_stand_between_the_level_and_the_line() {
         0.002,
         0.02
     ));
+}
+
+/// A support at 100 touched on bar 4, then closed under for five bars (6..10) — longer than
+/// `Keep{3}` lets a level live through — and touched again on bars 14, 17, 22, with highs falling
+/// 112, 107.5, 103 on bars 2, 11, 20 (−0.5 a bar) pressing into it from above.
+const BROKEN_AND_REBUILT: [(f32, f32); 24] = [
+    (109.0, 104.0),
+    (111.0, 106.0),
+    (112.0, 107.0),
+    (110.0, 103.0),
+    (104.0, 100.0),
+    (101.5, 100.3),
+    (100.2, 97.0),
+    (99.0, 96.0),
+    (98.5, 95.0),
+    (99.0, 96.0),
+    (99.3, 97.0),
+    (107.5, 101.0),
+    (106.0, 102.0),
+    (103.0, 100.8),
+    (102.0, 100.0),
+    (103.0, 100.9),
+    (104.0, 101.0),
+    (102.5, 100.1),
+    (102.7, 101.0),
+    (102.8, 101.2),
+    (103.0, 101.5),
+    (102.0, 100.5),
+    (101.5, 99.9),
+    (102.0, 100.6),
+];
+
+/// A squeeze whose level was passed through and formed again draws its horizontal from the first
+/// touch AFTER the pass — and so does everything that reads the drawn stretch: the zone band, the
+/// caption's span (`time_span`), the pinned figure and the age (`Found::born_ms`). The sloped half
+/// still starts at its own first touch, and the formation's anchor (`Found::first_ms`, its identity
+/// across runs) stays there too.
+///
+/// The oracle is the bar series itself: the stay under 100 on bars 6..10 cuts the bar-4 touch, so
+/// the level starts on bar 14; the line's first pivot is bar 2.
+///
+/// Breakage: drawing the level from `Found::first_ms` (LTC_USDT 22.11.2026: a support drawn from
+/// the evening before, across the hours price stood under it), or anchoring it to the uncut touch
+/// on bar 4.
+#[test]
+fn a_rebuilt_level_is_drawn_from_its_touches_after_the_pass() {
+    use super::super::draw::{ResolvedStyle, append_shapes, pin_figures, time_span};
+    use moon_core::config::auto_figures::{Extend, LineStyle};
+    use moon_core::figures::tools::{HorizontalRay, Segment};
+    use moon_core::figures::{FigNode, FigureKind};
+
+    let bars = from_hl(&BROKEN_AND_REBUILT);
+    let t = |i: usize| bars[i].t_open_ms;
+    let mut p = params(0.5);
+    p.level.broken = BrokenPolicy::Keep { bars: 3 };
+    let found = run(&bars, p);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let f = &found[0];
+    let FoundShape::Squeeze {
+        level,
+        level_t0_ms,
+        level_t1_ms,
+        t0_ms,
+        p0,
+        ..
+    } = f.shape
+    else {
+        panic!("a squeeze shape");
+    };
+    assert!((level - 100.0).abs() < 1e-9, "{level}");
+    assert_eq!((level_t0_ms, level_t1_ms), (t(14), t(22)));
+    assert_eq!((t0_ms, p0), (t(2), 112.0));
+    assert_eq!(f.first_ms, t(2), "the formation still opens on the line");
+    assert_eq!(
+        f.born_ms(),
+        t(14),
+        "its age counts from the level it captions"
+    );
+
+    let style = |extend| ResolvedStyle {
+        extend,
+        zone_alpha: Some(0.2),
+        ..ResolvedStyle::new(&LineStyle::default(), [1, 2, 3])
+    };
+    let (mut figures, mut bands) = (Vec::new(), Vec::new());
+    append_shapes(
+        f,
+        &style(Extend::RightEdge),
+        t(23),
+        &mut figures,
+        &mut bands,
+    );
+    assert_eq!(
+        figures[0].kind,
+        FigureKind::HorizontalRay(HorizontalRay {
+            origin: FigNode::new(t(14), level),
+        })
+    );
+    assert!(
+        matches!(figures[1].kind, FigureKind::Segment(s) if s.a == FigNode::new(t(2), 112.0)),
+        "the sloped half keeps its own start: {:?}",
+        figures[1].kind
+    );
+    assert_eq!((bands[0].t0_ms, bands[0].t1_ms), (t(14), f64::INFINITY));
+    assert_eq!(time_span(f, Extend::RightEdge), (t(14), f64::INFINITY));
+    assert_eq!(time_span(f, Extend::BetweenTouches), (t(14), t(22)));
+
+    let mut pinned = Vec::new();
+    pin_figures(f, &style(Extend::BetweenTouches), t(23), &mut pinned);
+    assert_eq!(
+        pinned[0].kind,
+        FigureKind::Segment(Segment {
+            a: FigNode::new(t(14), level),
+            b: FigNode::new(t(22), level),
+        })
+    );
 }
