@@ -38,6 +38,12 @@ impl ChartPanel {
             let Some(map) = self.pane_map(pane) else {
                 continue;
             };
+            let plot_left_ms = {
+                use moon_core::figures::Proj;
+                map.time_at_x(map.plot.x)
+            };
+            let plot_top = px(origin.1 + map.plot.y / scale);
+            let plot_bottom = px(origin.1 + (map.plot.y + map.plot.h) / scale);
             self.chart.with_auto_lines(pane, |lines| {
                 out.extend(lines.iter().filter_map(|line| {
                     let points: Vec<Point<Pixels>> =
@@ -52,6 +58,11 @@ impl ChartPanel {
                         shape: shape_name(&line.shape),
                         caption: line.text.clone(),
                         points,
+                        first_ms: line.first_ms,
+                        touches: line.touches,
+                        plot_left_ms,
+                        plot_top,
+                        plot_bottom,
                     })
                 }));
             });
@@ -81,6 +92,20 @@ pub(crate) struct ScreenAutoLine {
     pub caption: Option<std::sync::Arc<str>>,
     /// Points along the drawn, visible part, window-relative content pixels, left to right.
     pub points: Vec<Point<Pixels>>,
+    /// The line's first anchor, Unix ms (`Found::first_ms`): its earliest touch for the shapes
+    /// built from touches (levels, sloped lines, squeezes, formations); the period's first bar for
+    /// a period extreme or a volume profile; `0.0` for a round price.
+    pub first_ms: f64,
+    /// How many touches the line was found from; `0` for a shape with none (a profile, a round
+    /// price).
+    pub touches: usize,
+    /// The time at the left edge of its pane's plot, Unix ms: a line whose first touch lies before
+    /// it was found from candles off screen, so a viewer cannot see why it is drawn.
+    pub plot_left_ms: f64,
+    /// The top and bottom of its pane's plot, window-relative content pixels: a level hugging
+    /// either edge is drawn, but reads as part of the axis rather than a level (21.11, video 13).
+    pub plot_top: Pixels,
+    pub plot_bottom: Pixels,
 }
 
 /// The name [`ScreenAutoLine::shape`] gives a geometry.
