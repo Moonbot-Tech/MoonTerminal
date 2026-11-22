@@ -107,7 +107,7 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   a red merge. Branch from fresh `main`, open a PR, squash-merge — history stays linear.
 - **CI runs `fmt` and `clippy`.** The tree **is**
   rustfmt-clean: `cargo fmt --all` is the correct command, `rustfmt.toml`
-  (`style_edition = "2024"`) is the authority, and CI enforces it via the `Fmt` job — which does
+  (`style_edition = "2024"`) is the authority, and CI enforces it via the `Formatting (cargo fmt)` job — which does
   not need the optional `private/uidoc` overlay to pass; `cargo fmt` must (and does) work without
   it. Blame history across the tree-wide reformat is preserved by `.git-blame-ignore-revs` —
   enable it locally with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
@@ -116,7 +116,8 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   `Clippy (x86_64-msvc)` running `cargo clippy --workspace --all-targets --locked -- -D warnings`,
   `Station (x86_64-linux-musl)` building, testing and linting `moon-station` for Linux musl and
   starting it on an emulated CPU without AVX (`.github/scripts/station-baseline-smoke.sh`),
-  `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
+  `Dependency audit (cargo-deny)`, `Tour and knowledge site` building the knowledge site, and
+  `Formatting (cargo fmt)` running
   `cargo fmt --all -- --check`. They run in parallel. The macOS probe is diagnostic and runs
   outside them, in its own `macos-probe.yml` workflow (`continue-on-error`; `macos-probe-retry.yml`
   re-runs it when no macOS runner was acquired) — read its log, but it does not block. The Linux
