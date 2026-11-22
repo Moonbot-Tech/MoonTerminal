@@ -15,6 +15,7 @@ fn level(price: f64, strength: f32) -> Found {
         touch_volume: 0.0,
         tolerance_frac: 0.0,
         tag: None,
+        origin: None,
     }
 }
 
@@ -172,6 +173,7 @@ fn real_levels_respect_count_and_side() {
         &DetectCtx {
             tf_ms: 300_000,
             now_ms: 0.0,
+            price_tick: None,
         },
     );
     assert!(found.len() > 4, "enough levels to cut: {}", found.len());

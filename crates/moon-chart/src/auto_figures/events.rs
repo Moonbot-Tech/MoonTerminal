@@ -9,24 +9,36 @@
 //! two-line formation (`FoundShape::Pair`) is judged side by side — each side as a line of its
 //! own, the two answers merged into one story (`pair_events`): leaving the formation through
 //! either side is its breakout, and a bar that crosses both sides tells the story of the side its
-//! close ended up beyond. A bar's side is the side it closed on ([`super::close_side`]). A close
-//! exactly on the line has no side and neither breaks nor confirms anything. A bar whose close is
-//! unknown (a ring bar, see the module doc of `super`) has the side its whole range lies on — it
-//! closed somewhere in that range — and none when its range reaches the line: when the last
-//! closed bar is one of those, it shows no bar event at all. "The previous close" below is the
-//! nearest earlier close that HAD a side.
+//! close ended up beyond. A bar's side is the side it closed on, read exactly as the detectors read
+//! a break ([`super::line_side`]): a close on the side the line HELD price on
+//! ([`super::Found::origin`]) counts at once, a close on the other side only past the break buffer
+//! ([`super::break_buffer`] of the line's tolerance). A close inside the buffer, or exactly on the
+//! line, has no side and neither breaks nor confirms anything. A bar whose close is unknown (a ring
+//! bar, see the module doc of `super`) has the side its whole range lies on — it closed somewhere
+//! in that range — and none when its range reaches the line: when the last closed bar is one of
+//! those, it shows no bar event at all. "The previous close" below is the nearest earlier close
+//! that HAD a side.
+//!
+//! The line's held side anchors the crossings, so that an event never contradicts the detector's
+//! `broken`: a crossing OUT of the held side is a `Breakout`, a crossing back INTO it is a
+//! `FalseBreak` (a stay beyond longer than the policy keeps a line for has already dropped the line,
+//! `super::survives`). A line without a held side (a period extreme, a profile line, a round price)
+//! is judged by its closes alone, either way.
 //!
 //! - **Approach** — the current price is within `approach_pct` of the line at `at_ms`, measured as
 //!   a fraction of the LINE's price; for a formation, of its side nearer the price
 //!   ([`super::FoundShape::price_near`]).
-//! - **Squeeze** — the figure is a squeeze whose `pressed` flag is set.
+//! - **Squeeze** — the figure is a squeeze whose `pressed` flag is set, and the last bar did not
+//!   break its level: a `Breakout` ends the squeeze, so the two never share a bar.
 //! - **Breakout** — the last closed bar closed on the other side of the line from the previous
-//!   close.
+//!   close; for a line with a held side, only a crossing out of that side.
 //! - **FalseBreak** — the last closed bar closed back on a side the line held before a run of
-//!   closes beyond it, and that run began at most `window` bars before the last bar. `window` is
-//!   [`false_break_window`] of the row's policy; under `Remove` it is zero and a false break is
-//!   never shown — exactly what removing a level at once is for. A false break is the return
-//!   crossing, so the same bar does not also report a `Breakout`.
+//!   closes beyond it, and that run began at most `window` bars before the last bar; for a line
+//!   with a held side, only a return to THAT side — a return to the broken side after a short
+//!   visit back is the line breaking again, a `Breakout`. `window` is [`false_break_window`] of the
+//!   row's policy; under `Remove` it is zero and a false break is never shown — exactly what
+//!   removing a level at once is for. A false break is the return crossing, so the same bar does
+//!   not also report a `Breakout`.
 //! - **Bounce** — the last closed bar's range reached the line and it closed on the same side as
 //!   the previous close, and that side is the one the line has HELD: walking back from the last
 //!   bar, no run of closes on the other side longer than `window` precedes the run on this side
@@ -56,7 +68,7 @@
 use moon_core::config::auto_figures::{AutoEvent, BrokenPolicy, EventMarks};
 use moon_core::market::candles::ChartCandle;
 
-use super::{Found, FoundShape, PairSide, Seg, Side, bar_ok, close_side, pct_frac};
+use super::{Found, FoundShape, PairSide, Seg, Side, bar_ok, break_buffer, line_side, pct_frac};
 
 /// The events one line shows, as a bit set — no allocation per line.
 ///
@@ -192,14 +204,26 @@ pub fn line_events(
                 set.insert(AutoEvent::Approach);
             }
         }
-        if matches!(shape, FoundShape::Squeeze { pressed: true, .. }) {
-            set.insert(AutoEvent::Squeeze);
-        }
+        let buffer = break_buffer(line.tolerance_frac);
         match shape {
             FoundShape::Pair { upper, lower } => {
-                pair_events(bars, upper, lower, window, hunt_frac, &mut set);
+                pair_events(bars, upper, lower, buffer, window, hunt_frac, &mut set);
             }
-            _ => bar_events(bars, |t| shape.price_at(t), window, hunt_frac, &mut set),
+            _ => bar_events(
+                bars,
+                |t| shape.price_at(t),
+                line.origin,
+                buffer,
+                window,
+                hunt_frac,
+                &mut set,
+            ),
+        }
+        // A bar that broke the level ended the squeeze (module doc).
+        if matches!(shape, FoundShape::Squeeze { pressed: true, .. })
+            && !set.contains(AutoEvent::Breakout)
+        {
+            set.insert(AutoEvent::Squeeze);
         }
         out.push(shown_events(set, marks));
     }
@@ -217,8 +241,10 @@ pub fn line_events(
 ///   the formation, below it, so the formation broke down, and the bar shows the lower side's
 ///   `Breakout` alone; the upper side's crossing is dropped.
 /// - **inside** — the close is back between the sides, and the crossing of whichever side the
-///   previous close lay beyond is the story (a `FalseBreak` within the window, a `Breakout` back
-///   in after a long stay outside). The previous close lay beyond one side at most, so at most one
+///   previous close lay beyond is the story: a `FalseBreak` within the window, and nothing after a
+///   longer stay outside — each side holds price inside, so a crossing back in is never its
+///   `Breakout`, and a formation that stayed out that long is already dropped
+///   (`super::survives`). The previous close lay beyond one side at most, so at most one
 ///   side reports a crossing; should both (a close exactly on one side shifts which close counts as
 ///   "previous" for it), the upper side's is kept.
 ///
@@ -231,21 +257,40 @@ fn pair_events(
     bars: &[ChartCandle],
     upper: &Seg,
     lower: &Seg,
+    buffer: f64,
     window: usize,
     hunt_frac: f64,
     set: &mut EventSet,
 ) {
     let mut up = EventSet::default();
     let mut down = EventSet::default();
-    bar_events(bars, |t| upper.price_at(t), window, hunt_frac, &mut up);
-    bar_events(bars, |t| lower.price_at(t), window, hunt_frac, &mut down);
+    // Price inside the formation: below its upper side, above its lower one — each side's held
+    // side, as the formation's `broken` measures it.
+    bar_events(
+        bars,
+        |t| upper.price_at(t),
+        Some(Side::Below),
+        buffer,
+        window,
+        hunt_frac,
+        &mut up,
+    );
+    bar_events(
+        bars,
+        |t| lower.price_at(t),
+        Some(Side::Above),
+        buffer,
+        window,
+        hunt_frac,
+        &mut down,
+    );
     let crossed =
         |e: EventSet| e.contains(AutoEvent::Breakout) || e.contains(AutoEvent::FalseBreak);
     let drop_crossing = |e: &mut EventSet| {
         e.remove(AutoEvent::Breakout);
         e.remove(AutoEvent::FalseBreak);
     };
-    match last_close_beyond(bars, upper, lower) {
+    match last_close_beyond(bars, upper, lower, buffer) {
         Some(PairSide::Upper) => drop_crossing(&mut down),
         Some(PairSide::Lower) => drop_crossing(&mut up),
         None if crossed(up) => drop_crossing(&mut down),
@@ -265,17 +310,22 @@ fn pair_events(
 }
 
 /// Which side of the pair the last valid close lies beyond — above `upper` or below `lower` at the
-/// bar's open time, by [`close_side`] — or `None` when it is inside, on a side, unknown, or a side
-/// has no price there.
-fn last_close_beyond(bars: &[ChartCandle], upper: &Seg, lower: &Seg) -> Option<PairSide> {
+/// bar's open time by more than `buffer`, by [`line_side`] as the sides' own events read it — or
+/// `None` when it is inside, on a side, within the buffer, unknown, or a side has no price there.
+fn last_close_beyond(
+    bars: &[ChartCandle],
+    upper: &Seg,
+    lower: &Seg,
+    buffer: f64,
+) -> Option<PairSide> {
     let last = bars.iter().rev().find(|b| bar_ok(b))?;
-    let side_at = |seg: &Seg| {
+    let side_at = |seg: &Seg, held: Side| {
         seg.price_at(last.t_open_ms)
-            .and_then(|line| close_side(last, line))
+            .and_then(|line| line_side(last, line, Some(held), buffer))
     };
-    if side_at(upper) == Some(Side::Above) {
+    if side_at(upper, Side::Below) == Some(Side::Above) {
         Some(PairSide::Upper)
-    } else if side_at(lower) == Some(Side::Below) {
+    } else if side_at(lower, Side::Above) == Some(Side::Below) {
         Some(PairSide::Lower)
     } else {
         None
@@ -302,18 +352,22 @@ fn shown_events(set: EventSet, marks: &EventMarks) -> EventSet {
 }
 
 /// `Breakout`, `FalseBreak`, `Bounce`, `RoleFlip` and `StopHunt` from the last closed bars, into
-/// `set` (see the module doc). `hunt_frac` is the stop-hunt pierce as a fraction of the line's
-/// price; zero never reports a stop hunt.
+/// `set` (see the module doc). `origin` is the side the line held price on, when it has one, and
+/// `buffer` its break buffer as a fraction of the line's price (a bar's side is
+/// [`super::line_side`] of the two). `hunt_frac` is the stop-hunt pierce as a fraction of the
+/// line's price; zero never reports a stop hunt.
 fn bar_events(
     bars: &[ChartCandle],
     line_at: impl Fn(f64) -> Option<f64>,
+    origin: Option<Side>,
+    buffer: f64,
     window: usize,
     hunt_frac: f64,
     set: &mut EventSet,
 ) {
     // The last valid bars, newest first, each with its line price and its side (`None` on the
-    // line or where the line has no price). Bounded by `scan_len`: nothing past it can change any
-    // answer.
+    // line, inside the break buffer, or where the line has no price). Bounded by `scan_len`:
+    // nothing past it can change any answer.
     let mut recent = bars
         .iter()
         .rev()
@@ -321,7 +375,7 @@ fn bar_events(
         .take(scan_len(window))
         .map(|b| {
             let line = line_at(b.t_open_ms);
-            let side = line.and_then(|l| close_side(b, l));
+            let side = line.and_then(|l| line_side(b, l, origin, buffer));
             (b, line, side)
         });
     let Some((last, last_line, Some(last_side))) = recent.next() else {
@@ -351,10 +405,14 @@ fn bar_events(
             break;
         }
     }
-    let false_break = origin_seen && run_start.is_some_and(|k| k <= window);
+    // A line with a held side reads its crossings against it: back INTO it is the only return a
+    // false break can be, OUT of it the only crossing a breakout can be (module doc).
+    let into_held = origin.is_none_or(|o| last_side == o);
+    let out_of_held = origin.is_none_or(|o| last_side != o);
+    let false_break = into_held && origin_seen && run_start.is_some_and(|k| k <= window);
     if false_break {
         set.insert(AutoEvent::FalseBreak);
-    } else if prev_side == Some(last_side.opposite()) {
+    } else if out_of_held && prev_side == Some(last_side.opposite()) {
         set.insert(AutoEvent::Breakout);
     }
 

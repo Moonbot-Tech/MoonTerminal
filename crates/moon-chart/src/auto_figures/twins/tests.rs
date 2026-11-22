@@ -26,6 +26,7 @@ fn pair(tag: LineTag, upper_t0: f64, lower_t0: f64) -> Found {
         touch_volume: 0.0,
         tolerance_frac: 0.0,
         tag: Some(tag),
+        origin: None,
     }
 }
 

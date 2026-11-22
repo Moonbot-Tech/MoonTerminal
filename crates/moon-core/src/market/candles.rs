@@ -936,6 +936,37 @@ pub fn merge_bases(tf_ms: i64, parts: &[BasePart<'_>], out: &mut Vec<ChartCandle
     });
 }
 
+/// The bucket opens (in `tf_ms`) that a [`merge_bases`] of `parts` takes from `parts[0]` alone —
+/// buckets the first part fills and no later part has — ascending, written into `out`.
+///
+/// What the history layer needs to say WHICH candles of a merged series are the core's range-only
+/// 5-minute ring (the first, lowest-priority part): their high and low are real, their open and
+/// close only oriented for display, and a reader that decides by a close must not read them. The
+/// answer is by source, never by a candle's shape, and is exact: a bucket a cached or deep row
+/// overrides is not in it. A part is skipped exactly as `merge_bases` skips it. Cost
+/// O(rows log rows).
+pub fn first_part_only_keys(tf_ms: i64, parts: &[BasePart<'_>], out: &mut Vec<i64>) {
+    out.clear();
+    let usable = |part: &BasePart<'_>| {
+        !part.rows.is_empty() && part.tf_ms > 0 && tf_ms >= part.tf_ms && tf_ms % part.tf_ms == 0
+    };
+    let Some(first) = parts.first().filter(|p| usable(p)) else {
+        return;
+    };
+    let mut scratch: Vec<ChartCandle> = Vec::new();
+    resample(first.rows, tf_ms, &mut scratch);
+    out.extend(scratch.iter().map(|c| c.t_open_ms as i64));
+    out.sort_unstable();
+    out.dedup();
+    let mut later: Vec<i64> = Vec::new();
+    for part in parts[1..].iter().filter(|p| usable(p)) {
+        resample(part.rows, tf_ms, &mut scratch);
+        later.extend(scratch.iter().map(|c| c.t_open_ms as i64));
+    }
+    later.sort_unstable();
+    out.retain(|k| later.binary_search(k).is_err());
+}
+
 /// Whether time-sorted `rows` aggregated at `tf_ms` leave a hole in `from_ms..to_ms`.
 ///
 /// A hole is a missing bucket before the first row, between two consecutive rows, or after the
@@ -976,6 +1007,9 @@ pub struct CandleSeries {
     /// base candle whose volume and turnover are already complete. `INFINITY` while nothing is
     /// trade-derived.
     live_from: f64,
+    /// Bucket opens (ms, ascending) whose candle the last rebuild took from the trades rather than
+    /// the base: the buckets the trades covered, the dropped partial first one excepted.
+    trade_opens: Vec<i64>,
     /// Bumps when the series' bucket layout changes in a way a tail patch cannot express: rebuild,
     /// invalidate, the first candle, or an append that leaves a gap.
     layout_revision: u64,
@@ -994,6 +1028,7 @@ impl Default for CandleSeries {
             merge_scratch: Vec::new(),
             // Nothing is trade-derived yet, so every bucket is "base" until a rebuild says so.
             live_from: f64::INFINITY,
+            trade_opens: Vec::new(),
             layout_revision: 0,
             dirty_from: usize::MAX,
         }
@@ -1240,6 +1275,14 @@ impl CandleSeries {
         self.tf_ms
     }
 
+    /// Bucket opens (ms, ascending) the last [`Self::rebuild`] filled from the trades instead of
+    /// the base — per bucket, as the overlay works: a base bucket the trades did not reach keeps
+    /// its base candle, even after the first trade-built one. Buckets `push_trades` adds or takes
+    /// over later are not in it.
+    pub fn trade_built_opens(&self) -> &[i64] {
+        &self.trade_opens
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -1319,7 +1362,9 @@ impl CandleSeries {
         merged.clear();
         merged.reserve(self.candles.len() + local.len());
         let mut base_at = 0usize;
+        self.trade_opens.clear();
         for candle in local.iter().skip(usize::from(skip_partial_first)) {
+            self.trade_opens.push(candle.t_open_ms as i64);
             while base_at < self.candles.len() && self.candles[base_at].t_open_ms < candle.t_open_ms
             {
                 merged.push(self.candles[base_at]);

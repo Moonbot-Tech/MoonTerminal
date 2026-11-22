@@ -21,8 +21,8 @@ use super::job::{
 use super::pane::{AutoPaneDrawn, SegmentBase, append_auto_geometry, refresh_auto_captions};
 use super::select::{self, KeptLine, RowRules};
 use super::{
-    AutoPaneFigures, AutoRowDrawn, LineKey, PriceStep, RowTitle, native_closed_candles, price_step,
-    resegment, resolve_rgb,
+    AutoPaneFigures, AutoRowDrawn, LineKey, PriceStep, RowTitle, mark_range_only,
+    native_closed_candles, price_step, resegment, resolve_rgb,
 };
 use crate::chartdx::types::CandleGpu;
 
@@ -236,6 +236,7 @@ fn key(tf: TfId, now_ms: f64, lookback: u32) -> RowKey {
         tf,
         last_closed_ms: last_closed_open_ms(now_ms, tf),
         chart_ready: true,
+        chart_deep_history: false,
     }
 }
 
@@ -261,6 +262,8 @@ fn rows_take_their_bars_from_the_chart_or_the_cache_and_read_it_once() {
         chart,
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out.len(), 3);
@@ -294,6 +297,8 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
         chart: Vec::new().into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert!(out[0].1.read_failed);
@@ -306,6 +311,8 @@ fn a_cache_read_that_did_not_happen_is_a_failure_not_an_empty_answer() {
         chart: series(DAY0, 5 * MIN, 10).into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out[0].1.source, BarSource::Cache1m);
@@ -377,6 +384,7 @@ fn level_row(levels: &[f64]) -> AutoRowDrawn {
             .iter()
             .enumerate()
             .map(|(i, &price)| Found {
+                origin: None,
                 shape: FoundShape::Horizontal { price },
                 touches: vec![Touch { t_ms: 1.0, price }; 3],
                 strength: 1.0,
@@ -516,6 +524,7 @@ fn captions_are_rebuilt_only_when_a_printed_value_moves() {
 #[test]
 fn a_periods_high_and_low_are_different_lines() {
     let bar = |t: i64, price: f64| Found {
+        origin: None,
         shape: FoundShape::Horizontal { price },
         touches: vec![Touch {
             t_ms: t as f64,
@@ -666,6 +675,7 @@ fn a_caption_price_is_quantized_at_its_printed_precision() {
 #[test]
 fn two_trend_lines_from_one_pivot_are_different_lines() {
     let line = |t1: f64, p1: f64| Found {
+        origin: None,
         shape: FoundShape::Sloped {
             t0_ms: 0.0,
             p0: 100.0,
@@ -782,6 +792,7 @@ fn lines_of_two_timeframes_close_together_are_marked_as_confluence() {
 fn lines_sharing_their_anchors_are_told_apart_by_tag_and_round_price() {
     use moon_chart::auto_figures::LineTag;
     let line = |price: f64, first_ms: f64, touch: Option<f64>, tag: Option<LineTag>| Found {
+        origin: None,
         shape: FoundShape::Horizontal { price },
         touches: touch
             .map(|t| vec![Touch { t_ms: t, price }])
@@ -829,6 +840,7 @@ fn lines_sharing_their_anchors_are_told_apart_by_tag_and_round_price() {
 fn a_hidden_poc_stays_hidden_when_it_turns_naked() {
     use moon_chart::auto_figures::LineTag;
     let poc = |first_ms: f64, tag| Found {
+        origin: None,
         shape: FoundShape::Horizontal { price: 100.0 },
         touches: Vec::new(),
         strength: 1.0,
@@ -878,6 +890,7 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         tf,
         last_closed_ms: last_closed_open_ms(now, tf),
         chart_ready: true,
+        chart_deep_history: false,
     };
     // Twelve hours of 5-minute chart: the chart series for the 5-minute rows.
     let chart: Arc<[ChartCandle]> = series(DAY0, 5 * MIN, 144).into();
@@ -887,6 +900,8 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         chart: chart.clone(),
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let out = run(&job, None);
     assert_eq!(out[0].1.bars, 1, "round prices read one bar");
@@ -919,6 +934,8 @@ fn the_events_tail_is_independent_of_what_the_detector_needs() {
         chart,
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let cache = m5_cache();
     for with_cache in [true, false] {
@@ -953,6 +970,7 @@ fn key_of(detector: DetectorParams, tf: TfId, now_ms: f64) -> RowKey {
         tf,
         last_closed_ms: last_closed_open_ms(now_ms, tf),
         chart_ready: true,
+        chart_deep_history: false,
     }
 }
 
@@ -985,6 +1003,8 @@ fn a_row_on_the_charts_timeframe_reads_the_cache_when_the_series_is_too_short() 
         chart: chart.clone(),
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     let o = &out[0].1;
@@ -1251,6 +1271,7 @@ fn formation(
         price: 110.0,
     }));
     Found {
+        origin: None,
         shape: FoundShape::Pair {
             upper: side(upper_t0, 110.0),
             lower: side(lower_t0, 100.0),
@@ -1600,6 +1621,7 @@ fn a_twin_leaves_its_rows_count_and_hands_its_marks_to_the_flag() {
         lower.p0 -= by;
         lower.p1 -= by;
         Found {
+            origin: None,
             shape: FoundShape::Pair { upper, lower },
             ..f
         }
@@ -1710,6 +1732,8 @@ fn ring_kind_rows_have_no_close_and_real_rows_keep_theirs() {
         chart: Vec::new().into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     let o = &out[0].1;
@@ -1741,6 +1765,8 @@ fn a_ring_read_that_did_not_happen_is_a_failure() {
         chart: Vec::new().into(),
         cache: None,
         now_ms: now,
+        price_tick: None,
+        diag: None,
     };
     let out = run(&job, Some(&cache));
     assert_eq!(out[0].1.source, BarSource::Cache5m);
@@ -1892,4 +1918,209 @@ fn a_captions_name_and_rest_are_built_with_it() {
     assert!(refresh_auto_captions(&mut drawn, Some(100.0), 0.0, None));
     assert_eq!(drawn.lines[0].name, None);
     assert_eq!(drawn.lines[0].rest.as_deref(), Some(price.as_str()));
+}
+
+/// The chart's first series of a market is the core's 5-minute ring, drawn with an open and a
+/// close oriented from each range (`orient_range_rows`). Marked by the bucket opens the history
+/// reports as the ring's alone, those candles reach the detector without a close, exactly as the
+/// cache's ring rows do: the same ring read as the chart's series — on a market without a cache,
+/// where the series is all a row has — and read from the cache gives the same answer.
+///
+/// The oracle is the cache path, which the 21.11.2026 audit replayed against recorded candles.
+///
+/// Breakage: the display closes read as prices (AKEUSDT 21.11.2026: the chart's first run of an
+/// H1 row read 9 of 40 bars closing at their low, its ATR came out wider, and it drew a level at
+/// 0.005066 with three touches that the cache — and the chart after deep history — had at
+/// 0.005074 with two).
+#[test]
+fn the_chart_s_ring_rows_read_like_the_cache_s() {
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let from = DAY0 - 2 * 86_400_000;
+    let n = 2 * 288 + 144;
+    let ring: Vec<ChartCandle> = (0..n)
+        .map(|i| {
+            let x = i as f32;
+            let high = 100.0 + 5.0 * (x / 23.0).sin() + (i % 7) as f32 * 0.3;
+            let low = high - 1.0 - (i % 5) as f32 * 0.2;
+            ChartCandle {
+                t_open_ms: (from + i64::from(i) * 5 * MIN) as f64,
+                // The core's placeholder: open at the high, close at the low.
+                open: high,
+                high,
+                low,
+                close: low,
+                volume: 1.0,
+                quote_volume: 1.0,
+            }
+        })
+        .collect();
+    let mut chart = ring.clone();
+    moon_core::market::candles::orient_range_rows(&mut chart);
+    // Every bucket is the ring's alone, as the history reports it before deep history arrives.
+    let opens: Vec<i64> = ring.iter().map(|c| c.t_open_ms as i64).collect();
+    mark_range_only(&mut chart, &opens);
+    let key = RowKey {
+        detector: DetectorParams::Swing(SwingParams {
+            lookback_bars: 40,
+            pivot_left: 2,
+            pivot_right: 1,
+            tolerance_unit: moon_core::config::auto_figures::ToleranceUnit::Atr,
+            ..SwingParams::default()
+        }),
+        tf: TfId::H1,
+        last_closed_ms: last_closed_open_ms(now, TfId::H1),
+        chart_ready: true,
+        chart_deep_history: false,
+    };
+    let cache = RingCache {
+        m5: Vec::new(),
+        ring: Some(ring),
+    };
+    let job = |chart: Vec<ChartCandle>| PaneJob {
+        rows: vec![(0, key)],
+        chart_tf_ms: 5 * MIN,
+        chart: chart.into(),
+        cache: None,
+        now_ms: now,
+        price_tick: None,
+        diag: None,
+    };
+    let from_cache = run(&job(Vec::new()), Some(&cache));
+    // No cache for the chart run: with one, a ring series yields to it (the next test).
+    let from_chart = run(&job(chart), None);
+    assert_eq!(from_cache[0].1.source, BarSource::Cache5m);
+    assert_eq!(from_chart[0].1.source, BarSource::ChartResampled);
+    assert!(!from_cache[0].1.found.is_empty(), "the ring holds a level");
+    assert_eq!(from_chart[0].1.found, from_cache[0].1.found);
+}
+
+/// Exactly the candles whose bucket opens are listed lose their open and close; the others —
+/// cached klines, deep history, the trade-built tail — keep theirs.
+///
+/// Breakage: a mark by region that erases real closes around the ring's buckets (the first cut of
+/// this fix), or one that misses a listed bucket.
+#[test]
+fn only_the_listed_ring_buckets_lose_their_close() {
+    let bar = |t: f64| ChartCandle {
+        t_open_ms: t,
+        open: 1.0,
+        high: 2.0,
+        low: 0.5,
+        close: 1.5,
+        volume: 0.0,
+        quote_volume: 0.0,
+    };
+    let mut bars = vec![bar(0.0), bar(300_000.0), bar(600_000.0)];
+    mark_range_only(&mut bars, &[]);
+    assert!(bars.iter().all(|b| b.close == 1.5));
+    mark_range_only(&mut bars, &[300_000]);
+    assert!(bars[1].close.is_nan() && bars[1].open.is_nan());
+    assert_eq!((bars[0].open, bars[0].close), (1.0, 1.5));
+    assert_eq!(bars[2].close, 1.5);
+}
+
+/// A chart series that is still the core's ring — its candles marked without a close until deep
+/// history arrives — yields to a cache that recorded the same hours with real candles: the row
+/// reads the cache (and the chart's tail), and finds what the cache alone finds.
+///
+/// The oracle is the cache-only run. AKEUSDT 21.11.2026 after the first fix: the chart's first
+/// run read 39 of 40 hour bars without a close, its ATR came from the bars' own ranges, and for a
+/// quarter of a second it drew 0.005066 where the recorded candles — and deep history after it —
+/// gave 0.005074.
+///
+/// Breakage: the source chosen by the chart series' length alone, whatever its candles hold.
+#[test]
+fn a_chart_still_on_the_ring_yields_to_recorded_candles() {
+    let now = (DAY0 + 12 * 3_600_000 + 10_000) as f64;
+    let from = DAY0 - 2 * 86_400_000;
+    let n = 2 * 288 + 144;
+    let real: Vec<ChartCandle> = (0..n)
+        .map(|i| {
+            let x = i as f32;
+            let high = 100.0 + 5.0 * (x / 23.0).sin() + (i % 7) as f32 * 0.3;
+            let low = high - 1.0 - (i % 5) as f32 * 0.2;
+            ChartCandle {
+                t_open_ms: (from + i64::from(i) * 5 * MIN) as f64,
+                open: low + 0.3,
+                high,
+                low,
+                close: high - 0.2 - (i % 3) as f32 * 0.1,
+                volume: 1.0,
+                quote_volume: 1.0,
+            }
+        })
+        .collect();
+    // The chart's ring: the same ranges, open and close unknown (the history's range-only mark).
+    let chart: Vec<ChartCandle> = real
+        .iter()
+        .map(|c| ChartCandle {
+            open: f32::NAN,
+            close: f32::NAN,
+            ..*c
+        })
+        .collect();
+    let key = RowKey {
+        detector: DetectorParams::Swing(SwingParams {
+            lookback_bars: 40,
+            pivot_left: 2,
+            pivot_right: 1,
+            tolerance_unit: moon_core::config::auto_figures::ToleranceUnit::Atr,
+            ..SwingParams::default()
+        }),
+        tf: TfId::H1,
+        last_closed_ms: last_closed_open_ms(now, TfId::H1),
+        chart_ready: true,
+        chart_deep_history: false,
+    };
+    let cache = RingCache {
+        m5: real,
+        ring: Some(Vec::new()),
+    };
+    let job = |chart: Vec<ChartCandle>| PaneJob {
+        rows: vec![(0, key)],
+        chart_tf_ms: 5 * MIN,
+        chart: chart.into(),
+        cache: None,
+        now_ms: now,
+        price_tick: None,
+        diag: None,
+    };
+    let from_cache = run(&job(Vec::new()), Some(&cache));
+    let with_ring_chart = run(&job(chart.clone()), Some(&cache));
+    assert_eq!(with_ring_chart[0].1.source, BarSource::Cache5m);
+    assert!(
+        !from_cache[0].1.found.is_empty(),
+        "the candles hold a level"
+    );
+    assert_eq!(with_ring_chart[0].1.found, from_cache[0].1.found);
+
+    // Once deep history has arrived the row reads the chart's series again, even with old ring
+    // buckets still marked in it.
+    let deep_key = RowKey {
+        chart_deep_history: true,
+        ..key
+    };
+    let deep = PaneJob {
+        rows: vec![(0, deep_key)],
+        ..job(chart.clone())
+    };
+    assert_eq!(
+        run(&deep, Some(&cache))[0].1.source,
+        BarSource::ChartResampled
+    );
+
+    // A chart coarser than five minutes keeps its series: the cache could not take its tail.
+    let hourly: Vec<ChartCandle> = {
+        let mut out = Vec::new();
+        moon_core::market::candles::resample(&chart, 3_600_000, &mut out);
+        out
+    };
+    let coarse = PaneJob {
+        chart_tf_ms: 3_600_000,
+        ..job(hourly)
+    };
+    assert_eq!(
+        run(&coarse, Some(&cache))[0].1.source,
+        BarSource::ChartSeries
+    );
 }

@@ -384,6 +384,7 @@ fn each_formation_preset_finds_its_own_kind_on_its_demo() {
         let ctx = DetectCtx {
             tf_ms: tf.ms(),
             now_ms: NOON,
+            price_tick: None,
         };
         let found = moon_chart::auto_figures::detect(&params, &bars, &ctx);
         assert!(

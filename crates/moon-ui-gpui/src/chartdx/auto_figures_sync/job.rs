@@ -4,8 +4,10 @@
 //!
 //! ## Where a row's bars come from
 //!
-//! `moon_chart::auto_figures::tf::bar_source` decides; this module only carries it out, and every
-//! source is one the terminal already holds. The chart's own closed candles (snapshotted by the
+//! `moon_chart::auto_figures::tf::bar_source` decides, with one input adjusted here: while the
+//! chart's series is still the core's range-only ring and deep history has not arrived, a chart
+//! whose tail the cache can take counts as covering nothing (see `run_rows`). Every source is one
+//! the terminal already holds. The chart's own closed candles (snapshotted by the
 //! panel), or the local kline cache — the 5-minute rows the background recorder keeps for every
 //! market, the daily rows, and the 1-minute rows a market has where its chart was shown on 1 minute
 //! (for a 1-minute row on a coarser chart). NOTHING here asks a core for history: a second candle kind makes the
@@ -32,15 +34,19 @@
 //! and close — marked by the kind it came from, never by its shape. Its high and low still make
 //! pivots, levels and profiles; no break, event, body or pole reads a close it does not have. The
 //! read fails, and the row is retried, when either kind's read did not happen. The chart's own
-//! series is taken as the chart draws it and never reads the ring kind.
+//! series never reads the ring kind; its candles that ARE the core's ring — the series a market
+//! opens on, until deep history replaces it — arrive marked with an unknown open and close by the
+//! history layer (`super::mark_range_only`), the same mark the cache gives the ring kind.
 //!
 //! ## The recompute key
 //!
 //! [`RowKey`] is everything a row's answer depends on: its detector parameters, its resolved
-//! timeframe, the open time of the last CLOSED bar of that timeframe, and whether the chart had
-//! candles at all. Its time part changes only when a bar of the row's own timeframe closes, so an
-//! H4 row runs six times a day whatever the chart does in between. Price ticks, the mouse, a pan
-//! and a zoom of a `Fixed` row are deliberately not in it.
+//! timeframe, the open time of the last CLOSED bar of that timeframe, whether the chart had
+//! candles at all, and whether its series has deep history yet — which normally turns true once,
+//! when the exchange's candles replace the core's range-only ring the chart opened on, so a row
+//! that read the ring reads the real closes. Its time part changes only when a bar of the row's own
+//! timeframe closes, so an H4 row runs six times a day whatever the chart does in between. Price
+//! ticks, the mouse, a pan and a zoom of a `Fixed` row are deliberately not in it.
 
 use std::sync::Arc;
 
@@ -51,6 +57,8 @@ use moon_core::config::auto_figures::{DetectorParams, TfId};
 use moon_core::market::ChartCandle;
 use moon_core::market::candles::resample;
 use moon_core::market::kline_cache::{KIND_5M_MS, KlineCache, RING_5M_KIND};
+
+pub(crate) mod diag;
 
 /// How long after a bar's close the row waits before treating it as closed, ms.
 ///
@@ -84,6 +92,12 @@ pub(crate) struct RowKey {
     /// its history arrived recomputes once when it does, instead of keeping an answer computed on
     /// nothing until the next bar closes.
     pub chart_ready: bool,
+    /// Whether the chart's series had CoinCard deep history when the key was taken
+    /// (`ChartHistoryRead::deep_present`). A market opens on the core's range-only ring, whose
+    /// candles the row reads without closes; when deep history replaces them this turns true and
+    /// the row recomputes on real closes, instead of keeping the ring's answer until its next bar
+    /// closes. A pan or a zoom does not move it.
+    pub chart_deep_history: bool,
 }
 
 /// Where the cache rows of one market are read from.
@@ -121,6 +135,13 @@ pub(crate) struct PaneJob {
     pub cache: Option<CacheAddr>,
     /// The moment the keys were taken, Unix ms — the detectors' reference time.
     pub now_ms: f64,
+    /// The market's exchange tick when the core has sent it — the floor of every row's tolerance
+    /// (`moon_chart::auto_figures::DetectCtx::price_tick`). Read when the job is built, so a tick
+    /// that arrives later takes effect on the row's next key change (its next bar close).
+    pub price_tick: Option<f64>,
+    /// Set when the auto-figure diagnostics channel follows this market: the job then writes what
+    /// every row read and found ([`diag`]). `None` costs nothing.
+    pub diag: Option<diag::JobDiag>,
 }
 
 /// How long past a bucket's close a resampled row keeps waiting for the 5-minute cache to fill
@@ -280,11 +301,32 @@ pub(crate) fn run(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, Au
 /// [`run`] without the job-level stopwatch.
 fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowOutcome)> {
     let (chart_tf_ms, chart_history_ms) = chart_extent(&job.chart, job.chart_tf_ms);
+    // A chart series that is still the core's range-only ring — candles the history marked by
+    // source, which reach this job with an unknown close (`super::mark_range_only`) — is worse
+    // than the cache, which may have recorded those very hours with real candles and gives the
+    // ring's rows the same unknown close anyway (AKEUSDT 21.11.2026: for a quarter of a second the
+    // chart's ring drew a level the recorded candles did not have). So for a row whose key has no
+    // deep history yet, such a series counts as covering nothing, and the row reads the cache with
+    // the chart's newest bars appended (`with_chart_tail`) — but only on a chart whose bars the
+    // tail can take (1 and 5 minutes); on a coarser chart the series' newest bars would be lost,
+    // and it is read as it is. Once deep history arrives the key moves and the row reads the
+    // chart's series again, whatever old ring buckets are still marked in it. Without a cache the
+    // series is all there is. The cost: while the rule holds, a cache read that did not happen
+    // retries the row instead of answering it from the ring.
+    let ring_chart = cache.is_some()
+        && job.chart_tf_ms > 0
+        && KIND_5M_MS % job.chart_tf_ms == 0
+        && job.chart.iter().any(|c| c.close.is_nan());
     let plans: Vec<_> = job
         .rows
         .iter()
         .map(|&(ix, key)| {
-            let (source, needed) = plan_row(&key, chart_tf_ms, chart_history_ms, cache.is_some());
+            let history_ms = if ring_chart && !key.chart_deep_history {
+                0.0
+            } else {
+                chart_history_ms
+            };
+            let (source, needed) = plan_row(&key, chart_tf_ms, history_ms, cache.is_some());
             (ix, key, needed, source)
         })
         .collect();
@@ -311,7 +353,8 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
     let d1 = read(1440, span(BarSource::CacheDaily));
     let m1 = read(1, span(BarSource::Cache1m));
 
-    plans
+    let mut diag_lines: Vec<String> = Vec::new();
+    let outcomes = plans
         .into_iter()
         .map(|(ix, key, needed, source)| {
             if reads_cache(source) && cache.is_none() {
@@ -370,9 +413,23 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                     &DetectCtx {
                         tf_ms: row_ms,
                         now_ms: job.now_ms,
+                        price_tick: job.price_tick,
                     },
                 )
             };
+            if let Some(d) = &job.diag {
+                let seen = diag::RowSeen {
+                    ix,
+                    key: &key,
+                    source,
+                    needed,
+                    bars,
+                    found: &found,
+                    read_failed,
+                    lagging,
+                };
+                diag::row_lines(d, &seen, job.now_ms, &mut diag_lines);
+            }
             (
                 ix,
                 AutoRowOutcome {
@@ -388,7 +445,16 @@ fn run_rows(job: &PaneJob, cache: Option<&dyn BarCache>) -> Vec<(usize, AutoRowO
                 },
             )
         })
-        .collect()
+        .collect();
+    if let Some(d) = &job.diag {
+        // The 5-minute base as the cache gave it, when a row read it: rows, and ring rows.
+        let base = m5.as_ref().map(|read| {
+            read.as_ref()
+                .map(|rows| (rows.len(), rows.iter().filter(|r| r.close.is_nan()).count()))
+        });
+        diag::write(&diag::job_line(d, job, base), &diag_lines);
+    }
+    outcomes
 }
 
 /// The 5-minute rows (cache plus chart tail) as closed bars of `row_ms`, and whether the newest

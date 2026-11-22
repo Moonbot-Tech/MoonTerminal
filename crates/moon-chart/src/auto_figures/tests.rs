@@ -30,6 +30,7 @@ fn a_level_reports_its_touch_volume_and_tolerance() {
     let ctx = DetectCtx {
         tf_ms: M5_MS,
         now_ms: 0.0,
+        price_tick: None,
     };
     let swing = DetectorParams::Swing(SwingParams {
         pivot_left: 1,
@@ -85,6 +86,7 @@ fn a_squeeze_reports_its_level_tolerance() {
         let ctx = DetectCtx {
             tf_ms: i64::from(kind) * 60_000,
             now_ms: bars.last().map_or(0.0, |b| b.t_open_ms),
+            price_tick: None,
         };
         for f in detect(&params, &bars, &ctx) {
             assert_eq!(f.tolerance_frac, f64::from(p.level.tolerance_pct) / 100.0);
@@ -125,6 +127,7 @@ fn detect_dispatches_by_the_parameters_kind() {
     let ctx = DetectCtx {
         tf_ms: M5_MS,
         now_ms: 0.0,
+        price_tick: None,
     };
     let swing = DetectorParams::Swing(SwingParams {
         pivot_left: 1,
@@ -239,6 +242,7 @@ fn every_detector_survives_empty_and_tiny_input() {
     let ctx = DetectCtx {
         tf_ms: M5_MS,
         now_ms: 0.0,
+        price_tick: None,
     };
     let one = from_hl(&[(100.0, 99.0)]);
     let nan = vec![test_bars::bar(0, f32::NAN, f32::NAN, f32::NAN, f32::NAN); 20];
@@ -332,6 +336,7 @@ fn an_atr_tolerance_groups_by_the_atr_band() {
     let ctx = DetectCtx {
         tf_ms: M5_MS,
         now_ms: 0.0,
+        price_tick: None,
     };
     let params = |unit, lookback_bars, min_touches, tolerance_pct| {
         DetectorParams::Swing(SwingParams {
@@ -399,6 +404,7 @@ fn bench_atr_tolerances_follow_the_runs_atr() {
     let ctx = DetectCtx {
         tf_ms: 300_000,
         now_ms: 0.0,
+        price_tick: None,
     };
     let swing = SwingParams {
         lookback_bars: 1_000,
@@ -457,6 +463,7 @@ fn bench_touch_volume_counts_each_touching_bar_once() {
     let ctx = DetectCtx {
         tf_ms: 300_000,
         now_ms: 0.0,
+        price_tick: None,
     };
     let rows = [
         DetectorParams::Swing(SwingParams {
@@ -552,6 +559,7 @@ fn ring_bars_give_their_turns_and_break_by_their_whole_range() {
     let ctx = DetectCtx {
         tf_ms: 3_600_000,
         now_ms: 0.0,
+        price_tick: None,
     };
     let swing = DetectorParams::Swing(SwingParams {
         lookback_bars: 200,
@@ -631,6 +639,7 @@ fn a_ring_breaks_a_swing_level_like_real_candles_when_its_range_is_beyond() {
     let ctx = DetectCtx {
         tf_ms: M5_MS,
         now_ms: 0.0,
+        price_tick: None,
     };
     let answer = |bars: &[ChartCandle]| -> Vec<(FoundShape, Option<Broken>)> {
         detect(&swing, bars, &ctx)
@@ -646,7 +655,7 @@ fn a_ring_breaks_a_swing_level_like_real_candles_when_its_range_is_beyond() {
             Some(Broken {
                 at_ms: real[14].t_open_ms,
                 bars_since: 0,
-                returned: false,
+                longest_bars: 0,
             })
         )]
     );
@@ -675,25 +684,28 @@ fn a_ring_bar_is_on_the_side_its_whole_range_is_on() {
     let expected = Broken {
         at_ms: rings[1].t_open_ms,
         bars_since: 2,
-        returned: true,
+        longest_bars: 2,
     };
-    assert_eq!(scan_break(&rings, 0, Side::Below, line), Some(expected));
+    assert_eq!(
+        scan_break(&rings, 0, Side::Below, 0.0, line),
+        Some(expected)
+    );
     let real = [
         bar(0, 97.0, 99.0, 95.0, 97.0),
         bar(1, 102.0, 103.0, 101.0, 102.5),
         bar(2, 101.0, 102.0, 98.0, 101.0),
         bar(3, 98.0, 99.0, 96.0, 97.0),
     ];
-    assert_eq!(scan_break(&real, 0, Side::Below, line), Some(expected));
+    assert_eq!(scan_break(&real, 0, Side::Below, 0.0, line), Some(expected));
 
     let straddling = [
         ring(0, 99.0, 95.0),
         ring(1, 102.0, 98.0),
         ring(2, 100.5, 99.5),
     ];
-    assert_eq!(scan_break(&straddling, 0, Side::Below, line), None);
+    assert_eq!(scan_break(&straddling, 0, Side::Below, 0.0, line), None);
     let reaching = [ring(0, 99.0, 95.0), ring(1, 103.0, 100.0)];
-    assert_eq!(scan_break(&reaching, 0, Side::Below, line), None);
+    assert_eq!(scan_break(&reaching, 0, Side::Below, 0.0, line), None);
 }
 
 /// The bar assembly marks by SOURCE: every row of the ring kind loses its open and close and keeps
@@ -885,9 +897,68 @@ fn the_shipped_hour_rows_find_lines_in_one_core_ring() {
                 &DetectCtx {
                     tf_ms: 3_600_000,
                     now_ms: 0.0,
+                    price_tick: None,
                 },
             );
             assert!(!found.is_empty(), "{name} {preset:?} found nothing");
         }
     }
+}
+
+/// A close past the line counts as a break only past the buffer, and the break remembers its
+/// longest stay beyond: a level broken for five bars, back, and broken again reports the second
+/// break as the latest and five as the longest — which `Keep{3}` drops and `Keep{5}` keeps.
+///
+/// Breakage: a break without the buffer, the longest episode forgotten once price returns (the
+/// resurrection the 21.11.2026 audit found 707 times), or the open episode left out of it.
+#[test]
+fn a_break_needs_the_buffer_and_remembers_its_longest_stay() {
+    use super::test_bars::bar;
+    let c = |i: usize, close: f32| bar(i, close, close + 0.1, close - 0.1, close);
+    let line = |_: f64| Some(100.0);
+    let inside = [c(0, 99.0), c(1, 100.4)];
+    assert_eq!(scan_break(&inside, 0, Side::Below, 0.005, line), None);
+    let past = [c(0, 99.0), c(1, 100.6)];
+    let b = scan_break(&past, 0, Side::Below, 0.005, line).expect("past the buffer");
+    assert_eq!((b.bars_since, b.longest_bars), (0, 0));
+
+    let closes = [99.0, 101.0, 101.0, 101.0, 101.0, 101.0, 99.0, 101.0];
+    let bars: Vec<_> = closes.iter().enumerate().map(|(i, &x)| c(i, x)).collect();
+    let b = scan_break(&bars, 0, Side::Below, 0.0, line).expect("broken");
+    assert_eq!(
+        b,
+        Broken {
+            at_ms: bars[7].t_open_ms,
+            bars_since: 0,
+            longest_bars: 5,
+        }
+    );
+    assert!(!survives(Some(b), BrokenPolicy::Keep { bars: 3 }));
+    assert!(survives(Some(b), BrokenPolicy::Keep { bars: 5 }));
+
+    // Still open after its fourth bar: the open episode is the longest.
+    let open = &bars[..5];
+    let b = scan_break(open, 0, Side::Below, 0.0, line).expect("broken");
+    assert_eq!((b.bars_since, b.longest_bars), (3, 3));
+}
+
+/// A positive tolerance is never narrower than two exchange ticks; a zero tolerance, an unknown
+/// tick or an unusable one leave the row's tolerance as it is.
+///
+/// The oracle: a tick of 0.25 at a price of 100 is 0.25 %, two of them 0.5 %.
+///
+/// Breakage: a band narrower than the price grid (1000BTTUSDT 21.11.2026: a level on every tick),
+/// or a "no band" tolerance widened by the tick.
+#[test]
+fn a_tolerance_spans_at_least_two_ticks() {
+    use super::test_bars::bar;
+    let bars = [bar(0, 100.0, 100.1, 99.9, 100.0)];
+    let tol = |pct: f32, tick: Option<f64>| {
+        tolerance_frac(ToleranceUnit::Pct, pct, 0.0, None, &bars, tick).expect("a tolerance")
+    };
+    assert!((tol(0.1, Some(0.25)) - 0.005).abs() < 1e-12);
+    assert!((tol(1.0, Some(0.25)) - 0.01).abs() < 1e-9, "already wider");
+    assert!((tol(0.1, None) - 0.001).abs() < 1e-9);
+    assert!((tol(0.1, Some(f64::NAN)) - 0.001).abs() < 1e-9);
+    assert_eq!(tol(0.0, Some(0.25)), 0.0, "no band stays no band");
 }

@@ -149,6 +149,7 @@ fn round_levels(close: f64, p: &RoundLevelsParams) -> Vec<Found> {
                 touch_volume: 0.0,
                 tolerance_frac: 0.0,
                 tag: None,
+                origin: None,
             })
         })
         .collect()

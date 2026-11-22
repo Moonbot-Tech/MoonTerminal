@@ -248,6 +248,33 @@ ENV: MOON_ORDER_DIAG=GateF/BTC",
     },
     KeyDoc {
         section: "channels",
+        key: "auto_figures",
+        default: "\"\"",
+        doc: "\
+Chart auto figures -> `logs/auto_figures_diag.log`: every detector run of a chart's auto-figure
+rows on the followed markets. Per row: its timeframe and recompute key, where its bars came from
+(ChartSeries — the chart's own series; ChartResampled — that series resampled; Cache5m — the local
+5-minute cache with the core's ring; CacheDaily and Cache1m — the cache's daily and 1-minute rows;
+Unavailable — none), the chart series it was chosen against, how many bars it read and which
+(time, high, low, close of
+each — a ring bar without a close prints `-`), the exchange tick, what the detector found (price,
+touches, break) and which lines the row keeps against the last close.
+Answers \"the chart drew a level the detector does not find on the recorded candles\" — the two
+read different bars more often than not, and only the chart knows which it used.
+
+A SELECTOR, like `orders`:
+  \"\"      off
+  \"1\"     every market (one block per row on every bar close of every open chart)
+  \"AKE\"   markets whose name contains AKE, case-insensitive
+COST: every input bar is printed, about 45 bytes each, so a row writes from a couple of kilobytes
+(40 hour bars) through tens of them (289 five-minute bars of a day) to 100-200 KB (a week's or the
+previous week's 2 000-4 000 five-minute bars), several rows per chart, on every bar close of every
+row. The file is never rotated: narrow it to one market and switch it off when the question is
+answered.
+ENV: MOON_AUTO_FIGURES_DIAG=AKE",
+    },
+    KeyDoc {
+        section: "channels",
         key: "coin_naming",
         default: "\"\"",
         doc: "Coin spellings -> `logs/coin_naming.log`: how each core's catalog names one coin — its market name,

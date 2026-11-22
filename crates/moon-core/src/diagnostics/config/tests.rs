@@ -155,6 +155,27 @@ fn all_switches_off_is_reported_as_nothing_active() {
     assert_eq!(DiagCfg::default().active_summary(), None);
 }
 
+/// The auto-figure selector reads the environment as the order selector does: an empty value
+/// follows every market, a value narrows, and either one shows in the warning with its value.
+///
+/// Breakage: an empty `MOON_AUTO_FIGURES_DIAG` read as "off", or the channel missing from the
+/// active summary (a forgotten switch filling the disk silently).
+#[test]
+fn the_auto_figure_selector_reads_the_environment_and_shows_in_the_summary() {
+    let mut cfg = DiagCfg::default();
+    apply_env(&mut cfg, |v| {
+        (v == "MOON_AUTO_FIGURES_DIAG").then(String::new)
+    });
+    assert_eq!(cfg.channels.auto_figures, "1");
+    let mut cfg = DiagCfg::default();
+    apply_env(&mut cfg, |v| {
+        (v == "MOON_AUTO_FIGURES_DIAG").then(|| "AKE".to_string())
+    });
+    assert!(cfg.any_active());
+    let summary = cfg.active_summary().expect("active");
+    assert!(summary.contains("channels.auto_figures=AKE"), "{summary}");
+}
+
 #[test]
 fn a_string_switch_counts_as_active_and_carries_its_value() {
     let mut cfg = DiagCfg::default();

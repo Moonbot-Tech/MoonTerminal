@@ -509,6 +509,15 @@ pub(in crate::chartdx) struct PaneRender {
     /// and when it last asked. The ladder and the trade clusters both bucket by it. Reset with the
     /// pane on a market change.
     pub(in crate::chartdx) price_tick: moon_chart::ladder::LadderTick,
+    /// Bucket opens (ms, ascending) of the pane's candles that are the core's range-only 5-minute
+    /// ring rows (`ChartHistoryBuffers::range_only_opens`), taken with every FULL candle apply so
+    /// they always describe the candles in `candle_rows`. The auto figures read those candles
+    /// without an open and close. Reset with the pane on a market change.
+    pub(in crate::chartdx) range_only_opens: Vec<i64>,
+    /// Whether the series the pane holds has CoinCard deep history
+    /// (`ChartHistoryRead::deep_present`), taken with the same full apply — part of an auto-figure
+    /// row's recompute key.
+    pub(in crate::chartdx) deep_history: bool,
     /// The grid the resident ladder was built on; `None` while the zone draws the glass. A
     /// different grid — a zoom that moved the step, a tick that arrived — rebuilds the rows at once.
     pub(in crate::chartdx) ladder_grid: Option<moon_core::data::LadderGrid>,
@@ -812,6 +821,8 @@ impl PaneRender {
             orderbook_levels: Vec::new(),
             book_best: None,
             price_tick: moon_chart::ladder::LadderTick::default(),
+            range_only_opens: Vec::new(),
+            deep_history: false,
             ladder_grid: None,
             ladder_notation: moon_core::util::fmt::notation(),
             ladder_rows: Vec::new(),

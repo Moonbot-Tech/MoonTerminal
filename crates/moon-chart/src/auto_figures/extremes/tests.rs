@@ -17,6 +17,7 @@ fn run(bars: &[ChartCandle], period: ExtremePeriod, which: ExtremeWhich) -> Vec<
         &DetectCtx {
             tf_ms: 3_600_000,
             now_ms: 0.0,
+            price_tick: None,
         },
     )
 }
@@ -78,7 +79,10 @@ fn current_and_previous_day() {
     assert_eq!(prev[0].touches[0].t_ms, bars[5].t_open_ms);
     let broke = prev[0].broken.expect("Tuesday closed above Monday's high");
     assert_eq!(broke.at_ms, bars[30].t_open_ms);
-    assert!(broke.returned, "and closed back below it later");
+    assert_eq!(
+        broke.longest_bars, 1,
+        "and closed back below it on the next bar"
+    );
     assert!(
         prev[1].broken.is_none(),
         "nothing closed under Monday's low"
@@ -137,6 +141,7 @@ fn real_candles_match_an_independent_scan() {
             &DetectCtx {
                 tf_ms: 300_000,
                 now_ms,
+                price_tick: None,
             },
         ))
     };
@@ -191,6 +196,7 @@ fn today_follows_the_reference_time() {
             &DetectCtx {
                 tf_ms: 3_600_000,
                 now_ms,
+                price_tick: None,
             },
         )
     };
@@ -241,6 +247,7 @@ fn run_5m(bars: &[ChartCandle], period: ExtremePeriod, now: f64) -> Vec<f64> {
         &DetectCtx {
             tf_ms: M5 as i64,
             now_ms: MONDAY_2024_01_01_MS + now,
+            price_tick: None,
         },
     ))
 }

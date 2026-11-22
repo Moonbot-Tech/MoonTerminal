@@ -93,7 +93,9 @@ pub enum BrokenPolicy {
     /// Dropped on the first close beyond it.
     Remove,
     /// Kept for `bars` more bars after the break, flagged as broken so it can be drawn in a
-    /// weaker style; dropped after that unless price has come back inside.
+    /// weaker style. A close back on the original side within those bars was a false break and
+    /// the line stays; a stay beyond longer than `bars` drops it for good, even when price comes
+    /// back later (`moon_chart::auto_figures::Broken::longest_bars`).
     Keep { bars: u16 },
 }
 
@@ -333,7 +335,8 @@ pub struct SqueezeParams {
     /// when `level.tolerance_unit` is [`ToleranceUnit::Atr`].
     pub trend_tolerance_atr: f32,
     /// The formation counts as "pressed" once the sloped line, projected to the last closed bar,
-    /// is within this distance of the level, in % of price — always %, whatever the unit.
+    /// is within this distance of the level, in % of price — always %, whatever the unit — while
+    /// that bar closed inside the formation (not beyond the level, nor beyond the line).
     pub pressed_pct: f32,
 }
 
@@ -946,7 +949,8 @@ impl Default for Take {
 pub enum AutoEvent {
     /// Price came within the row's approach distance of the line.
     Approach,
-    /// A `Squeeze` formation is pressed: its sloped side has reached the level.
+    /// A `Squeeze` formation is pressed: its sloped side has reached the level and price still
+    /// stands between the two.
     Squeeze,
     /// A bar closed beyond the line.
     Breakout,

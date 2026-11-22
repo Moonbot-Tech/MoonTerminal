@@ -23,6 +23,7 @@ fn key(last_closed_ms: i64) -> RowKey {
         tf: TfId::H1,
         last_closed_ms,
         chart_ready: true,
+        chart_deep_history: false,
     }
 }
 
@@ -38,6 +39,7 @@ fn outcome(key: RowKey, levels: &[f64]) -> AutoRowOutcome {
         found: levels
             .iter()
             .map(|&price| Found {
+                origin: None,
                 shape: FoundShape::Horizontal { price },
                 touches: Vec::new(),
                 strength: 2.0,
@@ -304,7 +306,7 @@ fn hiding_with_the_eye_runs_no_detector_and_keeps_the_cache() {
     let now = Instant::now();
     let cfg = AutoFiguresCfg::shipped();
     let mut pane = eye_pane();
-    let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, EYE_NOW_MS);
     assert_eq!(
         first.jobs.len(),
         drawn_rows(&cfg),
@@ -314,7 +316,7 @@ fn hiding_with_the_eye_runs_no_detector_and_keeps_the_cache() {
 
     pane.eye = Some(false);
     let later = EYE_NOW_MS + (5 * HOUR) as f64;
-    let hidden = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, later);
+    let hidden = plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, later);
     assert!(hidden.jobs.is_empty(), "a hidden pane starts no detector");
     assert!(
         hidden.wake.is_none(),
@@ -340,14 +342,14 @@ fn showing_again_takes_the_cache_and_runs_only_stale_rows() {
     let mut cfg = AutoFiguresCfg::shipped();
     cfg.rows.push(AutoFigurePreset::Levels4h.row());
     let mut pane = eye_pane();
-    let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, EYE_NOW_MS);
     answer(&mut pane, &first.jobs, now);
     pane.published = true;
 
     // Hidden: the sync takes the lines off, which is what clears `published`.
     pane.eye = Some(false);
     assert!(
-        plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS)
+        plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, EYE_NOW_MS)
             .jobs
             .is_empty()
     );
@@ -355,7 +357,7 @@ fn showing_again_takes_the_cache_and_runs_only_stale_rows() {
 
     // Shown on the same bar: nothing to run, and the cache is published as it is.
     pane.eye = Some(true);
-    let same = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    let same = plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, EYE_NOW_MS);
     assert!(same.jobs.is_empty(), "the same key takes the cached answer");
     assert!(
         needs_publish(&pane, false),
@@ -366,12 +368,12 @@ fn showing_again_takes_the_cache_and_runs_only_stale_rows() {
     pane.eye = Some(false);
     let later = EYE_NOW_MS + HOUR as f64;
     assert!(
-        plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, later)
+        plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, later)
             .jobs
             .is_empty()
     );
     pane.eye = Some(true);
-    let moved = plan_rows(&cfg, &mut pane, Some(HOUR), true, 0, now, later);
+    let moved = plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, later);
     assert!(
         !moved.jobs.is_empty() && moved.jobs.len() < drawn_rows(&cfg),
         "some rows moved and some did not: {} of {}",
@@ -403,13 +405,13 @@ fn the_eye_outranks_the_tab_switch_but_not_the_rows() {
     let off = AutoFiguresCfg::shipped_off();
     let mut pane = eye_pane();
     assert!(
-        plan_rows(&off, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS)
+        plan_rows(&off, &mut pane, Some(HOUR), true, false, 0, now, EYE_NOW_MS)
             .jobs
             .is_empty(),
         "the switch is off and the eye untouched: nothing runs"
     );
     pane.eye = Some(true);
-    let shown = plan_rows(&off, &mut pane, Some(HOUR), true, 0, now, EYE_NOW_MS);
+    let shown = plan_rows(&off, &mut pane, Some(HOUR), true, false, 0, now, EYE_NOW_MS);
     assert_eq!(
         shown.jobs.len(),
         drawn_rows(&off),

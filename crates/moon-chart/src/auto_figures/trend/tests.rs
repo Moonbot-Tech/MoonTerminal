@@ -46,6 +46,7 @@ fn run(bars: &[ChartCandle], p: TrendParams) -> Vec<Found> {
         &DetectCtx {
             tf_ms: M5_MS,
             now_ms: 0.0,
+            price_tick: None,
         },
     )
 }
@@ -120,7 +121,8 @@ fn degenerate_inputs_are_safe() {
                 &DetectorParams::Trend(params()),
                 &DetectCtx {
                     tf_ms: 0,
-                    now_ms: 0.0
+                    now_ms: 0.0,
+                    price_tick: None,
                 }
             )
             .is_empty()
@@ -152,7 +154,11 @@ fn real_candles_keep_the_structural_invariants() {
         let found = Trend.detect(
             &bars,
             &DetectorParams::Trend(p),
-            &DetectCtx { tf_ms, now_ms: 0.0 },
+            &DetectCtx {
+                tf_ms,
+                now_ms: 0.0,
+                price_tick: None,
+            },
         );
         let frac = f64::from(p.tolerance_pct) / 100.0;
         for f in &found {

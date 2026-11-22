@@ -58,6 +58,10 @@ static ORDERS_ON: AtomicBool = AtomicBool::new(false);
 static ORDERS_SELECTOR: RwLock<String> = RwLock::new(String::new());
 static COIN_NAMING_ON: AtomicBool = AtomicBool::new(false);
 static COIN_NAMING_SELECTOR: RwLock<String> = RwLock::new(String::new());
+/// Fast path for the auto-figure channel, read once per detector job; the selector (already
+/// lower-cased) sits behind the lock.
+static AUTO_FIGURES_ON: AtomicBool = AtomicBool::new(false);
+static AUTO_FIGURES_SELECTOR: RwLock<String> = RwLock::new(String::new());
 
 static RING_LINES: AtomicUsize = AtomicUsize::new(config::DEFAULT_RING_LINES);
 static BALANCE_WINDOW_SEC: AtomicU64 = AtomicU64::new(config::DEFAULT_BALANCE_WINDOW_SEC);
@@ -146,6 +150,17 @@ pub fn stamped_line(file: &str, msg: &str) {
     );
 }
 
+/// Append a wall-clock-stamped `header` and the `lines` under it in ONE write through the
+/// channel's writer, so a writer on another thread cannot land between the header and its lines —
+/// for a channel whose blocks are written from parallel background jobs.
+pub fn stamped_block(file: &str, header: &str, lines: &[String]) {
+    let (date, hms) = crate::applog::split_unix_ms(crate::util::time::now_unix_ms_i64());
+    let mut block = Vec::with_capacity(lines.len() + 1);
+    block.push(format!("{date} {hms} {header}"));
+    block.extend_from_slice(lines);
+    channel_lines_at(file, None, &block);
+}
+
 /// ClientSettings snapshot channel (`logs/settings_diag.log`).
 #[inline]
 pub fn settings() -> bool {
@@ -197,6 +212,20 @@ pub fn with_coin_naming_selector<R>(f: impl FnOnce(&str) -> R) -> Option<R> {
         .read()
         .unwrap_or_else(|e| e.into_inner());
     Some(f(guard.as_str()))
+}
+
+/// Whether the auto-figure channel (`logs/auto_figures_diag.log`) follows `market`: the selector
+/// is `"1"` (every market) or a case-insensitive substring of the market's name. One relaxed load
+/// while the channel is off; the caller asks once per detector job, never per frame.
+pub fn auto_figures_follows(market: &str) -> bool {
+    if !AUTO_FIGURES_ON.load(Ordering::Relaxed) {
+        return false;
+    }
+    let guard = AUTO_FIGURES_SELECTOR
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    let selector = guard.as_str();
+    !selector.is_empty() && (selector == "1" || market.to_lowercase().contains(selector))
 }
 
 /// Lines the Log panel keeps in memory.
@@ -464,6 +493,24 @@ fn apply(cfg: &DiagCfg) {
     }
     if coins_on {
         COIN_NAMING_ON.store(true, Ordering::Relaxed);
+    }
+
+    // Same order again: the flag falls before the selector changes and rises after it is set. An
+    // empty selector never matches (`auto_figures_follows`), so the window cannot widen the
+    // channel to every market.
+    let figures = cfg.channels.auto_figures.trim().to_lowercase();
+    let figures_on = !figures.is_empty();
+    if !figures_on {
+        AUTO_FIGURES_ON.store(false, Ordering::Relaxed);
+    }
+    {
+        let mut guard = AUTO_FIGURES_SELECTOR
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = figures;
+    }
+    if figures_on {
+        AUTO_FIGURES_ON.store(true, Ordering::Relaxed);
     }
 
     // Poison recovered, like the selector above: a skipped store here would leave `active()`

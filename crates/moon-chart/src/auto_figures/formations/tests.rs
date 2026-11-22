@@ -37,6 +37,7 @@ fn ctx() -> DetectCtx {
     DetectCtx {
         tf_ms: M5_MS,
         now_ms: 0.0,
+        price_tick: None,
     }
 }
 
@@ -363,7 +364,6 @@ fn a_broken_formation_follows_the_policy() {
     let broken = keep[0].broken.expect("the neckline broke");
     assert_eq!(broken.at_ms, t(29));
     assert_eq!(broken.bars_since, 2);
-    assert!(!broken.returned);
 
     let remove = FormationParams {
         broken: BrokenPolicy::Remove,
@@ -553,7 +553,11 @@ fn bench_formations_are_sound() {
     for kind in [5u32, 1] {
         let all = ace(kind);
         let tf_ms = i64::from(kind) * 60_000;
-        let ctx = DetectCtx { tf_ms, now_ms: 0.0 };
+        let ctx = DetectCtx {
+            tf_ms,
+            now_ms: 0.0,
+            price_tick: None,
+        };
         let mut runs: Vec<(DetectorParams, usize)> = presets
             .iter()
             .filter_map(|p| p.row().detector.known().copied())
@@ -818,7 +822,6 @@ fn ring_bars_break_a_formation_by_their_whole_range() {
     let broken = keep[0].broken.expect("the neckline broke");
     assert_eq!(broken.at_ms, t(29));
     assert_eq!(broken.bars_since, 2);
-    assert!(!broken.returned);
     assert!(run(&bars, remove).is_empty());
 
     let bars = ring(path(&[
@@ -835,4 +838,31 @@ fn ring_bars_break_a_formation_by_their_whole_range() {
     assert_eq!(tags(&keep), [Some(LineTag::Triangle)], "{keep:?}");
     assert!(keep[0].broken.is_some());
     assert!(run(&bars, remove).is_empty());
+}
+
+/// Of two broken sides, the formation reports the later break, but keeps the longer stay beyond:
+/// a side that stayed broken past the policy still drops the formation after the other side broke
+/// for one bar.
+///
+/// Breakage: taking the later side's `Broken` whole (the earlier side's long stay forgotten, the
+/// formation resurrected through its other side).
+#[test]
+fn the_formation_keeps_the_longer_stay_of_its_two_sides() {
+    let early = Broken {
+        at_ms: 1_000.0,
+        bars_since: 12,
+        longest_bars: 9,
+    };
+    let late = Broken {
+        at_ms: 5_000.0,
+        bars_since: 0,
+        longest_bars: 0,
+    };
+    let both = latest(Some(early), Some(late)).expect("broken");
+    assert_eq!(
+        (both.at_ms, both.bars_since, both.longest_bars),
+        (5_000.0, 0, 9)
+    );
+    assert!(!survives(Some(both), BrokenPolicy::Keep { bars: 3 }));
+    assert_eq!(latest(Some(early), None), Some(early));
 }

@@ -131,6 +131,7 @@ fn period_levels(
                 // A calendar price is a point, not a cluster: no band.
                 tolerance_frac: 0.0,
                 tag: Some(tag),
+                origin: None,
             })
         })
         .collect()

@@ -878,6 +878,11 @@ impl ChartDataState {
                         CandleApply::Full => {
                             pr.figure_snap.set_candles(&pr.candle_rows);
                             pr.layers.set_candles(&pr.candle_rows);
+                            // Which of these very candles are the ring's alone: shipped with the
+                            // full emit, so the mark and the candles share one series revision.
+                            pr.range_only_opens
+                                .clone_from(&pr.history_buffers.range_only_opens);
+                            pr.deep_history = history.deep_present;
                         }
                         CandleApply::Patch(from) => {
                             pr.figure_snap.patch_candles(from, &pr.candle_rows);
@@ -1142,6 +1147,8 @@ impl ChartDataState {
                     pr.clear_path();
                     pr.last_candle_rev = u64::MAX;
                     pr.candle_rows.clear();
+                    pr.range_only_opens.clear();
+                    pr.deep_history = false;
                     pr.volume_samples.clear();
                     pr.volume_samples_max_tf = 0.0;
                     pr.candle_rows_epoch = f64::NAN;
