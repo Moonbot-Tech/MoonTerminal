@@ -1,4 +1,4 @@
-use super::{SECTION_TITLE, laid_out, schema_of, written_sections};
+use super::{SECTION_TITLE, laid_out, put_manual_on_buttons, schema_of, written_kinds};
 use crate::feed::{SchemaFieldUi, StrategyRow};
 
 /// A strategy row with the given kind and fields; the rest does not reach the schema.
@@ -67,45 +67,128 @@ fn a_fields_type_is_read_off_its_value() {
     );
 }
 
-/// Catches a written section losing a recorded value — a field the file does not list would vanish
-/// from the editor while the strategy still holds it — and a listed field being added twice, or its
-/// written widget replaced by the one read off the value.
-#[test]
-fn written_sections_keep_every_recorded_field() {
-    let path = std::env::temp_dir().join(format!("recorded-schema-{}.json", std::process::id()));
-    std::fs::write(
-        &path,
-        r#"[{"title":"Main","fields":[{"name":"A","type":"String","ui":"Combo","picklist":["x"],"default":"x"}]},
-            {"title":"Stops","fields":[{"name":"B","type":"Int32","ui":"Edit"}]}]"#,
-    )
-    .expect("a temporary file");
-    let written = written_sections(&path).expect("two sections");
+/// Writes `text` to a temporary file named after `tag`, reads it back as written kinds and removes it.
+fn read_written(tag: &str, text: &str) -> Option<Vec<crate::feed::SchemaKind>> {
+    let path = std::env::temp_dir().join(format!("recorded-{tag}-{}.json", std::process::id()));
+    std::fs::write(&path, text).expect("a temporary file");
+    let written = written_kinds(&path);
     let _ = std::fs::remove_file(&path);
+    written
+}
 
-    let schema = laid_out(&[row(18, "Spread", &[("A", "5"), ("C", "Yes")])], &written);
-    let sections = &schema.kinds[0].sections;
-    let names = |at: usize| -> Vec<&str> {
-        sections[at]
+/// Catches a written editor losing a recorded value — a field the file does not list for its kind
+/// would vanish from the editor while the strategy still holds it — a listed field being added twice
+/// or its written widget replaced by the one read off the value, one kind's editor being handed to
+/// another, and a kind the file names but no strategy holds going missing (the new-strategy dialog
+/// reads its fields from the schema).
+#[test]
+fn written_kinds_keep_every_recorded_field_under_its_own_kind() {
+    let written = read_written(
+        "kinds",
+        r#"{"kinds":[
+            {"ordinal":18,"name":"Spread","sections":[
+                {"title":"Main","fields":[{"name":"A","type":"String","ui":"Combo","picklist":["x"],"default":"x"}]},
+                {"title":"Stops","fields":[{"name":"B","type":"Int32","ui":"Edit"}]}]},
+            {"ordinal":12,"name":"Manual","sections":[
+                {"title":"Main","fields":[{"name":"M","type":"Bool","ui":"Checkbox"}]}]},
+            {"ordinal":2,"name":"DropsDetection","sections":[]}]}"#,
+    )
+    .expect("three kinds");
+
+    let schema = laid_out(
+        &[
+            row(18, "Spread", &[("A", "5"), ("C", "Yes")]),
+            row(12, "Manual", &[("M", "Yes"), ("N", "2")]),
+            row(20, "MoonHook", &[("H", "1")]),
+        ],
+        &written,
+    );
+    let ordinals: Vec<u8> = schema.kinds.iter().map(|kind| kind.ordinal).collect();
+    assert_eq!(
+        ordinals,
+        [18, 12, 2, 20],
+        "every written kind, then the unwritten recorded one"
+    );
+    let names = |ordinal: u8, at: usize| -> Vec<&str> {
+        let kind = schema
+            .kinds
+            .iter()
+            .find(|kind| kind.ordinal == ordinal)
+            .expect("kind");
+        kind.sections[at]
             .fields
             .iter()
             .map(|field| field.name.as_str())
             .collect()
     };
-    assert_eq!(sections[0].title, "Main");
-    assert_eq!(names(0), ["A"]);
-    assert_eq!(sections[0].fields[0].ui, SchemaFieldUi::Combo);
-    assert_eq!(names(1), ["B", "C"], "the unlisted one goes last");
+    let spread = &schema.kinds[0].sections;
+    assert_eq!(spread[0].title, "Main");
+    assert_eq!(names(18, 0), ["A"]);
+    assert_eq!(spread[0].fields[0].ui, SchemaFieldUi::Combo);
+    assert_eq!(names(18, 1), ["B", "C"], "the unlisted one goes last");
+    assert_eq!(
+        names(12, 0),
+        ["M", "N"],
+        "a Manual field stays on the Manual editor"
+    );
+    assert!(
+        schema.kinds[2].sections.is_empty(),
+        "nothing recorded, nothing added"
+    );
+    assert_eq!(
+        names(20, 0),
+        ["H"],
+        "a kind the file lacks keeps its derived editor"
+    );
 }
 
-/// Catches a file that cannot be read taking the editor down with it: the run falls back to the
-/// derived schema, which only `None` selects.
+/// Catches a file that cannot be read, or one in the old one-editor-for-all shape, taking the editor
+/// down with it: the run falls back to the derived schema, which only `None` selects.
 #[test]
-fn an_unreadable_or_empty_file_gives_no_sections() {
-    let path = std::env::temp_dir().join(format!("recorded-empty-{}.json", std::process::id()));
-    std::fs::write(&path, "[]").expect("a temporary file");
-    assert!(written_sections(&path).is_none());
-    std::fs::write(&path, "not json").expect("a temporary file");
-    assert!(written_sections(&path).is_none());
-    let _ = std::fs::remove_file(&path);
-    assert!(written_sections(&path).is_none());
+fn an_unreadable_old_or_empty_file_gives_no_kinds() {
+    assert!(read_written("empty", r#"{"kinds":[]}"#).is_none());
+    assert!(read_written("old", r#"[{"title":"Main","fields":[]}]"#).is_none());
+    assert!(read_written("junk", "not json").is_none());
+    let absent = std::env::temp_dir().join(format!("recorded-absent-{}.json", std::process::id()));
+    assert!(written_kinds(&absent).is_none());
+}
+
+/// Catches a button that names something no button may fire — a Spread or a MoonHook on the header,
+/// where a click places a manual order on it — and a shown slot past the core's strategies, which
+/// draws an empty button that fires nothing.
+#[test]
+fn only_manual_strategies_go_on_buttons_and_only_their_slots_show() {
+    let (_, mut config) = crate::feed::live::default_core_settings();
+    put_manual_on_buttons(
+        &mut config,
+        &[
+            row(18, "Spread", &[]),
+            StrategyRow {
+                name: "Scalp".into(),
+                ..row(12, "Manual", &[])
+            },
+            StrategyRow {
+                name: "Bounce".into(),
+                ..row(20, "MoonHook", &[])
+            },
+            StrategyRow {
+                name: "Swing".into(),
+                ..row(12, "Manual", &[])
+            },
+        ],
+    );
+    let buttons = &config.manual.strat_buttons;
+    assert!(buttons.use_buttons);
+    assert_eq!(&config.manual.strat_names[..3], ["Scalp", "Swing", ""]);
+    assert_eq!(&buttons.show_button[..3], [true, true, false]);
+}
+
+/// Catches a core with no manual strategy switching its buttons on: the header would then hide the
+/// picker behind a row of empty buttons.
+#[test]
+fn a_core_without_manual_strategies_keeps_its_buttons_off() {
+    let (_, mut config) = crate::feed::live::default_core_settings();
+    let before = config.manual.clone();
+    put_manual_on_buttons(&mut config, &[row(18, "Spread", &[])]);
+    assert_eq!(config.manual, before);
 }
