@@ -75,7 +75,7 @@ use moonproto::{
 };
 
 use self::trace_backfill::TracePacer;
-use super::assets::{build_assets, build_transfer_assets, cached_market_names};
+use super::assets::{WalletArrivals, build_assets, build_transfer_assets, cached_market_names};
 use super::strategies::{
     alert_params, build_schema_model, detect_strat_name, fmt_field, schema_default_fields,
     strat_db_dump, strat_display_name, strat_field_bool, strat_kind_name, tg_detect,
@@ -401,6 +401,9 @@ pub(super) fn run(
     let mut balance_refresh_log_until: Option<Instant> = None;
     // Transfer-assets cursor: publish only when the revision changes (request/response).
     let mut last_transfer_rev: u64 = u64::MAX;
+    // When each wallet list last arrived. A publish carries all three lists, so each needs its
+    // own time: only the wallets the core has just answered are re-dated.
+    let mut wallet_arrivals = WalletArrivals::default();
     // Strategy-export cursors: schema revision plus the contents/checked signature. Publish only
     // changes because strategy fields are expensive and need not be sent every second.
     let mut last_schema_rev: u64 = u64::MAX;
@@ -844,6 +847,11 @@ pub(super) fn run(
                     // token), and their row ids die with the process that issued them.
                     let _ = tx.send(FeedMsg::Watchdog(None));
                     watchdog_seen = false;
+                    // The wallet lists were answered by the process that went away, and MoonProto
+                    // keeps them. Republish them as never answered: the replacement may run
+                    // another account, and only its own answer may date them again.
+                    wallet_arrivals.forget();
+                    last_transfer_rev = u64::MAX;
                     // Keep this snapshot alive. BaseCheck frees the old `Arc<ServerInfo>`, and the
                     // replacement can be allocated at the same address; holding the snapshot pins
                     // that allocation until its letter-publication decision is made.
@@ -2784,7 +2792,11 @@ pub(super) fn run(
             let rev = tr.revision();
             if rev != last_transfer_rev {
                 last_transfer_rev = rev;
-                let msg = build_transfer_assets(snap.markets(), tr);
+                let arrived_ms = wallet_arrivals.observe(
+                    moonproto::ExchangeKind::ALL.map(|kind| tr.kind_revision(kind)),
+                    crate::util::now_unix_ms_i64(),
+                );
+                let msg = build_transfer_assets(snap.markets(), tr, arrived_ms);
                 if tx.send(FeedMsg::TransferAssets(msg)).is_err() {
                     break;
                 }

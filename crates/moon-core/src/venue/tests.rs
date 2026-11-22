@@ -373,6 +373,98 @@ fn binance_spot_and_futures_are_separate_wallets() {
     assert_eq!(uid(MarketKind::Futures), uid(MarketKind::Futures));
 }
 
+/// Breakage: `wallets_key` keeping the market — a Binance spot core and a futures core on one
+/// uid read the SAME transfer wallets, and the wallet overview would list that account twice and
+/// count its idle money twice.
+#[test]
+fn one_binance_uid_has_one_set_of_transfer_wallets() {
+    let key = |kind, uid| {
+        super::wallets_key(
+            Some(Venue {
+                brand: Brand::Binance,
+                kind,
+            }),
+            crate::account::AccountIdentity::from_auth("", "", uid),
+        )
+    };
+    assert!(key(MarketKind::Spot, 777).is_some());
+    assert_eq!(key(MarketKind::Spot, 777), key(MarketKind::Futures, 777));
+    assert_ne!(key(MarketKind::Futures, 777), key(MarketKind::Futures, 778));
+}
+
+/// Breakage: `wallets_key` following `merge_key` on Gate — Gate balances never fold, but a spot
+/// and a futures core on one account list the same wallets; kept apart, each core's trading
+/// wallet showed up as the other's idle money. And keyed by the deposit address they WERE kept
+/// apart: one account states it as the address or as `User-<id>` when the exchange would not
+/// give it, so the key is the user id both cores report.
+#[test]
+fn gate_cores_on_one_user_id_share_their_wallets_whatever_the_address() {
+    let key = |kind, address, uid| {
+        super::wallets_key(
+            Some(Venue {
+                brand: Brand::Gate,
+                kind,
+            }),
+            crate::account::AccountIdentity::from_auth("", address, uid),
+        )
+    };
+    let spot = key(MarketKind::Spot, "bc1qdeposit", 4242);
+    assert!(spot.is_some());
+    assert_eq!(spot, key(MarketKind::Futures, "User-4242", 4242));
+    assert_ne!(spot, key(MarketKind::Futures, "bc1qdeposit", 4243));
+    assert_eq!(
+        key(MarketKind::Spot, "bc1qdeposit", 0),
+        None,
+        "no user id, no account: the address alone does not name it"
+    );
+    let binance = super::wallets_key(
+        Some(Venue {
+            brand: Brand::Binance,
+            kind: MarketKind::Spot,
+        }),
+        crate::account::AccountIdentity::from_auth("", "", 4242),
+    );
+    assert_ne!(spot, binance, "one number on two exchanges is two accounts");
+    assert_eq!(
+        super::merge_key(
+            Some(Venue {
+                brand: Brand::Gate,
+                kind: MarketKind::Spot,
+            }),
+            crate::account::AccountIdentity::from_auth("", "bc1qdeposit", 4242),
+        ),
+        None,
+        "balances still never fold on Gate"
+    );
+}
+
+/// Breakage: `wallets_key` naming a Bybit account by its deposit address — the exchange gives one
+/// BTC address per network and a core keeps whichever it was told last, so two cores of one
+/// account can state two addresses and were kept apart as two accounts. The key is the user id
+/// both report, and a core that has not reported it names no account at all: falling back to the
+/// address is what splits the account.
+#[test]
+fn bybit_cores_on_one_user_id_share_their_wallets_whatever_the_address() {
+    let key = |kind, address, uid| {
+        super::wallets_key(
+            Some(Venue {
+                brand: Brand::Bybit,
+                kind,
+            }),
+            crate::account::AccountIdentity::from_auth("", address, uid),
+        )
+    };
+    let spot = key(MarketKind::Spot, "bc1qfirstnetwork", 5151);
+    assert!(spot.is_some());
+    assert_eq!(spot, key(MarketKind::Futures, "bc1qothernetwork", 5151));
+    assert_ne!(spot, key(MarketKind::Futures, "bc1qfirstnetwork", 5152));
+    assert_eq!(
+        key(MarketKind::Spot, "bc1qfirstnetwork", 0),
+        None,
+        "no user id, no account: the address alone does not name it"
+    );
+}
+
 /// Breakage: `merge_key` leaving the brand out of the key — one account id reused on two
 /// exchanges names two different wallets.
 #[test]

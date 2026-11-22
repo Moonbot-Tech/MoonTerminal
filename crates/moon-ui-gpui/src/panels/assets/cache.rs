@@ -149,6 +149,11 @@ impl AssetsView {
         self.effective_wallet_core(b)
             .and_then(|core| core_brand(b, core))
             .hash(&mut keys);
+        // The idle-money marks judge each account by ALL its cores, the hidden ones included, so
+        // every configured core's wallet account and wallet revision enter here: a sibling outside
+        // the filter that refreshes, or an account identity that lands after the wallets, moves
+        // no revision of the scoped cores.
+        idle_sig(b).hash(&mut keys);
         let sig = cores
             .iter()
             // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
@@ -238,6 +243,7 @@ impl AssetsView {
         self.cached_roster_auto_w = None;
         self.cached_all_futures = self.all_scope_cores_futures(b);
         self.rebuild_wallet_cache(b);
+        self.rebuild_idle(b);
         // Skip non-finite row values so one bad price cannot turn the whole Σ into `NaN`, but
         // COUNT what was skipped — a silently shortened sum is indistinguishable from an honest
         // one, and the footer needs to say so.
@@ -322,7 +328,7 @@ impl AssetsView {
             let thr = self.min_value_usd;
             let mut rows: Vec<TransferAssetRow> = all_items
                 .into_iter()
-                .filter(|a| thr <= 0.0 || a.value_usdt > thr)
+                .filter(|a| super::wallets::above_dust(a.value_usdt, thr))
                 .collect();
             rows.sort_by(|a, b| {
                 b.value_usdt
@@ -339,4 +345,78 @@ impl AssetsView {
         self.cached_wallets = Rc::new(snapshots);
         self.cached_wallet_key = Some(key);
     }
+
+    /// Recompute the idle-money marks of the wallets core list ([`super::idle`]).
+    ///
+    /// Every configured core goes in, not only the scoped ones: an account is judged by all the
+    /// wallets its cores trade from, and the mark lands on its first core the panel shows.
+    /// Reads `cached_aggs`, so it runs after they are rebuilt.
+    pub(super) fn rebuild_idle(&mut self, b: &Backend) {
+        let store = b.session.store();
+        let venues = b.session.core_venues();
+        let visible: std::collections::HashSet<CoreId> =
+            self.cached_cores.iter().map(|(id, _)| *id).collect();
+        // The cores the footer total counts — the same aggregates it is summed from, so the idle
+        // sum beside it cannot disagree about a core set to stay out of the total.
+        let counted: std::collections::HashSet<CoreId> = self
+            .cached_aggs
+            .iter()
+            .filter(|agg| agg.mode != moon_core::config::TotalMode::Exclude)
+            .map(|agg| agg.id)
+            .collect();
+        let inputs: Vec<super::idle::IdleInput<'_>> = CoreOrder::new(&b.config)
+            .from_sessions(b.session.sessions(), |_| true)
+            .into_iter()
+            .map(|(id, _)| {
+                let venue = venues.get(&id).and_then(|venue| venue.resolved());
+                let core = store.core(id);
+                super::idle::IdleInput {
+                    core: id,
+                    visible: visible.contains(&id),
+                    counted: counted.contains(&id),
+                    ready: core.is_some_and(core_ready),
+                    exchange_known: venues.contains_key(&id),
+                    venue,
+                    key: moon_core::venue::wallets_key(venue, b.session.account_identity(id)),
+                    wallets: core
+                        .filter(|cd| cd.transfer_rev > 0)
+                        .map(|cd| &cd.transfer_assets),
+                    seen_ms: core.map_or([0; 3], |cd| cd.transfer_seen_ms),
+                }
+            })
+            .collect();
+        let report = super::idle::idle_report(&inputs, self.min_value_usd);
+        // The footer's share stays in unix-ms: the tooltip words its age as it opens
+        // (`AssetsView::footer_tip`), in the clock zone and against the day of that moment.
+        self.cached_idle_footer = super::idle::footer_idle(&report);
+        self.cached_idle = Rc::new(report);
+    }
+}
+
+/// Whether a core is connected and ready right now — the only state in which the idle-money
+/// marks take its exchange account for established (`idle::IdleInput::ready`).
+fn core_ready(core: &moon_core::session::store::CoreData) -> bool {
+    core.status == moon_core::feed::ConnStatus::Ready
+}
+
+/// Signature of everything the idle-money marks read beyond the scoped cores: each configured
+/// core's venue — and whether it has named one at all — its wallet account, whether it is ready,
+/// and its wallet revision. A status change or an exchange code that resolves to no modelled
+/// venue moves no data revision, yet both change which accounts are judged.
+fn idle_sig(b: &Backend) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let store = b.session.store();
+    let venues = b.session.core_venues();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for session in b.session.sessions() {
+        let venue = venues.get(&session.id).and_then(|venue| venue.resolved());
+        let core = store.core(session.id);
+        session.id.hash(&mut h);
+        venues.contains_key(&session.id).hash(&mut h);
+        venue.hash(&mut h);
+        moon_core::venue::wallets_key(venue, b.session.account_identity(session.id)).hash(&mut h);
+        core.is_some_and(core_ready).hash(&mut h);
+        core.map_or(0, |cd| cd.transfer_rev).hash(&mut h);
+    }
+    h.finish()
 }

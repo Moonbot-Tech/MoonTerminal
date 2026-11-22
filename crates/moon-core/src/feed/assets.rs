@@ -394,11 +394,63 @@ pub(super) fn build_assets(
     }
 }
 
+/// When each wallet list last arrived, tracked across the publishes of one feed.
+///
+/// MoonProto keeps a revision per wallet (`TransferAssetsState::kind_revision`) and no time, so
+/// the feed dates a wallet the moment it sees that wallet's revision move — at most one loop turn
+/// after the core answered for it, or after MoonProto adjusted both ends of a transfer made
+/// through this core, which moves the two wallets' revisions as an answer would. A wallet whose
+/// revision did not move keeps the time it had: a publish carries all three lists, whichever of
+/// them has just changed.
+#[derive(Debug, Default)]
+pub(super) struct WalletArrivals {
+    /// Revision last seen per wallet, in wire order; `0` is MoonProto's "never updated".
+    seen: [u64; 3],
+    /// Unix-ms each of those revisions was first seen, `0` while the wallet was never updated.
+    at_ms: [i64; 3],
+}
+
+impl WalletArrivals {
+    /// Date the wallets whose revision moved since the last call.
+    ///
+    /// Args:
+    ///     revisions: Each wallet's current revision, in wire order (Spot, Futures, Quarterly).
+    ///     now_ms: Current unix-ms.
+    ///
+    /// Returns:
+    ///     Every wallet's arrival time in the same order, `0` for one never updated.
+    pub(super) fn observe(&mut self, revisions: [u64; 3], now_ms: i64) -> [i64; 3] {
+        for (slot, revision) in revisions.into_iter().enumerate() {
+            if revision != self.seen[slot] {
+                self.seen[slot] = revision;
+                self.at_ms[slot] = if revision == 0 { 0 } else { now_ms };
+            }
+        }
+        self.at_ms
+    }
+
+    /// Forget every arrival time, keeping the revisions seen.
+    ///
+    /// For a server restart: MoonProto keeps the lists across it, but the process that answered
+    /// for them is gone and the one that replaced it may run another account. The lists then
+    /// read as never answered until a wallet's revision moves again — only a fresh answer dates
+    /// them.
+    pub(super) fn forget(&mut self) {
+        self.at_ms = [0; 3];
+    }
+}
+
 /// Snapshot of the core's transfer assets by wallet (Spot/Futures/Quarterly) for the transfer tree.
 /// Calculates each row's USDT value through `coin_to_usdt`'s available market-price fallbacks.
+///
+/// Args:
+///     markets: Market read model the coin prices come from.
+///     st: The core's wallet lists.
+///     arrived_ms: When each of those lists last arrived ([`WalletArrivals::observe`]).
 pub(super) fn build_transfer_assets(
     markets: &MarketsState,
     st: &TransferAssetsState,
+    arrived_ms: [i64; 3],
 ) -> TransferAssetsSnapshot {
     // Index `market base coin (UPPER) → price`. This covers Hyperliquid spot, where the market is
     // named by INDEX (`@206`) while the wallet exposes the token by NAME (`UENA`), so concatenating
@@ -438,6 +490,7 @@ pub(super) fn build_transfer_assets(
         spot: conv(ExchangeKind::Spot),
         futures: conv(ExchangeKind::Futures),
         quarterly: conv(ExchangeKind::Quarterly),
+        arrived_ms,
     }
 }
 

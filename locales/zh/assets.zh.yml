@@ -47,12 +47,17 @@ assets.balances_folded_hl_caveat: "（Hyperliquid：终端看不到账户模式�
 assets.balances_excluded_list: "按内核设置不计入：%{cores}"
 # Footer row: every core in the window (not the number of accounts the sum covers).
 assets.balances_cores_n: "内核：%{n}"
-# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total.
-# Below them, after the existing `assets.cores_n`, one line per exchange account several cores
-# share (`core-1 + core-2`; the `+` joiner is built in code).
+# Footer tooltip labels, beside the amounts: free, then (reusing `assets.balances_total`) total,
+# then money in wallets no core trades from. Below them, after the existing `assets.cores_n`, one
+# line per exchange account several cores share (`core-1 + core-2`; the `+` joiner is built in
+# code), then two notes on that money: how old its figure is, and that it is not judged while
+# cores have not identified themselves.
 assets.balances_tip_free: "可用"
+assets.balances_tip_idle: "未交易"
 assets.balances_tip_shared: "%{cores} — 共享 %{brand} 账户，仅计一次"
 assets.balances_tip_shared_unknown: "%{cores} — 共享交易所账户，仅计一次"
+assets.balances_tip_idle_as_of: "未交易：数据时间 %{t}"
+assets.balances_tip_idle_withheld: "未交易：存在离线或未识别的内核时不作判断（等待：%{n}）"
 assets.section_positions: "仓位"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "全部内核"
@@ -118,6 +123,9 @@ assets.wallet.kind.bybit_funding: "Funding"
 assets.wallet.filtered_empty_one: "%{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
 assets.wallet.filtered_empty_few: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
 assets.wallet.filtered_empty_many: "全部 %{n} 项资产已被 %{thr}$ 价值过滤器隐藏"
+# Hover on the amber mark after a core name in the wallets core list: after the wallet and
+# coin lines (built in code), the age of those figures.
+assets.wallet.idle_as_of: "数据时间 %{t}"
 assets.wallets_hint: "钱包 · 在容器之间拖动币种"
 assets.refresh_hint: "刷新内核余额"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

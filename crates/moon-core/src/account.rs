@@ -4,15 +4,16 @@
 //! money once. This module only collects what the core stated — which field names the account on which brand,
 //! and what merges, is `venue::merge_key`.
 
-/// Identity of the exchange account a core is logged into: the one field `venue::merge_key` chose
-/// for the core's brand.
+/// Identity of the exchange account a core is logged into: the one field `venue::merge_key` or
+/// `venue::wallets_key` chose for the core's brand.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AccountKey {
     /// The account id the core reported.
     Id(String),
     /// The wallet address the core reported.
     Address(String),
-    /// The Binance account uid the core reported.
+    /// The exchange's own numeric user id, which the core reports in `binance_account_id`: the
+    /// account on Binance, and in `venue::wallets_key` on Bybit and Gate as well.
     BinanceUid(i64),
 }
 
