@@ -993,7 +993,7 @@ fn trade_window_replay_volume() {
     crate::test_locale::warm();
     let _window = crate::test_support::SharedWindowGuard::take();
     use gpui::{Bounds, GpuFrameInfo, point, px, size};
-    use moon_core::config::ChartTheme;
+    use moon_core::config::{ChartLabelsCfg, ChartTheme, LabelPreset};
     use moon_core::market::trade_replay::venue_caps::TickValue;
     use moon_core::market::trade_replay::{
         Coverage, TickStatus, TickThinning, TradeReplaySeries, TradeReplaySource, replay_window_ms,
@@ -1006,6 +1006,11 @@ fn trade_window_replay_volume() {
     let mut engine = crate::chartdx::ChartEngine::new(0.0, ChartTheme::default());
     engine.open(42, "XALPHAUSDT");
     engine.set_historical(true);
+    let mut captions = ChartLabelsCfg::empty();
+    captions
+        .push_preset(LabelPreset::CursorVolumes)
+        .expect("an empty caption set has room for the measuring block");
+    engine.set_chart_labels(Rc::new(captions));
     // One print a second, 20 quote each, buying on even seconds and selling on odd ones.
     let ticks: Vec<moon_core::feed::Tick> = (100..=110)
         .map(|s| moon_core::feed::Tick {
@@ -1106,7 +1111,7 @@ fn trade_window_replay_volume() {
         "candle seconds are an estimate: {outside}"
     );
 
-    // The factory cursor block measures ten seconds around the pointer.
+    // The configured cursor block measures ten seconds around the pointer.
     engine.set_cursor(Some((0, 520.0, 300.0)));
     engine.sync_cursor_volumes(&source);
     let held = |engine: &crate::chartdx::ChartEngine| {
