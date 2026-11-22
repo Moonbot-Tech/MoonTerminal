@@ -324,6 +324,20 @@ pub(super) struct Column {
     pub(super) align: f32,
     /// Widest a row may become before its captions are truncated.
     pub(super) max_w: f32,
+    /// Width from this left anchor to the gap before the overlapping control strip, if any.
+    pub(super) filter_header_max_w: Option<f32>,
+}
+
+impl Column {
+    /// Spend the same header width in measurement and drawing, clearing earlier cells in either pass.
+    pub(super) fn item_width(self, part: usize, spent: f32, width: f32) -> f32 {
+        match (part, self.filter_header_max_w) {
+            (FILTER_HEADER_PART, Some(filter_header_max_w)) => {
+                width.min(filter_header_max_w - spent)
+            }
+            _ => width,
+        }
+    }
 }
 
 /// What a hungry column needs to pick a width per line: the neighbours already drawn, and the

@@ -876,6 +876,92 @@ fn the_wrapped_draw_branch_registers_column_lines() {
     assert!(src[start..end].contains("grow_column_band("));
 }
 
+/// A no-book control strip can occupy the plot's top right while the filter starts on the left.
+/// Letting the filter spend the full plot width paints its core name through the scope caption.
+#[test]
+fn widened_filter_header_clears_the_control_strip_caption() {
+    use super::super::caption::caption_geom;
+    use super::model::Column;
+    use super::zone::{filter_header_right, zone_anchor, zone_width};
+
+    let measure = |text: &str| text.chars().count() as f32 * 8.0;
+    let scope = "EX-XX · all cores (39)";
+    let head = "> UNIT_01 · 19";
+    let owner = format!(" · {}", "CORE_A_".repeat(9));
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = ChartLabelRow::new(LabelZone::ZoneTop, LabelAlign::Right);
+    cfg.rows[0].push_part(ChartLabelField::Core);
+    let texts = [LabelText {
+        row: 0,
+        part: 0,
+        text: scope.into(),
+        prefix: String::new(),
+        reachable: false,
+        venue: None,
+        sign: None,
+        color: None,
+        bar: None,
+        volume_menu: false,
+        action: None,
+    }];
+    for width in [400.0, 440.0, 540.0, 1200.0] {
+        let geom = CaptionGeomInput {
+            pane_right: width,
+            plot_right: width,
+            ..plot_geom()
+        };
+        let corner = caption_geom(
+            geom.pane_left,
+            width,
+            geom.plot_left,
+            width,
+            geom.plot_top,
+            false,
+            0.0,
+            220.0,
+            super::CAPTION_PAD_X,
+            super::CAPTION_PAD_Y,
+        )
+        .expect("control strip");
+        let zone = LabelZone::ChartTop;
+        let align = LabelAlign::Left;
+        let (x, fraction) = zone_anchor(zone, align, &geom, &corner);
+        let right = filter_header_right(true, &cfg, &texts, &geom, &corner);
+        assert_eq!(
+            filter_header_right(false, &cfg, &texts, &geom, &corner),
+            None
+        );
+        assert_eq!(filter_header_right(true, &cfg, &[], &geom, &corner), None);
+        let column = Column {
+            x,
+            align: fraction,
+            max_w: zone_width(zone, &geom, &corner),
+            filter_header_max_w: right.map(|r| r - x),
+        };
+        let budget = column.item_width(super::FILTER_HEADER_PART, 0.0, column.max_w);
+        let (filter, filter_w) = super::fit::fit_filter_header(head, &owner, budget, measure);
+        let (filter_y, scope_y) = (
+            zone_start_y(zone, align, &geom, &corner) + 8.0,
+            zone_start_y(LabelZone::ZoneTop, LabelAlign::Right, &geom, &corner) + 15.0,
+        );
+        let scope_x = corner.right_x - measure(scope);
+        let filter_rect = [x, filter_y, x + filter_w, filter_y + 15.0];
+        let scope_rect = [scope_x, scope_y, corner.right_x, scope_y + 15.0];
+        assert!(filter.starts_with(head), "{width}: lost filter control");
+        if width == 440.0 {
+            assert!(filter.ends_with('…'), "{width}: {filter}");
+        } else if width == 1200.0 {
+            assert_eq!(filter, format!("{head}{owner}"));
+        }
+        assert!(filter_rect[0] < scope_rect[2] && filter_rect[1] < scope_rect[3]);
+        assert!(scope_rect[1] < filter_rect[3], "fixture must share a row");
+        assert!(
+            filter_rect[2] <= scope_rect[0],
+            "{width}: {filter_rect:?} overlaps {scope_rect:?}",
+        );
+    }
+}
+
 /// Truncating the whole widened header used to sacrifice the count and print its tail through the
 /// centred venue/all-cores caption. Every localized title, both fold states, narrow and wide panes,
 /// must instead keep the fixed head intact and cut only the core segment out of the centre's way.
