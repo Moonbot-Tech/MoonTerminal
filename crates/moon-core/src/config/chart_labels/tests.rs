@@ -1,218 +1,111 @@
 use super::*;
 
-/// `ChartLabelsCfg::default` must leave every shipped caption's size override absent.
-///
-/// Re-adding `style.size_mult = Some(1.7)` to the scale module would make a fresh profile freeze
-/// one caption at the old size, so later default-size changes would not reach it.
+/// Keep the Main default's caption order, placement and styles across both wire formats.
 #[test]
 fn the_default_is_the_shipped_working_layout() {
-    let cfg = ChartLabelsCfg::default();
-    let rows: Vec<_> = cfg.rows[..cfg.used_rows()]
-        .iter()
-        .map(|r| {
-            (
-                r.preset,
-                r.zone,
-                r.align,
-                r.flow,
-                r.placement,
-                r.gap,
-                r.parts[..r.used_parts()]
-                    .iter()
-                    .map(|p| p.field)
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .collect();
     use ChartLabelField as F;
     use LabelAlign as A;
     use LabelFlow as Fl;
     use LabelPreset as P;
     use LabelZone as Z;
+
+    let cfg = ChartLabelsCfg::default();
+    let rows: Vec<_> = cfg.rows[..cfg.used_rows()]
+        .iter()
+        .map(|row| {
+            (
+                row.zone,
+                row.align,
+                row.preset,
+                row.flow,
+                row.collapsed,
+                row.parts[..row.used_parts()]
+                    .iter()
+                    .map(|part| (part.field, part.style.size_mult))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
     assert_eq!(
         rows,
         vec![
-            // The instrument as a block in the control strip.
             (
-                Some(P::Instrument),
-                Z::ZoneTop,
-                A::Right,
-                Fl::Column,
-                Fl::Column,
-                0,
-                vec![F::Coin, F::Core, F::Venue]
-            ),
-            // The badge on the plot's top-right, with the coin's deltas standing BESIDE it.
-            (
-                Some(P::Scale),
                 Z::ChartTop,
-                A::Right,
+                A::Left,
+                None,
                 Fl::Row,
-                Fl::Column,
-                0,
-                vec![F::ScaleBadge, F::TimeScaleBadge]
-            ),
-            (
-                Some(P::CoinDeltas),
-                Z::ChartTop,
-                A::Right,
-                Fl::Column,
-                Fl::Row,
-                24,
-                vec![F::Delta1h, F::Delta24h]
-            ),
-            // What traded over the last minute, and the same measured around the pointer.
-            (
-                Some(P::Volumes),
-                Z::ChartTop,
-                A::Right,
-                Fl::Column,
-                Fl::Column,
-                6,
-                vec![F::WindowSpanName, F::WindowBuyVolume, F::WindowSellVolume]
-            ),
-            (
-                Some(P::CursorVolumes),
-                Z::ChartTop,
-                A::Right,
-                Fl::Column,
-                Fl::Column,
-                6,
+                false,
                 vec![
-                    F::WindowSpanName,
-                    F::WindowBuyVolume,
-                    F::WindowSellVolume,
-                    F::WindowLiquidations
-                ]
+                    (F::OpenOrders, Some(1.5)),
+                    (F::Exposure, Some(1.5)),
+                    (F::OpenPnlMoney, Some(1.5)),
+                    (F::OpenPnlPct, Some(1.5)),
+                ],
             ),
-            // What is open, the session counters under it, funding under those.
             (
-                Some(P::Position),
-                Z::ChartTop,
-                A::Left,
+                Z::ZoneTop,
+                A::Center,
+                None,
                 Fl::Row,
-                Fl::Row,
-                0,
-                vec![F::OpenOrders, F::OpenPnlMoney, F::OpenPnlPct, F::Exposure]
+                false,
+                vec![(F::Coin, Some(1.5))]
             ),
             (
-                Some(P::Session),
                 Z::ChartTop,
-                A::Left,
+                A::Right,
+                None,
                 Fl::Row,
-                Fl::Column,
-                4,
-                vec![F::SessionPnl, F::SessionProfit]
+                false,
+                vec![(F::ScaleBadge, Some(1.5))]
             ),
             (
-                Some(P::Funding),
-                Z::ChartTop,
-                A::Left,
-                Fl::Row,
-                Fl::Column,
-                8,
-                vec![F::Funding, F::FundingIn]
-            ),
-            // The venue roster down the plot's left edge, and the detect line centred over it.
-            (
-                Some(P::Arbitrage),
-                Z::ChartTop,
-                A::Left,
-                Fl::Column,
-                Fl::Column,
-                8,
-                vec![F::ArbColumn]
-            ),
-            (
-                Some(P::Detect),
                 Z::ChartTop,
                 A::Center,
-                Fl::Column,
-                Fl::Column,
-                0,
-                vec![F::DetectStrategy, F::DetectMsg, F::OrderStrategy]
+                None,
+                Fl::Row,
+                false,
+                vec![(F::Core, Some(1.5))]
             ),
             (
-                Some(P::StrategyFilters),
                 Z::ChartTop,
                 A::Left,
+                Some(P::StrategyFilters),
                 Fl::Column,
-                Fl::Column,
-                8,
-                vec![F::StrategyFilters]
-            ),
-            // The market buttons along the bottom edge: panic outermost, cancel continuing its
-            // line. Unnamed — the field names each of them — which is why the preset is `None`.
-            (
-                None,
-                Z::ChartBottom,
-                A::Right,
-                Fl::Row,
-                Fl::Column,
-                0,
-                vec![F::ActPanicSell]
+                true,
+                vec![(F::StrategyFilters, Some(1.0))],
             ),
             (
-                None,
-                Z::ChartBottom,
-                A::Right,
-                Fl::Row,
-                Fl::Row,
-                0,
-                vec![F::ActCancelBuy]
-            ),
-            // The auto-figures eye, alone on the opposite edge from the trading pair.
-            (
-                None,
                 Z::ChartBottom,
                 A::Left,
-                Fl::Row,
+                Some(P::Arbitrage),
                 Fl::Column,
-                0,
-                vec![F::ActAutoFigures]
+                false,
+                vec![(F::ArbColumn, Some(1.5))],
+            ),
+            (
+                Z::ChartTop,
+                A::Left,
+                Some(P::Session),
+                Fl::Row,
+                false,
+                vec![(F::SessionPnl, None), (F::SessionProfit, None)],
             ),
         ]
     );
-    assert!(
-        cfg.rows[..cfg.used_rows()]
-            .iter()
-            .flat_map(|row| row.parts[..row.used_parts()].iter())
-            .all(|part| part.style.size_mult.is_none()),
-        "the shipped layout must not freeze any caption size"
-    );
     assert_eq!(
-        cfg.rows[3].parts[0].window,
-        LabelWindow::M1,
-        "the live volume block opens on the minute, which the cheap sources serve"
-    );
-    assert_eq!(
-        (
-            cfg.rows[4].parts[1].span,
-            cfg.rows[4].parts[1].anchor,
-            cfg.rows[4].parts[1].bar
-        ),
-        (LabelSpan::Seconds(10), SpanAnchor::Cursor, false),
-        "the measuring block reads ten seconds around the pointer, without bars"
-    );
-    assert_eq!(
-        cfg.rows[7].parts[1].style.caption,
-        Some(false),
-        "the funding countdown prints bare, beside the rate that names itself"
-    );
-    assert_eq!(
-        (
-            cfg.rows[8].parts[0].style.color,
-            cfg.rows[8].parts[0].style.color_min_pct
-        ),
-        (Some(LabelColor::BySign), Some(0.5)),
-        "the roster colours the spread by its sign, and only where the spread is worth acting on"
+        cfg.rows[0].parts[0].style.color,
+        Some(LabelColor::Fixed(0x8D99AE))
     );
     assert!(
-        cfg.rows[..cfg.used_rows()]
+        cfg.rows[0].parts[..4]
             .iter()
-            .all(|r| r.name.is_empty()),
-        "every shipped module is named by its PRESET, so the popup speaks the reader's language"
+            .all(|part| part.pnl_basis == PnlBasis::All)
     );
+    assert_eq!(cfg.rows[4].parts[0].style.caption, Some(false));
+    assert_eq!(cfg.rows[6].parts[0].style, LabelStyle::default());
+    assert_eq!(cfg.rows[6].parts[1].style, LabelStyle::default());
+    assert_eq!(serde_json::from_str::<ChartLabelsCfg>("{}").unwrap(), cfg);
+    assert_eq!(toml::from_str::<ChartLabelsCfg>("").unwrap(), cfg);
 }
 
 /// The figures inherited from the overlay carry their captions: a bare "2" over the candles names
@@ -253,22 +146,6 @@ fn every_field_default_style_uses_the_shared_size() {
         "a signed figure colors by sign"
     );
     assert_eq!(core.color, LabelColor::Theme);
-}
-
-/// Fresh profiles must resolve every shipped caption to the approved 1.5x font size.
-///
-/// Changing `LABEL_SIZE_MULT_DEFAULT` back to 1.0 would make new charts draw at the old size even
-/// though their saved layout carries no override.
-#[test]
-fn every_shipped_caption_resolves_to_the_approved_default_size() {
-    let cfg = ChartLabelsCfg::default();
-    assert!(
-        cfg.rows[..cfg.used_rows()]
-            .iter()
-            .flat_map(|row| row.parts[..row.used_parts()].iter())
-            .all(|part| part.resolved_style().size_mult == 1.5),
-        "every caption in a fresh profile must draw at the approved 1.5x size"
-    );
 }
 
 /// A stored user size must survive sanitization and a wire round trip before it reaches drawing.
@@ -350,15 +227,9 @@ fn sanitize_closes_a_hole_between_captions() {
 /// blank, and a blank row is not a row.
 #[test]
 fn sanitize_drops_a_blank_row_and_keeps_the_order() {
-    // UNNAMED modules: a named one survives losing its captions, which the shipped roster relies on
-    // and `a_named_row_survives_without_captions` pins separately.
     let mut cfg = ChartLabelsCfg::default();
-    for row in &mut cfg.rows {
-        row.name.clear();
-    }
-    // The badge module, whose two scale captions are what make it blank once removed.
-    cfg.rows[1].remove_part(0);
-    cfg.rows[1].remove_part(0);
+    // Removing the scale badge empties its unnamed module.
+    cfg.rows[2].remove_part(0);
     cfg.sanitize();
     let fields: Vec<_> = cfg.rows[..cfg.used_rows()]
         .iter()
@@ -367,19 +238,12 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
     assert_eq!(
         fields,
         vec![
-            ChartLabelField::Coin,
-            ChartLabelField::Delta1h,
-            ChartLabelField::WindowSpanName,
-            ChartLabelField::WindowSpanName,
             ChartLabelField::OpenOrders,
-            ChartLabelField::SessionPnl,
-            ChartLabelField::Funding,
-            ChartLabelField::ArbColumn,
-            ChartLabelField::DetectStrategy,
+            ChartLabelField::Coin,
+            ChartLabelField::Core,
             ChartLabelField::StrategyFilters,
-            ChartLabelField::ActPanicSell,
-            ChartLabelField::ActCancelBuy,
-            ChartLabelField::ActAutoFigures
+            ChartLabelField::ArbColumn,
+            ChartLabelField::SessionPnl,
         ],
         "the survivors keep their relative order with no hole between them"
     );
@@ -437,18 +301,18 @@ fn an_unnamed_row_prints_no_name() {
 #[test]
 fn removing_a_caption_closes_the_gap() {
     let mut cfg = ChartLabelsCfg::default();
-    // The open-order module; its index moved when the two volume blocks joined the shipped set.
-    cfg.rows[5].remove_part(0);
-    let fields: Vec<_> = cfg.rows[5].parts[..cfg.rows[5].used_parts()]
+    let row = &mut cfg.rows[0];
+    row.remove_part(0);
+    let fields: Vec<_> = row.parts[..row.used_parts()]
         .iter()
         .map(|p| p.field)
         .collect();
     assert_eq!(
         fields,
         vec![
+            ChartLabelField::Exposure,
             ChartLabelField::OpenPnlMoney,
             ChartLabelField::OpenPnlPct,
-            ChartLabelField::Exposure,
         ]
     );
 }
@@ -463,8 +327,8 @@ fn moving_refuses_at_the_ends_and_swaps_in_the_middle() {
         "the last used row cannot move down"
     );
     assert!(cfg.move_row(2, true));
-    assert_eq!(cfg.rows[1].parts[0].field, ChartLabelField::Delta1h);
-    assert_eq!(cfg.rows[2].parts[0].field, ChartLabelField::ScaleBadge);
+    assert_eq!(cfg.rows[1].parts[0].field, ChartLabelField::ScaleBadge);
+    assert_eq!(cfg.rows[2].parts[0].field, ChartLabelField::Coin);
     assert!(
         !cfg.move_row(used, true),
         "a blank row is not a movable row"
@@ -475,11 +339,11 @@ fn moving_refuses_at_the_ends_and_swaps_in_the_middle() {
 #[test]
 fn moving_a_caption_refuses_at_the_ends_of_its_row() {
     let mut cfg = ChartLabelsCfg::default();
-    let row = &mut cfg.rows[5];
+    let row = &mut cfg.rows[0];
     assert!(!row.move_part(0, true));
     assert!(!row.move_part(row.used_parts() - 1, false));
     assert!(row.move_part(1, true));
-    assert_eq!(row.parts[0].field, ChartLabelField::OpenPnlMoney);
+    assert_eq!(row.parts[0].field, ChartLabelField::Exposure);
     assert_eq!(row.parts[1].field, ChartLabelField::OpenOrders);
 }
 
@@ -663,10 +527,10 @@ fn the_configuration_round_trips_through_toml() {
     cfg.rows[0].name = "Инструмент".to_string();
     cfg.rows[0].show_name = true;
     // A preset row with no name: the pair a file has to state separately.
-    assert_eq!(cfg.rows[7].preset, Some(LabelPreset::Funding));
+    assert_eq!(cfg.rows[6].preset, Some(LabelPreset::Session));
     cfg.rows[0].parts[0].style.color = Some(LabelColor::Fixed(0x112233));
     cfg.rows[0].parts[0].style.size_mult = Some(1.5);
-    cfg.rows[3].parts[1].pnl_basis = PnlBasis::Real;
+    cfg.rows[0].parts[2].pnl_basis = PnlBasis::Real;
     let text = toml::to_string_pretty(&cfg).expect("serializes");
     let back: ChartLabelsCfg = toml::from_str(&text).expect("parses");
     assert_eq!(back, cfg);
@@ -829,7 +693,7 @@ fn the_control_strip_is_a_band_of_its_own() {
     assert!(!LabelZone::ChartTop.is_control_zone());
     assert!(LabelZone::ZoneTop.is_top() && !LabelZone::ZoneBottom.is_top());
     assert_eq!(
-        ChartLabelsCfg::default().rows[0].zone,
+        ChartLabelsCfg::default().rows[1].zone,
         LabelZone::ZoneTop,
         "the default caption lives in the control strip, where it has always been drawn"
     );
@@ -971,9 +835,9 @@ fn a_hidden_row_draws_nothing_but_keeps_everything() {
     let mut cfg = ChartLabelsCfg::default();
     // The open-order module: its figures are the ones whose absence is measurable through the gate
     // the sync paths read.
-    cfg.rows[5].visible = false;
+    cfg.rows[0].visible = false;
     cfg.sanitize();
-    assert!(!cfg.rows[5].is_drawn());
+    assert!(!cfg.rows[0].is_drawn());
     assert_eq!(
         cfg.used_rows(),
         ChartLabelsCfg::default().used_rows(),
@@ -1581,7 +1445,7 @@ fn a_file_older_than_the_time_badge_receives_it_in_its_scale_module() {
 /// time badge keeps it removed; otherwise the caption returns on every start.
 #[test]
 fn a_removed_time_badge_stays_removed_after_a_round_trip() {
-    let mut cfg = ChartLabelsCfg::default();
+    let mut cfg = ChartLabelsCfg::compare_default();
     let scale = cfg
         .rows
         .iter_mut()
@@ -1600,31 +1464,24 @@ fn a_removed_time_badge_stays_removed_after_a_round_trip() {
     assert!(back.contains(ChartLabelField::ScaleBadge));
 }
 
-/// Every LIVE tab kind that stores no captions opens with the auto-figures eye (LinKvo,
-/// 19.11.2026), and the trade window — a closed trade, nothing to toggle live — does not.
-///
-/// Breaks if the eye leaves either live shipped set, or if a kind stops resolving to one of them.
+/// Only Comparison ships the auto-figures eye when a tab has no stored captions.
 #[test]
-fn a_tab_without_stored_captions_shows_the_auto_figures_eye() {
+fn only_comparison_ships_the_auto_figures_eye() {
     use crate::config::chart_defaults::ChartTabKind;
     let layout = Box::new(crate::config::layout::WindowLayout::default());
-    for kind in [
-        ChartTabKind::Main,
-        ChartTabKind::AddTo,
-        ChartTabKind::Compare,
+    for (kind, expected) in [
+        (ChartTabKind::Main, false),
+        (ChartTabKind::AddTo, false),
+        (ChartTabKind::Compare, true),
+        (ChartTabKind::Trade, false),
     ] {
         let cfg = layout.chart_labels_for(kind);
-        assert!(
+        assert_eq!(
             cfg.any_drawn(|f| f == ChartLabelField::ActAutoFigures),
-            "{kind:?} ships the eye"
+            expected,
+            "{kind:?} has its shipped eye visibility"
         );
     }
-    assert!(
-        !layout
-            .chart_labels_for(ChartTabKind::Trade)
-            .contains(ChartLabelField::ActAutoFigures),
-        "the trade window draws no live buttons, so it ships no eye"
-    );
 }
 
 /// A caption set the reader STORED is never rewritten to gain the eye — they add it from the

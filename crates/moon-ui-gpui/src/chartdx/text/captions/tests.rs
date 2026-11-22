@@ -491,14 +491,14 @@ fn a_module_reserves_one_bar_track_for_the_whole_column() {
     );
 }
 
-/// The two shipped buttons stand SIDE BY SIDE on one line of the plot's bottom band.
+/// Comparison's two shipped buttons share one line along the plot's bottom band.
 ///
 /// The property the whole migration rests on: two buttons that shared an anchor were drawn in a
 /// row, and a reader who never touched the setting has to find them exactly where they were. It is
 /// the grouping rule that decides that — not the drawing — so it is answerable without a device.
 #[test]
 fn the_shipped_buttons_share_one_line_along_the_bottom() {
-    let cfg = ChartLabelsCfg::default();
+    let cfg = ChartLabelsCfg::compare_default();
     let rows: Vec<usize> = cfg
         .rows
         .iter()

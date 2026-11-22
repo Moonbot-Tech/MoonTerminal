@@ -49,7 +49,7 @@ fn a_spec_with_its_own_candle_switches_gets_graphics_of_its_own() {
         cfg.last_price_line,
         "unnamed in its own table, which replaced the kind's whole: the shipped default"
     );
-    assert!(cfg.liquidations, "never named: the default");
+    assert!(!cfg.liquidations, "never named: the default");
     assert!(
         spec.candle_view.unwrap().carried_lines.is_none(),
         "consumed"
@@ -80,16 +80,15 @@ fn a_spec_with_its_own_graphics_but_inherited_candles_takes_the_kinds_old_switch
 #[test]
 fn the_liquidations_toggle_lands_on_the_graphics_and_is_consumed() {
     let (layout, kinds) = migrated_layout();
-    // Off with inherited graphics: needs graphics of its own.
+    // Off with inherited graphics matches the current default, so the old key is consumed alone.
     let mut off = old_spec(3, r#"{"tf_min":5}"#, Some(false), false);
     assert!(carry_spec(&layout, &kinds, &mut off));
-    assert!(!off.chart_graphics.expect("created").liquidations);
+    assert!(off.chart_graphics.is_none());
     assert!(off.liquidations_enabled.is_none(), "consumed");
-    // Explicitly ON with inherited graphics: what the default already says, so no override is
-    // created — only the old key is dropped.
+    // Explicitly on with inherited graphics needs an override to keep drawing liquidations.
     let mut on = old_spec(4, r#"{"tf_min":5}"#, Some(true), false);
     assert!(carry_spec(&layout, &kinds, &mut on));
-    assert!(on.chart_graphics.is_none());
+    assert!(on.chart_graphics.expect("created").liquidations);
     assert!(on.liquidations_enabled.is_none());
     // Off with graphics of its own: stamped in place.
     let mut own = old_spec(5, r#"{"tf_min":5}"#, Some(false), true);
@@ -127,9 +126,13 @@ fn a_spec_with_its_own_candles_that_carry_nothing_is_left_alone_while_the_kind_c
     let mut spec = old_spec(9, r#"{"tf_min":1}"#, None, false);
     assert!(!carry_spec(&layout, &kinds, &mut spec));
     assert!(spec.chart_graphics.is_none());
-    // A carried switch that agrees with the kind's needs no graphics of its own either: only the
-    // old key is consumed.
-    let mut spec = old_spec(10, r#"{"tf_min":1,"last_price_line":false}"#, None, false);
+    // Carried switches that agree with the kind's need no graphics of their own.
+    let mut spec = old_spec(
+        10,
+        r#"{"tf_min":1,"last_price_line":false,"mark_price_line":false}"#,
+        None,
+        false,
+    );
     assert!(
         carry_spec(&layout, &kinds, &mut spec),
         "the old key is consumed"

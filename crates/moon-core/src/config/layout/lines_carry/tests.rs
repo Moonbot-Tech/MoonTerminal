@@ -16,7 +16,7 @@ fn main_switches_land_on_the_base_graphics_and_are_consumed() {
 
     assert!(!layout.chart_graphics.last_price_line);
     assert!(
-        layout.chart_graphics.mark_price_line,
+        !layout.chart_graphics.mark_price_line,
         "an absent key keeps the default"
     );
     assert!(!layout.chart_graphics.moonshot_zone);
@@ -136,7 +136,10 @@ fn a_layout_with_nothing_carried_is_left_alone() {
 
 #[test]
 fn stamp_writes_only_what_the_table_named() {
-    let mut cfg = ChartGraphicsCfg::default();
+    let mut cfg = ChartGraphicsCfg {
+        mark_price_line: true,
+        ..ChartGraphicsCfg::default()
+    };
     let carried = CarriedLines {
         last_price_line: None,
         mark_price_line: Some(false),

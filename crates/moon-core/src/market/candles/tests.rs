@@ -421,13 +421,13 @@ fn deep_kind_mapping() {
     assert_eq!(deep_kind_min_for_tf(1440), 1440);
 }
 
-/// Reverting the fresh zone widths would give new users the former 3/0 chart.
+/// A new chart displays one-minute filled candles with both trade zones at Max.
 #[test]
 fn cfg_defaults_sane() {
     let cfg = CandleViewCfg::default();
-    assert_eq!(cfg.tf_ms(), TF5);
-    assert_eq!(cfg.mode, CANDLE_MODE_OUTLINE_IN_ZONE);
-    assert_eq!((cfg.trade_candles, cfg.hide_candles), (50, 50));
+    assert_eq!(cfg.tf_min, 1);
+    assert_eq!(cfg.mode, CANDLE_MODE_FILLED);
+    assert_eq!((cfg.trade_candles, cfg.hide_candles), (65535, 65535));
     assert!(
         cfg.carried_lines.is_none(),
         "a fresh value carries nothing to migrate"
@@ -522,26 +522,26 @@ fn the_carrier_is_written_back_under_the_old_keys_until_consumed() {
     );
 }
 
-/// Filling absent saved widths from the fresh default would silently redraw older charts.
+/// Missing keys use the shipped settings while explicit older chart choices survive decoding.
 #[test]
 fn missing_keys_fall_back_to_defaults() {
-    for cfg in [
-        serde_json::from_str::<CandleViewCfg>("{}").expect("an empty spec loads"),
-        toml::from_str::<CandleViewCfg>("mode = 2\n").expect("an older table loads"),
-    ] {
-        assert_eq!(
-            cfg,
-            CandleViewCfg {
-                trade_candles: 3,
-                hide_candles: 0,
-                ..CandleViewCfg::default()
-            }
-        );
-    }
+    let empty: CandleViewCfg = serde_json::from_str("{}").expect("an empty spec loads");
+    assert_eq!(empty, CandleViewCfg::default());
+    let old: CandleViewCfg =
+        toml::from_str("tf_min = 5\nmode = 2\ntrade_candles = 50\nhide_candles = 50\n")
+            .expect("an older table loads");
+    assert_eq!((old.tf_min, old.mode), (5, CANDLE_MODE_OUTLINE_IN_ZONE));
+    assert_eq!((old.trade_candles, old.hide_candles), (50, 50));
     let trade_only: CandleViewCfg = toml::from_str("trade_candles = 7\n").unwrap();
-    assert_eq!((trade_only.trade_candles, trade_only.hide_candles), (7, 0));
+    assert_eq!(
+        (trade_only.trade_candles, trade_only.hide_candles),
+        (7, 65535)
+    );
     let hide_only: CandleViewCfg = serde_json::from_str(r#"{"hide_candles":2}"#).unwrap();
-    assert_eq!((hide_only.trade_candles, hide_only.hide_candles), (3, 2));
+    assert_eq!(
+        (hide_only.trade_candles, hide_only.hide_candles),
+        (65535, 2)
+    );
 }
 
 /// A hand-written `nan` must not reach the config. It compares unequal to itself, so the engine's
@@ -585,7 +585,7 @@ fn history_inputs_ignores_style_and_overlay_fields() {
             ..base
         },
         CandleViewCfg {
-            trade_candles: base.trade_candles + 1,
+            trade_candles: 50,
             ..base
         },
     ] {

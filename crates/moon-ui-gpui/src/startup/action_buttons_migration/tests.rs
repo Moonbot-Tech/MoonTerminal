@@ -16,24 +16,11 @@ fn spec(num: u32, cancel: Option<ChartBtnPos>, panic: Option<ChartBtnPos>) -> Ch
     spec
 }
 
-/// A layout as the PREVIOUS build left it: the shipped captions, with no button among them.
-///
-/// The state every existing profile is actually in, and the one the pass exists for.
-/// `WindowLayout::default()` is NOT that state any more — the shipped set now carries the pair —
-/// so a test starting from it would prove only that the pass leaves a finished profile alone.
+/// An established layout with a caption set that predates the button modules.
 fn old_layout() -> Box<WindowLayout> {
     let mut layout = Box::new(WindowLayout::default());
-    let mut cfg = ChartLabelsCfg::default();
-    for row in cfg.rows.iter_mut() {
-        if row.holds_action() {
-            *row = ChartLabelRow::default();
-        }
-    }
-    cfg.sanitize();
-    assert!(
-        !holds_a_button(&cfg),
-        "the fixture must start where an existing profile does"
-    );
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.push_row(ChartLabelField::Coin, LabelZone::ZoneTop, LabelAlign::Right);
     layout.chart_labels = cfg;
     layout
 }
@@ -62,7 +49,7 @@ fn buttons(cfg: &ChartLabelsCfg) -> Vec<(ChartLabelField, LabelZone, LabelAlign,
         .collect()
 }
 
-/// A tab that never touched the setting keeps following its default, which already draws the pair.
+/// An established tab without a position override follows the caption set populated by the pass.
 ///
 /// The one case that must NOT produce an override: freezing a follower's captions into a copy is
 /// how a later build's improved default stops reaching the reader.

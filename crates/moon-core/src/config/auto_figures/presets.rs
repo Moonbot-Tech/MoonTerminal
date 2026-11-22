@@ -3,22 +3,15 @@
 //! A preset is a STARTING POINT, not a type: it fills a new row, and from then on the row is an
 //! ordinary row. The row remembers which preset it came from only so its name can be translated.
 //!
-//! The shipped set is LinKvo's decision of 19.11.2026 (`docs-internal/AUTO_FIGURES.md` §13.7): on
-//! by default, four rows — 1h levels, 1h sloped lines, the 15-minute squeeze and the extremes of
-//! the last 24 hours (a rolling window since 20.11.2026; the UTC day before). It is sized to what the terminal can actually read for EVERY market today: the core's
-//! 5-minute ring (500 candles, about 41.6 hours, kept in the candle cache), the open chart's own
-//! series and the cache's recorded candles. A row deeper than the ring would report "not enough
-//! history" on almost every market — the cache holds whole days for only a handful of them — so
-//! each shipped row's need fits inside one ring ([`RING_1H_LOOKBACK`], [`SQUEEZE_15M_LOOKBACK`]).
-//! The rows that need days of history — 4h levels, the volume, period and round-price presets of
-//! 19.11.2026 and the formation presets after them — are offered in the "Add" menu only; with
-//! candles served by the station they would join the set (4h + 1d + 4h sloped lines + squeeze).
+//! The Main chart starts with 1h levels and the rolling 24-hour extremes. Each fits in the
+//! core's 500-bar 5-minute ring, which is the history available on every market. Other chart
+//! kinds keep their four prepared rows with auto figures switched off.
 //!
 //! Not offered any more: the naked POCs (five whole days of profiles, which the cache has for
 //! almost no market). The variant stays, so a row created from it still loads with its name.
 //!
 //! Every preset row except a period high/low row prints its line captions on hover only
-//! (`CaptionShow::OnHover`, LinKvo 19.11.2026): four rows of always-on captions crowd the price
+//! ([`CaptionShow::OnHover`]): always-on captions crowd the price
 //! column the reader trades from, and a name is one pointer away. Period high/low rows print their
 //! captions always: their two lines are the reference prices read at a glance (user's call,
 //! 20.11.2026). A row already stored keeps whatever its caption said — an absent caption in a file
@@ -103,7 +96,7 @@ pub enum AutoFigurePreset {
     /// A row of its own rather than a second period inside `Extremes24h`: the contract's
     /// `PeriodExtremeParams` holds ONE period, and a separate row gets its own style and caption,
     /// which is what tells "today" and "yesterday" apart on the chart. Offered in the "Add" menu,
-    /// not in the shipped set — the four shipped rows are LinKvo's choice.
+    /// not in the shipped set.
     PrevDayExtremes,
     /// Sloped support and resistance lines through pivots. Offered, not shipped.
     TrendLines,
@@ -159,8 +152,12 @@ impl AutoFigurePreset {
         AutoFigurePreset::DoubleTops,
     ];
 
-    /// The rows a chart ships with, in draw order.
-    pub const DEFAULT_SET: [AutoFigurePreset; 4] = [
+    /// The Main chart's initial rows, in draw order.
+    pub const DEFAULT_SET: [AutoFigurePreset; 2] =
+        [AutoFigurePreset::Levels1h, AutoFigurePreset::Extremes24h];
+
+    /// The rows other kinds open with when the reader turns auto figures on.
+    pub(super) const OTHER_KIND_DEFAULT_SET: [AutoFigurePreset; 4] = [
         AutoFigurePreset::Levels1h,
         AutoFigurePreset::TrendLines1h,
         AutoFigurePreset::Squeeze,
@@ -498,12 +495,9 @@ impl AutoFigurePreset {
     }
 }
 
-/// The shipped rows, built from [`AutoFigurePreset::DEFAULT_SET`].
-pub(super) fn shipped_rows() -> Vec<AutoFigureRow> {
-    AutoFigurePreset::DEFAULT_SET
-        .into_iter()
-        .map(AutoFigurePreset::row)
-        .collect()
+/// Construct the shipped rows of a chart kind in their preset order.
+pub(super) fn shipped_rows(presets: &[AutoFigurePreset]) -> Vec<AutoFigureRow> {
+    presets.iter().copied().map(AutoFigurePreset::row).collect()
 }
 
 /// A palette colour as the `0xRRGGBB` a [`LabelColor::Fixed`] holds.

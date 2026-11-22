@@ -43,16 +43,13 @@ fn written_table(text: &str) -> toml::Table {
         .unwrap_or_default()
 }
 
-/// Assert `cfg` is the shipped four-row set, spelled out here rather than rebuilt from `presets`
-/// so a changed preset list fails this test instead of agreeing with itself.
+/// Check the Main chart's initial set and its two configured detectors.
 fn assert_shipped_rows(cfg: &AutoFiguresCfg) {
     let presets: Vec<_> = cfg.rows.iter().map(|r| r.preset).collect();
     assert_eq!(
         presets,
         vec![
             Some(AutoFigurePreset::Levels1h),
-            Some(AutoFigurePreset::TrendLines1h),
-            Some(AutoFigurePreset::Squeeze),
             Some(AutoFigurePreset::Extremes24h),
         ]
     );
@@ -65,16 +62,42 @@ fn assert_shipped_rows(cfg: &AutoFiguresCfg) {
         shape,
         vec![
             (Some(DetectorKind::Swing), TfSource::Fixed(TfId::H1)),
-            (Some(DetectorKind::Trend), TfSource::Fixed(TfId::H1)),
-            (Some(DetectorKind::Squeeze), TfSource::Fixed(TfId::M15)),
             (Some(DetectorKind::PeriodExtreme), TfSource::Fixed(TfId::M5)),
         ]
     );
     assert!(cfg.rows.iter().all(|r| r.visible));
+    let levels = &cfg.rows[0];
+    assert_eq!(levels.caption.show, CaptionShow::OnHover);
+    let Some(DetectorParams::Swing(params)) = levels.detector.known() else {
+        panic!("the 1h levels use a swing detector");
+    };
+    assert_eq!(
+        (params.lookback_bars, params.pivot_left, params.pivot_right),
+        (40, 2, 1)
+    );
+    assert_eq!(params.tolerance_unit, ToleranceUnit::Atr);
+    let extremes = &cfg.rows[1];
+    assert_eq!(extremes.style.line_kind, LineKind::Dash);
+    let Some(DetectorParams::PeriodExtreme(params)) = extremes.detector.known() else {
+        panic!("the 24-hour extremes use a period detector");
+    };
+    assert_eq!(params.period, ExtremePeriod::Last24h);
 }
 
-/// A profile from before this feature opens with auto figures ON, with the four shipped rows, on
-/// Main — and switched OFF everywhere else — while everything the file did state still loads.
+/// Pin the other kinds' established set after reducing Main to two rows.
+fn assert_other_kind_rows(cfg: &AutoFiguresCfg) {
+    assert_eq!(
+        cfg.rows.iter().map(|row| row.preset).collect::<Vec<_>>(),
+        [
+            Some(AutoFigurePreset::Levels1h),
+            Some(AutoFigurePreset::TrendLines1h),
+            Some(AutoFigurePreset::Squeeze),
+            Some(AutoFigurePreset::Extremes24h),
+        ]
+    );
+}
+
+/// A profile with no auto-figure setting draws the two Main figures and leaves other kinds off.
 ///
 /// Breaks if the field loses its default, if the default stops being the ON preset, or if a
 /// non-Main kind stops shipping its own disabled set and falls through to Main's.
@@ -94,13 +117,30 @@ fn an_old_layout_without_the_key_opens_with_the_shipped_set_on_main_only() {
             !cfg.enabled,
             "{kind:?} draws auto figures only once switched on"
         );
-        assert_shipped_rows(cfg);
+        assert_other_kind_rows(cfg);
         assert_eq!(
             layout.stored_auto_figures(kind),
             None,
             "{kind:?} stores nothing yet"
         );
     }
+}
+
+/// An empty table uses the Main defaults, while a saved four-row set keeps its rows on reload.
+#[test]
+fn empty_auto_figures_follow_main_and_saved_rows_survive() {
+    let empty: AutoFiguresCfg = toml::from_str("").expect("empty auto figures table loads");
+    assert_eq!(empty, AutoFiguresCfg::default());
+    assert_shipped_rows(&empty);
+
+    let stored = AutoFiguresCfg {
+        enabled: true,
+        ..AutoFiguresCfg::shipped_off()
+    };
+    let (_, reloaded) = round_trip(&stored);
+    assert!(reloaded.enabled);
+    assert_other_kind_rows(&reloaded);
+    assert_eq!(reloaded, stored);
 }
 
 /// The shipped set is a DEFAULT, not a value: writing an untouched profile states nothing about
@@ -803,7 +843,7 @@ detector = { kind = "round_levels", grid = "tiny", range_pct = 5.0 }
     assert_eq!(r.range_pct, 5.0);
 }
 
-/// None of the presets added on 19.11.2026 joins the shipped set (LinKvo's four rows), and each
+/// None of these presets joins the Main chart's shipped set, and each
 /// runs the detector its name promises.
 ///
 /// Breakage: a new preset slipped into `DEFAULT_SET`, which would switch it on for every profile
@@ -943,7 +983,7 @@ fn per_kind_storage_never_freezes_a_follower() {
             None,
             "{kind:?} was frozen"
         );
-        assert_shipped_rows(layout.auto_figures_for(kind));
+        assert_other_kind_rows(layout.auto_figures_for(kind));
     }
 
     let on = AutoFiguresCfg::shipped();
