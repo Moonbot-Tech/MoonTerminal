@@ -1276,103 +1276,162 @@ impl ChartView {
         last_price: Option<f32>,
     ) {
         let live = self.is_live(now_ms);
-        // Smooth Y using REAL dt rather than per frame: prepare now ticks at a variable rate
-        // (the own-pass moves the camera on vblank, while data updates less often), so a constant
-        // per-frame fraction would produce different auto-zoom/centering speeds across machines.
-        // Convert per-frame coefficients to the actual interval: f = 1 - (1-base)^(dt/16.67ms).
+        let dt_ms = self.take_frame_dt_ms(now_ms);
+        if !self.manual_price {
+            self.ease_toward_fit(live, dt_ms, visible, last_price);
+        }
+        self.repair_degenerate_range();
+        self.snap_rendered_window(live, area_h, visible);
+        // Guarded by the same relative floor as the range itself: an absolute 1e-9 here would
+        // misstate pixels-per-price by half on a window narrower than that, which is an ordinary
+        // window for a micro-priced instrument.
+        self.px_per_price =
+            (area_h / self.render_range.max(Self::min_range(self.center_price))).max(1e-6);
+        // Re-anchor the scale reference while the view follows the data — and NOT while the user
+        // holds a manual Y view, which is what makes a vertical drag leave the reported scale
+        // alone. Taken after the snap, so the reference is as piecewise-constant as the range it
+        // divides and the figure cannot dither on ordinary ticks.
+        if !self.manual_price && self.render_center.is_finite() && self.render_center > 0.0 {
+            self.scale_anchor = self.render_center;
+        }
+    }
+
+    /// Returns the real interval since the previous `update_y` and stamps `now_ms` as the new one.
+    ///
+    /// Smooth Y using REAL dt rather than per frame: prepare now ticks at a variable rate
+    /// (the own-pass moves the camera on vblank, while data updates less often), so a constant
+    /// per-frame fraction would produce different auto-zoom/centering speeds across machines.
+    /// Convert per-frame coefficients to the actual interval: f = 1 - (1-base)^(dt/16.67ms).
+    fn take_frame_dt_ms(&mut self, now_ms: f64) -> f64 {
         let dt_ms = if self.last_update_ms > 0.0 {
             (now_ms - self.last_update_ms).clamp(1.0, 250.0)
         } else {
             1000.0 / 60.0
         };
         self.last_update_ms = now_ms;
-        if !self.manual_price {
-            let frame_ref = 1000.0 / 60.0;
-            let auto_lerp = (1.0 - (1.0 - AUTO_LERP as f64).powf(dt_ms / frame_ref)) as f32;
-            let tick_lerp = (1.0 - (1.0 - TICK_LERP as f64).powf(dt_ms / frame_ref)) as f32;
-            let visible_mid = visible.map(|(lo, hi)| (lo + hi) * 0.5);
-            // No fallback to the last price while X is manual. `None` here means the window holds
-            // nothing to fit ([`fit_band`] decides that), and the last price is then by definition
-            // not in the window: centring on it would drag the Y view after a price the user cannot
-            // see. Live is the opposite case — there the last price is what the window is about.
-            let target_center = if live {
-                last_price.or(visible_mid)
+        dt_ms
+    }
+
+    /// Moves the eased center/range toward this frame's fit; skipped while Y is manual.
+    ///
+    /// The range is eased first, because the center's drift test divides by the updated range.
+    fn ease_toward_fit(
+        &mut self,
+        live: bool,
+        dt_ms: f64,
+        visible: Option<(f32, f32)>,
+        last_price: Option<f32>,
+    ) {
+        let frame_ref = 1000.0 / 60.0;
+        let auto_lerp = (1.0 - (1.0 - AUTO_LERP as f64).powf(dt_ms / frame_ref)) as f32;
+        let tick_lerp = (1.0 - (1.0 - TICK_LERP as f64).powf(dt_ms / frame_ref)) as f32;
+        let visible_mid = visible.map(|(lo, hi)| (lo + hi) * 0.5);
+        // No fallback to the last price while X is manual. `None` here means the window holds
+        // nothing to fit ([`fit_band`] decides that), and the last price is then by definition
+        // not in the window: centring on it would drag the Y view after a price the user cannot
+        // see. Live is the opposite case — there the last price is what the window is about.
+        let target_center = if live {
+            last_price.or(visible_mid)
+        } else {
+            visible_mid
+        };
+        let target_range = self.fit_target_range(live, visible, target_center);
+        if let Some(r) = target_range {
+            self.ease_range(live, r, auto_lerp);
+        }
+        if let Some(c) = target_center {
+            self.ease_center(live, c, tick_lerp);
+        }
+    }
+
+    /// The price range this frame's scale mode fits around `target_center`, zoom included.
+    ///
+    /// `None` when there is nothing to fit, which leaves the current range alone.
+    fn fit_target_range(
+        &self,
+        live: bool,
+        visible: Option<(f32, f32)>,
+        target_center: Option<f32>,
+    ) -> Option<f32> {
+        match (self.auto_price, visible, target_center) {
+            (true, Some((lo, hi)), Some(c)) if live => {
+                // In live mode, keep the last price centered and expand the range symmetrically
+                // so neither tick tails nor order lines are clipped. ×1.20 leaves about 10%
+                // padding at each edge, keeping lines away from the top and bottom.
+                let half = (c - lo)
+                    .max(hi - c)
+                    .max(c.abs() * 0.0005 + Self::min_range(c));
+                Some(half * 2.0 * 1.20)
+            }
+            (true, Some((lo, hi)), Some(c)) => {
+                Some((hi - lo).abs().max(c.abs() * 0.0005 + Self::min_range(c)) * 1.20)
+            }
+            // Nothing to fit. Only a LIVE chart takes the seed range: it is a chart that has not
+            // received data yet, and a thousandth of the price is a starting window. Off the live
+            // edge the same seed is a collapse — the branch below assigns it with neither lerp
+            // nor hysteresis — so the scale the user is reading is kept instead.
+            (true, None, Some(c)) if live => Some((c.abs() * 0.001).max(Self::min_range(c))),
+            // Fixed percent: sized off the SAME reference `set_scale_percent` and the badge
+            // use, or the click's range would be overwritten on the very next frame by a
+            // differently-based one.
+            (false, _, Some(c)) => {
+                let base = self.scale_ref_price().unwrap_or_else(|| c.abs());
+                Some((base * self.scale_percent).max(Self::min_range(base)))
+            }
+            _ => None,
+        }
+        // The right-button zoom multiplies whatever the picked scale fits, Auto included —
+        // Moonbot applies `yZoom` after every scale branch. The floor is applied again after
+        // it, as each branch applies it to its own fit.
+        .zip(target_center)
+        .map(|(r, c)| (r * self.price_zoom).max(Self::min_range(c)))
+    }
+
+    /// Eases the price range toward the fitted range `r`.
+    fn ease_range(&mut self, live: bool, r: f32, auto_lerp: f32) {
+        if live && self.auto_price && self.center_price != 0.0 && self.price_range > 0.0 {
+            // Asymmetry (Item 5): EXPAND the range immediately; otherwise visible ticks/order
+            // lines are clipped for dozens of frames while the slow lerp catches up (symptom:
+            // only the buy line and order book are visible, with ticks off-screen). SHRINK
+            // smoothly to avoid jitter during brief price spikes.
+            if r > self.price_range {
+                self.price_range = r;
             } else {
-                visible_mid
-            };
-            let target_range = match (self.auto_price, visible, target_center) {
-                (true, Some((lo, hi)), Some(c)) if live => {
-                    // In live mode, keep the last price centered and expand the range symmetrically
-                    // so neither tick tails nor order lines are clipped. ×1.20 leaves about 10%
-                    // padding at each edge, keeping lines away from the top and bottom.
-                    let half = (c - lo)
-                        .max(hi - c)
-                        .max(c.abs() * 0.0005 + Self::min_range(c));
-                    Some(half * 2.0 * 1.20)
-                }
-                (true, Some((lo, hi)), Some(c)) => {
-                    Some((hi - lo).abs().max(c.abs() * 0.0005 + Self::min_range(c)) * 1.20)
-                }
-                // Nothing to fit. Only a LIVE chart takes the seed range: it is a chart that has not
-                // received data yet, and a thousandth of the price is a starting window. Off the live
-                // edge the same seed is a collapse — the branch below assigns it with neither lerp
-                // nor hysteresis — so the scale the user is reading is kept instead.
-                (true, None, Some(c)) if live => Some((c.abs() * 0.001).max(Self::min_range(c))),
-                // Fixed percent: sized off the SAME reference `set_scale_percent` and the badge
-                // use, or the click's range would be overwritten on the very next frame by a
-                // differently-based one.
-                (false, _, Some(c)) => {
-                    let base = self.scale_ref_price().unwrap_or_else(|| c.abs());
-                    Some((base * self.scale_percent).max(Self::min_range(base)))
-                }
-                _ => None,
+                self.price_range += (r - self.price_range) * auto_lerp;
             }
-            // The right-button zoom multiplies whatever the picked scale fits, Auto included —
-            // Moonbot applies `yZoom` after every scale branch. The floor is applied again after
-            // it, as each branch applies it to its own fit.
-            .zip(target_center)
-            .map(|(r, c)| (r * self.price_zoom).max(Self::min_range(c)));
+        } else {
+            self.price_range = r;
+        }
+    }
 
-            if let Some(r) = target_range {
-                if live && self.auto_price && self.center_price != 0.0 && self.price_range > 0.0 {
-                    // Asymmetry (Item 5): EXPAND the range immediately; otherwise visible ticks/order
-                    // lines are clipped for dozens of frames while the slow lerp catches up (symptom:
-                    // only the buy line and order book are visible, with ticks off-screen). SHRINK
-                    // smoothly to avoid jitter during brief price spikes.
-                    if r > self.price_range {
-                        self.price_range = r;
-                    } else {
-                        self.price_range += (r - self.price_range) * auto_lerp;
-                    }
-                } else {
-                    self.price_range = r;
-                }
+    /// Moves the price center toward the fitted center `c`, honouring a pending center snap.
+    fn ease_center(&mut self, live: bool, c: f32, tick_lerp: f32) {
+        // The snap is consumed only once a price exists to snap to: a pane still waiting for
+        // its first tick keeps the request for the frame that can honour it.
+        let snap = std::mem::take(&mut self.center_snap_pending);
+        if self.center_price == 0.0 || !live || snap {
+            self.center_price = c;
+            if snap {
+                // Bypass the whole-pixel centre hysteresis as well: a drag shorter than
+                // `CENTER_SNAP_PX` would otherwise leave the rendered centre where it was.
+                self.render_center = c;
             }
-
-            if let Some(c) = target_center {
-                // The snap is consumed only once a price exists to snap to: a pane still waiting for
-                // its first tick keeps the request for the frame that can honour it.
-                let snap = std::mem::take(&mut self.center_snap_pending);
-                if self.center_price == 0.0 || !live || snap {
-                    self.center_price = c;
-                    if snap {
-                        // Bypass the whole-pixel centre hysteresis as well: a drag shorter than
-                        // `CENTER_SNAP_PX` would otherwise leave the rendered centre where it was.
-                        self.render_center = c;
-                    }
-                } else if self.price_range > Self::min_range(self.center_price) {
-                    let drift = (c - self.center_price).abs() / self.price_range;
-                    if drift > CENTER_BUFFER {
-                        self.center_price += (c - self.center_price) * tick_lerp;
-                    }
-                }
+        } else if self.price_range > Self::min_range(self.center_price) {
+            let drift = (c - self.center_price).abs() / self.price_range;
+            if drift > CENTER_BUFFER {
+                self.center_price += (c - self.center_price) * tick_lerp;
             }
         }
-        // A degenerate range gets a default that is a FRACTION OF THE PRICE. The old `+ 1.0`
-        // was a whole price unit — on a 1.2e-8 instrument, eight orders of magnitude of chart —
-        // and it became reachable once the floors above stopped being absolute. A window exactly
-        // AT the floor is legitimate — a right-button zoom all the way in lands there — so only a
-        // window below it, or a NaN, counts as degenerate.
+    }
+
+    /// Replaces a range below the floor (or a NaN) with a default sized off the price.
+    ///
+    /// A degenerate range gets a default that is a FRACTION OF THE PRICE. The old `+ 1.0`
+    /// was a whole price unit — on a 1.2e-8 instrument, eight orders of magnitude of chart —
+    /// and it became reachable once the floors above stopped being absolute. A window exactly
+    /// AT the floor is legitimate — a right-button zoom all the way in lands there — so only a
+    /// window below it, or a NaN, counts as degenerate.
+    fn repair_degenerate_range(&mut self) {
         if !(self.price_range >= Self::min_range(self.center_price)) {
             self.price_range = if self.center_price.abs() > 0.0 {
                 self.center_price.abs() * 0.10
@@ -1380,10 +1439,15 @@ impl ChartView {
                 1.0
             };
         }
-        // Snap Y. Live and automatic history render_* are piecewise constant: keep the range
-        // until the target moves beyond RANGE_HYST, and keep the center until it moves by more than
-        // CENTER_SNAP_PX px. In manual mode, follow input exactly for responsive dragging;
-        // the render cache is rebuilt transiently during interaction.
+    }
+
+    /// Copies the eased center/range into the rendered window, with hysteresis where it applies.
+    ///
+    /// Snap Y. Live and automatic history render_* are piecewise constant: keep the range
+    /// until the target moves beyond RANGE_HYST, and keep the center until it moves by more than
+    /// CENTER_SNAP_PX px. In manual mode, follow input exactly for responsive dragging;
+    /// the render cache is rebuilt transiently during interaction.
+    fn snap_rendered_window(&mut self, live: bool, area_h: f32, visible: Option<(f32, f32)>) {
         if !self.manual_price && (live || self.auto_price) {
             let target = self.price_range.max(Self::min_range(self.center_price));
             if !self.auto_price
@@ -1416,18 +1480,6 @@ impl ChartView {
         } else {
             self.render_range = self.price_range.max(Self::min_range(self.center_price));
             self.render_center = self.center_price;
-        }
-        // Guarded by the same relative floor as the range itself: an absolute 1e-9 here would
-        // misstate pixels-per-price by half on a window narrower than that, which is an ordinary
-        // window for a micro-priced instrument.
-        self.px_per_price =
-            (area_h / self.render_range.max(Self::min_range(self.center_price))).max(1e-6);
-        // Re-anchor the scale reference while the view follows the data — and NOT while the user
-        // holds a manual Y view, which is what makes a vertical drag leave the reported scale
-        // alone. Taken after the snap, so the reference is as piecewise-constant as the range it
-        // divides and the figure cannot dither on ordinary ticks.
-        if !self.manual_price && self.render_center.is_finite() && self.render_center > 0.0 {
-            self.scale_anchor = self.render_center;
         }
     }
 }
