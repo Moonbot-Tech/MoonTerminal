@@ -656,6 +656,8 @@ fn the_first_publish_of_a_fetch_frames_whichever_source_lands_first() {
             true,
             &TradeReplayOutcome::Ready(second.clone()),
         );
+        // Whether the later stage is accepted (a tick upgrade) or dropped (stale candles), it
+        // never re-frames the picture the first stage opened on.
         assert!(
             !later.frame,
             "{:?} after {:?} must not re-frame",

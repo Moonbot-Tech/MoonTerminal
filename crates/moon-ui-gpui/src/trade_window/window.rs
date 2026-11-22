@@ -316,7 +316,9 @@ fn new_view(
         // states what this trade WAS even while the picture behind it is still loading — and
         // never has to swap one set of captions for another once it lands.
         panel.attach_trade_labels(show_labels.then(|| labels.clone()), pcx);
-        if let Some(pct) = saved_scale {
+        if let Some(pct) =
+            super::frame::opening_scale(saved_scale, record.buy_price, record.sell_price)
+        {
             panel.force_scale(Some(pct), pcx);
         }
     });

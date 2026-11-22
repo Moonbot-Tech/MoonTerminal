@@ -161,7 +161,18 @@ fn a_window_opens_on_the_trade_itself_not_on_the_fixed_context() {
         opening_frame(entry, exit, Some(fitted)),
         Some((fitted, FIT_PAD))
     );
-    // A same-instant trade still frames rather than vanishing.
-    assert!(opening_frame(entry, entry, None).is_some());
+    // A same-instant trade frames on the point, never on the three-hour fallback.
+    assert_eq!(
+        opening_frame(entry, entry, None),
+        Some(((entry, entry), FIT_PAD))
+    );
     assert_eq!(opening_frame(exit, entry, None), None);
+}
+
+#[test]
+fn a_remembered_scale_opens_only_when_it_holds_both_fills() {
+    assert_eq!(opening_scale(None, 100.0, 101.0), None);
+    assert_eq!(opening_scale(Some(0.1), 100.0, 101.0), Some(0.1));
+    // Fills 18% apart cannot both show inside a 10% band: Auto takes the opening frame.
+    assert_eq!(opening_scale(Some(0.1), 100.0, 120.0), None);
 }
