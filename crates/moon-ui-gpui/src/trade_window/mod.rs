@@ -783,8 +783,8 @@ impl TradeWindowView {
         });
     }
 
-    /// Restore the selected trade after navigation, resetting this view's X and Y zoom only.
-    /// The remembered scale and framing preference for later windows remain the user's choice.
+    /// Restore the selected trade after navigation, using the same time and price framing as
+    /// on open without changing the remembered scale or framing preference.
     fn focus_trade(&mut self, cx: &mut Context<Self>) {
         // The same frame the window opened on — the fills — so the button and the opening
         // picture agree; ticking the fit switch again widens it.
@@ -794,8 +794,9 @@ impl TradeWindowView {
         };
         self.applied_frame = Some((start, end));
         self.panel.update(cx, |panel, pcx| {
-            panel.force_scale(None, pcx);
             panel.show_time_range(start, end, pad);
+            let scale = panel.scale();
+            window::restore_price_frame(panel, scale, &self.record, pcx);
         });
         cx.notify();
     }

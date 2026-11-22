@@ -244,8 +244,8 @@ pub(crate) fn opening_frame(
 }
 
 /// The price scale a trade window opens with: the remembered one, unless it cannot hold the
-/// trade's own fills — then Auto, the scale "Show trade" resets to, so the opening picture
-/// never hides the entry or exit arrow behind a zoom the reader picked for another trade.
+/// trade's own fills — then Auto, so the opening picture never hides the entry or exit arrow
+/// behind a zoom the reader picked for another trade.
 ///
 /// A fixed scale spans `pct` of the price around the view's centre; the fills must fit in
 /// HALF of it, so both arrows clear the edges wherever the centre lands between them.
@@ -265,6 +265,18 @@ pub(crate) fn opening_scale(saved: Option<f32>, entry_price: f64, exit_price: f6
     }
     let spread = (entry_price - exit_price).abs() / mid;
     (spread <= f64::from(pct) / 2.0).then_some(pct)
+}
+
+/// Returns the fill-centred window `(centre, range)` for the accepted scale, or `None` for Auto
+/// or an unusable price. The fills supply both the centre and the scale reference.
+pub(super) fn opening_price_window(
+    pct: Option<f32>,
+    entry_price: f64,
+    exit_price: f64,
+) -> Option<(f32, f32)> {
+    let pct = pct?;
+    let center = entry_price.midpoint(exit_price) as f32;
+    (center.is_finite() && center > 0.0).then_some((center, center * pct))
 }
 
 /// The price band a fitted frame asks the auto-Y fit to include: every price the drawn lines

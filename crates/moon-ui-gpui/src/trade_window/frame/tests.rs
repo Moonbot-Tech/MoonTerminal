@@ -176,3 +176,41 @@ fn a_remembered_scale_opens_only_when_it_holds_both_fills() {
     // Fills 18% apart cannot both show inside a 10% band: Auto takes the opening frame.
     assert_eq!(opening_scale(Some(0.1), 100.0, 120.0), None);
 }
+
+/// A wide replay edge candle must not displace the fills from a fixed opening window.
+#[test]
+fn a_wide_edge_candle_does_not_hide_fills_at_the_remembered_scale() {
+    let mut view = moon_chart::view::ChartView::new(0.0);
+    assert!(view.show_time_range(1_000.0, 61_000.0, 800.0, FIT_PAD));
+    let pct = opening_scale(Some(0.1), 100.0, 104.0).expect("the fills fit 10%");
+    let (fill_center, fill_range) =
+        opening_price_window(Some(pct), 100.0, 104.0).expect("fixed opening window");
+    // These are the low and high contributed by a one-minute candle at the replay edge.
+    let visible = Some((99.0, 260.0));
+    view.set_scale_percent(pct);
+    view.set_y_window(fill_center, fill_range);
+    view.update_y(1_000_000.0, 400.0, visible, None);
+    let (center, range) = view.y_window();
+    assert!(100.0 > center - range / 2.0 && 104.0 < center + range / 2.0);
+    assert_eq!(center, 102.0);
+    assert!((range - 10.2).abs() < 1e-5);
+
+    view.pan_y_px(400.0, 1_000_016.0);
+    assert_ne!(view.y_window().0, 102.0);
+    view.set_scale_percent(pct);
+    view.set_y_window(fill_center, fill_range);
+    view.update_y(1_000_032.0, 400.0, visible, None);
+    assert_eq!(view.y_window(), (center, range));
+}
+
+/// Using a fixed Y window in Auto would discard the existing visible-range fit.
+#[test]
+fn a_point_trade_centers_at_its_price_and_auto_leaves_the_fit_to_the_chart() {
+    assert_eq!(
+        opening_price_window(Some(0.5), 128.0, 128.0),
+        Some((128.0, 64.0))
+    );
+    assert_eq!(opening_price_window(None, 128.0, 128.0), None);
+    let fallback = opening_scale(Some(0.1), 100.0, 120.0);
+    assert_eq!(opening_price_window(fallback, 100.0, 120.0), None);
+}

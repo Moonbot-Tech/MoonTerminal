@@ -95,6 +95,14 @@ impl ChartPanel {
         cx.notify();
     }
 
+    /// Positions the current scale's Y window once. Later gestures and scale picks can move it.
+    pub(crate) fn set_price_window(&mut self, center: f32, range: f32, cx: &mut Context<Self>) {
+        if self.chart.set_locked_y(center, range) {
+            self.view_dirty = true;
+            cx.notify();
+        }
+    }
+
     /// Enables or disables this window/tab's order book. Rendering applies the engine flag, and the
     /// backend order-book reference is synchronized for demand-driven subscription.
     pub fn set_orderbook_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
