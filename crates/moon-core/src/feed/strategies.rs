@@ -720,7 +720,10 @@ pub(super) fn format_adjustment_log(changes: &[StrategyFieldChange]) -> String {
 }
 
 /// Return the display name for one schema kind without changing its wire ordinal or definition.
-fn schema_kind_name(ordinal: u8, core_name: &str) -> String {
+///
+/// Also the synthetic core's naming (`synth::recorded`), so a written schema names its kinds the way
+/// a received one does.
+pub(super) fn schema_kind_name(ordinal: u8, core_name: &str) -> String {
     if strategy_kind_is_hidden(ordinal) {
         strat_kind_name(ordinal).to_string()
     } else {
