@@ -38,7 +38,7 @@ pub fn strategy_filters_row() -> ChartLabelRow {
 /// The two market buttons every live chart drew before they became captions: `Panic Sell` and
 /// `Cancel Buy`, side by side along the plot's bottom edge, pushed right.
 ///
-/// Comparison ships the pair at its historical position.
+/// Main and Comparison ship the pair at its historical position.
 fn action_rows() -> Vec<ChartLabelRow> {
     action_rows_at(Some(LabelAlign::Right), Some(LabelAlign::Right))
 }
@@ -88,7 +88,7 @@ pub fn action_rows_at(cancel: Option<LabelAlign>, panic: Option<LabelAlign>) -> 
     rows
 }
 
-/// Comparison's auto-figures eye, separated from the trading buttons on the other edge.
+/// The auto-figures eye for live charts, separated from the trading buttons on the other edge.
 ///
 /// Its own builder keeps the display toggle out of the legacy trading-button migration.
 fn auto_figures_eye_row() -> ChartLabelRow {
@@ -152,6 +152,11 @@ impl Default for ChartLabelsCfg {
             row.parts[0].style.size_mult = Some(SIZE);
         }
         cfg.push_preset(LabelPreset::Session);
+
+        for row in action_rows() {
+            cfg.push_prepared(row);
+        }
+        cfg.push_prepared(auto_figures_eye_row());
 
         cfg
     }

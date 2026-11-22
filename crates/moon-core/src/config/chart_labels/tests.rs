@@ -90,6 +90,30 @@ fn the_default_is_the_shipped_working_layout() {
                 false,
                 vec![(F::SessionPnl, None), (F::SessionProfit, None)],
             ),
+            (
+                Z::ChartBottom,
+                A::Right,
+                None,
+                Fl::Row,
+                false,
+                vec![(F::ActPanicSell, None)],
+            ),
+            (
+                Z::ChartBottom,
+                A::Right,
+                None,
+                Fl::Row,
+                false,
+                vec![(F::ActCancelBuy, None)],
+            ),
+            (
+                Z::ChartBottom,
+                A::Left,
+                None,
+                Fl::Row,
+                false,
+                vec![(F::ActAutoFigures, None)],
+            ),
         ]
     );
     assert_eq!(
@@ -104,6 +128,12 @@ fn the_default_is_the_shipped_working_layout() {
     assert_eq!(cfg.rows[4].parts[0].style.caption, Some(false));
     assert_eq!(cfg.rows[6].parts[0].style, LabelStyle::default());
     assert_eq!(cfg.rows[6].parts[1].style, LabelStyle::default());
+    assert_eq!(cfg.rows[7].placement, Fl::Column);
+    assert_eq!(cfg.rows[8].placement, Fl::Row);
+    assert_eq!(cfg.rows[9].placement, Fl::Column);
+    for row in &cfg.rows[7..10] {
+        assert_eq!(row.parts[0].style, LabelStyle::default());
+    }
     assert_eq!(serde_json::from_str::<ChartLabelsCfg>("{}").unwrap(), cfg);
     assert_eq!(toml::from_str::<ChartLabelsCfg>("").unwrap(), cfg);
 }
@@ -244,6 +274,9 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
             ChartLabelField::StrategyFilters,
             ChartLabelField::ArbColumn,
             ChartLabelField::SessionPnl,
+            ChartLabelField::ActPanicSell,
+            ChartLabelField::ActCancelBuy,
+            ChartLabelField::ActAutoFigures,
         ],
         "the survivors keep their relative order with no hole between them"
     );
@@ -1464,23 +1497,29 @@ fn a_removed_time_badge_stays_removed_after_a_round_trip() {
     assert!(back.contains(ChartLabelField::ScaleBadge));
 }
 
-/// Only Comparison ships the auto-figures eye when a tab has no stored captions.
+/// Each live kind ships all three controls once when a tab has no stored captions.
 #[test]
-fn only_comparison_ships_the_auto_figures_eye() {
+fn live_kinds_ship_each_chart_control_once() {
     use crate::config::chart_defaults::ChartTabKind;
     let layout = Box::new(crate::config::layout::WindowLayout::default());
     for (kind, expected) in [
-        (ChartTabKind::Main, false),
-        (ChartTabKind::AddTo, false),
-        (ChartTabKind::Compare, true),
-        (ChartTabKind::Trade, false),
+        (ChartTabKind::Main, 1),
+        (ChartTabKind::AddTo, 1),
+        (ChartTabKind::Compare, 1),
+        (ChartTabKind::Trade, 0),
     ] {
         let cfg = layout.chart_labels_for(kind);
-        assert_eq!(
-            cfg.any_drawn(|f| f == ChartLabelField::ActAutoFigures),
-            expected,
-            "{kind:?} has its shipped eye visibility"
-        );
+        for field in [
+            ChartLabelField::ActCancelBuy,
+            ChartLabelField::ActPanicSell,
+            ChartLabelField::ActAutoFigures,
+        ] {
+            assert_eq!(
+                cfg.drawn_parts().filter(|part| part.field == field).count(),
+                expected,
+                "{kind:?} has the expected number of {field:?} controls"
+            );
+        }
     }
 }
 

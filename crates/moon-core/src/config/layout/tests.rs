@@ -214,16 +214,7 @@ fn only_a_new_profile_skips_the_legacy_button_carry_over() {
         let mut layout = WindowLayout::default();
         layout.apply_profile_defaults(age);
         assert_eq!(layout.chart_action_buttons_migrated, migrated);
-        assert!(
-            !layout
-                .chart_labels
-                .contains(crate::config::ChartLabelField::ActCancelBuy)
-        );
-        assert!(
-            !layout
-                .chart_labels
-                .contains(crate::config::ChartLabelField::ActPanicSell)
-        );
+        assert_eq!(layout.chart_labels, chart_labels::ChartLabelsCfg::default());
     }
 }
 
