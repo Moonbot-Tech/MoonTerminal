@@ -1761,6 +1761,28 @@ fn report_refresh_stays_render_bounded_without_os_focus() {
     );
 }
 
+/// #1428: a rendered Report must not consume a due generation while its read is in flight.
+/// Consuming it sets `needs_query`, and the completion handler drops a finished read whose panel
+/// already needs a query; with trades closing faster than an all-cores full-history read, every
+/// read is dropped and the panel stays on its first-load placeholder forever. Left due, the
+/// finished read publishes and its completion render starts the follow-up.
+#[test]
+fn report_render_keeps_a_due_generation_until_the_inflight_read_publishes() {
+    let render = read_src("panels/report/render.rs");
+    let report_render = code_only(braced_body(&render, "fn render(&mut self, window:"));
+    let query_boundary = chain_between(
+        &report_render,
+        "self.sync_display_zone_fields(window, cx);",
+        "self.flush_strategy_select_sync(window, cx);",
+        "visible Report query boundary",
+    );
+
+    assert!(
+        query_boundary.contains("if !self.query_inflight && self.generation_refresh.take_due() {"),
+        "a due generation consumed mid-read drops the finished read it was waiting on"
+    );
+}
+
 /// `analytics/calendar/mod.rs:reload_calendar_inner` must read Calendar and its undated
 /// warning through one compound API; restoring the old metadata follow-up can publish
 /// adjacent report generations as one visible state under continuous ingestion.
