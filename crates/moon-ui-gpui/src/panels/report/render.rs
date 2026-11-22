@@ -236,8 +236,9 @@ impl Render for ReportPanel {
         self.sync_display_zone_fields(window, cx);
         // MoonUI renders only the selected tab or a visible tile, so reaching this method is the
         // visibility boundary. Hidden Report tabs retain their due edge, while a visible Report in
-        // an unfocused OS window still catches up without waiting for a click.
-        if self.generation_refresh.take_due() {
+        // an unfocused OS window still catches up without waiting for a click. A read in flight
+        // keeps the edge due, so it publishes first and its completion render starts the follow-up.
+        if !self.query_inflight && self.generation_refresh.take_due() {
             self.needs_query = true;
         }
         self.schedule_requery(cx);
