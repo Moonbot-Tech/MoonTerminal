@@ -51,7 +51,7 @@ pub const ARROW_HALF_H: f32 = 6.0;
 /// quarters of the height so the triangle reads as an arrowhead rather than a squat wedge.
 pub const ARROW_HALF_W: f32 = 4.5;
 /// Thickness of the entry-to-exit connector, in logical px.
-pub const CONNECTOR_THICKNESS: f32 = 2.0;
+pub const CONNECTOR_THICKNESS: f32 = 3.0;
 
 /// Smallest accepted arrow-size multiplier.
 ///
@@ -128,12 +128,13 @@ pub fn clamp_volume_alpha(alpha: f32, fallback: f32) -> f32 {
 ///     scale: Configured multiplier; a non-finite value means an unusable config.
 ///
 /// Returns:
-///     The multiplier within `[ARROW_SCALE_MIN, ARROW_SCALE_MAX]`, or `1.0` when it is not finite.
+///     The multiplier within `[ARROW_SCALE_MIN, ARROW_SCALE_MAX]`, or the shipped default `1.3`
+///     when it is not finite.
 pub fn clamp_arrow_scale(scale: f32) -> f32 {
     if scale.is_finite() {
         scale.clamp(ARROW_SCALE_MIN, ARROW_SCALE_MAX)
     } else {
-        1.0
+        1.3
     }
 }
 

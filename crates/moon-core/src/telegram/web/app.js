@@ -1758,7 +1758,7 @@
     var DEAL_ARROW_HALF_H = 6;
     var DEAL_ARROW_HALF_W = 4.5;
     var DEAL_CONNECTOR_ALPHA = 0.85;
-    var DEAL_CONNECTOR_W = 2;
+    var DEAL_CONNECTOR_W = 3;
     var DEAL_CONNECTOR_MIN = 6;
     var TRADE_RANGES = [["deal", "mini_chart_range_deal"], ["30", "mini_chart_range_30"], ["300", "mini_chart_range_300"]];
     var LIVE_SPANS = [["120", "mini_chart_span_2"], ["300", "mini_chart_span_5"], ["900", "mini_chart_span_15"]];
