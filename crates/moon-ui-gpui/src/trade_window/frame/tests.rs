@@ -147,3 +147,21 @@ fn the_entry_placement_comes_from_the_own_entry_line_only() {
     );
     assert_eq!(fit_price_range([]), None);
 }
+
+#[test]
+fn a_window_opens_on_the_trade_itself_not_on_the_fixed_context() {
+    // A five-second trade: the fixed context would be three hours wide around it.
+    let (entry, exit) = (1_700_000_000_000, 1_700_000_005_000);
+    let opened = opening_frame(entry, exit, None).expect("a valid trade frames");
+    assert_eq!(opened, ((entry, exit), FIT_PAD));
+    assert_ne!(Some(opened.0), trade_frame(entry, exit, 60_000));
+    // The fit switch's wider span wins once the traces resolved it.
+    let fitted = (entry - 10_000, exit);
+    assert_eq!(
+        opening_frame(entry, exit, Some(fitted)),
+        Some((fitted, FIT_PAD))
+    );
+    // A same-instant trade still frames rather than vanishing.
+    assert!(opening_frame(entry, entry, None).is_some());
+    assert_eq!(opening_frame(exit, entry, None), None);
+}

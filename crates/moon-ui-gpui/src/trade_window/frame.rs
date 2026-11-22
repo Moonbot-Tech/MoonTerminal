@@ -207,6 +207,36 @@ pub(crate) fn fit_frame(
     Some((from, to))
 }
 
+/// The frame a trade window opens on, and the one "Show trade" returns to: the trade itself.
+///
+/// The reader opened the window to SEE the trade, so the opening picture is the trade fitted
+/// with [`FIT_PAD`] around it — never the fixed market context [`trade_frame`] gives, which at
+/// its ninety-bar floor drew a seconds-long trade as a hairline in a three-hour chart and left
+/// the reader to press "Show trade" to find it. With the fit switch on, `fitted` (the span
+/// widened to the entry placement and the shown neighbours, from [`fit_frame`]) wins once the
+/// traces have resolved it; until then, and with the switch off, the trade's own fills frame it.
+///
+/// Pure on purpose: the constructor, the first publish of a fetch and the "Show trade" button
+/// all call it with the same stamps, so whichever data stage lands first — the candle edges or
+/// the ticks — the window opens on the same frame the button produces.
+///
+/// Args:
+///     entry_ms: Position open, Unix milliseconds on the display axis.
+///     exit_ms: Position close, Unix milliseconds on the display axis.
+///     fitted: The fitted frame when the fit switch is on and the traces resolved one.
+///
+/// Returns:
+///     The interval and the padding to show it with, or `None` when the stamps describe none.
+pub(crate) fn opening_frame(
+    entry_ms: i64,
+    exit_ms: i64,
+    fitted: Option<(i64, i64)>,
+) -> Option<((i64, i64), f32)> {
+    fitted
+        .or_else(|| fit_frame((entry_ms, exit_ms), std::iter::empty()))
+        .map(|frame| (frame, FIT_PAD))
+}
+
 /// The price band a fitted frame asks the auto-Y fit to include: every price the drawn lines
 /// and arrows sit at.
 ///

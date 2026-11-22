@@ -305,10 +305,11 @@ fn new_view(
                 .read(pcx)
                 .report_axis(crate::chartdx::axes::display_zone()),
         );
-        if let Some((start_ms, end_ms)) =
-            super::frame::trade_frame(buy_utc_ms, close_utc_ms, 60_000)
+        // The trade itself, by the one opening rule `publish` and "Show trade" apply too.
+        if let Some(((start_ms, end_ms), pad)) =
+            super::frame::opening_frame(buy_utc_ms, close_utc_ms, None)
         {
-            panel.show_time_range(start_ms, end_ms, 0.0);
+            panel.show_time_range(start_ms, end_ms, pad);
         }
         // THE TRADE'S OWN CAPTIONS, published before the first fetch answers like the
         // timeframe pin above: they come from the replica, not from the network, so the window
