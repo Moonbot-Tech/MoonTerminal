@@ -86,6 +86,31 @@ pub(super) fn core_brand(b: &Backend, core: CoreId) -> Option<Brand> {
         .and_then(|venue| venue.brand())
 }
 
+/// A coin's quantity as a wallet row shows it: `available / total`, or the one figure when the
+/// two print the same.
+///
+/// The pair is Moonbot's Transfer row. Printed twice, the same number only takes room — in a
+/// narrow column it pushes the value past the column's edge. Compared as printed, so a
+/// difference finer than the shown places does not split them.
+///
+/// Args:
+///     amount: Available quantity.
+///     total: Total quantity, available plus locked.
+///
+/// Returns:
+///     `available / total`, or `available` alone when both print alike.
+fn qty_text(amount: f64, total: f64) -> String {
+    let (available, total) = (
+        moon_core::util::fmt::qty_down(amount),
+        moon_core::util::fmt::qty_down(total),
+    );
+    if available == total {
+        available
+    } else {
+        format!("{available} / {total}")
+    }
+}
+
 /// Return the localized wallet label shared by wallet headings and transfer dialogs.
 ///
 /// Args:
@@ -196,11 +221,12 @@ impl AssetsView {
             let fmt_qty = moon_core::util::fmt::qty_down;
             let preview_label: SharedString =
                 format!("{} {}", a.currency, fmt_qty(a.amount)).into();
-            // Match the Moonbot Transfer row: `COIN available / total (value$)`, all left-aligned.
-            // Value is based on `total`; an unknown conversion rate displays `(?$)`. Keep output
-            // bounded: `fmt::qty_down` uses up to three decimal places and `fmt::usd` up to two,
-            // rather than emitting long adaptive decimals.
-            let qty_txt = format!("{} / {}", fmt_qty(a.amount), fmt_qty(a.total));
+            // Match the Moonbot Transfer row: `COIN available / total (value$)`, all left-aligned —
+            // one figure when the two print the same ([`qty_text`]). Value is based on `total`; an
+            // unknown conversion rate displays `(?$)`. Keep output bounded: `fmt::qty_down` uses
+            // up to three decimal places and `fmt::usd` up to two, rather than emitting long
+            // adaptive decimals.
+            let qty_txt = qty_text(a.amount, a.total);
             let value_txt = if a.value_usdt > 0.0 {
                 format!("({}$)", moon_core::util::fmt::usd(a.value_usdt))
             } else {
