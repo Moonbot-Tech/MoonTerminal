@@ -404,6 +404,11 @@ pub(crate) struct TradeWindowView {
     show_other_trades: bool,
     /// Frame the window on the trade itself rather than on the fixed context; see [`frame`].
     fit_trade: bool,
+    /// Whether the reader asked for the fitted frame IN THIS WINDOW (ticked the fit switch or the
+    /// neighbours while it is on). Until then the window stays on the trade's own fills — the
+    /// frame it opened on and "Show trade" returns to — even with the switch remembered on, so an
+    /// entry placed an hour earlier never shrinks a seconds-long deal to a sliver on open.
+    fit_engaged: bool,
     /// Hide the figures rail, leaving the chart the whole window.
     hide_rail: bool,
     /// Print the trade's own captions — strategy, detect, sell reason — at the top of the chart.
@@ -591,6 +596,8 @@ impl TradeWindowView {
             return;
         }
         self.show_other_trades = show;
+        // A neighbour toggle under the fit switch is a request for the fitted frame.
+        self.fit_engaged |= self.fit_trade;
         let history = self.chart_history(cx);
         self.panel.update(cx, |panel, pcx| {
             panel.publish_trade_history(history, pcx);
@@ -616,6 +623,7 @@ impl TradeWindowView {
             return;
         }
         self.fit_trade = fit;
+        self.fit_engaged = fit;
         self.backend.update(cx, |backend, _| {
             if backend.layout.trade_window_fit != Some(fit) {
                 backend.layout.trade_window_fit = Some(fit);
@@ -748,7 +756,11 @@ impl TradeWindowView {
                 .read(cx)
                 .report_axis(crate::chartdx::axes::display_zone()),
         );
-        let fitted = if self.fit_trade { self.fit_frame } else { None };
+        let fitted = if self.fit_trade && self.fit_engaged {
+            self.fit_frame
+        } else {
+            None
+        };
         frame::opening_frame(buy_utc_ms, close_utc_ms, fitted)
     }
 
@@ -774,7 +786,9 @@ impl TradeWindowView {
     /// Restore the selected trade after navigation, resetting this view's X and Y zoom only.
     /// The remembered scale and framing preference for later windows remain the user's choice.
     fn focus_trade(&mut self, cx: &mut Context<Self>) {
-        // The same frame the window opened on, so the button and the opening picture agree.
+        // The same frame the window opened on — the fills — so the button and the opening
+        // picture agree; ticking the fit switch again widens it.
+        self.fit_engaged = false;
         let Some(((start, end), pad)) = self.wanted_frame(cx) else {
             return;
         };

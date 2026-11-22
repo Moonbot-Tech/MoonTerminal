@@ -360,6 +360,7 @@ fn new_view(
         history_generation: 0,
         settings_open: false,
         fit_trade,
+        fit_engaged: false,
         hide_rail,
         show_labels,
         show_corridor,
