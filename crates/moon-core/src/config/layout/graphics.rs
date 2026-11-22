@@ -154,7 +154,8 @@ impl HvolSide {
 /// that one field's default instead of resetting the others — or the file.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ChartGraphicsCfg {
-    /// Multiplier on the trade-history arrow's half-extents. One is the size the layer shipped with.
+    /// Multiplier on the trade-history arrow's half-extents. The shipped default is `1.3`; `1.0`
+    /// reproduces the layer's original size.
     #[serde(default = "def_trade_arrow_scale", deserialize_with = "de_arrow_scale")]
     pub trade_arrow_scale: f32,
     /// Thickness of the dashed entry-to-exit connector, in LOGICAL px.

@@ -218,7 +218,8 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert!(empty.chart_graphics.show_real_trades);
     assert!(empty.chart_graphics.show_emulator_trades);
     assert!(!empty.chart_graphics.hide_order_move_history);
-    assert_eq!(empty.chart_graphics.trade_arrow_scale, 1.0);
+    assert_eq!(empty.chart_graphics.trade_arrow_scale, 1.3);
+    assert_eq!(ChartGraphicsCfg::default().trade_arrow_scale, 1.3);
     assert_eq!(empty.chart_graphics.connector_thickness_px, 2.0);
     assert!(
         !empty.chart_graphics.candle_volume_labels_over,
@@ -240,6 +241,10 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
     assert_eq!(decoded.chart_graphics.trade_arrow_scale, 1.5);
     assert_eq!(decoded.chart_graphics.connector_thickness_px, 3.0);
+    let malformed_arrow: WindowLayout =
+        toml::from_str("[chart_graphics]\ntrade_arrow_scale = \"larger\"\n")
+            .expect("a malformed arrow scale must not reject the layout document");
+    assert_eq!(malformed_arrow.chart_graphics.trade_arrow_scale, 1.3);
     assert!(
         decoded.chart_graphics.show_real_trades,
         "the malformed bool must fall back to its documented default"

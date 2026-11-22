@@ -55,9 +55,10 @@ fn def_true() -> bool {
     true
 }
 
-/// Default multiplier on the closed-trade-history arrow size: the sizes the layer shipped with.
+/// Default multiplier on the closed-trade-history arrow size. The shipped default is `1.3`;
+/// `1.0` is the original size.
 fn def_trade_arrow_scale() -> f32 {
-    1.0
+    1.3
 }
 
 /// Default entry-to-exit connector thickness, matching `moon_chart::trade_marks::CONNECTOR_THICKNESS`.
