@@ -580,8 +580,7 @@ impl Render for ReportPanel {
             marker.as_ref(),
         );
         let base_tip = totals::footer_tooltip(&facts);
-        // The closing hint line lives in the tooltip only, never on the row itself — exactly as
-        // `panels/assets/balances.rs::summary_tooltip` appends its own hint.
+        // The closing hint line lives in the tooltip only, never on the row itself.
         let tip: SharedString = match &marker {
             Some(marker) if marker.hides_anything() => {
                 marker.tooltip(std::slice::from_ref(&base_tip))
