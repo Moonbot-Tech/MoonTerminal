@@ -913,17 +913,7 @@ fn an_unresolved_field_occupies_no_row() {
         vec![
             "BTCUSDT".to_string(),
             "Core-1".to_string(),
-            // The two volume blocks head themselves whatever the market says: the period is a
-            // SETTING, and a heading that vanished would take the right-click target with it.
-            "1m".to_string(),
-            "Cursor 10s".to_string(),
-            // And the MEASURING block prints dashes rather than nothing, so it keeps its shape
-            // while the pointer is off the plot. The live block beside it simply has no figures
-            // yet and prints none.
-            "Bv: —".to_string(),
-            "Sv: —".to_string(),
-            "L: —".to_string(),
-            "v Strategy filters".to_string(),
+            "> Strategy filters · 0".to_string(),
         ],
         "no scale badge and no comparison delta still means those two cost no captions"
     );
@@ -934,13 +924,11 @@ fn an_unresolved_field_occupies_no_row() {
 #[test]
 fn the_caption_address_survives_a_skipped_neighbour() {
     let _locale = crate::test_locale::force("en");
-    // The shipped roster, with only some of its figures answering: the venue has no name here, the
-    // Y-scale badge is hidden, and the whole position block has nothing open to report.
+    // The scale badge between the coin and core has no data, and the position block is empty.
     let cfg = ChartLabelsCfg::default();
     let inputs = LabelInputs {
         ticker: "BTCUSDT".into(),
         core_name: "Core-1".into(),
-        delta_1h: Some(1.5),
         ..Default::default()
     };
     let mut state = LabelState::default();
@@ -950,19 +938,8 @@ fn the_caption_address_survives_a_skipped_neighbour() {
     let addresses: Vec<(usize, usize)> = state.texts.iter().map(|t| (t.row, t.part)).collect();
     assert_eq!(
         addresses,
-        vec![
-            (0, 0),
-            (0, 1),
-            (2, 0),
-            // The volume headings, and the measuring block's four lines.
-            (3, 0),
-            (4, 0),
-            (4, 1),
-            (4, 2),
-            (4, 3),
-            (10, moon_core::config::FILTER_HEADER_PART),
-        ],
-        "every caption keeps the address its CONFIGURATION gives it, whatever its neighbours          resolved to: the skipped venue does not renumber the deltas, and the skipped badge module          does not renumber the module after it"
+        vec![(1, 0), (3, 0), (4, moon_core::config::FILTER_HEADER_PART),],
+        "skipping the scale badge does not renumber the core or strategy filters"
     );
 }
 

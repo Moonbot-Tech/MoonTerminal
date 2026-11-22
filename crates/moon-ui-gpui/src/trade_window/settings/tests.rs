@@ -19,7 +19,7 @@ fn price_line_toggles_round_trip_independently() {
     let mut layout = WindowLayout::default();
     let main = layout.chart_graphics_for(ChartTabKind::Main);
     let shipped = layout.chart_graphics_for(ChartTabKind::Trade);
-    assert!(shipped.last_price_line && shipped.mark_price_line);
+    assert!(shipped.last_price_line && !shipped.mark_price_line);
     for (last, mark) in [(false, true), (true, false), (false, false), (true, true)] {
         let mut cfg = layout.chart_graphics_for(ChartTabKind::Trade);
         cfg.last_price_line = last;
@@ -126,14 +126,21 @@ fn price_line_popup_rows_fit_every_locale(cx: &mut gpui::TestAppContext) {
     }
 }
 
-/// Resetting zone widths in the replay pin would replace a new user's 50/50 settings.
+/// The replay pin must preserve inherited zone widths in both live and saved settings.
 #[test]
-fn fresh_trade_window_keeps_fifty_candle_zones() {
+fn fresh_trade_window_keeps_max_candle_zones() {
+    use moon_core::market::candles::CANDLE_ZONE_MAX;
     for ticks in [false, true] {
         let cfg = pinned_candle_view(CandleViewCfg::default(), ticks);
-        assert_eq!((cfg.trade_candles, cfg.hide_candles), (50, 50));
+        assert_eq!(
+            (cfg.trade_candles, cfg.hide_candles),
+            (CANDLE_ZONE_MAX, CANDLE_ZONE_MAX)
+        );
         let stored = candles_for_default(cfg, 5);
-        assert_eq!((stored.trade_candles, stored.hide_candles), (50, 50));
+        assert_eq!(
+            (stored.trade_candles, stored.hide_candles),
+            (CANDLE_ZONE_MAX, CANDLE_ZONE_MAX)
+        );
     }
 }
 

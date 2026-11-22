@@ -55,14 +55,15 @@ fn def_true() -> bool {
     true
 }
 
-/// Default multiplier on the closed-trade-history arrow size: the sizes the layer shipped with.
+/// Default multiplier on the closed-trade-history arrow size. The shipped default is `1.3`;
+/// `1.0` is the original size.
 fn def_trade_arrow_scale() -> f32 {
-    1.0
+    1.3
 }
 
-/// Default entry-to-exit connector thickness, matching `moon_chart::trade_marks::CONNECTOR_THICKNESS`.
+/// Default entry-to-exit connector thickness for charts without a saved graphics preference.
 fn def_connector_thickness_px() -> f32 {
-    2.0
+    3.0
 }
 
 /// Default multiplier on the trade-cross marker size.
@@ -93,10 +94,8 @@ fn def_candle_volume_style() -> u8 {
 }
 
 /// Default bottom-volume band height, as a fraction of the plot height.
-///
-/// The same fraction the per-trade band has always used, so the two bands line up.
 fn def_candle_volume_height() -> f32 {
-    0.18
+    0.10
 }
 
 /// Default bottom-volume opacity.
@@ -969,11 +968,20 @@ impl WindowLayout {
     pub fn load(age: super::ProfileAge) -> Self {
         let mut layout: Self =
             super::toml_io::load_or_default(&paths::layout_path(), "layout.toml", |_| {});
-        layout.first_run_profile = age == super::ProfileAge::FirstRun;
-        if let Some(mode) = first_run_workspace_mode(age, layout.default_workspace_mode) {
-            layout.default_workspace_mode = Some(mode);
-        }
+        layout.apply_profile_defaults(age);
         layout
+    }
+
+    /// Seed a new profile without letting legacy startup passes replace its shipped defaults.
+    fn apply_profile_defaults(&mut self, age: ProfileAge) {
+        self.first_run_profile = age == ProfileAge::FirstRun;
+        if self.first_run_profile {
+            // The old button positions have no predecessor on a fresh profile.
+            self.chart_action_buttons_migrated = true;
+        }
+        if let Some(mode) = first_run_workspace_mode(age, self.default_workspace_mode) {
+            self.default_workspace_mode = Some(mode);
+        }
     }
 
     /// Whether the profile this layout was loaded for had never been configured.

@@ -52,6 +52,30 @@ pub(super) fn zone_width(zone: LabelZone, geom: &CaptionGeomInput, corner: &Capt
     (right - left).max(0.0)
 }
 
+/// Right edge for a left plot filter header when the top control strip contains the scope caption.
+/// With no book to reserve a separate strip, its fallback bounds can lie inside the plot.
+pub(super) fn filter_header_right(
+    widened: bool,
+    cfg: &ChartLabelsCfg,
+    texts: &[LabelText],
+    geom: &CaptionGeomInput,
+    corner: &CaptionGeom,
+) -> Option<f32> {
+    if !widened || corner.zone_left >= zone_bounds(LabelZone::ChartTop, geom, corner).1 {
+        return None;
+    }
+    let scope_in_strip = texts.iter().any(|text| {
+        cfg.rows.get(text.row).is_some_and(|row| {
+            row.zone == LabelZone::ZoneTop
+                && row
+                    .parts
+                    .get(text.part)
+                    .is_some_and(|part| part.field == ChartLabelField::Core)
+        })
+    });
+    scope_in_strip.then_some(corner.zone_left - CAPTION_GAP)
+}
+
 /// Where one band anchors, and at which fraction of its own width.
 ///
 /// A left-aligned plot band clears a left price-axis gutter by sixteen logical pixels, which the

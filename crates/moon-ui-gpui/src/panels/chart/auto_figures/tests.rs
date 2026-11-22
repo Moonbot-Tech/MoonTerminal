@@ -334,13 +334,21 @@ fn hiding_with_the_eye_runs_no_detector_and_keeps_the_cache() {
 /// Breakage: the show dropping the slots (every row recomputed), or waiting for a run to publish
 /// (nothing drawn until the next bar close).
 ///
-/// The shipped set plus the 4h levels: every shipped row closes a bar within the hour, and "only
-/// the stale rows" needs a row whose bar did not.
+/// The 5m, 15m and 1h rows close new bars within the hour. The 4h row keeps the same closed bar
+/// so the test can distinguish stale answers from ones the pane should reuse.
 #[test]
 fn showing_again_takes_the_cache_and_runs_only_stale_rows() {
     let now = Instant::now();
-    let mut cfg = AutoFiguresCfg::shipped();
-    cfg.rows.push(AutoFigurePreset::Levels4h.row());
+    let cfg = AutoFiguresCfg {
+        rows: vec![
+            AutoFigurePreset::Levels1h.row(),
+            AutoFigurePreset::TrendLines1h.row(),
+            AutoFigurePreset::Squeeze.row(),
+            AutoFigurePreset::Extremes24h.row(),
+            AutoFigurePreset::Levels4h.row(),
+        ],
+        ..AutoFiguresCfg::default()
+    };
     let mut pane = eye_pane();
     let first = plan_rows(&cfg, &mut pane, Some(HOUR), true, false, 0, now, EYE_NOW_MS);
     answer(&mut pane, &first.jobs, now);

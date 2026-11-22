@@ -4,14 +4,14 @@ use crate::config::ProfileAge;
 
 use super::*;
 
-/// Reverting the fresh widths or bypassing legacy decoding changes every following chart kind.
+/// Missing zones follow the shipped widths and explicit global or per-kind widths survive loading.
 #[test]
-fn candle_zone_defaults_distinguish_absent_and_saved_views() {
+fn candle_zone_defaults_preserve_explicit_saved_views() {
     use crate::config::chart_defaults::ChartTabKind;
 
     for (text, expected) in [
-        ("", (50, 50)),
-        ("[candle_view]\n", (3, 0)),
+        ("", (65535, 65535)),
+        ("[candle_view]\n", (65535, 65535)),
         (
             "[candle_view]\ntrade_candles = 0\nhide_candles = 0\n",
             (0, 0),
@@ -32,8 +32,8 @@ fn candle_zone_defaults_distinguish_absent_and_saved_views() {
         }
     }
     let layout: WindowLayout = toml::from_str(
-        "[chart_defaults_addto.candle_view]\ntrade_candles = 9\n\
-         [chart_defaults_trade.candle_view]\nhide_candles = 2\n",
+        "[chart_defaults_addto.candle_view]\ntrade_candles = 9\nhide_candles = 0\n\
+         [chart_defaults_trade.candle_view]\ntrade_candles = 3\nhide_candles = 2\n",
     )
     .expect("per-kind saved views load");
     let detached = layout.candle_view_for(ChartTabKind::AddTo);
@@ -204,6 +204,20 @@ fn only_a_new_profile_without_a_workspace_mode_is_seeded_auto() {
     }
 }
 
+/// First-run defaults must survive startup without disabling carry-over for an established profile.
+#[test]
+fn only_a_new_profile_skips_the_legacy_button_carry_over() {
+    for (age, migrated) in [
+        (ProfileAge::FirstRun, true),
+        (ProfileAge::Established, false),
+    ] {
+        let mut layout = WindowLayout::default();
+        layout.apply_profile_defaults(age);
+        assert_eq!(layout.chart_action_buttons_migrated, migrated);
+        assert_eq!(layout.chart_labels, chart_labels::ChartLabelsCfg::default());
+    }
+}
+
 /// `layout.rs:ChartGraphicsCfg` must keep its shipped defaults and salvage a single malformed
 /// field; replacing its lenient reader can reset chart settings or discard the surrounding layout.
 #[test]
@@ -218,8 +232,14 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert!(empty.chart_graphics.show_real_trades);
     assert!(empty.chart_graphics.show_emulator_trades);
     assert!(!empty.chart_graphics.hide_order_move_history);
-    assert_eq!(empty.chart_graphics.trade_arrow_scale, 1.0);
-    assert_eq!(empty.chart_graphics.connector_thickness_px, 2.0);
+    assert_eq!(empty.chart_graphics.trade_arrow_scale, 1.3);
+    assert_eq!(ChartGraphicsCfg::default().trade_arrow_scale, 1.3);
+    assert_eq!(empty.chart_graphics.connector_thickness_px, 3.0);
+    let missing_arrow: WindowLayout =
+        toml::from_str("[chart_graphics]\nconnector_thickness_px = 2.0\n")
+            .expect("a graphics table without an arrow scale must load");
+    assert_eq!(missing_arrow.chart_graphics.trade_arrow_scale, 1.3);
+    assert_eq!(missing_arrow.chart_graphics.connector_thickness_px, 2.0);
     assert!(
         !empty.chart_graphics.candle_volume_labels_over,
         "a file written before the switch keeps its captions above the band"
@@ -240,6 +260,12 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
     assert_eq!(decoded.analytics_period.as_deref(), Some("p-cur-month"));
     assert_eq!(decoded.chart_graphics.trade_arrow_scale, 1.5);
     assert_eq!(decoded.chart_graphics.connector_thickness_px, 3.0);
+    let malformed_arrow: WindowLayout = toml::from_str(
+        "[chart_graphics]\ntrade_arrow_scale = \"larger\"\nconnector_thickness_px = 3.0\n",
+    )
+    .expect("a malformed arrow scale must not reject the layout document");
+    assert_eq!(malformed_arrow.chart_graphics.trade_arrow_scale, 1.3);
+    assert_eq!(malformed_arrow.chart_graphics.connector_thickness_px, 3.0);
     assert!(
         decoded.chart_graphics.show_real_trades,
         "the malformed bool must fall back to its documented default"
@@ -265,6 +291,28 @@ fn chart_graphics_defaults_and_malformed_field_preserve_layout() {
         lines.chart_graphics.trade_history_style,
         TradeHistoryStyle::MoonbotLines
     );
+}
+
+/// Fresh and empty graphics use the same defaults, and explicit older values survive decoding.
+#[test]
+fn sparse_chart_graphics_use_the_new_defaults_without_rewriting_saved_values() {
+    let default = ChartGraphicsCfg::default();
+    let empty: ChartGraphicsCfg = toml::from_str("").expect("an empty graphics table loads");
+    for cfg in [default, empty] {
+        assert_eq!(cfg.connector_thickness_px, 3.0);
+        assert_eq!(cfg.candle_volume_height, 0.10);
+        assert!(!cfg.mark_price_line);
+        assert!(!cfg.liquidations);
+    }
+    let stored: ChartGraphicsCfg = toml::from_str(
+        "connector_thickness_px = 2.0\ncandle_volume_height = 0.18\n\
+         mark_price_line = true\nliquidations = true\n",
+    )
+    .expect("explicit values load");
+    assert_eq!(stored.connector_thickness_px, 2.0);
+    assert_eq!(stored.candle_volume_height, 0.18);
+    assert!(stored.mark_price_line);
+    assert!(stored.liquidations);
 }
 
 /// Dropping the legacy-opacity migration would leave an old tab drawing at 34%, while migrating

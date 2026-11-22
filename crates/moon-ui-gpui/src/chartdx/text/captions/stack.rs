@@ -166,11 +166,12 @@ impl RenderState {
         if cells.is_empty() {
             return Ok(0.0);
         }
-        let can_widen = hungry_line_width.is_some();
-        let line_width = |offset, height| {
-            hungry_line_width
+        let can_widen = hungry_line_width.is_some() || column.filter_header_max_w.is_some();
+        let line_width = |offset, item: &Item, spent| {
+            let width = hungry_line_width
                 .as_ref()
-                .map_or(column.max_w, |width| width(offset, height))
+                .map_or(column.max_w, |width| width(offset, item.block_h()));
+            column.item_width(item.part, spent, width - spent)
         };
         // A centred line must know its own width before it can be placed; the other two directions
         // walk out from their edge and never need the total.
@@ -193,7 +194,7 @@ impl RenderState {
             // would move the line diagonally instead of spacing it.
             let gap = if n == 0 { 0.0 } else { CAPTION_GAP + cell.gap };
             let spent = (cursor - start_x).abs() + gap;
-            let cell_line_width = |offset, height| line_width(offset, height) - spent;
+            let cell_line_width = |offset, item: &Item| line_width(offset, item, spent);
             // A later cell in a hungry row can still fit by extending past a short neighbour.
             let Some(cell_w) = self.measure_cell(ctx, texts, cell, cell_line_width) else {
                 if can_widen {
@@ -268,7 +269,7 @@ impl RenderState {
                 let Some(entry) = texts.get(item.pos) else {
                     continue;
                 };
-                let budget = cell_line_width(offset, item.block_h());
+                let budget = cell_line_width(offset, item);
                 if budget < MIN_LEGIBLE_W {
                     continue;
                 }

@@ -32,6 +32,22 @@ const CASCADE_STEP: f32 = 34.0;
 /// rather than hoped for: a third open retires the oldest.
 const MAX_WINDOWS: usize = 2;
 
+/// Restores the remembered Y scale and frames the fills when that scale can hold them.
+pub(super) fn restore_price_frame(
+    panel: &mut ChartPanel,
+    saved_scale: Option<f32>,
+    record: &ChartTradeRecord,
+    cx: &mut Context<ChartPanel>,
+) {
+    let pct = super::frame::opening_scale(saved_scale, record.buy_price, record.sell_price);
+    panel.force_scale(pct, cx);
+    if let Some((center, range)) =
+        super::frame::opening_price_window(pct, record.buy_price, record.sell_price)
+    {
+        panel.set_price_window(center, range, cx);
+    }
+}
+
 /// Open — or focus — the trade-detail window for one closed trade.
 ///
 /// Re-clicking a trade focuses its existing window and refreshes its Report-period neighbours.
@@ -305,19 +321,18 @@ fn new_view(
                 .read(pcx)
                 .report_axis(crate::chartdx::axes::display_zone()),
         );
-        if let Some((start_ms, end_ms)) =
-            super::frame::trade_frame(buy_utc_ms, close_utc_ms, 60_000)
+        // The trade itself, by the one opening rule `publish` and "Show trade" apply too.
+        if let Some(((start_ms, end_ms), pad)) =
+            super::frame::opening_frame(buy_utc_ms, close_utc_ms, None)
         {
-            panel.show_time_range(start_ms, end_ms, 0.0);
+            panel.show_time_range(start_ms, end_ms, pad);
         }
         // THE TRADE'S OWN CAPTIONS, published before the first fetch answers like the
         // timeframe pin above: they come from the replica, not from the network, so the window
         // states what this trade WAS even while the picture behind it is still loading — and
         // never has to swap one set of captions for another once it lands.
         panel.attach_trade_labels(show_labels.then(|| labels.clone()), pcx);
-        if let Some(pct) = saved_scale {
-            panel.force_scale(Some(pct), pcx);
-        }
+        restore_price_frame(panel, saved_scale, &record, pcx);
     });
     let embedded = host.embedded();
     // The remembered switches, read in one go: the constructor below borrows the context again.
@@ -357,6 +372,7 @@ fn new_view(
         history_generation: 0,
         settings_open: false,
         fit_trade,
+        fit_engaged: false,
         hide_rail,
         show_labels,
         show_corridor,

@@ -13,7 +13,7 @@
 //! means "follow Main", except where a kind ships its own set: the CAPTIONS of the trade window
 //! ([`crate::config::ChartLabelsCfg::trade_default`]) and of a comparison
 //! ([`crate::config::ChartLabelsCfg::compare_default`]), and the AUTO FIGURES of every non-Main
-//! kind, which ship Main's rows switched off ([`ChartTabKind::builtin_auto_figures`]); see
+//! kind, which ship their own rows switched off ([`ChartTabKind::builtin_auto_figures`]); see
 //! [`WindowLayout::set_chart_labels_default`](super::layout::WindowLayout::set_chart_labels_default)
 //! for what the first press does about that.
 

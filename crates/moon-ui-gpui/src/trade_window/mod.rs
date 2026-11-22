@@ -404,6 +404,11 @@ pub(crate) struct TradeWindowView {
     show_other_trades: bool,
     /// Frame the window on the trade itself rather than on the fixed context; see [`frame`].
     fit_trade: bool,
+    /// Whether the reader asked for the fitted frame IN THIS WINDOW (ticked the fit switch or the
+    /// neighbours while it is on). Until then the window stays on the trade's own fills — the
+    /// frame it opened on and "Show trade" returns to — even with the switch remembered on, so an
+    /// entry placed an hour earlier never shrinks a seconds-long deal to a sliver on open.
+    fit_engaged: bool,
     /// Hide the figures rail, leaving the chart the whole window.
     hide_rail: bool,
     /// Print the trade's own captions — strategy, detect, sell reason — at the top of the chart.
@@ -591,6 +596,8 @@ impl TradeWindowView {
             return;
         }
         self.show_other_trades = show;
+        // A neighbour toggle under the fit switch is a request for the fitted frame.
+        self.fit_engaged |= self.fit_trade;
         let history = self.chart_history(cx);
         self.panel.update(cx, |panel, pcx| {
             panel.publish_trade_history(history, pcx);
@@ -616,6 +623,7 @@ impl TradeWindowView {
             return;
         }
         self.fit_trade = fit;
+        self.fit_engaged = fit;
         self.backend.update(cx, |backend, _| {
             if backend.layout.trade_window_fit != Some(fit) {
                 backend.layout.trade_window_fit = Some(fit);
@@ -734,17 +742,13 @@ impl TradeWindowView {
         self.sync_traces(true, cx);
     }
 
-    /// The frame this window wants right now: the trade itself while fitted, the fixed context
-    /// otherwise.
+    /// The frame this window wants right now — the one it opens on and "Show trade" returns
+    /// to, by [`frame::opening_frame`]: the trade, widened to its placement and neighbours while
+    /// the fit switch is on.
     ///
     /// Returns:
     ///     The interval and the padding to show it with, or `None` when the stamps describe none.
     fn wanted_frame(&self, cx: &App) -> Option<((i64, i64), f32)> {
-        if self.fit_trade
-            && let Some(fit) = self.fit_frame
-        {
-            return Some((fit, frame::FIT_PAD));
-        }
         let (buy_utc_ms, close_utc_ms) = utc_stamps_ms(
             &self.record,
             &self
@@ -752,7 +756,12 @@ impl TradeWindowView {
                 .read(cx)
                 .report_axis(crate::chartdx::axes::display_zone()),
         );
-        frame::trade_frame(buy_utc_ms, close_utc_ms, 60_000).map(|frame| (frame, 0.0))
+        let fitted = if self.fit_trade && self.fit_engaged {
+            self.fit_frame
+        } else {
+            None
+        };
+        frame::opening_frame(buy_utc_ms, close_utc_ms, fitted)
     }
 
     /// Put the viewport on the wanted frame, unless it is already there.
@@ -774,22 +783,20 @@ impl TradeWindowView {
         });
     }
 
-    /// Restore the selected trade after navigation, resetting this view's X and Y zoom only.
-    /// The remembered scale and framing preference for later windows remain the user's choice.
+    /// Restore the selected trade after navigation, using the same time and price framing as
+    /// on open without changing the remembered scale or framing preference.
     fn focus_trade(&mut self, cx: &mut Context<Self>) {
-        let (entry, exit) = utc_stamps_ms(
-            &self.record,
-            &self
-                .backend
-                .read(cx)
-                .report_axis(crate::chartdx::axes::display_zone()),
-        );
-        let Some((start, end)) = frame::fit_frame((entry, exit), std::iter::empty()) else {
+        // The same frame the window opened on — the fills — so the button and the opening
+        // picture agree; ticking the fit switch again widens it.
+        self.fit_engaged = false;
+        let Some(((start, end), pad)) = self.wanted_frame(cx) else {
             return;
         };
+        self.applied_frame = Some((start, end));
         self.panel.update(cx, |panel, pcx| {
-            panel.force_scale(None, pcx);
-            panel.show_time_range(start, end, frame::FIT_PAD);
+            panel.show_time_range(start, end, pad);
+            let scale = panel.scale();
+            window::restore_price_frame(panel, scale, &self.record, pcx);
         });
         cx.notify();
     }
@@ -1234,36 +1241,15 @@ impl TradeWindowView {
             // published here or the window shows a chart with nothing marked on it — which is the
             // one thing this whole feature exists to fix.
             panel.publish_trade_history(history, pcx);
-            // The viewport is placed on the TRADE — with its own proportional context, or fitted
-            // to it, whichever `wanted_frame` says — not on the window the rows cover. Those
+            // The viewport is placed on the TRADE — fitted to it by `wanted_frame` — not on the
+            // window the rows cover. Those
             // differ on purpose: the fetch is asymmetric by design, so framing it put a short
             // position three quarters of the way to the right while a long one sat centred — two
             // trades, two differently composed pictures, which is the thing the user asked to be
             // made the same everywhere.
             //
-            // The padding is the rule's own: zero for the fixed context, whose interval already
-            // holds the breathing room (asking for more would push the right edge past the
-            // trailing margin the fetch guarantees and draw blank), `FIT_PAD` for a fitted frame,
-            // whose interval is exactly the trade.
-            //
-            // TWO boundaries of the fixed-context rule, both stated rather than defended against,
-            // and neither one a framing choice this function is free to make.
-            //
-            // A position held longer than the fetch's own seven-day budget keeps only its floors,
-            // so the framing rule hands back exactly what was downloaded and such a trade opens
-            // off-centre rather than centred.
-            //
-            // And past ROUGHLY A YEAR the exit leaves the opening viewport altogether. The
-            // doubling the framing rule would otherwise apply does NOT survive that far: any
-            // position over about three and a half days already puts the fetch over its budget,
-            // which collapses the downloaded window to the two floors, and the clamp above then
-            // holds the interval at the held duration plus those eighty minutes. So it is the
-            // POSITION reaching a year that trips the chart's 365-day cap, not twice the position
-            // reaching it at six months. The cap anchors what remains at the START. Centring it
-            // would show the middle of such a trade and NEITHER end, which is worse: the entry is
-            // the more useful of the two to open on. Neither boundary is silent — the chart takes
-            // the wheel like any other, so the exit is a scroll away — and no one-year window can
-            // hold both ends of a multi-year trade.
+            // `FIT_PAD` on each side, so the trade spans half the width. A position longer than
+            // the chart's 365-day cap opens anchored at its entry; the exit is a scroll away.
             if let Some(((start_ms, end_ms), pad)) = frame {
                 panel.show_time_range(start_ms, end_ms, pad);
             }

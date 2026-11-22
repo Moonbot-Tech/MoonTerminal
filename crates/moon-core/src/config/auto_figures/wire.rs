@@ -67,7 +67,7 @@ pub(super) struct CfgWrite {
 impl From<CfgRead> for AutoFiguresCfg {
     fn from(wire: CfgRead) -> Self {
         let rows = match wire.rows {
-            None => presets::shipped_rows(),
+            None => presets::shipped_rows(&AutoFigurePreset::DEFAULT_SET),
             Some(list) => list
                 .into_iter()
                 .enumerate()
@@ -97,7 +97,7 @@ impl From<AutoFiguresCfg> for CfgWrite {
             enabled: (!cfg.enabled).then_some(false),
             opacity: (cfg.opacity != AF_OPACITY_DEFAULT).then_some(cfg.opacity),
             modifier_only: (!cfg.modifier_only).then_some(false),
-            rows: (cfg.rows != presets::shipped_rows())
+            rows: (cfg.rows != presets::shipped_rows(&AutoFigurePreset::DEFAULT_SET))
                 .then(|| cfg.rows.into_iter().map(RowWire::from).collect()),
         }
     }

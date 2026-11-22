@@ -79,22 +79,19 @@ impl AutoFiguresCfg {
     pub fn shipped() -> Self {
         Self {
             enabled: true,
-            rows: presets::shipped_rows(),
+            rows: presets::shipped_rows(&AutoFigurePreset::DEFAULT_SET),
             opacity: AF_OPACITY_DEFAULT,
             modifier_only: true,
         }
     }
 
-    /// The configuration a kind that does not draw auto figures yet ships: the same rows, switched
-    /// OFF.
-    ///
-    /// The rows are there so that turning the switch on in that kind's popup shows the familiar
-    /// set rather than an empty table. LinKvo, 18.11.2026: auto figures show on Main only for now;
-    /// see `ChartTabKind::builtin_auto_figures`.
+    /// The other chart kinds keep their prepared rows available when auto figures are off.
     pub fn shipped_off() -> Self {
         Self {
             enabled: false,
-            ..Self::shipped()
+            rows: presets::shipped_rows(&AutoFigurePreset::OTHER_KIND_DEFAULT_SET),
+            opacity: AF_OPACITY_DEFAULT,
+            modifier_only: true,
         }
     }
 

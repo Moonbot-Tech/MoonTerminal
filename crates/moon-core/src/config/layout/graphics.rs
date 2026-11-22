@@ -154,7 +154,8 @@ impl HvolSide {
 /// that one field's default instead of resetting the others — or the file.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ChartGraphicsCfg {
-    /// Multiplier on the trade-history arrow's half-extents. One is the size the layer shipped with.
+    /// Multiplier on the trade-history arrow's half-extents. The shipped default is `1.3`; `1.0`
+    /// reproduces the layer's original size.
     #[serde(default = "def_trade_arrow_scale", deserialize_with = "de_arrow_scale")]
     pub trade_arrow_scale: f32,
     /// Thickness of the dashed entry-to-exit connector, in LOGICAL px.
@@ -227,13 +228,13 @@ pub struct ChartGraphicsCfg {
     pub last_price_line: bool,
     /// Whether the blue `MarkPrice` line from the core is drawn. A market whose provider reports
     /// no mark price draws none regardless.
-    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    #[serde(default, deserialize_with = "de_lenient_false")]
     pub mark_price_line: bool,
     /// Whether a MoonShot order fills its corridor between the entry and the target.
     #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
     pub moonshot_zone: bool,
     /// Whether liquidation trades draw their crosses beside the trade marks.
-    #[serde(default = "def_true", deserialize_with = "de_lenient_true")]
+    #[serde(default, deserialize_with = "de_lenient_false")]
     pub liquidations: bool,
 
     // --- Trade marks. Moved here from `ChartTheme` so they are per TAB rather than per theme. ---
@@ -435,9 +436,9 @@ impl Default for ChartGraphicsCfg {
             hide_entry_fill_arrow: false,
             bright_closed_trades: false,
             last_price_line: true,
-            mark_price_line: true,
+            mark_price_line: false,
             moonshot_zone: true,
-            liquidations: true,
+            liquidations: false,
             marker_scale: def_marker_scale(),
             trade_volume_alpha: def_trade_volume_alpha(),
             trade_kind: TradeKind::Crosses,

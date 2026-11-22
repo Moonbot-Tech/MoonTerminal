@@ -176,7 +176,10 @@ impl RenderState {
                 // AFTER the wrap, never before: `measure_cell` reads a prose caption's width off
                 // the wrap, and asking it first would send the whole sentence through the
                 // truncation walk — which measures one character at a time — every frame.
-                let width = self.measure_cell(ctx, texts, cell, |_, _| budget);
+                let spent = column.max_w - budget;
+                let width = self.measure_cell(ctx, texts, cell, |_, item| {
+                    column.item_width(item.part, spent, budget)
+                });
                 budget -= width.unwrap_or(0.0);
             }
         }

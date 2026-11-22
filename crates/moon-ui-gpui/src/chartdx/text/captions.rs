@@ -24,8 +24,8 @@
 //! once those figures have ended, rather than wrapping at half the plot beside empty candles. See
 //! [`widths`]. Before the wrap split,
 //! a long detect line printed straight through whatever was pinned to the left and the right of it.
-//! Two different zones are never divided against each other — each stays inside its own band, which
-//! is the paragraph above.
+//! The plot and control strip usually budget space independently. When the strip occupies the
+//! plot, a left filter header clears the all-cores scope caption in that strip.
 
 use gpui::{Hsla, point};
 
@@ -57,7 +57,7 @@ pub(in crate::chartdx) use fit_memo::FitMemo;
 pub(in crate::chartdx) use model::{ActionDraw, CAPTION_PLATES, CaptionBar, CaptionGeomInput};
 use model::{Band, Column, HungryBudget};
 pub(in crate::chartdx) use plan::RowPlanCache;
-use zone::{elastic_band, zone_anchor, zone_bounds, zone_start_y, zone_width};
+use zone::{elastic_band, filter_header_right, zone_anchor, zone_bounds, zone_start_y, zone_width};
 
 impl RenderState {
     /// Draw every configured caption for one pane and publish its backing plates.
@@ -254,6 +254,13 @@ impl RenderState {
         );
         // Restore before drawing: even a failed draw cannot mutate or lose the pristine plan.
         self.panes[idx].caption_rows = cache;
+        let filter_right = filter_header_right(
+            self.panes[idx].all_cores_count.is_some(),
+            cfg,
+            texts,
+            &geom,
+            &corner,
+        );
         for (zone, rows) in LabelZone::ALL.into_iter().zip(working) {
             // Every band of the zone is gathered before ANY of them is drawn. Three passes that
             // each spent the whole zone are exactly what printed a centred detect line over the
@@ -309,6 +316,12 @@ impl RenderState {
                     x,
                     align: fraction,
                     max_w,
+                    filter_header_max_w: match (zone, align) {
+                        (LabelZone::ChartTop, LabelAlign::Left) => {
+                            filter_right.map(|right| right - x)
+                        }
+                        _ => None,
+                    },
                 };
                 // Height of a wrapped caption is not known from its style. Prose is measured here
                 // at one budget. A hungry column wraps per line inside `draw_stack`, because a

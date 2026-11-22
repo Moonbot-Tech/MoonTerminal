@@ -10,14 +10,14 @@ impl RenderState {
         ctx: &gpui::GpuCanvasTextContext<'_>,
         texts: &[LabelText],
         cells: &[Cell],
-        line_width: impl Fn(f32, f32) -> f32,
+        line_width: impl Fn(f32, &Item, f32) -> f32,
         can_widen: bool,
     ) -> f32 {
         let mut total = 0.0;
         for (n, cell) in cells.iter().enumerate() {
             let gap = if n == 0 { 0.0 } else { CAPTION_GAP + cell.gap };
-            let Some(w) = self.measure_cell(ctx, texts, cell, |offset, height| {
-                line_width(offset, height) - (total + gap)
+            let Some(w) = self.measure_cell(ctx, texts, cell, |offset, item| {
+                line_width(offset, item, total + gap)
             }) else {
                 if can_widen {
                     continue;
@@ -35,12 +35,12 @@ impl RenderState {
         ctx: &gpui::GpuCanvasTextContext<'_>,
         texts: &[LabelText],
         cell: &Cell,
-        line_width: impl Fn(f32, f32) -> f32,
+        line_width: impl Fn(f32, &Item) -> f32,
     ) -> Option<f32> {
         let reserve = bar_zone(texts, cell);
         cell.positioned_items()
             .filter_map(|(offset, item)| {
-                let budget = line_width(offset, item.block_h());
+                let budget = line_width(offset, item);
                 if budget < MIN_LEGIBLE_W {
                     return None;
                 }

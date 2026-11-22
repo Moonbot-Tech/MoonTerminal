@@ -207,6 +207,78 @@ pub(crate) fn fit_frame(
     Some((from, to))
 }
 
+/// The frame a trade window opens on, and the one "Show trade" returns to: the trade itself.
+///
+/// The reader opened the window to SEE the trade, so the opening picture is the trade fitted
+/// with [`FIT_PAD`] around it — never the fixed market context [`trade_frame`] gives, which at
+/// its ninety-bar floor drew a seconds-long trade as a hairline in a three-hour chart and left
+/// the reader to press "Show trade" to find it. With the fit switch on, `fitted` (the span
+/// widened to the entry placement and the shown neighbours, from [`fit_frame`]) wins once the
+/// traces have resolved it; until then, and with the switch off, the trade's own fills frame it.
+///
+/// Pure on purpose: the constructor, the first publish of a fetch and the "Show trade" button
+/// all call it with the same stamps, so whichever data stage lands first — the candle edges or
+/// the ticks — the window opens on the same frame the button produces.
+///
+/// Args:
+///     entry_ms: Position open, Unix milliseconds on the display axis.
+///     exit_ms: Position close, Unix milliseconds on the display axis.
+///     fitted: The fitted frame when the fit switch is on and the traces resolved one.
+///
+/// Returns:
+///     The interval and the padding to show it with, or `None` when the stamps describe none.
+pub(crate) fn opening_frame(
+    entry_ms: i64,
+    exit_ms: i64,
+    fitted: Option<(i64, i64)>,
+) -> Option<((i64, i64), f32)> {
+    if let Some(frame) = fitted {
+        return Some((frame, FIT_PAD));
+    }
+    // A same-instant pair is a point: handed over as is, the chart's own minimum width frames it
+    // rather than `fit_frame`'s three-hour fallback.
+    if exit_ms == entry_ms && entry_ms > 0 {
+        return Some(((entry_ms, exit_ms), FIT_PAD));
+    }
+    fit_frame((entry_ms, exit_ms), std::iter::empty()).map(|frame| (frame, FIT_PAD))
+}
+
+/// The price scale a trade window opens with: the remembered one, unless it cannot hold the
+/// trade's own fills — then Auto, so the opening picture never hides the entry or exit arrow
+/// behind a zoom the reader picked for another trade.
+///
+/// A fixed scale spans `pct` of the price around the view's centre; the fills must fit in
+/// HALF of it, so both arrows clear the edges wherever the centre lands between them.
+///
+/// Args:
+///     saved: The remembered scale (a fraction, `0.1` is 10%), `None` for Auto.
+///     entry_price: The entry fill price.
+///     exit_price: The exit fill price.
+///
+/// Returns:
+///     The scale to apply on open, `None` for Auto.
+pub(crate) fn opening_scale(saved: Option<f32>, entry_price: f64, exit_price: f64) -> Option<f32> {
+    let pct = saved?;
+    let mid = (entry_price + exit_price) / 2.0;
+    if !(mid > 0.0) {
+        return saved;
+    }
+    let spread = (entry_price - exit_price).abs() / mid;
+    (spread <= f64::from(pct) / 2.0).then_some(pct)
+}
+
+/// Returns the fill-centred window `(centre, range)` for the accepted scale, or `None` for Auto
+/// or an unusable price. The fills supply both the centre and the scale reference.
+pub(super) fn opening_price_window(
+    pct: Option<f32>,
+    entry_price: f64,
+    exit_price: f64,
+) -> Option<(f32, f32)> {
+    let pct = pct?;
+    let center = entry_price.midpoint(exit_price) as f32;
+    (center.is_finite() && center > 0.0).then_some((center, center * pct))
+}
+
 /// The price band a fitted frame asks the auto-Y fit to include: every price the drawn lines
 /// and arrows sit at.
 ///

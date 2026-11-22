@@ -589,3 +589,79 @@ fn out_of_order_history_selections_keep_the_newest_snapshot() {
     );
     assert_eq!(trace_requests, vec![vec![2, 0]]);
 }
+
+/// Whichever stage lands first — the 1-minute candle edges or a settled tick series — it is the
+/// one that frames the window, and the later one of the same fetch never re-frames it.
+#[test]
+fn the_first_publish_of_a_fetch_frames_whichever_source_lands_first() {
+    use super::{TradeWindowState, fold_outcome};
+    use moon_core::market::trade_replay::{
+        TickStatus, TickThinning, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource,
+        replay_window_ms,
+    };
+    let candles = TradeReplaySeries {
+        source: TradeReplaySource::Klines1m,
+        venue: moon_core::venue::venue(3),
+        window: replay_window_ms(100_000_000, 100_005_000, 5 * 60_000).expect("valid trade"),
+        tf_ms: 60_000,
+        candles: vec![moon_core::market::ChartCandle {
+            t_open_ms: 100_000_000.0,
+            open: 10.0,
+            high: 11.0,
+            low: 9.0,
+            close: 10.0,
+            volume: 1.0,
+            quote_volume: 10.0,
+        }],
+        ticks: Vec::new(),
+        identity: 7,
+        tick_status: TickStatus::Pending,
+        thinning: TickThinning::Raw,
+        partial: false,
+        side_slots: Vec::new(),
+        covered: moon_core::market::trade_replay::Coverage::one((99_700_000, 100_300_000)),
+    };
+    let mut ticks = candles.clone();
+    ticks.source = TradeReplaySource::Ticks;
+    ticks.candles.clear();
+    ticks.ticks.push(moon_core::feed::Tick {
+        time_ms: 100_000_000.0,
+        price: 10.0,
+        qty: 1.0,
+        side: moon_core::feed::Side::Buy,
+    });
+    ticks.tick_status = TickStatus::Served;
+    let after = |series: &TradeReplaySeries| TradeWindowState::Ready {
+        source: series.source,
+        tf_min: 1,
+        tick_status: series.tick_status,
+        thinning: TickThinning::Raw,
+        partial: false,
+        ends: false,
+        brand: None,
+    };
+    for (first, second) in [(&candles, &ticks), (&ticks, &candles)] {
+        let opened = fold_outcome(
+            &TradeWindowState::Loading,
+            false,
+            &TradeReplayOutcome::Ready(first.clone()),
+        );
+        assert!(
+            opened.accept && opened.frame,
+            "{:?} first must frame",
+            first.source
+        );
+        let later = fold_outcome(
+            &after(first),
+            true,
+            &TradeReplayOutcome::Ready(second.clone()),
+        );
+        // Whether the later stage is accepted (a tick upgrade) or dropped (stale candles), it
+        // never re-frames the picture the first stage opened on.
+        assert!(
+            !later.frame,
+            "{:?} after {:?} must not re-frame",
+            second.source, first.source
+        );
+    }
+}
