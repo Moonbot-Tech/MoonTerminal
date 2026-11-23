@@ -1,5 +1,5 @@
 //! Shared right-click context menu for a market token. It is used wherever a token is shown,
-//! including chart order lines, token or strategy cells in Orders, and token cells in Assets,
+//! including chart order lines and the chart's ban lock, token or strategy cells in Orders, and token cells in Assets,
 //! Report and the Screener. The menu selects applicable entries from the context available in [`CoinMenuCtx`]: a
 //! strategy (`strat_id`), an order (`order_uid` and `side`), and the source panel filter's selected
 //! cores.
@@ -64,7 +64,8 @@ pub struct CoinMenuCtx {
     pub coin: String,
     /// Cores selected by the source panel's filter for the selected-cores blacklist action. That
     /// entry covers the selected cores that CARRY the coin, each in its own spelling, and appears
-    /// only when more than one does. Chart lines supply `[core]`, so it remains hidden.
+    /// only when more than one does. Chart order lines supply `[core]`, so it remains hidden there;
+    /// the chart's ban lock supplies its group's scope.
     pub selected_cores: Vec<CoreId>,
     /// Order strategy when `strat_id != 0`, enabling the strategy section. None means manual or join.
     pub strat_id: Option<u64>,

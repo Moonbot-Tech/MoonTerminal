@@ -261,7 +261,7 @@ fn core_blacklist_writer(
 
 /// One preset row per duration, all sending to the same targets.
 ///
-/// [`TempBanSpan::ALL`] rather than a list of its own: the chart's ban BUTTON offers the same four
+/// [`TempBanSpan::ALL`] rather than a list of its own: MoonBot's own menu offers the same four
 /// spans, and the set matters — a trader who bans a coin for four hours from one client and looks
 /// for that ban in the other must not have to translate between two sets of presets.
 fn hour_rows(

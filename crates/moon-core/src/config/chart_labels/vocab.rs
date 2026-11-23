@@ -365,11 +365,11 @@ impl LabelTf {
 ///
 /// MoonBot's own menu — one hour, four hours, a day, three days — so a reader who bans a coin from
 /// the chart and one who bans it from the core's own window choose between the same four spans.
-/// Asked at the press, by the lock's own popup and by the coin menu's rows; nothing stores one.
+/// Asked at the press by the coin menu's rows — which the chart's lock opens too; nothing stores one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TempBanSpan {
-    /// One hour, the span a chart button is pressed for most: "not this one, not right now".
+    /// One hour, the span picked most: "not this one, not right now".
     #[default]
     H1,
     H4,
