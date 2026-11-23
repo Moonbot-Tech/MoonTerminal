@@ -165,6 +165,7 @@ core_expert.gen_auto_cancel_min: es pt zh
 core_expert.hk_cancel_buy: tr
 core_expert.hk_controls_frame: pt
 core_expert.hk_join_sells: tr
+core_expert.log_exchange: es
 core_expert.log_support_en: ru es uk pt vi zh
 core_expert.tab_interface: pt
 core_expert.tab_login: pt
@@ -177,6 +178,7 @@ core_expert.wd_status_error: es
 core_settings.tab_general: es
 core_status.axis_api: es uk tr pt vi zh
 core_status.chart_5m: es pt zh
+core_status.chart_exch: es
 core_status.chart_mem: es tr pt vi zh
 core_status.chart_ping: es tr pt vi
 core_status.col.api_key: es pt zh
@@ -191,6 +193,7 @@ core_status.mb: es tr pt vi zh
 core_status.mem_free: es tr pt vi zh
 core_status.mode.servers_short: vi
 core_status.ms: es tr pt vi zh
+core_status.problem_cat.exchange: es
 core_status.requests: pt
 core_status.server_n: ru es uk vi zh
 core_status.startup.kb: es tr pt vi zh
@@ -319,6 +322,7 @@ telegram.mini_unit_mb: es tr pt vi zh
 telegram.mini_unit_ms: es tr pt vi zh
 telegram.notify_editor.chat: es pt vi
 telegram.notify_manual: es pt
+telegram.report_exchange_menu: es
 telegram.report_exchanges: es
 telegram.report_total: es pt
 telegram.report_volume_col: pt

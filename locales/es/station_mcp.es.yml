@@ -1,6 +1,6 @@
 _version: 1
 station_mcp.setup: "Activar y configurar MCP"
-station_mcp.setup_hint: "Configura HTTPS de confianza en este servidor, abre TCP 443 y reinicia la Estación. No necesita comprar un dominio ni descargar certificados."
+station_mcp.setup_hint: "Configura HTTPS de confianza en este servidor, abre TCP 443 y reinicia la Estación. No necesitas comprar un dominio ni descargar certificados."
 station_mcp.title: "Acceso de IA"
 station_mcp.description: "Conecta tu IA a esta Estación y elige sus permisos."
 station_mcp.keywords: "ia mcp oauth permisos clientes"

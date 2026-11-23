@@ -22,7 +22,7 @@ core_status.section.aggregate_ok_nomed_few: "%{n} núcleos · todos conectados"
 core_status.section.aggregate_ok_nomed_many: "%{n} núcleos · todos conectados"
 # Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
 # sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
-core_status.section_sort_hint: "Ordenado dentro de cada bolsa"
+core_status.section_sort_hint: "Ordenado dentro de cada exchange"
 core_status.empty: "Sin datos de núcleos"
 core_status.mode.flat: "Núcleos"
 core_status.mode.servers: "Servidores"
@@ -42,11 +42,11 @@ core_status.updates.legend_build_one: "%{build} — %{n} núcleo"
 core_status.updates.legend_build_few: "%{build} — %{n} núcleos"
 core_status.updates.legend_build_many: "%{build} — %{n} núcleos"
 core_status.updates.up_to_date_title: "Todos los núcleos están en la compilación más nueva"
-core_status.updates.up_to_date_body: "%{build} es la más nueva entre sus núcleos."
+core_status.updates.up_to_date_body: "%{build} es la más nueva entre tus núcleos."
 core_status.updates.hint: "La actualización va de un servidor a la vez; el núcleo se reinicia unos 20 s."
 core_status.warn.where: "Dónde"
 core_status.empty.no_cores_title: "Aún no hay núcleos"
-core_status.empty.no_cores_body: "Añada un núcleo en Ajustes → Núcleos: aquí aparecerán su enlace, la carga y la versión."
+core_status.empty.no_cores_body: "Añade un núcleo en Ajustes → Núcleos: aquí aparecerán su enlace, la carga y la versión."
 core_status.empty.open_settings: "Abrir Ajustes"
 core_status.empty.no_problems_title: "No hay problemas"
 core_status.empty.no_problems_body: "Los %{n} núcleos están en línea, el ping es normal y las versiones están al día."
@@ -102,7 +102,7 @@ core_status.col.mem_used: "Mem usada"
 core_status.col.free_phys: "Libre fís."
 core_status.col.cpus: "CPU lógicos"
 core_status.col.ping: "Ping núcleo"
-core_status.col.ping_exch: "Ping bolsa"
+core_status.col.ping_exch: "Ping exchange"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
 # Moonbot build the core reported. The product noun IS the heading, so the cells hold
@@ -127,7 +127,7 @@ core_status.api_perpetual: "Clave sin fecha de caducidad"
 # cost the metrics their room); the hover carries the full phrase.
 core_status.col_tip.cpus: "CPU lógicos en la máquina"
 core_status.col_tip.tz_off: "Desfase del reloj del núcleo respecto a UTC"
-core_status.col_tip.api_key: "Días hasta que caduque la clave API de la bolsa"
+core_status.col_tip.api_key: "Días hasta que caduque la clave API del exchange"
 # Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
 # a dash. Named for the budget rather than the exchange, so the column still reads right the day a
 # second venue starts publishing a quota.
@@ -146,7 +146,7 @@ core_status.chart_mem: "RAM"
 # Ping/RTT axis label on the warning badge card and the Warnings list (client↔core ping).
 core_status.chart_ping: "Ping"
 # Core→exchange order-latency label (the exchange ping) on the chart legend and the card.
-core_status.chart_exch: "Bolsa"
+core_status.chart_exch: "Exchange"
 # Connectivity axis label on a chart warning badge's hover card.
 core_status.warn_conn: "Enlace"
 # Shown as a warning cluster's duration while it is still active.
@@ -164,7 +164,7 @@ core_status.warn_cfg.cpu: "CPU del servidor"
 core_status.warn_cfg.mem: "Crecimiento de memoria"
 core_status.warn_cfg.conn: "Caída de núcleo"
 core_status.warn_cfg.ping: "Pico de ping del núcleo"
-core_status.warn_cfg.exch: "Pico de ping de bolsa"
+core_status.warn_cfg.exch: "Pico de ping del exchange"
 core_status.warn_cfg.api: "Clave API por vencer"
 core_status.warn_cfg.api_quota: "Cuota API agotándose"
 # Column captions on a warning row (above the controls).
@@ -308,7 +308,7 @@ core_status.fault.next.local_port: "Algo en ESTA maquina retiene el puerto: una 
 core_status.fault.next.no_response: "Abre el puerto UDP del nucleo tanto en el panel del hoster como en el firewall de la propia maquina. Una VM restaurada desde una instantanea no conserva su grupo de reglas, y Windows marca el adaptador nuevo como Publico mientras una regla solo para Privada permanece muda"
 core_status.fault.next.unparsed: "Los paquetes llegaron al terminal: no es un puerto cerrado. Envia el registro y estos contadores al soporte"
 core_status.fault.next.try_mode: "Otros nucleos de este terminal se conectaron bien en modo %{mode} — prueba a cambiar este a %{mode}"
-core_status.fault.next.access: "Pega la clave exportada por ESTE bot y comprueba que el modo «Núcleo (VPS)» esta activo en el nucleo. Permanece inactivo mientras la cuenta de intercambio no este bajo el referido MoonBonus"
+core_status.fault.next.access: "Pega la clave exportada por ESTE bot y comprueba que el modo «Núcleo (VPS)» esta activo en el nucleo. Permanece inactivo mientras la cuenta del exchange no este bajo el referido MoonBonus"
 core_status.fault.next.unidentified: "El nucleo responde pero no pasa la comprobacion de compatibilidad. Comprueba, en orden: si el modo «Núcleo (VPS)» esta activo, si el nucleo esta sobrecargado, y actualiza Moonbot en su maquina"
 core_status.fault.next.syncing: "Espera. Si la cifra deja de avanzar, pasa el raton por la columna de arranque: alli se ve la perdida del canal"
 core_status.fault.next.stalled: "El intento se repite solo. Si el mismo paso sigue fallando, pasa el raton por la columna de arranque y envia el registro"
@@ -344,7 +344,7 @@ core_status.problems_no_cores: "No hay núcleos en el ámbito"
 # contradict that notice by claiming a clean bill.
 core_status.problems_nothing_listed: "Nada informado"
 core_status.problem_cat.machine: "Máquina"
-core_status.problem_cat.exchange: "Bolsa"
+core_status.problem_cat.exchange: "Exchange"
 core_status.problem_cat.network: "Red"
 core_status.problem_cat.other: "Otro"
 

@@ -48,7 +48,7 @@ assets.balances_excluded_n: "excluidos: %{n}"
 # Tooltip line per shared account: which cores were folded into which counted one.
 assets.balances_folded_into: "%{cores} comparten la cuenta de %{core}: contada una vez"
 # Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
-assets.balances_folded_hl_caveat: "(Hyperliquid: el terminal no ve el modo de cuenta, unificado o estándar; si las billeteras están separadas, ponga el núcleo en «Por separado» en Ajustes → Conexiones → En total)"
+assets.balances_folded_hl_caveat: "(Hyperliquid: el terminal no ve el modo de cuenta, unificado o estándar; si las billeteras están separadas, pon el núcleo en «Por separado» en Ajustes → Conexiones → En total)"
 # Tooltip line naming the cores excluded by their own setting.
 assets.balances_excluded_list: "Excluidos por ajuste del núcleo: %{cores}"
 assets.section_positions: "Posiciones"
@@ -124,7 +124,7 @@ assets.settings.display: "Visualización"
 assets.settings.group_by_venue: "Agrupar núcleos por exchange"
 # Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
 # column, so no Shift variant to advertise.
-assets.roster_resize: "Arrastre para cambiar el ancho. Doble clic lo restablece"
+assets.roster_resize: "Arrastra para cambiar el ancho. Doble clic lo restablece"
 assets.transfer_title: "Transferir %{coin}: %{from} -> %{to}"
 assets.free: "libre: %{n}"
 assets.transfer_btn: "Transferir"

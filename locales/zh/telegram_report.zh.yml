@@ -2,16 +2,16 @@ _version: 1
 telegram.report_title: "报告"
 telegram.report_exchange_menu: "交易所"
 telegram.report_exchange_total: "交易所合计"
-telegram.report_exchange_summary: "%{cores} 个核心 · %{active} 个有交易 · 胜率 %{winrate}% · 平均订单 %{average}"
+telegram.report_exchange_summary: "%{cores} 个内核 · %{active} 个有交易 · 胜率 %{winrate}% · 平均订单 %{average}"
 telegram.report_by_groups: "按分组"
-telegram.report_best_cores: "最佳核心"
-telegram.report_worst_cores: "最差核心"
+telegram.report_best_cores: "最佳内核"
+telegram.report_worst_cores: "最差内核"
 telegram.report_hidden_prefix: "已隐藏名称的共同前缀：%{prefix}"
-telegram.report_exchange_all: "该交易所的全部核心 · %{active} 个有交易"
+telegram.report_exchange_all: "该交易所的全部内核 · %{active} 个有交易"
 telegram.report_other_exchange: "其他交易所"
 telegram.report_back_exchange: "返回交易所"
 telegram.report_page_short: "页"
-telegram.report_rank_footer: "从最差到最佳 · 没有交易的核心不显示"
+telegram.report_rank_footer: "从最差到最佳 · 没有交易的内核不显示"
 telegram.report_average_col: "平均 %"
 telegram.report_volume_col: "成交额"
 telegram.report_native_col: "计价币"
@@ -43,7 +43,7 @@ telegram.button_home: "概览"
 
 telegram.report_navigation_hint: "在底部菜单中选择时间段。再次点击可获取最新报告。报告下方的按钮用于切换视图或打开交易所。"
 
-telegram.report_all_cores: "全部核心"
+telegram.report_all_cores: "全部内核"
 
 telegram.report_calculation: "计算方式"
 
@@ -70,7 +70,7 @@ telegram.button_daily: "按日"
 
 telegram.report_days: "每日"
 
-telegram.report_cores: "核心"
+telegram.report_cores: "内核"
 telegram.report_groups: "分组"
 telegram.report_groups_missing: "分组尚未传到服务站；终端会自动发送。"
 telegram.report_view_switch: "视图：%{view}"
@@ -97,7 +97,7 @@ telegram.report_quote_unknown: "计价币未知"
 telegram.report_empty: "此时间段内没有已平仓的交易"
 
 telegram.report_scope: "终端历史中的所选分组 · 真实的已平仓交易 · 按交易时的汇率。数据来自本地历史；已关闭的机器人不会更新。"
-telegram.report_scope_station: "服务站历史中的所选分组 · 真实的已平仓交易 · 按交易时的汇率。服务站全天候复制核心的历史；已断开的机器人不会更新。"
+telegram.report_scope_station: "服务站历史中的所选分组 · 真实的已平仓交易 · 按交易时的汇率。服务站全天候复制内核的历史；已断开的机器人不会更新。"
 
 telegram.report_missing_rates: "如果部分交易没有 USDT 汇率，合计会拆成多行：“合计 USDT”涵盖已完整估值的币种，其余每个币种各占一行并以该币种计，例如“合计 RUB”。不同币种的金额不会相加；未知币种的交易只显示笔数。"
 

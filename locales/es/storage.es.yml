@@ -55,7 +55,7 @@ storage.core_data_confirm_untouched: "Los registros, las copias de seguridad y l
 storage.core_data_deleted: "núcleos: %{cores}, avisos: %{warnings}"
 storage.core_data_partly: "sin confirmar: %{what}"
 storage.op_core_delete: "Borrado de datos de núcleos"
-storage.core_data_nothing: "Nada que borrar: los núcleos elegidos empezaron a descargar informes; espere a que termine"
+storage.core_data_nothing: "Nada que borrar: los núcleos elegidos empezaron a descargar informes; espera a que termine"
 
 # Settings redesign (phases 3-5)
 storage.usage.total: "Total en disco"

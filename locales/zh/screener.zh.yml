@@ -8,7 +8,7 @@ screener.window_title: "MoonTerminal — 筛选器"
 # helps: no core is connected at all. A connected core that has not published a book yet gets
 # `screener.empty_no_data`, and a core hidden by the workspace preset gets the shared
 # `workspace.scope.all_hidden` instead of either.
-screener.empty: "没有市场数据——请连接核心"
+screener.empty: "没有市场数据——请连接内核"
 screener.empty_no_data: "尚未收到市场数据"
 # A fourth: rows WERE published and the bottom bar's controls — the Type and Listed lists, a text
 # or volume filter — left none of them.
@@ -18,8 +18,8 @@ screener.empty_filtered: "没有符合当前筛选条件的行"
 # title and stays as it is.
 screener.listed_collecting: "Listed 仍在收集中：还剩 %{n} 秒"
 screener.coins: "个币种"
-screener.all_cores: "全部核心"
-screener.cores_n: "核心：%{n}"
+screener.all_cores: "全部内核"
+screener.cores_n: "内核：%{n}"
 screener.columns: "列"
 # The cross-listing column and the list that filters it. The three values are Moonbot's own words for its
 # `ListedType` strategy filter and stay English in every language, like the market kinds.

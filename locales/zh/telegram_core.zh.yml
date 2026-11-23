@@ -2,12 +2,12 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram_core.core_pick_none: "请选择核心"
+telegram_core.core_pick_none: "请选择内核"
 telegram_core.tag.logged_in: "已登录"
 telegram_core.tag.not_logged_in: "未登录"
 telegram_core.tag.proxy_error: "代理错误"
 telegram_core.tag.reader_off: "读取器已关闭"
-telegram_core.tag.no_core: "无法连接核心"
+telegram_core.tag.no_core: "无法连接内核"
 telegram_core.tag.unsupported: "不支持远程登录"
 telegram_core.tag_short.logged_in: "已登录"
 telegram_core.tag_short.not_logged_in: "未登录"
@@ -15,27 +15,27 @@ telegram_core.tag_short.proxy_error: "代理错误"
 telegram_core.tag_short.reader_off: "读取器关"
 telegram_core.tag_short.no_core: "无连接"
 telegram_core.tag_short.unsupported: "不支持登录"
-telegram_core.list_core: "核心"
+telegram_core.list_core: "内核"
 telegram_core.list_telegram: "Telegram"
 telegram_core.row_login: "登录"
 telegram_core.row_account: "账号"
 telegram_core.account_phone: "账号 %{phone} · 已登录"
 telegram_core.account_none: "未连接账号"
 telegram_core.account_reader_off: "读取器已关闭——账号不受影响"
-telegram_core.disconnected_hint: "Telegram 状态来自核心本身。连接恢复后，这里会显示登录和代理。"
+telegram_core.disconnected_hint: "Telegram 状态来自内核本身。连接恢复后，这里会显示登录和代理。"
 telegram_core.reconnect: "重新连接"
 
 telegram_core.enable: "启用读取器"
 
-telegram_core.enable_tip: "关闭只会停止此核心的读取器，不会退出 Telegram 账号。"
+telegram_core.enable_tip: "关闭只会停止此内核的读取器，不会退出 Telegram 账号。"
 
 telegram_core.unsupported: "此服务不支持远程登录。"
 
 telegram_core.unsupported_ver: "此服务不支持远程登录（版本 %{v}）。"
 
-telegram_core.stale: "快照已过期——在收到核心的最新状态之前，操作不可用。"
+telegram_core.stale: "快照已过期——在收到内核的最新状态之前，操作不可用。"
 
-telegram_core.sent_waiting: "已发送，等待核心响应…"
+telegram_core.sent_waiting: "已发送，等待内核响应…"
 
 telegram_core.service_online: "服务在线"
 
@@ -47,7 +47,7 @@ telegram_core.setup_error: "初始化错误"
 
 telegram_core.client_error: "客户端错误"
 
-telegram_core.disconnected: "核心未连接。"
+telegram_core.disconnected: "内核未连接。"
 
 telegram_core.no_snapshot: "没有状态快照。"
 
@@ -67,7 +67,7 @@ telegram_core.proxy_password: "密码"
 
 telegram_core.proxy_secret: "密钥"
 
-telegram_core.proxy_secret_hint: "核心不会返回已保存的密码或密钥，因此需要重新输入。留空会将其清除，而不是保留旧值。"
+telegram_core.proxy_secret_hint: "内核不会返回已保存的密码或密钥，因此需要重新输入。留空会将其清除，而不是保留旧值。"
 
 telegram_core.proxy_actual: "实际代理"
 
@@ -125,9 +125,9 @@ telegram_core.logged_in_unknown: "账号已就绪"
 
 telegram_core.logout: "退出登录"
 
-telegram_core.logout_title: "在核心上退出 Telegram"
+telegram_core.logout_title: "在内核上退出 Telegram"
 
-telegram_core.logout_q: "这会退出账号，并重置该核心所在机器上共用的 Telegram 数据。那台机器上的所有 Moonbot 进程都会受影响，不只是这个核心。"
+telegram_core.logout_q: "这会退出账号，并重置该内核所在机器上共用的 Telegram 数据。那台机器上的所有 Moonbot 进程都会受影响，不只是这个内核。"
 
 telegram_core.premium: "需要完成 Telegram 的外部步骤。取消登录即可返回手机号输入。"
 
@@ -137,7 +137,7 @@ telegram_core.support_subject: "主题"
 
 telegram_core.cancel_login: "取消登录"
 
-telegram_core.transitional: "核心正在处理，请稍候…"
+telegram_core.transitional: "内核正在处理，请稍候…"
 
 telegram_core.step_unknown: "未知的登录步骤。请刷新状态，不要凭猜测发送数据。"
 
@@ -167,7 +167,7 @@ telegram_core.resend: "重新发送验证码"
 
 telegram_core.resend_in: "%{wait} 后可重新发送"
 
-telegram_core.no_answer: "核心没有响应。请刷新状态后重试。"
+telegram_core.no_answer: "内核没有响应。请刷新状态后重试。"
 
 telegram_core.next_code: "下一种方式"
 
@@ -199,8 +199,8 @@ tgcore.steps.done: "已连接"
 tgcore.steps.email: "登录邮箱"
 tgcore.steps.registration: "账号未注册"
 tgcore.steps.premium_required: "需要 Telegram Premium"
-tgcore.steps.waiting: "等待核心响应…"
+tgcore.steps.waiting: "等待内核响应…"
 tgcore.steps.unknown: "未知的登录步骤"
 tgcore.qr_login: "用二维码登录"
 tgcore.proxy.title: "代理"
-tgcore.proxy.send: "发送到核心"
+tgcore.proxy.send: "发送到内核"

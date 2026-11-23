@@ -22,18 +22,18 @@ status.license: "许可证：%{value}"
 # here. This is the full build line a tester is asked to quote, matching what startup.rs logs.
 status.version_tooltip: "正式版 %{release} · 构建 %{build} · MoonUI %{moonui}"
 # Active trading-core selector in the header: text shown when the group has no cores.
-header.no_cores: "无核心"
+header.no_cores: "无内核"
 # Visible core's emulator vs real mode, in the header cluster beside the core pill.
 # Both states stay on the chrome so the operator does not have to open core settings.
 header.trade_emu: "模拟"
 header.trade_real: "实盘"
-header.trade_emu_tip: "模拟模式。可在核心设置（齿轮）中更改。"
-header.trade_real_tip: "实盘模式。可在核心设置（齿轮）中更改。"
+header.trade_emu_tip: "模拟模式。可在内核设置（齿轮）中更改。"
+header.trade_real_tip: "实盘模式。可在内核设置（齿轮）中更改。"
 # Header balance double-click: Auto reveals the group Assets surface; Classic opens the window.
 header.balance_tip: "双击打开“资产”"
 # Price ticker in the header, on the right beside the clock.
-header.ticker_tip: "价格及 1 小时 / 24 小时波幅。单击打开图表，双击选择币种和核心"
-header.ticker_pick: "行情币种（跨核心搜索）"
+header.ticker_tip: "价格及 1 小时 / 24 小时波幅。单击打开图表，双击选择币种和内核"
+header.ticker_pick: "行情币种（跨内核搜索）"
 # Ticker delta-window labels distinguish the periods of two adjacent percentages.
 header.delta_1h: "1h"
 header.delta_24h: "24h"
@@ -52,7 +52,7 @@ toolbar.sell_hint: "固定卖出 S%{n} · 单击启用 · 双击编辑 · Ctrl+�
 toolbar.lev_unset_no_core: "选择服务器以查看杠杆。"
 toolbar.lev_unset_no_market: "请在主图表上选择币种。"
 toolbar.lev_unset_unreported: "交易所未提供该市场的杠杆。"
-toolbar.sl_unset_tip: "止损由策略决定，但当前无法从核心获取其数值。"
+toolbar.sl_unset_tip: "止损由策略决定，但当前无法从内核获取其数值。"
 toolbar.tp_main_active_hint: "主 TP 已激活。选择 S 槽位会把蓝色高亮移到该槽位。"
 toolbar.tp_fixed_active_hint: "S%{n} 已激活。点击 TP 可恢复主止盈。"
 toolbar.scale: "缩放"
@@ -77,7 +77,7 @@ header.ms_slot_clear: "清空槽位"
 # Quick-select settings popup: the gear beside the strategy buttons, its rows, the core-side
 # sell-price flag it exposes, and the action that replaces the local slots with the core's.
 header.ms_slots_gear: "策略按钮设置"
-header.ms_slots_hint: "勾选框决定是否显示按钮。列表：按钮的策略及其钩子策略（写入核心）。机器人按钮会在“策略”窗口中打开它们"
+header.ms_slots_hint: "勾选框决定是否显示按钮。列表：按钮的策略及其钩子策略（写入内核）。机器人按钮会在“策略”窗口中打开它们"
 # The per-core switch that decides whether the terminal touches a manual order's stop at all.
 header.ms_mb_logic: "Moonbot 逻辑"
 header.ms_mb_logic_hint: "止损取自策略（或其钩子），与 Moonbot 一致：工具栏的 SL 被锁定，下单后不再补发任何内容。取消勾选后，会在下单后补发自己的止损"
@@ -93,8 +93,8 @@ header.ms_hook_none: "无钩子"
 # Tooltip on the robot button after the hook field: it opens the hook strategy, not the manual one.
 header.ms_hook_goto_tip: "前往钩子策略"
 header.ms_slot_unassigned: "未指定"
-header.ms_slots_pull: "从核心拉取"
-header.ms_slots_pull_tip: "用核心自身的配置替换按钮组"
+header.ms_slots_pull: "从内核拉取"
+header.ms_slots_pull_tip: "用内核自身的配置替换按钮组"
 # Moonbot's own checkbox, stored in the CORE: while it is off the core sells a manual-strategy
 # order at that strategy's own price and the toolbar's TP/S never reach it.
 header.ms_ignore_strat_sell: "忽略手动策略的 SellPrice"
@@ -114,16 +114,16 @@ toolbar.apply: "应用"
 
 # Toolbar switch beside the order-size strip: whether this core keeps its OWN sizes/TP/SL set or
 # shares its group's. Two texts, because the tooltip states what a click would do next.
-toolbar.own_trade_on: "该核心使用自己的订单大小和 TP/SL — 关闭即可恢复共用配置"
-toolbar.own_trade_off: "该核心使用共用配置 — 开启即可使用独立配置"
+toolbar.own_trade_on: "该内核使用自己的订单大小和 TP/SL — 关闭即可恢复共用配置"
+toolbar.own_trade_off: "该内核使用共用配置 — 开启即可使用独立配置"
 # The hovered chart's core differs from the group's active trading core (or their per-core opt-in
 # disagrees), so a click, wheel, or edit here would write somewhere other than the values shown.
 # Disabled on purpose rather than silently mutating the wrong core (goal A2 FIX-3).
-toolbar.core_manual_mismatch: "显示的是光标下另一个核心的数值 — 已禁止编辑，以免改动活动核心"
+toolbar.core_manual_mismatch: "显示的是光标下另一个内核的数值 — 已禁止编辑，以免改动活动内核"
 
 # Coarse-area rejection (CoreConfigRejection::Areas) the display core's edit carries; %{areas} is
 # a comma-joined list built from the toolbar.core_config_area_* keys below.
-toolbar.core_config_areas_rejected: "核心拒绝了：%{areas}"
+toolbar.core_config_areas_rejected: "内核拒绝了：%{areas}"
 toolbar.core_config_area_auto_start: "自动启动"
 toolbar.core_config_area_btc_blink: "BTC 闪烁"
 toolbar.core_config_area_general: "常规"
@@ -179,8 +179,8 @@ toolbar.lev_preset_tip: "填入杠杆 ×%{x}。只有“应用”才会发送。
 toolbar.lev_preset_blocked: "×%{x} 不可用：该币种最大为 ×%{max}。"
 
 # --- Core-settings popup (⚙ button beside the core selector) ---
-core_settings.title: "核心设置"
-core_settings.no_core: "无活动核心"
+core_settings.title: "内核设置"
+core_settings.no_core: "无活动内核"
 core_settings.runtime_started: "已启动"
 core_settings.runtime_auto: "自动检测"
 core_settings.restart: "启动 / 重启"
@@ -216,7 +216,7 @@ core_settings.expert: "专家模式"
 core_settings.expert_hint: "齿轮可打开完整的 Moonbot 设置窗口"
 core_settings.ok: "OK"
 core_settings.cancel: "取消"
-core_settings.as_waiting: "正在等待核心配置…"
+core_settings.as_waiting: "正在等待内核配置…"
 core_settings.as_launch: "启动时启用"
 core_settings.as_start: "启动"
 core_settings.as_detect: "自动检测"
@@ -288,8 +288,8 @@ coin_menu.compare: "对比"
 # list they are added to is the parent row, so repeating it in every child would print it six times.
 coin_menu.bl_group: "加入黑名单"
 coin_menu.tbl_group: "加入临时黑名单"
-coin_menu.target_core: "核心“%{core}”"
-coin_menu.target_cores: "所选核心（%{n}）"
+coin_menu.target_core: "内核“%{core}”"
+coin_menu.target_cores: "所选内核（%{n}）"
 coin_menu.target_strategy: "策略“%{name}”"
 # Ban lengths, matching the presets Moonbot's own TempBL menu offers: 1 h, 4 h, 24 h, 3 days.
 coin_menu.tbl_hours: "%{n} h"
@@ -357,8 +357,8 @@ chart.graphics.cursor_spot.hidden: "隐藏"
 # The "Trade history" popup (the book button): how the closed trades are drawn. Its rows keep
 # their `chart.graphics.*` keys from the popup they came out of.
 chart.history.title: "交易历史"
-chart.history.all_cores.tip: "汇总内所有核心在该交易所的交易"
-chart.history.all_cores.caption: "%{venue} · 所有核心（%{n}）"
+chart.history.all_cores.tip: "汇总内所有内核在该交易所的交易"
+chart.history.all_cores.caption: "%{venue} · 所有内核（%{n}）"
 chart.history.frame_closed_orders: "已完成订单"
 chart.graphics.arrow_size: "三角大小"
 chart.graphics.connector: "入场-出场连线粗细"
@@ -469,22 +469,22 @@ chart.coin.no_banned: "暂无临时黑名单"
 chart.coin.unban: "解除临时黑名单"
 chart.coin.unfav: "移出自选"
 # Shared by both acting rows: what stops the press is the window's scope, not what the row is.
-chart.coin.act_denied: "该核心不在此窗口的范围内"
+chart.coin.act_denied: "该内核不在此窗口的范围内"
 # What the tilde before a countdown means: the core has not confirmed anything since it went quiet,
 # so the figure is our own extrapolation. The ban keeps expiring whether or not we can see it.
-chart.coin.ban_stale: "没有最新的核心设置 — 时间为估算值"
+chart.coin.ban_stale: "没有最新的内核设置 — 时间为估算值"
 # Trailing count on a coin row that names how many cores offer the instrument.
   # Noun-then-colon, the form already used by `chart_labels.cores_count` and `figures_count`:
   # Russian declines the noun by count ("2 ядра", "5 ядер"), so "%{n} ядер" is wrong at 2-4, and a
   # plural mechanism is not worth inventing for a row label.
-chart.coin.cores: "核心：%{n}"
+chart.coin.cores: "内核：%{n}"
 # The same count when some of those cores already hold an open order or position on the coin.
-chart.coin.cores_in_trade: "核心：%{n}，交易中：%{k}"
+chart.coin.cores_in_trade: "内核：%{n}，交易中：%{k}"
 # Tooltip of the dot marking a core that already trades the coin.
-chart.coin.in_trade_tip: "该核心在此市场已有挂单或仓位"
+chart.coin.in_trade_tip: "该内核在此市场已有挂单或仓位"
 # The only line under the logo of an empty Main chart stack. It names the ONE gesture that exists:
 # there is no double-click on a core row that opens a chart.
-chart.empty.hint: "在右侧搜索框输入币种并按 Enter — 图表将在活动核心上打开"
+chart.empty.hint: "在右侧搜索框输入币种并按 Enter — 图表将在活动内核上打开"
 # --- Stack orientation (vertical/horizontal) and width labels in horizontal mode ---
 chart.layout.orientation_tip: "方向：纵向 / 横向"
 chart.layout.width_fit: "Fit 宽度"
@@ -515,26 +515,26 @@ shell.engine_action.ma_on: "MA 模式：开"
 shell.engine_action.ma_off: "MA 模式：关"
 shell.engine_action.transfer: "划转 %{qty} %{asset}：%{from} → %{to}"
 shell.engine_action.reload_order_book: "重新加载订单簿"
-shell.engine_action.request_strategies_snapshot: "从核心加载策略"
+shell.engine_action.request_strategies_snapshot: "从内核加载策略"
 
 # --- Result toasts for a coin-menu strategy-blacklist edit (the menu has no window of its own) ---
 shell.strat_edit_sent: "%{coin} 的黑名单修改已发送"
-shell.strat_edit_adjusted: "%{coin}：核心保存了不同的值%{diffs}"
+shell.strat_edit_adjusted: "%{coin}：内核保存了不同的值%{diffs}"
 shell.strat_edit_superseded: "%{coin}：已被另一次修改抢先"
-shell.strat_edit_timeout: "%{coin}：尚未确认，仍在等待核心响应"
+shell.strat_edit_timeout: "%{coin}：尚未确认，仍在等待内核响应"
 
 # --- Drawn-figure context menu (right-click in pencil mode) ---
 chart.fig_menu.alert_on: "预警：开启"
 chart.fig_menu.alert_off: "预警：关闭"
-chart.fig_menu.share: "在所有核心上显示"
-chart.fig_menu.unshare: "仅在此核心上"
+chart.fig_menu.share: "在所有内核上显示"
+chart.fig_menu.unshare: "仅在此内核上"
 chart.fig_menu.settings: "设置"
 chart.fig_menu.delete: "删除图形"
-chart.fig_menu.delete_shared: "从所有核心删除"
+chart.fig_menu.delete_shared: "从所有内核删除"
 chart.fig_menu.sells_to_zone: "将卖单排入此区域"
 
 # --- Alerts window ---
-alerts.col.core: "核心"
+alerts.col.core: "内核"
 alerts.col.coin: "币种"
 alerts.col.figure: "图形"
 alerts.col.price: "价格"
@@ -547,8 +547,8 @@ alerts.col.alert: "预警"
 alerts.col.kind: "类型"
 alerts.kind.moonbot: "Moonbot"
 alerts.kind.terminal: "终端"
-alerts.all_cores: "全部核心"
-alerts.cores_n: "核心：%{n}"
+alerts.all_cores: "全部内核"
+alerts.cores_n: "内核：%{n}"
 alerts.filter.kind.all: "任意类型"
 alerts.filter.kind.moonbot: "仅 Moonbot 类型"
 alerts.filter.kind.terminal: "仅终端类型"
@@ -565,13 +565,13 @@ alerts.empty: "暂无图形"
 alerts.count: "图形：%{n}"
 alerts.settings: "图形设置"
 alerts.delete: "删除图形"
-alerts.delete_armed: "删除图形并撤下核心上的预警"
+alerts.delete_armed: "删除图形并撤下内核上的预警"
 alerts.delete_core: "删除图形，Moonbot 中也一并删除"
-alerts.arm.hint: "将图形作为预警发送到核心"
+alerts.arm.hint: "将图形作为预警发送到内核"
 alerts.arm.from_core: "该预警绘制于 Moonbot。只能通过删除来撤下"
-alerts.arm.disarm_hint: "撤下核心上的预警"
-alerts.arm.shared: "图形为所有核心共用 — 预警只能设在一个核心上"
-alerts.arm.offline: "核心离线 — 命令无法送达"
+alerts.arm.disarm_hint: "撤下内核上的预警"
+alerts.arm.shared: "图形为所有内核共用 — 预警只能设在一个内核上"
+alerts.arm.offline: "内核离线 — 命令无法送达"
 alerts.duration: "时长，秒"
 alerts.repeat: "重复播放声音"
 alerts.sound: "选择声音"
@@ -669,7 +669,7 @@ chart_labels.group.strategy: "策略"
 chart_labels.group.trade: "交易"
 chart_labels.field.none: "—"
 chart_labels.field.coin: "币种"
-chart_labels.field.core: "核心"
+chart_labels.field.core: "内核"
 chart_labels.field.venue: "交易所"
 chart_labels.field.quote: "计价币"
 chart_labels.field.scale_badge: "Y 轴缩放"
@@ -713,7 +713,7 @@ chart_labels.field.exch_pos_size: "交易所仓位"
 chart_labels.field.liq_price: "强平价格"
 chart_labels.field.leverage: "杠杆"
 chart_labels.field.margin_mode: "保证金模式"
-chart_labels.field.session_pnl: "币种盈亏（核心）"
+chart_labels.field.session_pnl: "币种盈亏（内核）"
 chart_labels.field.session_profit: "会话"
 chart_labels.field.coin_balance: "币种余额"
 chart_labels.short.bid: "买一"
@@ -755,7 +755,7 @@ chart_labels.field.arb_column: "套利（列）"
 chart_labels.field.strategy_filters: "策略过滤器"
 chart_labels.column.more_above: "^ 上方还有 %{n} 项"
 chart_labels.column.more_below: "... 还有 %{n} 项"
-chart_labels.filter.open_core_bl: "打开核心 %{core} 的黑名单"
+chart_labels.filter.open_core_bl: "打开内核 %{core} 的黑名单"
 chart_labels.filter.open_strategy: "打开策略 %{name}"
 chart_labels.filter.open_strategy_field: "打开策略 %{name}：%{field}"
 chart_labels.filter.open_strategy_bl: "打开策略 %{name} 的“币种黑名单”"
@@ -871,7 +871,7 @@ chart.layout.max_charts_evict: "替换最旧的"
 chart.layout.main_detects: "打开检测"
 chart.layout.main_detects_hint: "检测流中的图表会加入 Main 的图表堆"
 chart.layout.no_arrival_flash: "边框不闪烁"
-chart.layout.arrival_core_color: "边框使用核心颜色"
+chart.layout.arrival_core_color: "边框使用内核颜色"
 chart.layout.arrival_hold: "边框保持可见"
 # --- Screen divider: how many columns (or rows) a chart stack lays its charts out in ---
 chart.layout.divider_columns: "列数"

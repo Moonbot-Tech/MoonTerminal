@@ -4,7 +4,7 @@
 _version: 1
 
 conn.market_src: "Fuente de datos de mercado"
-conn.market_dedup: "Datos compartidos — un núcleo por bolsa y moneda"
+conn.market_dedup: "Datos compartidos — un núcleo por exchange y moneda"
 conn.market_percore: "Separado — cada gráfico su propio núcleo"
 conn.core_sort: "Orden de núcleos"
 conn.core_sort.name: "Por nombre — alfabético"
@@ -43,7 +43,7 @@ conn.key_ph: "«Copiar clave» en Moonbot"
 conn.bundle_ph: "nombre del conjunto"
 conn.tip.proto: "Modo de transporte MoonProto: el mismo trío V0/V1/V2 que en los ajustes Moon Proto del núcleo; ambos lados deben estar en el MISMO. Se toma de la clave UNA vez, mientras no haya modo definido; después es tuyo y una clave nueva ya no lo sobrescribe, así que no hace falta reemitir ninguna clave para cambiar de modo. Un guion significa que la clave no indicó nada (exportación antigua) y la conexión usa V0. Se aplica al guardar: el núcleo se reconecta solo. Por eso pulsa «Copiar clave» solo DESPUÉS de fijar «Puerto:» y la versión en el núcleo con los botones V0/V1/V2 (Moonbot crea claves V0 por defecto): la clave los lleva consigo."
 conn.tip.preset: "En qué modo de espacio de trabajo se muestra este núcleo en las listas: ambos, solo MANUAL o solo AUTO. Solo visualización — un núcleo oculto sigue conectándose y registrando."
-conn.tip.total: "Cómo cuenta este núcleo en el total al pie de Activos. Auto: los núcleos de la misma cuenta de la bolsa cuentan una vez. Excluir: el núcleo queda fuera del total. Por separado: el núcleo siempre cuenta por sí solo, sin fusionarse."
+conn.tip.total: "Cómo cuenta este núcleo en el total al pie de Activos. Auto: los núcleos de la misma cuenta del exchange cuentan una vez. Excluir: el núcleo queda fuera del total. Por separado: el núcleo siempre cuenta por sí solo, sin fusionarse."
 conn.preset.both: "Ambos"
 # The same two mode NAMES the header dropdown lists (`workspace.mode.*`): this column picks which
 # of them shows the core, so a name that drifted apart here would read as a third mode.

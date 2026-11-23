@@ -14,7 +14,7 @@ _version: 1
 # sync, in the same `DISPLAY_COLUMNS` order.
 report.col.buydate: "开仓"
 report.col.closedate: "平仓"
-report.col.core_name: "核心"
+report.col.core_name: "内核"
 report.col.coin: "币种"
 report.col.isshort: "方向"
 report.col.quantity: "数量"
@@ -115,7 +115,7 @@ report.filter.closed_only_short: "已平"
 report.filter.all_sides: "全部方向"
 # Error toast when a soft-delete/restore could not be sent (the core is offline or gone). The
 # affected rows stay selected so nothing is silently lost.
-report.delete_send_failed: "无法发送更改：核心不可用。所选行保持选中。"
+report.delete_send_failed: "无法发送更改：内核不可用。所选行保持选中。"
 # Selection commands shown in the totals row only while report rows are selected.
 report.selection.count: "已选：%{n}"
 report.selection.clear: "取消选择"
@@ -123,8 +123,8 @@ report.selection.copy: "复制"
 report.selection.delete: "删除（%{n}）"
 report.selection.restore: "恢复（%{n}）"
 report.selection.copied: "已复制交易：%{n}"
-report.selection.delete_queued: "已加入删除队列：%{n}。核心响应后将取消选择。"
-report.selection.restore_queued: "已加入恢复队列：%{n}。核心响应后将取消选择。"
+report.selection.delete_queued: "已加入删除队列：%{n}。内核响应后将取消选择。"
+report.selection.restore_queued: "已加入恢复队列：%{n}。内核响应后将取消选择。"
 # The trigger draws a MoonUI icon asset, added in code; the dictionary contains text only.
 report.columns_menu: "列"
 # Menu for saving the report to a file (the ⇩ button left of Columns). The query period comes from
@@ -190,9 +190,9 @@ report.avg_order_pct_current_tip: "按当前汇率的盈利与平均订单之比
 # Explicit selection of two or more cores. %{cores} is report.avg_order_cores_* with that
 # selection's length. The short text above does not change. Partial still wins over the
 # current-rate sentence.
-report.avg_order_cores_one: "涵盖 %{n} 个核心"
-report.avg_order_cores_few: "涵盖 %{n} 个核心"
-report.avg_order_cores_many: "涵盖 %{n} 个核心"
+report.avg_order_cores_one: "涵盖 %{n} 个内核"
+report.avg_order_cores_few: "涵盖 %{n} 个内核"
+report.avg_order_cores_many: "涵盖 %{n} 个内核"
 report.avg_order_pct_cores_tip: "盈利与平均订单之比：%{pct}。平均订单：%{avg}，计入订单：%{n}，%{cores}"
 report.avg_order_pct_partial_cores_tip: "盈利与平均订单之比：%{pct}。平均订单：%{avg}，计入订单：%{n}，%{cores}；未计入：%{excluded}"
 report.avg_order_pct_current_cores_tip: "按当前汇率的盈利与平均订单之比：%{pct}。平均订单：%{avg}，计入订单：%{n}，%{cores}"
@@ -241,10 +241,10 @@ report.period.cur_year: "今年"
 report.period.month: "30 天"
 # A rolling 365-day window — NOT a calendar year.
 report.period.year: "365 天"
-report.cores_n: "核心：%{n}"
+report.cores_n: "内核：%{n}"
 report.strategies_n: "策略：%{n}"
 # The core-list field label matches Orders (orders.all_cores).
-report.all_cores: "全部核心"
+report.all_cores: "全部内核"
 # Order-type list field, matching orders.kind.*. `report.kind.all` is the Analytics toolbar wording;
 # the Report scope field uses `all_kinds` so its row differs from the direction group's "all".
 report.kind.all: "全部"
@@ -261,12 +261,12 @@ report.trade_log.open: "交易日志"
 # there is nothing the scan could look for.
 report.trade_log.no_task: "交易日志——无任务编号"
 # Shown DISABLED when the row's core cannot be named, so no log file can be located.
-report.trade_log.no_core: "交易日志——无法确定核心"
+report.trade_log.no_core: "交易日志——无法确定内核"
 report.trade_log.title: "交易日志"
 report.trade_log.loading: "正在读取日志文件..."
 report.trade_log.count: "行数：%{n}"
 report.trade_log.truncated: "仅显示前 %{n} 行——其余已截断"
 report.trade_log.copy_all: "复制全部"
-report.trade_log.empty: "未找到日志：当天的文件已超过保留期限被删除，或该核心的日志接收已关闭"
+report.trade_log.empty: "未找到日志：当天的文件已超过保留期限被删除，或该内核的日志接收已关闭"
 
 report.access_denied: "无法访问报告副本。"

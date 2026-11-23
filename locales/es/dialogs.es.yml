@@ -19,7 +19,7 @@ dialogs.operation: "Operación"
 
 # --- Dialog fields and hints ---
 dialogs.name_ph: "nombre"
-dialogs.name_required: "Introduzca un nombre de estrategia"
+dialogs.name_required: "Introduce un nombre de estrategia"
 dialogs.folder_prefix: "carpeta: %{path}"
 dialogs.into_prefix: "en: %{path}"
 dialogs.delete_confirm: "¿Eliminar %{what}? Esta acción no se puede deshacer."

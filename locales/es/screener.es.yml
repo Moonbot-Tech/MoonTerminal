@@ -8,7 +8,7 @@ screener.window_title: "MoonTerminal — Screener"
 # helps: no core is connected at all. A connected core that has not published a book yet gets
 # `screener.empty_no_data`, and a core hidden by the workspace preset gets the shared
 # `workspace.scope.all_hidden` instead of either.
-screener.empty: "Sin datos de mercado — conecte un núcleo"
+screener.empty: "Sin datos de mercado — conecta un núcleo"
 screener.empty_no_data: "Aún no se han recibido datos de mercado"
 # A fourth: rows WERE published and the bottom bar's controls — the Type and Listed lists, a text
 # or volume filter — left none of them.
@@ -34,12 +34,12 @@ screener.af_approach: "Aproximación ≤"
 screener.af_calculate: "Calcular"
 screener.af_progress: "Calculando %{done} / %{total}"
 screener.af_calculate_tip: "Buscar figuras automáticas en todos los mercados del Screener con la caché local de velas de 5 minutos, con las filas del conjunto Main"
-screener.af_restart_tip: "Calculando: pulse para empezar de nuevo"
+screener.af_restart_tip: "Calculando: pulsa para empezar de nuevo"
 screener.af_no_rows_tip: "El conjunto de figuras automáticas de Main no tiene filas activadas"
 screener.af_nothing: "nada"
 screener.af_short: "poco historial"
 screener.af_no_cache: "sin caché"
 screener.af_unread: "caché no leída"
 screener.af_stale: "caché atrasada %{age}"
-screener.af_press_calculate: "Pulse «Calcular» para elegir monedas por figuras automáticas"
+screener.af_press_calculate: "Pulsa «Calcular» para elegir monedas por figuras automáticas"
 screener.af_running: "Calculando figuras automáticas…"

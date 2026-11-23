@@ -20,7 +20,7 @@ common.db_not_ready: "报告数据库尚未同步。"
 common.incomparable_quote: "所选交易的计价币不一致或未知。请选择一种币种，或切换到 Profit %。"
 common.period_out_of_range: "请求的时间段超出了可读范围。"
 common.period_out_of_range_title: "时间段超出可读范围。"
-common.period_out_of_range_hint: "这不是空时间段，而是被拒绝的时间段：请检查已保存的时间段或核心的数据。"
+common.period_out_of_range_hint: "这不是空时间段，而是被拒绝的时间段：请检查已保存的时间段或内核的数据。"
 common.exchange_unknown: "未识别的交易所"
 common.exchange_spot: "Spot"
 common.exchange_futures: "Futures"
@@ -39,15 +39,15 @@ common.exchange_quarterly: "Quarterly"
 # is what the glyph now says, so only "all" versus a count is left to render. Masculine in Spanish,
 # agreeing with núcleos — which is why it is not the strategy filter's own "all" word.
 common.core_pick.all_short: "全部"
-common.core_pick.groups_heading: "核心分组"
-common.core_pick.group_cores_n: "%{n} 个核心"
+common.core_pick.groups_heading: "内核分组"
+common.core_pick.group_cores_n: "%{n} 个内核"
 # Members whose core is no longer configured. They are kept on purpose — a core can come back — so
 # this is a warning, not an error.
 common.core_pick.group_dead_n: "缺少 %{n} 个"
 common.core_pick.save_as_group: "将所选保存为分组…"
 common.core_pick.manage_groups: "管理分组…"
-common.core_pick.save_title: "新建核心分组"
-common.core_pick.manage_title: "核心分组"
+common.core_pick.save_title: "新建内核分组"
+common.core_pick.manage_title: "内核分组"
 # Refuses BOTH an empty name and a save blocked by the group ceiling: either way nothing was
 # created, and the dialog stays open. `dialogs.name_required` cannot be reused — it names a
 # strategy in all three languages.
