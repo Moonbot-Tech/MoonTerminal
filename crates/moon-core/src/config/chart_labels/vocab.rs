@@ -369,7 +369,7 @@ impl LabelTf {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TempBanSpan {
-    /// One hour, the span a chart button is pressed for most: "not this one, not right now".
+    /// One hour, the span picked most: "not this one, not right now".
     #[default]
     H1,
     H4,

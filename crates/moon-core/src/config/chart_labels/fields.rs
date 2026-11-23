@@ -203,12 +203,13 @@ pub enum ChartLabelField {
     ActCancelBuy,
     /// Arm — or disarm — panic selling on this market; the chart's `Panic Sell` button.
     ActPanicSell,
-    /// Put this coin in the core's TEMPORARY blacklist, or lift a ban that is already running.
+    /// Open the coin menu's blacklists for this coin, or lift a temporary ban that is already running.
     ///
-    /// A LOCK, and nothing else: open while the coin trades, closed while it is banned. Which span
-    /// to ban for is asked when it is pressed rather than configured here — a button that carried a
-    /// period would need one button per period, and the reader would still have to read it before
-    /// pressing. How long is left is [`Self::TempBanLeft`]'s to print, wherever the reader puts it.
+    /// A LOCK, and nothing else: open while the coin trades, closed while a temporary ban runs. An
+    /// open lock asks — which list, which cores, which span — through the shared coin menu rather
+    /// than carrying a choice here: a button that carried a period would need one button per
+    /// period, and the reader would still have to read it before pressing. The glyph reads the
+    /// TEMPORARY list only. How long is left is [`Self::TempBanLeft`]'s to print.
     ActTempBan,
     /// Mark this coin as a favourite, or unmark it — the chart's star.
     ///

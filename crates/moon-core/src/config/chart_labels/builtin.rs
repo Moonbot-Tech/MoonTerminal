@@ -112,8 +112,6 @@ fn coin_switches_row() -> ChartLabelRow {
     row.push_part(ChartLabelField::TempBanLeft);
     row.push_part(ChartLabelField::ActFavorite);
     row.parts[0].style.size_mult = Some(SIZE);
-    // The glyph says it; the field's short caption beside a lock would only repeat it.
-    row.parts[0].style.caption = Some(false);
     row.parts[1].style.size_mult = Some(SIZE);
     row
 }
