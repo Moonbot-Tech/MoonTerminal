@@ -57,7 +57,7 @@ use super::super::logic::{
 use super::super::{Key, StrategiesView, moon_alpha};
 use super::checks;
 use super::ops;
-use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag};
+use super::ui::{ContextMenu, DragChip, FolderDrag, MenuTarget, StratDrag, pointers_at_drag_start};
 use crate::controls::core_run::{RunKey, RunScope, RunSlots, reserved_cell, run_cell};
 use crate::design;
 use moon_core::feed::StrategyRow;

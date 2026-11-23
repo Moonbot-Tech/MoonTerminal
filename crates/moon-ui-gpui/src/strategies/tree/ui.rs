@@ -5,6 +5,7 @@
 
 use moon_core::feed::strategy_path;
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::super::*;
@@ -457,8 +458,85 @@ pub(super) struct DragChip {
     pub(super) origin_window: WindowId,
     /// Live folders-and-strategies field written by `strat-tree-scroll` prepaint.
     pub(super) tree_field: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// When true, a failed paint gate also stops the process-global folder or strategy drag.
+    /// When true, the chip hides outside its origin tree, and a paint that
+    /// [`drag_chip_paint_should_stop`] rejects also stops the process-global folder or strategy
+    /// drag. Hiding and stopping are separate decisions: another window hides the chip without
+    /// ending the drag unless the pointer actually reached it.
     pub(super) stop_when_outside: bool,
+    /// Where every other open window last tracked the pointer when this drag began, from
+    /// [`pointers_at_drag_start`]. A paint in one of those windows ends the drag only once its
+    /// tracked pointer has moved, i.e. the pointer actually reached it.
+    pub(super) pointers_at_start: HashMap<WindowId, Point<Pixels>>,
+}
+
+/// Snapshot the pointer position every window other than `origin` last tracked.
+///
+/// A held button keeps delivering moves to the window that took the press (Windows `SetCapture`,
+/// Cocoa `mouseDragged`, the X11 and Wayland implicit grab), so another window's tracked position
+/// changes during the gesture only when that window itself receives pointer input. Comparing
+/// against this snapshot keeps a chart or status strip that merely redraws on its own data while
+/// the button is held from ending the drag (#1451), while a window that does receive pointer
+/// input mid-drag still ends it.
+///
+/// Under that capture the pointer leaving the list is seen by the origin window, whose move
+/// listener cancels once the pointer leaves the tree field. What the snapshot cannot see is a
+/// window lying on top of the tree: the pointer over it is still inside the tree field in origin
+/// coordinates and that window receives nothing. Before #1451 such a window ended the drag only
+/// when it happened to repaint, through the same over-eager rule this replaces.
+///
+/// Args:
+///     origin: Window that started the drag; it is mid-update here and is skipped.
+///     cx: Application context used to read every other window.
+///
+/// Returns:
+///     Last tracked pointer per other window. A window that cannot be read is left out.
+pub(super) fn pointers_at_drag_start(
+    origin: WindowId,
+    cx: &mut App,
+) -> HashMap<WindowId, Point<Pixels>> {
+    cx.windows()
+        .into_iter()
+        .filter(|handle| handle.window_id() != origin)
+        .filter_map(|handle| {
+            handle
+                .update(cx, |_, window, _| {
+                    (handle.window_id(), window.mouse_position())
+                })
+                .ok()
+        })
+        .collect()
+}
+
+/// Return whether a paint of the tree drag preview must end the drag.
+///
+/// The preview is painted by every window that redraws, because GPUI's drag payload is one for
+/// the whole application. A paint in the origin window applies the tree-field rule of
+/// [`strat_drag_move_should_stop`]. A paint in any other window ends the drag only when that
+/// window's tracked pointer moved since the drag began: a repaint of a window the pointer never
+/// reached is not the pointer leaving the list (#1451). A window with no snapshot opened after
+/// the drag began and has no evidence of the pointer either; the origin's own move listener
+/// still cancels once the pointer leaves the tree field.
+///
+/// Args:
+///     origin_window: Window that started the drag.
+///     paint_window: Window currently painting the preview.
+///     pointer: Pointer position that window last tracked.
+///     tree_field: Latest `strat-tree-scroll` bounds, or `None` before the first prepaint.
+///     pointer_at_start: The paint window's tracked pointer when the drag began, if known.
+///
+/// Returns:
+///     `true` when the preview must defer `App::stop_active_drag`.
+pub(super) fn drag_chip_paint_should_stop(
+    origin_window: WindowId,
+    paint_window: WindowId,
+    pointer: Point<Pixels>,
+    tree_field: Option<Bounds<Pixels>>,
+    pointer_at_start: Option<Point<Pixels>>,
+) -> bool {
+    if origin_window != paint_window {
+        return pointer_at_start.is_some_and(|start| start != pointer);
+    }
+    strat_drag_move_should_stop(origin_window, paint_window, pointer, tree_field)
 }
 
 /// Return whether a Strategies tree drag preview may paint at `pointer`.
@@ -541,7 +619,13 @@ impl Render for DragChip {
         let pointer = window.mouse_position();
         let tree_field = self.tree_field.get();
         if self.stop_when_outside
-            && strat_drag_move_should_stop(self.origin_window, paint_window, pointer, tree_field)
+            && drag_chip_paint_should_stop(
+                self.origin_window,
+                paint_window,
+                pointer,
+                tree_field,
+                self.pointers_at_start.get(&paint_window).copied(),
+            )
         {
             // Overlay prepaint takes `App::active_drag` before this `Render::render` runs and
             // restores it afterward (`moon-gpui` window draw), so a direct `stop_active_drag` is a
@@ -550,8 +634,9 @@ impl Render for DragChip {
                 cx.stop_active_drag(window);
             });
         }
-        // Both tree payloads opt into this shared paint gate, so neither preview can render
-        // outside its origin tree while the process-global drag is being stopped.
+        // Both tree payloads opt into this shared paint gate, so neither preview renders outside
+        // its origin tree: not while the drag is being stopped above, and not in another window
+        // that repaints while the drag stays live.
         if self.stop_when_outside
             && !drag_chip_should_paint(self.origin_window, paint_window, pointer, tree_field)
         {

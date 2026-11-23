@@ -6,8 +6,9 @@ use moon_core::feed::StrategyRow;
 use moon_core::session::CoreId;
 
 use super::{
-    StratDrag, drag_chip_should_paint, footer_labels_fit, keep_ui_folder, resolve_paste_target,
-    strat_drag_event_should_stop, strat_drag_move_should_stop,
+    StratDrag, drag_chip_paint_should_stop, drag_chip_should_paint, footer_labels_fit,
+    keep_ui_folder, resolve_paste_target, strat_drag_event_should_stop,
+    strat_drag_move_should_stop,
 };
 
 /// The source file, read at COMPILE time so the guard below cannot drift from it.
@@ -233,6 +234,13 @@ fn drag_chip_render_consults_the_paint_gate() {
         body.contains("window.defer("),
         "outside StratDrag must defer stop_active_drag until after overlay restore"
     );
+    assert!(
+        body.split("window.defer(")
+            .next()
+            .is_some_and(|stop_cond| stop_cond.contains("drag_chip_paint_should_stop(")),
+        "the deferred stop must be decided by drag_chip_paint_should_stop, or a repaint of \
+         another window ends the drag again (#1451)"
+    );
     let before_defer = body
         .split("window.defer(")
         .next()
@@ -316,6 +324,53 @@ fn strat_drag_cancels_outside_the_tree_field() {
     assert!(
         strat_drag_move_should_stop(origin, other_window(), point(px(60.0), px(100.0)), None),
         "an origin-window mismatch must cancel even before tree bounds exist"
+    );
+}
+
+/// #1451: another window's paint ends the drag only once that window's tracked pointer moved.
+/// Returning `true` for every foreign paint again kills the gesture whenever the chart redraws;
+/// returning `false` lets a pointer that really entered another window carry the drag on.
+#[test]
+fn foreign_paint_stops_the_drag_only_after_the_pointer_reached_that_window() {
+    let tree = tree_field();
+    let parked = point(px(300.0), px(5.0));
+    assert!(
+        !drag_chip_paint_should_stop(origin(), other_window(), parked, Some(tree), Some(parked)),
+        "a repaint of a window whose pointer has not moved since the drag began must not stop it"
+    );
+    assert!(
+        drag_chip_paint_should_stop(
+            origin(),
+            other_window(),
+            point(px(301.0), px(5.0)),
+            Some(tree),
+            Some(parked)
+        ),
+        "a pointer that moved inside another window must stop the drag"
+    );
+    assert!(
+        !drag_chip_paint_should_stop(origin(), other_window(), parked, Some(tree), None),
+        "a window opened after the drag began has no evidence of the pointer"
+    );
+    assert!(
+        !drag_chip_paint_should_stop(
+            origin(),
+            origin(),
+            point(px(60.0), px(100.0)),
+            Some(tree),
+            None
+        ),
+        "an origin paint inside the tree field keeps the drag"
+    );
+    assert!(
+        drag_chip_paint_should_stop(
+            origin(),
+            origin(),
+            point(px(120.0), px(100.0)),
+            Some(tree),
+            None
+        ),
+        "an origin paint past the tree field still stops the drag"
     );
 }
 

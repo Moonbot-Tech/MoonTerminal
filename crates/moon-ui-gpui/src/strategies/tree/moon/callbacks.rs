@@ -60,6 +60,7 @@ impl StrategiesView {
                     let n = drag.ids.len();
                     let origin_window = drag.origin_window;
                     let tree_field = tree_field.clone();
+                    let pointers_at_start = pointers_at_drag_start(origin_window, app);
                     app.new(move |_| DragChip {
                         label: SharedString::from(if n > 1 {
                             format!("{n}×")
@@ -70,6 +71,7 @@ impl StrategiesView {
                         origin_window,
                         tree_field,
                         stop_when_outside: true,
+                        pointers_at_start,
                     })
                 })
             }
@@ -94,14 +96,17 @@ impl StrategiesView {
             move |_drag: &FolderDrag, _pos, window, app| {
                 let origin_window = window.window_handle().window_id();
                 let tree_field = folder_field.clone();
+                let pointers_at_start = pointers_at_drag_start(origin_window, app);
                 app.new(move |_| DragChip {
                     label: SharedString::from("▣"),
                     step,
                     origin_window,
                     tree_field,
                     // Folder drags share the application-global overlay, so the preview must hide
-                    // and stop when it leaves this tree or paints in another native window.
+                    // in every other window and stop when it leaves this tree or the pointer
+                    // reaches another native window.
                     stop_when_outside: true,
+                    pointers_at_start,
                 })
             },
         )
