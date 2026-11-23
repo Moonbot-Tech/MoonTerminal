@@ -11,7 +11,12 @@ pub enum StationError {
     HelperTooOld,
     ServiceTooOld,
     TerminalTooOld,
+    /// A command on an open connection did not end within its deadline.
     Timeout,
+    /// The SSH connection itself got no answer within its deadline. Kept apart from [`Self::Timeout`]
+    /// because its causes differ: on a station server, fail2ban blocking this address after failed
+    /// logins looks exactly like this.
+    ConnectTimeout,
     SystemdMissing,
     SystemdTooOld,
     PasswordStillOffered,
@@ -43,6 +48,7 @@ impl std::fmt::Display for StationError {
                 Self::ServiceTooOld => "the station service is too old: update the service",
                 Self::TerminalTooOld => "the terminal is too old: update the terminal",
                 Self::Timeout => "the server did not answer within the deadline",
+                Self::ConnectTimeout => "the server did not answer the SSH connection in time",
                 Self::SystemdMissing => "no systemd on this server",
                 Self::SystemdTooOld => "systemd is too old for encrypted credentials",
                 Self::PasswordStillOffered => "the server still offers password logins",

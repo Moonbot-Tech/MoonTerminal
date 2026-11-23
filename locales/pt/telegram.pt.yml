@@ -592,10 +592,10 @@ telegram.server.access_pending_return: "O acesso da estação não pode ser muda
 telegram.server.install_review: "Nada foi enviado ao servidor ainda: confira a chave e as mudanças abaixo, depois inicie a instalação."
 telegram.server.install_fingerprint: "O servidor %{addr} apresentou a chave %{fingerprint}. Confira no console do provedor. Continue só se for a chave do seu servidor."
 telegram.server.install_changes_title: "A instalação vai mudar este servidor:"
-telegram.server.install_change_ssh: "Logins por senha e de root por SSH são desligados para todo usuário; só chaves funcionam."
+telegram.server.install_change_ssh: "Logins por senha e de root por SSH são desligados para todo usuário; só chaves funcionam. A chave do terminal e a sua (se você entrou com chave) vão para a conta «moon»: entre como moon@endereço-do-servidor e depois sudo -i."
 telegram.server.install_change_firewall: "O firewall ufw é ligado e bloqueia toda conexão de entrada exceto SSH; qualquer outra coisa que esteja escutando agora é fechada (o log da instalação nomeia essas portas). Se o ufw já está ligado, só a porta SSH é adicionada."
 telegram.server.install_change_admin: "Uma conta de administrador \"moon\" é criada, com sudo sem senha."
-telegram.server.install_change_extras: "fail2ban e atualizações de segurança automáticas são instalados."
+telegram.server.install_change_extras: "fail2ban e atualizações de segurança automáticas são instalados. O fail2ban bloqueia um endereço por 10 minutos após 5 logins falhos em 10 minutos — incluindo tentativas de entrar como root."
 telegram.server.install_password_warning: "Você entra com senha e não entrega uma chave própria: depois da instalação, só o MoonTerminal deste computador consegue entrar. Guarde a pasta de dados, ou adicione a sua chave no servidor antes."
 telegram.server.install_confirm: "Confiar nesta chave e instalar"
 

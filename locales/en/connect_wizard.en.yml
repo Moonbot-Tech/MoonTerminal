@@ -99,6 +99,7 @@ connect_wizard.review.sub: "Server %{addr} presents this key. Compare it with th
 connect_wizard.review.matches: "The key matches the one my provider shows"
 connect_wizard.review.close_password: "Turn off password login"
 connect_wizard.review.close_password_note: "Once the core is installed, the server lets you in by key only. If the key file is lost, the only way in is the console in your provider's panel."
+connect_wizard.review.close_password_note_password: "The server first gets this terminal's key, and a login with it is checked; only then is the password turned off. From then on only MoonTerminal on this computer can log in over SSH — keep its data folder. If it is lost, the only way in is the console in your provider's panel."
 connect_wizard.review.secrets: "Then the terminal logs in to the server with your login and password."
 connect_wizard.review.login: "Log in and check"
 

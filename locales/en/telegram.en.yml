@@ -592,10 +592,10 @@ telegram.server.access_pending_return: "Station access cannot be changed or remo
 telegram.server.install_review: "Nothing has been sent to the server yet: check the key and the changes below, then start the install."
 telegram.server.install_fingerprint: "Server %{addr} presented key %{fingerprint}. Check it in your provider's console. Continue only if it is your server's key."
 telegram.server.install_changes_title: "The install will change this server:"
-telegram.server.install_change_ssh: "Password and root logins over SSH are turned off for every user; only keys work."
+telegram.server.install_change_ssh: "Password and root logins over SSH are turned off for every user; only keys work. The terminal's key and your own (if you logged in with a key) go to the «moon» account: log in as moon@server-address, then sudo -i."
 telegram.server.install_change_firewall: "The ufw firewall is turned on and blocks every incoming connection except SSH; anything else that listens now gets closed (the install log names those ports). If ufw is already on, only the SSH port is added."
 telegram.server.install_change_admin: "An administrator account \"moon\" is created, with sudo without a password."
-telegram.server.install_change_extras: "fail2ban and automatic security updates are installed."
+telegram.server.install_change_extras: "fail2ban and automatic security updates are installed. fail2ban blocks an address for 10 minutes after 5 failed logins within 10 minutes — attempts to log in as root included."
 telegram.server.install_password_warning: "You log in with a password and give no key of your own: after the install, only this computer's MoonTerminal can log in. Keep its data folder, or add your own key to the server first."
 telegram.server.install_confirm: "Trust this key and install"
 

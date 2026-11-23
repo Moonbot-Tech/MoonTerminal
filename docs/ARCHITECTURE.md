@@ -19,8 +19,11 @@ experimental migration plans.
   on one: moved from another machine (`core_move`), or fresh and set up through the core's own
   command line (`core_new`). A library the terminal calls — its connect wizard
   (`moon-ui-gpui/src/connect_wizard/`) drives a fresh install — plus a `moon-remote`
-  command-line binary. Behind a key login either install can turn the server's password logins
-  off (`key_only`): changed through the open login, checked from outside, rolled back on doubt.
+  command-line binary. Either install can turn the server's password logins off (`key_only`):
+  changed through the open login, checked from outside, rolled back on doubt. Behind a password
+  login the terminal's app key is authorized and proven first and recorded in `hosts.toml` as
+  that server's `key_login` (never its station `admin`), and the wizard logs in with it from then
+  on.
 - `build-support` — not a crate: `git_meta.rs`, included through `#[path]` by the build scripts of
   `moon-ui-gpui` and `moon-station`, so both binaries embed the same Git revision and release base.
 - `Moonbot-Tech/MoonUI` — external git dependency: standalone GPUI runtime + Moon UI components.

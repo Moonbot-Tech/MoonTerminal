@@ -592,10 +592,10 @@ telegram.server.access_pending_return: "不能更改或移除服务站访问：�
 telegram.server.install_review: "尚未向服务器发送任何内容：请检查下方的密钥和更改，然后开始安装。"
 telegram.server.install_fingerprint: "服务器 %{addr} 出示了密钥 %{fingerprint}。请在服务商控制台中核对。只有确认是你的服务器密钥时才继续。"
 telegram.server.install_changes_title: "安装将对此服务器做以下更改："
-telegram.server.install_change_ssh: "对所有用户关闭 SSH 密码登录和 root 登录；只能使用密钥。"
+telegram.server.install_change_ssh: "对所有用户关闭 SSH 密码登录和 root 登录；只能使用密钥。终端的密钥和您的密钥（如果您用密钥登录）会加到「moon」账户上：请以 moon@服务器地址 登录，然后执行 sudo -i。"
 telegram.server.install_change_firewall: "启用 ufw 防火墙，并拦截除 SSH 以外的所有入站连接；当前正在监听的其他服务都会被关闭（安装日志会列出这些端口）。如果 ufw 已启用，则只添加 SSH 端口。"
 telegram.server.install_change_admin: "创建管理员账户“moon”，可免密码使用 sudo。"
-telegram.server.install_change_extras: "安装 fail2ban 和自动安全更新。"
+telegram.server.install_change_extras: "安装 fail2ban 和自动安全更新。10 分钟内登录失败 5 次后，fail2ban 会将该地址封禁 10 分钟——包括尝试以 root 登录。"
 telegram.server.install_password_warning: "你使用密码登录，且未提供自己的密钥：安装后只有这台电脑上的 MoonTerminal 能够登录。请保管好它的数据文件夹，或先把自己的密钥添加到服务器。"
 telegram.server.install_confirm: "信任此密钥并安装"
 

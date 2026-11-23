@@ -592,10 +592,10 @@ telegram.server.access_pending_return: "Không đổi hoặc gỡ quyền trạm
 telegram.server.install_review: "Chưa gửi gì lên máy chủ: kiểm tra khóa và các thay đổi bên dưới, rồi bắt đầu cài."
 telegram.server.install_fingerprint: "Máy chủ %{addr} đưa khóa %{fingerprint}. Kiểm tra trong console của nhà cung cấp. Chỉ tiếp tục nếu đó là khóa máy chủ của bạn."
 telegram.server.install_changes_title: "Lần cài sẽ đổi máy chủ này:"
-telegram.server.install_change_ssh: "Đăng nhập SSH bằng mật khẩu và bằng root bị tắt với mọi người dùng; chỉ khóa còn chạy."
+telegram.server.install_change_ssh: "Đăng nhập SSH bằng mật khẩu và bằng root bị tắt với mọi người dùng; chỉ khóa còn chạy. Khóa của terminal và khóa của bạn (nếu bạn đăng nhập bằng khóa) được thêm vào tài khoản «moon»: đăng nhập bằng moon@địa-chỉ-máy-chủ, sau đó sudo -i."
 telegram.server.install_change_firewall: "Tường lửa ufw được bật và chặn mọi kết nối vào trừ SSH; thứ khác đang lắng nghe sẽ bị đóng (nhật ký cài nêu các cổng đó). Nếu ufw đã bật, chỉ thêm cổng SSH."
 telegram.server.install_change_admin: "Một tài khoản quản trị \"moon\" được tạo, có sudo không cần mật khẩu."
-telegram.server.install_change_extras: "fail2ban và cập nhật bảo mật tự động được cài."
+telegram.server.install_change_extras: "fail2ban và cập nhật bảo mật tự động được cài. fail2ban chặn một địa chỉ trong 10 phút sau 5 lần đăng nhập thất bại trong 10 phút — kể cả các lần thử đăng nhập bằng root."
 telegram.server.install_password_warning: "Bạn đăng nhập bằng mật khẩu và không đưa khóa riêng: sau khi cài, chỉ MoonTerminal của máy này đăng nhập được. Giữ thư mục dữ liệu của nó, hoặc thêm khóa của bạn lên máy chủ trước."
 telegram.server.install_confirm: "Tin khóa này và cài"
 

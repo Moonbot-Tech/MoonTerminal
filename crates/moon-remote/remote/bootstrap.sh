@@ -5,8 +5,9 @@
 # [args]`; secrets arrive on stdin, never in argv. Every step checks the state it is about to
 # change first, so running the setup again is harmless.
 #
-# The `key-only` pair of steps is the one part a core's install uses as well (`moon-remote`'s
-# `key_only`): it closes password logins on a server whose user came in by a key.
+# The `key-only` pair of steps and `authorize` are the part a core's install uses as well
+# (`moon-remote`'s `key_only`): they close password logins on a core's server, after a password
+# login only once the terminal's own key has been authorized and proven.
 set -eu
 umask 022
 
@@ -14,6 +15,14 @@ HELPER=/usr/local/sbin/moon-station-admin
 SUDOERS=/etc/sudoers.d/moon-station
 SSHD_DROPIN=/etc/ssh/sshd_config.d/00-moon-station.conf
 KEY_ONLY_DROPIN=/etc/ssh/sshd_config.d/00-moon-key-only.conf
+# A hand-made reopener: a chat reply of 2026-11-12 told users to create it (`PasswordAuthentication
+# yes`, `PermitRootLogin yes`) so a move could log in by password. It sorts between the two files
+# above, so it keeps root logins open past the station's file. The closing steps move it aside,
+# out of the `*.conf` pattern sshd includes, and their rollbacks move it back.
+PASSWORD_DROPIN=/etc/ssh/sshd_config.d/00-moon-password.conf
+PASSWORD_ASIDE=/etc/ssh/sshd_config.d/00-moon-password.conf.moon-off
+# Where an aside goes once the close that made it is over: no later rollback may bring it back.
+PASSWORD_SETTLED=/etc/ssh/sshd_config.d/00-moon-password.conf.moon-removed
 UNIT=/etc/systemd/system/moon-station.service
 REMOVED=/etc/moon-station/removed
 UPDATE_PATH_UNIT=/etc/systemd/system/moon-station-update.path
@@ -48,7 +57,11 @@ put_file() {
         rm -f "$tmp"
         echo unchanged
     else
-        install -m "$2" -o "${3%%:*}" -g "${3##*:}" "$tmp" "$1"
+        # Returned, not left to `set -e`: a caller testing put_file in an `if` has errexit off.
+        if ! install -m "$2" -o "${3%%:*}" -g "${3##*:}" "$tmp" "$1"; then
+            rm -f "$tmp"
+            return 1
+        fi
         rm -f "$tmp"
         echo changed
     fi
@@ -82,6 +95,31 @@ listeners() {
         tcp | udp) echo "$port/$proto" ;;
         esac
     done | sort -u
+}
+
+# Settle an aside an EARLIER run left, so this run's rollback must not resurrect it. Called first
+# by every closing step; afterwards an aside is this run's alone. An earlier run whose own
+# rollback never ran (killed by its deadline, or a rollback that failed) is settled the same way:
+# the server then stays closed, the state #1352 asks for, and the file stays as `.moon-removed`
+# for a hand restore.
+password_dropin_settle() {
+    if [ -f "$PASSWORD_ASIDE" ]; then
+        mv -f "$PASSWORD_ASIDE" "$PASSWORD_SETTLED"
+    fi
+}
+
+# Move the hand-made reopener out of sshd's reach. Prints nothing; succeeds when there is none.
+password_dropin_aside() {
+    if [ -f "$PASSWORD_DROPIN" ]; then
+        mv -f "$PASSWORD_DROPIN" "$PASSWORD_ASIDE"
+    fi
+}
+
+# Put the reopener back where the user left it, for a rollback.
+password_dropin_back() {
+    if [ -f "$PASSWORD_ASIDE" ]; then
+        mv -f "$PASSWORD_ASIDE" "$PASSWORD_DROPIN"
+    fi
 }
 
 sshd_includes_dropins() {
@@ -293,23 +331,36 @@ step_service() {
 }
 
 # harden: keys only, no root login. Our file sorts before cloud-init's 50-cloud-init.conf, and
-# sshd takes the first value it reads. Verified through `sshd -T`, rolled back on any doubt.
+# sshd takes the first value it reads. Verified through `sshd -T`, rolled back on any doubt. The
+# hand-made reopener sorts before our file and would keep root open, so it is moved aside first.
 step_harden() {
     sshd_includes_dropins ||
         die "sshd_config does not include sshd_config.d"
-    state=$(printf '%s\n' \
+    password_dropin_settle
+    moved=no
+    if [ -f "$PASSWORD_DROPIN" ]; then
+        password_dropin_aside
+        moved=yes
+    fi
+    if ! state=$(printf '%s\n' \
         '# moon-station: keys only, no root. Sorted first so no later file can reopen it.' \
         'PermitRootLogin no' \
         'PasswordAuthentication no' \
-        'KbdInteractiveAuthentication no' | put_file "$SSHD_DROPIN" 644 root:root)
+        'KbdInteractiveAuthentication no' | put_file "$SSHD_DROPIN" 644 root:root); then
+        password_dropin_back
+        die "could not write $SSHD_DROPIN"
+    fi
+    [ "$moved" = no ] || state=changed
     if ! sshd -t; then
         rm -f "$SSHD_DROPIN"
+        password_dropin_back
         die "sshd rejected the configuration; removed it"
     fi
     effective=$(sshd_effective || true)
     for want in 'permitrootlogin no' 'passwordauthentication no' 'kbdinteractiveauthentication no'; do
         if ! printf '%s\n' "$effective" | grep -qx "$want"; then
             rm -f "$SSHD_DROPIN"
+            password_dropin_back
             reload_sshd
             die "sshd still does not say \"$want\"; removed our file"
         fi
@@ -321,40 +372,113 @@ step_harden() {
 # unharden: the rollback of harden, for when the new logins do not work.
 step_unharden() {
     rm -f "$SSHD_DROPIN"
+    password_dropin_back
     sshd -t
     reload_sshd
     echo "sshd=reopened"
 }
 
-# key-only: password logins off, nothing else touched — for a server a core was put on through
-# a key login. That key keeps working, so no account and no key is added here, and root's own
-# login stays as it was: the core runs as root and its user logs in as root. `PermitRootLogin` is
+# authorize <login>; stdin: public key lines. Appends to that login's authorized_keys every key
+# it lacks — the terminal's own, so a server closed to passwords after a password login still lets
+# the terminal in. Root is a valid login here: a provider's image often has no other account. The
+# file is appended to, never replaced, and a directory or file that exists keeps its mode. Prints
+# `key=added` or `key=present` per key.
+step_authorize() {
+    name=${1:-}
+    case "$name" in
+    '' | *[!a-z0-9_.-]*) die "not a usable login name: $name" ;;
+    esac
+    entry=$(getent passwd "$name") || die "no user $name"
+    home=$(printf '%s\n' "$entry" | cut -d: -f6)
+    [ -n "$home" ] && [ -d "$home" ] || die "$name has no home directory"
+    keys_in=$(mktemp)
+    cat >"$keys_in"
+    if [ ! -s "$keys_in" ]; then
+        rm -f "$keys_in"
+        die "no public key on stdin"
+    fi
+    while IFS= read -r pub; do
+        case "$pub" in
+        "ssh-ed25519 "* | "ecdsa-sha2-"* | "ssh-rsa "*) ;;
+        *)
+            rm -f "$keys_in"
+            die "not an ed25519, ECDSA or RSA public key"
+            ;;
+        esac
+    done <"$keys_in"
+    primary=$(id -gn "$name")
+    if [ ! -d "$home/.ssh" ]; then
+        mkdir -p "$home/.ssh"
+        chown "$name:$primary" "$home/.ssh"
+        chmod 700 "$home/.ssh"
+    fi
+    keys="$home/.ssh/authorized_keys"
+    if [ ! -f "$keys" ]; then
+        : >"$keys"
+        chown "$name:$primary" "$keys"
+        chmod 600 "$keys"
+    fi
+    # A last line without its newline would glue the appended key onto it.
+    if [ -s "$keys" ] && [ -n "$(tail -c 1 "$keys")" ]; then
+        echo >>"$keys"
+    fi
+    while IFS= read -r pub; do
+        body=$(printf '%s\n' "$pub" | awk '{print $2}')
+        if grep -qF "$body" "$keys"; then
+            echo "key=present"
+        else
+            printf '%s\n' "$pub" >>"$keys"
+            echo "key=added"
+        fi
+    done <"$keys_in"
+    rm -f "$keys_in"
+}
+
+# key-only: password logins off, nothing else touched — for a core's server. The way in that
+# stays is the login's own key, or after a password login the terminal's key that `authorize`
+# added first; this step adds no account and no key, and root's own login stays as it was: the
+# core runs as root and its user logs in as root. `PermitRootLogin` is
 # left out on purpose: this file sorts before the station's, and naming it here would reopen a
 # root login the station closed. Prints `sshd=already` when sshd takes no password as it stands,
-# `sshd=changed` when this step closed it.
+# `sshd=changed` when this step closed it. The hand-made reopener is moved aside on the way: moving
+# it is a change too, so a server it sat on is never reported as closed already.
 step_key_only() {
+    password_dropin_settle
+    moved=no
+    if [ -f "$PASSWORD_DROPIN" ]; then
+        password_dropin_aside
+        moved=yes
+    fi
     # Asked first: a server closed in its main sshd_config needs no drop-in directory at all.
-    if sshd_refuses_passwords; then
+    if [ "$moved" = no ] && sshd_refuses_passwords; then
         echo "sshd=already"
         return 0
     fi
-    sshd_includes_dropins ||
+    if ! sshd_includes_dropins; then
+        password_dropin_back
         die "sshd_config does not include sshd_config.d"
-    printf '%s\n' \
+    fi
+    if ! printf '%s\n' \
         '# MoonBot core: key logins only. Sorted first so no later file can reopen it.' \
         'PasswordAuthentication no' \
-        'KbdInteractiveAuthentication no' | put_file "$KEY_ONLY_DROPIN" 644 root:root >/dev/null
+        'KbdInteractiveAuthentication no' | put_file "$KEY_ONLY_DROPIN" 644 root:root >/dev/null; then
+        password_dropin_back
+        die "could not write $KEY_ONLY_DROPIN"
+    fi
     if ! sshd -t; then
         rm -f "$KEY_ONLY_DROPIN"
+        password_dropin_back
         die "sshd rejected the configuration; removed it"
     fi
     if ! sshd_refuses_passwords; then
         rm -f "$KEY_ONLY_DROPIN"
+        password_dropin_back
         die "sshd would still take a password; removed our file"
     fi
     # A file left behind an sshd that never read it would make the next run say `already`.
     if ! reload_sshd; then
         rm -f "$KEY_ONLY_DROPIN"
+        password_dropin_back
         die "sshd did not reload; removed our file"
     fi
     echo "sshd=changed"
@@ -363,6 +487,7 @@ step_key_only() {
 # key-only-off: the rollback of key-only, for when the key login does not work afterwards.
 step_key_only_off() {
     rm -f "$KEY_ONLY_DROPIN"
+    password_dropin_back
     sshd -t
     reload_sshd
     echo "sshd=reopened"
@@ -490,6 +615,7 @@ helper) step_helper "$@" ;;
 service) step_service ;;
 harden) step_harden ;;
 unharden) step_unharden ;;
+authorize) step_authorize "$@" ;;
 key-only) step_key_only ;;
 key-only-off) step_key_only_off ;;
 ufw-install) step_ufw_install ;;

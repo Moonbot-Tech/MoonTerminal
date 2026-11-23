@@ -99,6 +99,7 @@ connect_wizard.review.sub: "%{addr} sunucusu bu anahtarı sunuyor. Sağlayıcın
 connect_wizard.review.matches: "Anahtar, sağlayıcımın gösterdiğiyle aynı"
 connect_wizard.review.close_password: "Parolayla girişi kapat"
 connect_wizard.review.close_password_note: "Çekirdek kurulduktan sonra sunucuya yalnızca anahtarla girilir. Anahtar dosyası kaybolursa tek yol sağlayıcı panelindeki konsoldur."
+connect_wizard.review.close_password_note_password: "Önce sunucuya bu terminalin anahtarı eklenir ve onunla giriş denenir; parola ancak bundan sonra kapatılır. Bundan sonra sunucuya SSH ile yalnızca bu bilgisayardaki MoonTerminal girebilir — veri klasörünü saklayın. Kaybolursa tek yol sağlayıcı panelindeki konsoldur."
 connect_wizard.review.secrets: "Ardından terminal kullanıcı adınız ve parolanızla sunucuya girer."
 connect_wizard.review.login: "Gir ve kontrol et"
 

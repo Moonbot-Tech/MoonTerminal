@@ -832,6 +832,7 @@ fn losing_a_known_station_cancels_queued_work_and_fingerprint_consent() {
                 addr: "old:22".into(),
                 fingerprint: "SHA256:old".into(),
                 admin: Some("moon".into()),
+                key_login: None,
             },
             target: Target {
                 host: "new".into(),
@@ -999,6 +1000,7 @@ fn queued_access_changes_and_forgetting_recheck_recovery_state() {
         addr: "old:22".into(),
         fingerprint: "SHA256:old".into(),
         admin: Some("moon".into()),
+        key_login: None,
     };
     assert!(
         job::Job::Remove {

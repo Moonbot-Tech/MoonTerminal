@@ -586,7 +586,7 @@ impl CoreCmdsView {
             let b = backend.read(cx);
             let host = target_host(&facts.target);
             let has_login = facts.located.is_some()
-                || self.hosts.admin_by_ip(host).is_some()
+                || self.hosts.app_login_by_ip(host).is_some()
                 || b.core_cmds.logins.contains_key(host);
             crate::backend::core_cmds::menu_form(
                 has_login || facts.target.is_empty(),

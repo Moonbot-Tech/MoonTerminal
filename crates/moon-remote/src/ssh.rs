@@ -238,7 +238,7 @@ impl Conn {
             }
             Err(_) => {
                 return Err(OpenError::Other(
-                    anyhow::anyhow!(crate::error::StationError::Timeout).context(format!(
+                    anyhow::anyhow!(crate::error::StationError::ConnectTimeout).context(format!(
                         "connect to {}: no answer within {}s",
                         target.addr(),
                         CONNECT_TIMEOUT.as_secs()

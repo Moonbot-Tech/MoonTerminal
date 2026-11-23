@@ -18,7 +18,7 @@ use rust_i18n::t;
 
 use super::steps::{StepEvent, StepId, StepNote, StepState};
 use super::{Event, FailOutcome, text};
-use crate::backend::core_new::{close_password_line, login_failure_text, state_text};
+use crate::backend::core_new::{close_password, login_failure_text, state_text};
 
 /// How often a move that waits on its old core looks whether it went down.
 const WATCH: Duration = Duration::from_secs(30);
@@ -37,8 +37,9 @@ pub(crate) struct MoveForm {
     pub(crate) dir: String,
     /// The new core's MoonProto UDP port.
     pub(crate) proto_port: u16,
-    /// Turn the server's password logins off once the new core is installed; set only with a
-    /// key login in `first`.
+    /// Turn the server's password logins off once the new core is installed. Behind a password
+    /// login the terminal's own key is authorized and proven first, and the move logs in with it
+    /// from then on.
     pub(crate) close_password: bool,
     /// The server address the new core's outgoing connections leave from; `None`: the primary
     /// one. Checked against the server's addresses before anything is installed.
@@ -150,7 +151,7 @@ impl<'a> Progress<'a> {
 /// its end.
 pub(super) fn run(
     uid: u64,
-    form: MoveForm,
+    mut form: MoveForm,
     old: anyhow::Result<CoreTarget>,
     tx: &mpsc::Sender<Event>,
     answers: &mpsc::Receiver<Command>,
@@ -159,7 +160,7 @@ pub(super) fn run(
     let mut say = |step: MoveStep| progress.saw(&step);
     let mut stage = Stage::Nothing;
     let moved = run_move(
-        uid, &form, old, tx, answers, &progress, &mut say, &mut stage,
+        uid, &mut form, old, tx, answers, &progress, &mut say, &mut stage,
     );
     let event = match moved {
         Ok(event) => event,
@@ -206,11 +207,12 @@ pub(super) fn old_core_from(target: &CoreTarget) -> anyhow::Result<String> {
     Ok(format!("{}:{}", resolved.client_host, target.port))
 }
 
-/// The move proper; `stage` follows what is on the server, for a failure to report.
+/// The move proper; `stage` follows what is on the server, for a failure to report. Closing the
+/// password logins may swap `form`'s provider login for the terminal's key.
 #[allow(clippy::too_many_arguments)] // one call site; a struct would only rename the list
 fn run_move(
     uid: u64,
-    form: &MoveForm,
+    form: &mut MoveForm,
     old: anyhow::Result<CoreTarget>,
     tx: &mpsc::Sender<Event>,
     answers: &mpsc::Receiver<Command>,
@@ -316,11 +318,14 @@ fn run_move(
     );
     // After the install, so a server the core never got onto is left exactly as it was found;
     // before the old core's stop, which may wait for hours with no session to do it through.
-    if form.close_password
-        && let Some(line) =
-            close_password_line(&conn, &privilege, &form.target, &form.first, &form.pin)
-    {
-        send(Event::Line(line));
+    // The start after it, and a failure's removal, log in again: with the terminal's key once
+    // the provider's password stopped working.
+    if form.close_password {
+        let done = close_password(&conn, &privilege, &form.target, &form.first, &form.pin);
+        send(Event::Line(done.line));
+        if let Some(relogin) = done.relogin {
+            form.first = relogin;
+        }
     }
     // The stop may wait for hours: no session is held open over it.
     drop(conn);

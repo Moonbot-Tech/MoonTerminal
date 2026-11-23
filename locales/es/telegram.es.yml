@@ -592,10 +592,10 @@ telegram.server.access_pending_return: "No se puede cambiar ni eliminar el acces
 telegram.server.install_review: "Aún no se ha enviado nada al servidor: comprueba la clave y los cambios de abajo y luego inicia la instalación."
 telegram.server.install_fingerprint: "El servidor %{addr} presentó la clave %{fingerprint}. Compruébala en la consola de tu proveedor. Continúa solo si es la clave de tu servidor."
 telegram.server.install_changes_title: "La instalación cambiará este servidor:"
-telegram.server.install_change_ssh: "Los inicios de sesión SSH con contraseña y como root se desactivan para todos los usuarios; solo funcionan las claves."
+telegram.server.install_change_ssh: "Los inicios de sesión SSH con contraseña y como root se desactivan para todos los usuarios; solo funcionan las claves. La clave del terminal y la tuya (si entraste con clave) se instalan en la cuenta «moon»: entra como moon@dirección-del-servidor y luego sudo -i."
 telegram.server.install_change_firewall: "Se activa el cortafuegos ufw y bloquea todas las conexiones entrantes excepto SSH; todo lo demás que escucha ahora se cierra (el registro de la instalación nombra esos puertos). Si ufw ya está activo, solo se añade el puerto SSH."
 telegram.server.install_change_admin: "Se crea una cuenta de administrador \"moon\", con sudo sin contraseña."
-telegram.server.install_change_extras: "Se instalan fail2ban y las actualizaciones de seguridad automáticas."
+telegram.server.install_change_extras: "Se instalan fail2ban y las actualizaciones de seguridad automáticas. fail2ban bloquea una dirección durante 10 minutos tras 5 inicios de sesión fallidos en 10 minutos, incluidos los intentos de entrar como root."
 telegram.server.install_password_warning: "Inicias sesión con contraseña y no das una clave propia: tras la instalación, solo el MoonTerminal de este ordenador podrá entrar. Conserva su carpeta de datos o añade antes tu propia clave al servidor."
 telegram.server.install_confirm: "Confiar en esta clave e instalar"
 
