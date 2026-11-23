@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use super::moon::{NodeData, drop_dest};
-use super::ui::{DragChip, StratDrag, strat_drag_event_should_stop};
+use super::ui::{DragChip, StratDrag, pointers_at_drag_start, strat_drag_event_should_stop};
 
 /// Compile-time source of the tree pane that owns `strat-tree-scroll`.
 const SRC: &str = include_str!("mod.rs");
@@ -117,12 +117,14 @@ impl Render for StratDragHarness {
                     .on_drag(payload, move |drag, _pos, _window, app| {
                         let origin_window = drag.origin_window;
                         let tree_field = tree_field.clone();
+                        let pointers_at_start = pointers_at_drag_start(origin_window, app);
                         app.new(move |_| DragChip {
                             label: SharedString::from("≡"),
                             step: 0.0,
                             origin_window,
                             tree_field,
                             stop_when_outside: true,
+                            pointers_at_start,
                         })
                     })
                     .on_drag_move(cx.listener(
@@ -249,6 +251,60 @@ fn strat_drag_cancels_across_a_second_window(cx: &mut TestAppContext) {
     );
 }
 
+/// Repaint a window that has received no pointer input, the way a chart or status strip redraws
+/// on its own data while the button is held over Strategies.
+fn redraw_without_pointer(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        window.refresh();
+        let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+}
+
+/// #1451: a second window that only redraws while the pointer stays in the tree must not end
+/// the gesture, and the strategy must still land on the folder it is released over.
+#[gpui::test]
+fn strat_drag_survives_a_redraw_of_another_window(cx: &mut TestAppContext) {
+    let tree_field = Rc::new(Cell::new(Some(Bounds::new(
+        Point::default(),
+        size(px(200.0), px(200.0)),
+    ))));
+    let window_a = cx.open_window(size(px(400.0), px(400.0)), {
+        let tree_field = tree_field.clone();
+        move |_, _cx| StratDragHarness::new(tree_field)
+    });
+    let window_b = cx.open_window(size(px(400.0), px(400.0)), |_, _cx| OutsideWindow);
+    let mut cx_a = VisualTestContext::from_window(window_a.into(), cx);
+    let mut cx_b = VisualTestContext::from_window(window_b.into(), cx);
+
+    start_strat_drag(&mut cx_a);
+    redraw_without_pointer(&mut cx_b);
+    assert!(
+        cx_a.update(|_, cx| cx.has_active_drag()),
+        "a repaint of a window the pointer is not in must keep StratDrag live"
+    );
+
+    cx_a.simulate_mouse_move(
+        point(px(100.0), px(50.0)),
+        Some(MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    redraw_without_pointer(&mut cx_b);
+    cx_a.simulate_mouse_up(
+        point(px(100.0), px(50.0)),
+        MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    let harness = window_a.root(&mut cx_a).expect("origin harness");
+    harness.read_with(&cx_a, |view, _| {
+        assert_eq!(
+            view.dropped.borrow().clone(),
+            Some((7, vec!["desk".into(), "live".into()])),
+            "a StratDrag that outlived another window's repaint must still drop on the folder"
+        );
+    });
+}
+
 /// Same-window interior survival plus a Core drop after a live StratDrag.
 #[gpui::test]
 fn strat_drag_survives_interior_and_drops_on_core(cx: &mut TestAppContext) {
@@ -359,12 +415,14 @@ impl Render for FolderDragHarness {
                     },
                     move |_drag, _offset, _window, cx| {
                         let tree_field = preview_bounds.clone();
+                        let pointers_at_start = pointers_at_drag_start(origin_window, cx);
                         cx.new(move |_| DragChip {
                             label: SharedString::from("≡"),
                             step: 0.0,
                             origin_window,
                             tree_field,
                             stop_when_outside: true,
+                            pointers_at_start,
                         })
                     },
                 ),
@@ -470,5 +528,35 @@ fn folder_drag_cancels_across_a_second_window(cx: &mut TestAppContext) {
     assert!(
         !cx_a.update(|_, cx| cx.has_active_drag()),
         "one move in a second native window must clear the process-global FolderDrag"
+    );
+}
+
+/// #1451, folder half: the folder drag shares the same preview, so another window's repaint
+/// must not end it either.
+#[gpui::test]
+fn folder_drag_survives_a_redraw_of_another_window(cx: &mut TestAppContext) {
+    let tree_field = Rc::new(Cell::new(None));
+    let window_a = cx.open_window(size(px(400.0), px(400.0)), {
+        let tree_field = tree_field.clone();
+        move |_, _| FolderDragHarness {
+            width: 200.0,
+            height: 200.0,
+            tree_field,
+        }
+    });
+    let window_b = cx.open_window(size(px(400.0), px(400.0)), |_, _| OutsideWindow);
+    let mut cx_a = VisualTestContext::from_window(window_a.into(), cx);
+    let mut cx_b = VisualTestContext::from_window(window_b.into(), cx);
+    cx_a.update(|window, _| window.refresh());
+    cx_a.run_until_parked();
+
+    let row = cx_a
+        .debug_bounds("folder-drag-row")
+        .expect("the rendered folder row must expose its bounds");
+    start_folder_drag(&mut cx_a, row);
+    redraw_without_pointer(&mut cx_b);
+    assert!(
+        cx_a.update(|_, cx| cx.has_active_drag()),
+        "a repaint of a window the pointer is not in must keep FolderDrag live"
     );
 }
