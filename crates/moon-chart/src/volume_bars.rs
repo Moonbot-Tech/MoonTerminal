@@ -563,14 +563,12 @@ thread_local! {
 
 /// Rows `sample_at_sorted` inspected on this thread since the last call; resets the count.
 #[cfg(test)]
-#[allow(dead_code)] // read by the prover's before/after measurement
 pub(crate) fn take_sample_at_visited() -> u64 {
     SAMPLE_AT_VISITED.with(|n| n.replace(0))
 }
 
 /// Rows `visible_interval_max_sorted` inspected on this thread since the last call; resets it.
 #[cfg(test)]
-#[allow(dead_code)] // read by the prover's before/after measurement
 pub(crate) fn take_interval_max_visited() -> u64 {
     INTERVAL_MAX_VISITED.with(|n| n.replace(0))
 }
