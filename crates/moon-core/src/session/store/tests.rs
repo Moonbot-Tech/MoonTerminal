@@ -1897,3 +1897,60 @@ fn coalesced_partial_turns_after_a_gap_do_not_close_unrelated_orders() {
         }
     }
 }
+
+/// A resolution message of `ids`, each confirming revision `(1, id)`.
+fn resolutions(ids: std::ops::Range<u64>) -> FeedMsg {
+    let actual = Arc::new(moonproto::StrategySnapshot::new(
+        0,
+        1,
+        0,
+        false,
+        moonproto::StrategyKind::MANUAL,
+        "",
+        moonproto::StrategyFields::new(),
+    ));
+    FeedMsg::StrategyEdits(crate::feed::StrategyEditSnapshot {
+        open: Vec::new(),
+        resolved: ids
+            .map(|id| crate::feed::StrategyEditResolution {
+                id,
+                result: crate::feed::StrategyEditResult::Confirmed,
+                sent_revision: (1, id),
+                actual: actual.clone(),
+                changes: Vec::new(),
+            })
+            .collect(),
+    })
+}
+
+/// The Station reads the ring once per drain. A batch resolved in one message and a single
+/// resolution right behind it in the same drain used to cut the ring back to the cap, and the
+/// batch's first strategies then read as unanswered although the core had confirmed them.
+#[test]
+fn a_large_batch_survives_the_next_resolution_of_the_same_drain() {
+    let mut core = CoreData::new();
+    core.apply(resolutions(0..300));
+    core.apply(resolutions(1_000..1_001));
+    assert_eq!(core.strategy_edit_notes_since(0).count(), 301);
+    assert!(core.strategy_edit_notes_since(0).any(|note| note.id == 0));
+}
+
+/// Kept past the cap only while young: once aged, the ring is back at its cap on the next
+/// resolution, so a large batch does not hold memory for good.
+#[test]
+fn an_aged_batch_is_trimmed_back_to_the_cap() {
+    let mut core = CoreData::new();
+    core.apply(resolutions(0..300));
+    for note in core.strategy_edit_notes.iter_mut() {
+        note.at_ms -= crate::feed::STRATEGY_EDIT_NOTE_KEEP_MS;
+    }
+    core.apply(resolutions(1_000..1_001));
+    assert_eq!(
+        core.strategy_edit_notes_since(0).count(),
+        crate::feed::STRATEGY_EDIT_NOTE_CAP
+    );
+    assert!(
+        core.strategy_edit_notes_since(0)
+            .any(|note| note.id == 1_000)
+    );
+}

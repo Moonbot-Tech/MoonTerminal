@@ -29,13 +29,13 @@ pub use moonproto::OrderActionTicket;
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    /// Edit one or more strategies of this core in one submission: all of them or none.
     StrategyEdit {
-        #[serde(with = "ids")]
-        #[schemars(with = "String")]
-        id: u64,
-        fields: BTreeMap<String, Value>,
-        checked: Option<bool>,
-        path: Option<String>,
+        /// 1..=500 distinct strategies; one strategy is a list of one.
+        #[schemars(length(min = 1, max = 500))]
+        edits: Vec<StrategyFieldEdit>,
+        /// Asks the core to refresh standing orders of the edited strategies. One flag for the
+        /// whole submission, as the core takes it.
         #[serde(default)]
         apply_to_orders: bool,
     },
@@ -104,10 +104,32 @@ pub enum Action {
     RuntimeRestart,
 }
 
+/// One strategy's part of an [`Action::StrategyEdit`]: the fields to set and, optionally, its
+/// enabled flag and folder. Fields left out keep their values.
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StrategyFieldEdit {
+    #[serde(with = "ids")]
+    #[schemars(with = "String")]
+    pub id: u64,
+    #[serde(default)]
+    pub fields: BTreeMap<String, Value>,
+    pub checked: Option<bool>,
+    pub path: Option<String>,
+}
+
 impl Action {
     /// The same typed action drives both validation and the MCP input schema.
+    ///
+    /// Nested types are inlined: the schema is embedded as one property of a tool's input
+    /// schema, where a `$ref` to this root's `$defs` would point at nothing and the Station's
+    /// tool catalog would fail to compile.
     pub fn schema() -> Value {
-        serde_json::to_value(schemars::schema_for!(Action)).expect("JSON schema is serializable")
+        let schema = schemars::generate::SchemaSettings::default()
+            .with(|settings| settings.inline_subschemas = true)
+            .into_generator()
+            .into_root_schema_for::<Action>();
+        serde_json::to_value(schema).expect("JSON schema is serializable")
     }
     /// Required capability is derived from the typed action, never from an AI-supplied scope.
     pub fn scope(&self) -> Scope {
@@ -167,6 +189,10 @@ pub struct Submission {
 pub struct Receipt {
     pub value: Value,
     pub admission: Option<moonproto::OrderActionTicket>,
+    /// The strategy revisions a strategy edit or create sent, which the core's resolutions are
+    /// matched against. Kept out of `value`: the client never needs them, and a batch would
+    /// carry hundreds.
+    pub sent: Vec<SentRevision>,
 }
 
 impl From<Value> for Receipt {
@@ -175,8 +201,26 @@ impl From<Value> for Receipt {
         Self {
             value,
             admission: None,
+            sent: Vec::new(),
         }
     }
+}
+
+/// A core value cut to 120 characters, never inside a UTF-8 sequence: a coin list the core
+/// adjusted is kilobytes, and fifty adjusted strategies would otherwise fill an operation result.
+fn clip(text: &str) -> String {
+    match text.char_indices().nth(120) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
+}
+
+/// One strategy revision a submission sent: the identity a resolution must carry to be its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SentRevision {
+    pub id: u64,
+    pub version: i32,
+    pub last_date: u64,
 }
 
 impl Submission {
@@ -212,24 +256,46 @@ impl SessionManager {
         strategies::read(&client, id, offset)
     }
 
-    /// Match an immutable resolution to the submitted revision, never to the strategy ID alone.
-    pub fn automation_strategy_resolution(&self, core: CoreId, sent: &Value) -> Option<Value> {
+    /// The core's verdict on one strategy revision this client sent.
+    ///
+    /// Matched to the exact submitted revision, never to the strategy ID alone, so a later edit
+    /// of the same strategy cannot pass for this one's result. An adjusted strategy names the
+    /// fields the core kept differently, not its whole saved snapshot: a batch of hundreds would
+    /// otherwise answer with megabytes.
+    ///
+    /// Args:
+    ///     core: Core the revision was sent to.
+    ///     sent: The revision as [`SentRevision`] recorded it at submission.
+    ///
+    /// Returns:
+    ///     `{status, kept_by_core?}` — up to 16 `{field, sent, saved}` with long values clipped —
+    ///     or `None` while no resolution of that revision is retained.
+    pub fn automation_strategy_resolution(
+        &self,
+        core: CoreId,
+        sent: &SentRevision,
+    ) -> Option<Value> {
         let data = self.store().core(core)?;
-        let id = ids::parse(&sent["id"]).ok()?;
-        let version = i32::try_from(sent["version"].as_i64()?).ok()?;
-        let date = sent["last_date"].as_u64()?;
-        let note = data
-            .strategy_edit_notes_since(0)
-            .find(|note| note.id == id && note.sent_revision == (version, date))?;
+        let note = data.strategy_edit_notes_since(0).find(|note| {
+            note.id == sent.id && note.sent_revision == (sent.version, sent.last_date)
+        })?;
         let status = match note.result {
             crate::feed::StrategyEditResult::Confirmed => "confirmed",
             crate::feed::StrategyEditResult::Adjusted => "adjusted",
             crate::feed::StrategyEditResult::Superseded => "superseded",
         };
-        Some(
-            json!({"status":status,"execution_confirmed":status=="confirmed","strategy_id":id.to_string(),
-            "sent":sent,"saved":strategies::row(&note.actual),"observed_at_ms":note.at_ms}),
-        )
+        let mut resolution = json!({"status": status});
+        if !note.changes.is_empty() {
+            resolution["kept_by_core"] = note
+                .changes
+                .iter()
+                .take(16)
+                .map(|change| {
+                    json!({"field":change.name,"sent":clip(&change.sent),"saved":clip(&change.saved)})
+                })
+                .collect();
+        }
+        Some(resolution)
     }
 
     /// Prepare from one live snapshot; `expected` is opaque to clients and retained by the caller.
@@ -591,6 +657,7 @@ pub(crate) fn execute(
             return Ok(Receipt {
                 value: json!({"status":"queued_in_runtime","execution_confirmed":false}),
                 admission: Some(ticket),
+                sent: Vec::new(),
             });
         }
         Action::PositionClose {

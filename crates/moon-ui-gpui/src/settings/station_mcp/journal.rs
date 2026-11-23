@@ -112,7 +112,12 @@ fn headline(entry: &AuditEntry, cores: &[CoreInfo], action: &str, outcome: &str)
         .map_or_else(String::new, |time| {
             time.format("%Y-%m-%d %H:%M:%S UTC").to_string()
         });
+    // A batch has no one name to quote; how many strategies it changed is what identifies it.
     let what = match &entry.subject {
+        _ if entry.strategies > 1 => format!(
+            "{action} · {}",
+            t!("station_mcp.strategies_count", count = entry.strategies)
+        ),
         Some(subject) => format!("{action} «{subject}»"),
         None => action.to_owned(),
     };
@@ -129,6 +134,20 @@ fn headline(entry: &AuditEntry, cores: &[CoreInfo], action: &str, outcome: &str)
     .join(" · ")
 }
 
+/// One changed value of `entry` as the owner reads it.
+///
+/// A batch's field with no common new value was set to different values per strategy — an edit
+/// never clears a field — so it says that rather than "—", which would read as cleared.
+fn entry_change_line(entry: &AuditEntry, change: &AuditChange, cores: &[CoreInfo]) -> String {
+    if entry.action == "access_change" {
+        access_line(change, cores, scope_word)
+    } else if entry.strategies > 1 && change.after.is_none() {
+        format!("{}: {}", change.field, t!("station_mcp.values_differ"))
+    } else {
+        change_line(change)
+    }
+}
+
 /// One journal entry: its headline over the values it changed, muted.
 pub(super) fn entry_el(entry: &AuditEntry, cores: &[CoreInfo], cx: &App) -> AnyElement {
     let muted = rgba_from(MoonPalette::active(cx).text_muted, 1.0);
@@ -141,13 +160,7 @@ pub(super) fn entry_el(entry: &AuditEntry, cores: &[CoreInfo], cx: &App) -> AnyE
     let mut lines = entry
         .changes
         .iter()
-        .map(|change| {
-            if entry.action == "access_change" {
-                access_line(change, cores, scope_word)
-            } else {
-                change_line(change)
-            }
-        })
+        .map(|change| entry_change_line(entry, change, cores))
         .collect::<Vec<_>>();
     if entry.changes_omitted > 0 {
         lines.push(t!("station_mcp.changes_more", count = entry.changes_omitted).to_string());

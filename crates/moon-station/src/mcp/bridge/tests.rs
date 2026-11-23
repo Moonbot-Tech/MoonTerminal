@@ -104,3 +104,54 @@ fn a_disconnected_cores_list_is_marked_stale() {
             .contains("disconnected")
     );
 }
+
+/// One sent revision of strategy `id`.
+fn sent(id: u64) -> SentRevision {
+    SentRevision {
+        id,
+        version: 1,
+        last_date: 10,
+    }
+}
+
+/// A batch reads as confirmed only when every strategy is: one answer missing makes the whole
+/// operation unknown, and that strategy is named under it rather than dropped.
+#[test]
+fn a_batch_reports_its_worst_outcome_and_names_every_strategy() {
+    let outcomes = BTreeMap::from([
+        (1, json!({"status":"confirmed"})),
+        (
+            2,
+            json!({"status":"adjusted","kept_by_core":[{"field":"OrderSize"}]}),
+        ),
+    ]);
+    let result = strategy_result(&[sent(1), sent(2), sent(3)], &outcomes, Some("timeout"));
+    assert_eq!(result["status"], "unknown");
+    assert_eq!(result["execution_confirmed"], false);
+    assert_eq!(result["strategies"]["confirmed"], json!(["1"]));
+    assert_eq!(result["strategies"]["adjusted"], json!(["2"]));
+    assert_eq!(result["strategies"]["unknown"], json!(["3"]));
+    assert_eq!(result["adjusted"][0]["id"], "2");
+    assert_eq!(result["reason"], "timeout");
+    let all = BTreeMap::from([(1, json!({"status":"confirmed"}))]);
+    let confirmed = strategy_result(&[sent(1)], &all, None);
+    assert_eq!(confirmed["status"], "confirmed");
+    assert_eq!(confirmed["execution_confirmed"], true);
+}
+
+/// Adjusted strategies past the detail bound are counted, not listed, so the result stays small.
+#[test]
+fn adjusted_details_are_bounded_and_counted() {
+    let ids: Vec<u64> = (0..(MAX_ADJUSTED_DETAILS as u64 + 7)).collect();
+    let outcomes: BTreeMap<u64, Value> = ids
+        .iter()
+        .map(|id| (*id, json!({"status":"adjusted","kept_by_core":[]})))
+        .collect();
+    let sent: Vec<SentRevision> = ids.iter().map(|id| sent(*id)).collect();
+    let result = strategy_result(&sent, &outcomes, None);
+    assert_eq!(
+        result["adjusted"].as_array().map(Vec::len),
+        Some(MAX_ADJUSTED_DETAILS)
+    );
+    assert_eq!(result["adjusted_details_omitted"], 7);
+}

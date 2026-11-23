@@ -56,14 +56,24 @@ pub(super) fn execute(
                         &request.expected,
                         now,
                     );
-                    usize::from(outcome.is_ok())
+                    // The count is the log line's; zero would also tell the caller nothing went.
+                    outcome.as_ref().map_or(0, |(_, sent)| sent.len())
                 },
             );
-            let preview = outcome?;
+            let (_, sent) = outcome?;
             ensure!(queued, "ActiveLib rejected the strategy submission");
-            let id = crate::automation::ids::parse(&preview["id"])?;
-            local_edits.mark(id);
-            Ok(json!({"status":"submitted","strategy_id":id.to_string(),"execution_confirmed":false,"expected":preview["sent"]}).into())
+            for revision in &sent {
+                local_edits.mark(revision.id);
+            }
+            let ids: Vec<String> = sent
+                .iter()
+                .map(|revision| revision.id.to_string())
+                .collect();
+            Ok(Receipt {
+                value: json!({"status":"submitted","strategy_ids":ids,"execution_confirmed":false}),
+                admission: None,
+                sent,
+            })
         }
         _ => {
             ensure!(

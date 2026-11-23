@@ -607,8 +607,8 @@ fn build_catalog() -> Vec<Tool> {
         ),
         tool(
             "action_preview",
-            "Validate one explicit change against current core state and permissions. Returns a short-lived preview ID and concrete before/after. Does not submit commands. Explain effects before applying. Order balance_amount is in the account settlement currency, NOT base quantity or margin; a selected strategy can override it. Read the preview's effective size and limits.",
-            json!({"core":core,"action":Action::schema()}),
+            "Validate one explicit change against current core state and permissions. Returns a short-lived preview ID and concrete before/after. Does not submit commands. Explain effects before applying. strategy_edit takes a list of up to 500 strategies of ONE core, each with its own fields: one preview and one apply for all of them, all or nothing (one pending, missing or invalid strategy refuses the whole list and names it). Its preview lists each strategy's name and only the fields that differ; a long coin list shows as counts and the coins added/removed unless full_lists is true. A strategy already holding the values is listed as unchanged and not sent. Several cores take one preview each. Order balance_amount is in the account settlement currency, NOT base quantity or margin; a selected strategy can override it. Read the preview's effective size and limits.",
+            json!({"core":core,"action":Action::schema(),"full_lists":{"type":"boolean","description":"Show long strategy values (coin lists) whole in a strategy_edit preview."}}),
             &["core", "action"],
             true,
         ),
@@ -621,7 +621,7 @@ fn build_catalog() -> Vec<Tool> {
         ),
         tool(
             "operation_get",
-            "Read a submitted operation and current observed state. Unknown/timeout is not success or safe-to-retry. Order creation cannot be exactly correlated to a server UID by current MoonProto.",
+            "Read a submitted operation and current observed state. A strategy edit's result lists each strategy id under its outcome (confirmed, adjusted with what the core kept, superseded, unknown); read values with strategy_read. Unknown/timeout is not success or safe-to-retry. Order creation cannot be exactly correlated to a server UID by current MoonProto.",
             json!({"operation_id":id}),
             &["operation_id"],
             true,

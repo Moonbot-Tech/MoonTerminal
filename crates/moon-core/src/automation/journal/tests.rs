@@ -51,27 +51,31 @@ fn a_change_of_access_lists_only_the_cores_that_moved() {
     );
 }
 
+/// A strategy edit; the summary reads the preview, so the listed edits do not matter.
 fn edit() -> Action {
     Action::StrategyEdit {
-        id: 5,
-        fields: BTreeMap::new(),
-        checked: None,
-        path: None,
+        edits: Vec::new(),
         apply_to_orders: false,
     }
+}
+
+/// A strategy-edit preview of one strategy changing from `before` to `after`.
+fn one_strategy(before: Value, after: Value) -> Value {
+    json!({"strategies": [{"id": "5", "unchanged": false, "before": before, "after": after}]})
 }
 
 /// The preview carries the whole strategy, trading parameters included. A journal built from it
 /// without a diff would store them all; the revision fields would also read as a change.
 #[test]
 fn a_strategy_edit_keeps_only_what_it_changed() {
-    let preview = json!({
-        "before": {"version": 1, "last_date": 10, "checked": false, "path": "a",
-            "fields": {"StrategyName": "Night", "OrderSize": 10, "StopLoss": 2.5}},
-        "after": {"version": 2, "last_date": 11, "checked": true, "path": "a",
-            "fields": {"StrategyName": "Night", "OrderSize": 10, "StopLoss": 3.0}},
-    });
+    let preview = one_strategy(
+        json!({"version": 1, "last_date": 10, "checked": false, "path": "a",
+            "fields": {"StrategyName": "Night", "OrderSize": 10, "StopLoss": 2.5}}),
+        json!({"version": 2, "last_date": 11, "checked": true, "path": "a",
+            "fields": {"StrategyName": "Night", "OrderSize": 10, "StopLoss": 3.0}}),
+    );
     let summary = summarize(&edit(), &preview);
+    assert_eq!(summary.strategies, 1);
     assert_eq!(summary.subject.as_deref(), Some("Night"));
     assert_eq!(
         summary.changes,
@@ -94,14 +98,54 @@ fn a_strategy_edit_keeps_only_what_it_changed() {
 #[test]
 fn an_edit_applied_to_live_orders_says_so() {
     let action = Action::StrategyEdit {
-        id: 5,
-        fields: BTreeMap::new(),
-        checked: None,
-        path: None,
+        edits: Vec::new(),
         apply_to_orders: true,
     };
-    let summary = summarize(&action, &json!({"before": {}, "after": {}}));
+    let summary = summarize(&action, &one_strategy(json!({}), json!({})));
     assert_eq!(summary.changes[0].field, "apply_to_orders");
+}
+
+/// The report's case: the same two fields set on hundreds of strategies. The entry must say how
+/// many and which fields once each, not list the first strategies' values and hide the rest. A
+/// field set to different values per strategy states no value; old values that differ state none
+/// either; a strategy that already held the values was not sent and is not counted.
+#[test]
+fn a_batch_states_its_count_and_each_field_once() {
+    let strategy = |id: u64, max: f64, by: &str, unchanged: bool| {
+        json!({"id": id.to_string(), "unchanged": unchanged,
+            "before": {"fields": {"StrategyName": format!("S{id}"), "FilterMax": max, "FilterBy": "1h"}},
+            "after": {"fields": {"StrategyName": format!("S{id}"), "FilterMax": 5.0, "FilterBy": by}}})
+    };
+    let mut strategies: Vec<Value> = (0..333)
+        .map(|id| {
+            strategy(
+                id,
+                f64::from(id as u32),
+                if id % 2 == 0 { "24h" } else { "4h" },
+                false,
+            )
+        })
+        .collect();
+    strategies.push(strategy(999, 5.0, "1h", true));
+    let summary = summarize(&edit(), &json!({"strategies": strategies}));
+    assert_eq!(summary.strategies, 333);
+    assert_eq!(summary.subject, None);
+    assert_eq!(summary.omitted, 0);
+    assert_eq!(
+        summary.changes,
+        vec![
+            AuditChange {
+                field: "FilterBy".into(),
+                before: None,
+                after: None,
+            },
+            AuditChange {
+                field: "FilterMax".into(),
+                before: None,
+                after: Some("5.0".into()),
+            },
+        ]
+    );
 }
 
 /// A selected strategy can override the command's amount: the journal must state the amount the
@@ -157,7 +201,7 @@ fn a_settings_patch_lists_only_values_that_differ() {
 fn a_large_edit_is_counted_past_the_bound() {
     let before: serde_json::Map<_, _> = (0..20).map(|i| (format!("f{i:02}"), json!(0))).collect();
     let after: serde_json::Map<_, _> = (0..20).map(|i| (format!("f{i:02}"), json!(1))).collect();
-    let preview = json!({"before": {"fields": before}, "after": {"fields": after}});
+    let preview = one_strategy(json!({"fields": before}), json!({"fields": after}));
     let summary = summarize(&edit(), &preview);
     assert_eq!(summary.changes.len(), MAX_CHANGES);
     assert_eq!(summary.omitted, 4);

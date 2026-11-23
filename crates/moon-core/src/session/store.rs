@@ -16,8 +16,8 @@ use crate::feed::{
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
     CoreConfigState, CoreTelegramState, CoreTgEvent, DetectRow, EngineActionResult, FeedMsg,
     LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState, STRATEGY_EDIT_NOTE_CAP,
-    StrategyEditNote, StrategyEditOutcome, StrategyEditPhase, StrategyEditRow, StrategyRow,
-    StrategySchemaModel, TempBlacklistRow, TransferAssetsSnapshot,
+    STRATEGY_EDIT_NOTE_KEEP_MS, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
+    StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow, TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -1159,8 +1159,22 @@ impl CoreData {
                     notes_pushed_this_apply += 1;
                 }
                 // A note pushed by this apply must never be evicted by this same apply, so the
-                // trim floor rises to cover a batch bigger than the steady-state cap.
-                let trim_floor = STRATEGY_EDIT_NOTE_CAP.max(notes_pushed_this_apply);
+                // trim floor rises to cover a batch bigger than the steady-state cap. Nor may a
+                // young note: a poller reading after a whole drain — the Station's MCP owner,
+                // matching a batch of up to 500 sent strategies — would otherwise lose a batch
+                // resolved in one message to the next message of the same drain.
+                let young = self
+                    .strategy_edit_notes
+                    .iter()
+                    // A clock stepped back gives a negative age; such a note is not young, or
+                    // the ring would stop trimming until the clock caught up.
+                    .filter(|note| {
+                        (0..STRATEGY_EDIT_NOTE_KEEP_MS).contains(&at_ms.saturating_sub(note.at_ms))
+                    })
+                    .count();
+                let trim_floor = STRATEGY_EDIT_NOTE_CAP
+                    .max(notes_pushed_this_apply)
+                    .max(young);
                 while self.strategy_edit_notes.len() > trim_floor {
                     self.strategy_edit_notes.pop_front();
                 }

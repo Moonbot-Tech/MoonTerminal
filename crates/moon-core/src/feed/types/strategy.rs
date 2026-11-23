@@ -169,6 +169,13 @@ pub struct StrategyEditSnapshot {
 /// Cap on resolved strategy-edit notes retained per core.
 pub const STRATEGY_EDIT_NOTE_CAP: usize = 64;
 
+/// How long a resolved note outlives [`STRATEGY_EDIT_NOTE_CAP`], in milliseconds.
+///
+/// Long enough for any poller to read it after the pass that applied it. The ring is trimmed
+/// back to its cap by the first resolution message after that, not by a timer, so a large batch
+/// stays until the core resolves another edit — bounded by one batch.
+pub const STRATEGY_EDIT_NOTE_KEEP_MS: i64 = 10_000;
+
 /// Classification of one pending strategy edit against a core's resolved notes and open rows,
 /// returned by [`crate::session::store::CoreData::resolve_strategy_edit`].
 ///

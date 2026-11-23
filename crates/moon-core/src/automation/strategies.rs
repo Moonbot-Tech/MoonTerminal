@@ -7,7 +7,7 @@ use moonproto::{
 };
 use serde_json::{Value, json};
 
-use super::Action;
+use super::{Action, SentRevision, StrategyFieldEdit};
 
 /// Preserve every numeric bit; 64-bit integers use strings to survive JavaScript MCP clients.
 fn value(field: &FieldValue) -> Value {
@@ -82,7 +82,19 @@ pub(super) fn preview(client: &MoonClient, action: &Action) -> Result<Value> {
         .strategy_schema()
         .context("strategy schema unavailable")?;
     match action {
-        Action::StrategyEdit { id, .. } | Action::StrategyDelete { id } => ensure!(
+        // One pending strategy fails the whole batch: sending the rest would leave the client
+        // holding a list it believes was applied together.
+        Action::StrategyEdit { edits, .. } => {
+            for edit in edits {
+                ensure!(
+                    snapshot.strategy_edit(edit.id).is_none(),
+                    "strategy {} already has a pending edit; observe its result first, nothing \
+                     was sent",
+                    edit.id
+                );
+            }
+        }
+        Action::StrategyDelete { id } => ensure!(
             snapshot.strategy_edit(*id).is_none(),
             "strategy already has a pending edit; observe its result first"
         ),
@@ -97,30 +109,181 @@ pub(super) fn preview(client: &MoonClient, action: &Action) -> Result<Value> {
 }
 
 /// Rebuild on the effective full set (including pending edits), checking the complete preview first.
+///
+/// Returns:
+///     The rebuilt preview and the revisions it puts on the wire: every strategy an edit
+///     changes, the strategy a create makes, nothing for a delete.
 pub(crate) fn apply(
     full: &mut Vec<StrategySnapshot>,
     schema: Option<&StrategySchema>,
     action: &Action,
     expected: &Value,
     now: u64,
-) -> Result<Value> {
+) -> Result<(Value, Vec<SentRevision>)> {
     let schema = schema.context("strategy schema unavailable")?;
     // Work on a copy until every field validates and the previous snapshot still matches.
     let mut next = full.clone();
-    let mut preview = transform(&mut next, schema, action, Some(now))?;
-    ensure!(
-        preview["before"] == expected["before"] && preview["after"] == expected["after"],
-        "strategy changed since preview; read and preview again"
-    );
-    if let Some(sent) = next
+    let preview = transform(&mut next, schema, action, Some(now))?;
+    let sent_ids: Vec<u64> = match action {
+        // Every listed strategy's whole before AND after, unchanged ones included: one of them
+        // moving during the preview's lifetime refuses the batch.
+        Action::StrategyEdit { .. } => {
+            ensure!(
+                preview["strategies"] == expected["strategies"],
+                "a strategy changed since preview; read and preview again, nothing was sent"
+            );
+            changed_ids(&preview)
+        }
+        _ => {
+            ensure!(
+                preview["before"] == expected["before"] && preview["after"] == expected["after"],
+                "strategy changed since preview; read and preview again"
+            );
+            match action {
+                Action::StrategyCreate { .. } => {
+                    super::ids::parse(&preview["id"]).into_iter().collect()
+                }
+                _ => Vec::new(),
+            }
+        }
+    };
+    let sent = sent_ids
         .iter()
-        .find(|strategy| Some(strategy.strategy_id) == super::ids::parse(&preview["id"]).ok())
-    {
-        preview["sent"] = row(sent);
-    }
+        .filter_map(|id| next.iter().find(|strategy| strategy.strategy_id == *id))
+        .map(|strategy| SentRevision {
+            id: strategy.strategy_id,
+            version: strategy.strategy_ver,
+            last_date: strategy.last_date,
+        })
+        .collect();
     *full = next;
-    Ok(preview)
+    Ok((preview, sent))
 }
+
+/// The strategies a strategy-edit preview actually changes, in the order the client listed them.
+fn changed_ids(preview: &Value) -> Vec<u64> {
+    preview["strategies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|strategy| strategy["unchanged"] != true)
+        .filter_map(|strategy| super::ids::parse(&strategy["id"]).ok())
+        .collect()
+}
+
+/// Most strategies one edit names. A short preview of this many two-field edits stays far
+/// inside the Station's 128 KB response budget, which remains the backstop for wider edits.
+pub(super) const MAX_BATCH: usize = 500;
+
+/// Refuse a batch that is empty, too long or names a strategy twice, before anything is built.
+///
+/// A repeated id would make the second entry silently win over the first in one submission.
+fn check_batch(edits: &[StrategyFieldEdit]) -> Result<()> {
+    ensure!(
+        !edits.is_empty() && edits.len() <= MAX_BATCH,
+        "edits must list 1..{MAX_BATCH} strategies of this core"
+    );
+    let mut seen = std::collections::HashSet::with_capacity(edits.len());
+    for edit in edits {
+        ensure!(
+            seen.insert(edit.id),
+            "strategy {} is listed twice; merge its fields into one entry",
+            edit.id
+        );
+    }
+    Ok(())
+}
+
+/// Whether two preview rows hold the same strategy apart from its revision stamp.
+///
+/// The editor never moves the revision, so equal content means the edit asks for what the core
+/// already holds, and sending it would only start a confirmation for nothing.
+fn same_content(before: &Value, after: &Value) -> bool {
+    ["kind", "checked", "path", "fields"]
+        .iter()
+        .all(|key| before[key] == after[key])
+}
+
+/// Apply one strategy's part of an edit to its current snapshot.
+///
+/// Args:
+///     full: The core's whole set as this batch has rebuilt it so far, so a rename checks
+///         against the names earlier entries already gave.
+///     schema: The core's live strategy schema.
+///     edit: The fields, flag and folder asked for.
+///
+/// Returns:
+///     The strategy's row before the edit and its edited snapshot, revision untouched.
+fn edit_one(
+    full: &[StrategySnapshot],
+    schema: &StrategySchema,
+    edit: &StrategyFieldEdit,
+) -> Result<(Value, StrategySnapshot)> {
+    let StrategyFieldEdit {
+        id,
+        fields,
+        checked,
+        path,
+    } = edit;
+    let old = full
+        .iter()
+        .find(|s| s.strategy_id == *id)
+        .context("strategy not found")?;
+    // Only a rename is judged: an edit that keeps its name must stay possible even on a pair
+    // that already shares one, or the duplicate could never be fixed from here.
+    if let Some(next) = fields.get("StrategyName") {
+        let next = next.as_str().context("StrategyName must be a string")?;
+        if old.strategy_name().map(str::trim) != Some(next.trim()) {
+            ensure_name_free(full, Some(*id), next)?;
+        }
+    }
+    let mut base = old.clone();
+    if let Some(signal) = fields.get("SignalType") {
+        let name = signal.as_str().context("SignalType must be a string")?;
+        let kind = schema
+            .kinds
+            .iter()
+            .find(|k| k.name == name)
+            .context("unknown strategy kind")?
+            .kind();
+        base = StrategySnapshot::new(
+            base.strategy_id,
+            base.strategy_ver,
+            base.last_date,
+            base.checked,
+            kind,
+            base.path,
+            base.fields,
+        );
+    }
+    let mut editor = StrategyEditor::from_snapshot(schema, &base)?;
+    edit_fields(&mut editor, schema, fields)?;
+    if let Some(checked) = checked {
+        editor.set_checked(*checked);
+    }
+    if let Some(path) = path {
+        validate_path(path)?;
+        editor.set_path(path.clone());
+    }
+    Ok((row(old), editor.into_snapshot()))
+}
+
+/// Put one changed snapshot into the set, stamped for the wire when this is the submission.
+fn replace(full: &mut Vec<StrategySnapshot>, mut changed: StrategySnapshot, now: Option<u64>) {
+    if let Some(now) = now {
+        changed.last_date = now.max(changed.last_date.saturating_add(1));
+    }
+    let id = changed.strategy_id;
+    if let Some(existing) = full.iter_mut().find(|s| s.strategy_id == id) {
+        *existing = changed;
+    } else {
+        full.push(changed);
+    }
+}
+
+/// What a submission can and cannot promise, stated in every strategy preview.
+const LIMITS: &str = "No server-side compare-and-swap. An external edit after submission can \
+                      still race. Settings confirmation does not confirm BUY replacement.";
 
 /// Build one complete, validated replacement without overwriting untouched or future fields.
 fn transform(
@@ -129,55 +292,44 @@ fn transform(
     action: &Action,
     now: Option<u64>,
 ) -> Result<Value> {
-    let (before, mut changed, apply_orders) = match action {
+    let (before, changed) = match action {
         Action::StrategyEdit {
-            id,
-            fields,
-            checked,
-            path,
+            edits,
             apply_to_orders,
         } => {
-            let old = full
-                .iter()
-                .find(|s| s.strategy_id == *id)
-                .context("strategy not found")?;
-            // Only a rename is judged: an edit that keeps its name must stay possible even on a
-            // pair that already shares one, or the duplicate could never be fixed from here.
-            if let Some(next) = fields.get("StrategyName") {
-                let next = next.as_str().context("StrategyName must be a string")?;
-                if old.strategy_name().map(str::trim) != Some(next.trim()) {
-                    ensure_name_free(full, Some(*id), next)?;
+            check_batch(edits)?;
+            let mut strategies = Vec::with_capacity(edits.len());
+            for edit in edits {
+                // Any entry failing fails the batch; the id says which, and nothing is sent.
+                // The cause goes into the one message: callers pass errors on with `to_string`,
+                // which would drop it if it sat in an anyhow context chain.
+                let (before, changed) = edit_one(full, schema, edit).map_err(|cause| {
+                    anyhow::anyhow!(
+                        "strategy {}: {cause:#}; edit refused, nothing was sent",
+                        edit.id
+                    )
+                })?;
+                let after = row(&changed);
+                let unchanged = same_content(&before, &after);
+                if !unchanged {
+                    // Into the set now, so a later entry's rename sees this one's name.
+                    replace(full, changed, now);
                 }
-            }
-            let mut base = old.clone();
-            if let Some(signal) = fields.get("SignalType") {
-                let name = signal.as_str().context("SignalType must be a string")?;
-                let kind = schema
-                    .kinds
-                    .iter()
-                    .find(|k| k.name == name)
-                    .context("unknown strategy kind")?
-                    .kind();
-                base = StrategySnapshot::new(
-                    base.strategy_id,
-                    base.strategy_ver,
-                    base.last_date,
-                    base.checked,
-                    kind,
-                    base.path,
-                    base.fields,
+                strategies.push(
+                    json!({"id":edit.id.to_string(),"before":before,"after":after,
+                    "unchanged":unchanged}),
                 );
             }
-            let mut editor = StrategyEditor::from_snapshot(schema, &base)?;
-            edit_fields(&mut editor, schema, fields)?;
-            if let Some(checked) = checked {
-                editor.set_checked(*checked);
-            }
-            if let Some(path) = path {
-                validate_path(path)?;
-                editor.set_path(path.clone());
-            }
-            (row(old), editor.into_snapshot(), *apply_to_orders)
+            ensure!(
+                strategies
+                    .iter()
+                    .any(|strategy| strategy["unchanged"] != true),
+                "every listed strategy already holds these values; nothing to send"
+            );
+            return Ok(
+                json!({"strategies":strategies,"apply_to_orders":apply_to_orders,
+                "limits":LIMITS}),
+            );
         }
         Action::StrategyCreate {
             strategy_kind,
@@ -213,7 +365,7 @@ fn transform(
             // The editor stamps format 1, which the core would convert as an old strategy file —
             // a MoonShot would lose its TriggerKeyBuy (#1286). Stamped like every other create.
             made.strategy_ver = crate::feed::live::revision_stamp(full);
-            (json!({"next_id":id.to_string()}), made, false)
+            (json!({"next_id":id.to_string()}), made)
         }
         Action::StrategyDelete { id } => {
             let old = full
@@ -229,19 +381,9 @@ fn transform(
         _ => bail!("not a strategy action"),
     };
     let after = row(&changed);
-    if let Some(now) = now {
-        changed.last_date = now.max(changed.last_date.saturating_add(1));
-    }
     let id = changed.strategy_id;
-    if let Some(existing) = full.iter_mut().find(|s| s.strategy_id == id) {
-        *existing = changed;
-    } else {
-        full.push(changed);
-    }
-    Ok(
-        json!({"before":before,"after":after,"id":id.to_string(),"apply_to_orders":apply_orders,
-        "limits":"No server-side compare-and-swap. An external edit after submission can still race. Settings confirmation does not confirm BUY replacement."}),
-    )
+    replace(full, changed, now);
+    Ok(json!({"before":before,"after":after,"id":id.to_string(),"limits":LIMITS}))
 }
 
 /// Refuse a strategy name another strategy on this core already carries.
