@@ -292,6 +292,7 @@ fn journal_entry(operation: &str, grant_id: &str) -> AuditEntry {
         subject: Some("Night".into()),
         changes: Vec::new(),
         changes_omitted: 0,
+        strategies: 1,
     }
 }
 

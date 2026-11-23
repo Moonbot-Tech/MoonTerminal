@@ -5,7 +5,40 @@
 
 use moon_core::station_api::mcp::{AuditChange, AuditEntry, CoreInfo};
 
-use super::{access_line, change_line, core_names, headline, outcome_label};
+use super::{access_line, change_line, core_names, entry_change_line, headline, outcome_label};
+
+/// A batch has no one name to quote: the headline says how many strategies it changed, and a
+/// field set to different values per strategy says so instead of reading as cleared.
+#[test]
+fn a_batch_reads_as_its_count_and_its_fields() {
+    let _locale = crate::test_locale::force("en");
+    let batch = AuditEntry {
+        subject: None,
+        strategies: 333,
+        ..entry()
+    };
+    let line = headline(&batch, &[], "Edit", "Confirmed");
+    assert!(
+        line.ends_with("Edit · 333 strategies · Confirmed"),
+        "{line}"
+    );
+    let varied = AuditChange {
+        field: "FilterBy".into(),
+        before: None,
+        after: None,
+    };
+    assert_eq!(
+        entry_change_line(&batch, &varied, &[]),
+        "FilterBy: values differ"
+    );
+    let common = AuditChange {
+        field: "FilterMax".into(),
+        before: None,
+        after: Some("5".into()),
+    };
+    assert_eq!(entry_change_line(&batch, &common, &[]), "FilterMax: 5");
+    assert_eq!(entry_change_line(&entry(), &varied, &[]), "FilterBy: —");
+}
 
 fn entry() -> AuditEntry {
     AuditEntry {
@@ -19,6 +52,7 @@ fn entry() -> AuditEntry {
         subject: Some("Night".into()),
         changes: Vec::new(),
         changes_omitted: 0,
+        strategies: 1,
     }
 }
 

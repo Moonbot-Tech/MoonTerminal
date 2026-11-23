@@ -202,6 +202,10 @@ pub struct AuditEntry {
     /// Changed fields beyond the ones kept in `changes`.
     #[serde(default)]
     pub changes_omitted: u32,
+    /// How many strategies one strategy edit changed. Above one, `changes` lists each field once
+    /// for the whole batch and `subject` is empty. 0 for other actions and for older entries.
+    #[serde(default)]
+    pub strategies: u32,
 }
 
 /// One value an action changed. Either side is absent when there was no earlier value (a new

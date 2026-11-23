@@ -232,3 +232,24 @@ fn site_schemas_reject_what_the_site_has_no_answer_for() {
         assert!(!validator.is_valid(&arguments), "{name} {arguments}");
     }
 }
+
+/// The catalog compiles with the nested strategy-edit list, and its schema is the one the
+/// typed action parses: a list of strategies within the bound is accepted, an empty list, an
+/// old single-id edit and a strategy entry with an unknown key are not.
+#[test]
+fn the_strategy_edit_schema_takes_a_bounded_list() {
+    let (_, validator) = catalog()
+        .iter()
+        .find(|(tool, _)| tool.name == "action_preview")
+        .unwrap();
+    let edit = |edits: Value| json!({"core":"1","action":{"kind":"strategy_edit","edits":edits},"full_lists":true});
+    let two = edit(json!([{"id":"1","fields":{"FilterMax":5}},{"id":"2","checked":false}]));
+    assert!(validator.is_valid(&two));
+    assert!(serde_json::from_value::<Action>(two["action"].clone()).is_ok());
+    assert!(!validator.is_valid(&edit(json!([]))));
+    let many: Vec<Value> = (1..=501).map(|id| json!({"id":id.to_string()})).collect();
+    assert!(!validator.is_valid(&edit(json!(many))));
+    assert!(!validator.is_valid(&edit(json!([{"id":"1","colour":"red"}]))));
+    let old = json!({"core":"1","action":{"kind":"strategy_edit","id":"1","fields":{}}});
+    assert!(!validator.is_valid(&old));
+}

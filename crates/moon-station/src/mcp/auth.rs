@@ -651,6 +651,7 @@ impl Auth {
                         subject: None,
                         changes: summary.changes,
                         changes_omitted: summary.omitted,
+                        strategies: 0,
                     });
                     self.save(next)?;
                 }

@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-use moon_core::automation::{Action, Authorization, Receipt, Submission};
+use moon_core::automation::{Action, Authorization, Receipt, SentRevision, Submission};
 use moon_core::config::AppConfig;
 use moon_core::session::SessionManager;
 use moon_core::station_api::mcp::{AuditEntry, Scope};
@@ -30,24 +30,49 @@ struct Operation {
     receipt: Option<mpsc::Receiver<std::result::Result<Receipt, String>>>,
     admission: Option<moon_core::automation::OrderActionTicket>,
     result: Value,
+    /// The strategy revisions a strategy edit or create sent; empty for any other action.
+    sent: Vec<SentRevision>,
+    /// The core's verdict per sent strategy, filled as each one arrives.
+    outcomes: BTreeMap<u64, Value>,
 }
+
+/// Most adjusted strategies one result details; the rest are listed by id only.
+const MAX_ADJUSTED_DETAILS: usize = 50;
 
 impl Operation {
     /// A matching strategy event proves the saved values; a timeout never resubmits an edit.
-    fn strategy_resolution(&self, session: &SessionManager) -> Option<Value> {
-        if self.result["status"] != "submitted" || self.result["expected"].is_null() {
+    ///
+    /// Each sent strategy resolves on its own as the core answers it. A new result is returned
+    /// once every one has an answer, or the wait ran out, so a batch reports once rather than a
+    /// strategy at a time.
+    fn strategy_resolution(&mut self, session: &SessionManager) -> Option<Value> {
+        if self.result["status"] != "submitted" || self.sent.is_empty() {
             return None;
         }
         let data = session.store().core(self.core)?;
         if data.conn_epoch != self.epoch {
-            return Some(
-                json!({"status":"unknown","execution_confirmed":false,"reason":"core reconnected before resolution"}),
-            );
+            return Some(self.resolved(Some("core reconnected before resolution")));
         }
-        session.automation_strategy_resolution(self.core, &self.result["expected"]).or_else(|| {
-            (Instant::now() >= self.expires).then(|| json!({"status":"unknown","execution_confirmed":false,
-                "reason":"No matching strategy resolution before timeout; read actual values before another edit."}))
+        for sent in &self.sent {
+            if !self.outcomes.contains_key(&sent.id) {
+                if let Some(found) = session.automation_strategy_resolution(self.core, sent) {
+                    self.outcomes.insert(sent.id, found);
+                }
+            }
+        }
+        if self.outcomes.len() == self.sent.len() {
+            return Some(self.resolved(None));
+        }
+        (Instant::now() >= self.expires).then(|| {
+            self.resolved(Some(
+                "No matching strategy resolution before timeout; read actual values before another edit.",
+            ))
         })
+    }
+
+    /// This operation's final strategy result; see [`strategy_result`].
+    fn resolved(&self, reason: Option<&str>) -> Value {
+        strategy_result(&self.sent, &self.outcomes, reason)
     }
 
     /// Feed and ActiveLib receipts are polled without blocking the Station's session owner.
@@ -59,6 +84,9 @@ impl Operation {
                         self.receipt = None;
                     }
                     self.admission = receipt.admission;
+                    if !receipt.sent.is_empty() {
+                        self.sent = receipt.sent;
+                    }
                     return Some(receipt.value);
                 }
                 Ok(Err(reason)) => {
@@ -92,6 +120,54 @@ impl Operation {
         }
         None
     }
+}
+
+/// A strategy operation's final result: each sent id under its outcome, unanswered ones as
+/// unknown.
+///
+/// The overall status is the worst one present — unknown, then superseded, then adjusted — so a
+/// batch never reads as confirmed while one strategy is not.
+///
+/// Args:
+///     sent: The revisions the submission sent, in the order the client listed them.
+///     outcomes: The core's verdict per strategy id, as far as it has arrived.
+///     reason: Why the wait ended before every verdict, if it did.
+fn strategy_result(
+    sent: &[SentRevision],
+    outcomes: &BTreeMap<u64, Value>,
+    reason: Option<&str>,
+) -> Value {
+    let mut by_status: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    let mut adjusted = Vec::new();
+    for sent in sent {
+        let found = outcomes.get(&sent.id);
+        let status = found
+            .and_then(|found| found["status"].as_str())
+            .unwrap_or("unknown");
+        by_status
+            .entry(status)
+            .or_default()
+            .push(sent.id.to_string());
+        if let Some(kept) = found.and_then(|found| found.get("kept_by_core")) {
+            adjusted.push(json!({"id":sent.id.to_string(),"kept_by_core":kept}));
+        }
+    }
+    let status = ["unknown", "superseded", "adjusted", "confirmed"]
+        .into_iter()
+        .find(|status| by_status.contains_key(status))
+        .unwrap_or("unknown");
+    let mut result = json!({"status":status,"execution_confirmed":status == "confirmed",
+        "strategies":by_status});
+    if !adjusted.is_empty() {
+        result["adjusted_details_omitted"] =
+            json!(adjusted.len().saturating_sub(MAX_ADJUSTED_DETAILS));
+        adjusted.truncate(MAX_ADJUSTED_DETAILS);
+        result["adjusted"] = json!(adjusted);
+    }
+    if let Some(reason) = reason {
+        result["reason"] = json!(reason);
+    }
+    result
 }
 
 /// Events are scoped on read; only a grant's own operation events are visible to that grant.
@@ -270,7 +346,7 @@ impl Owner {
                                 && operation.receipt.is_none()
                                 && operation.admission.is_none()
                                 && !(operation.result["status"] == "submitted"
-                                    && !operation.result["expected"].is_null())
+                                    && !operation.sent.is_empty())
                         })
                         .min_by_key(|(_, operation)| operation.retain_until)
                         .map(|(id, _)| id.clone());
@@ -283,9 +359,15 @@ impl Owner {
                     "too many active operations or previews; wait for their results or expiry"
                 );
                 let preview = session.automation_preview(core, &action)?;
+                // The budget bounds what the client reads; the retained preview stays whole.
+                let view = super::edit_view::client_view(
+                    &action,
+                    &preview,
+                    args.get("full_lists").and_then(Value::as_bool) == Some(true),
+                );
                 ensure!(
-                    serde_json::to_vec(&preview)?.len() <= 128 * 1024,
-                    "preview exceeds the response budget; select fewer fields or a smaller strategy"
+                    serde_json::to_vec(&view)?.len() <= 128 * 1024,
+                    "preview exceeds the response budget; edit fewer strategies or fields at once, or leave full_lists off"
                 );
                 let epoch = session
                     .store()
@@ -307,9 +389,11 @@ impl Owner {
                         receipt: None,
                         admission: None,
                         result: json!({"status":"preview"}),
+                        sent: Vec::new(),
+                        outcomes: BTreeMap::new(),
                     },
                 );
-                json!({"preview_id":id,"core":core.to_string(),"expires_in_seconds":120,"preview":preview,"submitted":false})
+                json!({"preview_id":id,"core":core.to_string(),"expires_in_seconds":120,"preview":view,"submitted":false})
             }
             "action_apply" => self.apply(session, shared, who, string(&args, "preview_id")?)?,
             "operation_get" => {
@@ -320,18 +404,10 @@ impl Owner {
                     "operation belongs to another authorization"
                 );
                 authorize(shared, who, Scope::Read, &[operation.core])?;
-                let observed = match moon_core::automation::ids::parse(
-                    &operation.result["strategy_id"],
-                )
-                .ok()
-                {
-                    Some(strategy) => session
-                        .automation_strategies(operation.core, Some(strategy), 0)
-                        .ok(),
-                    None => None,
-                };
-                json!({"operation_id":id,"core":operation.core.to_string(),"result":operation.result,"observed_strategy":observed,
-                    "core_state":core_status(session,operation.core),"instruction":"Compare the observed core state with the requested effect. A receipt alone is not proof of execution. Do not automatically retry unknown trading outcomes."})
+                // No strategy is attached: a whole one is about 9 KB and a batch names hundreds.
+                // The result names each strategy's outcome; strategy_read reads the values.
+                json!({"operation_id":id,"core":operation.core.to_string(),"result":operation.result,
+                    "core_state":core_status(session,operation.core),"instruction":"Compare the observed core state with the requested effect. A receipt alone is not proof of execution. Do not automatically retry unknown trading outcomes. To check a strategy's saved values, call strategy_read naming the fields."})
             }
             "logs_start" => {
                 let cores = cores(&args)?;
@@ -485,6 +561,7 @@ impl Owner {
                 subject: summary.subject,
                 changes: summary.changes,
                 changes_omitted: summary.omitted,
+                strategies: summary.strategies,
             })?;
         let (reply, receipt) = mpsc::sync_channel(2);
         let submitted = session.automation_submit(
@@ -507,6 +584,9 @@ impl Owner {
             return Err(error);
         }
         operation.submitted = true;
+        // The submission carries its own copy for the feed's recheck; nothing reads this one
+        // again, and a batch's whole snapshots would otherwise stay for the 24-hour retention.
+        operation.expected = Value::Null;
         operation.expires = Instant::now() + Duration::from_secs(120);
         operation.receipt = Some(receipt);
         operation.retain_until = Instant::now() + Duration::from_secs(24 * 60 * 60);
@@ -608,14 +688,8 @@ fn compare(
         !found.is_empty(),
         "no live strategy named {name} on the authorized cores"
     );
-    const LONG: usize = 100;
-    let items = |value: &str| -> std::collections::BTreeSet<String> {
-        value
-            .split(',')
-            .map(|item| item.trim().to_ascii_uppercase())
-            .filter(|item| !item.is_empty())
-            .collect()
-    };
+    const LONG: usize = super::edit_view::LONG_VALUE;
+    let items = super::edit_view::list_items;
     let fields: std::collections::BTreeSet<&String> =
         found.iter().flat_map(|(_, fields)| fields.keys()).collect();
     let mut differing = serde_json::Map::new();

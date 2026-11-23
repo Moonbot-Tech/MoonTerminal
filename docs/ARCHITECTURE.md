@@ -1188,7 +1188,13 @@ rejected. All 64-bit core/strategy/order identities cross MCP as decimal strings
 Strategies use native schema values and the existing pending-edit overlay/full-list owner.
 ActiveLib's immutable EditResolved payload replaces the former ID-keyed desired cache: notes
 retain the submitted revision and actual snapshot, preventing a later edit from masquerading
-as the earlier result. Guarded order moves/cancels bind preview to local incarnation and phase,
+as the earlier result. `strategy_edit` takes a list of up to 500 strategies of one core and
+sends them as one full-list submission, all or nothing: a pending edit, an unknown id or a
+rejected field on any of them refuses the preview and names it. The Station retains every
+listed strategy's whole before/after and compares it again at apply; the client is shown only
+names and differing fields (`mcp/edit_view.rs`), a strategy already holding the values is left
+out of the send, and the result lists each sent id under its own resolution. Several cores stay
+several previews. Guarded order moves/cancels bind preview to local incarnation and phase,
 then recheck on the ActiveLib runtime thread. New-order tickets are not exactly correlated to
 server UIDs by the current wire protocol, so a send receipt never claims an exchange fill.
 

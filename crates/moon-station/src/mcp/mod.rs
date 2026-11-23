@@ -3,6 +3,7 @@
 mod auth;
 mod bridge;
 mod capture;
+mod edit_view;
 mod http;
 mod knowledge;
 mod site;
