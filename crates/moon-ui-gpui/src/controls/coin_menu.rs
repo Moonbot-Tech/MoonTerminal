@@ -523,6 +523,19 @@ fn core_blacklist(b: &Backend, core: CoreId) -> (bool, String) {
         .unwrap_or((false, String::new()))
 }
 
+/// Whether `coin` is on the core-wide blacklist this terminal last heard from the core.
+///
+/// For a control outside this menu that offers the same row — the chart's ban lock — so both
+/// draw the checkmark from one reading of the list.
+///
+/// Args:
+///     b: Backend whose store holds the core's settings.
+///     core: Core whose list is read.
+///     coin: The core's spelling of the coin (`market_currency`).
+pub(crate) fn core_blacklist_holds(b: &Backend, core: CoreId, coin: &str) -> bool {
+    blacklist_contains(&core_blacklist(b, core).1, coin)
+}
+
 /// Writes one token onto or off a core-wide blacklist.
 ///
 /// Adding enables the list so the new entry affects trading: the command sends the flag and text
