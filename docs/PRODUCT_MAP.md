@@ -236,7 +236,8 @@ reports download again), one instance per install folder, FireTest
 (`chart-smoke`) — the built-in chart bench.
 
 **AI access (Station)**: Settings → Station → AI access sets up trusted HTTPS on the server and
-gives the address to paste into Claude or ChatGPT as an MCP connector; the owner approves each
+gives the address to paste into Claude as an MCP connector (ChatGPT is not supported: it refuses
+to connect to a server by IP address, and the station is reached by IP); the owner approves each
 client with the code from its authorization page and grants access per core — read on every
 selected core, strategies, trading and settings on the cores ticked; a client's permissions change
 from its card, access is revoked per client or all at once, and the change log records every
