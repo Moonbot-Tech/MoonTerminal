@@ -99,6 +99,7 @@ connect_wizard.review.sub: "El servidor %{addr} presenta esta clave. Compárela 
 connect_wizard.review.matches: "La clave coincide con la que muestra mi proveedor"
 connect_wizard.review.close_password: "Desactivar el acceso por contraseña"
 connect_wizard.review.close_password_note: "Tras instalar el núcleo, el servidor solo dejará entrar con la clave. Si se pierde el archivo de clave, solo quedará la consola del panel del proveedor."
+connect_wizard.review.close_password_note_password: "Primero se instala en el servidor la clave de este terminal y se comprueba el acceso con ella; solo entonces se desactiva la contraseña. Desde ese momento solo MoonTerminal de este ordenador podrá entrar por SSH: guarda su carpeta de datos. Si se pierde, solo quedará la consola del panel del proveedor."
 connect_wizard.review.secrets: "Después el terminal entra en el servidor con su usuario y contraseña."
 connect_wizard.review.login: "Entrar y comprobar"
 

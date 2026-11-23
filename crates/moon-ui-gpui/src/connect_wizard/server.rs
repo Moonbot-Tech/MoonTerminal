@@ -32,8 +32,8 @@ pub(crate) struct ServerAccess {
     pub(crate) public_ip: Ipv4Addr,
     pub(crate) dir: String,
     pub(crate) proto_port: u16,
-    /// Turn the server's password logins off once the core is on it. Only ever set for a key
-    /// login: a password login has no key to come back in with.
+    /// Turn the server's password logins off once the core is on it. Behind a password login the
+    /// terminal's own key is authorized and proven first, so it has a way back in.
     pub(crate) close_password: bool,
 }
 
@@ -50,8 +50,8 @@ pub(super) struct ServerFields {
     pub(super) by_key: bool,
     /// The user ticked that the host key matches the provider's.
     pub(super) fingerprint_ok: bool,
-    /// The user's choice to turn password logins off behind a key login; ticked from the start,
-    /// since a server that still takes a password is guessed at for as long as it runs.
+    /// The user's choice to turn password logins off once the core is on the server; ticked from
+    /// the start, since a server that still takes a password is guessed at for as long as it runs.
     pub(super) close_password: bool,
     /// Whether this form logs in only, hiding and skipping the install destination fields.
     pub(super) login_only: bool,
@@ -89,10 +89,21 @@ impl ServerFields {
         }
     }
 
-    /// Whether closing the password logins is on offer: the login is a key, and this form
-    /// installs something — the login-only form changes nothing on its server.
+    /// Whether closing the password logins is on offer: this form installs something — the
+    /// login-only form changes nothing on its server. A password login is offered it too: the
+    /// install gives the terminal's key a way in before it closes anything.
     pub(super) fn offers_close_password(&self) -> bool {
-        self.by_key && !self.login_only
+        !self.login_only
+    }
+
+    /// The note under the close choice: a key login keeps its key, a password login hands the
+    /// way in to this terminal alone.
+    fn close_password_note(&self) -> &'static str {
+        if self.by_key {
+            "connect_wizard.review.close_password_note"
+        } else {
+            "connect_wizard.review.close_password_note_password"
+        }
     }
 
     /// The choice to turn password logins off, for the host-key review; `None` where it is not
@@ -117,7 +128,7 @@ impl ServerFields {
                             cx.notify();
                         })),
                 )
-                .child(note(t!("connect_wizard.review.close_password_note"), cx)),
+                .child(note(t!(self.close_password_note()), cx)),
         )
     }
 

@@ -78,8 +78,30 @@ fn admin_lookup_matches_ip_across_ports_and_requires_an_admin() {
     hosts.pin("203.0.113.20:22", "SHA256:c").unwrap();
 
     assert_eq!(
-        hosts.admin_by_ip("203.0.113.10").unwrap().addr,
+        hosts.app_login_by_ip("203.0.113.10").unwrap().addr,
         "203.0.113.10:2222"
     );
-    assert!(hosts.admin_by_ip("203.0.113.20").is_none());
+    assert!(hosts.app_login_by_ip("203.0.113.20").is_none());
+}
+
+/// A core server closed after a password login is reached by its proven login, yet it must never
+/// read as the station's server: `first_set_up` picking it would send station work to a core box.
+/// A file written before the field existed loads with no such login.
+#[test]
+fn a_core_servers_key_login_is_found_but_never_taken_for_the_station() {
+    let old: Hosts =
+        toml::from_str("[[host]]\naddr = \"198.51.100.4:22\"\nfingerprint = \"SHA256:k\"\n")
+            .unwrap();
+    assert_eq!(old.get("198.51.100.4:22").unwrap().key_login, None);
+
+    let mut hosts = old;
+    hosts.set_key_login("198.51.100.4:22", "root").unwrap();
+    let back: Hosts = toml::from_str(&toml::to_string_pretty(&hosts).unwrap()).unwrap();
+    let found = back.app_login_by_ip("198.51.100.4").unwrap();
+    assert_eq!(found.login_user(), Some("root"));
+    assert!(back.first_set_up().is_none());
+    assert!(
+        back.check_address(found, "198.51.100.9:22").is_err(),
+        "the station's address change must not adopt a core server"
+    );
 }

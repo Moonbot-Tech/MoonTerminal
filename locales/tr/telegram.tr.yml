@@ -592,10 +592,10 @@ telegram.server.access_pending_return: "İstasyon erişimi değiştirilemez ve k
 telegram.server.install_review: "Sunucuya henüz bir şey gitmedi: anahtarı ve aşağıdaki değişiklikleri denetleyin, sonra kurulumu başlatın."
 telegram.server.install_fingerprint: "%{addr} sunucusu %{fingerprint} anahtarını sundu. Sağlayıcınızın konsolunda denetleyin. Yalnızca kendi sunucunuzun anahtarıysa sürdürün."
 telegram.server.install_changes_title: "Kurulum bu sunucuyu şöyle değiştirir:"
-telegram.server.install_change_ssh: "SSH üzerinden parola ve root girişleri her kullanıcı için kapanır; yalnızca anahtarlar çalışır."
+telegram.server.install_change_ssh: "SSH üzerinden parola ve root girişleri her kullanıcı için kapanır; yalnızca anahtarlar çalışır. Terminalin anahtarı ve sizinki (anahtarla girdiyseniz) «moon» hesabına eklenir: moon@sunucu-adresi olarak girin, ardından sudo -i."
 telegram.server.install_change_firewall: "ufw güvenlik duvarı açılır ve SSH dışında her gelen bağlantıyı keser; şu an dinleyen başka her şey kapanır (kurulum günlüğü o portları adlandırır). ufw zaten açıksa yalnızca SSH portu eklenir."
 telegram.server.install_change_admin: "Parolasız sudo ile \"moon\" yönetici hesabı oluşturulur."
-telegram.server.install_change_extras: "fail2ban ve otomatik güvenlik güncellemeleri kurulur."
+telegram.server.install_change_extras: "fail2ban ve otomatik güvenlik güncellemeleri kurulur. fail2ban, 10 dakika içinde 5 başarısız girişten sonra adresi 10 dakikalığına engeller — root olarak giriş denemeleri de buna dahildir."
 telegram.server.install_password_warning: "Parolayla giriyorsunuz ve kendi anahtarınızı vermiyorsunuz: kurulumdan sonra yalnızca bu bilgisayarın MoonTerminal'i girebilir. Veri klasörünü saklayın veya önce kendi anahtarınızı sunucuya ekleyin."
 telegram.server.install_confirm: "Bu anahtara güven ve kur"
 

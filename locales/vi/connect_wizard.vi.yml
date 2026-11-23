@@ -99,6 +99,7 @@ connect_wizard.review.sub: "Máy chủ %{addr} đưa ra khóa này. Hãy đối 
 connect_wizard.review.matches: "Khóa trùng với khóa nhà cung cấp hiển thị"
 connect_wizard.review.close_password: "Tắt đăng nhập bằng mật khẩu"
 connect_wizard.review.close_password_note: "Sau khi cài lõi, máy chủ chỉ cho đăng nhập bằng khóa. Nếu mất tệp khóa, chỉ còn cách vào qua bảng điều khiển trong trang quản lý của nhà cung cấp."
+connect_wizard.review.close_password_note_password: "Trước tiên máy chủ được thêm khóa của terminal này và việc đăng nhập bằng khóa được kiểm tra; chỉ sau đó mật khẩu mới bị tắt. Từ đó chỉ MoonTerminal trên máy tính này mới đăng nhập SSH được — hãy giữ thư mục dữ liệu của nó. Nếu mất, chỉ còn cách vào qua bảng điều khiển trong trang quản lý của nhà cung cấp."
 connect_wizard.review.secrets: "Sau đó terminal đăng nhập máy chủ bằng tên đăng nhập và mật khẩu của bạn."
 connect_wizard.review.login: "Đăng nhập và kiểm tra"
 

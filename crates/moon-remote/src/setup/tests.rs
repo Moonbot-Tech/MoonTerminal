@@ -7,6 +7,43 @@ use super::*;
 use std::io::Write;
 use std::process::Stdio;
 
+/// After a core install closed a server's passwords, a password login must go by the recorded
+/// app key — but only for that login and that host key: another user, a reinstalled server (new
+/// host key) or the station's administrator record keep the password path.
+#[test]
+fn a_password_login_takes_the_recorded_app_key_only_for_its_own_login_and_host_key() {
+    let mut hosts = Hosts::default();
+    hosts.pin("198.51.100.4:22", "SHA256:k").unwrap();
+    hosts.set_key_login("198.51.100.4:22", "root").unwrap();
+    hosts.pin("203.0.113.7:22", "SHA256:s").unwrap();
+    hosts.set_admin("203.0.113.7:22", "root").unwrap();
+
+    assert!(records_app_key_for(
+        &hosts,
+        "198.51.100.4:22",
+        "root",
+        "SHA256:k"
+    ));
+    assert!(!records_app_key_for(
+        &hosts,
+        "198.51.100.4:22",
+        "ubuntu",
+        "SHA256:k"
+    ));
+    assert!(!records_app_key_for(
+        &hosts,
+        "198.51.100.4:22",
+        "root",
+        "SHA256:new"
+    ));
+    assert!(!records_app_key_for(
+        &hosts,
+        "203.0.113.7:22",
+        "root",
+        "SHA256:s"
+    ));
+}
+
 /// The source of `setup.rs` itself, for the one order contract no unit seam can observe.
 const SETUP_SOURCE: &str = include_str!("../setup.rs");
 

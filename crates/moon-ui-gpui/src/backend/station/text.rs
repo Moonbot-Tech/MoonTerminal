@@ -40,7 +40,14 @@ pub(crate) fn error(error: &anyhow::Error) -> String {
         match kind {
             OpenError::Refused { .. } => t!("station.error.login_refused"),
             OpenError::HostKeyChanged { .. } => t!("station.error.host_key_changed"),
-            OpenError::Unreachable(_) => t!("station.error.unreachable"),
+            // fail2ban's stock ban answers the port with a reject: an address banned after
+            // failed logins reads as an unreachable server.
+            OpenError::Unreachable(_) => format!(
+                "{}\n{}",
+                t!("station.error.unreachable"),
+                t!("station.error.ban_hint")
+            )
+            .into(),
             OpenError::Other(inner) => {
                 let headline = match inner.downcast_ref::<StationError>() {
                     Some(kind) => station_error(kind),
@@ -77,6 +84,12 @@ fn station_error(kind: &StationError) -> String {
         StationError::ServiceTooOld => t!("station.error.ServiceTooOld").to_string(),
         StationError::TerminalTooOld => t!("station.error.TerminalTooOld").to_string(),
         StationError::Timeout => t!("station.error.Timeout").to_string(),
+        // A ban that drops the packets instead leaves the connection unanswered.
+        StationError::ConnectTimeout => format!(
+            "{}\n{}",
+            t!("station.error.Timeout"),
+            t!("station.error.ban_hint")
+        ),
         StationError::SystemdMissing => t!("station.error.SystemdMissing").to_string(),
         StationError::SystemdTooOld => t!("station.error.SystemdTooOld").to_string(),
         StationError::PasswordStillOffered => t!("station.error.PasswordStillOffered").to_string(),

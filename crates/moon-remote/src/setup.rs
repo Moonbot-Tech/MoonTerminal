@@ -477,6 +477,11 @@ fn first_login(
 
 /// Log in to `target` with the provider's login against the host key `pin`, and find how that
 /// login reaches root — sudo with the login's password, when it has one.
+///
+/// A password login goes by the app key instead when `hosts.toml` records that key for this very
+/// login under the same host key: a core install closed that server's passwords
+/// (`key_only::close_after_password`), so the provider's password is refused there now — a
+/// second core, a move or a login-only login would otherwise never get in again.
 pub fn provider_login(
     target: &Target,
     first: &FirstAccess,
@@ -484,7 +489,10 @@ pub fn provider_login(
 ) -> anyhow::Result<(Conn, Privilege)> {
     let (conn, sudo_password) = match first {
         FirstAccess::Password { user, password } => {
-            let conn = Conn::open(target, &Auth::Password { user, password }, pin)?;
+            let conn = match recorded_app_login(target, user, pin) {
+                Some(conn) => conn,
+                None => Conn::open(target, &Auth::Password { user, password }, pin)?,
+            };
             (conn, Some(password.clone()))
         }
         FirstAccess::Key {
@@ -498,6 +506,35 @@ pub fn provider_login(
     };
     let privilege = Privilege::detect(&conn, sudo_password.as_ref())?;
     Ok((conn, privilege))
+}
+
+/// A new login of `user` by the app key, when [`records_app_key_for`] says the key gets that
+/// login in on `target` under `pin`; `None` otherwise, or when the key no longer gets in — the
+/// password is tried then.
+fn recorded_app_login(target: &Target, user: &str, pin: &str) -> Option<Conn> {
+    let hosts = Hosts::load(&Hosts::path()).ok()?;
+    if !records_app_key_for(&hosts, &target.addr(), user, pin) {
+        return None;
+    }
+    let app = app_key::load_or_create().ok()?;
+    match Conn::open(target, &Auth::Key { user, key: &app }, pin) {
+        Ok(conn) => Some(conn),
+        Err(e) => {
+            log::info!(
+                "{}: the recorded app key login of {user} failed, trying the password: {e:#}",
+                target.addr()
+            );
+            None
+        }
+    }
+}
+
+/// Whether `hosts` records the app key for the core-server login `user` at `addr` under the same
+/// host key `pin`. Only `key_login` counts: the station's administrator never takes a password.
+fn records_app_key_for(hosts: &Hosts, addr: &str, user: &str, pin: &str) -> bool {
+    hosts
+        .get(addr)
+        .is_some_and(|host| host.fingerprint == pin && host.key_login.as_deref() == Some(user))
 }
 
 /// A NEW login as the administrator by the app key, its sudo without a password, and the helper.

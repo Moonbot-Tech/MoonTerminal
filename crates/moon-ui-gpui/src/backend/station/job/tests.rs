@@ -395,6 +395,7 @@ fn synthetic_host() -> moon_remote::hosts::Host {
         addr: "synthetic.invalid:22".into(),
         fingerprint: "SHA256:synthetic".into(),
         admin: Some("moon".into()),
+        key_login: None,
     }
 }
 

@@ -99,6 +99,7 @@ connect_wizard.review.sub: "服务器 %{addr} 出示了以下密钥。请与服�
 connect_wizard.review.matches: "密钥与服务商显示的一致"
 connect_wizard.review.close_password: "关闭密码登录"
 connect_wizard.review.close_password_note: "核心安装后，服务器只允许使用密钥登录。如果密钥文件丢失，就只能通过服务商面板里的控制台进入。"
+connect_wizard.review.close_password_note_password: "会先把本终端的密钥加到服务器上，并验证能用它登录，然后才关闭密码。此后只有这台电脑上的 MoonTerminal 能通过 SSH 登录——请保留它的数据文件夹。如果丢失，就只能通过服务商面板里的控制台进入。"
 connect_wizard.review.secrets: "之后终端将使用你的登录名和密码登录服务器。"
 connect_wizard.review.login: "登录并检查"
 

@@ -56,6 +56,13 @@ fn ssh_headlines_preserve_actions_and_deadlines() {
         .context("connect scope");
     assert!(error(&timeout).starts_with("The server did not answer in time."));
     assert!(error(&timeout).contains("connect scope"));
+    // A command that ran too long is not a ban; a connection nobody answered may be one (#1441).
+    assert!(!error(&timeout).contains("fail2ban"));
+    let connect = anyhow::Error::new(OpenError::Other(anyhow::anyhow!(
+        StationError::ConnectTimeout
+    )));
+    assert!(error(&connect).starts_with("The server did not answer in time."));
+    assert!(error(&connect).contains("fail2ban"));
     let refused = anyhow::Error::new(OpenError::Refused {
         password_offered: true,
     });

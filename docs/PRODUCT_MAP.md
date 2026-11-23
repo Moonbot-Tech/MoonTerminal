@@ -194,9 +194,10 @@ per-core (a hint for “the one that works” from the user's bots' experience),
 servers.enc bound to the machine, moved with a password. The connect wizard installs a new core
 on a rented Linux server — optionally in Demo mode: Moonbot's demo account in the emulator, no
 exchange keys of the user's needed, keys can be added later — moves a core onto one, or connects
-an existing Moonbot core by its key, step by step (port, Moon Proto window, key); when it logs in
-to the server with an SSH key, a new core's install or a move offers to turn off the server's
-password login (ticked by default). A core on a Linux server (a
+an existing Moonbot core by its key, step by step (port, Moon Proto window, key); a new core's
+install or a move offers to turn off the server's password login (ticked by default) — behind
+a password login it first puts this terminal's key on the server and checks it, and server
+commands then log in with that key. A core on a Linux server (a
 non-loopback literal IPv4 address) has server commands on its right-click menu: status, retry the
 exchange login, log, restart/stop/start its service, its outgoing IP (which of the server's
 addresses it reaches the exchange from; systemd 255+, picked as well on the new-core check screen

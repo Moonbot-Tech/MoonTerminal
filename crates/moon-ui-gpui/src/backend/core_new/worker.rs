@@ -35,27 +35,45 @@ pub(crate) struct NewForm {
     /// Start the core on MoonBot's demo settings: it logs in to MoonBot's demo exchange account by
     /// itself, in the emulator, so the install goes on to the connection without asking for keys.
     pub(crate) demo: bool,
-    /// Turn the server's password logins off once the core is installed; set only with a key
-    /// login in `first`.
+    /// Turn the server's password logins off once the core is installed. Behind a password login
+    /// the terminal's own key is authorized and proven first ([`key_only::close_after_password`]).
     pub(crate) close_password: bool,
 }
 
-/// Turn the server's password logins off behind the key login `first`, and word the outcome as a
-/// progress line. It never fails its caller: a server left open is said so, and the core stays.
+/// What closing the password logins left a wizard run with.
+pub(crate) struct PasswordClose {
+    /// The outcome, worded as a progress line.
+    pub(crate) line: String,
+    /// The login every later step of this run uses instead of the provider's password, which the
+    /// close made useless; `None` keeps the current one (a key login, or a key that never got in).
+    pub(crate) relogin: Option<FirstAccess>,
+}
+
+/// Turn the server's password logins off behind the provider login `first`, and word the outcome
+/// as a progress line. It never fails its caller: a server left open is said so, and the core
+/// stays.
 ///
-/// Returns `None` for a password login — it has no key to come back in with, so nothing is
-/// closed.
-pub(crate) fn close_password_line(
+/// A key login keeps its own key as the way in. A password login has none, so the terminal's
+/// app key is authorized and proven first, and the caller switches to it through
+/// [`PasswordClose::relogin`].
+pub(crate) fn close_password(
     conn: &Conn,
     privilege: &Privilege,
     target: &Target,
     first: &FirstAccess,
     pin: &str,
-) -> Option<String> {
-    let FirstAccess::Key { user, key, .. } = first else {
-        return None;
+) -> PasswordClose {
+    let (closed, relogin) = match first {
+        FirstAccess::Key { user, key, .. } => (
+            key_only::close(conn, privilege, target, user, key, pin),
+            None,
+        ),
+        FirstAccess::Password { user, .. } => {
+            let done = key_only::close_after_password(conn, privilege, target, user, pin);
+            (done.closed, done.relogin)
+        }
     };
-    let line = match key_only::close(conn, privilege, target, user, key, pin) {
+    let line = match closed {
         Ok(Closed::Now) => t!("connect_wizard.line.password_closed"),
         Ok(Closed::Already) => t!("connect_wizard.line.password_already_closed"),
         Err(e) => t!(
@@ -63,7 +81,10 @@ pub(crate) fn close_password_line(
             reason = format!("{e:#}")
         ),
     };
-    Some(line.to_string())
+    PasswordClose {
+        line: line.to_string(),
+        relogin,
+    }
 }
 
 /// The user's next step.
@@ -95,7 +116,11 @@ pub(super) fn probe(target: Target, tx: &mpsc::Sender<Event>) {
 
 /// Check the server, then carry out the user's commands until the install is removed or the
 /// backend drops it.
-pub(super) fn run(form: NewForm, tx: &mpsc::Sender<Event>, commands: &mpsc::Receiver<NewCommand>) {
+pub(super) fn run(
+    mut form: NewForm,
+    tx: &mpsc::Sender<Event>,
+    commands: &mpsc::Receiver<NewCommand>,
+) {
     let send = |event: Event| {
         let _ = tx.send(event);
     };
@@ -110,7 +135,7 @@ pub(super) fn run(form: NewForm, tx: &mpsc::Sender<Event>, commands: &mpsc::Rece
     // A dropped channel is the backend forgetting the install: the login goes with this thread.
     while let Ok(command) = commands.recv() {
         let result = match (&command, dir.as_deref()) {
-            (NewCommand::Install { egress }, None) => match install(&form, *egress, &send) {
+            (NewCommand::Install { egress }, None) => match install(&mut form, *egress, &send) {
                 Ok(done) => {
                     // A demo core is past its login already: nothing is asked of the user.
                     let connected = if form.demo {
@@ -188,8 +213,11 @@ fn check(
 /// exchanges. MoonProto waits for the exchange: MoonBot keeps its settings per exchange, so the key
 /// handed out now would belong to the default exchange rather than the user's. A demo core starts
 /// on MoonBot's demo settings, so its initialization is its login to the demo account as well.
+///
+/// Closing the password logins may swap `form`'s provider login for the terminal's key: every
+/// later step logs in again, and the password no longer would.
 fn install(
-    form: &NewForm,
+    form: &mut NewForm,
     egress: Option<std::net::Ipv4Addr>,
     send: &dyn Fn(Event),
 ) -> Result<String, Installing> {
@@ -217,11 +245,12 @@ fn install(
         t!("connect_wizard.line.installed", dir = &dir).to_string(),
     ));
     // After the install, so a server the core never got onto is left exactly as it was found.
-    if form.close_password
-        && let Some(line) =
-            close_password_line(&conn, &privilege, &form.target, &form.first, &form.pin)
-    {
-        send(Event::Line(line));
+    if form.close_password {
+        let done = close_password(&conn, &privilege, &form.target, &form.first, &form.pin);
+        send(Event::Line(done.line));
+        if let Some(relogin) = done.relogin {
+            form.first = relogin;
+        }
     }
     let after = || -> anyhow::Result<_> {
         core_new::wait_initialized(&conn, &privilege, &dir, None, core_new::SETTLE_TIMEOUT)?;

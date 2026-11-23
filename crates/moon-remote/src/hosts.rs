@@ -1,12 +1,18 @@
 //! `remote/hosts.toml`: what the terminal knows about each server it prepared — the host key the
-//! user confirmed and the administrator it logs in as. Nothing here is secret; the app's
-//! private key lives sealed in `app_key.enc`.
+//! user confirmed and the account it logs in as with its app key: the station's administrator,
+//! or the login of a core's server whose password logins a core install closed. Nothing here is
+//! secret; the app's private key lives sealed in `app_key.enc`.
 //!
 //! ```toml
 //! [[host]]
 //! addr = "203.0.113.7:22"
 //! fingerprint = "SHA256:…"
 //! admin = "moon"
+//!
+//! [[host]]
+//! addr = "198.51.100.4:22"
+//! fingerprint = "SHA256:…"
+//! key_login = "root"
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -56,6 +62,20 @@ pub struct Host {
     /// The administrator the setup created; `None` until that step has been verified.
     #[serde(default)]
     pub admin: Option<String>,
+    /// A core server's own login (typically `root`) that a core install authorized the app key
+    /// for and proved from a new connection, before it turned the password logins off. Kept apart
+    /// from `admin`: that one marks the station's server, and a core server is not one — the
+    /// station's lookups ([`Hosts::first_set_up`], the address change) read `admin` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_login: Option<String>,
+}
+
+impl Host {
+    /// The account the app key logs in as: the station's administrator, else a core server's
+    /// proven login.
+    pub fn login_user(&self) -> Option<&str> {
+        self.admin.as_deref().or(self.key_login.as_deref())
+    }
 }
 
 impl Hosts {
@@ -83,10 +103,11 @@ impl Hosts {
         self.hosts.iter().find(|h| h.addr == addr)
     }
 
-    /// Find a verified administrator by the IPv4 host part of its pinned `host:port` address.
-    pub fn admin_by_ip(&self, ip: &str) -> Option<&Host> {
+    /// Find a host the app key logs in to ([`Host::login_user`]) by the IPv4 host part of its
+    /// pinned `host:port` address.
+    pub fn app_login_by_ip(&self, ip: &str) -> Option<&Host> {
         self.hosts.iter().find(|host| {
-            host.admin.is_some()
+            host.login_user().is_some()
                 && host
                     .addr
                     .rsplit_once(':')
@@ -94,7 +115,7 @@ impl Hosts {
         })
     }
 
-    /// Forget `addr`: its pinned key and administrator. The way back to a server that was
+    /// Forget `addr`: its pinned key and recorded login. The way back to a server that was
     /// reinstalled — it presents a new host key, which the pin refuses.
     pub fn forget(&mut self, addr: &str) -> bool {
         let before = self.hosts.len();
@@ -162,6 +183,7 @@ impl Hosts {
                     addr: addr.to_owned(),
                     fingerprint: fingerprint.to_owned(),
                     admin: None,
+                    key_login: None,
                 });
                 Ok(())
             }
@@ -176,6 +198,17 @@ impl Hosts {
             .find(|h| h.addr == addr)
             .ok_or_else(|| anyhow::anyhow!("{addr} is not pinned"))?;
         host.admin = Some(admin.to_owned());
+        Ok(())
+    }
+
+    /// Record the core-server login the app key was proven for on an already pinned host.
+    pub fn set_key_login(&mut self, addr: &str, login: &str) -> anyhow::Result<()> {
+        let host = self
+            .hosts
+            .iter_mut()
+            .find(|h| h.addr == addr)
+            .ok_or_else(|| anyhow::anyhow!("{addr} is not pinned"))?;
+        host.key_login = Some(login.to_owned());
         Ok(())
     }
 }

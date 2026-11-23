@@ -13,6 +13,7 @@ use moon_core::config::{AppConfig, ServerConfig, parse_endpoint_override, target
 use moon_remote::core_cmds::{Cmd, Login};
 use moon_remote::core_new::CoreState;
 use moon_remote::hosts::Hosts;
+use moon_remote::setup::FirstAccess;
 use moon_remote::ssh::Target;
 
 use crate::Backend;
@@ -119,20 +120,32 @@ impl Backend {
         self.core_cmds.reconcile_workers(before, &self.config)
     }
 
-    /// Prefer a confirmed session login, then fall back to the cached administrator for `ip`.
+    /// Prefer a confirmed session login, then fall back to the recorded app-key login for `ip`;
+    /// see [`Self::core_cmds_login_from`] for when a session password gives way.
     pub(crate) fn core_cmds_login_for(&self, ip: &str) -> Option<Login> {
         self.core_cmds_login_from(ip, &self.core_cmds.hosts)
     }
 
-    /// Choose a session or administrator login using one already loaded host snapshot.
+    /// Choose a session or app-key login using one already loaded host snapshot.
+    ///
+    /// A session password gives way to an app-key record made under the same host key: that
+    /// record is written right before a core install turns the server's password logins off, so
+    /// the password typed earlier this session may no longer get in. A record under another host
+    /// key is stale — the server was reinstalled — and the login the user just confirmed wins.
     fn core_cmds_login_from(&self, ip: &str, hosts: &Hosts) -> Option<Login> {
-        if let Some(login) = self.core_cmds.logins.get(ip) {
-            return Some(Login::Provider {
+        let app = hosts.app_login_by_ip(ip);
+        let session = self.core_cmds.logins.get(ip).filter(|login| {
+            let yields = matches!(login.first, FirstAccess::Password { .. })
+                && app.is_some_and(|host| host.fingerprint == login.pin);
+            !yields
+        });
+        match session {
+            Some(login) => Some(Login::Provider {
                 first: login.first.clone(),
                 pin: login.pin.clone(),
-            });
+            }),
+            None => app.map(|_| Login::Admin),
         }
-        hosts.admin_by_ip(ip).map(|_| Login::Admin)
     }
 
     /// Start the persistent 250 ms drain for all per-core command workers.
@@ -319,13 +332,12 @@ impl Backend {
                 (display, port)
             }
             Login::Admin => {
-                let known = self.core_cmds.hosts.admin_by_ip(&host);
+                let known = self.core_cmds.hosts.app_login_by_ip(&host);
                 let display = known
                     .map(|known| {
                         known
-                            .admin
-                            .as_deref()
-                            .map(|admin| format!("{admin}@{}", known.addr))
+                            .login_user()
+                            .map(|user| format!("{user}@{}", known.addr))
                             .unwrap_or(fallback)
                     })
                     .unwrap_or_else(|| format!("{host}:22"));

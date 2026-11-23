@@ -99,6 +99,7 @@ connect_wizard.review.sub: "O servidor %{addr} apresenta esta chave. Compare-a c
 connect_wizard.review.matches: "A chave é a mesma que o meu provedor mostra"
 connect_wizard.review.close_password: "Desativar o acesso por senha"
 connect_wizard.review.close_password_note: "Depois de instalar o núcleo, o servidor só deixará entrar com a chave. Se o arquivo da chave se perder, restará apenas o console no painel do provedor."
+connect_wizard.review.close_password_note_password: "Primeiro o servidor recebe a chave deste terminal e o acesso com ela é verificado; só então a senha é desativada. A partir daí só o MoonTerminal deste computador poderá entrar por SSH — guarde a pasta de dados dele. Se ela se perder, restará apenas o console no painel do provedor."
 connect_wizard.review.secrets: "Depois o terminal entra no servidor com o seu usuário e senha."
 connect_wizard.review.login: "Entrar e verificar"
 

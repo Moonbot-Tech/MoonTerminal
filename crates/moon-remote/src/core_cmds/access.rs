@@ -8,7 +8,9 @@ use crate::ssh::{Auth, Conn, Target};
 
 /// A login that can reach the server-side core commands with root privilege.
 pub enum Login {
-    /// The administrator recorded by server setup, authenticated with the terminal's app key.
+    /// The account `hosts.toml` records for the server — the station's administrator, or a core
+    /// server's login proven when its password logins were closed — authenticated with the
+    /// terminal's app key.
     Admin,
     /// A provider credential held only for this session, with its confirmed host-key pin.
     Provider { first: FirstAccess, pin: String },
@@ -33,8 +35,7 @@ pub fn open(target: &Target, login: &Login) -> anyhow::Result<(Conn, Privilege)>
                 .get(&target.addr())
                 .ok_or_else(|| anyhow::anyhow!("{} was never set up here", target.addr()))?;
             let user = host
-                .admin
-                .as_deref()
+                .login_user()
                 .ok_or_else(|| anyhow::anyhow!("{}: the setup did not finish", target.addr()))?;
             let app = app_key::load_or_create()?;
             let conn = Conn::open(target, &Auth::Key { user, key: &app }, &host.fingerprint)?;
