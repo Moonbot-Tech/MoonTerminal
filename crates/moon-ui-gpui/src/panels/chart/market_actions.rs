@@ -17,13 +17,9 @@
 //! control on an own-pass chart.
 
 use gpui::*;
-use moon_core::config::{ChartAction, TempBanSpan};
+use moon_core::config::ChartAction;
 use moon_core::session::CoreId;
-use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonVariant,
-    MoonContextMenuWindowExt as _, MoonMenuItem, MoonRect, MoonWindowExt as _,
-};
-use rust_i18n::t;
+use moon_ui::{MoonButton, MoonButtonIconSlot, MoonButtonSegment, MoonButtonVariant, MoonRect};
 
 use super::ChartPanel;
 use crate::Backend;
@@ -100,9 +96,9 @@ impl ChartPanel {
             };
             let state = crate::chartdx::MarketActionState {
                 allowed: self.workspace_action_allowed(backend, core),
-                // Each fact is read only where a button prints it. The shipped pair carries no ban
-                // button, and walking a core's blacklist for one nobody placed is work per pane per
-                // render for a caption that does not exist.
+                // Each fact is read only where a button prints it: a profile without the lock or
+                // the star pays nothing for them, and walking a core's lists for a caption that
+                // does not exist is work per pane per render.
                 panic_armed: wanted.panic_sell && backend.is_panic_armed(core, &market),
                 // The DEADLINE, and the CORE's own rather than one derived from the clock — see
                 // `CoreData::temp_ban_until_ms`. Derived here it would move on every render once
@@ -249,11 +245,11 @@ impl ChartPanel {
                                         return;
                                     }
                                     // The lock is the one control that ASKS. Closing it is a choice
-                                    // — an hour, a day, three days — and a button cannot carry four
-                                    // answers; opening it is not, so a running ban lifts on the
-                                    // press with nothing in between.
+                                    // — which list, which cores, how long — so it opens the coin
+                                    // menu; opening it is not, so a running ban lifts on the press
+                                    // with nothing in between.
                                     if action == ChartAction::TempBan && !active {
-                                        open_ban_menu(
+                                        open_lock_coin_menu(
                                             &backend,
                                             group.clone(),
                                             core,
@@ -269,7 +265,6 @@ impl ChartPanel {
                                         &backend,
                                         group.as_deref(),
                                         action,
-                                        None,
                                         core,
                                         market,
                                         coin,
@@ -297,18 +292,15 @@ impl ChartPanel {
 ///     backend: Live command and workspace authority.
 ///     group: Owning chart group, or `None` for an unscoped diagnostic chart.
 ///     action: What the pressed button does.
-///     span: How long to ban for, or `None` to lift a ban that is running; the other two ignore it.
 ///     core: Core the button was drawn for.
 ///     market: Market it was drawn for.
 ///     coin: That market's `market_currency`, which is what the core's favourites list is matched
 ///         against; empty while the catalogue has not named the market.
 ///     app: Application context for the update.
-#[allow(clippy::too_many_arguments)]
 fn dispatch_market_action(
     backend: &Entity<Backend>,
     group: Option<&str>,
     action: ChartAction,
-    span: Option<TempBanSpan>,
     core: CoreId,
     market: String,
     coin: String,
@@ -333,12 +325,11 @@ fn dispatch_market_action(
             // Never reaches here: the button's own handler routes the eye to its panel before the
             // backend is touched, because it has nothing to send.
             ChartAction::AutoFigures => {}
-            // One control, both directions: a span sets the ban, `None` lifts the one that runs.
-            // The press decided which — see the button's own handler — and it decided against the
-            // same state the lock was DRAWN in, so the picture and the command agree.
+            // Only a CLOSED lock reaches here: it lifts the ban that runs. An open one opens the coin
+            // menu instead, whose rows set the ban — see the button's own handler, which decided
+            // against the same state the lock was DRAWN in, so the picture and the command agree.
             ChartAction::TempBan => {
-                let ban = span.map(TempBanSpan::duration);
-                if let Err(error) = b.session.set_temp_ban(core, market.clone(), ban) {
+                if let Err(error) = b.session.set_temp_ban(core, market.clone(), None) {
                     log::warn!(
                         "chart: temp blacklist {market} on core {} failed: {error:#}",
                         moon_core::feed::core_label(core)
@@ -350,35 +341,31 @@ fn dispatch_market_action(
     });
 }
 
-/// Ask how long to ban this coin for, at the point the lock was pressed.
+/// Open the shared coin menu at the point the open lock was pressed.
 ///
-/// A menu rather than four buttons on the chart: the spans are MoonBot's own four, they are chosen
-/// once and then forgotten, and a control per span would take the plot's whole bottom edge to say
-/// what one lock already says.
+/// The SAME menu a right click on a coin opens in the Report, Orders and Assets — permanent and
+/// temporary blacklists on this core and on the group's cores, «Где в чёрных списках», compare,
+/// copy — rather than a menu of the lock's own. A coin the trader is only watching has no other
+/// chart route to the permanent list (the coin menu opens on the chart only over an order line),
+/// and a second copy of those rows would drift from the first.
 ///
-/// Below the spans, the same menu offers this core's PERMANENT blacklist — the coin menu's
-/// `В ЧС` → core row, at the place the coin is already on screen. Without it a coin the trader is
-/// only watching has no chart route to that list: the coin menu opens on the chart only over an
-/// order line. The lock itself still reads and writes the temporary list alone, and a closed lock
-/// lifts its ban on the press without this menu — so the row is offered while no temporary ban
-/// runs, which is when a coin is still trading.
-///
-/// The workspace rail is checked when a row is CHOSEN, not here: the menu can stand open while an
-/// Auto workspace moves the core out of this group's scope, and the row that was picked is the
-/// command — see [`dispatch_market_action`].
+/// «Selected cores» is the chart group's workspace scope, as the Report's is its own; an unscoped
+/// chart offers every core this terminal is configured with (a core whose catalogue does not carry
+/// the coin is left out by the menu itself). Each row re-validates the workspace rail when it is CHOSEN —
+/// the menu can stand open while an Auto workspace moves a core out of scope.
 ///
 /// Args:
 ///     backend: Live command and workspace authority.
 ///     group: Owning chart group, or `None` for an unscoped diagnostic chart.
 ///     core: Core the lock was drawn for.
 ///     market: Market it was drawn for.
-///     coin: That market's `market_currency`, the token the core's permanent list matches; empty
-///         while the catalogue has not named the market, and then the permanent row is left out.
+///     coin: That market's `market_currency`; empty while the pane has not resolved it, and then
+///         the catalogue is asked, as the order-line menu does.
 ///     at: Where to open, in window coordinates — the press itself.
 ///     window: Window that owns the menu.
 ///     app: Application context.
-#[allow(clippy::too_many_arguments)] // one per fact the two lists need; no struct owns them all
-fn open_ban_menu(
+#[allow(clippy::too_many_arguments)] // one per fact the menu context needs; no struct owns them all
+fn open_lock_coin_menu(
     backend: &Entity<Backend>,
     group: Option<String>,
     core: CoreId,
@@ -388,100 +375,49 @@ fn open_ban_menu(
     window: &mut Window,
     app: &mut App,
 ) {
-    let mut items: Vec<MoonMenuItem> = TempBanSpan::ALL
-        .iter()
-        .map(|&span| {
-            let (backend, group, market) = (backend.clone(), group.clone(), market.clone());
-            let hours = span.hours();
-            MoonMenuItem::with_key(
-                SharedString::from(format!("chart-ban-{hours}h")),
-                // Spelled in DAYS only past a day, exactly as the coin menu spells the same four.
-                match hours > 24 {
-                    true => t!("coin_menu.tbl_days", n = hours / 24).to_string(),
-                    false => t!("coin_menu.tbl_hours", n = hours).to_string(),
-                },
-            )
-            .on_click(move |_, window, app| {
-                window.close_context_menu(app);
-                dispatch_market_action(
-                    &backend,
-                    group.as_deref(),
-                    ChartAction::TempBan,
-                    Some(span),
-                    core,
-                    market.clone(),
-                    // A ban is keyed by the MARKET, so the coin this dispatch also carries is not
-                    // read on this path; see `coin_menu::temp_ban_symbol`.
-                    String::new(),
-                    app,
-                );
-            })
-        })
-        .collect();
-    // Headed like the coin menu's two submenus, so the spans read as the TEMPORARY list and the
-    // row below them as the permanent one rather than as a fifth span.
-    items.insert(
-        0,
-        MoonMenuItem::label(t!("coin_menu.tbl_group").to_string()),
-    );
-    if !coin.is_empty() {
+    let ctx = {
         let b = backend.read(app);
-        let listed = crate::controls::coin_menu::core_blacklist_holds(b, core, &coin);
-        // Without the core's settings there is no list to edit, and the write would only log its
-        // refusal; the star waits for the same snapshot.
-        let ready = b
-            .session
-            .store()
-            .core(core)
-            .is_some_and(|data| data.client_settings.is_some());
-        let core_name = b
-            .session
-            .sessions()
+        if !b.workspace_action_allows_core(group.as_deref(), core) {
+            return;
+        }
+        let sessions = b.session.sessions();
+        let core_name = sessions
             .iter()
             .find(|s| s.id == core)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        let backend = backend.clone();
-        items.push(MoonMenuItem::separator());
-        items.push(MoonMenuItem::label(t!("coin_menu.bl_group").to_string()));
-        items.push(
-            MoonMenuItem::with_key(
-                "chart-ban-permanent",
-                t!("coin_menu.target_core", core = core_name).to_string(),
-            )
-            // Checked like the coin menu's own row, and for the same reason it un-lists: a
-            // checkmark that cannot be cleared is the defect #663 removed there.
-            .checked(listed)
-            .disabled(!ready)
-            .on_click(move |_, window, app| {
-                window.close_context_menu(app);
-                backend.update(app, |b, cx| {
-                    if !b.workspace_action_allows_core(group.as_deref(), core) {
-                        return;
-                    }
-                    // Direction from the LIVE list, not the one the row was drawn from: the
-                    // core may have changed it while the menu stood open.
-                    let lift = crate::controls::coin_menu::core_blacklist_holds(b, core, &coin);
-                    // Logged inside; nothing more to tell the reader from a chart.
-                    let _ = crate::controls::coin_menu::write_core_blacklist(b, core, &coin, lift);
-                    cx.notify();
-                });
-            }),
-        );
-    }
-    window.open_fitted_moon_context_menu(
-        app,
-        "chart-ban-menu",
-        at,
-        items,
-        BAN_MENU_MIN_W,
-        BAN_MENU_MAX_W,
-    );
+        let selected_cores: Vec<CoreId> = match group.as_deref() {
+            Some(group) => b
+                .effective_workspace_scope(group, crate::workspace::RetainedCoreScope::All)
+                .ids()
+                .to_vec(),
+            None => sessions.iter().map(|s| s.id).collect(),
+        };
+        let coin = match coin.is_empty() {
+            true => b.session.market_source().market_label(core, &market).coin,
+            false => coin,
+        };
+        crate::controls::CoinMenuCtx {
+            core,
+            core_name,
+            market,
+            coin,
+            selected_cores,
+            strat_id: None,
+            strat_name: None,
+            order_uid: None,
+            workspace_group: group,
+            side: None,
+            short: false,
+            // Already on this chart: the menu leaves out «Открыть на графике».
+            origin: crate::controls::CoinMenuOrigin::ChartLine,
+            history: None,
+            trailing: Vec::new(),
+            filter_here: None,
+        }
+    };
+    crate::controls::open_coin_menu(ctx, backend.clone(), at, window, app);
 }
-
-/// Width bounds for that menu, in design pixels: enough for the longest localized span.
-const BAN_MENU_MIN_W: f32 = 120.0;
-const BAN_MENU_MAX_W: f32 = 240.0;
 
 #[cfg(test)]
 mod tests;

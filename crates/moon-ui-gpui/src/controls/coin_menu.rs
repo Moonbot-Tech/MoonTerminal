@@ -1,5 +1,5 @@
 //! Shared right-click context menu for a market token. It is used wherever a token is shown,
-//! including chart order lines, token or strategy cells in Orders, and token cells in Assets,
+//! including chart order lines and the chart's ban lock, token or strategy cells in Orders, and token cells in Assets,
 //! Report and the Screener. The menu selects applicable entries from the context available in [`CoinMenuCtx`]: a
 //! strategy (`strat_id`), an order (`order_uid` and `side`), and the source panel filter's selected
 //! cores.
@@ -64,7 +64,8 @@ pub struct CoinMenuCtx {
     pub coin: String,
     /// Cores selected by the source panel's filter for the selected-cores blacklist action. That
     /// entry covers the selected cores that CARRY the coin, each in its own spelling, and appears
-    /// only when more than one does. Chart lines supply `[core]`, so it remains hidden.
+    /// only when more than one does. Chart order lines supply `[core]`, so it remains hidden there;
+    /// the chart's ban lock supplies its group's scope.
     pub selected_cores: Vec<CoreId>,
     /// Order strategy when `strat_id != 0`, enabling the strategy section. None means manual or join.
     pub strat_id: Option<u64>,
@@ -521,19 +522,6 @@ fn core_blacklist(b: &Backend, core: CoreId) -> (bool, String) {
         .and_then(|cd| cd.client_settings.as_ref())
         .map(|cs| (cs.use_blacklist, cs.blacklist_text.clone()))
         .unwrap_or((false, String::new()))
-}
-
-/// Whether `coin` is on the core-wide blacklist this terminal last heard from the core.
-///
-/// For a control outside this menu that offers the same row — the chart's ban lock — so both
-/// draw the checkmark from one reading of the list.
-///
-/// Args:
-///     b: Backend whose store holds the core's settings.
-///     core: Core whose list is read.
-///     coin: The core's spelling of the coin (`market_currency`).
-pub(crate) fn core_blacklist_holds(b: &Backend, core: CoreId, coin: &str) -> bool {
-    blacklist_contains(&core_blacklist(b, core).1, coin)
 }
 
 /// Writes one token onto or off a core-wide blacklist.

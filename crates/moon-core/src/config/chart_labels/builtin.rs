@@ -97,6 +97,27 @@ fn auto_figures_eye_row() -> ChartLabelRow {
     row
 }
 
+/// The coin's own switches for a live chart: the temporary-blacklist lock, how long its ban has
+/// left, and the favourites star — one line along the strip's bottom edge, pushed right.
+///
+/// Transcribed from the developer's Main chart on 2026-11-23, sizes included. The lock is the
+/// chart's route to the coin menu's blacklists (`panels::chart::market_actions`); without it in
+/// the shipped set a trader looking at a coin has no one-click way to put it on any list. The
+/// countdown prints only while a ban runs, so a clean coin's line is the two buttons.
+fn coin_switches_row() -> ChartLabelRow {
+    const SIZE: f32 = 1.25;
+    let mut row = ChartLabelRow::new(LabelZone::ZoneBottom, LabelAlign::Right);
+    row.gap = 8;
+    row.push_part(ChartLabelField::ActTempBan);
+    row.push_part(ChartLabelField::TempBanLeft);
+    row.push_part(ChartLabelField::ActFavorite);
+    row.parts[0].style.size_mult = Some(SIZE);
+    // The glyph says it; the field's short caption beside a lock would only repeat it.
+    row.parts[0].style.caption = Some(false);
+    row.parts[1].style.size_mult = Some(SIZE);
+    row
+}
+
 impl Default for ChartLabelsCfg {
     /// The owner's Main chart captions, also used when resetting the global caption settings.
     fn default() -> Self {
@@ -157,6 +178,7 @@ impl Default for ChartLabelsCfg {
             cfg.push_prepared(row);
         }
         cfg.push_prepared(auto_figures_eye_row());
+        cfg.push_prepared(coin_switches_row());
 
         cfg
     }

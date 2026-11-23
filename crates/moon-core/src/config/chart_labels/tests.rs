@@ -114,6 +114,18 @@ fn the_default_is_the_shipped_working_layout() {
                 false,
                 vec![(F::ActAutoFigures, None)],
             ),
+            (
+                Z::ZoneBottom,
+                A::Right,
+                None,
+                Fl::Row,
+                false,
+                vec![
+                    (F::ActTempBan, Some(1.25)),
+                    (F::TempBanLeft, Some(1.25)),
+                    (F::ActFavorite, None),
+                ],
+            ),
         ]
     );
     assert_eq!(
@@ -277,6 +289,7 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
             ChartLabelField::ActPanicSell,
             ChartLabelField::ActCancelBuy,
             ChartLabelField::ActAutoFigures,
+            ChartLabelField::ActTempBan,
         ],
         "the survivors keep their relative order with no hole between them"
     );

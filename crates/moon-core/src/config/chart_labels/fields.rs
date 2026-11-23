@@ -820,7 +820,8 @@ pub enum ChartAction {
     CancelBuy,
     /// Arm panic selling, or disarm it while it is already armed.
     PanicSell,
-    /// Ban the coin temporarily for the caption's own span, or lift the ban that is running.
+    /// Open the coin menu to ban the coin — permanently or for a span, here or on the group's cores —
+    /// or, while a temporary ban runs, lift it.
     TempBan,
     /// Mark the coin in the CORE's own favourites list, or unmark it there.
     Favorite,
