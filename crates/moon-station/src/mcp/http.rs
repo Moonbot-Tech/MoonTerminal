@@ -66,8 +66,42 @@ pub(super) fn router(shared: Arc<Shared>, stop: CancellationToken) -> Router {
         .with_state(shared)
 }
 
+/// Longest User-Agent kept in the request log line; enough to name the client and its version.
+const LOG_AGENT_CHARS: usize = 120;
+
+/// Log one line per HTTP request around `guard`, refusals included. An AI client that fails to
+/// add the station reports only "could not connect", so the station log is the one place that
+/// shows whether the client reached it at all and which step it stopped on (#1433). Only the
+/// method, the path (never the query: it carries OAuth codes and state), the status, the Origin
+/// and the User-Agent are written — no credential, cookie or body.
+async fn boundary(state: State<Arc<Shared>>, request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let origin = header_text(request.headers(), header::ORIGIN);
+    let agent: String = header_text(request.headers(), header::USER_AGENT)
+        .chars()
+        .take(LOG_AGENT_CHARS)
+        .collect();
+    let response = guard(state, request, next).await;
+    log::info!(
+        "MCP HTTP {method} {path} -> {} origin={origin} agent={agent}",
+        response.status().as_u16()
+    );
+    response
+}
+
+/// A header as owned text for the log, `-` when absent or not visible ASCII. Owned so nothing
+/// borrows the request across the middleware's await (a borrowed body would make it non-`Send`).
+fn header_text(headers: &HeaderMap, name: header::HeaderName) -> String {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_owned()
+}
+
 /// Reject unexpected hosts/origins on OAuth too, and attach browser isolation/no-cache headers.
-async fn boundary(State(shared): State<Arc<Shared>>, request: Request, next: Next) -> Response {
+async fn guard(State(shared): State<Arc<Shared>>, request: Request, next: Next) -> Response {
     let expected = shared.origin.trim_start_matches("https://");
     let host = request
         .headers()
