@@ -416,6 +416,45 @@ pub(super) fn scroll_wheel(
     cx.stop_propagation();
 }
 
+/// Zooms the time axis under a trackpad pinch: fingers apart zoom in, around the moment under them.
+pub(super) fn pinch(
+    this: &mut ChartPanel,
+    e: &PinchEvent,
+    _window: &mut Window,
+    cx: &mut Context<ChartPanel>,
+) {
+    if cx.has_active_drag() {
+        return;
+    }
+    this.use_track.note_input(Instant::now());
+    if matches!(e.phase, TouchPhase::Started | TouchPhase::Ended) {
+        this.input.pinch_reset();
+    }
+    // A book-only broom pane has no plot to zoom, exactly as for the wheel.
+    if this.orderbook_only {
+        return;
+    }
+    let sf = this.last_ppp;
+    let Some((pos, within)) = this.chart_local(e.position) else {
+        return;
+    };
+    this.input.last_ptr = pos;
+    this.input.cursor = if within { Some(pos) } else { None };
+    this.input.hovered_pane = this.input.pane_at(pos.0, pos.1);
+    let fb = this.chart.slot_dev_width();
+    let changed = {
+        let input = &mut this.input;
+        this.chart
+            .with_container_mut(|container| input.pinch(e.delta, within, container, fb, sf))
+    };
+    if changed {
+        this.mark_input_changed(cx);
+        crate::diag::bump(&crate::diag::CHART_INPUT_NOTIFY);
+        cx.notify();
+    }
+    cx.stop_propagation();
+}
+
 /// Routes left-button down through caption controls, figures, trading, drag, and navigation.
 pub(super) fn mouse_down_left(
     this: &mut ChartPanel,

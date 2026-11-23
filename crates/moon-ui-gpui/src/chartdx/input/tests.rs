@@ -423,3 +423,117 @@ fn measured_price_axis_geometry() {
     );
     assert!(matches!(data.frame(frame()), GpuFrameDecision::Skip));
 }
+
+/// A live Main chart with the pointer a quarter of the way into the plot, at a 60-second window.
+fn pinch_fixture() -> (ChartInput, Container, f32, f32) {
+    use crate::chartdx::pane::ContainerKind;
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: 900.0,
+        h: 500.0,
+    };
+    let mut input = ChartInput {
+        hovered_pane: Some(0),
+        pane_rects: vec![(0, rect)],
+        ..Default::default()
+    };
+    let mut container = Container::new(ContainerKind::Main);
+    container.open_manual(42, "TESTUSDT", now_unix_ms());
+    let plot = input.areas_of(&rect, 1.0, moon_chart::PRICE_AXIS_W).plot;
+    input.last_ptr = (plot.x + plot.w * 0.25, plot.y + plot.h * 0.5);
+    let (plot_w, cursor_x) = input.plot_metrics_for(Some(0), 900.0, 1.0, &container);
+    let view = container.view_mut(0).unwrap();
+    view.ensure_default_window(plot_w, 60.0, None);
+    view.resume_live(now_unix_ms());
+    (input, container, plot_w, cursor_x)
+}
+
+/// The time under the pointer, relative to the view's epoch.
+fn time_under(container: &mut Container, plot_w: f32, cursor_x: f32) -> f32 {
+    let (left, window) = container.view_mut(0).unwrap().visible_x(plot_w);
+    left + window * cursor_x / plot_w
+}
+
+/// Issue #1435: no pinch path at all must fail here. Fingers apart (+0.25, a 25% zoom-in by
+/// `PinchEvent`'s own contract) shrink the window by 1.25 and keep the moment under the fingers;
+/// fingers together widen it again.
+#[test]
+fn pinch_zooms_time_around_the_fingers() {
+    let (mut input, mut container, plot_w, cursor_x) = pinch_fixture();
+    let before = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    let anchor = time_under(&mut container, plot_w, cursor_x);
+    assert!(input.pinch(0.25, true, &mut container, 900.0, 1.0));
+    let after = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(
+        (after - before / 1.25).abs() < 1.0,
+        "pinch out did not zoom in by 1.25: {before} -> {after}"
+    );
+    let moved = time_under(&mut container, plot_w, cursor_x) - anchor;
+    assert!(
+        moved.abs() < 50.0,
+        "the moment under the fingers moved {moved} ms"
+    );
+    input.pinch_reset();
+    assert!(input.pinch(-0.2, true, &mut container, 900.0, 1.0));
+    let back = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(
+        (back - after / 0.8).abs() < after * 1e-4,
+        "pinch in did not zoom out by 1 / 0.8: {after} -> {back}"
+    );
+}
+
+/// The gesture's start and end carry a zero delta and must not move the chart; a pinch outside
+/// the chart zone must not either.
+#[test]
+fn zero_or_outside_pinch_leaves_the_chart_alone() {
+    let (mut input, mut container, plot_w, _) = pinch_fixture();
+    let before = container.view_mut(0).unwrap().visible_x(plot_w);
+    assert!(!input.pinch(0.0, true, &mut container, 900.0, 1.0));
+    assert!(!input.pinch(0.5, false, &mut container, 900.0, 1.0));
+    assert!(!input.pinch(f32::NAN, true, &mut container, 900.0, 1.0));
+    assert_eq!(container.view_mut(0).unwrap().visible_x(plot_w), before);
+}
+
+/// A pinch is the ordinary wheel's zoom: its floor is thirty seconds, not super zoom's 0.6.
+#[test]
+fn pinch_stops_at_the_ordinary_thirty_second_floor() {
+    let (mut input, mut container, plot_w, _) = pinch_fixture();
+    // One short gesture per step, so every platform's reading of the delta is the same 1.5x.
+    for _ in 0..60 {
+        input.pinch_reset();
+        input.pinch(0.5, true, &mut container, 900.0, 1.0);
+    }
+    let window = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(
+        (window - 30_000.0).abs() < 1.0,
+        "pinch zoomed past the 30-second floor to {window} ms"
+    );
+}
+
+/// Linux reports a pinch update as a step of the gesture's ABSOLUTE scale: scale 1 -> 1.5 -> 2 is
+/// two deltas of 0.5, and the gesture as a whole must still zoom by exactly 2, not 1.5 * 1.5.
+/// Windows and macOS report the ratio to the previous update minus one.
+#[test]
+fn pinch_factor_reads_each_platforms_delta() {
+    let first = pinch_factor(0.5, 0.0, true);
+    let second = pinch_factor(0.5, 0.5, true);
+    assert!((first * second - 2.0).abs() < 1e-6, "{first} * {second}");
+    assert!((pinch_factor(0.1, 0.0, false) - 1.1).abs() < 1e-6);
+    assert!((pinch_factor(0.1, 0.7, false) - 1.1).abs() < 1e-6);
+    // An estimate driven to zero or below by updates the chart never saw falls back to the ratio
+    // reading instead of flipping the direction or dividing by zero.
+    assert!((pinch_factor(0.1, -1.0, true) - 1.1).abs() < 1e-6);
+    assert!((pinch_factor(0.1, -1.5, true) - 1.1).abs() < 1e-6);
+}
+
+/// The chart slot must subscribe to the pinch at all — dropping the registration is exactly how
+/// issue #1435 lost the gesture, and no test above, which drives the zoom directly, would notice.
+#[test]
+fn chart_slot_subscribes_to_the_pinch() {
+    let render = include_str!("../../panels/chart/render.rs");
+    assert!(
+        render.contains(".on_pinch(cx.listener(render_input::pinch))"),
+        "the chart slot no longer listens for a trackpad pinch"
+    );
+}
