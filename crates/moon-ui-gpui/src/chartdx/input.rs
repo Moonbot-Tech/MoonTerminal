@@ -368,7 +368,6 @@ impl ChartInput {
         fallback_w: f32,
         ppp: f32,
     ) -> bool {
-        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "chart:input");
         if !gate_ok || !delta.is_finite() || delta == 0.0 {
             return false;
         }
