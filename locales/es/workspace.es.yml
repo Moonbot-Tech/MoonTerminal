@@ -34,11 +34,11 @@ workspace.status.ready: "Listo"
 # the count survives when the preset name clips: "режим: AUTO · 12 из 20 ядер".
 workspace.scope.preset: "modo: %{mode}"
 workspace.scope.cores_n_of_m: "%{n} de %{total} núcleos"
-workspace.scope.hint: "Algunos núcleos están ocultos por el modo de espacio de trabajo activo — cambie el modo o revise la visibilidad en Ajustes → Conexiones"
+workspace.scope.hint: "Algunos núcleos están ocultos por el modo de espacio de trabajo activo — cambia el modo o revisa la visibilidad en Ajustes → Conexiones"
 # The same recovery advice for the case where the preset hid EVERY core, so the opening clause
 # cannot say "some". Only the first clause differs from `workspace.scope.hint`; the two are one
 # choice inside `ScopeMarker::tooltip`, gated on `hides_everything`.
-workspace.scope.all_hidden_hint: "Todos los núcleos están ocultos por el modo de espacio de trabajo activo — cambie el modo o revise la visibilidad en Ajustes → Conexiones"
+workspace.scope.all_hidden_hint: "Todos los núcleos están ocultos por el modo de espacio de trabajo activo — cambia el modo o revisa la visibilidad en Ajustes → Conexiones"
 # The empty state of a surface the preset emptied COMPLETELY, shared by every such surface
 # (`workspace::scope_marker::scope_empty_text`). Deliberately not per-surface and deliberately not
 # the surface's own "no orders" / "no data" / "connect a core" line: those assert that nothing
@@ -48,7 +48,7 @@ workspace.scope.all_hidden_hint: "Todos los núcleos están ocultos por el modo 
 workspace.scope.all_hidden: "Todos los núcleos están ocultos por el modo de espacio de trabajo activo"
 # The tooltip a pinned scope chip shows in place of the picker menu it replaces — the picker is
 # disabled by the active workspace, and this is the only place that says why (`panels::common`).
-workspace.scope.pinned_hint: "El ámbito lo define el espacio de trabajo: %{scope}. Puede cambiarlo en el panel izquierdo"
+workspace.scope.pinned_hint: "El ámbito lo define el espacio de trabajo: %{scope}. Puedes cambiarlo en el panel izquierdo"
 # The rail's ⚙ popup: which core-run controls the rows carry. The checkbox labels reuse
 # `profit_monitor.settings.*` — the same controls, the same wording; only the popup title, the
 # group-heading row and the grouping rows are the rail's own.

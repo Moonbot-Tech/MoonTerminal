@@ -1,15 +1,15 @@
 _version: 1
 telegram.report_title: "Informe"
-telegram.report_exchange_menu: "Bolsa"
-telegram.report_exchange_total: "Total de la bolsa"
+telegram.report_exchange_menu: "Exchange"
+telegram.report_exchange_total: "Total del exchange"
 telegram.report_exchange_summary: "%{cores} núcleos · %{active} con operaciones · winrate %{winrate}% · orden media %{average}"
 telegram.report_by_groups: "Por grupos"
 telegram.report_best_cores: "Mejores núcleos"
 telegram.report_worst_cores: "Peores núcleos"
 telegram.report_hidden_prefix: "prefijo compartido oculto: %{prefix}"
 telegram.report_exchange_all: "Todos los núcleos · %{active} con operaciones"
-telegram.report_other_exchange: "Otra bolsa"
-telegram.report_back_exchange: "Volver a la bolsa"
+telegram.report_other_exchange: "Otro exchange"
+telegram.report_back_exchange: "Volver al exchange"
 telegram.report_page_short: "Pág."
 telegram.report_rank_footer: "de peor a mejor · sin operaciones no se muestran"
 telegram.report_average_col: "Media %"
@@ -20,7 +20,7 @@ telegram.help_hour: "Esta hora"
 
 telegram.help_daily: "Resultados diarios de este mes"
 
-telegram.help_intro: "Elige un período en el menú inferior. Pulsa de nuevo para actualizar el informe. Elige una bolsa para ver su resumen."
+telegram.help_intro: "Elige un período en el menú inferior. Pulsa de nuevo para actualizar el informe. Elige un exchange para ver su resumen."
 
 telegram.help_commands: "Comandos y fechas propias"
 
@@ -41,7 +41,7 @@ telegram.report_calculation_extra: "El total incluye todo el grupo y período, t
 
 telegram.button_home: "Resumen"
 
-telegram.report_navigation_hint: "Elige el período en el menú inferior. Pulsa de nuevo para actualizar. Los botones del informe cambian la vista o abren una bolsa."
+telegram.report_navigation_hint: "Elige el período en el menú inferior. Pulsa de nuevo para actualizar. Los botones del informe cambian la vista o abren un exchange."
 
 telegram.report_all_cores: "Todos los núcleos"
 

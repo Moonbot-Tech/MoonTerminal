@@ -8,7 +8,7 @@ trade_window.focus: "显示交易"
 trade_window.focus.tip: "回到所选交易，并重置时间和价格缩放"
 trade_window.scale.tip: "可见区域的高度，以价格的百分比表示：10% 表示整个图表在垂直方向上覆盖价格的 10%。10 条网格带每条占十分之一。手动缩放时，图表上的标记会随之变化。"
 
-trade_window.blocked.unresolved: "交易窗口不可用——核心未连接"
+trade_window.blocked.unresolved: "交易窗口不可用——内核未连接"
 
 trade_window.retry: "重试"
 
@@ -50,19 +50,19 @@ trade_window.state.unknown_symbol: "交易所没有这个市场。"
 
 trade_window.source.ticks: "交易所逐笔数据"
 
-trade_window.source.core_ticks: "核心逐笔数据"
+trade_window.source.core_ticks: "内核逐笔数据"
 
 trade_window.source.loading_more: "继续加载中"
 
 trade_window.source.context_unavailable: "K线上下文不可用"
 
-trade_window.source.awaiting_core: "%{min} 分钟 K线，正在检查核心存档"
+trade_window.source.awaiting_core: "%{min} 分钟 K线，正在检查内核存档"
 
-trade_window.source.core_ticks_bucketed: "核心逐笔数据，步长 %{secs} s"
+trade_window.source.core_ticks_bucketed: "内核逐笔数据，步长 %{secs} s"
 
 trade_window.source.ticks_bucketed: "交易所逐笔数据，步长 %{secs} s"
 
-trade_window.source.core_ticks_edges_bucketed: "核心逐笔数据，两端步长 %{secs} s"
+trade_window.source.core_ticks_edges_bucketed: "内核逐笔数据，两端步长 %{secs} s"
 
 trade_window.source.ticks_edges_bucketed: "交易所逐笔数据，两端步长 %{secs} s"
 
@@ -93,7 +93,7 @@ trade_window.empty.no_data: "该时段内此市场没有数据。"
 trade_window.empty.no_endpoint: "%{brand} 没有终端可用的公开历史数据源。"
 
 
-trade_window.empty.core_offline: "该交易的核心未连接，无法确定其交易所和市场。"
+trade_window.empty.core_offline: "该交易的内核未连接，无法确定其交易所和市场。"
 
 trade_window.empty.bad_window: "该交易的开仓或平仓时间无效。"
 
@@ -121,14 +121,14 @@ trade_window.figure.strategy: "策略"
 # нет нигде / ядро, которому она принадлежит, сейчас не подключено.
 trade_window.strategy.in_deleted: "在已删除中"
 trade_window.strategy.deleted: "已删除"
-trade_window.strategy.core_offline: "核心未连接"
+trade_window.strategy.core_offline: "内核未连接"
 # Строка версии: штамп — тот же, каким панель «Версии» подписывает свои строки, чтобы юзер нашёл
 # её глазами; «действует» — то же слово, что стоит там у текущей версии.
 trade_window.strategy.version: "版本 %{stamp}"
 trade_window.strategy.version_current: "版本：生效中"
 trade_window.strategy.version_unknown: "版本未知"
-trade_window.strategy.version_tip: "入场时生效的策略版本——以终端的记录为准：时间戳表示终端看到这些设置的时间，而非核心应用它们的时间。点击可在“版本”面板中打开该版本。"
-trade_window.strategy.version_unknown_tip: "该交易早于首个已保存的版本：当时终端尚未观察此核心"
+trade_window.strategy.version_tip: "入场时生效的策略版本——以终端的记录为准：时间戳表示终端看到这些设置的时间，而非内核应用它们的时间。点击可在“版本”面板中打开该版本。"
+trade_window.strategy.version_unknown_tip: "该交易早于首个已保存的版本：当时终端尚未观察此内核"
 
 trade_window.figure.unknown: "无数据"
 
@@ -141,11 +141,11 @@ trade_window.side.short: "SHORT"
 # Блок «Ордера» в рельсе: архивные трассы ордеров этой сделки из ядра (#569). Пустой ответ ядра —
 # окончательное «трасс нет», без вечного спиннера; ошибка/таймаут — с кнопкой «Повторить».
 trade_window.figure.orders: "订单"
-trade_window.traces.pending: "正在查找轨迹：先查存档，再问核心…"
+trade_window.traces.pending: "正在查找轨迹：先查存档，再问内核…"
 trade_window.traces.drawn: "自身 %{own} 条，继承 %{inherited} 条"
 trade_window.traces.drawn_own: "图表上 %{own} 条线"
 trade_window.traces.none: "存档中没有轨迹——出场取自报告，入场以箭头表示"
-trade_window.traces.not_askable: "未收到行键——该交易在核心更新之前就已复制"
-trade_window.traces.failed: "核心未响应——核心版本过旧或连接中断"
-trade_window.traces.retry_tip: "再次向核心请求订单轨迹"
+trade_window.traces.not_askable: "未收到行键——该交易在内核更新之前就已复制"
+trade_window.traces.failed: "内核未响应——内核版本过旧或连接中断"
+trade_window.traces.retry_tip: "再次向内核请求订单轨迹"
 trade_window.traces.neighbours: "+%{n} 条相邻"

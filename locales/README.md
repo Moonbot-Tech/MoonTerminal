@@ -92,6 +92,19 @@ dictionaries in `crates/moon-tg/src/i18n.rs` (a `mod <code>` with its own
 back to English), then
 re-run the contract test above and `cargo test -p moon-tg i18n::`.
 
+## House words (the same as on moonbot.pro)
+
+The terminal speaks with the words of the Moonbot site, so a trader reading both meets one
+vocabulary. Every new or rewritten value follows them:
+
+- **es** — the reader is addressed as «tú», never «usted»: «Pulsa», «Elige», «tu núcleo»,
+  «puedes». Third-person «su» about a core, an order or a strategy stays. An exchange is
+  «el exchange», plural «los exchanges», never «bolsa». The core is «núcleo».
+- **zh** — the core is «内核», never «核心»; an exchange is «交易所».
+
+Labels quoted from Moonbot itself (its Moon Proto window, its expert settings) stay exactly as
+Moonbot writes them, whatever this list says.
+
 ## Deliberately NOT translated
 
 Industry standard / tech metrics we leave as they are in every language:
