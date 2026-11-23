@@ -398,6 +398,7 @@ impl Render for ChartPanel {
                 }),
             )
             .on_scroll_wheel(cx.listener(render_input::scroll_wheel))
+            .on_pinch(cx.listener(render_input::pinch))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(render_input::mouse_down_left),

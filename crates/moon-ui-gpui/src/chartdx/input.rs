@@ -64,6 +64,30 @@ const LIVE_BREAK_WINDOW_MS: f64 = 50.0;
 /// detaches, so the pull-back does not catch it again on the next pixel of jitter.
 const LIVE_BREAK_HYSTERESIS_PX: f32 = 16.0;
 const RMB_ZOOM_START_PX: f32 = 4.0;
+/// Whether this platform's pinch delta is a step of the gesture's ABSOLUTE scale (X11 and Wayland:
+/// `new_scale - previous_scale`) rather than a ratio to the previous update minus one (Windows
+/// Direct Manipulation: `scale / last_scale - 1`; macOS: the magnification).
+const PINCH_DELTA_IS_ABSOLUTE: bool = cfg!(any(target_os = "linux", target_os = "freebsd"));
+
+/// The multiplicative X zoom one pinch update asks for; above 1 zooms in.
+///
+/// Args:
+///     delta: The update's delta as the platform reports it; positive spreads the fingers.
+///     accum: Sum of the gesture's earlier deltas, so an absolute-scale platform's update can be
+///         turned into a ratio against the scale it started from (`1.0 + accum`).
+///     absolute: Whether `delta` is an absolute-scale step ([`PINCH_DELTA_IS_ABSOLUTE`]).
+///
+/// The accumulator only sees the updates that reached this chart, so after a stretch of the gesture
+/// spent off it the estimate can drift. A positive estimate still gives the delta's own direction;
+/// one at or below zero says nothing, and the step falls back to the ratio reading.
+fn pinch_factor(delta: f32, accum: f32, absolute: bool) -> f32 {
+    let before = 1.0 + accum;
+    if absolute && before > 0.0 {
+        (before + delta) / before
+    } else {
+        1.0 + delta
+    }
+}
 
 /// A left drag on a LIVE view, held at the live edge until it proves to be a flick.
 ///
@@ -157,6 +181,10 @@ pub struct ChartInput {
     /// Gesture that gathered the accumulated lines, so a change of modifiers
     /// mid-scroll starts a fresh count instead of spending them on the other gesture.
     wheel_mode: Option<WheelMode>,
+    /// Sum of the current pinch gesture's deltas, reset at its start and end. Linux reports each
+    /// delta as a step of the gesture's absolute scale, so the step's ratio needs the scale it
+    /// started from: `1.0 + pinch_accum`.
+    pinch_accum: f32,
     rmb_down: bool,
     /// Whether right-button movement crossed the price-zoom drag threshold.
     rmb_moved: bool,
@@ -320,6 +348,41 @@ impl ChartInput {
             return true;
         }
         false
+    }
+
+    /// Start or finish a pinch gesture: the next update's ratio is measured from scale 1 again.
+    pub(crate) fn pinch_reset(&mut self) {
+        self.pinch_accum = 0.0;
+    }
+
+    /// Apply one trackpad pinch update as an X zoom of the hovered pane.
+    ///
+    /// The same zoom as Ctrl+wheel ([`XZoom::Ctrl`]): the moment under the fingers stays put, with
+    /// the ordinary thirty-second floor. A zero delta (the gesture's start and end) moves nothing.
+    /// Returns whether a view changed and needs presentation.
+    pub(crate) fn pinch(
+        &mut self,
+        delta: f32,
+        gate_ok: bool,
+        container: &mut Container,
+        fallback_w: f32,
+        ppp: f32,
+    ) -> bool {
+        let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "chart:input");
+        if !gate_ok || !delta.is_finite() || delta == 0.0 {
+            return false;
+        }
+        let factor = pinch_factor(delta, self.pinch_accum, PINCH_DELTA_IS_ABSOLUTE);
+        self.pinch_accum += delta;
+        let (plot_w, cursor_x) =
+            self.plot_metrics_for(self.hovered_pane, fallback_w, ppp, container);
+        let now = now_unix_ms();
+        let Some(view) = self.hovered_view_mut(container) else {
+            return false;
+        };
+        view.zoom_x_at(factor, plot_w, cursor_x, now, XZoom::Ctrl);
+        record_zoom_window(view.visible_x(plot_w).1);
+        true
     }
 
     /// Apply one super-zoom hotkey step at each prepared pane's plot center.
