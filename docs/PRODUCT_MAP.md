@@ -129,8 +129,11 @@ percent from the best price) each placed or hidden per tab, auto figures (levels
 high/low, trend lines, squeezes, volume profile, round prices and formations found on the candles
 and the core's 5-minute ring — a table of rows per kind of chart tab from a button on the tab
 strip, each row its detector, timeframe, how many lines to keep and their look, captions and event
-marks, one opacity for the block; captions show on hover by default, a hovered line shows its card
-while Ctrl is held, its right-click menu pins it as a figure, hides it or opens its row; an eye in
+marks, one opacity for the block; captions show on hover by default, period high/low captions
+always; by default the lines answer the mouse only while Ctrl (Command on macOS) is held (a
+per-kind switch in the popup; without it a right-drag passes through them), a line hovered with
+Ctrl shows its card, its
+right-click menu pins it as a figure, hides it or opens its row; an eye in
 the chart's captions shows or hides the auto figures on that coin until the coin changes; on by default on Main, shipped
 switched off on the other kinds; the Screener scans every market with Main's rows on a button press
 and filters by the event found), liquidation count, news marks (gems by
