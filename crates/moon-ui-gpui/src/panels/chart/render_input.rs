@@ -162,7 +162,14 @@ fn release_order_drag(
 /// Worked around here rather than in the fork, per the project's rule about editing MoonUI, and
 /// noted in `docs-internal/FORK_BUGS.md`.
 fn wheel_delta(x: f32, y: f32, modifiers: Modifiers) -> f32 {
-    if y == 0.0 && modifiers.shift { x } else { y }
+    if wheel_reads_x(y, modifiers) { x } else { y }
+}
+
+/// Whether [`wheel_delta`] takes this event's distance from X: a Shift gesture the platform moved
+/// there. One rule for both callers, because Windows scales an X delta by a different setting
+/// ("characters per notch") and the notch conversion has to know which one it is undoing.
+fn wheel_reads_x(y: f32, modifiers: Modifiers) -> bool {
+    y == 0.0 && modifiers.shift
 }
 
 /// Resolve Ctrl+Shift before the Shift/Alt pan gesture, and Ctrl alone before a plain zoom.
@@ -374,15 +381,21 @@ pub(super) fn scroll_wheel(
     {
         return;
     }
-    // Lines represent discrete mouse-wheel clicks, commonly +/-1 or +/-3 on Windows. Pixels are
-    // precise trackpad/Magic Mouse input on macOS, delivered as a continuous inertial stream.
-    // Preserve the distinction through `precise` so input.wheel scales them differently.
-    let (dy, precise) = match e.delta {
-        ScrollDelta::Lines(p) => (wheel_delta(p.x, p.y, e.modifiers), false),
-        ScrollDelta::Pixels(p) => (
-            wheel_delta(f32::from(p.x), f32::from(p.y), e.modifiers),
-            true,
-        ),
+    // Lines are a mouse wheel, scaled by each platform its own way; the chart zooms and pans by
+    // the notches behind them (`input::notches`). Pixels are precise trackpad/Magic Mouse input,
+    // delivered as a continuous inertial stream. Preserve the distinction through `precise` so
+    // input.wheel scales them differently. The label column keeps reading the raw lines.
+    // `amount` is what input.wheel takes: notches for a wheel, pixels when precise.
+    let (dy, precise, amount) = match e.delta {
+        ScrollDelta::Lines(p) => {
+            let lines = wheel_delta(p.x, p.y, e.modifiers);
+            let scale = input::notches::platform_line_scale(wheel_reads_x(p.y, e.modifiers));
+            (lines, false, input::notches::notches(lines, scale))
+        }
+        ScrollDelta::Pixels(p) => {
+            let px = wheel_delta(f32::from(p.x), f32::from(p.y), e.modifiers);
+            (px, true, px)
+        }
     };
     this.input.last_ptr = pos;
     this.input.cursor = if within { Some(pos) } else { None };
@@ -396,7 +409,7 @@ pub(super) fn scroll_wheel(
         let input = &mut this.input;
         this.chart.with_container_mut(|container| {
             input.wheel(
-                dy,
+                amount,
                 precise,
                 wheel_mode(e.modifiers),
                 within,

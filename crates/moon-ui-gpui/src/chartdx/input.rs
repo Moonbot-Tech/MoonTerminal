@@ -1,5 +1,6 @@
 //! GPUI chart-area input state, ported from the removed egui implementation without winit types.
-//! Wheel input uses a plain `dy: f32`, and mouse buttons use the local [`Btn`] enum. All stored
+//! Wheel input is a plain `dy: f32` in notches or pixels ([`notches`] turns a platform's lines into
+//! notches), and mouse buttons use the local [`Btn`] enum. All stored
 //! coordinates are device pixels, matching the chart renderer and [`ChartView`]. The `ChartPanel`
 //! handlers obtain them through `ChartEngine::chart_local_from_window_pos`, which converts logical
 //! window coordinates as `(position - slot_origin) * scale_factor`. This layer mutates chart views
@@ -10,6 +11,8 @@ use crate::chartdx::pane::Container;
 use moon_chart::view::{ChartView, Rect, XZoom, record_zoom_window};
 use moon_core::session::CoreId;
 
+pub(crate) mod notches;
+
 /// Mouse button subset used by chart navigation instead of `winit::MouseButton`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Btn {
@@ -17,7 +20,7 @@ pub enum Btn {
     Right,
 }
 
-/// Navigation gesture, also identifying which discrete wheel accumulator owns a delta.
+/// Navigation gesture a wheel delta drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WheelMode {
     /// Unmodified wheel. Thirty-second floor. A live chart stays pinned to now.
@@ -48,12 +51,13 @@ fn x_zoom(mode: WheelMode) -> XZoom {
     }
 }
 
-const WHEEL_THRESHOLD: f32 = 100.0;
 /// Pixel distance that doubles or halves X scale for precise macOS trackpad input.
 ///
-/// Precise zoom uses `2^(pixels / WHEEL_PX_PER_2X)` instead of the discrete wheel threshold, which
-/// caused inertial pixel deltas to trigger repeated jumps and axis jitter.
+/// Precise zoom uses `2^(pixels / WHEEL_PX_PER_2X)` rather than one step per event, which made
+/// inertial pixel deltas trigger repeated jumps and axis jitter.
 const WHEEL_PX_PER_2X: f32 = 300.0;
+/// Device pixels one wheel notch pans the time axis by with Shift or Alt held.
+const WHEEL_PAN_PX_PER_NOTCH: f32 = 60.0;
 /// Logical pixels per millisecond a drag toward history must reach before a live chart lets go of
 /// the live edge: only a flick breaks the pin. A slower drag pans price and leaves time following.
 const LIVE_BREAK_SPEED: f32 = 1.9;
@@ -176,11 +180,6 @@ pub struct ChartInput {
     lmb_down: bool,
     drag_pane: Option<usize>,
     live_hold: LiveHold,
-    wheel_accum: f32,
-    wheel_pane: Option<usize>,
-    /// Gesture that gathered the accumulated lines, so a change of modifiers
-    /// mid-scroll starts a fresh count instead of spending them on the other gesture.
-    wheel_mode: Option<WheelMode>,
     /// Sum of the current pinch gesture's deltas, reset at its start and end. Linux reports each
     /// delta as a step of the gesture's absolute scale, so the step's ratio needs the scale it
     /// started from: `1.0 + pinch_accum`.
@@ -283,10 +282,13 @@ impl ChartInput {
 
     /// Apply wheel X zoom or X pan to the hovered pane.
     ///
-    /// `dy` is a line delta for discrete input or a pixel delta when `precise` is true. `mode`
-    /// selects plain zoom (live edge stays pinned), Ctrl zoom, super zoom, or Shift/Alt panning,
-    /// and `gate_ok` requires the pointer to be inside the chart zone. Returns whether a view
-    /// changed and needs presentation.
+    /// `dy` is signed wheel notches for discrete input (see [`notches::notches`]; fractions from a
+    /// high-resolution wheel included) or a pixel delta when `precise` is true. Every event applies
+    /// in full at once: a notch is one doubling of the time scale or one
+    /// [`WHEEL_PAN_PX_PER_NOTCH`] pan step, and a fraction is that share of it. `mode` selects
+    /// plain zoom (live edge stays pinned), Ctrl zoom, super zoom, or Shift/Alt panning, and
+    /// `gate_ok` requires the pointer to be inside the chart zone. Returns whether a view changed
+    /// and needs presentation.
     pub fn wheel(
         &mut self,
         dy: f32,
@@ -298,50 +300,34 @@ impl ChartInput {
         ppp: f32,
     ) -> bool {
         let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Input, "chart:input");
-        // Non-finite deltas are refused HERE, at the one place they enter, because everything
-        // downstream carries NaN silently: the threshold test below is false for NaN so it does not
-        // return early, `signum()` of a NaN accumulator is NaN, `View::zoom_x_at` multiplies the
-        // raw `px_per_ms` by it, and `f32::clamp` returns a NaN unchanged — after which that pane's
-        // scale is NaN forever, since the self-heal on resize compares against it and never matches
-        // again. The old discrete branch happened to survive this by testing `> 0.0` and falling to
-        // a 0.5 factor; computing the factor from the accumulator removed that accident, which is
-        // what made the guard worth writing rather than assuming the platform is well behaved.
+        // Non-finite deltas are refused HERE, at the one place they enter: `pan_x_px` would carry
+        // a NaN straight into the anchor, and that pane's time axis would stay NaN for the rest of
+        // the session. `zoom_x_at` refuses a bad factor itself, but the pan has no such guard.
         if !gate_ok || !dy.is_finite() || dy == 0.0 {
             return false;
-        }
-        // The accumulator belongs to one pane AND one gesture. Carrying it across a change of
-        // either spends lines gathered while panning on the zoom step that follows, which fires
-        // early and at whichever multiplier the modifiers happen to hold at that instant.
-        if self.wheel_pane != self.hovered_pane || self.wheel_mode != Some(mode) {
-            self.wheel_accum = 0.0;
-            self.wheel_pane = self.hovered_pane;
-            self.wheel_mode = Some(mode);
         }
         let (plot_w, cursor_x) =
             self.plot_metrics_for(self.hovered_pane, fallback_w, ppp, container);
         let now = now_unix_ms();
         if let Some(view) = self.hovered_view_mut(container) {
             if mode == WheelMode::Pan {
-                // Precise panning follows gesture pixels; a discrete line event uses a fixed
-                // 60-device-pixel step in its sign direction.
-                let dx = if precise { -dy } else { -dy.signum() * 60.0 };
+                // Precise panning follows gesture pixels; a wheel pans a fixed step per notch.
+                let dx = if precise {
+                    -dy
+                } else {
+                    -dy * WHEEL_PAN_PX_PER_NOTCH
+                };
                 view.pan_x_px(dx, now, plot_w);
-            } else if precise {
-                // Precise macOS trackpad input zooms proportionally to gesture magnitude without
-                // threshold accumulation, avoiding repeated jumps from inertial pixel deltas.
-                self.wheel_accum = 0.0;
-                let factor = 2f32.powf(dy / WHEEL_PX_PER_2X);
-                view.zoom_x_at(factor, plot_w, cursor_x, now, x_zoom(mode));
-                record_zoom_window(view.visible_x(plot_w).1);
             } else {
-                // Accumulate discrete wheel lines and apply the step at the threshold.
-                self.wheel_accum += dy * 40.0;
-                if self.wheel_accum.abs() < WHEEL_THRESHOLD {
-                    return false;
-                }
-                // Terminal UX: wheel up zooms in, wheel down zooms out.
-                let factor = 2f32.powf(self.wheel_accum.signum());
-                self.wheel_accum = 0.0;
+                // Terminal UX: wheel up zooms in, wheel down zooms out. A wheel doubles per notch
+                // and a fraction moves the scale by its share at once, so a slow turn is followed
+                // and a fast one loses nothing (#1461). Precise trackpad input doubles per
+                // `WHEEL_PX_PER_2X` pixels of the gesture.
+                let factor = if precise {
+                    2f32.powf(dy / WHEEL_PX_PER_2X)
+                } else {
+                    2f32.powf(dy)
+                };
                 view.zoom_x_at(factor, plot_w, cursor_x, now, x_zoom(mode));
                 record_zoom_window(view.visible_x(plot_w).1);
             }
