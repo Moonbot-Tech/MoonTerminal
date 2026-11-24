@@ -329,12 +329,18 @@ impl AnalyticsView {
             on_pick: std::rc::Rc::new(move |uid, _, app| {
                 let _ = view.update(app, |this, cx| {
                     this.summary_ui.toggle_pick(uid);
-                    // Picks and the mode a pick may switch persist across restarts.
-                    let ui = &this.summary_ui;
-                    let (lines, picks) = (ui.lines.id(), ui.picked.iter().copied().collect());
+                    // Picks and the mode a pick may switch persist across restarts. Only the
+                    // clicked uid flips on disk: the in-memory set drops cores the current
+                    // snapshot lacks, and those picks must survive for a later period.
+                    let picked = this.summary_ui.picked.contains(&uid);
+                    let lines = this.summary_ui.lines.id();
                     this.backend.update(cx, |b, _| {
+                        let saved = &mut b.layout.analytics_chart_picks;
+                        saved.retain(|&u| u != uid);
+                        if picked {
+                            saved.push(uid);
+                        }
                         b.layout.analytics_chart_lines = Some(lines.to_owned());
-                        b.layout.analytics_chart_picks = picks;
                         b.layout_dirty = true;
                     });
                     cx.notify();
