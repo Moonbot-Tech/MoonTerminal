@@ -335,7 +335,7 @@ impl AnalyticsView {
                     let picked = this.summary_ui.picked.contains(&uid);
                     let lines = this.summary_ui.lines.id();
                     this.backend.update(cx, |b, _| {
-                        let saved = &mut b.layout.analytics_chart_picks;
+                        let saved = b.layout.analytics_chart_picks.get_or_insert_default();
                         saved.retain(|&u| u != uid);
                         if picked {
                             saved.push(uid);

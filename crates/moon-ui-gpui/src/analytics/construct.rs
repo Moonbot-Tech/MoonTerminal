@@ -243,6 +243,7 @@ impl AnalyticsView {
             .layout
             .analytics_chart_picks
             .iter()
+            .flatten()
             .copied()
             .collect();
         // Right-column collapse state from the previous run (default expanded).
