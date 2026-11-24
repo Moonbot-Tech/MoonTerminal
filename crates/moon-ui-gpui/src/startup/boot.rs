@@ -648,14 +648,13 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // they read, including the status that seeds a core the first time.
                     if drain.sound_inputs {
                         // Play core detect/alert sounds for new detects that specify a sound.
-                        let detect_played = b.play_detect_sounds();
-                        // Moonbot's price-approach alerts, on the same drain and behind their own
-                        // per-core revision gate. Preserve their detect-first admission policy; the
-                        // shared scheduler then serializes accepted clips with the trade lane.
-                        let alert_played = b.play_price_alert_sounds(detect_played);
-                        // Moonbot's network-problem alarm, on the core's own switch, last in the
-                        // same admission chain.
-                        b.play_problem_sounds(alert_played);
+                        b.play_detect_sounds();
+                        // Moonbot's price-approach alerts and network-problem alarm, each behind
+                        // its own per-core gate and its own once-per-drain rule. A detect in the
+                        // same drain no longer holds them back: the scheduler plays notices before
+                        // a waiting detect and never cuts the playing clip (#1447).
+                        b.play_price_alert_sounds();
+                        b.play_problem_sounds();
                     }
                     b.collect_trade_sounds();
                     b.pump_sounds();

@@ -956,9 +956,9 @@ pub struct WindowLayout {
     /// ignores this field.
     #[serde(default, deserialize_with = "de_lenient_u32")]
     pub alert_duration_s: Option<u32>,
-    /// How many times the detect player enqueues a figure-alert clip, chosen in the Alerts panel.
-    /// `None` is [`ALERT_REPEAT_DEFAULT`]. Zero is silence for that firing; ordinary (non-alert)
-    /// detects still play once.
+    /// How many times a figure-alert clip plays, chosen in the Alerts panel. The repeats are one
+    /// waiting entry, which a newer detect may replace whole. `None` is [`ALERT_REPEAT_DEFAULT`].
+    /// Zero is silence for that firing; ordinary (non-alert) detects still play once.
     #[serde(default, deserialize_with = "de_lenient_u32")]
     pub alert_repeat: Option<u32>,
 }

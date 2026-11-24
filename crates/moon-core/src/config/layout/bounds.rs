@@ -65,10 +65,12 @@ pub fn resolve_alert_duration_s(stored: Option<u32>) -> u32 {
         .clamp(ALERT_DURATION_S_MIN, ALERT_DURATION_S_MAX)
 }
 
-/// How many times the detect player should enqueue one figure-alert clip.
+/// How many times one figure-alert clip should play, as one waiting entry that a newer detect may
+/// replace whole.
 ///
 /// `None` is the panel's shipped repeat. Zero is a stored choice (play nothing); values above
-/// the stepper ceiling clamp so a hand-edited layout cannot flood the sound queue.
+/// the stepper ceiling clamp so a hand-edited layout cannot keep the player busy with one alert
+/// for as long as nothing newer arrives.
 ///
 /// Args:
 ///     stored: Value from [`WindowLayout::alert_repeat`].

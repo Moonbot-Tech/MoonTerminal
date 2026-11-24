@@ -68,11 +68,10 @@ impl Backend {
     /// cursor prevents duplicates and startup bursts: the first visit seeds the cursor without
     /// playback.
     ///
-    /// Returns:
-    ///     Whether a sound was selected. Price-approach alerts keep their existing per-drain
-    ///     admission policy; the media scheduler owns actual playback timing.
-    pub(crate) fn play_detect_sounds(&mut self) -> bool {
-        let mut played = false;
+    /// Returns nothing: no other sound in the drain waits on whether a detect sounded. The
+    /// price-approach beep and the network alarm used to, back when the player cut itself off;
+    /// the scheduler now orders them ahead of a waiting detect instead (#1447).
+    pub(crate) fn play_detect_sounds(&mut self) {
         for (core, data) in self.session.store().cores() {
             // Gate on revision because feed draining wakes this path hundreds of times per second
             // while detects change infrequently. Leave the list untouched when nothing changed.
@@ -143,7 +142,6 @@ impl Backend {
                 // another core in this one, replaces it whole instead of queuing behind it (#1447).
                 let plays = detect_sound_plays(is_alert, self.alert_repeat());
                 crate::media::sound::play_detect(&name, plays);
-                played = plays > 0;
             } else {
                 // Quiet mode is named explicitly: without it, a silenced night reads as "no
                 // detect asked for a sound", which is a different bug entirely.
@@ -159,7 +157,6 @@ impl Backend {
                 ));
             }
         }
-        played
     }
 }
 
