@@ -99,6 +99,9 @@ fn check(discovery: &Mutex<Option<ReleaseDiscovery>>) -> ReleaseCheck {
             "the release check failed earlier".into(),
         ));
     };
+    // Strictly newer, unlike `release-fetch` for a development build: the chat announces "a new
+    // version is out", which the release of the build's own version is not. The return from a
+    // development build is the terminal's ("Update the service"), never a chat offer.
     let discovery = discovery.get_or_insert_with(|| ReleaseDiscovery::for_asset(identity, asset));
     match discovery.scan() {
         Ok(result) => match result.eligibility {
