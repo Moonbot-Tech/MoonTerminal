@@ -94,14 +94,22 @@ pub fn run(args: Args) -> Result<Value> {
     }))
 }
 
-/// A version's diff with long values shown as their length.
+/// A version's diff with long values shown as their length and their item count.
+///
+/// Items are counted with the strategy separator set (`symbol::split_coin_list`: space, comma,
+/// semicolon, tab, newline, and brackets and quotes) for every long field, not only coin lists:
+/// MoonBot splits its own strategy list fields — CoinsBlackList/CoinsWhiteList, WatchAddress,
+/// BinanceTokenTags, TriggerKeysBL — on spaces as well as commas, so a comma-only count reported
+/// "ANC GALA" as one coin (#1448). A free-text field such as Comment has no item contract; its
+/// token count (an apostrophe splits a word) is a rough size hint, as comma chunks were, and its
+/// character count stays beside it.
 fn changed(raw: Option<&str>) -> Value {
     let Some(Ok(Value::Object(map))) = raw.map(serde_json::from_str::<Value>) else {
         return Value::Null;
     };
     let short = |v: &Value| match v {
         Value::String(s) if s.chars().count() > LONG_VALUE => {
-            json!({"long_text_chars": s.chars().count(), "items": s.split(',').filter(|i| !i.trim().is_empty()).count()})
+            json!({"long_text_chars": s.chars().count(), "items": crate::symbol::split_coin_list(s).count()})
         }
         other => other.clone(),
     };

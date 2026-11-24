@@ -99,13 +99,17 @@ fn pair(was: &Value, is: &Value, full_lists: bool) -> Value {
         "whole_value":"pass full_lists=true to action_preview to see it"})
 }
 
-/// The items of a comma-separated list, trimmed, upper-cased and unique — the way
-/// `strategy_compare` counts a coin list, so both tools report one list the same way.
+/// The items of a strategy list, trimmed, upper-cased and unique — the way `strategy_compare`
+/// counts a coin list, so both tools report one list the same way.
+///
+/// Split with the terminal's strategy separator set (`moon_core::symbol::split_coin_list`:
+/// space, comma, semicolon, tab, newline, and brackets and quotes): MoonBot reads a strategy's CoinsBlackList and
+/// CoinsWhiteList, and its other list fields, with spaces as separators too, so "ANC GALA" is two
+/// coins (#1448). Only strategy fields reach here; the core-wide blacklist, which is comma-only,
+/// is never diffed by these tools.
 pub(super) fn list_items(value: &str) -> BTreeSet<String> {
-    value
-        .split(',')
-        .map(|item| item.trim().to_ascii_uppercase())
-        .filter(|item| !item.is_empty())
+    moon_core::symbol::split_coin_list(value)
+        .map(str::to_ascii_uppercase)
         .collect()
 }
 

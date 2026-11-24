@@ -155,3 +155,24 @@ fn adjusted_details_are_bounded_and_counted() {
     );
     assert_eq!(result["adjusted_details_omitted"], 7);
 }
+
+/// `strategy_compare` reads a space-separated coin list (#1448) coin by coin, the way the
+/// preview does: the second strategy lacks exactly GALA, not one whole-field item.
+#[test]
+fn a_space_separated_list_is_compared_coin_by_coin() {
+    let rest = (0..40)
+        .map(|i| format!("C{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let strategy = |coins: String| BTreeMap::from([("CoinsBlackList".to_string(), coins)]);
+    let found = [
+        ("1:7".to_string(), strategy(format!("ANC GALA {rest}"))),
+        ("2:7".to_string(), strategy(format!("ANC {rest}"))),
+    ];
+    let answer = compare("Night", &found, false).expect("two live strategies");
+    let list = &answer["differing_fields"]["CoinsBlackList"];
+    assert_eq!(list["1:7"]["items"], 42);
+    assert_eq!(list["2:7"]["items"], 41);
+    assert_eq!(list["2:7"]["missing_from_first"], json!(["GALA"]));
+    assert_eq!(list["2:7"]["not_in_first"], json!([]));
+}

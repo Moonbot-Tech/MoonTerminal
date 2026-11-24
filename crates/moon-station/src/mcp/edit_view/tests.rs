@@ -103,3 +103,32 @@ fn another_action_is_shown_as_previewed() {
 fn list_items_ignore_spacing_and_case() {
     assert_eq!(list_items("btc, Eth,,BTC "), list_items("ETH,BTC"));
 }
+
+/// A coin list separated by spaces, as MoonBot accepts it (#1448), is several coins: lifting
+/// GALA out of "ANC GALA ..." is one coin removed, not one whole-field item swapped for another.
+#[test]
+fn a_space_separated_list_is_diffed_coin_by_coin() {
+    let rest = (0..40)
+        .map(|i| format!("C{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let old = format!("ANC GALA {rest}");
+    let new = format!("ANC {rest}");
+    let preview = json!({"strategies":[{"id":"7","unchanged":false,
+        "before":row("Night",2.0,&old,1),"after":row("Night",2.0,&new,1)}]});
+    let view = client_view(&edit(&[7]), &preview, false);
+    let coins = &view["strategies"][0]["changes"]["Coins"];
+    assert_eq!(coins["before"]["items"], 42);
+    assert_eq!(coins["after"]["items"], 41);
+    assert_eq!(coins["removed"], json!(["GALA"]));
+    assert_eq!(coins["added_count"], 0);
+}
+
+/// Every separator a strategy list may use counts alike.
+#[test]
+fn list_items_split_on_every_strategy_separator() {
+    assert_eq!(
+        list_items("anc gala;btc\teth\nxrp"),
+        list_items("ANC,GALA,BTC,ETH,XRP")
+    );
+}

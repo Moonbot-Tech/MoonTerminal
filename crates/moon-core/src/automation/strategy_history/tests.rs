@@ -18,3 +18,15 @@ fn a_long_changed_value_is_shown_as_its_size() {
     assert!(changed(None).is_null());
     assert!(changed(Some("not json")).is_null());
 }
+
+/// A coin list separated by spaces, as MoonBot accepts it (#1448), counts each coin, not one.
+#[test]
+fn a_space_separated_list_counts_each_coin() {
+    let list = (0..60)
+        .map(|i| format!("COIN{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let raw = json!({"CoinsBlackList":{"old":"A B","new":format!("ANC GALA {list}")}}).to_string();
+    let diff = changed(Some(&raw));
+    assert_eq!(diff["CoinsBlackList"]["new"]["items"], 62);
+}
