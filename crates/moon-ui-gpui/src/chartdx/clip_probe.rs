@@ -3,7 +3,12 @@
 
 use super::{ChartViewGpu, gpu, recovery_probe, userdata::UserDataLayer};
 use gpui::RawGpuAccess;
-use moon_chart::layers::{MarkerInstance, SEG_EXTEND_EDGE, SegInstance};
+use moon_chart::layers::{MarkerInstance, SEG_EXTEND_EDGE, SEG_EXTEND_RAY, SegInstance};
+
+/// How far left of the plot the probe's horizontal ray starts, in pixels: the order of a 24-hour
+/// level seen on a narrow live window, the geometry that dropped out of whole frames on DX11 while
+/// only the ray's far end was clipped (24.11.2026).
+const FAR_RAY_ORIGIN_PX: f32 = 200_000.0;
 
 /// Draw adversarial geometry under the caller's actual scissor, then inspect native pixels.
 /// No scissor is set here: replacing the production clip with the pane must fail this probe.
@@ -32,6 +37,7 @@ pub(super) fn check(
     let price = |y: f32| view.view_price0 + (bottom - y) / view.price_to_px;
     let arrow_y = (top + height * 0.35).round();
     let line_y = (top + height * 0.7).round();
+    let far_y = (top + height * 0.55).round();
     let mut layer = UserDataLayer::new();
     let arrows = [
         pane[0] + 8.0,
@@ -68,6 +74,14 @@ pub(super) fn check(
             line_y + 10.0,
             SEG_EXTEND_EDGE,
         ),
+        // A horizontal ray born far left of the plot, aimed right: it must cross the whole plot.
+        segment(
+            left - FAR_RAY_ORIGIN_PX,
+            far_y,
+            left - FAR_RAY_ORIGIN_PX + 1.0,
+            far_y,
+            SEG_EXTEND_RAY,
+        ),
     ];
     layer.set(&[], &[], &segments, &arrows);
     layer.prepare(&device, &context, gpu);
@@ -76,6 +90,8 @@ pub(super) fn check(
     let mut plot_changes = 0;
     let mut arrow_pixels = 0;
     let mut book_line_changes = 0;
+    // Plot columns the far-origin ray painted, by distance from the plot's left edge.
+    let mut far_ray_columns = vec![false; width.max(0.0) as usize + 1];
     for y in 0..before.height {
         for x in 0..before.width {
             let offset = ((y * before.width + x) * 4) as usize;
@@ -109,7 +125,21 @@ pub(super) fn check(
             if px >= right && (py - (line_y + 10.0)).abs() < 2.0 {
                 book_line_changes += 1;
             }
+            if px >= left
+                && px < right
+                && (py - far_y).abs() < 2.0
+                && let Some(column) = far_ray_columns.get_mut((px - left) as usize)
+            {
+                *column = true;
+            }
         }
+    }
+    // The first and last columns can sit under a vertical segment or the edge's half pixel.
+    let far_ray_painted = far_ray_columns.iter().filter(|c| **c).count();
+    if (far_ray_painted as f32) < width * 0.9 {
+        return Err(format!(
+            "clip probe's far-origin ray painted {far_ray_painted} of {width} plot columns"
+        ));
     }
     if plot_changes < 20 {
         return Err("clip probe drew no visible geometry".into());

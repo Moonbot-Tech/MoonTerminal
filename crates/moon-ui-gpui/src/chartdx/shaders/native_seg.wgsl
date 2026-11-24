@@ -34,6 +34,24 @@ fn data_to_px(cv: ChartView, t_rel: f32, price: f32) -> vec2<f32> {
     return vec2<f32>(x, y);
 }
 
+// One axis of the Liang-Barsky clip in `seg_vertex`: narrows the visible parameter range `t` of
+// `p + d * t` to [lo, hi] on this axis; an axis-parallel segment outside the band empties it.
+fn seg_clip_axis(p: f32, d: f32, lo: f32, hi: f32, t: vec2<f32>) -> vec2<f32> {
+    if (d != 0.0) {
+        let ta = (lo - p) / d;
+        let tb = (hi - p) / d;
+        return vec2<f32>(max(t.x, min(ta, tb)), min(t.y, max(ta, tb)));
+    }
+    if (p < lo || p > hi) {
+        return vec2<f32>(t.x, -1.0);
+    }
+    return t;
+}
+
+// Period of every line pattern in `pattern_on` (lcm of 16, 6 and 20): a dash phase carried modulo
+// this stays exact however far the visible part starts from the segment's origin.
+const SEG_PATTERN_PERIOD: f32 = 240.0;
+
 @group(0) @binding(0) var<uniform> cv: ChartView;
 @group(0) @binding(1) var<storage, read> segs: array<GpuSeg>;
 
@@ -86,6 +104,23 @@ fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32
         a.y = clamp(a.y, lo, hi);
         b.y = clamp(b.y, lo, hi);
     }
+    // Clip BOTH ends to the render target, grown by the stroke and a margin that scales with the
+    // coordinates' f32 error. Kept identical to the DX11 copy (order_lines.hlsl), which says why:
+    // a far-off origin made a quad long enough to drop out of whole frames.
+    let reach_err = (max(abs(a.x), abs(a.y)) + max(abs(b.x), abs(b.y))) * 1e-6;
+    let margin = max(s.m.x, 1.0) * 0.5 + 2.0 + reach_err;
+    let full = b - a;
+    var vis = seg_clip_axis(a.x, full.x, -margin, cv.resolution.x + margin, vec2<f32>(0.0, 1.0));
+    vis = seg_clip_axis(a.y, full.y, -margin, cv.resolution.y + margin, vis);
+    var dist0 = 0.0;
+    if (vis.y < vis.x) {
+        b = a; // wholly outside: a zero-area quad
+    } else {
+        dist0 = (length(full) * vis.x) % SEG_PATTERN_PERIOD;
+        // Only a clipped end moves (see order_lines.hlsl).
+        if (vis.y < 1.0) { b = a + full * vis.y; }
+        if (vis.x > 0.0) { a = a + full * vis.x; }
+    }
     var dir = b - a;
     let len = max(length(dir), 1e-4);
     dir = dir / len;
@@ -97,7 +132,7 @@ fn seg_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32
     out.pos = to_clip(px, cv.resolution);
     out.color = s.color;
     out.pattern = s.m.y;
-    out.dist = len * along[vid];
+    out.dist = dist0 + len * along[vid];
     return out;
 }
 

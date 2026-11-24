@@ -886,6 +886,21 @@ fragment float4 hline_fragment(HOut in [[stage_in]]) {
 
 struct SOut { float4 position [[position]]; float4 color; float pattern [[flat]]; float dist; };
 
+// One axis of the Liang-Barsky clip in `seg_vertex`: narrows the visible parameter range `t` of
+// `p + d * t` to [lo, hi] on this axis; an axis-parallel segment outside the band empties it.
+static float2 seg_clip_axis(float p, float d, float lo, float hi, float2 t) {
+    if (d != 0.0) {
+        float ta = (lo - p) / d;
+        float tb = (hi - p) / d;
+        return float2(max(t.x, min(ta, tb)), min(t.y, max(ta, tb)));
+    }
+    return (p < lo || p > hi) ? float2(t.x, -1.0) : t;
+}
+
+// Period of every line pattern in `pattern_on` (lcm of 16, 6 and 20): a dash phase carried modulo
+// this stays exact however far the visible part starts from the segment's origin.
+constant float SEG_PATTERN_PERIOD = 240.0;
+
 vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                        constant ChartView& cv [[buffer(0)]],
                        const device GpuSeg* segs [[buffer(1)]]) {
@@ -931,6 +946,23 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
         a.y = clamp(a.y, lo, hi);
         b.y = clamp(b.y, lo, hi);
     }
+    // Clip BOTH ends to the render target, grown by the stroke and a margin that scales with the
+    // coordinates' f32 error. Kept identical to the DX11 copy (order_lines.hlsl), which says why:
+    // a far-off origin made a quad long enough to drop out of whole frames.
+    float reach_err = (max(abs(a.x), abs(a.y)) + max(abs(b.x), abs(b.y))) * 1e-6;
+    float margin = max(s.m.x, 1.0) * 0.5 + 2.0 + reach_err;
+    float2 full = b - a;
+    float2 vis = seg_clip_axis(a.x, full.x, -margin, cv.resolution.x + margin, float2(0.0, 1.0));
+    vis = seg_clip_axis(a.y, full.y, -margin, cv.resolution.y + margin, vis);
+    float dist0 = 0.0;
+    if (vis.y < vis.x) {
+        b = a; // wholly outside: a zero-area quad
+    } else {
+        dist0 = fmod(length(full) * vis.x, SEG_PATTERN_PERIOD);
+        // Only a clipped end moves (see order_lines.hlsl).
+        if (vis.y < 1.0) { b = a + full * vis.y; }
+        if (vis.x > 0.0) { a = a + full * vis.x; }
+    }
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;
@@ -938,7 +970,7 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     float along = (vid == 1 || vid == 2 || vid == 4) ? 1.0 : 0.0;
     float side = (vid == 2 || vid == 4 || vid == 5) ? 1.0 : -1.0;
     float2 px = mix(a, b, along) + nrm * side;
-    return { to_clip(px, cv.resolution), s.color, s.m.y, len * along };
+    return { to_clip(px, cv.resolution), s.color, s.m.y, dist0 + len * along };
 }
 
 fragment float4 seg_fragment(SOut in [[stage_in]]) {
