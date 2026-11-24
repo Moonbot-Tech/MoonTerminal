@@ -176,3 +176,27 @@ fn a_space_separated_list_is_compared_coin_by_coin() {
     assert_eq!(list["2:7"]["missing_from_first"], json!(["GALA"]));
     assert_eq!(list["2:7"]["not_in_first"], json!([]));
 }
+
+/// A long free-text field is not a coin list: two comments of words without commas compare as one
+/// item each, the whole text, as before #1448.
+#[test]
+fn a_long_comment_is_compared_as_its_whole_text() {
+    let first = "watch the big green candles before the night session and do not chase anything that has already doubled today";
+    let second = "do not chase anything that has already doubled today and watch the big green candles before the night session";
+    let strategy = |text: &str| BTreeMap::from([("Comment".to_string(), text.to_string())]);
+    let found = [
+        ("1:7".to_string(), strategy(first)),
+        ("2:7".to_string(), strategy(second)),
+    ];
+    let answer = compare("Night", &found, false).expect("two live strategies");
+    let comment = &answer["differing_fields"]["Comment"];
+    assert_eq!(comment["2:7"]["items"], 1);
+    assert_eq!(
+        comment["2:7"]["not_in_first"],
+        json!([second.to_ascii_uppercase()])
+    );
+    assert_eq!(
+        comment["2:7"]["missing_from_first"],
+        json!([first.to_ascii_uppercase()])
+    );
+}

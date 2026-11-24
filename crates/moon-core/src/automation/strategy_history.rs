@@ -94,29 +94,65 @@ pub fn run(args: Args) -> Result<Value> {
     }))
 }
 
+/// Strategy fields that hold a coin list.
+///
+/// The strategy schema the core streams carries a type and a widget kind per field but no list
+/// marker, so the names are kept here, once, for every reader that sizes or diffs a strategy
+/// value: `strategy_versions` below, and the Station's `action_preview` and `strategy_compare`.
+const COIN_LIST_FIELDS: [&str; 2] = [crate::feed::FIELD_COINS_BLACK_LIST, "CoinsWhiteList"];
+
+/// The items of one strategy field's value, trimmed, non-empty and as written.
+///
+/// A coin list ([`COIN_LIST_FIELDS`], matched ignoring case) is split with
+/// [`crate::symbol::split_coin_list`], the terminal's strategy separator set: a strategy list
+/// takes spaces, commas or a comma and a space, so "ANC GALA" is two coins (#1448). Every other
+/// field is split on commas only, as these readers always did: a free-text field such as
+/// `Comment` is no list, and cutting it into words would show a reworded comment as no change.
+///
+/// Args:
+///     field: The strategy field's name as the core spells it.
+///     value: Its value.
+///
+/// Returns:
+///     The items in field order; duplicates are kept.
+pub fn field_items<'a>(field: &str, value: &'a str) -> Vec<&'a str> {
+    if COIN_LIST_FIELDS
+        .iter()
+        .any(|list| list.eq_ignore_ascii_case(field))
+    {
+        crate::symbol::split_coin_list(value).collect()
+    } else {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .collect()
+    }
+}
+
 /// A version's diff with long values shown as their length and their item count.
 ///
-/// Items are counted with the strategy separator set (`symbol::split_coin_list`: space, comma,
-/// semicolon, tab, newline, and brackets and quotes) for every long field, not only coin lists:
-/// MoonBot splits its own strategy list fields — CoinsBlackList/CoinsWhiteList, WatchAddress,
-/// BinanceTokenTags, TriggerKeysBL — on spaces as well as commas, so a comma-only count reported
-/// "ANC GALA" as one coin (#1448). A free-text field such as Comment has no item contract; its
-/// token count (an apostrophe splits a word) is a rough size hint, as comma chunks were, and its
-/// character count stays beside it.
+/// Items are counted by [`field_items`]: a coin list coin by coin, any other field by commas.
 fn changed(raw: Option<&str>) -> Value {
     let Some(Ok(Value::Object(map))) = raw.map(serde_json::from_str::<Value>) else {
         return Value::Null;
     };
-    let short = |v: &Value| match v {
+    let short = |name: &str, v: &Value| match v {
         Value::String(s) if s.chars().count() > LONG_VALUE => {
-            json!({"long_text_chars": s.chars().count(), "items": crate::symbol::split_coin_list(s).count()})
+            json!({"long_text_chars": s.chars().count(), "items": field_items(name, s).len()})
         }
         other => other.clone(),
     };
     map.into_iter()
         .map(|(name, pair)| {
-            let old = pair.get("old").map(short).unwrap_or(Value::Null);
-            let new = pair.get("new").map(short).unwrap_or(Value::Null);
+            let old = pair
+                .get("old")
+                .map(|v| short(&name, v))
+                .unwrap_or(Value::Null);
+            let new = pair
+                .get("new")
+                .map(|v| short(&name, v))
+                .unwrap_or(Value::Null);
             (name, json!({"old": old, "new": new}))
         })
         .collect::<Map<_, _>>()

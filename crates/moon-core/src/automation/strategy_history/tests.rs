@@ -30,3 +30,14 @@ fn a_space_separated_list_counts_each_coin() {
     let diff = changed(Some(&raw));
     assert_eq!(diff["CoinsBlackList"]["new"]["items"], 62);
 }
+
+/// A long free-text field keeps the comma count it always had: a comment of words with one comma
+/// is two items, not a word count (#1448 changed coin lists only).
+#[test]
+fn a_long_comment_keeps_its_comma_count() {
+    let comment = "watch the big green candles before the night session opens on the main venues, and do not chase anything that has already doubled today or tripled this week on thin volume";
+    assert!(comment.chars().count() > LONG_VALUE);
+    let raw = json!({"Comment":{"old":"x","new":comment}}).to_string();
+    let diff = changed(Some(&raw));
+    assert_eq!(diff["Comment"]["new"]["items"], 2);
+}

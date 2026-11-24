@@ -66,7 +66,7 @@ fn differences(before: &Value, after: &Value, full_lists: bool) -> Map<String, V
     let mut out = Map::new();
     for key in ["kind", "checked", "path"] {
         if before[key] != after[key] {
-            out.insert(key.into(), pair(&before[key], &after[key], full_lists));
+            out.insert(key.into(), pair(key, &before[key], &after[key], full_lists));
         }
     }
     let names: BTreeSet<&String> = [&before["fields"], &after["fields"]]
@@ -77,20 +77,23 @@ fn differences(before: &Value, after: &Value, full_lists: bool) -> Map<String, V
     for name in names {
         let (was, is) = (&before["fields"][name], &after["fields"][name]);
         if was != is {
-            out.insert(name.clone(), pair(was, is, full_lists));
+            out.insert(name.clone(), pair(name, was, is, full_lists));
         }
     }
     out
 }
 
 /// One field's before and after; a long list as its size and what entered and left it.
-fn pair(was: &Value, is: &Value, full_lists: bool) -> Value {
+///
+/// `field` names the attribute or strategy field, which decides how a long value splits into
+/// items (see [`list_items`]).
+fn pair(field: &str, was: &Value, is: &Value, full_lists: bool) -> Value {
     let long = |value: &Value| value.as_str().is_some_and(|text| text.len() > LONG_VALUE);
     if full_lists || !(long(was) || long(is)) {
         return json!({"before":was,"after":is});
     }
-    let old = list_items(was.as_str().unwrap_or_default());
-    let new = list_items(is.as_str().unwrap_or_default());
+    let old = list_items(field, was.as_str().unwrap_or_default());
+    let new = list_items(field, is.as_str().unwrap_or_default());
     let added: Vec<_> = new.difference(&old).collect();
     let removed: Vec<_> = old.difference(&new).collect();
     json!({"before":{"items":old.len()},"after":{"items":new.len()},
@@ -99,16 +102,17 @@ fn pair(was: &Value, is: &Value, full_lists: bool) -> Value {
         "whole_value":"pass full_lists=true to action_preview to see it"})
 }
 
-/// The items of a strategy list, trimmed, upper-cased and unique — the way `strategy_compare`
-/// counts a coin list, so both tools report one list the same way.
+/// The items of one strategy field's long value, trimmed, upper-cased and unique — the way
+/// `strategy_compare` counts it too, so both tools report one list the same way.
 ///
-/// Split with the terminal's strategy separator set (`moon_core::symbol::split_coin_list`:
-/// space, comma, semicolon, tab, newline, and brackets and quotes): MoonBot reads a strategy's CoinsBlackList and
-/// CoinsWhiteList, and its other list fields, with spaces as separators too, so "ANC GALA" is two
-/// coins (#1448). Only strategy fields reach here; the core-wide blacklist, which is comma-only,
-/// is never diffed by these tools.
-pub(super) fn list_items(value: &str) -> BTreeSet<String> {
-    moon_core::symbol::split_coin_list(value)
+/// The split is `moon_core::automation::strategy_history::field_items`, shared with
+/// `strategy_versions`: a coin list (CoinsBlackList, CoinsWhiteList) coin by coin with the
+/// terminal's strategy separator set, so "ANC GALA" is two coins (#1448); any other field by
+/// commas, as before, so a long comment stays its whole text. Only strategy fields and attributes
+/// reach here; the core-wide blacklist is never diffed by these tools.
+pub(super) fn list_items(field: &str, value: &str) -> BTreeSet<String> {
+    moon_core::automation::strategy_history::field_items(field, value)
+        .into_iter()
         .map(str::to_ascii_uppercase)
         .collect()
 }
