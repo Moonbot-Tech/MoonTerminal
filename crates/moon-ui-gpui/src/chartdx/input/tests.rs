@@ -115,7 +115,7 @@ fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
             .ensure_default_window(width, 60.0, None);
         for _ in 0..20 {
             assert!(input.wheel(
-                if precise { 300.0 } else { 3.0 },
+                if precise { 300.0 } else { 1.0 },
                 precise,
                 WheelMode::SuperZoom,
                 true,
@@ -126,7 +126,7 @@ fn super_zoom_wheel_and_hotkey_share_the_plot_floor() {
         }
         assert!((container.view_mut(0).unwrap().visible_x(width).1 - 600.0).abs() < 0.1);
         assert!(input.wheel(
-            -3.0,
+            -1.0,
             false,
             WheelMode::Zoom,
             true,
@@ -182,7 +182,7 @@ fn time_zoom_records_the_window_and_a_pan_does_not() {
     ));
     assert_eq!(remembered_zoom_window(), Some(99_000.0));
     assert!(input.wheel(
-        3.0,
+        1.0,
         false,
         WheelMode::Zoom,
         true,
@@ -203,18 +203,44 @@ fn time_zoom_records_the_window_and_a_pan_does_not() {
     );
 }
 
-/// Reusing ordinary-wheel accumulated lines makes the first super-zoom notch fire too early.
-#[test]
-fn super_zoom_starts_a_fresh_wheel_accumulator() {
+/// One live chart pane with its default window, for the wheel-notch checks below.
+///
+/// Returns:
+///     The input routed at pane 0, its container, and the plot width the wheel zooms against.
+fn wheel_chart() -> (ChartInput, Container, f32) {
     use crate::chartdx::pane::ContainerKind;
     let mut container = Container::new(ContainerKind::Main);
     container.open_manual(42, "TESTUSDT", now_unix_ms());
-    let mut input = ChartInput {
+    let input = ChartInput {
         hovered_pane: Some(0),
+        pane_rects: vec![(
+            0,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 900.0,
+                h: 500.0,
+            },
+        )],
         ..Default::default()
     };
-    assert!(!input.wheel(
-        2.0,
+    let (plot_w, _) = input.plot_metrics_for(Some(0), 900.0, 1.0, &container);
+    container
+        .view_mut(0)
+        .unwrap()
+        .ensure_default_window(plot_w, 60.0, None);
+    (input, container, plot_w)
+}
+
+/// A slow turn of a high-resolution wheel delivers a fraction of a notch per event. Banking it
+/// against a threshold — the old 2.5-line rule (#1461) — must fail: the scale has to follow the
+/// fraction at once, and three thirds have to add up to exactly one doubling.
+#[test]
+fn a_third_of_a_notch_moves_the_time_scale_by_its_share() {
+    let (mut input, mut container, plot_w) = wheel_chart();
+    let before = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(input.wheel(
+        1.0 / 3.0,
         false,
         WheelMode::Zoom,
         true,
@@ -222,30 +248,68 @@ fn super_zoom_starts_a_fresh_wheel_accumulator() {
         900.0,
         1.0
     ));
-    assert!(!input.wheel(
-        1.0,
-        false,
-        WheelMode::SuperZoom,
-        true,
-        &mut container,
-        900.0,
-        1.0
-    ));
+    let third = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    let expected = before / 2f32.powf(1.0 / 3.0);
+    assert!(
+        (third - expected).abs() < expected * 1e-3,
+        "a third of a notch moved {before} ms to {third} ms, expected {expected} ms"
+    );
+    for _ in 0..2 {
+        assert!(input.wheel(
+            1.0 / 3.0,
+            false,
+            WheelMode::Zoom,
+            true,
+            &mut container,
+            900.0,
+            1.0
+        ));
+    }
+    let whole = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(
+        (whole - before / 2.0).abs() < before * 1e-3,
+        "three thirds moved {before} ms to {whole} ms instead of halving it"
+    );
+}
+
+/// A fast spin puts several notches in one event. Paying one doubling and dropping the rest must
+/// fail: four notches are 16x.
+#[test]
+fn four_notches_in_one_event_zoom_sixteen_times() {
+    let (mut input, mut container, plot_w) = wheel_chart();
+    let before = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    // The plain wheel's 30-second floor must not be what stops the zoom here.
+    assert!(
+        before / 16.0 > 30_000.0,
+        "the default window {before} ms is too narrow for this check"
+    );
     assert!(input.wheel(
-        2.0,
+        4.0,
         false,
-        WheelMode::SuperZoom,
+        WheelMode::Zoom,
         true,
         &mut container,
         900.0,
         1.0
     ));
+    let after = container.view_mut(0).unwrap().visible_x(plot_w).1;
+    assert!(
+        (after - before / 16.0).abs() < before * 1e-4,
+        "four notches moved {before} ms to {after} ms, expected a sixteenth"
+    );
+}
+
+/// Shift/Alt with the wheel pans by the notches turned and leaves the scale alone. The old fixed
+/// step of 60 pixels per event, whatever its size, must fail: half a notch is half the step.
+#[test]
+fn a_pan_notch_moves_its_share_of_the_step_and_keeps_the_scale() {
+    let (mut input, mut container, plot_w) = wheel_chart();
     let view = container.view_mut(0).unwrap();
     view.set_manual_persistent();
     let before = view.px_per_ms;
     let anchor = view.right_time_ms;
     assert!(input.wheel(
-        -3.0,
+        -0.5,
         false,
         WheelMode::Pan,
         true,
@@ -255,7 +319,11 @@ fn super_zoom_starts_a_fresh_wheel_accumulator() {
     ));
     let view = container.view_mut(0).unwrap();
     assert_eq!(view.px_per_ms, before);
-    assert!(view.right_time_ms < anchor);
+    let moved_px = (anchor - view.right_time_ms) * f64::from(view.px_per_ms);
+    assert!(
+        (moved_px - 30.0).abs() < 0.01,
+        "half a pan notch moved {moved_px} px toward history on a {plot_w} px plot"
+    );
 }
 
 /// An unmodified wheel notch at mid-plot must keep a live chart on the live edge. The same
@@ -298,7 +366,7 @@ fn plain_wheel_keeps_live_and_ctrl_wheel_lets_go() {
     }
     let before = container.view_mut(0).unwrap().visible_x(plot_w).1;
     assert!(input.wheel(
-        3.0,
+        1.0,
         false,
         WheelMode::Zoom,
         true,
@@ -332,7 +400,7 @@ fn plain_wheel_keeps_live_and_ctrl_wheel_lets_go() {
         view.ensure_default_window(plot_w, 60.0, None);
         view.resume_live(now_unix_ms());
     }
-    assert!(ctrl_input.wheel(3.0, false, WheelMode::CtrlZoom, true, &mut ctrl, 900.0, 1.0));
+    assert!(ctrl_input.wheel(1.0, false, WheelMode::CtrlZoom, true, &mut ctrl, 900.0, 1.0));
     let view = ctrl.view_mut(0).unwrap();
     assert!(!view.follow, "ctrl wheel at mid-plot kept Live");
     assert!(

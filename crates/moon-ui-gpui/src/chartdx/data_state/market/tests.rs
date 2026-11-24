@@ -150,7 +150,7 @@ fn replay_price_transform() {
                 input.hovered_pane = Some(0);
                 engine.with_container_mut(|container| {
                     assert!(input.wheel(
-                        100.0,
+                        1.0,
                         false,
                         crate::chartdx::input::WheelMode::Zoom,
                         true,
@@ -1240,7 +1240,7 @@ fn bench_s_chart_frame_pan() {
                 5,
                 || {
                     assert!(engine.with_container_mut(|container| input.wheel(
-                        60.0,
+                        1.0,
                         false,
                         crate::chartdx::input::WheelMode::Pan,
                         true,
@@ -1276,7 +1276,7 @@ fn bench_s_chart_frame_zoom() {
                 || {
                     step += 1;
                     assert!(engine.with_container_mut(|container| input.wheel(
-                        if step % 2 == 0 { -3.0 } else { 3.0 },
+                        if step % 2 == 0 { -1.0 } else { 1.0 },
                         false,
                         crate::chartdx::input::WheelMode::CtrlZoom,
                         true,
