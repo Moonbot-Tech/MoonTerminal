@@ -202,9 +202,11 @@ impl AvailableRelease {
 pub enum UpdateEligibility {
     /// The build has no trustworthy stable baseline.
     Unsupported,
-    /// No strictly newer eligible stable release exists.
+    /// No strictly newer eligible stable release exists (none at or above the baseline for a
+    /// session built with `ReleaseDiscovery::including_baseline`).
     Current,
-    /// A strictly newer immutable release with a verified-asset contract exists.
+    /// A strictly newer immutable release with a verified-asset contract exists — or, for a
+    /// session built with `ReleaseDiscovery::including_baseline`, one at the baseline's version.
     Available(AvailableRelease),
 }
 

@@ -114,6 +114,9 @@ pub struct ReleaseDiscovery {
     asset_name: Option<&'static str>,
     pages: [Option<CachedReleasePage>; MAX_RELEASE_PAGES],
     page_two_refresh_at: u64,
+    /// Whether the release OF the baseline is offered too, not only newer ones
+    /// ([`Self::including_baseline`]).
+    include_baseline: bool,
 }
 
 impl ReleaseDiscovery {
@@ -143,6 +146,20 @@ impl ReleaseDiscovery {
         discovery
     }
 
+    /// Offer the release whose version equals the baseline as well as newer ones.
+    ///
+    /// For a binary that is not that release's own: a development build of a later commit
+    /// embeds the latest tag behind it as its baseline, so "strictly newer" finds nothing, while
+    /// the release of that very version is a different binary — the one a return to the release
+    /// must install. A release's own binary never asks for this: it would reinstall itself.
+    ///
+    /// Returns:
+    ///     The same session, offering releases at or above its baseline.
+    pub fn including_baseline(mut self) -> Self {
+        self.include_baseline = true;
+        self
+    }
+
     /// Revalidate the bounded release snapshot once.
     ///
     /// Returns:
@@ -169,6 +186,7 @@ impl ReleaseDiscovery {
             asset_name: platform_asset_name(),
             pages: [None, None],
             page_two_refresh_at: 0,
+            include_baseline: false,
         }
     }
 
@@ -204,7 +222,8 @@ impl ReleaseDiscovery {
 
         if first_len < RELEASES_PER_PAGE {
             staged[1] = None;
-            let eligibility = eligibility_from_pages(&staged, baseline, asset_name)?;
+            let eligibility =
+                eligibility_from_pages(&staged, baseline, self.include_baseline, asset_name)?;
             self.pages = staged;
             self.page_two_refresh_at = 0;
             return Ok(DiscoveryResult {
@@ -235,7 +254,8 @@ impl ReleaseDiscovery {
             next_page_two_refresh_at = now_unix.saturating_add(PAGE_SENTINEL_SECONDS);
         }
 
-        let eligibility = eligibility_from_pages(&staged, baseline, asset_name)?;
+        let eligibility =
+            eligibility_from_pages(&staged, baseline, self.include_baseline, asset_name)?;
         self.pages = staged;
         self.page_two_refresh_at = next_page_two_refresh_at;
         Ok(DiscoveryResult {
@@ -533,7 +553,8 @@ fn apply_page_update(
 ///
 /// Args:
 ///     pages: Complete committed or staged first-200 page snapshot.
-///     baseline: Embedded executable version used for strict-newer comparison.
+///     baseline: Embedded executable version candidates are compared against.
+///     include_baseline: Offer the release of the baseline itself too, not only newer ones.
 ///     asset_name: The exact asset a release must carry.
 ///
 /// Returns:
@@ -544,6 +565,7 @@ fn apply_page_update(
 fn eligibility_from_pages(
     pages: &[Option<CachedReleasePage>; MAX_RELEASE_PAGES],
     baseline: ReleaseVersion,
+    include_baseline: bool,
     asset_name: &'static str,
 ) -> Result<UpdateEligibility, DiscoveryError> {
     let mut greatest = None;
@@ -552,6 +574,7 @@ fn eligibility_from_pages(
         greatest = greatest_eligible(
             &page.releases,
             baseline,
+            include_baseline,
             asset_name,
             greatest,
             &mut tags_by_version,
@@ -566,18 +589,21 @@ fn eligibility_from_pages(
 /// Args:
 ///     releases: One bounded page of GitHub release metadata.
 ///     baseline: Embedded numeric version below which candidates remain hidden.
+///     include_baseline: Whether a candidate equal to `baseline` qualifies, not only newer ones.
 ///     asset_name: The exact asset a release must carry.
 ///     greatest: Greatest eligible candidate from earlier releases or pages.
 ///     tags_by_version: Exact-tag authority used to reject semantic aliases across all pages.
 ///
 /// Returns:
-///     The greatest strictly newer eligible release after reading the page.
+///     The greatest eligible release after reading the page: strictly newer than `baseline`, or
+///     at least `baseline` with `include_baseline`.
 ///
 /// Errors:
 ///     Returns an error for malformed eligible metadata or distinct tags with one numeric version.
 fn greatest_eligible(
     releases: &[GitHubRelease],
     baseline: ReleaseVersion,
+    include_baseline: bool,
     asset_name: &'static str,
     mut greatest: Option<AvailableRelease>,
     tags_by_version: &mut BTreeMap<ReleaseVersion, String>,
@@ -591,7 +617,9 @@ fn greatest_eligible(
             } else {
                 tags_by_version.insert(candidate.version(), candidate.release_tag().to_owned());
             }
-            let is_new_greatest = candidate.version() > baseline
+            let above_floor = candidate.version() > baseline
+                || (include_baseline && candidate.version() == baseline);
+            let is_new_greatest = above_floor
                 && greatest
                     .as_ref()
                     .is_none_or(|current| candidate.version() > current.version());

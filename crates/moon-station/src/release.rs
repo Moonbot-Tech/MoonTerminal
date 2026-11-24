@@ -4,10 +4,13 @@
 //! The version is the terminal's release tag the station was built from (`build.rs`, the
 //! terminal's own rules). A release that carries `moon-station-<arch>` newer than it is an update:
 //! the bot's "Status" offers it, and "Update" files a request — a file without parameters in the
-//! data root. The station runs unprivileged and does not install anything itself: a systemd path
-//! unit (`moon-station-update.path`) sees the file and starts the helper as root, and the helper
-//! runs THIS binary as `release-fetch` to find the release and download it, checked against the
-//! immutable release's SHA-256 digest by the terminal's own updater code (`moon_core::update`).
+//! data root. The install itself also takes the release of the build's own version when the build
+//! is not that release's binary ([`discovery_for`]): how the terminal's "Update the service"
+//! returns a development build to the release. The station runs unprivileged and does not install
+//! anything itself: a systemd path unit (`moon-station-update.path`) sees the file and starts the
+//! helper as root, and the helper runs THIS binary as `release-fetch` to find the release and
+//! download it, checked against the immutable release's SHA-256 digest by the terminal's own
+//! updater code (`moon_core::update`).
 //! The request names no version, so a station taken over cannot pick what root installs.
 
 use std::path::{Path, PathBuf};
@@ -114,9 +117,25 @@ pub fn last_update(data_root: &Path) -> Option<String> {
     (!line.is_empty()).then(|| line.chars().take(300).collect())
 }
 
+/// The release discovery [`fetch`] installs from: a release's own binary takes only a newer
+/// release; any other build also takes the release of its own version (see [`fetch`]). The
+/// chat's status ([`ReleaseWatch`]) stays strictly newer on purpose: it announces a new version.
+fn discovery_for(identity: BuildIdentity, asset: &'static str) -> ReleaseDiscovery {
+    let discovery = ReleaseDiscovery::for_asset(identity, asset);
+    match exact_release() {
+        Some(_) => discovery,
+        None => discovery.including_baseline(),
+    }
+}
+
 /// `moon-station release-fetch --out <path>`: what the root updater runs. Prints one line —
 /// `release=<tag> sha256=<hex>` with the binary verified at `<path>`, or `release=current` /
 /// `release=unversioned` with nothing downloaded; fails with why otherwise.
+///
+/// A release's own binary takes only a newer release. Any other build — a development build of a
+/// later commit, which names the latest tag behind it as its version — takes the release of that
+/// version too: it is a different binary, and installing it is how a server returns to the
+/// release (2026-11-24: a development build answered `current` and stayed).
 pub fn fetch(mut args: impl Iterator<Item = String>) -> anyhow::Result<()> {
     const USAGE: &str = "usage: moon-station release-fetch --out <path>";
     let out = match (args.next().as_deref(), args.next(), args.next()) {
@@ -134,7 +153,7 @@ pub fn fetch(mut args: impl Iterator<Item = String>) -> anyhow::Result<()> {
         println!("release=unversioned");
         return Ok(());
     }
-    let scan = ReleaseDiscovery::for_asset(identity, asset)
+    let scan = discovery_for(identity, asset)
         .scan()
         .map_err(|e| anyhow::anyhow!("GitHub releases: {e}"))?;
     match scan.eligibility {

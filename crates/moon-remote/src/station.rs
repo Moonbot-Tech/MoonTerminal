@@ -1224,7 +1224,7 @@ pub fn update_from_release(target: &Target, say: &mut dyn FnMut(Progress)) -> an
             },
             match none.contains("unversioned") {
                 true => "nothing installed: this station build is not from a release",
-                false => "nothing installed: no release newer than the station carries its binary",
+                false => "nothing installed: no release past the station's own carries its binary",
             },
         ));
     }

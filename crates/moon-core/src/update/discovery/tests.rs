@@ -36,6 +36,7 @@ fn reducer_selects_the_greatest_strictly_newer_release() {
             fixture_release("v0.20"),
         ],
         baseline,
+        false,
         platform_asset_name(),
         None,
         &mut tags_by_version,
@@ -54,6 +55,7 @@ fn reducer_selects_the_greatest_strictly_newer_release() {
         greatest_eligible(
             &[fixture_release("v0.21")],
             baseline,
+            false,
             platform_asset_name(),
             None,
             &mut BTreeMap::new(),
@@ -75,6 +77,7 @@ fn reducer_rejects_distinct_tags_for_the_same_newer_version() {
     let error = greatest_eligible(
         &[fixture_release("v0.24"), fixture_release("v0.24.0")],
         baseline,
+        false,
         platform_asset_name(),
         None,
         &mut BTreeMap::new(),
@@ -96,6 +99,7 @@ fn reducer_rejects_an_alias_below_the_selected_maximum() {
     let greatest = greatest_eligible(
         &[fixture_release("v0.25.0"), fixture_release("v0.24")],
         baseline,
+        false,
         platform_asset_name(),
         None,
         &mut tags_by_version,
@@ -104,6 +108,7 @@ fn reducer_rejects_an_alias_below_the_selected_maximum() {
     let error = greatest_eligible(
         &[fixture_release("v0.24.0")],
         baseline,
+        false,
         platform_asset_name(),
         greatest,
         &mut tags_by_version,
@@ -345,6 +350,60 @@ fn each_session_offers_only_the_asset_it_installs() {
     assert_eq!(candidate.asset_name(), "moon-station-x86_64");
     assert_eq!(candidate.release_tag(), "v0.24.1");
     assert_eq!(server.finish().len(), 2);
+}
+
+/// A development build of a commit after `v0.24.1` embeds `v0.24.1` as its baseline. Strictly
+/// newer, the station's return to the release found nothing and kept the development binary
+/// (2026-11-24); with the baseline included it gets `v0.24.1` itself — and still never an older
+/// release, while a session without the switch keeps answering `Current`.
+#[test]
+fn including_the_baseline_offers_the_release_of_that_version_and_nothing_older() {
+    let page = format!(
+        "[{},{}]",
+        release_json_with_asset("v0.24.1", "moon-station-x86_64"),
+        release_json_with_asset("v0.24.0", "moon-station-x86_64")
+    );
+    let older_only = format!(
+        "[{}]",
+        release_json_with_asset("v0.24.0", "moon-station-x86_64")
+    );
+    let server = ScriptedServer::start(vec![
+        http_response(200, &[], &page),
+        http_response(200, &[], &page),
+        http_response(200, &[], &older_only),
+    ]);
+    let session = || {
+        let mut discovery = ReleaseDiscovery::with_client(
+            BuildIdentity::from_release_base("v0.24.1"),
+            GitHubReleaseClient::for_test(&server.url),
+        );
+        discovery.asset_name = Some("moon-station-x86_64");
+        discovery
+    };
+
+    assert_eq!(
+        session().scan_at(1_000).unwrap().eligibility,
+        UpdateEligibility::Current
+    );
+    let UpdateEligibility::Available(candidate) = session()
+        .including_baseline()
+        .scan_at(1_000)
+        .unwrap()
+        .eligibility
+    else {
+        panic!("the release of the baseline's own version was not offered");
+    };
+    assert_eq!(candidate.release_tag(), "v0.24.1");
+    // With only an older release published, the switch offers nothing: it is not a downgrade.
+    assert_eq!(
+        session()
+            .including_baseline()
+            .scan_at(1_000)
+            .unwrap()
+            .eligibility,
+        UpdateEligibility::Current
+    );
+    assert_eq!(server.finish().len(), 3);
 }
 
 /// Loopback HTTP script retaining every request as a wire-level test oracle.
