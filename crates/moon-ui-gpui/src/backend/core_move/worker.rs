@@ -18,7 +18,7 @@ use rust_i18n::t;
 
 use super::steps::{StepEvent, StepId, StepNote, StepState};
 use super::{Event, FailOutcome, text};
-use crate::backend::core_new::{close_password, login_failure_text, state_text};
+use crate::backend::core_new::{close_password, login_failure_text, state_text, swap_line};
 
 /// How often a move that waits on its old core looks whether it went down.
 const WATCH: Duration = Duration::from_secs(30);
@@ -309,6 +309,9 @@ fn run_move(
         },
         say,
     )?;
+    if let Some(line) = swap_line(&installed.swap) {
+        send(Event::Line(line));
+    }
     let dir = installed.dir;
     *stage = Stage::Installed(dir.clone());
     progress.mark(

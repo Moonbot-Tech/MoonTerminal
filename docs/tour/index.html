@@ -1890,6 +1890,10 @@ const STEPS = [
         ],
         [
           "sub",
+          "Если у сервера 1 ГБ памяти или меньше и своп не включён, мастер перед первым запуском ядра создаст файл подкачки <code>/swapfile<\/code> на 1 ГБ — когда на диске после него останется хотя бы 2 ГБ. Не получится — мастер напишет почему и продолжит установку."
+        ],
+        [
+          "sub",
           "Чтобы сначала попробовать терминал без своих ключей биржи, отметьте «Демо-режим» в карточке нового ядра на первом экране мастера. Ядро встанет с настройками Moonbot Demo — демо-аккаунт Moonbot на Binance, торговля в эмуляторе, сделки на биржу не уходят, — и шаг с биржей и ключами мастер пропустит."
         ],
         [
@@ -2042,6 +2046,10 @@ const STEPS = [
         [
           "sub",
           "Open the chosen UDP port in the provider's external firewall, if it has one. If <code>ufw<\/code> is active on the server, the wizard opens the port there itself."
+        ],
+        [
+          "sub",
+          "If the server has 1 GB of memory or less and no swap on, the wizard makes a 1 GB swap file, <code>/swapfile<\/code>, before the core's first start — as long as the disk keeps at least 2 GB free beside it. If that fails, the wizard says why and goes on with the install."
         ],
         [
           "sub",

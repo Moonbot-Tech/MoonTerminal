@@ -127,6 +127,48 @@ pub struct Installed {
     pub dir: String,
     /// Its systemd unit.
     pub unit: String,
+    /// What the install did about swap before the core's first start.
+    pub swap: Swap,
+}
+
+/// What an install step did about swap, from its `SWAP_*` line: a server with 1 GiB of memory or
+/// less and no swap on gets a swap file before the core's first start. Whatever the outcome, the
+/// install itself went on — the wizard only says it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Swap {
+    /// The server needs none: more memory, or swap of its own already on.
+    #[default]
+    NotNeeded,
+    /// A swap file of `mb` MiB was made, turned on and recorded for the next boot.
+    Made { mb: u64 },
+    /// None was made: the disk would be left too full; `free_mb` MiB are free on it.
+    NoRoom { free_mb: u64 },
+    /// It could not be made, for this reason (the server tool's own words); nothing of it stays.
+    Failed(String),
+}
+
+impl Swap {
+    /// Read the install step's output. No `SWAP_*` line is [`Swap::NotNeeded`], which is also what
+    /// the script prints nothing for. A number that does not parse is a failure with the raw line,
+    /// never a made swap: the wizard must not claim swap it cannot vouch for.
+    pub fn parse(text: &str) -> Self {
+        if let Some(mb) = script::value(text, "SWAP_MADE") {
+            return mb
+                .parse()
+                .map(|mb| Self::Made { mb })
+                .unwrap_or_else(|_| Self::Failed(format!("SWAP_MADE={mb}")));
+        }
+        if let Some(free) = script::value(text, "SWAP_NO_ROOM") {
+            return free
+                .parse()
+                .map(|free_mb| Self::NoRoom { free_mb })
+                .unwrap_or_else(|_| Self::Failed(format!("SWAP_NO_ROOM={free}")));
+        }
+        match script::value(text, "SWAP_FAILED") {
+            Some(reason) => Self::Failed(reason.to_owned()),
+            None => Self::NotNeeded,
+        }
+    }
 }
 
 /// The command line running `step` of the script with `args`.
@@ -204,10 +246,12 @@ pub fn check(
 }
 
 /// Upload the settings and the connection packet and install the package and the service,
-/// without starting the core: [`start`] does that once the old core is down.
+/// without starting the core: [`start`] does that once the old core is down. A server of 1 GiB or
+/// less without swap gets a swap file first; [`Installed::swap`] says how that went.
 ///
-/// A failure leaves no instance and no work directory behind, with two exceptions: the package's
-/// `moonbot@.service` template is shared by every instance and stays installed, and a connection
+/// A failure leaves no instance and no work directory behind, with three exceptions: the package's
+/// `moonbot@.service` template is shared by every instance and stays installed, so does a swap
+/// file made before the failure (it serves the server, not this core), and a connection
 /// that drops or times out mid-install may leave the script to finish on its own. The script then
 /// removes its work directory itself, and [`remove`] takes out an instance it completed.
 pub fn install(
@@ -265,6 +309,7 @@ pub fn install(
     Ok(Installed {
         dir: dir.to_owned(),
         unit: unit.to_owned(),
+        swap: Swap::parse(&text),
     })
 }
 

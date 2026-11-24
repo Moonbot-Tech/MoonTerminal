@@ -36,7 +36,7 @@ use moon_ui::MoonPalette;
 use rust_i18n::t;
 use zeroize::Zeroizing;
 
-pub(crate) use worker::{NewCommand, NewForm, close_password};
+pub(crate) use worker::{NewCommand, NewForm, close_password, swap_line};
 
 use crate::Backend;
 use crate::design;
