@@ -760,7 +760,9 @@ fn shader_ray_reach(src: &str, a: [f32; 2], d: [f32; 2], bounds: [f32; 4], thick
 
 /// Two days left of a one-hour viewport used to end the ray at x=-13678, wholly offscreen.
 /// Also cover legacy Ray directions and an offset pane: reach must pass every visible point
-/// while the segment still starts at its origin, never at a point behind it.
+/// while the reach step still starts at the origin, never at a point behind it. (The clip that
+/// follows moves the drawn start to the target's edge; see
+/// `every_backend_clips_both_segment_ends_to_the_target`.)
 #[test]
 fn every_backend_ray_reaches_the_viewport_from_a_distant_origin() {
     for path in [
@@ -879,6 +881,140 @@ fn every_backend_regular_ray_keeps_its_visible_span() {
             "{path}: lost a grazing thick ray"
         );
     }
+}
+
+/// Every backend must clip a segment to the render target at BOTH ends, not just a ray's far end.
+///
+/// A horizontal ray's origin is where its level was born: a 24-hour extreme on a 30-minute window
+/// sits tens of thousands of pixels left of the plot. With only the far end trimmed, the quad kept
+/// that length and dropped out of whole frames on DX11 — the auto figures' max/min line blinked
+/// on and off as the live edge moved it a pixel (24.11.2026), while the same level drawn full-width
+/// through the hline pass stayed put. Removing the clip from one backend compiles, passes every
+/// other test, and comes back only as that blink on that platform; so does dropping the carried
+/// dash phase, as a pattern that crawls along the line instead of riding with the chart.
+///
+/// The source is checked first, statement by statement and in order, so that the numeric replay
+/// below describes what every backend actually runs; a rewrite of the clip fails closed here until
+/// the replay is brought along with it.
+#[test]
+fn every_backend_clips_both_segment_ends_to_the_target() {
+    for path in [
+        "chartdx/shaders/order_lines.hlsl",
+        "chartdx/shaders/chart_native.metal",
+        "chartdx/shaders/native_seg.wgsl",
+    ] {
+        let src = code_only(&read_src(path));
+        let compact = |s: &str| -> String {
+            s.replace("cv_resolution", "cv.resolution")
+                .replace("vec2<f32>", "float2")
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect()
+        };
+        // `braced_body` keeps the signature and the outer braces; compare what is inside them.
+        let helper = compact(braced_body(&src, "seg_clip_axis("));
+        let helper = helper
+            .split_once('{')
+            .and_then(|(_, inner)| inner.strip_suffix('}'))
+            .unwrap_or_else(|| panic!("{path}: seg_clip_axis has no body"));
+        assert!(
+            helper
+                == "if(d!=0.0){floatta=(lo-p)/d;floattb=(hi-p)/d;returnfloat2(max(t.x,min(ta,tb)),min(t.y,max(ta,tb)));}return(p<lo||p>hi)?float2(t.x,-1.0):t;"
+                || helper
+                    == "if(d!=0.0){letta=(lo-p)/d;lettb=(hi-p)/d;returnfloat2(max(t.x,min(ta,tb)),min(t.y,max(ta,tb)));}if(p<lo||p>hi){returnfloat2(t.x,-1.0);}returnt;",
+            "{path}: seg_clip_axis no longer matches the replayed clip: {helper}"
+        );
+        let all = compact(&src);
+        assert!(
+            all.contains("SEG_PATTERN_PERIOD=240.0;")
+                || all.contains("SEG_PATTERN_PERIOD:f32=240.0;"),
+            "{path}: the dash period the replay carries the phase by"
+        );
+        let body = compact(braced_body(&src, "seg_vertex("));
+        let mut at = 0;
+        for step in [
+            "reach_err=(max(abs(a.x),abs(a.y))+max(abs(b.x),abs(b.y)))*1e-6;",
+            "margin=max(s.m.x,1.0)*0.5+2.0+reach_err;",
+            "full=b-a;",
+            "vis=seg_clip_axis(a.x,full.x,-margin,cv.resolution.x+margin,float2(0.0,1.0));",
+            "vis=seg_clip_axis(a.y,full.y,-margin,cv.resolution.y+margin,vis);",
+            "if(vis.y<vis.x){b=a;}else{",
+            "dist0=",
+            "length(full)*vis.x",
+            "SEG_PATTERN_PERIOD",
+            "if(vis.y<1.0){b=a+full*vis.y;}",
+            "if(vis.x>0.0){a=a+full*vis.x;}",
+            "dist0+len*along",
+        ] {
+            let found = body[at..].find(step).unwrap_or_else(|| {
+                panic!("{path}: seg_vertex lost (or reordered) the clip step `{step}`")
+            });
+            at += found + step.len();
+        }
+    }
+
+    // The replay of the clip the source was just checked against, in f32 like the shaders.
+    let res = [1920.0_f32, 1080.0];
+    let clip = |a: [f32; 2], b: [f32; 2], thickness: f32| -> Option<([f32; 2], [f32; 2], f32)> {
+        let reach_err = (a[0].abs().max(a[1].abs()) + b[0].abs().max(b[1].abs())) * 1e-6;
+        let margin = thickness.max(1.0) * 0.5 + 2.0 + reach_err;
+        let full = [b[0] - a[0], b[1] - a[1]];
+        let axis = |p: f32, d: f32, lo: f32, hi: f32, t: (f32, f32)| {
+            if d != 0.0 {
+                let (ta, tb) = ((lo - p) / d, (hi - p) / d);
+                (t.0.max(ta.min(tb)), t.1.min(ta.max(tb)))
+            } else if p < lo || p > hi {
+                (t.0, -1.0)
+            } else {
+                t
+            }
+        };
+        let vis = axis(a[0], full[0], -margin, res[0] + margin, (0.0, 1.0));
+        let vis = axis(a[1], full[1], -margin, res[1] + margin, vis);
+        (vis.1 >= vis.0).then(|| {
+            let at = |t: f32| [a[0] + full[0] * t, a[1] + full[1] * t];
+            let dist0 = (full[0].hypot(full[1]) * vis.0) % 240.0;
+            let end = if vis.1 < 1.0 { at(vis.1) } else { b };
+            let start = if vis.0 > 0.0 { at(vis.0) } else { a };
+            (start, end, dist0)
+        })
+    };
+
+    // A horizontal ray born far left of the plot, its far end already trimmed by the reach step to
+    // just past a plot whose right edge sits inside the target: the drawn start lands just outside
+    // the target's left edge at the same row, and the unclipped far end does not move at all.
+    for origin in [-60_000.0_f32, -2.0e6, -1.0e8] {
+        let (a, b, dist0) = clip([origin, 400.0], [1500.5, 400.0], 1.0).expect("crosses the view");
+        assert!(
+            a[0] < 0.0 && a[0] > -400.0,
+            "far ray from {origin} starts at {a:?}"
+        );
+        assert_eq!((a[1], b), (400.0, [1500.5, 400.0]), "far ray from {origin}");
+        // The dash pattern stays anchored to the origin: at screen x the phase is (x - origin).
+        let x = 500.0_f32;
+        let clipped = (dist0 + (x - a[0])) % 240.0;
+        let whole = ((x - origin) as f64).rem_euclid(240.0) as f32;
+        let drift = (clipped - whole).abs().min(240.0 - (clipped - whole).abs());
+        assert!(
+            drift < 1.0 + origin.abs() * 2e-7,
+            "far ray from {origin}: phase {clipped} vs {whole}"
+        );
+    }
+    // Wholly outside the target: nothing to draw, so the quad collapses.
+    assert!(clip([-500.0, -500.0], [-400.0, -300.0], 1.0).is_none());
+    assert!(clip([100.0, -50.0], [900.0, -50.0], 1.0).is_none());
+    // A sloped segment through the target keeps its slope and ends at the margins.
+    let (a, b, _) = clip([-1000.0, -500.0], [3000.0, 1500.0], 1.0).expect("crosses the view");
+    for p in [a, b] {
+        assert!(
+            (p[1] - (-500.0 + (p[0] + 1000.0) * 0.5)).abs() < 0.01,
+            "slope moved at {p:?}"
+        );
+        assert!(p[0] >= -3.0 && p[0] <= res[0] + 3.0 && p[1] >= -3.0 && p[1] <= res[1] + 3.0);
+    }
+    // A segment inside the target is left as it is.
+    let inside = clip([100.0, 200.0], [800.0, 600.0], 2.0).expect("inside");
+    assert_eq!(inside, ([100.0, 200.0], [800.0, 600.0], 0.0));
 }
 
 /// Prepare must hand the price auto-fit the two bands SEPARATELY, through `fit_band`.

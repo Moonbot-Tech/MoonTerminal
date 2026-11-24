@@ -98,6 +98,21 @@ float4 hline_fragment(HOut i) : SV_Target {
 
 // ── Segment (SegInstance: pts=(t0,p0,t1,p1), color, m=(thickness,pattern,extend,clamp)) ─
 struct Seg { float4 pts; float4 color; float4 m; };
+
+// One axis of the Liang-Barsky clip in `seg_vertex`: narrows the visible parameter range `t` of
+// `p + d * t` to [lo, hi] on this axis; an axis-parallel segment outside the band empties it.
+float2 seg_clip_axis(float p, float d, float lo, float hi, float2 t) {
+    if (d != 0.0) {
+        float ta = (lo - p) / d;
+        float tb = (hi - p) / d;
+        return float2(max(t.x, min(ta, tb)), min(t.y, max(ta, tb)));
+    }
+    return (p < lo || p > hi) ? float2(t.x, -1.0) : t;
+}
+
+// Period of every line pattern in `pattern_on` (lcm of 16, 6 and 20): a dash phase carried modulo
+// this stays exact however far the visible part starts from the segment's origin.
+static const float SEG_PATTERN_PERIOD = 240.0;
 StructuredBuffer<Seg> segs : register(t1);
 struct SOut { float4 pos : SV_Position; float4 color : COLOR0; nointerpolation float pattern : TEXCOORD0; float dist : TEXCOORD1; };
 
@@ -146,6 +161,28 @@ SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
         a.y = clamp(a.y, lo, hi);
         b.y = clamp(b.y, lo, hi);
     }
+    // Clip BOTH ends to the render target, grown by the stroke and a margin that scales with the
+    // coordinates' f32 error. The ray's far end is already short, but its origin — a 24-hour
+    // extreme on a 30-minute window, an order placed hours ago — can sit tens of thousands of
+    // pixels left of the plot, and a quad that long dropped out of whole frames on DX11 (the auto
+    // figures' max/min line blinking on a live chart, 24.11.2026). Nothing outside the target is
+    // drawn anyway, so the visible span is unchanged; the dash phase carries the clipped-off
+    // length so the pattern stays anchored to the origin.
+    float reach_err = (max(abs(a.x), abs(a.y)) + max(abs(b.x), abs(b.y))) * 1e-6;
+    float margin = max(s.m.x, 1.0) * 0.5 + 2.0 + reach_err;
+    float2 full = b - a;
+    float2 vis = seg_clip_axis(a.x, full.x, -margin, cv_resolution.x + margin, float2(0.0, 1.0));
+    vis = seg_clip_axis(a.y, full.y, -margin, cv_resolution.y + margin, vis);
+    float dist0 = 0.0;
+    if (vis.y < vis.x) {
+        b = a; // wholly outside: a zero-area quad
+    } else {
+        dist0 = fmod(length(full) * vis.x, SEG_PATTERN_PERIOD);
+        // Only a clipped end moves: `a + full` is not `b` in f32 once `a` is far away, and an
+        // order line's end at the book edge must stay exactly where it was.
+        if (vis.y < 1.0) { b = a + full * vis.y; }
+        if (vis.x > 0.0) { a = a + full * vis.x; }
+    }
     float2 dir = b - a;
     float len = max(length(dir), 1e-4);
     dir /= len;
@@ -153,7 +190,7 @@ SOut seg_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float along[6] = { 0, 1, 1, 0, 1, 0 };
     float side[6]  = { -1, -1, 1, -1, 1, 1 };
     float2 px = lerp(a, b, along[vid]) + nrm * side[vid];
-    SOut o; o.pos = float4(to_clip(px), 0, 1); o.color = s.color; o.pattern = s.m.y; o.dist = len * along[vid]; return o;
+    SOut o; o.pos = float4(to_clip(px), 0, 1); o.color = s.color; o.pattern = s.m.y; o.dist = dist0 + len * along[vid]; return o;
 }
 float4 seg_fragment(SOut i) : SV_Target {
     if (!pattern_on(i.pattern, i.dist)) discard;
