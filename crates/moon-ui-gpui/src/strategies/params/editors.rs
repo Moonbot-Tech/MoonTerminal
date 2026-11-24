@@ -558,7 +558,9 @@ impl StrategiesView {
                     cx,
                     if compact_row { 160.0 } else { 360.0 },
                 ));
-                crate::controls::coin_token::coin_token_strip(text, &item.coin, size, max_width, cx)
+                crate::controls::coin_token::strategy_coin_token_strip(
+                    text, &item.coin, size, max_width, cx,
+                )
             })
         });
         let reveal_button = reveal
@@ -786,7 +788,7 @@ impl StrategiesView {
                 if let Some(next) = self
                     .field_edits
                     .get(&edit_key)
-                    .map(|draft| moon_core::symbol::coin_list::remove(draft, &coin))
+                    .map(|draft| moon_core::symbol::coin_list::strategy_remove(draft, &coin))
                 {
                     self.field_edits.insert(edit_key, next.clone());
                     if let Some(input) = self.field_inputs.get(editor_id).cloned() {
@@ -816,6 +818,9 @@ struct CoinReveal {
 
 /// An empty reveal token is field-only, even when an empty list contains an empty split piece.
 ///
+/// The value is a strategy list, so it is split like one: `ANC GALA` lists GALA, and the
+/// comma-only core-wide matcher would hide the Remove button for a coin the strategy skips.
+///
 /// Args:
 ///     value: Coin-list text currently displayed in the field.
 ///     coin: Reveal token, empty when navigation requested only a field.
@@ -823,7 +828,7 @@ struct CoinReveal {
 /// Returns:
 ///     Whether a nonempty token is present and can receive highlighting/removal controls.
 fn revealed_coin_is_listed(value: &str, coin: &str) -> bool {
-    !coin.is_empty() && moon_core::symbol::coin_list::contains(value, coin)
+    !coin.is_empty() && moon_core::symbol::coin_list::strategy_contains(value, coin)
 }
 
 /// The «Убрать <COIN>» control a strategy field row draws at its trailing edge.

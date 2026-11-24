@@ -16,7 +16,7 @@ use crate::design;
 use crate::test_locale::force;
 
 use super::{revealed_coin_is_listed, strategy_blacklist_remove};
-use crate::controls::coin_token::coin_token_strip;
+use crate::controls::coin_token::strategy_coin_token_strip;
 
 struct Host {
     compact: bool,
@@ -37,7 +37,7 @@ fn strategy_row(compact: bool, cx: &App) -> AnyElement {
         design::t_body(cx)
     };
     let max_width = compact.then(|| design::font_w_px(cx, 160.0));
-    let strip = coin_token_strip(text, coin, size, max_width, cx);
+    let strip = strategy_coin_token_strip(text, coin, size, max_width, cx);
     let button = strategy_blacklist_remove("coins", coin, None, compact, |_, _| {}, cx);
     let value = if compact {
         h_flex()
@@ -200,4 +200,15 @@ fn field_only_reveals_never_mark_a_coin() {
     }
     assert!(revealed_coin_is_listed("XALPHA,WBTC", "wbtc"));
     assert!(!revealed_coin_is_listed("XALPHA", "WBTC"));
+}
+
+/// A strategy field written with spaces between coins still lists each of them (#1448).
+///
+/// Mutation: match the field with the comma-only core-wide `coin_list::contains`. A reveal of
+/// GALA in `ANC GALA` would then hide the Remove button for a coin the strategy skips.
+#[test]
+fn a_space_separated_field_reveals_its_coin() {
+    assert!(revealed_coin_is_listed("ANC GALA", "GALA"));
+    assert!(revealed_coin_is_listed("ANC;gala", "GALA"));
+    assert!(!revealed_coin_is_listed("ANC GALAUSDT", "GALA"));
 }

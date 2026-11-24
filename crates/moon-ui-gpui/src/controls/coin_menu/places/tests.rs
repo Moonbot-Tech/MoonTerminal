@@ -169,6 +169,30 @@ fn listed_coin_matches_when_only_the_case_differs() {
     );
 }
 
+/// A strategy list takes spaces between coins and the core-wide list does not, so the same text
+/// `ANC GALA` lists GALA in a strategy and nowhere on the core (#1448).
+///
+/// Mutation: match the strategy field with the comma-only `coin_list::contains` (the strategy
+/// row disappears), or the core list with the strategy splitter (a core row appears for a coin
+/// the core trades).
+#[test]
+fn a_space_separated_strategy_list_is_found_and_the_core_list_is_not() {
+    let core = core_with(
+        Some((true, "ANC GALA")),
+        vec![strategy(3, "UNIT_03", "", Some("ANC GALA"))],
+        &[],
+    );
+    assert_eq!(
+        find(&[(CORE_A, &core)], "GALA"),
+        vec![CoinPlace::Strategy {
+            core: CORE_A,
+            sid: 3,
+            folder: String::new(),
+            strategy: "UNIT_03".to_string(),
+        }]
+    );
+}
+
 /// Treating the pair as the coin, or stripping a quote inside the list compare, would list a
 /// different market. The token is the coin on both sides.
 #[test]

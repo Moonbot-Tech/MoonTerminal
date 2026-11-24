@@ -1,7 +1,9 @@
 //! Where one coin is blacklisted: the core list, a temporary ban, or a strategy field.
 //!
-//! Chart menus and the places dialog both ask this module. Matching is the core's own
-//! comma-separated token compare. A `*` entry is a literal token, not a mask.
+//! Chart menus and the places dialog both ask this module. Matching is the core's own literal
+//! token compare, split per list: the core-wide list on commas only, a strategy field on every
+//! separator a strategy list takes ([`coin_list::strategy_contains`]). A `*` entry is a literal
+//! token, not a mask.
 
 use std::collections::BTreeSet;
 
@@ -108,9 +110,6 @@ pub(crate) fn find_coin_places<'a>(
     out
 }
 
-/// Whether this strategy's `CoinsBlackList` text lists `coin`.
-///
-/// A missing field is the empty list: the server omits a field that still has its default.
 /// `CoinsBlackList` text on one strategy row.
 ///
 /// The server omits a field that still has its default, so a missing field is the empty list.
@@ -128,8 +127,13 @@ pub(super) fn coins_black_list(row: &StrategyRow) -> &str {
         .unwrap_or("")
 }
 
+/// Whether this strategy's `CoinsBlackList` text lists `coin`.
+///
+/// A missing field is the empty list: the server omits a field that still has its default. The
+/// text is split like every strategy list — `ANC GALA` lists both coins — because the core
+/// honours that spelling there, unlike on the comma-only core-wide list.
 fn strategy_lists(row: &StrategyRow, coin: &str) -> bool {
-    coin_list::contains(coins_black_list(row), coin)
+    coin_list::strategy_contains(coins_black_list(row), coin)
 }
 
 /// Blacklist places for one coin on cores that currently have a session.

@@ -1301,6 +1301,8 @@ impl SessionManager {
     ///
     /// The core omits a field equal to its schema default, so a strategy that sends no list has
     /// an empty one and the first token starts it. An edit that changes nothing sends nothing.
+    /// The field is split like every strategy list (`ANC GALA` is two coins), not like the
+    /// comma-only core-wide list ([`crate::symbol::coin_list::strategy_edit`]).
     ///
     /// Args:
     ///     core: Core that holds the strategy.
@@ -1337,7 +1339,7 @@ impl SessionManager {
         let key = (core, Some(strategy));
         let in_store = (true, current);
         let (_, base) = self.blacklist_base(key, &in_store);
-        let new = crate::symbol::coin_list::edit(&base, coin, lift);
+        let new = crate::symbol::coin_list::strategy_edit(&base, coin, lift);
         if new == base {
             return Ok(false);
         }

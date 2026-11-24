@@ -1,6 +1,22 @@
 //! Token-split pins for the strategy blacklist field.
 
-use super::{CoinTokenPiece, split_coin_token, window_coin_tokens};
+use super::{CoinTokenPiece, split_coin_token, split_strategy_coin_token, window_coin_tokens};
+
+/// A strategy field written with spaces between coins paints the revealed coin, not the line.
+///
+/// Mutation: split the strategy strip with the comma-only `split_coin_token`. `ANC GALA` would be
+/// one unmarked token, and a reveal of GALA would draw a strip with no coin in amber (#1448).
+#[test]
+fn a_strategy_strip_splits_on_every_list_separator() {
+    let text = "ANC GALA;btc";
+    let marked = split_strategy_coin_token(text, "gala");
+    let tokens: Vec<(&str, bool)> = marked
+        .iter()
+        .map(|(range, hit)| (&text[range.clone()], *hit))
+        .collect();
+    assert_eq!(tokens, [("ANC", false), ("GALA", true), ("btc", false)]);
+    assert_eq!(split_coin_token(text, "gala").len(), 1);
+}
 
 /// `split_coin_token` marks a case-insensitive token and leaves a pair that merely starts with it.
 #[test]
