@@ -19,7 +19,7 @@ pub(in crate::analytics) mod state;
 use crate::design;
 use crate::load_state::Note;
 use moon_core::util::fmt::{self, compact};
-pub(in crate::analytics) use state::SummaryUi;
+pub(in crate::analytics) use state::{CoreLines, SummaryUi};
 /// The per-core profit ranking card.
 pub(in crate::analytics) mod cores;
 /// The KPI band of the rebuilt Summary; assembled into the tab in batch B9.
@@ -329,6 +329,14 @@ impl AnalyticsView {
             on_pick: std::rc::Rc::new(move |uid, _, app| {
                 let _ = view.update(app, |this, cx| {
                     this.summary_ui.toggle_pick(uid);
+                    // Picks and the mode a pick may switch persist across restarts.
+                    let ui = &this.summary_ui;
+                    let (lines, picks) = (ui.lines.id(), ui.picked.iter().copied().collect());
+                    this.backend.update(cx, |b, _| {
+                        b.layout.analytics_chart_lines = Some(lines.to_owned());
+                        b.layout.analytics_chart_picks = picks;
+                        b.layout_dirty = true;
+                    });
                     cx.notify();
                 });
             }),
@@ -368,6 +376,11 @@ impl AnalyticsView {
                 let _ = view.update(app, |this, cx| {
                     if this.summary_ui.lines != lines {
                         this.summary_ui.lines = lines;
+                        // A display lens that persists across restarts.
+                        this.backend.update(cx, |b, _| {
+                            b.layout.analytics_chart_lines = Some(lines.id().to_owned());
+                            b.layout_dirty = true;
+                        });
                         cx.notify();
                     }
                 });

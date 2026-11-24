@@ -235,6 +235,16 @@ impl AnalyticsView {
         let saved_hist_collapsed = backend.read(cx).layout.analytics_hist_collapsed;
         // "Profit by core" card mode from the previous run (default: the compact overview).
         let saved_cores_show_all = backend.read(cx).layout.analytics_cores_show_all;
+        // Profit chart "Cores on the chart" mode and picks from the previous run.
+        let saved_chart_lines =
+            summary::CoreLines::from_id(backend.read(cx).layout.analytics_chart_lines.as_deref());
+        let saved_chart_picks = backend
+            .read(cx)
+            .layout
+            .analytics_chart_picks
+            .iter()
+            .copied()
+            .collect();
         // Right-column collapse state from the previous run (default expanded).
         let saved_side_collapsed = backend.read(cx).layout.analytics_tuner_side_collapsed;
         // Visible strategy-list columns from the previous run, one mask per axis. An older
@@ -383,6 +393,8 @@ impl AnalyticsView {
             // The reused layout flag now means "ranking unfolded".
             summary_ui: summary::SummaryUi {
                 unfolded: saved_cores_show_all,
+                lines: saved_chart_lines,
+                picked: saved_chart_picks,
                 ..Default::default()
             },
             compare_prev: session.compare_prev,
