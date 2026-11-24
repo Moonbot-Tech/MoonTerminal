@@ -37,6 +37,16 @@ impl Render for ChartTabs {
         // a group window has chart tabs of its own.
         #[cfg(uidoc)]
         crate::uidoc::note_main_stack(&self.main, window.window_handle());
+        // And the stack of the active set or comparison tab, which it drags as well (the leader of
+        // a comparison pulls the others along); `None` while Main is the active tab.
+        #[cfg(uidoc)]
+        crate::uidoc::note_tab_stack(
+            match &self.active {
+                Tab::Main => None,
+                Tab::Add(n, bucket) | Tab::Custom(n, bucket) => self.add_stack(*n, bucket),
+            },
+            window.window_handle(),
+        );
         // Snapshot tabs so callbacks do not retain a borrow of `self.add`: identity, label, width
         // count, unread badge count, and detachability.
         let mut tabs: Vec<(Tab, String, usize, usize, bool)> =
