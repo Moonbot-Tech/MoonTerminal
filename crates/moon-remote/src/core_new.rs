@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::core_move::{INSTALL_TIMEOUT, Installed, command};
+use crate::core_move::{INSTALL_TIMEOUT, Installed, Swap, command};
 use crate::script::{self, Privilege, STEP_TIMEOUT};
 use crate::ssh::Conn;
 
@@ -216,8 +216,9 @@ impl ApiKeys {
 
 /// Install the package and the service in `dir` (a taken name gets `-2`, `-3`…), open `proto_port`
 /// in an active ufw, and start the core. Returns once the core answers its commands. A failure
-/// leaves nothing behind but what every instance shares: the `moonbot@.service` template and the
-/// `mb` command in `/usr/local/bin`.
+/// leaves nothing behind but what every instance shares: the `moonbot@.service` template, the
+/// `mb` command in `/usr/local/bin`, and the swap file a server of 1 GiB or less without swap gets
+/// before the core's first start ([`Installed::swap`]).
 ///
 /// Without `settings` the core starts on its own defaults and waits for an exchange and keys.
 /// With a settings archive — a ZIP holding `BotConfig.bcfg` and its companions at their paths
@@ -255,6 +256,7 @@ pub fn install(
     Ok(Installed {
         dir: dir.to_owned(),
         unit: unit.to_owned(),
+        swap: Swap::parse(&text),
     })
 }
 

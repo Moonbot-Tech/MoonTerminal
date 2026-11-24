@@ -184,8 +184,8 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
         say,
     )?;
     println!(
-        "MOVE_DIRECTORY={}\nMOVE_SERVICE={}",
-        installed.dir, installed.unit
+        "MOVE_DIRECTORY={}\nMOVE_SERVICE={}\nswap: {:?}",
+        installed.dir, installed.unit, installed.swap
     );
     let dir = installed.dir.as_str();
     // `core-move-start` carries no strategies: where the carry is required, only a fresh move

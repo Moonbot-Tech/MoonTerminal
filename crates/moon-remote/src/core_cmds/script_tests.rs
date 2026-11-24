@@ -422,6 +422,13 @@ impl Sandbox {
             .env("MB_PROC_ROOT", self.posix(&self.proc))
             .env("MB_UFW_CONF", self.posix(&self.root.join("ufw.conf")))
             .env("MB_SYSTEMD_DIR", self.posix(&self.systemd_dir()))
+            .env("MB_BIN_DIR", self.posix(&self.root.join("usr-local-bin")))
+            .env("MB_SWAP_FILE", self.posix(&self.root.join("swapfile")))
+            .env("MB_FSTAB", self.posix(&self.root.join("fstab")))
+            .env(
+                "MB_SWAP_LOCK",
+                self.posix(&self.root.join("moonbot-swap.lock")),
+            )
             .env(
                 "MB_EGRESS_NFT",
                 self.posix(&self.root.join("moonbot-egress.nft")),
@@ -1404,3 +1411,4 @@ fn retarget_skips_ipv6_when_ufw_disables_it() {
 }
 
 mod egress;
+mod swap;

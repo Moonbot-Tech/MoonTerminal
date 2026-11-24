@@ -138,8 +138,8 @@ fn new_core(target: Target, args: &mut Args) -> anyhow::Result<()> {
         egress,
     )?;
     println!(
-        "MOVE_DIRECTORY={}\nMOVE_SERVICE={}",
-        installed.dir, installed.unit
+        "MOVE_DIRECTORY={}\nMOVE_SERVICE={}\nswap: {:?}",
+        installed.dir, installed.unit, installed.swap
     );
     // Everything past the install leaves a running core behind on failure: say how to go on.
     let installed_dir = installed.dir.clone();

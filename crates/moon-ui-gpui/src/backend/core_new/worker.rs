@@ -40,6 +40,23 @@ pub(crate) struct NewForm {
     pub(crate) close_password: bool,
 }
 
+/// The progress line about the swap an install gave a small server, `None` when it needed none.
+/// Shared by the new-core and the move runs: both install through the same script step, and
+/// neither fails on swap — the line is how the user learns their server runs without it.
+pub(crate) fn swap_line(swap: &core_move::Swap) -> Option<String> {
+    let line = match swap {
+        core_move::Swap::NotNeeded => return None,
+        core_move::Swap::Made { mb } => t!("connect_wizard.line.swap_made", mb = mb),
+        core_move::Swap::NoRoom { free_mb } => {
+            t!("connect_wizard.line.swap_no_room", free = free_mb)
+        }
+        core_move::Swap::Failed(reason) => {
+            t!("connect_wizard.line.swap_failed", reason = reason)
+        }
+    };
+    Some(line.to_string())
+}
+
 /// What closing the password logins left a wizard run with.
 pub(crate) struct PasswordClose {
     /// The outcome, worded as a progress line.
@@ -240,6 +257,10 @@ fn install(
         egress,
     )
     .map_err(Installing::Nothing)?;
+    // Before the install line: the swap came first, before the core's first start.
+    if let Some(line) = swap_line(&installed.swap) {
+        send(Event::Line(line));
+    }
     let dir = installed.dir;
     send(Event::Line(
         t!("connect_wizard.line.installed", dir = &dir).to_string(),

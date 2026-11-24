@@ -41,6 +41,9 @@
 # the move added it, ini-flag; install deletes it.
 # install and install-fresh take `egress=<ipv4>` after their arguments: the core is bound before
 # its first start. check and info print the EGRESS_* lines the choice is made from.
+# install and install-fresh give a server of 1 GiB or less without swap a 1 GiB swap file once
+# the package checked out, before the core's first start, and print one SWAP_* line about it
+# (ensure_swap); swap that could not be made never fails the install.
 #
 # A bound core: a drop-in of its unit records the address and names an nftables set through
 # systemd's NFTSet= (systemd 255+), which systemd fills with the unit's cgroup on every start —
@@ -59,6 +62,15 @@ marker=.moonterminal-move
 PROC=${MB_PROC_ROOT:-/proc}
 UFW_CONF=${MB_UFW_CONF:-/etc/ufw/ufw.conf}
 SYSTEMD_DIR=${MB_SYSTEMD_DIR:-/etc/systemd/system}
+BIN_DIR=${MB_BIN_DIR:-/usr/local/bin}
+SWAP_FILE=${MB_SWAP_FILE:-/swapfile}
+FSTAB=${MB_FSTAB:-/etc/fstab}
+# A server with this much memory or less gets swap before its first core starts (MiB)...
+SWAP_MAX_MEM_MB=1024
+# ...a swap file this big (MiB)...
+SWAP_SIZE_MB=1024
+# ...only while the disk keeps this much free beside it (MiB), for the core's database and logs.
+SWAP_DISK_RESERVE_MB=2048
 EGRESS_NFT=${MB_EGRESS_NFT:-/etc/moonbot-egress.nft}
 EGRESS_UNIT=moonbot-egress.service
 EGRESS_TABLE=moonbot_egress
@@ -246,10 +258,118 @@ service_failed() {
 # wrapper serves every instance on the server, so remove leaves it in place.
 install_mb() {
     test -f "$1/mb" || return 0
-    if test ! -e /usr/local/bin/mb || test "$1/mb" -nt /usr/local/bin/mb; then
-        install -p -m 0755 "$1/mb" /usr/local/bin/mb
+    if test ! -e "$BIN_DIR/mb" || test "$1/mb" -nt "$BIN_DIR/mb"; then
+        install -p -m 0755 "$1/mb" "$BIN_DIR/mb"
     fi
-    ln -sfn mb /usr/local/bin/moonbot
+    ln -sfn mb "$BIN_DIR/moonbot"
+}
+
+# Give a small server swap before its first core starts: with SWAP_MAX_MEM_MB of memory or less
+# and no swap on, a core that grows at a busy moment is killed by the kernel instead of slowing
+# down. A server with swap of its own — a file, a partition, zram — is left as it is.
+#
+# Never fails the install: it prints one line and returns 0 whatever happens. SWAP_MADE=<MiB> —
+# a swap file was made, turned on and recorded in fstab for the next boot; SWAP_NO_ROOM=<free MiB>
+# — the disk would keep less than SWAP_DISK_RESERVE_MB beside it; SWAP_FAILED=<reason> — it could
+# not be made, and nothing of it is left. Nothing at all when the server needs none.
+#
+# The swap stays when a later step of the install fails or the core is removed: it belongs to the
+# server, and other cores on it use it too. Two installs at once on one server take turns, so the
+# second one finds the first one's swap on and makes none.
+ensure_swap() {
+    # In a subshell: a redirection that fails on `exec` ends the shell running it, and the lock
+    # goes with the subshell.
+    if swap_report=$(
+        exec 8>"${MB_SWAP_LOCK:-/run/moonbot-swap.lock}"
+        if command -v flock >/dev/null 2>&1 && ! flock -w 300 8; then
+            echo 'SWAP_FAILED=another install is still making swap on this server'
+            exit 0
+        fi
+        swap_needed_or_made
+    ); then
+        test -z "$swap_report" || printf '%s\n' "$swap_report"
+    else
+        echo 'SWAP_FAILED=cannot take the swap lock'
+    fi
+    return 0
+}
+
+# The SWAP_* line for ensure_swap, under its lock; empty when the server needs no swap.
+swap_needed_or_made() {
+    # A half-written file of an install that was killed mid-way: ours by its name, and nobody
+    # else's work is under way while the lock is held. Cleared on every install, needed or not,
+    # so a server that has swap or more memory by now gets its disk back too.
+    rm -f -- "$SWAP_FILE.moonterminal-part" || true
+    swap_mem_kb=$(awk '$1 == "MemTotal:" { print $2 }' "$PROC/meminfo" 2>/dev/null) || swap_mem_kb=''
+    swap_have_kb=$(awk '$1 == "SwapTotal:" { print $2 }' "$PROC/meminfo" 2>/dev/null) || swap_have_kb=''
+    case $swap_mem_kb in ''|*[!0-9]*) echo "SWAP_FAILED=cannot read the memory size"; return 0 ;; esac
+    case $swap_have_kb in ''|*[!0-9]*) echo "SWAP_FAILED=cannot read the swap size"; return 0 ;; esac
+    test "$swap_mem_kb" -le $((SWAP_MAX_MEM_MB * 1024)) || return 0
+    test "$swap_have_kb" = 0 || return 0
+    # Off but present: someone's file, maybe swap they turned off on purpose. Not ours to reuse.
+    if test -e "$SWAP_FILE" || test -L "$SWAP_FILE"; then
+        echo "SWAP_FAILED=$SWAP_FILE already exists and is not in use: left as it is"
+        return 0
+    fi
+    # POSIX df: the fourth field of the second line is the space available to root, in KiB.
+    swap_free_kb=$(df -Pk -- "$(dirname -- "$SWAP_FILE")" 2>/dev/null | awk 'NR == 2 { print $4 }') ||
+        swap_free_kb=''
+    case $swap_free_kb in ''|*[!0-9]*) echo "SWAP_FAILED=cannot read the free disk space"; return 0 ;; esac
+    if test "$swap_free_kb" -lt $(((SWAP_SIZE_MB + SWAP_DISK_RESERVE_MB) * 1024)); then
+        echo "SWAP_NO_ROOM=$((swap_free_kb / 1024))"
+        return 0
+    fi
+    if swap_make; then
+        echo "SWAP_MADE=$SWAP_SIZE_MB"
+    else
+        # One line for the reply: the tool's own words, line breaks folded into spaces.
+        echo "SWAP_FAILED=$(printf '%s' "${swap_err:-}" | tr '\r\n' '  ' | sed 's/  */ /g; s/^ //; s/ $//')"
+    fi
+}
+
+# Make, turn on and record the swap file, leaving swap_err with the failing tool's message. A
+# failure takes back whatever it got to: no file, no swap on, no fstab line.
+#
+# dd writes every block: a fallocate'd file has unwritten extents, which swapon refuses on some
+# filesystems. A filesystem that cannot hold swap at all (btrfs without nodatacow, a container's
+# overlay) fails at swapon and is said so.
+#
+# The file is written under a name of its own and takes SWAP_FILE only once it is whole: a step
+# killed mid-write leaves that part, which the next install clears, rather than a SWAP_FILE it
+# would take for someone's own swap and never touch.
+swap_make() {
+    swap_part="$SWAP_FILE.moonterminal-part"
+    swap_err=$( (umask 077 && dd if=/dev/zero of="$swap_part" bs=1M count="$SWAP_SIZE_MB" status=none 2>&1 >/dev/null) ) &&
+        swap_err=$(chmod 600 -- "$swap_part" 2>&1) &&
+        swap_err=$(mkswap -- "$swap_part" 2>&1 >/dev/null) &&
+        swap_err=$(mv -- "$swap_part" "$SWAP_FILE" 2>&1) &&
+        swap_err=$(swapon -- "$SWAP_FILE" 2>&1) || {
+        test -n "$swap_err" || swap_err='the swap file could not be made'
+        # SWAP_FILE was absent under the lock: whatever stands there now is this attempt's.
+        rm -f -- "$swap_part" "$SWAP_FILE" || true
+        return 1
+    }
+    swap_err=$(swap_record 2>&1) || {
+        test -n "$swap_err" || swap_err="$FSTAB could not be written"
+        swapoff -- "$SWAP_FILE" >/dev/null 2>&1 || true
+        rm -f -- "$SWAP_FILE" || true
+        return 1
+    }
+}
+
+# Add the swap file to fstab, so it comes back after a reboot; a line already naming it is kept.
+# nofail: a boot that cannot turn it on goes on without it.
+swap_record() {
+    if test -f "$FSTAB" && awk -v file="$SWAP_FILE" '$1 == file && $3 == "swap" { found = 1 } END { exit !found }' "$FSTAB"; then
+        return 0
+    fi
+    {
+        # A file whose last line has no newline would glue ours onto it.
+        if test -s "$FSTAB" && test -n "$(tail -c 1 -- "$FSTAB")"; then
+            echo
+        fi
+        printf '%s none swap sw,nofail 0 0\n' "$SWAP_FILE"
+    } >> "$FSTAB"
 }
 
 # Whether ufw is installed and active.
@@ -850,7 +970,7 @@ install)
         n=$((n + 1))
     done
     unit=$(unit_of "$dest")
-    test ! -e "/etc/systemd/system/$unit" || { echo "The service $unit already exists" >&2; exit 1; }
+    test ! -e "$SYSTEMD_DIR/$unit" || { echo "The service $unit already exists" >&2; exit 1; }
     umask 077
     mkdir -p -- "$(dirname -- "$dest")"
     mkdir -- "$dest"
@@ -873,6 +993,8 @@ install)
         --connect-timeout 20 --max-time 600 --output "$work/package.zip" "$url"
     unzip -q "$work/package.zip" -d "$dest"
     (cd "$dest" && sha256sum --quiet --check SHA256SUMS)
+    # The package is whole: a small server gets its swap before the core's first start.
+    ensure_swap
     unpack_settings "$work/state.zip" "$dest"
     install -m 600 "$work/key" "$dest/MoonProtoSetup.key"
     printf '%s\n' "$port" > "$dest/$marker"
@@ -880,7 +1002,7 @@ install)
         : > "$dest/$marker.ini-flag"
     fi
     chmod 700 "$dest/MoonBot"
-    install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
+    install -m 644 "$dest/moonbot@.service" "$SYSTEMD_DIR/moonbot@.service"
     install_mb "$dest"
     # Only rules opened here are marked for removal, independently for IPv4 and IPv6.
     if ufw_active; then
@@ -915,7 +1037,7 @@ install-fresh)
         n=$((n + 1))
     done
     unit=$(unit_of "$dest")
-    test ! -e "/etc/systemd/system/$unit" || { echo "The service $unit already exists" >&2; exit 1; }
+    test ! -e "$SYSTEMD_DIR/$unit" || { echo "The service $unit already exists" >&2; exit 1; }
     umask 077
     work=''
     made=''
@@ -956,13 +1078,15 @@ install-fresh)
     unzip -q "$work/package.zip" -d "$dest"
     (cd "$dest" && sha256sum --quiet --check SHA256SUMS)
     test -f "$dest/mb" || { echo 'This MoonBot package has no command line (mb): a newer package is needed' >&2; exit 1; }
+    # The package is whole: a small server gets its swap before the core's first start.
+    ensure_swap
     # With settings the core starts on that configuration instead of writing its defaults.
     if test -n "$settings"; then
         unpack_settings "$work/state.zip" "$dest"
     fi
     printf '%s\n' "$port" > "$dest/$marker"
     chmod 700 "$dest/MoonBot" "$dest/mb"
-    install -m 644 "$dest/moonbot@.service" /etc/systemd/system/moonbot@.service
+    install -m 644 "$dest/moonbot@.service" "$SYSTEMD_DIR/moonbot@.service"
     install_mb "$dest"
     # As in install: only an allow opened here is marked for removal.
     if ufw_active; then
