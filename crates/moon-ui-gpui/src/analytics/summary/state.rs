@@ -18,6 +18,26 @@ pub(in crate::analytics) enum CoreLines {
     Selected,
 }
 
+impl CoreLines {
+    /// Persisted id of the mode (`layout.analytics_chart_lines`).
+    pub(in crate::analytics) fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Top5 => "top5",
+            Self::Selected => "selected",
+        }
+    }
+
+    /// Mode from a persisted id; a missing or unknown id answers the default.
+    pub(in crate::analytics) fn from_id(id: Option<&str>) -> Self {
+        match id {
+            Some("none") => Self::None,
+            Some("selected") => Self::Selected,
+            _ => Self::Top5,
+        }
+    }
+}
+
 /// Which five extreme trades the trades card lists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::analytics) enum TradeSide {

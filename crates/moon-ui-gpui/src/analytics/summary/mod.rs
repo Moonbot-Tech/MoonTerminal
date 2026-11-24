@@ -19,7 +19,7 @@ pub(in crate::analytics) mod state;
 use crate::design;
 use crate::load_state::Note;
 use moon_core::util::fmt::{self, compact};
-pub(in crate::analytics) use state::SummaryUi;
+pub(in crate::analytics) use state::{CoreLines, SummaryUi};
 /// The per-core profit ranking card.
 pub(in crate::analytics) mod cores;
 /// The KPI band of the rebuilt Summary; assembled into the tab in batch B9.
@@ -329,6 +329,20 @@ impl AnalyticsView {
             on_pick: std::rc::Rc::new(move |uid, _, app| {
                 let _ = view.update(app, |this, cx| {
                     this.summary_ui.toggle_pick(uid);
+                    // Picks and the mode a pick may switch persist across restarts. Only the
+                    // clicked uid flips on disk: the in-memory set drops cores the current
+                    // snapshot lacks, and those picks must survive for a later period.
+                    let picked = this.summary_ui.picked.contains(&uid);
+                    let lines = this.summary_ui.lines.id();
+                    this.backend.update(cx, |b, _| {
+                        let saved = b.layout.analytics_chart_picks.get_or_insert_default();
+                        saved.retain(|&u| u != uid);
+                        if picked {
+                            saved.push(uid);
+                        }
+                        b.layout.analytics_chart_lines = Some(lines.to_owned());
+                        b.layout_dirty = true;
+                    });
                     cx.notify();
                 });
             }),
@@ -368,6 +382,11 @@ impl AnalyticsView {
                 let _ = view.update(app, |this, cx| {
                     if this.summary_ui.lines != lines {
                         this.summary_ui.lines = lines;
+                        // A display lens that persists across restarts.
+                        this.backend.update(cx, |b, _| {
+                            b.layout.analytics_chart_lines = Some(lines.id().to_owned());
+                            b.layout_dirty = true;
+                        });
                         cx.notify();
                     }
                 });

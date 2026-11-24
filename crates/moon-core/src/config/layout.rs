@@ -641,6 +641,18 @@ pub struct WindowLayout {
     /// restart. Read leniently for the same reason as that flag.
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub analytics_cores_show_all: bool,
+    /// Analytics Summary profit chart, "Cores on the chart": "none" / "top5" / "selected".
+    /// None or an unknown value = the default ("top5"). A display lens, persisted so the
+    /// chosen mode comes back after a restart. Read leniently: a hand-edited non-string must
+    /// not reject the whole layout.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_chart_lines: Option<String>,
+    /// Core uids picked for the "selected" mode of [`Self::analytics_chart_lines`]. Each user
+    /// click flips only its own uid here, so a pick the current period hides survives. Read
+    /// leniently so a malformed hand edit cannot discard the complete window layout.
+    // wire-id-exempt: terminal-issued core uids, never a core id — see `config::wire_id`.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_chart_picks: Option<Vec<u64>>,
     /// Analytics tuner right-hand column ("Fact vs variants" plus the axis-specific tool):
     /// `true` folds the whole column away so the strategy list takes the freed width. One flag
     /// serves every axis (Filters / Coins / Time), because it is the same column
