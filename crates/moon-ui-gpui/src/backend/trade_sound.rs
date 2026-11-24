@@ -1,6 +1,5 @@
 //! Delayed trade playback with connection identity and current quiet/mute authorization.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::Backend;
@@ -47,38 +46,42 @@ impl PendingTradeSound {
     }
 }
 
-/// Bounded FIFO retains both open and close notices independently from ordinary sound traffic.
+/// The newest trade edge waiting behind the clip on the device, in a slot of its own so that
+/// ordinary sound traffic — a newer detect above all — can never displace it.
+///
+/// One slot, latest-wins, not a FIFO: the trades are on screen, and replaying every open and close
+/// of a burst kept the terminal signalling events that were over (issue #1447). A newer edge
+/// replaces a waiting one; the clip already playing is never cut.
 #[derive(Default)]
 pub(crate) struct TradePlayback {
-    pending: VecDeque<PendingTradeSound>,
+    pending: Option<PendingTradeSound>,
 }
 
 impl TradePlayback {
-    /// Reauthorize all waiting entries before offering the head; a busy player keeps it queued.
+    /// Reauthorize the waiting edge before offering it; a busy player keeps it waiting, and an
+    /// edge no longer authorized is spent, so it cannot reappear on unmute.
     fn pump(
         &mut self,
         authorize: impl Fn(&PendingTradeSound) -> Option<String>,
         play: impl FnOnce(Option<&str>) -> bool,
     ) {
-        self.pending.retain(|edge| authorize(edge).is_some());
-        let name = self.pending.front().and_then(authorize);
+        let name = self.pending.as_ref().and_then(&authorize);
+        if name.is_none() {
+            self.pending = None;
+        }
         if play(name.as_deref()) {
-            self.pending.pop_front();
+            self.pending = None;
         }
     }
 
-    /// Keep accepted edges in order; overflow cannot evict an earlier open or close.
+    /// Make `pending` the waiting edge, replacing one that has not played yet.
     fn push(&mut self, pending: PendingTradeSound) {
-        if self.pending.len() < 256 {
-            self.pending.push_back(pending);
-        } else {
-            log::warn!("trade sound queue full; newest edge omitted");
-        }
+        self.pending = Some(pending);
     }
 }
 
 impl Backend {
-    /// Capture every authorized feed edge; detectors and price alerts cannot spend this FIFO.
+    /// Capture every authorized feed edge; detectors and price alerts cannot spend this slot.
     pub(crate) fn collect_trade_sounds(&mut self) {
         for (core, exchange, event) in self.session.take_trade_sounds() {
             let Some(epoch) = self.session.trade_sound_epoch(core).cloned() else {
@@ -96,8 +99,8 @@ impl Backend {
         }
     }
 
-    /// Revalidate every queued edge, including ones behind the head, so a temporary mute or
-    /// disconnect spends the backlog immediately rather than letting it reappear on unmute.
+    /// Revalidate the waiting edge on every turn, so a temporary mute or disconnect spends it
+    /// immediately rather than letting it reappear on unmute.
     pub(crate) fn pump_sounds(&mut self) {
         let mut playback = std::mem::take(&mut self.trade_playback);
         playback.pump(

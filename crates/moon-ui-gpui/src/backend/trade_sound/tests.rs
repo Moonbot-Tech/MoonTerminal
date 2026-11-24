@@ -23,20 +23,23 @@ fn pending(core: u64, edge: TradeEdge) -> PendingTradeSound {
     }
 }
 
-/// Distinct fixture labels expose both the exchange route and the open/close edge in FIFO order.
+/// Distinct fixture labels expose both the exchange route and the open/close edge.
 fn label(edge: &PendingTradeSound) -> Option<String> {
     Some(format!("{}:{:?}", edge.exchange.code, edge.event.edge))
 }
 
-/// Losing a player turn must retain every edge, including two exchanges sharing a local UID.
+/// Losing a player turn must keep the waiting edge, and the slot holds the newest of a burst.
+///
+/// Rewritten for #1447: it pinned a FIFO that replayed every edge of a burst in order. The slot
+/// now keeps only the newest edge, across exchanges, and still survives lost turns.
 #[test]
-fn contention_retains_open_close_and_multiple_exchanges_until_idle_turns() {
+fn contention_keeps_the_newest_edge_until_an_idle_turn() {
     let mut queue = TradePlayback::default();
     queue.push(pending(1, TradeEdge::Open));
     queue.push(pending(1, TradeEdge::Close));
     queue.push(pending(2, TradeEdge::Open));
     queue.pump(label, |name| {
-        assert_eq!(name, Some("1:Open"));
+        assert_eq!(name, Some("2:Open"));
         false
     });
     queue.pump(label, |_| false);
@@ -44,49 +47,62 @@ fn contention_retains_open_close_and_multiple_exchanges_until_idle_turns() {
     // No further arrivals: these are scheduler turns, not feed events.
     for _ in 0..3 {
         queue.pump(label, |name| {
-            heard.push(name.unwrap().to_owned());
-            true
+            if let Some(name) = name {
+                heard.push(name.to_owned());
+            }
+            name.is_some()
         });
     }
-    assert_eq!(heard, ["1:Open", "1:Close", "2:Open"]);
-    assert!(queue.pending.is_empty());
+    assert_eq!(heard, ["2:Open"]);
+    assert!(queue.pending.is_none());
 }
 
-/// Revalidation must visit the entire backlog while busy, so muted entries cannot return later.
+/// Revalidation runs while the player is busy, so a muted edge cannot return later.
+///
+/// Rewritten for #1447: with one slot there is no backlog behind a head, so the busy turn itself
+/// has to spend the revoked edge.
 #[test]
-fn revoked_backlog_is_spent_even_when_the_head_cannot_play() {
+fn revoked_edge_is_spent_even_when_the_player_is_busy() {
     let mut queue = TradePlayback::default();
     queue.push(pending(1, TradeEdge::Open));
+    queue.pump(|edge| (edge.core == 1).then(|| "open".into()), |_| false);
+    assert!(
+        queue.pending.is_some(),
+        "an authorized edge outlives a lost turn"
+    );
     queue.push(pending(2, TradeEdge::Close));
     queue.pump(|edge| (edge.core == 1).then(|| "open".into()), |_| false);
-    assert_eq!(queue.pending.len(), 1);
-    queue.pump(label, |name| {
-        assert_eq!(name, Some("1:Open"));
-        true
-    });
+    assert!(
+        queue.pending.is_none(),
+        "the revoked edge is spent while busy"
+    );
     queue.pump(label, |name| {
         assert!(name.is_none());
         false
     });
 }
 
-/// Saturation retains accepted open/close sequence instead of silently evicting older entries.
+/// A burst of edges waits as its newest one only, whatever came before it.
+///
+/// Rewritten for #1447: it pinned a 256-edge FIFO whose overflow dropped the NEWEST edge.
+///
+/// Plausible breakage: a FIFO again — the burst's opens and closes replay one by one long after
+/// the trades are on screen.
 #[test]
-fn trade_backlog_is_bounded_and_preserves_accepted_head() {
+fn a_trade_burst_waits_as_its_newest_edge_only() {
     let mut queue = TradePlayback::default();
     queue.push(pending(1, TradeEdge::Open));
-    queue.push(pending(1, TradeEdge::Close));
     for _ in 0..1000 {
         queue.push(pending(2, TradeEdge::Open));
     }
-    assert_eq!(queue.pending.len(), 256);
-    queue.pump(label, |name| {
-        assert_eq!(name, Some("1:Open"));
-        true
-    });
+    queue.push(pending(1, TradeEdge::Close));
     queue.pump(label, |name| {
         assert_eq!(name, Some("1:Close"));
         true
+    });
+    queue.pump(label, |name| {
+        assert!(name.is_none(), "nothing of the burst replays");
+        false
     });
 }
 

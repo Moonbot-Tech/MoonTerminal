@@ -2,14 +2,15 @@
 //! thread-local and every test runs on its own thread, so installing a catalog here touches no
 //! other test.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
 use super::embedded::{DEFAULT_SOUND, MB_SOUNDS, SOUNDS};
 use super::{
     CATALOG, Catalog, Clip, MissingSound, Playback, RejectReason, Source, install, is_playable,
-    mb_sound_name, missing, play, play_ordinal, resolve, sources, stems, take_missing_notices,
-    wav_duration, with_catalog,
+    mb_sound_name, missing, play, play_detect, play_ordinal, resolve, sources, stems,
+    take_missing_notices, wav_duration, with_catalog,
 };
 
 /// Swap the installed catalog for `catalog`, run `body`, and put the previous one back.
@@ -458,7 +459,122 @@ fn a_miss_before_the_scan_is_settled_by_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Ordinary notices get the first turn, but cannot cut or indefinitely starve waiting trades.
+/// A repeat count for [`Playback::enqueue_detect`].
+fn copies(n: u32) -> NonZeroU32 {
+    NonZeroU32::new(n).expect("a test asks for at least one play")
+}
+
+/// The tick the scheduler simulation pumps at: the order of the application's coordination timer.
+const TICK: Duration = Duration::from_millis(100);
+
+/// The output-device allowance the scheduler adds after every clip.
+const GAP: Duration = Duration::from_millis(50);
+
+/// Pump a scheduler over virtual time the way the coordination timer does, with a backend trade
+/// slot beside it that the scheduler consumes only when it picks the trade.
+///
+/// Args:
+///     player: The scheduler under test.
+///     horizon: How long to keep pumping.
+///     arrive: Called on every tick before the pump, with the tick's offset, the scheduler and
+///         the trade slot, to model what the feed delivers at that moment.
+///
+/// Returns:
+///     Every clip started, as `(offset, is_trade, bytes)`, in start order.
+fn simulate(
+    player: &mut Playback,
+    horizon: Duration,
+    mut arrive: impl FnMut(Duration, &mut Playback, &mut Option<Clip>),
+) -> Vec<(Duration, bool, Arc<[u8]>)> {
+    let start = std::time::Instant::now();
+    let mut trade = None;
+    let mut starts = Vec::new();
+    let mut t = Duration::ZERO;
+    while t < horizon {
+        arrive(t, player, &mut trade);
+        if let Some((clip, is_trade)) = player.next(start + t, trade.clone()) {
+            if is_trade {
+                trade = None;
+            }
+            starts.push((t, is_trade, clip.wav));
+        }
+        t += TICK;
+    }
+    starts
+}
+
+/// Issue #1447: twenty detects that each landed in their own drain must not replay for minutes.
+///
+/// Plausible breakage: going back to a FIFO behind the playing clip — the last of twenty `ding2`
+/// detects then started 96.9 s after the burst.
+#[test]
+fn lane_1447_a_burst_does_not_replay_in_full() {
+    let mut player = Playback::default();
+    let detect = clip("ding2");
+    // One detect per drain, a tick apart: the first starts at once, nineteen arrive behind it.
+    let starts = simulate(&mut player, Duration::from_secs(300), |t, player, _| {
+        if t < TICK * 20 {
+            player.enqueue_detect(detect.clone(), copies(1));
+        }
+    });
+    let last_start = starts.last().map(|s| s.0).unwrap_or_default();
+    eprintln!(
+        "#1447 burst of 20 detects: {} starts, last at {last_start:?}",
+        starts.len()
+    );
+    // The playing clip finishes and at most the latest one follows it.
+    let bound = (detect.duration + GAP) * 2;
+    assert!(
+        last_start <= bound,
+        "ordinary sounds still starting {last_start:?} after the burst (bound {bound:?})"
+    );
+    assert_eq!(
+        starts.len(),
+        2,
+        "the clip that started, then the newest detect"
+    );
+}
+
+/// The issue's own arithmetic, twenty detects with twenty trade opens arriving drain by drain:
+/// about two minutes as a FIFO. Behind the first clip wait one trade edge and one detect, still
+/// alternating, so the burst lasts one detect, one open and one detect.
+///
+/// Plausible breakage: keeping a FIFO in either lane, or letting a newer detect take the trade's
+/// turn.
+#[test]
+fn a_burst_with_trades_ends_after_one_turn_of_each_kind() {
+    let mut player = Playback::default();
+    let detect = clip("ding2");
+    let open = clip("ringin");
+    let starts = simulate(&mut player, Duration::from_secs(300), |t, player, trade| {
+        if t < TICK * 20 {
+            player.enqueue_detect(detect.clone(), copies(1));
+            *trade = Some(open.clone());
+        }
+    });
+    let last_start = starts.last().map(|s| s.0).unwrap_or_default();
+    eprintln!(
+        "#1447 burst of 20 detects + 20 opens: {} starts, last at {last_start:?}",
+        starts.len()
+    );
+    assert_eq!(
+        starts.iter().map(|s| s.1).collect::<Vec<_>>(),
+        [false, true, false],
+        "the first detect, the newest open, the newest detect — nothing else"
+    );
+    let bound = detect.duration + open.duration + GAP * 2 + TICK * 2;
+    assert!(
+        last_start <= bound,
+        "still starting {last_start:?} (bound {bound:?})"
+    );
+}
+
+/// Ordinary sounds get the first turn, but cannot cut or indefinitely starve a waiting trade; a
+/// notice goes before a waiting detect; a clip waiting in its slot plays without new events.
+///
+/// Rewritten for #1447: it used to queue two clips FIFO in one ordinary lane. The notice and the
+/// detect now wait in their own slots, the notice first, and a detect re-sent while the trade
+/// plays replaces the waiting one instead of queuing a second copy.
 #[test]
 fn contention_alternates_complete_clips_and_progresses_without_new_events() {
     use std::time::Instant;
@@ -467,84 +583,281 @@ fn contention_alternates_complete_clips_and_progresses_without_new_events() {
     let alert = clip("pfiff");
     let open = clip("ding1");
     let close = clip("ding2");
-    player.enqueue(detect.clone());
+    player.enqueue_detect(detect.clone(), copies(1));
     player.enqueue(alert.clone());
     let start = Instant::now();
     let (first, is_trade) = player.next(start, Some(open.clone())).unwrap();
     assert!(!is_trade);
-    assert!(Arc::ptr_eq(&first.wav, &detect.wav));
+    assert!(
+        Arc::ptr_eq(&first.wav, &alert.wav),
+        "a notice never waits behind a detect"
+    );
     assert!(
         player
-            .next(start + detect.duration, Some(open.clone()))
+            .next(start + alert.duration, Some(open.clone()))
             .is_none()
     );
-    let open_at = start + detect.duration + Duration::from_millis(50);
+    let open_at = start + alert.duration + GAP;
     assert!(player.next(open_at, Some(open.clone())).unwrap().1);
-    // Repeated producer traffic while the trade plays must queue, never interrupt it.
-    player.enqueue(detect.clone());
+    // Repeated producer traffic while the trade plays never interrupts it, and the re-sent detect
+    // takes the waiting one's place rather than queuing behind it.
+    assert_eq!(
+        player.enqueue_detect(detect.clone(), copies(1)),
+        Some(copies(1))
+    );
     assert!(
         player
             .next(open_at + Duration::from_millis(500), Some(close.clone()))
             .is_none()
     );
-    let alert_at = open_at + open.duration + Duration::from_millis(50);
-    let (next, is_trade) = player.next(alert_at, Some(close.clone())).unwrap();
+    let detect_at = open_at + open.duration + GAP;
+    let (next, is_trade) = player.next(detect_at, Some(close.clone())).unwrap();
     assert!(!is_trade);
-    assert!(Arc::ptr_eq(&next.wav, &alert.wav));
-    let close_at = alert_at + alert.duration + Duration::from_millis(50);
+    assert!(Arc::ptr_eq(&next.wav, &detect.wav));
+    let close_at = detect_at + detect.duration + GAP;
     assert!(player.next(close_at, Some(close.clone())).unwrap().1);
+    player.enqueue(alert.clone());
     assert!(
         player
             .next(close_at + Duration::from_secs(5), None)
-            .is_none()
+            .is_none(),
+        "the five-second close is never cut"
     );
+    let (after, is_trade) = player.next(close_at + close.duration + GAP, None).unwrap();
+    assert!(!is_trade);
+    assert!(Arc::ptr_eq(&after.wav, &alert.wav));
     assert!(
-        !player
-            .next(close_at + close.duration + Duration::from_millis(50), None)
-            .unwrap()
-            .1
+        player
+            .next(close_at + close.duration + GAP + alert.duration + GAP, None)
+            .is_none(),
+        "the burst is over: nothing replays"
     );
 }
 
-/// Saturating the ordinary lane cannot replace its accepted FIFO head or a pending trade turn.
+/// Saturating the detect lane cannot cut the clip on the device or take a pending trade turn,
+/// and leaves exactly one clip waiting — the newest.
+///
+/// Rewritten for #1447 (was `ordinary_queue_is_bounded_without_evicting_accepted_clips`): it
+/// pinned a 64-clip FIFO whose overflow dropped the NEWEST sound. The clip that already started
+/// is what is now protected, and the newest is what waits.
 #[test]
-fn ordinary_queue_is_bounded_without_evicting_accepted_clips() {
+fn a_detect_burst_never_cuts_the_playing_clip_and_waits_as_its_newest() {
     use std::time::Instant;
     let mut player = Playback::default();
     let first = clip("babytoy");
-    player.enqueue(first.clone());
-    for _ in 0..1000 {
-        player.enqueue(clip("ding2"));
-    }
-    assert_eq!(player.normal.len(), 64);
+    let newest = clip("ding1");
+    player.enqueue_detect(first.clone(), copies(1));
     let now = Instant::now();
     assert!(Arc::ptr_eq(
         &player.next(now, None).unwrap().0.wav,
         &first.wav
     ));
+    for _ in 0..1000 {
+        player.enqueue_detect(clip("ding2"), copies(1));
+    }
+    player.enqueue_detect(newest.clone(), copies(1));
+    assert!(
+        player.next(now + Duration::from_millis(1), None).is_none(),
+        "the burst never cuts the clip already playing"
+    );
+    let free = now + first.duration + GAP;
+    assert!(
+        player.next(free, Some(clip("pfiff"))).unwrap().1,
+        "the trade keeps its turn against a full ordinary lane"
+    );
+    let (next, _) = player.next(free + Duration::from_secs(2), None).unwrap();
+    assert!(Arc::ptr_eq(&next.wav, &newest.wav));
     assert!(
         player
-            .next(
-                now + first.duration + Duration::from_millis(50),
-                Some(clip("ding1"))
-            )
-            .unwrap()
-            .1
+            .next(free + Duration::from_secs(2) + newest.duration + GAP, None)
+            .is_none(),
+        "one clip waited behind the first, not a thousand"
     );
 }
 
+/// A trade waiting in its slot is never dropped because a detect is newer, whichever side holds
+/// the turn: losing the turn does not consume the edge.
+///
+/// Plausible breakage: one shared "latest sound" slot — the burst's newest detect would erase
+/// "the position opened".
+#[test]
+fn a_newer_detect_never_takes_a_waiting_trade() {
+    let mut player = Playback::default();
+    let detect = clip("ding2");
+    let open = clip("ringin");
+    let starts = simulate(&mut player, Duration::from_secs(60), |t, player, trade| {
+        // The first open plays at once and hands the next turn to the ordinary lane; the second
+        // waits while a detect is offered that turn and every later one.
+        if t == Duration::ZERO || t == TICK {
+            *trade = Some(open.clone());
+        }
+        if t >= TICK && t < TICK * 30 {
+            player.enqueue_detect(detect.clone(), copies(1));
+        }
+    });
+    assert_eq!(
+        starts.iter().map(|s| s.1).collect::<Vec<_>>(),
+        [true, false, true, false],
+        "open, detect, the waiting open, the newest detect"
+    );
+}
+
+/// A figure alert's `Повторять звук` copies are one event: alone, all of them play; a newer
+/// detect replaces whatever copies are still owed.
+///
+/// Plausible breakage: storing the event as a single clip turns a stored repeat of 2 into one
+/// play; storing copies as separate clips lets a burst queue behind them again.
+#[test]
+fn figure_alert_repeats_are_one_event() {
+    let alert = clip("pfiff");
+    let detect = clip("ding1");
+    for n in [2, 20] {
+        let mut player = Playback::default();
+        assert_eq!(player.enqueue_detect(alert.clone(), copies(n)), None);
+        let starts = simulate(&mut player, Duration::from_secs(60), |_, _, _| {});
+        assert_eq!(starts.len(), n as usize, "an empty queue plays every copy");
+        assert!(starts.iter().all(|s| Arc::ptr_eq(&s.2, &alert.wav)));
+    }
+    let mut player = Playback::default();
+    player.enqueue_detect(alert.clone(), copies(3));
+    let starts = simulate(&mut player, Duration::from_secs(60), |t, player, _| {
+        if t == TICK {
+            assert_eq!(
+                player.enqueue_detect(detect.clone(), copies(1)),
+                Some(copies(2)),
+                "the newer detect replaces the two copies still owed"
+            );
+        }
+    });
+    assert_eq!(starts.len(), 2);
+    assert!(Arc::ptr_eq(&starts[0].2, &alert.wav));
+    assert!(Arc::ptr_eq(&starts[1].2, &detect.wav));
+}
+
+/// The network alarm and the price-approach beep wait in the notice lane: a detect never erases
+/// one, and one never sits behind detects, in whichever order they arrived.
+///
+/// Plausible breakage: a priority that only holds when the notice arrives last, or a notice kept
+/// in the detect slot where the next detect replaces it.
+#[test]
+fn a_notice_is_never_replaced_by_a_detect_nor_waits_behind_one() {
+    // Five seconds on the device, so the whole burst below arrives while it plays.
+    let playing = clip("ding2");
+    let alarm = clip("alarm");
+    let detect = clip("ding1");
+    for notice_first in [true, false] {
+        let mut player = Playback::default();
+        player.enqueue(playing.clone());
+        let starts = simulate(&mut player, Duration::from_secs(60), |t, player, _| {
+            if t == TICK && notice_first {
+                player.enqueue(alarm.clone());
+            }
+            if t >= TICK && t < TICK * 20 {
+                player.enqueue_detect(detect.clone(), copies(1));
+            }
+            if t == TICK * 19 && !notice_first {
+                player.enqueue(alarm.clone());
+            }
+        });
+        let heard: Vec<_> = starts.iter().map(|s| s.2.clone()).collect();
+        assert_eq!(heard.len(), 3, "playing clip, alarm, newest detect");
+        assert!(Arc::ptr_eq(&heard[0], &playing.wav));
+        assert!(Arc::ptr_eq(&heard[1], &alarm.wav), "the alarm goes first");
+        assert!(Arc::ptr_eq(&heard[2], &detect.wav));
+    }
+}
+
+/// A figure alert whose repeat is zero is silence and leaves a detect already waiting in place.
+///
+/// Plausible breakage: clearing the slot for a zero-repeat alert would silence the detect before
+/// it.
+#[test]
+fn a_zero_repeat_alert_leaves_the_waiting_detect() {
+    use super::{PLAYBACK, discard_pending};
+    discard_pending();
+    let waiting = clip("ding1");
+    play_detect("ding1", 1);
+    play_detect("pfiff", 0);
+    PLAYBACK.with(|player| {
+        let player = player.borrow();
+        let event = player.detect.as_ref().expect("the detect still waits");
+        assert!(Arc::ptr_eq(&event.clip.wav, &waiting.wav));
+        assert_eq!(event.left, copies(1));
+    });
+    discard_pending();
+}
+
+/// Distinct notices each keep their turn — several warning axes opening in one tick, an alarm
+/// and a beep — while a repeat of a sound already waiting folds into it, and past the lane's
+/// size the OLDEST is dropped so the newest is always heard.
+///
+/// Plausible breakage: a single latest-wins notice slot (a beep erases a waiting alarm, and only
+/// the last of several warning axes sounds); a FIFO without folding (a burst of alarms across
+/// drains replays in full); overflow that drops the newest, as the old FIFO did.
+#[test]
+fn distinct_notices_each_wait_once_and_overflow_drops_the_oldest() {
+    let playing = clip("ding2");
+    let alarm = clip("alarm");
+    let beep = clip("pfiff");
+    let warn = clip("hallo");
+    let mut player = Playback::default();
+    player.enqueue(playing.clone());
+    let starts = simulate(&mut player, Duration::from_secs(60), |t, player, _| {
+        if t == TICK {
+            player.enqueue(alarm.clone());
+            player.enqueue(beep.clone());
+            player.enqueue(warn.clone());
+        }
+        if t > TICK && t < TICK * 20 {
+            assert!(!player.enqueue(alarm.clone()), "a repeat drops nothing");
+        }
+    });
+    let heard: Vec<_> = starts.iter().map(|s| s.2.clone()).collect();
+    assert_eq!(
+        heard.len(),
+        4,
+        "playing clip, then alarm, beep and warning once each"
+    );
+    for (got, want) in heard.iter().zip([&playing, &alarm, &beep, &warn]) {
+        assert!(Arc::ptr_eq(got, &want.wav), "arrival order is kept");
+    }
+
+    let mut player = Playback::default();
+    let names = ["alarm", "pfiff", "hallo", "ding1", "babytoy", "ringin"];
+    let dropped: Vec<bool> = names.iter().map(|n| player.enqueue(clip(n))).collect();
+    assert_eq!(dropped, [false, false, false, false, true, true]);
+    let starts = simulate(&mut player, Duration::from_secs(60), |_, _, _| {});
+    let heard: Vec<_> = starts.iter().map(|s| s.2.clone()).collect();
+    assert_eq!(heard.len(), super::NOTICE_SLOTS);
+    for (got, name) in heard.iter().zip(&names[2..]) {
+        assert!(
+            Arc::ptr_eq(got, &clip(name).wav),
+            "the newest four are kept"
+        );
+    }
+}
+
 /// Routing a trade preview through ordinary `play` would ignore its gain; scaling the shared
-/// catalog instead would also lower subsequent detect/alert sounds using the same file.
+/// catalog instead would also lower subsequent detect/alert sounds using the same file. A second
+/// click on the same preview folds into the first although its bytes are a fresh buffer.
 #[test]
 fn trade_preview_gain_leaves_ordinary_playback_and_catalog_unchanged() {
     super::discard_pending();
     let original = clip("ringin");
     super::play_trade_preview("ringin", 37);
     play("ringin");
+    super::play_trade_preview("ringin", 37);
+    super::PLAYBACK.with(|player| {
+        assert_eq!(
+            player.borrow().notices.len(),
+            2,
+            "a repeated preview click is the same sound, not a third clip"
+        );
+    });
     super::PLAYBACK.with(|player| {
         let player = player.borrow();
-        let preview = &player.normal[0];
-        let ordinary = &player.normal[1];
+        let preview = &player.notices[0];
+        let ordinary = &player.notices[1];
         assert_eq!(
             preview.wav,
             super::volume::scale(original.wav.clone(), 37).unwrap()
@@ -557,16 +870,21 @@ fn trade_preview_gain_leaves_ordinary_playback_and_catalog_unchanged() {
     super::discard_pending();
 }
 
-/// Entering quiet spends the old backlog without rejecting later producer-approved exceptions.
+/// Entering quiet spends the old backlog — notice and detect alike — without rejecting later
+/// producer-approved exceptions.
 #[test]
 fn quiet_transition_discards_backlog_but_accepts_later_bypass() {
     use super::{PLAYBACK, discard_pending};
-    play("ding1");
+    play_detect("ding1", 2);
     play("ding2");
     discard_pending();
-    PLAYBACK.with(|player| assert!(player.borrow().normal.is_empty()));
+    PLAYBACK.with(|player| assert!(!player.borrow().ordinary_waiting()));
     // Simulates a detect already approved by the existing quiet-bypass policy.
-    play("pfiff");
-    PLAYBACK.with(|player| assert_eq!(player.borrow().normal.len(), 1));
+    play_detect("pfiff", 1);
+    PLAYBACK.with(|player| {
+        let player = player.borrow();
+        assert!(player.notices.is_empty());
+        assert_eq!(player.detect.as_ref().map(|e| e.left), Some(copies(1)));
+    });
     discard_pending();
 }

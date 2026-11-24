@@ -167,12 +167,56 @@ fn resolve(lookup: MissingSound) -> Option<Clip> {
     clip
 }
 
-/// Queue a named sound without interrupting the current clip. The application's coordination
-/// timer pumps this lane, including Settings previews when no market events arrive. A name no
-/// file answers to plays the default and is reported once.
+/// Queue a named notice sound without interrupting the current clip. The application's
+/// coordination timer pumps this lane, including Settings previews when no market events arrive.
+/// A name no file answers to plays the default and is reported once.
+///
+/// This is the notice lane — warnings, alarms, previews — which a detect never replaces; core
+/// detects go through [`play_detect`] instead (issue #1447).
 pub fn play(name: &str) {
     if let Some(clip) = resolve(MissingSound::Name(name.to_string())) {
-        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
+        queue_notice(clip);
+    }
+}
+
+/// Hand a notice to the scheduler and log the one it had to drop, if any.
+///
+/// The drop is logged because "it did not beep" is diagnosed from the detect log, where the alarm
+/// and the price-approach beep already write their own lines; a notice dropped before its turn
+/// would otherwise read as played.
+fn queue_notice(clip: Clip) {
+    if PLAYBACK.with(|player| player.borrow_mut().enqueue(clip)) {
+        moon_core::detect_diag::line(&format!(
+            "[sound] notice lane full ({NOTICE_SLOTS} distinct sounds waiting); the oldest dropped"
+        ));
+    }
+}
+
+/// Queue one detect or figure-alert sound as a single event of `copies` plays, replacing any
+/// detect event still waiting behind the current clip.
+///
+/// Why latest-wins: the detect cards already list every strategy that fired, so the sound is the
+/// tap that something happened. Queuing each detect of a burst replayed events that were long
+/// over — twenty five-second clips signalled for about two minutes (issue #1447). The clip already
+/// playing is never cut; only the waiting detect is replaced, whole, including the remaining
+/// copies of a figure alert's `Повторять звук`. With nothing newer arriving, all `copies` play.
+///
+/// Args:
+///     name: The sound's stem; a name no file answers to plays the default and is reported once.
+///     copies: How many times the event plays; zero is silence and leaves a waiting detect alone.
+pub(crate) fn play_detect(name: &str, copies: u32) {
+    let Some(copies) = std::num::NonZeroU32::new(copies) else {
+        return;
+    };
+    if let Some(clip) = resolve(MissingSound::Name(name.to_string())) {
+        let replaced = PLAYBACK.with(|player| player.borrow_mut().enqueue_detect(clip, copies));
+        if let Some(left) = replaced {
+            // "It did not beep" is diagnosed from this log; a detect that was queued but replaced
+            // before its turn has to say so, or it reads as played.
+            moon_core::detect_diag::line(&format!(
+                "[sound] {name} replaced a waiting detect sound ({left} play(s) left)"
+            ));
+        }
     }
 }
 
@@ -184,15 +228,16 @@ pub(crate) fn play_trade_preview(name: &str, percent: u8) {
             return;
         };
         clip.wav = wav;
-        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
+        queue_notice(clip);
     }
 }
 
 /// Play the sound a 1-based Moonbot ordinal names; one past the table plays the default and is
-/// reported once.
+/// reported once. It waits in the notice lane — the network alarm and the price-approach beep
+/// come through here — so a detect neither replaces it nor goes before it.
 pub fn play_ordinal(ordinal: i32) {
     if let Some(clip) = resolve(MissingSound::Ordinal(ordinal)) {
-        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
+        queue_notice(clip);
     }
 }
 
@@ -255,23 +300,102 @@ fn wav_duration(wav: &[u8]) -> Option<std::time::Duration> {
     Some(std::time::Duration::from_nanos(nanos))
 }
 
-/// The normal lane retains existing producer selection rules; trades have a separate bounded
-/// backend lane so a burst of detects cannot occupy every trade slot. Alternate when both wait.
+/// One detect event waiting to play: the clip and how many plays of it are still owed.
+///
+/// A figure alert's `Повторять звук` copies are ONE event, so they live in one entry that a newer
+/// detect replaces whole rather than as separate clips a newer detect would queue behind.
+struct DetectEvent {
+    clip: Clip,
+    left: std::num::NonZeroU32,
+}
+
+/// How many distinct notice sounds may wait at once. Past it the oldest is dropped, so the newest
+/// is always heard — the opposite of the old FIFO, which dropped the fresh sound on overflow.
+const NOTICE_SLOTS: usize = 4;
+
+/// The playback scheduler: the clip on the device always finishes, and behind it waits the
+/// newest news of each kind — never the backlog of a burst (issue #1447).
+///
+/// Windows `PlaySound` and macOS `NSSound` replace the clip already playing rather than mixing,
+/// so clips are serialized; what is bounded is the wait behind the playing one. Three kinds wait
+/// apart so that one cannot erase another's news:
+///
+/// - `notices` — the network-problem alarm, the price-approach beep, core warnings and previews.
+///   Each distinct sound waits once: a repeat of one already waiting folds into it, so a burst of
+///   alarms is one alarm, while an alarm, a beep and a warning axis are different news and each
+///   plays. A detect never replaces one and they go before a waiting detect, so an alarm never
+///   sits behind stale detects.
+/// - `detect` — the newest core detect or figure alert, with its remaining repeat copies.
+/// - the trade edge — held by the backend's trade lane and offered on every [`Playback::next`],
+///   so a newer detect cannot drop "the position opened".
+///
+/// The ordinary kinds and the trade edge alternate when both wait, as before.
 #[derive(Default)]
 struct Playback {
-    normal: std::collections::VecDeque<Clip>,
+    notices: std::collections::VecDeque<Clip>,
+    detect: Option<DetectEvent>,
     busy_until: Option<std::time::Instant>,
     trade_turn: bool,
 }
 
 impl Playback {
-    /// Preserve accepted FIFO entries on overflow; never evict a clip already waiting to play.
-    fn enqueue(&mut self, clip: Clip) {
-        if self.normal.len() < 64 {
-            self.normal.push_back(clip);
-        } else {
-            log::warn!("notification sound queue full; newest ordinary sound omitted");
+    /// Queue a notice unless the same sound already waits, dropping the oldest past
+    /// [`NOTICE_SLOTS`].
+    ///
+    /// Distinct rather than latest-wins: the notice producers are different news — several
+    /// warning axes open in one tick, each with its own sound, and an alarm must not be erased by
+    /// a beep. The same sound again is the same news, so it folds into the one waiting, which is
+    /// what keeps a burst of alarms across drains from replaying the way detects used to.
+    ///
+    /// Returns:
+    ///     Whether a waiting notice was dropped to make room.
+    fn enqueue(&mut self, clip: Clip) -> bool {
+        // "The same sound" is the same BYTES, not the same allocation: a trade preview is scaled
+        // into a fresh buffer on every click, and a rescan rebuilds every entry. `Arc` equality
+        // checks the pointer first, so the common case stays a pointer compare.
+        if self.notices.iter().any(|w| w.wav == clip.wav) {
+            return false;
         }
+        let dropped = self.notices.len() >= NOTICE_SLOTS;
+        if dropped {
+            self.notices.pop_front();
+        }
+        self.notices.push_back(clip);
+        dropped
+    }
+
+    /// Put a detect event in its slot, replacing the one waiting there, whole.
+    ///
+    /// Returns:
+    ///     The plays the replaced event still owed, or `None` when the slot was empty.
+    fn enqueue_detect(
+        &mut self,
+        clip: Clip,
+        copies: std::num::NonZeroU32,
+    ) -> Option<std::num::NonZeroU32> {
+        self.detect
+            .replace(DetectEvent { clip, left: copies })
+            .map(|replaced| replaced.left)
+    }
+
+    /// Whether an ordinary clip — a notice or a detect — waits for a turn.
+    fn ordinary_waiting(&self) -> bool {
+        !self.notices.is_empty() || self.detect.is_some()
+    }
+
+    /// Take the next ordinary clip: the oldest notice first, so a pending alarm never waits behind
+    /// a detect, then one copy of the waiting detect event, keeping the rest of its copies.
+    fn take_ordinary(&mut self) -> Option<Clip> {
+        if let Some(clip) = self.notices.pop_front() {
+            return Some(clip);
+        }
+        let event = self.detect.as_mut()?;
+        let clip = event.clip.clone();
+        match std::num::NonZeroU32::new(event.left.get() - 1) {
+            Some(left) => event.left = left,
+            None => self.detect = None,
+        }
+        Some(clip)
     }
 
     /// Called by the application timer even without feed traffic. The small output-device
@@ -280,15 +404,21 @@ impl Playback {
         if self.busy_until.is_some_and(|until| now < until) {
             return None;
         }
-        let is_trade = trade.is_some() && (self.trade_turn || self.normal.is_empty());
+        let is_trade = trade.is_some() && (self.trade_turn || !self.ordinary_waiting());
         let clip = if is_trade {
             trade?
         } else {
-            self.normal.pop_front()?
+            self.take_ordinary()?
         };
         self.trade_turn = !is_trade;
         self.busy_until = Some(now + clip.duration + std::time::Duration::from_millis(50));
         Some((clip, is_trade))
+    }
+
+    /// Drop every waiting ordinary clip; the clip on the device and the trade lane are untouched.
+    fn discard_ordinary(&mut self) {
+        self.notices.clear();
+        self.detect = None;
     }
 }
 
@@ -300,10 +430,10 @@ thread_local! {
 /// Spend pre-sleep ordinary backlog once at the quiet transition. Later producer-authorized
 /// quiet exceptions may enqueue normally, and the current asynchronous clip is left to finish.
 pub(crate) fn discard_pending() {
-    PLAYBACK.with(|player| player.borrow_mut().normal.clear());
+    PLAYBACK.with(|player| player.borrow_mut().discard_ordinary());
 }
 
-/// Offer the trade-lane head and advance one fair, noninterrupting playback turn. A trade sound
+/// Offer the waiting trade edge and advance one fair, noninterrupting playback turn. A trade sound
 /// whose file is gone plays the default and is reported, like every other lane.
 /// Returns true only when the trade was selected, so contention never consumes its edge.
 /// The current trade gain applies at playback time; ordinary detects and alerts keep their bytes.
