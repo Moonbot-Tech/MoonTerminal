@@ -21,10 +21,10 @@ fn edit(ids: &[u64]) -> Action {
     }
 }
 
-/// A retained preview row of a strategy carrying `coins` and a filter value.
+/// A retained preview row of a strategy carrying `coins` as its CoinsBlackList and a filter value.
 fn row(name: &str, filter_max: f64, coins: &str, version: i32) -> Value {
     json!({"id":"7","version":version,"last_date":100,"kind":3,"checked":true,"path":"a",
-        "fields":{"StrategyName":name,"FilterMax":filter_max,"FilterBy":"24h","Coins":coins}})
+        "fields":{"StrategyName":name,"FilterMax":filter_max,"FilterBy":"24h","CoinsBlackList":coins}})
 }
 
 /// The case from the report: two fields edited on a strategy whose coin list is kilobytes long.
@@ -62,14 +62,14 @@ fn a_long_list_is_shown_as_its_difference_unless_asked_whole() {
     let preview = json!({"strategies":[{"id":"7","unchanged":false,
         "before":row("Night",2.0,&old,1),"after":row("Night",2.0,&new,1)}]});
     let short = client_view(&edit(&[7]), &preview, false);
-    let coins = &short["strategies"][0]["changes"]["Coins"];
+    let coins = &short["strategies"][0]["changes"]["CoinsBlackList"];
     assert_eq!(coins["before"]["items"], 60);
     assert_eq!(coins["after"]["items"], 61);
     assert_eq!(coins["added"], json!(["NEWCOIN"]));
     assert_eq!(coins["removed_count"], 0);
     let whole = client_view(&edit(&[7]), &preview, true);
     assert_eq!(
-        whole["strategies"][0]["changes"]["Coins"]["after"],
+        whole["strategies"][0]["changes"]["CoinsBlackList"]["after"],
         json!(new)
     );
 }
@@ -101,5 +101,60 @@ fn another_action_is_shown_as_previewed() {
 /// Spacing and case are not differences in a coin list.
 #[test]
 fn list_items_ignore_spacing_and_case() {
-    assert_eq!(list_items("btc, Eth,,BTC "), list_items("ETH,BTC"));
+    assert_eq!(
+        list_items("CoinsWhiteList", "btc, Eth,,BTC "),
+        list_items("CoinsWhiteList", "ETH,BTC")
+    );
+}
+
+/// A coin list separated by spaces, as MoonBot accepts it (#1448), is several coins: lifting
+/// GALA out of "ANC GALA ..." is one coin removed, not one whole-field item swapped for another.
+#[test]
+fn a_space_separated_list_is_diffed_coin_by_coin() {
+    let rest = (0..40)
+        .map(|i| format!("C{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let preview = json!({"strategies":[{"id":"7","unchanged":false,
+        "before":text_row("CoinsBlackList",&format!("ANC GALA {rest}")),
+        "after":text_row("CoinsBlackList",&format!("ANC {rest}"))}]});
+    let view = client_view(&edit(&[7]), &preview, false);
+    let coins = &view["strategies"][0]["changes"]["CoinsBlackList"];
+    assert_eq!(coins["before"]["items"], 42);
+    assert_eq!(coins["after"]["items"], 41);
+    assert_eq!(coins["removed"], json!(["GALA"]));
+    assert_eq!(coins["added_count"], 0);
+}
+
+/// A retained preview row of strategy 7 whose one field besides its name is `field`.
+fn text_row(field: &str, value: &str) -> Value {
+    json!({"id":"7","version":1,"last_date":100,"kind":3,"checked":true,"path":"a",
+        "fields":{"StrategyName":"Night",field:value}})
+}
+
+/// A long free-text field is not a coin list: a comment of words without commas stays one item,
+/// so a reworded comment is shown as its old text removed and its new text added, as before #1448.
+#[test]
+fn a_long_comment_keeps_its_whole_text_as_one_item() {
+    let old = "watch the big green candles before the night session and do not chase anything that has already doubled today";
+    let new = "do not chase anything that has already doubled today and watch the big green candles before the night session";
+    let preview = json!({"strategies":[{"id":"7","unchanged":false,
+        "before":text_row("Comment",old),"after":text_row("Comment",new)}]});
+    let view = client_view(&edit(&[7]), &preview, false);
+    let shown = &view["strategies"][0]["changes"]["Comment"];
+    assert_eq!(shown["before"]["items"], 1);
+    assert_eq!(shown["after"]["items"], 1);
+    assert_eq!(shown["added"], json!([new.to_ascii_uppercase()]));
+    assert_eq!(shown["removed"], json!([old.to_ascii_uppercase()]));
+}
+
+/// Every separator a strategy coin list may use counts alike, whatever the name's case; a field
+/// that is not a coin list keeps splitting on commas only.
+#[test]
+fn list_items_split_on_every_strategy_separator() {
+    assert_eq!(
+        list_items("coinsblacklist", "anc gala;btc\teth\nxrp"),
+        list_items("CoinsBlackList", "ANC,GALA,BTC,ETH,XRP")
+    );
+    assert_eq!(list_items("Comment", "anc gala, btc").len(), 2);
 }

@@ -689,7 +689,6 @@ fn compare(
         "no live strategy named {name} on the authorized cores"
     );
     const LONG: usize = super::edit_view::LONG_VALUE;
-    let items = super::edit_view::list_items;
     let fields: std::collections::BTreeSet<&String> =
         found.iter().flat_map(|(_, fields)| fields.keys()).collect();
     let mut differing = serde_json::Map::new();
@@ -701,6 +700,8 @@ fn compare(
             continue;
         }
         let long = !full_lists && values.iter().flatten().any(|v| v.len() > LONG);
+        // The field's name decides the split: a coin list coin by coin, anything else by commas.
+        let items = |value: &str| super::edit_view::list_items(field, value);
         let first = values
             .first()
             .copied()

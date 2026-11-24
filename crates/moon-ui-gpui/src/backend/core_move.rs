@@ -27,6 +27,7 @@ use moon_remote::ssh::Target;
 use rust_i18n::t;
 
 pub(crate) use steps::{StepEvent, StepId, StepNote, StepRow, StepState, Steps};
+pub(crate) use text::megabytes;
 pub(crate) use worker::{Command, MoveForm};
 
 use crate::Backend;

@@ -41,8 +41,8 @@ fn leaving_the_band_is_not_an_announcement() {
 
 /// The exit wins when both legs cross in the same batch, and exactly one leg is announced.
 ///
-/// Plausible breakage: playing both makes the player cut the first sound off mid-way, so the user
-/// hears one clipped noise and cannot tell which alert fired.
+/// Plausible breakage: announcing the entry, or both, buries the alert with money already behind
+/// it under the one for an order that has not filled yet.
 #[test]
 fn the_exit_is_announced_first_when_both_cross() {
     let near = set(&[(7, AlertLeg::Entry), (9, AlertLeg::Exit)]);

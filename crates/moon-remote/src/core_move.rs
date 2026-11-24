@@ -36,6 +36,9 @@ const WORK_PREFIX: &str = "/tmp/moonbot-move.";
 /// One step of a move, for the caller to show. Language-free: a UI words it itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MoveStep {
+    /// The settings snapshot is still arriving from the old core: `bytes` so far. Said when the
+    /// count grew, at most once a second; the total is not known until [`MoveStep::SnapshotTaken`].
+    SnapshotReceiving { bytes: u64 },
     /// The settings snapshot was taken from the old core: its size, and the exchange the core
     /// reported.
     SnapshotTaken {

@@ -136,8 +136,9 @@ impl Plan {
         let mut old_answered = false;
 
         // The exchange is the user's, else the one the old core reports for itself (a terminal
-        // core); without either, `archive::compose` reads it off the strategy files.
-        let (settings, reported) = match &request.zip {
+        // core); without either, `archive::compose` reads it off the strategy files. `asked` is
+        // whether the old core answered the question, so a refusal can say it named none.
+        let (settings, reported, asked) = match &request.zip {
             Some(path) => {
                 let bytes = zeroize::Zeroizing::new(
                     std::fs::read(path).with_context(|| format!("read {}", path.display()))?,
@@ -145,6 +146,7 @@ impl Plan {
                 // Asked only when the strategy files cannot settle it: a ZIP of one exchange
                 // never needs the old core.
                 let ambiguous = archive::strategy_exchanges(&bytes)?.len() > 1;
+                let mut asked = false;
                 let reported = if request.exchange.is_none() && core && ambiguous {
                     let ask = || -> anyhow::Result<Option<String>> {
                         let (packet, host, port) = old.as_ref().ok_or_else(|| {
@@ -155,6 +157,7 @@ impl Plan {
                     match ask() {
                         Ok(name) => {
                             old_answered = true;
+                            asked = true;
                             name
                         }
                         Err(e) => {
@@ -168,39 +171,27 @@ impl Plan {
                 } else {
                     None
                 };
-                (bytes, reported)
+                (bytes, reported, asked)
             }
             None => {
                 let (packet, host, port) = old.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("the core's key names no address: give its address")
                 })?;
-                let taken = snapshot::download(config(packet, host, *port)?, CORE_TIMEOUT)
+                let taken =
+                    snapshot::download(config(packet, host, *port)?, CORE_TIMEOUT, &mut |bytes| {
+                        say(MoveStep::SnapshotReceiving { bytes })
+                    })
                     .with_context(|| format!("take the settings snapshot from {host}:{port}"))?;
                 say(MoveStep::SnapshotTaken {
                     bytes: taken.bytes.len(),
                     exchange: taken.exchange.clone(),
                 });
                 old_answered = true;
-                (taken.bytes, taken.exchange)
+                (taken.bytes, taken.exchange, true)
             }
         };
-        // A core-reported name decides where the rebuilt report database goes, so it must be one
-        // the snapshot's strategy files carry too: a mismatch would file the database under a name
-        // the new core never opens. The user's exchange is taken as given.
-        let exchange = match (&request.exchange, reported) {
-            (Some(chosen), _) => Some(chosen.clone()),
-            (None, Some(reported)) => {
-                let known = archive::strategy_exchanges(&settings)?;
-                anyhow::ensure!(
-                    known.is_empty() || known.contains(&reported),
-                    "the old core reports exchange {reported:?}, but the snapshot's strategy files \
-                     name {}: name the core's exchange",
-                    known.join(", ")
-                );
-                Some(reported)
-            }
-            (None, None) => None,
-        };
+        let core_named_none = asked && reported.is_none();
+        let exchange = settle_exchange(request.exchange.as_deref(), reported, &settings)?;
         let db_file = match (uid, request.report_db) {
             (Some(uid), true) => rebuild_db(uid, say)?,
             _ => None,
@@ -213,7 +204,7 @@ impl Plan {
         // Both carry secrets — the API keys, the trade history — and nothing below reads them.
         drop(settings);
         drop(db_file);
-        let archive = composed?;
+        let archive = composed.map_err(|e| with_core_silence(e, core_named_none))?;
         say(MoveStep::Composed {
             exchange: archive.exchange.clone(),
             report_db: archive.report_db.clone(),
@@ -498,3 +489,51 @@ fn rebuild_db(uid: u64, say: &mut dyn FnMut(MoveStep)) -> anyhow::Result<Option<
     });
     Ok(Some(file))
 }
+
+/// The exchange the archive is filed under: the user's `chosen` as given, else the old core's
+/// `reported` name checked against `settings`' strategy files, else `None` — left to the
+/// strategy files (`archive::compose`).
+///
+/// A core-reported name decides where the rebuilt report database goes, so it must be one the
+/// snapshot's strategy files carry too: a mismatch would file the database under a name the new
+/// core never opens.
+///
+/// Errors:
+///     A mismatch, marked as an unsettled exchange (`archive::is_exchange_unsettled`) with the
+///     reason alone: only a caller that takes a name (the command line) may ask for one.
+fn settle_exchange(
+    chosen: Option<&str>,
+    reported: Option<String>,
+    settings: &[u8],
+) -> anyhow::Result<Option<String>> {
+    match (chosen, reported) {
+        (Some(chosen), _) => Ok(Some(chosen.to_owned())),
+        (None, Some(reported)) => {
+            let known = archive::strategy_exchanges(settings)?;
+            if !known.is_empty() && !known.contains(&reported) {
+                return Err(archive::unsettled(format!(
+                    "the old core reports exchange {reported:?}, but the snapshot's strategy \
+                     files name {}",
+                    known.join(", ")
+                )));
+            }
+            Ok(Some(reported))
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+/// `error` with the old core's silence said first when it is an unsettled exchange and the core,
+/// asked, named none: the strategy files were the only source left, and the user of a caller
+/// that cannot take a name (the move window) needs to read why there was no other. Any other
+/// error as is.
+fn with_core_silence(error: anyhow::Error, core_named_none: bool) -> anyhow::Error {
+    if core_named_none && archive::is_exchange_unsettled(&error) {
+        error.context("the old core reports no exchange name")
+    } else {
+        error
+    }
+}
+
+#[cfg(test)]
+mod tests;

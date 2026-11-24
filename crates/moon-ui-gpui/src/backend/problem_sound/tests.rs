@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use super::{Observation, ProblemSoundState, THROTTLE_MS};
+use super::{Observation, ProblemSoundState, Silenced, THROTTLE_MS};
 
 /// Collects synthetic network kinds without involving a live core.
 fn kinds(list: &[u8]) -> HashSet<u8> {
@@ -76,6 +76,56 @@ fn the_throttle_is_per_core_and_five_seconds() {
     assert_eq!(
         state.observe(1, 4, || kinds(&[3, 4, 5]), 1_000 + THROTTLE_MS),
         Observation::Fresh { throttled: false }
+    );
+}
+
+/// Only an alarm handed to the scheduler starts the core's five seconds; one that quiet mode or
+/// another core's alarm kept silent leaves the next confirmation free to sound (#1447).
+///
+/// Plausible breakage: recording the alarm before the silencing checks makes a finding nobody
+/// heard throttle the next one, so a core whose exchange drops twice in five seconds stays silent
+/// both times.
+#[test]
+fn only_an_alarm_handed_over_spends_the_throttle() {
+    let mut state = ProblemSoundState::default();
+    state.observe(1, 1, || kinds(&[]), 0);
+
+    assert_eq!(
+        state.observe(1, 2, || kinds(&[3]), 1_000),
+        Observation::Fresh { throttled: false }
+    );
+    assert_eq!(
+        state.admit(1, 1_000, false, true, false),
+        Err(Silenced::Quiet)
+    );
+    assert_eq!(
+        state.observe(1, 3, || kinds(&[3, 4]), 1_500),
+        Observation::Fresh { throttled: false },
+        "an alarm quiet mode kept silent must not start the throttle"
+    );
+    assert_eq!(
+        state.admit(1, 1_500, false, false, true),
+        Err(Silenced::AlarmThisDrain)
+    );
+    assert_eq!(
+        state.observe(1, 4, || kinds(&[3, 4, 5]), 2_000),
+        Observation::Fresh { throttled: false },
+        "an alarm another core's alarm kept silent must not start the throttle"
+    );
+    assert_eq!(state.admit(1, 2_000, false, false, false), Ok(()));
+    assert_eq!(
+        state.observe(1, 5, || kinds(&[3, 4, 5, 6]), 2_000 + THROTTLE_MS - 1),
+        Observation::Fresh { throttled: true },
+        "the alarm that was handed over does start it"
+    );
+    assert_eq!(
+        state.admit(1, 2_000 + THROTTLE_MS - 1, true, false, false),
+        Err(Silenced::Throttled)
+    );
+    assert_eq!(
+        state.observe(1, 6, || kinds(&[3, 4, 5, 6, 7]), 2_000 + THROTTLE_MS),
+        Observation::Fresh { throttled: false },
+        "a throttled alarm does not extend the window it was refused by"
     );
 }
 

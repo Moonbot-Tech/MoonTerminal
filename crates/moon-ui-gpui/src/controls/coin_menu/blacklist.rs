@@ -5,7 +5,8 @@
 //! in a menu that also carries navigation, strategy and order actions — and the reader's first
 //! question is which LIST, long before it is which core.
 //!
-//! The permanent list is a comma-separated text this terminal rewrites in full; the temporary one
+//! The permanent list is a text this terminal rewrites in full — comma-separated on the core,
+//! any strategy-list separator in a strategy's field ([`strategy_contains`]); the temporary one
 //! is a delta the feed merges at send time, because the core writes that list too. See
 //! [`moon_core::feed::CoreCmd::SetTempBlacklist`].
 //!
@@ -21,6 +22,7 @@ use rust_i18n::t;
 
 use moon_core::config::TempBanSpan;
 use moon_core::session::CoreId;
+use moon_core::symbol::coin_list::strategy_contains;
 
 use super::names::CoinNames;
 use super::{
@@ -83,7 +85,9 @@ pub(super) fn permanent_blacklist_item(
             Some(name) => t!("coin_menu.target_strategy", name = name.to_string()).to_string(),
             None => t!("coin_menu.target_strategy", name = sid.to_string()).to_string(),
         };
-        let in_strategy = blacklist_contains(&strategy_blacklist(b, core, sid), coin);
+        // A strategy list takes spaces between coins (`ANC GALA`); the comma-only
+        // `blacklist_contains` above would show a listed coin unchecked and add it again.
+        let in_strategy = strategy_contains(&strategy_blacklist(b, core, sid), coin);
         rows.push(target_row(
             "coin-bl-strat",
             label,
@@ -98,7 +102,7 @@ pub(super) fn permanent_blacklist_item(
                         // Re-checked inside the click for the same reason the workspace is:
                         // the schema can change between the menu opening and the press.
                         if b.session.strategy_has_blacklist(core, sid) {
-                            let lift = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
+                            let lift = strategy_contains(&strategy_blacklist(b, core, sid), &coin);
                             let _ = write_strategy_blacklist(b, core, sid, &coin, lift);
                         }
                     }

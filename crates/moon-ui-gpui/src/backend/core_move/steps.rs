@@ -62,6 +62,9 @@ pub(crate) enum StepState {
 pub(crate) enum StepNote {
     /// The settings are being taken from the old core.
     TakingSettings,
+    /// The settings snapshot is arriving from the old core: `bytes` so far. A download over a
+    /// slow link takes minutes, and a row with only a spinner reads as stuck (#1419).
+    ReceivingSettings { bytes: u64 },
     /// The settings are taken: the strategy count (`None`: not read) and whether the trade
     /// history goes along.
     SettingsTaken {

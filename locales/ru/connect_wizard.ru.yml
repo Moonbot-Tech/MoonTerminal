@@ -330,6 +330,7 @@ connect_wizard.move.step.stop_old: "Останавливаем старое яд
 connect_wizard.move.step.start_new: "Запускаем новое ядро"
 connect_wizard.move.step.switch: "Переключаем терминал и станцию"
 connect_wizard.move.note.taking: "Забираем настройки, стратегии и историю сделок…"
+connect_wizard.move.note.receiving: "Получаем архив настроек: %{size} МБ…"
 connect_wizard.move.note.keys: "Биржа и ключи"
 connect_wizard.move.note.strategies: "стратегий: %{n}"
 connect_wizard.move.note.history: "история сделок"

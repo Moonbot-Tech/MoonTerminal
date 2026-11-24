@@ -3,9 +3,11 @@
 use moon_remote::core_move::{MoveStep, MoveWarning};
 use rust_i18n::t;
 
-/// One progress line for `step`.
-pub(super) fn step(step: &MoveStep) -> String {
-    match step {
+/// One progress line for `step`; `None` for a count still moving, which the settings row shows
+/// in place — a line a second would push the move's real lines out of its capped log.
+pub(super) fn step(step: &MoveStep) -> Option<String> {
+    let line = match step {
+        MoveStep::SnapshotReceiving { .. } => return None,
         MoveStep::SnapshotTaken { bytes, exchange } => t!(
             "core_move.step.snapshot",
             size = megabytes(*bytes as u64),
@@ -57,11 +59,12 @@ pub(super) fn step(step: &MoveStep) -> String {
             };
             t!(key, detail = detail)
         }
-    }
-    .to_string()
+    };
+    Some(line.to_string())
 }
 
-/// `bytes` as megabytes with one decimal.
-fn megabytes(bytes: u64) -> String {
+/// `bytes` as megabytes with one decimal: the log's snapshot line and the settings row's count
+/// say one number the same way.
+pub(crate) fn megabytes(bytes: u64) -> String {
     format!("{:.1}", bytes as f64 / 1_048_576.0)
 }

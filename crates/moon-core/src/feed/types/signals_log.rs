@@ -113,8 +113,10 @@ impl DetectRow {
 /// two thousand rows per core, on every core.
 pub const DETECT_MSG_KEEP: usize = 200;
 
-/// The strategy field holding its coin blacklist: a comma-separated token list, in the format of
-/// the core-wide blacklist ([`crate::symbol::coin_list`]).
+/// The strategy field holding its coin blacklist: coins separated by spaces, commas or a comma
+/// and a space (moonbot.pro, the strategy filters tab), so "ANC GALA" is two coins (#1448). Read
+/// it with [`crate::symbol::split_coin_list`] and edit it with the `strategy_*` helpers of
+/// [`crate::symbol::coin_list`]; the core-wide blacklist is the comma-only one.
 pub const FIELD_COINS_BLACK_LIST: &str = "CoinsBlackList";
 
 /// Longest strategy name retained on a detect, in characters.

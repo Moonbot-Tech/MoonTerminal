@@ -106,6 +106,35 @@ fn several_exchanges_need_an_explicit_name() {
     assert_eq!(archive.exchange, "Binance Futures");
 }
 
+/// A snapshot that cannot settle the exchange gives the reason alone: the move window has no
+/// exchange field, so "pass it explicitly" there asks the impossible; the command line, which
+/// takes `--exchange`, says that part itself (#1419).
+#[test]
+fn an_unsettled_exchange_tells_no_one_to_pass_it() {
+    let several = snapshot(&[
+        ("BotConfig.bcfg", b"cfg"),
+        ("data/Binance-USDT-strat.txt", b""),
+        ("data/ByBit Futures-USDT-strat.txt", b""),
+    ]);
+    let none = snapshot(&[("BotConfig.bcfg", b"cfg")]);
+    for zip in [&several, &none] {
+        let error = compose(zip, None, None)
+            .err()
+            .expect("an unsettled exchange");
+        let text = format!("{error:#}");
+        assert!(!text.contains("pass"), "{text}");
+        assert!(is_exchange_unsettled(&error), "{text}");
+    }
+    let text = format!("{:#}", compose(&several, None, None).err().unwrap());
+    assert!(text.contains("(Binance, ByBit Futures)"), "{text}");
+
+    // Any other refusal of the snapshot is not one a name would settle.
+    let not_a_snapshot = compose(&snapshot(&[("x.txt", b"")]), None, None)
+        .err()
+        .unwrap();
+    assert!(!is_exchange_unsettled(&not_a_snapshot));
+}
+
 /// The list a core-reported exchange is checked against: one entry per exchange, whatever the
 /// base currency, nothing from outside `data/` — the shape a live core's snapshot had.
 #[test]

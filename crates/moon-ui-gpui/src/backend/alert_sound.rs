@@ -8,8 +8,12 @@
 //! Built like [`super::detect_sound`], and for the same reasons: feed draining calls this hundreds
 //! of times a second, so a revision gate does the work only when something actually arrived; a
 //! core's first visit SEEDS silently rather than announcing every order that was already near; and
-//! at most one sound leaves per drain, because the player interrupts itself and a burst would be
-//! heard as one truncated noise anyway.
+//! at most one approach beep leaves per drain. That last rule no longer protects the player — the
+//! scheduler never cuts a clip off — but it keeps one price batch that crosses orders on many
+//! cores from becoming a beep per core. It bounds ONE drain only: crossings spread over successive
+//! drains each beep, and what bounds those is the notice lane itself (the same sound folds into
+//! the one waiting; past four distinct sounds the oldest is dropped). A detect in the same drain
+//! does not hold the beep back (#1447).
 //!
 //! Two things this had to learn about the feed, either of which alone made the first version fire
 //! almost never:
@@ -49,28 +53,23 @@ pub(crate) enum AlertLeg {
 }
 
 impl Backend {
-    /// Play the price-approach alerts, at most one sound for the whole drain.
+    /// Play the price-approach alerts, at most one beep for the whole drain.
     ///
     /// Cheap when nothing arrived: every core sits behind the revision pair the module doc
     /// describes, and a core with both alerts switched off is dropped before its orders are read.
     ///
-    /// Args:
-    ///     detect_played: Whether the detect scan already used this drain's one sound.
-    ///
-    /// Returns:
-    ///     Whether this drain's shared player budget has been spent, including detects.
-    pub(crate) fn play_price_alert_sounds(&mut self, detect_played: bool) -> bool {
+    /// Takes no word from the detect scan that ran before it in the same drain: the beep goes to
+    /// the notice lane, which plays ahead of a waiting detect and never interrupts the clip on the
+    /// device, so a detect has nothing left to protect (#1447).
+    pub(crate) fn play_price_alert_sounds(&mut self) {
         // Cloned once for the whole pass rather than per core: the handle is an `Arc` clone, while
         // each `latest_price` below takes the source's read lock.
         let source = self.session.market_source();
-        // One sound for the DRAIN and not one per core: the player replaces whatever is playing, so
-        // announcing two cores in the same pass would leave only the second audible while spending
-        // the first one's edge silently. The first crossing wins; the rest stay counted.
-        //
-        // It starts at whatever the DETECT scan just did, for the same reason: that scan runs first
-        // in the same drain and shares the one player, so a price alert firing now would clip a
-        // detect sound a few microseconds old.
-        let mut played = detect_played;
+        // One beep for the DRAIN and not one per core: a price batch that crosses orders on many
+        // cores at once is one piece of news, not a beep per core. This bounds the one drain only;
+        // across drains the notice lane's own fold and four-slot bound apply. The first crossing
+        // wins; the rest stay counted, their edge spent with it.
+        let mut played = false;
         for (core, data) in self.session.store().cores() {
             let rev = (data.orders_table_rev, data.order_lines_rev);
             if self.last_orders_alert_rev.get(&core) == Some(&rev) {
@@ -181,9 +180,9 @@ impl Backend {
             // The same `channels.detects` log the detect sounds write to, and for the same reason:
             // "it did not beep" has several causes here — the alert switched off, the level never
             // reached, quiet mode, a core with no config yet, the silent first pass, and another
-            // core having taken this drain's one sound — and they are indistinguishable from
-            // outside. The line names which one it was. An ordinal past the terminal's sound table
-            // is NOT one of them any more: it plays the default and raises a toast (see
+            // core's crossing having taken this drain's one beep — and they are indistinguishable
+            // from outside. The line names which one it was. An ordinal past the terminal's sound
+            // table is NOT one of them any more: it plays the default and raises a toast (see
             // `media::sound::play_ordinal`); the line still says the table had no name for it.
             let name = crate::media::sound::mb_sound_name(ordinal);
             moon_core::detect_diag::line(&format!(
@@ -192,7 +191,7 @@ impl Backend {
                 name.as_deref().unwrap_or("NO SUCH SOUND, default plays"),
                 match (self.quiet_sleeping, played) {
                     (true, _) => ", silent: quiet mode",
-                    (_, true) => ", silent: another core took this drain's sound",
+                    (_, true) => ", silent: another core's price alert took this drain's beep",
                     _ => "",
                 }
             ));
@@ -206,17 +205,15 @@ impl Backend {
                 played = true;
             }
         }
-        played
     }
 }
 
 /// Which leg, if any, this pass should announce: an ARMED one that is inside its band now and was
 /// not last time.
 ///
-/// At most one, because the player interrupts itself — two sounds in one pass are heard as one
-/// truncated noise, so the second would only cut the first short. The EXIT wins that tie: a
-/// position about to close is the one worth hearing, and its alert is the one with money already
-/// committed behind it.
+/// At most one, because one crossing per core is the tap the user needs; the order list shows
+/// which legs are near. The EXIT wins that tie: a position about to close is the one worth
+/// hearing, and its alert is the one with money already committed behind it.
 ///
 /// `armed` is applied BEFORE the tie is broken rather than to the winner afterwards: an unarmed
 /// exit crossing in the same batch would otherwise take the pass and silence an armed entry.

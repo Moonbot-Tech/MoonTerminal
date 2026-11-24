@@ -1,8 +1,10 @@
 //! Coin-list tokens shared by the strategy field reveal and the shell blacklist strips.
 //!
-//! Splitting follows [`moon_core::symbol::coin_list`]: comma-separated text, trimmed tokens,
-//! ASCII-case-insensitive match. A pair such as `XALPHAUSDT` is a different token from `XALPHA`.
-//! The strip windows around the matching token so a clipped row still shows it.
+//! Splitting follows [`moon_core::symbol::coin_list`]: trimmed tokens, ASCII-case-insensitive
+//! match, split per list — commas only for the core-wide list ([`split_coin_token`]), every
+//! strategy-list separator for a strategy field ([`split_strategy_coin_token`]). A pair such as
+//! `XALPHAUSDT` is a different token from `XALPHA`. The strip windows around the matching token
+//! so a clipped row still shows it.
 
 use std::ops::Range;
 use std::time::Instant;
@@ -42,6 +44,28 @@ pub(crate) fn split_coin_token(text: &str, coin: &str) -> Vec<(Range<usize>, boo
         offset += piece.len() + 1;
     }
     out
+}
+
+/// [`split_coin_token`] for a strategy coin list, whose entries may be separated by spaces,
+/// semicolons or line breaks as well as commas.
+///
+/// The ranges come from [`moon_core::symbol::coin_list::strategy_entries`], the splitter the
+/// reveal's "listed" decision and the Remove button use, so a field the reveal marks always has
+/// its hit token here: `ANC GALA` split on commas would be one token and paint no coin amber.
+///
+/// Args:
+///     text: Strategy list text, in the core's own spelling.
+///     coin: Token to mark, compared with [`str::eq_ignore_ascii_case`].
+///
+/// Returns:
+///     One entry per entry of the list, in list order. The bool is true only for that token.
+pub(crate) fn split_strategy_coin_token(text: &str, coin: &str) -> Vec<(Range<usize>, bool)> {
+    moon_core::symbol::coin_list::strategy_entries(text)
+        .map(|range| {
+            let hit = text[range.clone()].eq_ignore_ascii_case(coin);
+            (range, hit)
+        })
+        .collect()
 }
 
 /// How long a blacklist or field outline takes to fade out.
@@ -173,8 +197,48 @@ pub(crate) fn coin_token_strip(
     max_width: Option<Pixels>,
     cx: &App,
 ) -> AnyElement {
+    token_strip(text, &split_coin_token(text, coin), size, max_width, cx)
+}
+
+/// [`coin_token_strip`] for a strategy coin list, split by [`split_strategy_coin_token`].
+///
+/// The pieces are drawn with commas between them like the core-wide strip: the strip names the
+/// entries, and the field's own spelling is the input shown beside it.
+///
+/// Args:
+///     text: Strategy list text, in the core's own spelling.
+///     coin: Token painted amber.
+///     size: Font size of every piece.
+///     max_width: Row cap. `None` draws every token.
+///     cx: Application context for the palette.
+///
+/// Returns:
+///     The strip element. The hit token carries the `coin-bl-token` selector.
+pub(crate) fn strategy_coin_token_strip(
+    text: &str,
+    coin: &str,
+    size: Pixels,
+    max_width: Option<Pixels>,
+    cx: &App,
+) -> AnyElement {
+    token_strip(
+        text,
+        &split_strategy_coin_token(text, coin),
+        size,
+        max_width,
+        cx,
+    )
+}
+
+/// Draw `spans` of `text` as a windowed token strip; the splitting is the caller's.
+fn token_strip(
+    text: &str,
+    spans: &[(Range<usize>, bool)],
+    size: Pixels,
+    max_width: Option<Pixels>,
+    cx: &App,
+) -> AnyElement {
     let p = MoonPalette::active(cx);
-    let spans = split_coin_token(text, coin);
     let tokens: Vec<(&str, bool)> = spans
         .iter()
         .map(|(range, hit)| (&text[range.clone()], *hit))

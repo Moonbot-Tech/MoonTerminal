@@ -3,7 +3,8 @@
 //! `DetectRow.sound_name`, just like an ordinary detect. This is a `Backend` method because it needs
 //! the core store. Feed draining invokes the scan; revision and sequence cursors avoid redundant
 //! work and startup backlog. Each pass selects at most one eligible new detect per core. The shared
-//! media scheduler queues selected clips and serializes them with price alerts and trade notices.
+//! media scheduler holds only the newest selected detect behind the clip already playing (#1447)
+//! and serializes it with price alerts and trade notices.
 
 use crate::Backend;
 
@@ -44,7 +45,7 @@ impl Backend {
         }
     }
 
-    /// How many times the player enqueues a figure-alert clip.
+    /// How many times the player plays a figure-alert clip.
     ///
     /// Returns:
     ///     The Alerts panel repeat, or 2 while none was stored.
@@ -61,14 +62,16 @@ impl Backend {
         }
     }
 
-    /// Plays the most recent eligible new detect sound for each core. The `last_detect_seq` cursor
-    /// prevents duplicates and startup bursts: the first visit seeds the cursor without playback.
+    /// Selects the most recent eligible new detect sound for each core and hands it to the player,
+    /// where a later selection — another core's in this pass, or the next pass's — replaces one
+    /// still waiting, so a burst is heard as its newest detect (#1447). The `last_detect_seq`
+    /// cursor prevents duplicates and startup bursts: the first visit seeds the cursor without
+    /// playback.
     ///
-    /// Returns:
-    ///     Whether a sound was selected. Price-approach alerts keep their existing per-drain
-    ///     admission policy; the media scheduler owns actual playback timing.
-    pub(crate) fn play_detect_sounds(&mut self) -> bool {
-        let mut played = false;
+    /// Returns nothing: no other sound in the drain waits on whether a detect sounded. The
+    /// price-approach beep and the network alarm used to, back when the player cut itself off;
+    /// the scheduler now orders them ahead of a waiting detect instead (#1447).
+    pub(crate) fn play_detect_sounds(&mut self) {
         for (core, data) in self.session.store().cores() {
             // Gate on revision because feed draining wakes this path hundreds of times per second
             // while detects change infrequently. Leave the list untouched when nothing changed.
@@ -135,11 +138,10 @@ impl Backend {
                     "[sound] core={} play={name}",
                     moon_core::feed::core_label(core)
                 ));
+                // One event of `plays` copies: a newer detect, from this core's next drain or
+                // another core in this one, replaces it whole instead of queuing behind it (#1447).
                 let plays = detect_sound_plays(is_alert, self.alert_repeat());
-                for _ in 0..plays {
-                    crate::media::sound::play(&name);
-                }
-                played = plays > 0;
+                crate::media::sound::play_detect(&name, plays);
             } else {
                 // Quiet mode is named explicitly: without it, a silenced night reads as "no
                 // detect asked for a sound", which is a different bug entirely.
@@ -155,11 +157,10 @@ impl Backend {
                 ));
             }
         }
-        played
     }
 }
 
-/// How many times the detect player should enqueue this clip.
+/// How many times the detect player should play this clip, as one event.
 ///
 /// A figure alert (`DETECT_KIND_ALERT`) uses the Alerts panel repeat, including zero (silence).
 /// An ordinary detect still plays once: `SoundAlert=Yes` is not this control.
@@ -169,7 +170,7 @@ impl Backend {
 ///     figure_repeat: Resolved Alerts panel repeat.
 ///
 /// Returns:
-///     Enqueue count for this pass.
+///     How many times this pass's one event plays.
 fn detect_sound_plays(is_alert: bool, figure_repeat: u32) -> u32 {
     if is_alert { figure_repeat } else { 1 }
 }
