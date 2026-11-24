@@ -36,6 +36,11 @@ pub enum EngineActionKind {
     /// (moonproto `request_snapshot`, MoonBot 7.72 L7 and later). The terminal does not send this
     /// request yet; the variant exists so the projection of moonproto's kinds stays total.
     RequestStrategiesSnapshot,
+    /// A Moon Streamer setting was changed or its diagnostics were requested (moonproto
+    /// `MoonStreamer`, MoonBot 7.73 N2 and later): source, reception, distribution, reconnect,
+    /// refresh or the subscriber report. The terminal does not send these yet; one variant covers
+    /// all six so the projection of moonproto's kinds stays total without a toast text per knob.
+    MoonStreamerSettings,
 }
 
 /// Result of an asynchronous Engine action on the core.

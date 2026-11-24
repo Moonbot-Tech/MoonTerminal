@@ -668,6 +668,7 @@ fn engine_action_label(
         K::RequestStrategiesSnapshot => {
             t!("shell.engine_action.request_strategies_snapshot").to_string()
         }
+        K::MoonStreamerSettings => t!("shell.engine_action.moon_streamer_settings").to_string(),
     }
 }
 

@@ -48,6 +48,12 @@ pub(in crate::feed::live) fn engine_action_result(
         },
         K::ReloadOrderBook => EngineActionKind::ReloadOrderBook,
         K::RequestStrategiesSnapshot => EngineActionKind::RequestStrategiesSnapshot,
+        K::RefreshMoonStreamer
+        | K::SetMoonStreamerSource { .. }
+        | K::SetMoonStreamerDistribution { .. }
+        | K::SetMoonStreamerReception { .. }
+        | K::ReconnectMoonStreamer
+        | K::RequestMoonStreamerSubscribers => EngineActionKind::MoonStreamerSettings,
     };
     EngineActionResult {
         kind,
