@@ -347,7 +347,44 @@ pub(super) fn report_html(page: &Page) -> String {
         t!("telegram.report_cores")
     };
     let title = page.scope_label.as_deref().unwrap_or(&heading);
-    let mut html = String::new();
+    let mut html = preview_title_html(page, title);
+    if page.groups_missing {
+        html.push_str(&format!(
+            "<p>{}</p>",
+            escape(&t!("telegram.report_groups_missing"))
+        ));
+    }
+    if page.total.orders == 0 {
+        html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
+        if page.rows.is_empty() && !page.groups_missing {
+            return html;
+        }
+    }
+    html.push_str(&table_html(
+        page,
+        &if page.request.daily {
+            t!("telegram.report_date")
+        } else {
+            heading
+        },
+    ));
+    if page.groups_missing {
+        return html;
+    }
+    html.push_str(&details_html(&detail_lines(page)));
+    if page.pages > 1 {
+        html.push_str(&format!(
+            "<p>{} {}/{}</p>",
+            escape(&t!("telegram.report_page")),
+            page.request.page + 1,
+            page.pages
+        ));
+    }
+    html
+}
+
+/// The report's opening paragraph: its title, period and, for an open-basis report, that basis.
+fn preview_title_html(page: &Page, title: &str) -> String {
     // An unreadable clock names the year rather than guessing it.
     let now = i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(i64::MAX);
     let year = display_time::at(now, page.zone).map_or(i32::MIN, |now| now.year());
@@ -378,27 +415,15 @@ pub(super) fn report_html(page: &Page) -> String {
             escape(&t!("report.period_basis.open"))
         ));
     }
-    html.push_str(&format!("<p>{preview_title}</p>"));
-    if page.groups_missing {
-        html.push_str(&format!(
-            "<p>{}</p>",
-            escape(&t!("telegram.report_groups_missing"))
-        ));
-    }
-    if page.total.orders == 0 {
-        html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
-        if page.rows.is_empty() && !page.groups_missing {
-            return html;
-        }
-    }
-    html.push_str(&format!(
+    format!("<p>{preview_title}</p>")
+}
+
+/// The totals table: `first_column` over the row labels, the saved columns, then every row.
+fn table_html(page: &Page, first_column: &str) -> String {
+    let mut html = format!(
         "<table compact><tr><th align=\"left\">{}</th>",
-        escape(&if page.request.daily {
-            t!("telegram.report_date")
-        } else {
-            heading
-        })
-    ));
+        escape(first_column)
+    );
     for label in column_headers(&page.layout) {
         html.push_str(&format!("<th align=\"right\">{}</th>", escape(&label)));
     }
@@ -415,11 +440,14 @@ pub(super) fn report_html(page: &Page) -> String {
         }
     }
     html.push_str("</table>");
-    if page.groups_missing {
-        return html;
-    }
-    // The details name each core of the page once, however many groups list it: a repeat counts
-    // only when its first listing is on another page. Core UIDs distinguish reused names.
+    html
+}
+
+/// The cores the details name: each core of the page once, however many groups list it.
+///
+/// A repeat counts only when its first listing is on another page. Core UIDs distinguish reused
+/// names.
+fn detail_lines(page: &Page) -> Vec<(Option<u64>, &String, &QuoteBreakdown)> {
     let mut lines: Vec<(Option<u64>, &String, &QuoteBreakdown)> = page
         .rows
         .iter()
@@ -435,12 +463,17 @@ pub(super) fn report_html(page: &Page) -> String {
             lines.push((*uid, name, total));
         }
     }
-    html.push_str(&format!(
+    lines
+}
+
+/// The collapsed details: each line's PnL and average order, then any average-coverage notes.
+fn details_html(lines: &[(Option<u64>, &String, &QuoteBreakdown)]) -> String {
+    let mut html = format!(
         "<details><summary>{}</summary><table compact><tr><th>PnL</th><th>{}</th></tr>",
         escape(&t!("telegram.report_details")),
         escape(&t!("telegram.report_average"))
-    ));
-    for &(_, name, total) in &lines {
+    );
+    for &(_, name, total) in lines {
         let label = plain_label(name);
         let average = details_parts(total)
             .iter()
@@ -457,7 +490,7 @@ pub(super) fn report_html(page: &Page) -> String {
         ));
     }
     html.push_str("</table>");
-    for &(_, name, total) in &lines {
+    for &(_, name, total) in lines {
         let (counted, excluded) = details_parts(total)
             .iter()
             .map(average_coverage)
@@ -478,14 +511,6 @@ pub(super) fn report_html(page: &Page) -> String {
         }
     }
     html.push_str("</details>");
-    if page.pages > 1 {
-        html.push_str(&format!(
-            "<p>{} {}/{}</p>",
-            escape(&t!("telegram.report_page")),
-            page.request.page + 1,
-            page.pages
-        ));
-    }
     html
 }
 
