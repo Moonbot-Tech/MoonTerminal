@@ -516,6 +516,7 @@ shell.engine_action.ma_off: "MA 模式：关"
 shell.engine_action.transfer: "划转 %{qty} %{asset}：%{from} → %{to}"
 shell.engine_action.reload_order_book: "重新加载订单簿"
 shell.engine_action.request_strategies_snapshot: "从内核加载策略"
+shell.engine_action.moon_streamer_settings: "Moon Streamer 设置"
 
 # --- Result toasts for a coin-menu strategy-blacklist edit (the menu has no window of its own) ---
 shell.strat_edit_sent: "%{coin} 的黑名单修改已发送"
