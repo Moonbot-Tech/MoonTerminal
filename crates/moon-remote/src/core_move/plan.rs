@@ -174,7 +174,10 @@ impl Plan {
                 let (packet, host, port) = old.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("the core's key names no address: give its address")
                 })?;
-                let taken = snapshot::download(config(packet, host, *port)?, CORE_TIMEOUT)
+                let taken =
+                    snapshot::download(config(packet, host, *port)?, CORE_TIMEOUT, &mut |bytes| {
+                        say(MoveStep::SnapshotReceiving { bytes })
+                    })
                     .with_context(|| format!("take the settings snapshot from {host}:{port}"))?;
                 say(MoveStep::SnapshotTaken {
                     bytes: taken.bytes.len(),

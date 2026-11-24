@@ -38,6 +38,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use moon_core::core_move::old_core::StopAnswer;
+use moon_core::core_move::snapshot;
 use moon_remote::core_move::plan::{KeySource, Plan, Request};
 use moon_remote::core_move::{self, MoveStep};
 use moon_remote::hosts;
@@ -49,10 +50,43 @@ use super::{Args, read_key};
 
 /// How long the command waits between two stop requests to an old core that refuses.
 const STOP_RETRY: Duration = Duration::from_secs(60);
+/// What a failed snapshot transfer can fall back on: the snapshot MoonBot saves by hand works on
+/// any build. Said here, not by the transfer, because only this command takes a ZIP.
+const ZIP_HINT: &str = "save the snapshot in Moonbot (VPS setup -> Get settings) and pass it with \
+                        --zip";
+
+/// `error` with [`ZIP_HINT`] after it when it is a failed snapshot transfer; any other error as is.
+fn with_zip_hint(error: anyhow::Error) -> anyhow::Error {
+    if snapshot::is_transfer_failure(&error) {
+        anyhow::anyhow!("{error:#}; or {ZIP_HINT}")
+    } else {
+        error
+    }
+}
+
+/// Whether `step` is worth a line of its own. The snapshot's count arrives once a second, which
+/// over a slow link is hundreds of lines; one per whole MiB crossed still shows it moving.
+/// `shown` is the MiB last printed.
+fn worth_a_line(step: &MoveStep, shown: &mut u64) -> bool {
+    let MoveStep::SnapshotReceiving { bytes } = step else {
+        return true;
+    };
+    let mib = bytes / 1_048_576;
+    if mib <= *shown {
+        return false;
+    }
+    *shown = mib;
+    true
+}
 
 /// Run one `core-move*` command.
 pub fn run(command: &str, target: Target, args: &mut Args) -> anyhow::Result<()> {
-    let mut say = |step: MoveStep| println!("{step:?}");
+    let mut shown = 0;
+    let mut say = |step: MoveStep| {
+        if worth_a_line(&step, &mut shown) {
+            println!("{step:?}");
+        }
+    };
     match command {
         "core-move" => move_core(target, args, &mut say),
         "core-move-start" => {
@@ -147,7 +181,7 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
     let (conn, privilege) = connect(&target, args)?;
     args.done()?;
 
-    let mut plan = Plan::build(&request, say)?;
+    let mut plan = Plan::build(&request, say).map_err(with_zip_hint)?;
     // `--old-stopped` stands in for the stop only where the move cannot stop the old core itself.
     anyhow::ensure!(
         plan.has_old_core() != old_stopped,
@@ -331,3 +365,6 @@ fn confirm_secrets(target: &Target) -> anyhow::Result<()> {
     anyhow::ensure!(answer.trim() == "yes", "not sent");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

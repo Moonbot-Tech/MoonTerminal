@@ -133,8 +133,22 @@ impl<'a> Progress<'a> {
     }
 
     /// Report `step` as a log line and note what the step rows need from it.
+    ///
+    /// The snapshot's count rides the settings row's note, not the log; once the snapshot is in,
+    /// the note goes back to the rest of the step (strategies, trade history), so a count that
+    /// stopped moving is not left standing over work it no longer describes.
     fn saw(&self, step: &MoveStep) {
         match step {
+            MoveStep::SnapshotReceiving { bytes } => self.mark(
+                StepId::Settings,
+                StepState::Running,
+                StepNote::ReceivingSettings { bytes: *bytes },
+            ),
+            MoveStep::SnapshotTaken { .. } => self.mark(
+                StepId::Settings,
+                StepState::Running,
+                StepNote::TakingSettings,
+            ),
             MoveStep::OldStrategies { strategies, .. } => self.strategies.set(Some(*strategies)),
             MoveStep::Composed { report_db, .. } => self.history.set(report_db.is_some()),
             MoveStep::Warning(MoveWarning::StrategiesNotConfirmed, _) => {
@@ -143,7 +157,9 @@ impl<'a> Progress<'a> {
             MoveStep::Removed => self.mark(StepId::Install, StepState::Done, StepNote::Removed),
             _ => {}
         }
-        let _ = self.tx.send(Event::Line(text::step(step)));
+        if let Some(line) = text::step(step) {
+            let _ = self.tx.send(Event::Line(line));
+        }
     }
 }
 
@@ -462,3 +478,6 @@ fn remove(form: &MoveForm, dir: &str, say: &mut dyn FnMut(MoveStep)) -> anyhow::
     let (conn, privilege) = setup::provider_login(&form.target, &form.first, &form.pin)?;
     core_move::remove(&conn, &privilege, dir, say)
 }
+
+#[cfg(test)]
+mod tests;

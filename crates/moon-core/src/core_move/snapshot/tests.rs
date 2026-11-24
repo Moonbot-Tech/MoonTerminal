@@ -92,3 +92,88 @@ fn no_first_part_ends_after_a_minute() {
         "{error}"
     );
 }
+
+/// A fake transfer that grows on disk every poll: the first part is reported at once, then at
+/// most once a second and only when the count moved — never on every 200 ms poll (#1419: the
+/// settings row showed nothing until the download ended).
+#[test]
+fn received_bytes_are_reported_once_a_second_while_they_grow() {
+    let dir = std::env::temp_dir().join(format!("moon-core-move-report-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("transfer.zip");
+    std::fs::write(&file, b"").unwrap();
+
+    let start = Instant::now();
+    let mut progress = Progress::new(start);
+    let mut reports = Vec::new();
+    // Ten seconds of polls; a 1 KiB part lands every poll for the first five seconds only.
+    for poll in 1..=50u64 {
+        if poll <= 25 {
+            let mut bytes = std::fs::read(&file).unwrap();
+            bytes.extend_from_slice(&[0u8; 1024]);
+            std::fs::write(&file, &bytes).unwrap();
+        }
+        let now = start + POLL * poll as u32;
+        let on_disk = std::fs::metadata(&file).unwrap().len();
+        progress.check(on_disk, now).unwrap();
+        if let Some(bytes) = progress.report(now) {
+            reports.push((poll, bytes));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Poll 1 (0.2 s) at once, then every fifth poll (1 s) while it grows; the last growth
+    // (poll 25) a second after the report before it, then nothing once the count stands still.
+    assert_eq!(
+        reports,
+        vec![
+            (1, 1024),
+            (6, 6 * 1024),
+            (11, 11 * 1024),
+            (16, 16 * 1024),
+            (21, 21 * 1024),
+            (26, 25 * 1024),
+        ],
+    );
+    // A growth inside the second is held, not dropped: it goes out once the second is up.
+    let mut tail = Progress::new(start);
+    tail.check(1024, start).unwrap();
+    assert_eq!(tail.report(start), Some(1024));
+    tail.check(2048, start + Duration::from_millis(400))
+        .unwrap();
+    assert_eq!(tail.report(start + Duration::from_millis(400)), None);
+    assert_eq!(tail.report(start + Duration::from_secs(1)), Some(2048));
+}
+
+/// Nothing is reported before the first part: a core that never answers shows no count of zero.
+#[test]
+fn nothing_is_reported_before_the_first_part() {
+    let start = Instant::now();
+    let mut progress = Progress::new(start);
+    for second in 1..59 {
+        let now = start + Duration::from_secs(second);
+        progress.check(0, now).unwrap();
+        assert_eq!(progress.report(now), None);
+    }
+}
+
+/// A transfer failure says the reason alone and stays recognisable through the context a caller
+/// adds, so the command line can add the ZIP pointer while the window, which cannot take a ZIP,
+/// does not tell its user to pass one (#1419).
+#[test]
+fn a_transfer_failure_is_marked_and_carries_no_zip_pointer() {
+    use anyhow::Context as _;
+    let start = Instant::now();
+    let error = Progress::new(start)
+        .check(0, start + FIRST_PART)
+        .context("take the settings snapshot from 203.0.113.5:4510")
+        .unwrap_err();
+    assert!(is_transfer_failure(&error), "{error:#}");
+    let text = format!("{error:#}");
+    assert!(!text.contains("ZIP"), "{text}");
+    assert!(!text.contains("Get settings"), "{text}");
+
+    let other = anyhow::anyhow!("connect: timed out").context("take the settings snapshot");
+    assert!(!is_transfer_failure(&other));
+}

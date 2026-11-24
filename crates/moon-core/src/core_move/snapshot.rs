@@ -6,6 +6,10 @@
 //! the request. The snapshot carries the bot's exchange API keys and its MoonProto key, so it is
 //! read into memory and the file the library writes is removed on every path: a failed or
 //! abandoned transfer would otherwise leave a partial copy behind.
+//!
+//! A transfer that fails is marked as one ([`is_transfer_failure`]): a snapshot saved by hand in
+//! MoonBot works around it on any build, but only a caller that can take such a ZIP may say so —
+//! the terminal's window cannot, the command line can.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -24,8 +28,9 @@ const FIRST_PART: Duration = Duration::from_secs(60);
 /// (it ends a download after five minutes without progress). A fixed clock over the whole
 /// transfer would cut a slow link that is still receiving parts.
 const NO_PROGRESS: Duration = Duration::from_secs(300);
-/// The pointer every failure ends with: the snapshot MoonBot saves by hand works on any build.
-const USE_ZIP: &str = "save the snapshot in Moonbot (VPS setup -> Get settings) and pass the ZIP";
+/// The least time between two reports of the bytes received: often enough for a count that
+/// moves, rare enough that a fast link does not wake whoever draws it on every poll.
+const REPORT_EVERY: Duration = Duration::from_secs(1);
 /// Name prefix of the library's download target in the temp folder; the process id follows.
 const TEMP_PREFIX: &str = "moon-core-move-settings-";
 /// Age past which a target is a leftover of a killed run: a live transfer gets a new part at
@@ -44,7 +49,20 @@ pub struct CoreSnapshot {
 
 /// Download the settings snapshot of the core at `cfg`. `timeout` bounds the connect; the
 /// transfer runs for as long as parts keep arriving (see [`Progress`]).
-pub fn download(cfg: ClientConfig, timeout: Duration) -> anyhow::Result<CoreSnapshot> {
+///
+/// `received` hears the bytes that have arrived so far, each time they grew but at most once per
+/// [`REPORT_EVERY`]: the library tells nothing until the end, and a large snapshot over a slow
+/// link takes minutes the user would otherwise watch without a sign of life. The total is not
+/// known before the end — the library keeps it to itself.
+///
+/// Errors:
+///     A failure of the transfer itself is marked for [`is_transfer_failure`]; a connect that
+///     fails is not — the core is not reached, and a hand-saved ZIP would not reach it either.
+pub fn download(
+    cfg: ClientConfig,
+    timeout: Duration,
+    received: &mut dyn FnMut(u64),
+) -> anyhow::Result<CoreSnapshot> {
     let temp = std::env::temp_dir();
     remove_stale(&temp);
     let client = super::strategies::connect(cfg, timeout)?;
@@ -53,7 +71,7 @@ pub fn download(cfg: ClientConfig, timeout: Duration) -> anyhow::Result<CoreSnap
     // the file itself and refuses one that exists.
     let file = TempFile(temp.join(format!("{TEMP_PREFIX}{}.zip", std::process::id())));
     let _ = std::fs::remove_file(&file.0);
-    let result = fetch(&client, &file.0);
+    let result = fetch(&client, &file.0, received);
     // The library holds the file open until its runtime thread ends; a removal before that only
     // marks it, so `file` is dropped after the thread has exited and the copy is gone on return.
     let _ = client.disconnect();
@@ -72,6 +90,33 @@ pub fn exchange_of(cfg: ClientConfig, timeout: Duration) -> anyhow::Result<Optio
     let exchange = reported_exchange(&client);
     let _ = client.disconnect();
     Ok(exchange)
+}
+
+/// Whether `error` is a failed transfer of the snapshot — one a snapshot saved by hand in MoonBot
+/// ("VPS setup -> Get settings") works around on any build. Seen through any context a caller
+/// added; a caller that can take such a ZIP says so, one that cannot leaves it unsaid.
+pub fn is_transfer_failure(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<TransferFailed>().is_some()
+}
+
+/// A failed transfer, as [`is_transfer_failure`] tells it apart. The text is the reason alone:
+/// what the user can do about it is the caller's to say. Public so a caller's own tests can
+/// stand one up without a core.
+#[derive(Debug)]
+pub struct TransferFailed(pub String);
+
+impl std::fmt::Display for TransferFailed {
+    /// The reason, as it was given.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TransferFailed {}
+
+/// A failed transfer for `reason`, marked as one.
+fn failed(reason: String) -> anyhow::Error {
+    anyhow::Error::new(TransferFailed(reason))
 }
 
 /// The exchange name a connected core reports (`ServerInfo::exchange_name`), trimmed; `None`
@@ -106,12 +151,16 @@ fn remove_stale(temp: &Path) {
 /// Ask for the snapshot into `path` and wait for the library's verdict on it.
 ///
 /// The library reports nothing until the transfer ends, so progress is read off the file it
-/// writes; [`Progress`] decides when to give up.
-fn fetch(client: &MoonClient, path: &Path) -> anyhow::Result<Zeroizing<Vec<u8>>> {
+/// writes; [`Progress`] decides when to give up and when `received` hears of it.
+fn fetch(
+    client: &MoonClient,
+    path: &Path,
+    received: &mut dyn FnMut(u64),
+) -> anyhow::Result<Zeroizing<Vec<u8>>> {
     client
         .settings()
         .download_settings_snapshot(path.to_path_buf())
-        .map_err(|e| anyhow::anyhow!("ask for the settings snapshot: {e}; or {USE_ZIP}"))?;
+        .map_err(|e| failed(format!("ask for the settings snapshot: {e}")))?;
     let mut progress = Progress::new(Instant::now());
     let mut events = Vec::new();
     loop {
@@ -128,27 +177,30 @@ fn fetch(client: &MoonClient, path: &Path) -> anyhow::Result<Zeroizing<Vec<u8>>>
             if done != path {
                 continue;
             }
-            let size = result.map_err(|e| {
-                anyhow::anyhow!("the core's settings snapshot failed: {e}; or {USE_ZIP}")
-            })?;
+            let size =
+                result.map_err(|e| failed(format!("the core's settings snapshot failed: {e}")))?;
             let bytes = Zeroizing::new(
-                std::fs::read(path)
-                    .map_err(|e| anyhow::anyhow!("read the snapshot: {e}; or {USE_ZIP}"))?,
+                std::fs::read(path).map_err(|e| failed(format!("read the snapshot: {e}")))?,
             );
-            anyhow::ensure!(
-                bytes.len() as u64 == size,
-                "the snapshot file holds {} bytes, the core sent {size}; or {USE_ZIP}",
-                bytes.len()
-            );
+            if bytes.len() as u64 != size {
+                return Err(failed(format!(
+                    "the snapshot file holds {} bytes, the core sent {size}",
+                    bytes.len()
+                )));
+            }
             return Ok(bytes);
         }
-        let received = std::fs::metadata(path).map_or(0, |m| m.len());
-        progress.check(received, Instant::now())?;
+        let now = Instant::now();
+        progress.check(std::fs::metadata(path).map_or(0, |m| m.len()), now)?;
+        if let Some(bytes) = progress.report(now) {
+            received(bytes);
+        }
         std::thread::sleep(POLL);
     }
 }
 
-/// When a transfer still running is given up, judged by the bytes on disk.
+/// When a transfer still running is given up, and when its bytes are reported, judged by the
+/// bytes on disk.
 struct Progress {
     /// When the snapshot was asked for.
     start: Instant,
@@ -156,6 +208,8 @@ struct Progress {
     received: u64,
     /// When `received` last grew (`start` until the first part).
     moved: Instant,
+    /// The bytes last reported and when; `None` before the first report.
+    reported: Option<(u64, Instant)>,
 }
 
 impl Progress {
@@ -164,6 +218,7 @@ impl Progress {
             start: now,
             received: 0,
             moved: now,
+            reported: None,
         }
     }
 
@@ -177,20 +232,35 @@ impl Progress {
             self.received = received;
             self.moved = now;
         }
-        anyhow::ensure!(
-            self.received > 0 || now.duration_since(self.start) < FIRST_PART,
-            "the core sent no part of its settings snapshot within {}s: most likely its build \
-             does not serve one; {USE_ZIP}",
-            FIRST_PART.as_secs()
-        );
-        anyhow::ensure!(
-            now.duration_since(self.moved) < NO_PROGRESS,
-            "the core sent no new part of its settings snapshot for {}s ({} bytes received); \
-             {USE_ZIP}",
-            NO_PROGRESS.as_secs(),
-            self.received
-        );
+        if self.received == 0 && now.duration_since(self.start) >= FIRST_PART {
+            return Err(failed(format!(
+                "the core sent no part of its settings snapshot within {}s: most likely its \
+                 build does not serve one",
+                FIRST_PART.as_secs()
+            )));
+        }
+        if now.duration_since(self.moved) >= NO_PROGRESS {
+            return Err(failed(format!(
+                "the core sent no new part of its settings snapshot for {}s ({} bytes received)",
+                NO_PROGRESS.as_secs(),
+                self.received
+            )));
+        }
         Ok(())
+    }
+
+    /// The bytes received, when they are to be reported at `now`: they grew since the last
+    /// report, and that report is at least [`REPORT_EVERY`] old. The first part is reported at
+    /// once, so the count appears as soon as there is one.
+    fn report(&mut self, now: Instant) -> Option<u64> {
+        let due = match self.reported {
+            None => self.received > 0,
+            Some((bytes, at)) => self.received > bytes && now.duration_since(at) >= REPORT_EVERY,
+        };
+        due.then(|| {
+            self.reported = Some((self.received, now));
+            self.received
+        })
     }
 }
 

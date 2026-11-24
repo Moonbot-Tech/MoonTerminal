@@ -9,7 +9,7 @@ use gpui::*;
 use moon_ui::{MoonPalette, MoonSpinner, MoonSpinnerSize, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
 
-use crate::backend::core_move::{StepId, StepNote, StepRow, StepState};
+use crate::backend::core_move::{StepId, StepNote, StepRow, StepState, megabytes};
 use crate::design;
 
 /// The state mark's box, unscaled.
@@ -33,6 +33,11 @@ pub(super) fn detail(note: &StepNote) -> String {
     let join = |parts: Vec<String>| parts.join(", ");
     match note {
         StepNote::TakingSettings => t!("connect_wizard.move.note.taking").to_string(),
+        StepNote::ReceivingSettings { bytes } => t!(
+            "connect_wizard.move.note.receiving",
+            size = megabytes(*bytes)
+        )
+        .to_string(),
         StepNote::SettingsTaken {
             strategies,
             history,

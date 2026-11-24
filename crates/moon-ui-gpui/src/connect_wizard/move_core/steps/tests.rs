@@ -115,6 +115,10 @@ fn titles_and_details_are_the_approved_words() {
         "Подходит для Moonbot, порт 5160 свободен"
     );
     assert_eq!(detail(&StepNote::NotNeeded), "Не понадобилось");
+    assert_eq!(
+        detail(&StepNote::ReceivingSettings { bytes: 1_572_864 }),
+        "Получаем архив настроек: 1.5 МБ…"
+    );
     assert_eq!(clock(at(134)), "2:14");
 }
 
