@@ -1,7 +1,30 @@
+use moon_core::core_move::archive;
 use moon_core::core_move::snapshot::TransferFailed;
 use moon_remote::core_move::MoveStep;
 
-use super::{ZIP_HINT, with_zip_hint, worth_a_line};
+use super::{EXCHANGE_HINT, ZIP_HINT, with_exchange_hint, with_zip_hint, worth_a_line};
+
+/// An exchange the snapshot cannot settle keeps the pointer to `--exchange` on the command line —
+/// the one path that takes a name — through the context the plan adds, and also after the ZIP
+/// hint passed it by; any other failure gets no such pointer (#1419).
+#[test]
+fn only_an_unsettled_exchange_gets_the_exchange_pointer() {
+    let unsettled = archive::unsettled("the settings snapshot holds strategies of two".into())
+        .context("the old core reports no exchange name");
+    let text = format!("{:#}", with_exchange_hint(with_zip_hint(unsettled)));
+    assert_eq!(
+        text,
+        format!(
+            "the old core reports no exchange name: the settings snapshot holds strategies of \
+             two: {EXCHANGE_HINT}"
+        )
+    );
+    assert!(EXCHANGE_HINT.contains("--exchange"));
+
+    let failed = anyhow::Error::new(TransferFailed("the core sent no part".into()));
+    let text = format!("{:#}", with_exchange_hint(with_zip_hint(failed)));
+    assert!(!text.contains("--exchange"), "{text}");
+}
 
 /// A failed snapshot transfer keeps the pointer to a hand-saved ZIP on the command line — the one
 /// path that takes `--zip` — through the context the plan adds; any other failure is left as it

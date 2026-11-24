@@ -190,17 +190,47 @@ fn stems(names: &[String]) -> Vec<String> {
 
 /// The exchange name from the snapshot's strategy files, for a caller that has no better source;
 /// an error when there is none or more than one, since the database name must match the core's
-/// exchange exactly.
+/// exchange exactly. The error is marked for [`is_exchange_unsettled`] and gives the reason alone.
 fn exchange_from(names: &[String]) -> anyhow::Result<String> {
     let found = stems(names);
     match found.as_slice() {
         [one] => Ok(one.clone()),
-        [] => anyhow::bail!("no strategy file in the ZIP names the exchange: pass it explicitly"),
-        many => anyhow::bail!(
-            "the ZIP holds strategies of several exchanges ({}): pass the core's exchange explicitly",
+        [] => Err(unsettled(
+            "no strategy file in the settings snapshot names the core's exchange".to_owned(),
+        )),
+        many => Err(unsettled(format!(
+            "the settings snapshot holds strategies of several exchanges ({}), so it cannot tell \
+             which one this core runs on",
             many.join(", ")
-        ),
+        ))),
     }
+}
+
+/// Whether `error` says the core's exchange could not be settled — one a name given by hand
+/// would settle. Seen through any context a caller added; a caller that can take such a name
+/// (the command line's `--exchange`) says so, one that cannot (the move window) leaves it unsaid.
+pub fn is_exchange_unsettled(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ExchangeUnsettled>().is_some()
+}
+
+/// An exchange that could not be settled, as [`is_exchange_unsettled`] tells it apart. The text
+/// is the reason alone: what the user can do about it is the caller's to say. Public so a caller
+/// that settles the exchange itself (against the core's own report) marks its refusal the same.
+#[derive(Debug)]
+pub struct ExchangeUnsettled(pub String);
+
+impl std::fmt::Display for ExchangeUnsettled {
+    /// The reason, as it was given.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ExchangeUnsettled {}
+
+/// An unsettled exchange for `reason`, marked as one.
+pub fn unsettled(reason: String) -> anyhow::Error {
+    anyhow::Error::new(ExchangeUnsettled(reason))
 }
 
 /// `ini` with `KeepOrdersAfterCrash=1` in `[Special]`, and whether that line was added here.

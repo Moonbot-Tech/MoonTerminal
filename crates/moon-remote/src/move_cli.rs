@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use moon_core::core_move::old_core::StopAnswer;
-use moon_core::core_move::snapshot;
+use moon_core::core_move::{archive, snapshot};
 use moon_remote::core_move::plan::{KeySource, Plan, Request};
 use moon_remote::core_move::{self, MoveStep};
 use moon_remote::hosts;
@@ -55,10 +55,25 @@ const STOP_RETRY: Duration = Duration::from_secs(60);
 const ZIP_HINT: &str = "save the snapshot in Moonbot (VPS setup -> Get settings) and pass it with \
                         --zip";
 
+/// What an exchange the snapshot cannot settle falls back on: the name given by hand. Said here,
+/// not by `archive`, because only this command takes `--exchange` — the move window has no field
+/// for it.
+const EXCHANGE_HINT: &str = "pass the core's exchange with --exchange <name>";
+
 /// `error` with [`ZIP_HINT`] after it when it is a failed snapshot transfer; any other error as is.
 fn with_zip_hint(error: anyhow::Error) -> anyhow::Error {
     if snapshot::is_transfer_failure(&error) {
         anyhow::anyhow!("{error:#}; or {ZIP_HINT}")
+    } else {
+        error
+    }
+}
+
+/// `error` with [`EXCHANGE_HINT`] after it when it is an exchange the move could not settle; any
+/// other error as is.
+fn with_exchange_hint(error: anyhow::Error) -> anyhow::Error {
+    if archive::is_exchange_unsettled(&error) {
+        anyhow::anyhow!("{error:#}: {EXCHANGE_HINT}")
     } else {
         error
     }
@@ -181,7 +196,9 @@ fn move_core(target: Target, args: &mut Args, say: &mut dyn FnMut(MoveStep)) -> 
     let (conn, privilege) = connect(&target, args)?;
     args.done()?;
 
-    let mut plan = Plan::build(&request, say).map_err(with_zip_hint)?;
+    let mut plan = Plan::build(&request, say)
+        .map_err(with_zip_hint)
+        .map_err(with_exchange_hint)?;
     // `--old-stopped` stands in for the stop only where the move cannot stop the old core itself.
     anyhow::ensure!(
         plan.has_old_core() != old_stopped,
