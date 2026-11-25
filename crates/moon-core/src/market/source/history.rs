@@ -523,9 +523,10 @@ impl MarketDataSource {
             // provider is later RE-ELECTED to a core on a different exchange key — would keep
             // reading/writing the STALE cache address forever, since `set_provider_exchanges` only
             // overwrites `provider_exchange` and invalidates nothing. Keyed on the ADDRESS
-            // (`exchange_key`) rather than on the derived `deep_quote` bool: a bool cannot see a
-            // spot provider's identity resolving (its `deep_quote` stays `false` throughout) or a
-            // same-`deep_quote` provider election, both of which change the real cache address.
+            // (`exchange_key`) rather than on the derived `deep_quote` bool: a bool cannot see an
+            // unidentified venue's provider resolving (its `deep_quote` stays `false` throughout)
+            // or a same-`deep_quote` provider election, both of which change the real cache
+            // address.
             // Comparing against the cursor's stored key turns either arrival into an explicit
             // transition: force a full cache re-read now, and fold the transition into
             // `series_reset` below so the composed series is rebuilt too. Note `None != Some(_)` is
@@ -811,12 +812,7 @@ impl MarketDataSource {
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
                         );
-                        snap_part.extend(
-                            cursor
-                                .server_candle_rows
-                                .iter()
-                                .map(|r| snap5_row_candle(r, deep_quote)),
-                        );
+                        snap_part.extend(cursor.server_candle_rows.iter().map(snap5_row_candle));
                         crate::market::candles::orient_range_rows(&mut snap_part);
                     }
                 } else if cp.tf_ms < SNAP5_TF_MS {
@@ -834,12 +830,9 @@ impl MarketDataSource {
                             r5.capacity(),
                             &mut cursor.server_candle_rows,
                         );
-                        cursor.ring_rows_5m.extend(
-                            cursor
-                                .server_candle_rows
-                                .iter()
-                                .map(|r| snap5_row_candle(r, deep_quote)),
-                        );
+                        cursor
+                            .ring_rows_5m
+                            .extend(cursor.server_candle_rows.iter().map(snap5_row_candle));
                         crate::market::candles::orient_range_rows(&mut cursor.ring_rows_5m);
                     }
                 }

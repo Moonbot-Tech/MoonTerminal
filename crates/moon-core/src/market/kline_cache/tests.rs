@@ -190,9 +190,10 @@ fn packed_rows(rows: &[ChartCandle], day_start: i64, include_quote: bool) -> Vec
 }
 
 /// `kline_cache.rs:legacy_volume_is_quote` widening its coarse-kind gate to kinds 1 or 5
-/// reinterprets ambiguous cached base rows as quote money, silently under-reading futures history.
+/// reinterprets ambiguous cached base rows as quote money, silently under-reading futures history;
+/// applying it to an unknown venue reads the base deep rows measured on code 221 as turnover.
 #[test]
-fn legacy_quote_reinterpretation_is_limited_to_proven_coarse_binance_futures_rows() {
+fn legacy_quote_reinterpretation_is_limited_to_coarse_rows_of_quote_venues() {
     let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
     init_schema(&conn).expect("v2 schema");
     let day = 20_002 * DAY_MS;
@@ -212,7 +213,8 @@ fn legacy_quote_reinterpretation_is_limited_to_proven_coarse_binance_futures_row
         ("4:00000000", 1440, 12_000.0),
         ("4:00000000", 1, 1_200_000.0),
         ("4:00000000", 5, 1_200_000.0),
-        ("3:00000000", 1440, 1_200_000.0),
+        ("3:00000000", 1440, 12_000.0),
+        ("221:00000000", 1440, 1_200_000.0),
         ("200:00000000", 1440, 1_200_000.0),
         ("x", 1440, 1_200_000.0),
     ] {

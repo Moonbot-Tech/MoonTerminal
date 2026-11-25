@@ -120,27 +120,21 @@ impl MarketDataSource {
             });
     }
 
-    /// Elected providers with their kline-cache exchange key, client slot, and whether the
-    /// venue's wire `volume` is quote money (`crate::venue::deep_volume_is_quote`, which the
-    /// chart's snapshot layer reads for the same ring rows).
+    /// Elected providers with their kline-cache exchange key and client slot.
     ///
     /// The one traversal both the recorder and the ring-depth channel walk, so the channel reports
     /// exactly the providers whose rings the recorder reads. Called under the caller's read lock.
     fn recorder_providers(
         inner: &MarketDataSourceInner,
-    ) -> Vec<(CoreId, String, SharedMoonClient, bool)> {
+    ) -> Vec<(CoreId, String, SharedMoonClient)> {
         inner
             .provider_exchange
             .iter()
             .filter_map(|(p, e)| {
-                inner.clients.get(p).map(|c| {
-                    (
-                        *p,
-                        format!("{}:{:08x}", e.code, e.dex),
-                        c.clone(),
-                        crate::venue::deep_volume_is_quote(e.code),
-                    )
-                })
+                inner
+                    .clients
+                    .get(p)
+                    .map(|c| (*p, format!("{}:{:08x}", e.code, e.dex), c.clone()))
             })
             .collect()
     }
@@ -155,7 +149,7 @@ impl MarketDataSource {
             let inner = self.inner.read().expect("market source poisoned");
             Self::recorder_providers(&inner)
                 .into_iter()
-                .map(|(p, ex, slot, _)| {
+                .map(|(p, ex, slot)| {
                     let venue = inner
                         .core_venue
                         .get(&p)
@@ -243,7 +237,7 @@ impl MarketDataSource {
         // The ring's rows go through their own batch, under their own kind, each item beside the
         // mark its market takes once the cache confirms it stored.
         let mut ring_batch = RingBatch::default();
-        for (provider, ex, slot, volume_is_quote) in providers {
+        for (provider, ex, slot) in providers {
             let Some((client, epoch)) = slot.get_with_epoch() else {
                 continue;
             };
@@ -258,13 +252,8 @@ impl MarketDataSource {
                 };
                 if let Some(ring) = readers.candles_5m.as_ref() {
                     let key = (provider, name.to_string());
-                    let read = ring_snapshot_rows(
-                        ring,
-                        ring_marks.get(&key).copied(),
-                        epoch,
-                        volume_is_quote,
-                        cur_bucket,
-                    );
+                    let read =
+                        ring_snapshot_rows(ring, ring_marks.get(&key).copied(), epoch, cur_bucket);
                     match read {
                         RingRead::Empty => {}
                         // Nothing to store: the mark moves at once.
@@ -961,7 +950,6 @@ fn ring_snapshot_rows(
     ring: &moonproto::state::SeqRingReader<moonproto::state::Candle5mRow>,
     prev: Option<ring::RingMark>,
     epoch: u64,
-    volume_is_quote: bool,
     cur_bucket_ms: i64,
 ) -> RingRead {
     let cursor = ring.cursor_from_now();
@@ -997,7 +985,7 @@ fn ring_snapshot_rows(
                 close: c.close(),
                 volume: c.volume(),
             };
-            rows.extend(ring::ring_candle(wire, volume_is_quote, cur_bucket_ms));
+            rows.extend(ring::ring_candle(wire, cur_bucket_ms));
         });
         RingRead::Snapshot(rows, mark)
     })

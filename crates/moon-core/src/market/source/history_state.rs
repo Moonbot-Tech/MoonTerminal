@@ -175,9 +175,10 @@ pub struct ChartHistoryCursor {
     /// used: neither `cache_stale` nor `series_reset` otherwise tracks the exchange key at all, so
     /// a bool derived from it cannot see every transition the key itself can. Two cases that a
     /// bool misses and the key catches:
-    /// - A **SPOT** provider's `deep_quote` is `false` before its identity resolves and `false`
-    ///   after — the bool never changes, so a bool-keyed version never re-reads the now-addressable
-    ///   cache and that core's history stays empty for the whole session.
+    /// - A provider on a venue this build does not identify has `deep_quote` `false` before its
+    ///   identity resolves and `false` after — the bool never changes, so a bool-keyed version
+    ///   never re-reads the now-addressable cache and that core's history stays empty for the
+    ///   whole session.
     /// - A provider **ELECTION** that changes which core answers for a market changes the exchange
     ///   key (and therefore the cache address) without necessarily changing `deep_quote` — e.g. two
     ///   futures cores on the same brand. `cache_stale` never tracked the key either, so this was a

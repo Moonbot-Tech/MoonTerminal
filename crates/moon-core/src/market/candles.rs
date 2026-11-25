@@ -334,9 +334,10 @@ pub struct ChartCandle {
     pub close: f32,
     /// Trade volume in the bucket, denominated in the base currency.
     ///
-    /// May be an ESTIMATE rather than a wire figure: a Binance Futures deep-history row carries
-    /// its volume in quote money, and [`split_wire_volume`] derives this field from it the same
-    /// way [`estimate_quote_volume`] derives `quote_volume` from a base figure on other sources.
+    /// May be an ESTIMATE rather than a wire figure: the core's deep-history and 5-minute ring rows
+    /// carry their volume in quote money (`crate::venue::deep_volume_is_quote`), and
+    /// [`split_wire_volume`] derives this field from it the same way [`estimate_quote_volume`]
+    /// derives `quote_volume` from a base figure on other sources.
     pub volume: f32,
     /// Turnover in the bucket, denominated in the quote currency.
     ///
@@ -344,10 +345,9 @@ pub struct ChartCandle {
     /// CURRENT price and is wrong for every historical bar. This is a source-ingestion contract:
     /// downstream readers carry or sum this field but never derive it from `volume` and a current
     /// price. `0.0` means "nothing traded, or this source does not know". Where a source reports
-    /// base volume, this is an ESTIMATE produced by [`estimate_quote_volume`]; where a Binance
-    /// Futures deep-history row already carries turnover on the wire, this is that figure passed
-    /// through unchanged — see [`split_wire_volume`], which decides per-row which of the two
-    /// happened.
+    /// base volume, this is an ESTIMATE produced by [`estimate_quote_volume`]; where a core row
+    /// already carries turnover on the wire, this is that figure passed through unchanged — see
+    /// [`split_wire_volume`], which decides per-row which of the two happened.
     pub quote_volume: f32,
 }
 
