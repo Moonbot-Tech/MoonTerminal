@@ -673,8 +673,8 @@ pub(super) fn screener_row(
 /// entries, followed by the Screener's own entries that copy the listed coins
 /// (`super::coin_copy`). Its "N cores" targets are the cores the table can currently show — the
 /// Singleton display preset narrowed by the source selector, the filter the rows themselves went
-/// through — as the Assets and Orders menus use their own panel filter. The window belongs to no group, so the
-/// actions keep the unscoped authority the row's left click already has.
+/// through — as the Assets and Orders menus use their own panel filter. The window belongs to no
+/// group, so the actions keep the unscoped authority the row's left click already has.
 ///
 /// Args:
 ///     core: Core that owns the clicked row; its chart and its blacklists are the menu's targets.
