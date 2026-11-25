@@ -1,7 +1,42 @@
 //! [ReportPanel] filters, controlled row selection, row actions, column toggles, and export.
 
+use super::keys::ReportKey;
+use super::selection::ReportRowKey;
 use super::state::{ReportPreferenceWrite, schedule_report_preference};
 use super::*;
+use crate::controls::coin_menu::{
+    CoinMenuCtx, ReportRowMenu, copy_ticker,
+    multi::{
+        MultiFacts, MultiReportActions, ReportSelectionAction, capped_trade_rows, copy_tickers,
+        distinct_tickers, multi_count, open_multi_coin_menu,
+    },
+    open_chart_target, with_hint,
+};
+use crate::trade_window::open_record::RecordTarget;
+
+/// Route a right-click either to the clicked row or to the current multi-selection.
+#[derive(Debug, Eq, PartialEq)]
+enum RowMenuKind {
+    Single,
+    Multi,
+}
+
+/// Preserve a multi-selection only when the click lands on one of its members.
+fn row_menu_kind(selection: &ReportSelection, key: ReportRowKey) -> RowMenuKind {
+    if selection.len() > 1 && selection.contains(Some(key)) {
+        RowMenuKind::Multi
+    } else {
+        RowMenuKind::Single
+    }
+}
+
+/// Select the right-clicked row, or clear the selection when a legacy row has no stable key.
+fn select_context_row(selection: &mut ReportSelection, key: Option<ReportRowKey>) {
+    match key {
+        Some(key) => selection.select_only(Some(key)),
+        None => selection.clear(),
+    }
+}
 
 /// Workspace authority captured while an export destination picker is open.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -615,6 +650,28 @@ impl ReportPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.apply_coin_filter(text, None, window, cx);
+    }
+
+    /// Set an exact ticker set while keeping the current Report's other filters.
+    fn set_exact_coin_filter(
+        &mut self,
+        coins: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_coin_filter(coins.join(", "), Some(coins), window, cx);
+    }
+
+    /// Apply a single field substitution and update the common database filter before requerying.
+    fn apply_coin_filter(
+        &mut self,
+        text: String,
+        exact_coins: Option<Vec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.exact_coins = exact_coins;
         self.coin_query = text.clone();
         self.coin_popup_open = false;
         self.coin.update(cx, |input, input_cx| {
@@ -636,14 +693,19 @@ impl ReportPanel {
     ///
     /// Returns:
     ///     The menu entry, placed by the shared menu among its coin actions.
-    fn coin_filter_item(&self, coin: &str, cx: &mut Context<Self>) -> Option<MoonMenuItem> {
+    fn coin_filter_item(
+        &self,
+        coin: &str,
+        hint: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Option<MoonMenuItem> {
         let coin = coin.trim();
         if coin.is_empty() {
             return None;
         }
         let text = super::exact_coin_field_text(coin);
         let view = cx.entity();
-        Some(
+        Some(with_hint(
             MoonMenuItem::with_key(
                 "rep-row-coin-filter",
                 t!("coin_menu.coin_filter", coin = coin).to_string(),
@@ -653,104 +715,91 @@ impl ReportPanel {
                 let text = text.clone();
                 view.update(app, |this, cx| this.set_coin_filter_text(text, window, cx));
             }),
-        )
+            hint,
+        ))
     }
 
-    /// Open the row's right-click menu at the cursor: the shared token menu, plus this trade's log.
-    ///
-    /// ONE menu for the whole row — every cell opens it, not just the coin. It is the same menu the
-    /// Orders table, Assets and the chart's order lines use, so a token action reads the same
-    /// everywhere; what only the Report can add rides at the end, behind its own separator.
-    ///
-    /// That trailing entry is the trade's core log. A row whose core recorded no task number cannot
-    /// produce one — a log line carries no other identity — so it is shown DISABLED and says why,
-    /// instead of opening a window that could only ever be empty.
-    ///
-    /// Args:
-    ///     row: Index into the current snapshot's rows.
-    ///     window: Window hosting the menu and the resulting dialog.
-    ///     cx: Panel context used to read the row, the core, and the panel's core scope.
-    ///
-    /// Returns:
-    ///     Nothing; a right-click landing past the last row opens nothing.
+    /// Choose the row or selection menu before resolving any action targets.
     pub(super) fn open_row_menu(
         &mut self,
         row: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(key) = self
+            .data
+            .data()
+            .and_then(|data| data.row_keys.get(row))
+            .copied()
+        else {
+            return;
+        };
+        if key.is_some_and(|key| row_menu_kind(&self.selection, key) == RowMenuKind::Multi) {
+            self.open_selected_rows_menu(window, cx);
+        } else {
+            select_context_row(&mut self.selection, key);
+            cx.notify();
+            self.open_single_row_menu(row, window, cx);
+        }
+    }
+
+    /// Build single-row actions against the current snapshot and capture stable click targets.
+    fn open_single_row_menu(&self, row: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let keys = self.report_keys(cx);
         let backend = self.backend.clone();
-        let trade_log = vec![match self.trade_log_request(row, cx) {
-            Ok(request) => {
-                MoonMenuItem::with_key("rep-row-trade-log", t!("report.trade_log.open").to_string())
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        trade_log::open_trade_log(request.clone(), backend.clone(), window, app);
-                    })
-            }
-            Err(reason) => {
-                MoonMenuItem::with_key("rep-row-trade-log", t!(reason).to_string()).disabled(true)
-            }
-        }];
+        let trade_log = self.trade_log_request(row, cx).map(|request| {
+            let item = MoonMenuItem::with_key(
+                "rep-row-trade-log",
+                t!("report.trade_log.open").to_string(),
+            )
+            .on_click(move |_, window, app| {
+                window.close_context_menu(app);
+                trade_log::open_trade_log(request.clone(), backend.clone(), window, app);
+            });
+            with_hint(item, keys.hint(ReportKey::TradeLog))
+        });
         // The DISCOVERABLE path to the trade window: a double-click is invisible, and it is also
         // the only place a "why not" can be shown at all, since a double-click has nowhere to put
         // one.
         let detail_view = cx.entity();
-        let mut trade_log = trade_log;
         // Resolved HERE, not in the callback. A Report refresh republishes the rows while the menu
         // is open, so a retained row INDEX would let the action land on a different trade; the
         // resolved target is carried instead, exactly as the trade-log entry above carries its
         // request.
-        trade_log.push(match self.trade_detail_target(row, cx) {
+        let trade_window = match self.trade_detail_target(row, cx) {
             Some(target) => {
-                MoonMenuItem::with_key("rep-row-trade-window", super::trade_detail::menu_label())
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        let target = target.clone();
-                        detail_view
-                            .update(app, |this, cx| this.open_trade_detail_target(target, cx));
-                    })
+                let item = MoonMenuItem::with_key(
+                    "rep-row-trade-window",
+                    super::trade_detail::menu_label(),
+                )
+                .on_click(move |_, window, app| {
+                    window.close_context_menu(app);
+                    let target = target.clone();
+                    detail_view.update(app, |this, cx| this.open_trade_detail_target(target, cx));
+                });
+                with_hint(item, keys.hint(ReportKey::OpenWindow))
             }
             None => MoonMenuItem::with_key(
                 "rep-row-trade-window",
                 t!("trade_window.blocked.unresolved").to_string(),
             )
             .disabled(true),
-        });
-        // With no explicit filter the coin actions may act on every core the selector currently
-        // knows, exactly as the coin cell's menu did.
-        let selected_cores = self.effective_core_ids(self.backend.read(cx));
-        let workspace_group = (!self.standalone).then(|| self.group.clone());
-        let Some(data) = self.data.data().cloned() else {
-            return;
         };
-        let Some(values) = data.rows.get(row) else {
-            return;
-        };
-        let filter_here = self.coin_filter_item(&columns::row_coin_text(values, &self.cols), cx);
-        let mut ctx = columns::row_coin_menu_ctx(
-            values,
-            &self.cols,
-            columns::ReportCoinMenuScope {
-                target: columns::ReportCoinTarget {
-                    core_uid: data.core_uids.get(row).copied().unwrap_or(0),
-                    published_filter: data.filter.clone(),
-                    focus_record_id: data.row_keys.get(row).and_then(|key| match key {
-                        Some(selection::ReportRowKey::Replicated { rec_id, .. })
-                        | Some(selection::ReportRowKey::Legacy { db_id: rec_id, .. }) => {
-                            Some(*rec_id)
-                        }
-                        None => None,
-                    }),
-                },
-                selected_cores,
-                workspace_group,
-            },
-            trade_log,
-            &self.backend,
+        let coin = self.row_ticker(row);
+        let filter = self.coin_filter_item(&coin, keys.hint(ReportKey::FilterCoin), cx);
+        let Some(ctx) = self.row_menu_context(
+            row,
+            Some(ReportRowMenu {
+                trade_window,
+                trade_log,
+                filter,
+                chart_hint: keys.hint(ReportKey::ShowOnChart),
+                copy_hint: keys.hint(ReportKey::CopyTicker),
+            }),
             cx,
-        );
-        ctx.filter_here = filter_here;
+        ) else {
+            return;
+        };
         crate::controls::open_coin_menu(
             ctx,
             self.backend.clone(),
@@ -758,6 +807,198 @@ impl ReportPanel {
             window,
             cx,
         );
+    }
+
+    /// Resolve a row against the filter that actually published it and the current workspace.
+    fn row_menu_context(
+        &self,
+        row: usize,
+        report: Option<ReportRowMenu>,
+        cx: &App,
+    ) -> Option<CoinMenuCtx> {
+        let data = self.data.data()?;
+        let focus_record_id = match data.row_keys.get(row).copied().flatten() {
+            Some(
+                ReportRowKey::Replicated { rec_id, .. }
+                | ReportRowKey::Legacy { db_id: rec_id, .. },
+            ) => Some(rec_id),
+            None => None,
+        };
+        Some(columns::row_coin_menu_ctx(
+            data.rows.get(row)?,
+            &self.cols,
+            columns::ReportCoinMenuScope {
+                target: columns::ReportCoinTarget {
+                    core_uid: data.core_uids.get(row).copied().unwrap_or_default(),
+                    published_filter: data.filter.clone(),
+                    focus_record_id,
+                },
+                selected_cores: self.effective_core_ids(self.backend.read(cx)),
+                workspace_group: (!self.standalone).then(|| self.group.clone()),
+            },
+            report,
+            &self.backend,
+            cx,
+        ))
+    }
+
+    /// Map the retained identities back to the current rows in visible selection order.
+    fn selected_row_indices(&self) -> Vec<usize> {
+        let Some(data) = self.data.data() else {
+            return Vec::new();
+        };
+        data.row_keys
+            .iter()
+            .enumerate()
+            .filter_map(|(row, &key)| self.selection.contains(key).then_some(row))
+            .collect()
+    }
+
+    /// Read one printed ticker from the current Report table.
+    fn row_ticker(&self, row: usize) -> String {
+        self.data
+            .data()
+            .and_then(|data| data.rows.get(row))
+            .map_or_else(String::new, |values| {
+                columns::row_coin_text(values, &self.cols)
+            })
+    }
+
+    /// Capture actionable trade-window targets up to the host's limit.
+    fn selected_trade_targets(&self, rows: &[usize], cx: &App) -> Vec<RecordTarget> {
+        capped_trade_rows(rows)
+            .iter()
+            .filter_map(|&row| self.trade_detail_target(row, cx))
+            .collect()
+    }
+
+    /// Submit the captured trade windows through the single-row opener and report a clipped batch.
+    fn open_selected_trade_windows(
+        &mut self,
+        targets: &[RecordTarget],
+        clipped: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for target in targets {
+            self.open_trade_detail_target(target.clone(), cx);
+        }
+        if clipped {
+            window.push_notification(
+                MoonNotification::info(multi_count(
+                    "coin_menu.multi.windows_requested",
+                    targets.len(),
+                )),
+                cx,
+            );
+        }
+    }
+
+    /// Capture the selection once so a refreshed table cannot retarget an open menu.
+    fn open_selected_rows_menu(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.data.data().is_none() {
+            return;
+        }
+        let rows = self.selected_row_indices();
+        let targets = self.selected_trade_targets(&rows, cx);
+        let clipped = rows.len() > capped_trade_rows(&rows).len();
+        let coins = distinct_tickers(rows.iter().map(|&row| self.row_ticker(row)));
+        let mut seen = HashSet::new();
+        let contexts: Vec<_> = rows
+            .iter()
+            .filter_map(|&row| {
+                let context = self.row_menu_context(row, None, cx)?;
+                seen.insert((
+                    context.core,
+                    self.row_ticker(row).trim().to_ascii_uppercase(),
+                    context.market.to_ascii_uppercase(),
+                ))
+                .then_some(context)
+            })
+            .collect();
+        let view = cx.entity();
+        let trade_windows: Option<ReportSelectionAction> = (!targets.is_empty()).then(|| {
+            let view = view.clone();
+            Box::new(move |window: &mut Window, app: &mut App| {
+                view.update(app, |this, cx| {
+                    this.open_selected_trade_windows(&targets, clipped, window, cx);
+                });
+            }) as ReportSelectionAction
+        });
+        let filter_coins = coins.clone();
+        let filter = Box::new(move |window: &mut Window, app: &mut App| {
+            view.update(app, |this, cx| {
+                this.set_exact_coin_filter(filter_coins.clone(), window, cx)
+            });
+        });
+        open_multi_coin_menu(
+            MultiFacts {
+                rows: rows.len(),
+                coins,
+            },
+            &contexts,
+            MultiReportActions {
+                trade_windows,
+                filter,
+            },
+            &self.backend,
+            window,
+            cx,
+        );
+    }
+
+    /// Execute a Report shortcut against the current selection using the menu's action functions.
+    pub(super) fn run_report_key(
+        &mut self,
+        action: ReportKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let rows = self.selected_row_indices();
+        let Some(action) = keys::for_selection(action, rows.len()) else {
+            return false;
+        };
+        let row = rows[0];
+        match action {
+            ReportKey::OpenWindow => {
+                let targets = self.selected_trade_targets(&rows, cx);
+                if targets.is_empty() {
+                    return false;
+                }
+                self.open_selected_trade_windows(
+                    &targets,
+                    rows.len() > capped_trade_rows(&rows).len(),
+                    window,
+                    cx,
+                );
+            }
+            ReportKey::ShowOnChart => {
+                return self.row_menu_context(row, None, cx).is_some_and(|ctx| {
+                    !ctx.market.is_empty() && open_chart_target(&ctx, &self.backend, cx)
+                });
+            }
+            ReportKey::TradeLog => {
+                let Ok(request) = self.trade_log_request(row, cx) else {
+                    return false;
+                };
+                trade_log::open_trade_log(request, self.backend.clone(), window, cx);
+            }
+            ReportKey::FilterCoin | ReportKey::CopyTicker => {
+                let coins = distinct_tickers(rows.iter().map(|&row| self.row_ticker(row)));
+                let Some(coin) = coins.first() else {
+                    return false;
+                };
+                match (action, rows.len()) {
+                    (ReportKey::FilterCoin, 1) => {
+                        self.set_coin_filter_text(super::exact_coin_field_text(coin), window, cx)
+                    }
+                    (ReportKey::FilterCoin, _) => self.set_exact_coin_filter(coins, window, cx),
+                    (ReportKey::CopyTicker, 1) => copy_ticker(coin, window, cx),
+                    _ => copy_tickers(&coins, window, cx),
+                }
+            }
+        }
+        true
     }
 
     /// Resolve one report row into everything the log scan needs, or say why it cannot be done.

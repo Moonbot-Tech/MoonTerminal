@@ -20,6 +20,7 @@ pub(crate) mod columns;
 mod comment;
 mod controls;
 mod export;
+mod keys;
 mod overview_narrow;
 mod query;
 mod render;
@@ -588,11 +589,7 @@ fn filters_ctx_id(detached: bool) -> String {
     crate::persistence::table_persist::ctx_id("report-filters", detached)
 }
 
-/// What one standalone Report window is opened on: one exact strategy, or one exact coin.
-///
-/// The two are exclusive on purpose. A coin window shows every strategy of that coin, so it
-/// carries no strategy key, and a strategy window carries no coin text; each variant names the
-/// one core its subject belongs to, so the core cannot disagree with the subject.
+/// An independent Report's opening filter, over either a strategy or one or more exact coins.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReportScopeSubject {
     /// Every trade of one exact strategy.
@@ -608,6 +605,13 @@ pub enum ReportScopeSubject {
         core_uid: u64,
         /// The coin as the Report column prints it (`PAID`, sometimes `VINEUSDT`), trimmed.
         coin: String,
+    },
+    /// Every trade of the selected tickers across the cores that supplied the selected rows.
+    Coins {
+        /// Distinct source cores in visible row order.
+        cores: Vec<CoreId>,
+        /// Exact stored tickers, in visible row order.
+        coins: Vec<String>,
     },
 }
 
@@ -667,19 +671,56 @@ impl ReportScope {
         }
     }
 
-    /// Return the one core this scope reads.
+    /// Build an all-time Report over a nonempty set of exact tickers and source cores.
+    pub(crate) fn for_coins(cores: Vec<CoreId>, coins: Vec<String>) -> Option<Self> {
+        if cores.is_empty() || coins.is_empty() {
+            return None;
+        }
+        let mut seen = HashSet::new();
+        let cores = cores
+            .into_iter()
+            .filter(|&core| seen.insert(core))
+            .collect();
+        Some(Self {
+            subject: ReportScopeSubject::Coins { cores, coins },
+            date_from: None,
+            date_to: None,
+            side: SideFilter::All,
+            emulator: ReportFilter::default().emulator,
+        })
+    }
+
+    /// Return the first source core for placing and grouping this Report window.
     pub fn core_uid(&self) -> u64 {
         match &self.subject {
             ReportScopeSubject::Strategy { key, .. } => key.core_uid,
             ReportScopeSubject::Coin { core_uid, .. } => *core_uid,
+            ReportScopeSubject::Coins { cores, .. } => cores.first().copied().unwrap_or_default(),
         }
     }
 
-    /// Return the name the window title carries: the strategy name or the coin.
-    pub fn title_subject(&self) -> &str {
+    /// Return the initial core selection, including offline historical identities.
+    fn selected_cores(&self) -> HashSet<CoreId> {
         match &self.subject {
-            ReportScopeSubject::Strategy { name, .. } => name,
-            ReportScopeSubject::Coin { coin, .. } => coin,
+            ReportScopeSubject::Coins { cores, .. } => cores.iter().copied().collect(),
+            _ => HashSet::from([self.core_uid()]),
+        }
+    }
+
+    /// Return the exact database coin set for the plural scope.
+    fn exact_coins(&self) -> Option<Vec<String>> {
+        match &self.subject {
+            ReportScopeSubject::Coins { coins, .. } => Some(coins.clone()),
+            _ => None,
+        }
+    }
+
+    /// Return the subject text used in the window title.
+    pub fn title_subject(&self) -> String {
+        match &self.subject {
+            ReportScopeSubject::Strategy { name, .. } => name.clone(),
+            ReportScopeSubject::Coin { coin, .. } => coin.clone(),
+            ReportScopeSubject::Coins { coins, .. } => plural_scope_title(coins),
         }
     }
 
@@ -687,18 +728,29 @@ impl ReportScope {
     pub fn strategy(&self) -> Option<ReportStrategyKey> {
         match &self.subject {
             ReportScopeSubject::Strategy { key, .. } => Some(*key),
-            ReportScopeSubject::Coin { .. } => None,
+            ReportScopeSubject::Coin { .. } | ReportScopeSubject::Coins { .. } => None,
         }
     }
 
-    /// Return the coin-field text this scope seeds: the exact ticker plus the trailing space that
-    /// asks the Report for an exact match, or an empty field for a strategy scope.
+    /// Seed the field with the scope's ticker, ticker list, or empty text for a strategy.
     pub fn coin_field_text(&self) -> String {
         match &self.subject {
             ReportScopeSubject::Strategy { .. } => String::new(),
             ReportScopeSubject::Coin { coin, .. } => exact_coin_field_text(coin),
+            ReportScopeSubject::Coins { coins, .. } => coins.join(", "),
         }
     }
+}
+
+/// Limit the title to three tickers while the coin field and exact query keep the full set.
+fn plural_scope_title(coins: &[String]) -> String {
+    let mut title = coins[..coins.len().min(3)].join(", ");
+    if coins.len() > 3 {
+        let more = t!("report.scope_more_coins", n = coins.len() - 3);
+        title.push(' ');
+        title.push_str(&more);
+    }
+    title
 }
 
 /// Spell one ticker as the Report coin field's exact-match text.
@@ -853,6 +905,8 @@ pub struct ReportPanel {
     /// This distinguishes manual edits, which open the match popup, from `on_pick` substitutions,
     /// which update the mirror first so their change event does not reopen the popup.
     coin_query: String,
+    /// Exact stored tickers from a bulk action, cleared by the first subsequent field edit.
+    exact_coins: Option<Vec<String>>,
     /// Whether the shared `controls::coin_search` match popup is open.
     coin_popup_open: bool,
     /// Coin-field text a coin scope seeded (`"PAID "`), or `None` for any other panel.
@@ -983,8 +1037,12 @@ pub struct ReportPanel {
     dates_rendered: bool,
     /// Whether this panel owns the dedicated standalone Report tool window and its title bar.
     standalone: bool,
+    /// The actual standalone window, including independent multi-coin reports.
+    standalone_window: Option<AnyWindowHandle>,
     // `table_state()` exposes the retained state to the detached window's automatic-width button.
     dock: Option<WeakEntity<DockArea>>,
+    /// Focus ancestor for the filter controls and their focused popovers.
+    filter_focus: FocusHandle,
     focus: FocusHandle,
 }
 

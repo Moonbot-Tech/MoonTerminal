@@ -69,6 +69,7 @@ report.side.long: "Largo"
 report.cell.emu: "emu"
 
 # --- Filters and combo boxes ---
+report.scope_more_coins: "y %{n} más"
 report.filter.all: "Todas"
 report.all_strategies: "Todas las estrategias"
 report.search_strategies: "Buscar estrategias..."

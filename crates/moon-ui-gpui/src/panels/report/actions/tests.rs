@@ -1,8 +1,47 @@
-//! Export-scope identity regressions for the asynchronous Report path picker.
+//! Regressions for the asynchronous export picker and Report row actions.
 
-use super::{ReportExportScopeIdentity, report_export_scope_is_current};
+use super::{
+    ReportExportScopeIdentity, ReportRowKey, ReportSelection, RowMenuKind,
+    report_export_scope_is_current, row_menu_kind, select_context_row,
+};
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use moon_core::config::WorkspaceMode;
+
+/// A stable replicated row key for selection tests.
+fn row_key(rec_id: i64) -> ReportRowKey {
+    ReportRowKey::Replicated {
+        core_uid: 7,
+        rec_id,
+    }
+}
+
+/// Collapsing every right-click would discard the other rows of an existing selection.
+#[test]
+fn right_click_inside_multi_selection_opens_multi() {
+    let first = row_key(1);
+    let second = row_key(2);
+    let mut selection = ReportSelection::default();
+    selection.select_all(&[Some(first), Some(second)]);
+
+    assert_eq!(row_menu_kind(&selection, second), RowMenuKind::Multi);
+    assert_eq!(
+        selection.in_order(&[Some(first), Some(second)]),
+        [first, second]
+    );
+}
+
+/// Reusing the multi menu outside the selection would act on trades away from the pointer.
+#[test]
+fn right_click_outside_collapses_to_row() {
+    let clicked = row_key(3);
+    let mut selection = ReportSelection::default();
+    selection.select_all(&[Some(row_key(1)), Some(row_key(2))]);
+
+    assert_eq!(row_menu_kind(&selection, clicked), RowMenuKind::Single);
+    select_context_row(&mut selection, Some(clicked));
+    assert_eq!(selection.len(), 1);
+    assert!(selection.contains(Some(clicked)));
+}
 
 /// A group's semantic mode and membership protect its export without observing other groups.
 ///

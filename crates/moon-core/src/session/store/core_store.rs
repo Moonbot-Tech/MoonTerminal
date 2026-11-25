@@ -17,6 +17,9 @@ pub struct CoreStore {
     /// restored under the same id continues numbering after what the UI cursors already hold; see
     /// `CoreData::detect_seq`. One `u64` per id ever seen.
     detect_seqs: HashMap<CoreId, Arc<AtomicU64>>,
+    /// Local temp-ban writes must be visible before the feed publishes their echoes.
+    pub(in crate::session) temp_ban_intents:
+        std::sync::Mutex<crate::session::commands::TempBanIntents>,
 }
 
 impl CoreStore {

@@ -41,6 +41,7 @@ pub(super) enum TradeHotkey {
 
 /// Pure routing table, exhaustive over [`crate::hotkeys::HotkeyAction`] (no wildcard arm), so a
 /// new variant forces a decision here. Every non-handled arm returns `None`.
+/// Report shortcuts are panel-local and never enter this global action router.
 pub(super) fn route(action: crate::hotkeys::HotkeyAction) -> Option<TradeHotkey> {
     use crate::hotkeys::HotkeyAction as A;
     match action {

@@ -74,8 +74,8 @@ fn open_row_coin_menu(
         short,
         origin: CoinMenuOrigin::OrderTable,
         history: None,
-        trailing: Vec::new(),
-        filter_here: None,
+        report: None,
+        screener_copy: Vec::new(),
     };
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);
 }

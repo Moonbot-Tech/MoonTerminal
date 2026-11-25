@@ -69,6 +69,7 @@ report.side.long: "Лонг"
 report.cell.emu: "ему"
 
 # --- Filters and combo boxes ---
+report.scope_more_coins: "і ще %{n}"
 report.filter.all: "Усі"
 report.all_strategies: "Усі стратегії"
 report.search_strategies: "Пошук стратегії..."

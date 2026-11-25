@@ -886,15 +886,21 @@ fn delayed_workspace_actions_revalidate_inside_the_dispatch_path() {
 
     let coin_menu = read_src("controls/coin_menu.rs");
     let menu_builder = compact(braced_body(&coin_menu, "fn build_items("));
+    let order_actions = read_src("controls/coin_menu/own.rs");
     let menu_guard = compact(braced_body(&coin_menu, "fn workspace_action_allows_cores("));
     assert!(
-        menu_builder
-            .matches("workspace_action_allows_cores(")
-            .count()
-            >= 4
-            && menu_guard.contains("backend.workspace_action_allows_core(group,*core)"),
+        menu_guard.contains("backend.workspace_action_allows_core(group,*core)"),
         "every order action built here must revalidate all captured cores atomically"
     );
+    for action in ["order_edit", "join_sells", "split_order", "cancel_order"] {
+        assert!(
+            menu_builder.contains(&format!("own::{action}("))
+                && compact(braced_body(&order_actions, &format!("fn {action}("))).contains(
+                    "workspace_action_allows_cores(b,workspace_group.as_deref(),&[core])"
+                ),
+            "the {action} menu callback must revalidate the captured workspace and core"
+        );
+    }
 
     let orders = read_src("panels/orders/table.rs");
     let stop_toggle = compact(braced_body(&orders, "fn flag_toggle_cell("));

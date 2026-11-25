@@ -557,7 +557,7 @@ impl HotkeyAction {
 /// fixed-sell presets; active-market and active-core trading actions; configured `switch_charts`;
 /// then manual strategies; and cancel buys on all cores last of all. Returns `None` when no
 /// binding matches.
-fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction> {
+pub(crate) fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     DISPATCH.iter().find_map(|step| match step {
         Step::Slot(slot) => pressed(hk.key(*slot), event).then(|| action_of(*slot, hk)),
         Step::Builtin(builtin) => builtin

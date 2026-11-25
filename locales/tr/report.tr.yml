@@ -69,6 +69,7 @@ report.side.long: "Long"
 report.cell.emu: "emu"
 
 # --- Filters and combo boxes ---
+report.scope_more_coins: "ve %{n} tane daha"
 report.filter.all: "Tümü"
 report.all_strategies: "Tüm stratejiler"
 report.search_strategies: "Strateji ara..."

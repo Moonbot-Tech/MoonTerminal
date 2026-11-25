@@ -5,6 +5,40 @@ use gpui::{Bounds, point, px, size};
 use super::{initial_report_bounds, report_title, restored_report_bounds, scoped_report_title};
 use moon_core::config::GeomRect;
 
+/// Opening several independent Reports must preserve the singleton geometry and stagger origins.
+#[test]
+fn multi_coin_window_does_not_persist_bounds() {
+    use super::{ReportScope, cascade_report_bounds, persists_report_bounds};
+    let multi = ReportScope::for_coins(vec![1], vec!["XALPHA".into(), "XBETA".into()]).unwrap();
+    assert!(!persists_report_bounds(&multi.subject));
+    assert!(persists_report_bounds(
+        &ReportScope::for_coin(1, "XALPHA").subject
+    ));
+    let base = initial_report_bounds(None);
+    for (open, offset) in [(0, 24.0), (1, 48.0)] {
+        let cascaded = cascade_report_bounds(base, None, open);
+        assert_eq!(cascaded.origin, base.origin + point(px(offset), px(offset)));
+        assert_eq!(cascaded.size, base.size);
+    }
+}
+
+/// Adding a fourth ticker must shorten both title paths without narrowing the exact query.
+#[test]
+fn plural_scope_title_caps_at_three() {
+    use super::ReportScope;
+    let _locale = crate::test_locale::force("en");
+    let coins = ["XALPHA", "XBETA", "XGAMMA", "XDELTA", "XEPSILON"]
+        .map(str::to_string)
+        .to_vec();
+    let scope = ReportScope::for_coins(vec![1], coins.clone()).unwrap();
+    assert_eq!(scope.title_subject(), "XALPHA, XBETA, XGAMMA and 2 more");
+    assert_eq!(
+        scope.coin_field_text(),
+        "XALPHA, XBETA, XGAMMA, XDELTA, XEPSILON"
+    );
+    assert_eq!(scope.exact_coins(), Some(coins));
+}
+
 /// Restoring the old 1240x720 constants must fail this assertion and recreate the cramped window
 /// reported by the user.
 ///

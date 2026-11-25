@@ -69,6 +69,7 @@ report.side.long: "做多"
 report.cell.emu: "模拟"
 
 # --- Filters and combo boxes ---
+report.scope_more_coins: "以及另外 %{n} 个"
 report.filter.all: "全部"
 report.all_strategies: "全部策略"
 report.search_strategies: "搜索策略..."

@@ -69,6 +69,7 @@ report.side.long: "Long"
 report.cell.emu: "giả lập"
 
 # --- Filters and combo boxes ---
+report.scope_more_coins: "và %{n} mã khác"
 report.filter.all: "Tất cả"
 report.all_strategies: "Mọi chiến lược"
 report.search_strategies: "Tìm chiến lược..."
