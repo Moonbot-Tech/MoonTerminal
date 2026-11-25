@@ -1,9 +1,60 @@
-//! Regression tests for Assets table columns and scope-sensitive Market Sell actions.
+//! Regression tests for Assets table columns, wallet selection, and Market Sell scope checks.
 
 // Explicit imports, NOT `use super::*`: the parent re-exports `gpui::*`, which carries its
 // own `test` and shadows the built-in attribute — `#[test]` then expands recursively.
-use super::{AssetsScope, assets_columns, market_sell_core_is_authorized};
+use super::{
+    AssetsScope, assets_columns, market_sell_core_is_authorized, resolve_bottom_wallet_core,
+};
+use crate::panels::assets::balances::CoreAgg;
 use crate::panels::assets::columns::AssetCol;
+use moon_core::config::TotalMode;
+use moon_core::session::{BalanceState, CoreId};
+
+/// A deleted cached core must yield to the first listed core, while a filtered-out Classic pick
+/// remains authoritative. Restoring the unconditional cached-key read would keep the header and
+/// refresh action on a dead core; checking only listed aggregates would mislabel retained wallets.
+#[test]
+fn wallet_core_falls_back_when_the_remembered_core_is_gone() {
+    let listed = [core_agg(2), core_agg(3)];
+    let scope = vec![
+        (1, "Retained".to_string()),
+        (2, "First listed".to_string()),
+        (3, "Other".to_string()),
+    ];
+
+    assert_eq!(
+        resolve_bottom_wallet_core(Some(1), &listed, &scope),
+        Some(1),
+        "a known Classic core stays selected even when its row is filtered out"
+    );
+
+    let after_removal = &scope[1..];
+    assert_eq!(
+        resolve_bottom_wallet_core(Some(1), &listed, after_removal),
+        Some(2),
+        "once core 1 is gone, the first listed core takes over"
+    );
+    assert_eq!(
+        resolve_bottom_wallet_core(Some(9), &listed, &scope),
+        Some(2),
+        "a cached id absent from both lookups is not a known core"
+    );
+    assert_eq!(resolve_bottom_wallet_core(None, &listed, &scope), Some(2));
+    assert_eq!(resolve_bottom_wallet_core(Some(1), &[], &[]), None);
+}
+
+/// Build the minimal aggregate needed to exercise wallet-core resolution.
+fn core_agg(id: CoreId) -> CoreAgg {
+    CoreAgg {
+        id,
+        name: format!("Core {id}"),
+        free: 0.0,
+        total: 0.0,
+        state: BalanceState::Awaiting,
+        merge: None,
+        mode: TotalMode::Auto,
+    }
+}
 
 /// Pins `.no_grow()` on the actions column of
 /// `panels/assets/table.rs::assets_columns`. The plausible edit: someone adds or reorders a

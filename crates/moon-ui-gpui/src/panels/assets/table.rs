@@ -750,27 +750,26 @@ impl AssetsView {
     ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let facet = design::is_facet(cx);
-        // The core the containers belong to is the one the wallet cache was built for
-        // (`rebuild_wallet_cache`), and it is read from that cache, never derived a second time
-        // from the listed cores. A retained Classic pick can sit outside the current filter: the
-        // containers then still show that core's balances, and a core re-derived here from the
-        // filtered list named a different one over them — in the header, on the highlighted row
-        // and in every drag, whose id the transfer dialog then rejects. Only when there is no
-        // wallet core at all does the first listed core stand in, as before.
-        let selected = self
-            .cached_wallet_key
-            .and_then(|(core, ..)| core)
-            .or_else(|| aggs.first().map(|a| a.id));
+        // The cached key names the core whose containers were built. It stays authoritative while
+        // that core is listed or remains elsewhere in the panel's full scope, so a filtered-out
+        // Classic pick keeps its own balances without a highlighted row. A removed core instead
+        // falls back to the first listed core for the header, refresh button, and transfers.
+        let scope_cores = self.scope_cores(self.backend.read(cx));
+        let selected = resolve_bottom_wallet_core(
+            self.cached_wallet_key.and_then(|(core, ..)| core),
+            aggs,
+            &scope_cores,
+        );
         // Its name, also when the filter has taken its row out of the list.
         let selected_name = selected.and_then(|core| {
             aggs.iter()
                 .find(|agg| agg.id == core)
                 .map(|agg| agg.name.clone())
                 .or_else(|| {
-                    self.scope_cores(self.backend.read(cx))
-                        .into_iter()
+                    scope_cores
+                        .iter()
                         .find(|(id, _)| *id == core)
-                        .map(|(_, name)| name)
+                        .map(|(_, name)| name.clone())
                 })
         });
 
@@ -1044,6 +1043,29 @@ impl AssetsView {
                     .child(div().flex_1().h_full().min_w_0().child(right)),
             )
     }
+}
+
+/// Resolve the wallet host from the cache, visible aggregates, and full panel scope.
+///
+/// Args:
+///     cached: Core whose wallet snapshots were cached, if any.
+///     aggs: Currently listed core balances in canonical order.
+///     scope_cores: Every known core in the panel's scope, including filtered-out Classic picks.
+///
+/// Returns:
+///     The cached core while it remains known, otherwise the first listed core, or `None` when the
+///     list is empty.
+fn resolve_bottom_wallet_core(
+    cached: Option<CoreId>,
+    aggs: &[CoreAgg],
+    scope_cores: &[(CoreId, String)],
+) -> Option<CoreId> {
+    cached
+        .filter(|core| {
+            aggs.iter().any(|agg| agg.id == *core)
+                || scope_cores.iter().any(|(id, _)| id == core)
+        })
+        .or_else(|| aggs.first().map(|agg| agg.id))
 }
 
 /// When a wallet list arrived, as the idle-money mark and the footer tooltip show it.
