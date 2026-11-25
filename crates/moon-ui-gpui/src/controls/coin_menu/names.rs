@@ -67,6 +67,11 @@ impl CoinNames {
     /// Returns:
     ///     One entry per core that carries the coin.
     pub(super) fn resolve(b: &Backend, ctx: &CoinMenuCtx) -> Self {
+        Self::resolve_for(b, ctx, None)
+    }
+
+    /// Resolve only cores the menu will offer, while retaining the clicked core's own spelling.
+    pub(super) fn resolve_for(b: &Backend, ctx: &CoinMenuCtx, targets: Option<&[CoreId]>) -> Self {
         let source = b.session.market_source();
         let clicked = match ctx.market.is_empty() {
             true => MarketLabel::default(),
@@ -111,7 +116,7 @@ impl CoinNames {
             let mut hits: HashMap<CoreId, Vec<(String, MarketLabel)>> = HashMap::new();
             for session in b.session.sessions() {
                 let core = session.id;
-                if core == ctx.core {
+                if core == ctx.core || targets.is_some_and(|targets| !targets.contains(&core)) {
                     continue;
                 }
                 let catalog = source.provider_of(core).unwrap_or(core);

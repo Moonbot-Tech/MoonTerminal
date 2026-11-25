@@ -678,6 +678,7 @@ impl ReportPanel {
             .map(ReportScope::coin_field_text)
             .unwrap_or_default();
         let scoped_coin = (!coin_query.is_empty()).then(|| coin_query.clone());
+        let exact_coins = scope.as_ref().and_then(ReportScope::exact_coins);
         // Both fields sit on the picker's whole-minute grid: the lower bound as picked, the upper
         // one floored into the range it came from.
         let from_query = scope
@@ -717,7 +718,7 @@ impl ReportPanel {
         let available_strategy_keys = HashSet::new();
         let initial_selected_cores = scope
             .as_ref()
-            .map(|scope| HashSet::from([scope.core_uid()]))
+            .map(ReportScope::selected_cores)
             .unwrap_or_default();
         let ordered_cores = ordered_strategy_cores(&strategies, &cores, &backend.read(cx).config);
         let groups = strategy_groups(
@@ -763,6 +764,7 @@ impl ReportPanel {
                 let value = e.read(cx).value().to_string();
                 if t.coin_query != value {
                     t.coin_query = value;
+                    t.exact_coins = None;
                     t.coin_popup_open = !t.coin_query.trim().is_empty();
                     // Defaults whenever the match list comes back up; several paths close it
                     // without passing `close_coin_popup`.
@@ -1023,6 +1025,7 @@ impl ReportPanel {
             coin_query,
             coin_popup_open: false,
             scoped_coin,
+            exact_coins,
             coin_expanded: HashSet::new(),
             from,
             from_query,
@@ -1076,7 +1079,9 @@ impl ReportPanel {
             natural_widths: NaturalWidthsCache::default(),
             detached: false,
             standalone: false,
+            standalone_window: None,
             dock: None,
+            filter_focus: cx.focus_handle(),
             focus: cx.focus_handle(),
         };
         // A group Report created while a filter is on air joins it, before its first query rather
@@ -1112,12 +1117,13 @@ impl ReportPanel {
     ) {
         let core_uid = scope.core_uid();
         let coin_text = scope.coin_field_text();
+        self.sel_cores = scope.selected_cores();
+        self.exact_coins = scope.exact_coins();
         self.selected_strategies = scope.strategy().map(|strategy| HashSet::from([strategy]));
         if let ReportScopeSubject::Strategy { key, name } = scope.subject {
             upsert_strategy_choice(&mut self.strategies, key, name);
         }
         self.group = report_group_for_core(&self.backend, core_uid, cx);
-        self.sel_cores = HashSet::from([core_uid]);
         self.queue_strategy_select_sync(true, cx);
         self.side = scope.side;
         self.kind = ReportKind::from_filter(scope.emulator);
@@ -1511,6 +1517,7 @@ impl ReportPanel {
     pub(crate) fn mark_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.mark_table_detached(cx);
         self.standalone = true;
+        self.standalone_window = Some(window.window_handle());
         cx.observe_window_bounds(window, |this, window, cx| {
             let geom = crate::window::windowing::window_geom_rect(window, cx);
             this.backend.update(cx, |backend, _| {

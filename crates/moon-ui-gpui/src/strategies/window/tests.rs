@@ -38,7 +38,7 @@ fn stale_strategy_reveal_never_retargets_the_workspace() {
 #[test]
 fn every_strategy_navigation_producer_passes_workspace_authority() {
     let orders = include_str!("../../panels/orders/table.rs");
-    let menu = include_str!("../../controls/coin_menu.rs");
+    let menu = include_str!("../../controls/coin_menu/strategy.rs");
     let tuner = include_str!("../../analytics/tuner/mod.rs");
     let ms_slots = include_str!("../../controls/manual_strat/settings.rs");
 

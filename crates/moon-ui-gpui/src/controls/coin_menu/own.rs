@@ -1,24 +1,25 @@
 //! Chart navigation and actions on the specific order under the pointer.
 
-use gpui::Entity;
+use gpui::{App, Entity};
 use moon_ui::{MoonMenuItem, MoonTone, MoonWindowExt as _};
 use rust_i18n::t;
 
 use moon_core::config::SPLIT_ORDER_PARTS;
 
-use super::{CoinMenuCtx, ReportRowMenu, workspace_action_allows_cores};
+use super::{CoinMenuCtx, ReportRowMenu, with_hint, workspace_action_allows_cores};
 use crate::Backend;
 
 /// Open the clicked market, using the Report's captured history scope when present.
 pub(super) fn open_chart(ctx: &CoinMenuCtx, backend: &Entity<Backend>) -> MoonMenuItem {
-    let core = ctx.core;
-    let backend_open = backend.clone();
-    let market = ctx.market.clone();
-    let workspace_group = ctx.workspace_group.clone();
-    let history = ctx.history.clone();
-    MoonMenuItem::with_key(
+    let hint = ctx
+        .report
+        .as_ref()
+        .and_then(|report| report.chart_hint.clone());
+    let backend = backend.clone();
+    let ctx = ctx.clone();
+    let item = MoonMenuItem::with_key(
         "coin-open",
-        t!(if history.is_some() {
+        t!(if ctx.history.is_some() {
             "coin_menu.view_trades"
         } else {
             "coin_menu.open"
@@ -27,25 +28,29 @@ pub(super) fn open_chart(ctx: &CoinMenuCtx, backend: &Entity<Backend>) -> MoonMe
     )
     .on_click(move |_, window, app| {
         window.close_context_menu(app);
-        backend_open.update(app, |b, bcx| {
-            let opened = if let Some(history) = history.clone() {
-                b.open_report_on_main_if_authorized(
-                    workspace_group.as_deref(),
-                    (core, market.clone()),
-                    history,
-                    false,
-                )
-            } else {
-                b.open_on_main_if_authorized(
-                    workspace_group.as_deref(),
-                    (core, market.clone()),
-                    false,
-                )
-            };
-            if opened {
-                bcx.notify();
-            }
-        });
+        open_chart_target(&ctx, &backend, app);
+    });
+    with_hint(item, hint)
+}
+
+/// Run the menu's chart navigation with the captured workspace and published history filter.
+pub(crate) fn open_chart_target(
+    ctx: &CoinMenuCtx,
+    backend: &Entity<Backend>,
+    app: &mut App,
+) -> bool {
+    backend.update(app, |b, bcx| {
+        let target = (ctx.core, ctx.market.clone());
+        let group = ctx.workspace_group.as_deref();
+        let opened = if let Some(history) = ctx.history.clone() {
+            b.open_report_on_main_if_authorized(group, target, history, false)
+        } else {
+            b.open_on_main_if_authorized(group, target, false)
+        };
+        if opened {
+            bcx.notify();
+        }
+        opened
     })
 }
 

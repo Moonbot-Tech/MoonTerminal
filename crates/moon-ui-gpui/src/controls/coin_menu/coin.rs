@@ -1,6 +1,6 @@
 //! Navigation, reporting and clipboard actions for the clicked ticker.
 
-use gpui::{ClipboardItem, Entity};
+use gpui::{App, ClipboardItem, Entity, Window};
 use moon_ui::{MoonMenuItem, MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
 
@@ -45,15 +45,18 @@ pub(super) fn copy_coin_item(coin: &str) -> MoonMenuItem {
     MoonMenuItem::with_key("coin-copy", t!("coin_menu.copy_coin").to_string()).on_click(
         move |_, window, app| {
             window.close_context_menu(app);
-            app.write_to_clipboard(ClipboardItem::new_string(coin.clone()));
-            window.push_notification(
-                MoonNotification::success(
-                    t!("coin_menu.coin_copied", coin = coin.as_str()).to_string(),
-                ),
-                app,
-            );
+            copy_ticker(&coin, window, app);
         },
     )
+}
+
+/// Copy the printed ticker and confirm it in the window that owns the selection.
+pub(crate) fn copy_ticker(coin: &str, window: &mut Window, app: &mut App) {
+    app.write_to_clipboard(ClipboardItem::new_string(coin.to_string()));
+    window.push_notification(
+        MoonNotification::success(t!("coin_menu.coin_copied", coin = coin).to_string()),
+        app,
+    );
 }
 
 /// The "every trade of this coin" entry, scoped to the clicked core.

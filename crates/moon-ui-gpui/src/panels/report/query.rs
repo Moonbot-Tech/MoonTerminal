@@ -342,8 +342,12 @@ impl ReportPanel {
             date_to,
             // Normalize Russian-layout keystrokes for the SQL filter as well as the search popup;
             // otherwise Cyrillic input would reach `coin LIKE` unchanged and return no matches.
-            coin: crate::controls::coin_search::normalize_layout(&self.coin_query).into_owned(),
-            exact_coins: None,
+            coin: if self.exact_coins.is_some() {
+                String::new()
+            } else {
+                crate::controls::coin_search::normalize_layout(&self.coin_query).into_owned()
+            },
+            exact_coins: self.exact_coins.clone(),
             side: self.side,
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,

@@ -237,7 +237,7 @@ impl ReportPanel {
         if !self.standalone {
             return;
         }
-        let Some(handle) = self.backend.read(cx).report_window else {
+        let Some(handle) = self.standalone_window else {
             return;
         };
         let title = self.standalone_title();
@@ -248,7 +248,7 @@ impl ReportPanel {
             let _ = handle.update(cx, |_, window, app| {
                 window.set_window_title(&title);
                 crate::window::titles::retitle(
-                    handle.into(),
+                    handle,
                     move |_| {
                         subject
                             .as_deref()
@@ -261,10 +261,7 @@ impl ReportPanel {
     }
 }
 
-/// Open or retarget the singleton standalone Report window to one exact strategy or coin.
-///
-/// One window serves both subjects: opening a coin while a strategy window is up replaces its
-/// scope, exactly as a second strategy does.
+/// Open a new multi-coin Report or retarget the singleton used for individual subjects.
 ///
 /// Args:
 ///     backend: Shared backend holding singleton handles.
@@ -282,9 +279,13 @@ pub fn open_scoped(
     owner_display: Option<DisplayId>,
     cx: &mut App,
 ) {
-    let existing = {
+    // A bulk action can start in the singleton itself, so its destination must be independent.
+    let singleton = !matches!(&scope.subject, ReportScopeSubject::Coins { .. });
+    let existing = if singleton {
         let backend = backend.read(cx);
         (backend.report_window, backend.report_window_view.clone())
+    } else {
+        (None, None)
     };
     if let (Some(handle), Some(view)) = existing {
         let next = scope.clone();
@@ -367,9 +368,11 @@ pub fn open_scoped(
         panel.update(cx, |panel, panel_cx| {
             panel.mark_standalone(window, panel_cx)
         });
-        backend_for_window.update(cx, |backend, _| {
-            backend.report_window_view = Some(panel.downgrade());
-        });
+        if singleton {
+            backend_for_window.update(cx, |backend, _| {
+                backend.report_window_view = Some(panel.downgrade());
+            });
+        }
         cx.new(|cx| {
             crate::window::windowing::frame(
                 Root::new(panel, window, cx)
@@ -379,9 +382,11 @@ pub fn open_scoped(
     });
     drop(open_span);
     if let Ok(handle) = opened {
-        backend.update(cx, |backend, _| {
-            backend.report_window = Some(handle);
-        });
+        if singleton {
+            backend.update(cx, |backend, _| {
+                backend.report_window = Some(handle);
+            });
+        }
         crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
         crate::window::windowing::activate_new_window(handle.into(), cx);
     }

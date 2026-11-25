@@ -346,7 +346,7 @@ pub(super) fn row_coin_menu_ctx(
     values: &[Value],
     cols: &[String],
     scope: ReportCoinMenuScope,
-    report: ReportRowMenu,
+    report: Option<ReportRowMenu>,
     backend: &Entity<Backend>,
     cx: &App,
 ) -> CoinMenuCtx {
@@ -415,7 +415,7 @@ pub(super) fn row_coin_menu_ctx(
             coin,
             target.focus_record_id,
         )),
-        report: Some(report),
+        report,
         screener_copy: Vec::new(),
     }
 }

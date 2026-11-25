@@ -132,8 +132,7 @@ pub(super) fn temp_blacklist_item(
         "tbl-core",
         backend,
         ctx.workspace_group.clone(),
-        names,
-        vec![core],
+        temp_targets(names, &[core]),
     ));
 
     // The selected cores that list the coin under a market of their own. As with the permanent
@@ -154,8 +153,7 @@ pub(super) fn temp_blacklist_item(
             "tbl-cores",
             backend,
             ctx.workspace_group.clone(),
-            names,
-            cores.clone(),
+            temp_targets(names, cores),
         ));
     }
 
@@ -231,7 +229,7 @@ pub(super) fn temp_blacklist_item(
                         ) {
                             return;
                         }
-                        send_temp_ban(b, &held_cores, &names, None);
+                        send_temp_ban(b, &temp_targets(&names, &held_cores), None);
                     });
                 },
             ),
@@ -257,10 +255,28 @@ fn core_blacklist_writer(
         let lift = targets
             .iter()
             .all(|(core, token)| blacklist_contains(&core_blacklist(b, *core).1, token));
-        for (core, token) in &targets {
-            let _ = write_core_blacklist(b, *core, token, lift);
+        write_core_blacklist_targets(b, &targets, lift);
+    }
+}
+
+/// Submit adds or lifts, returning successful adds absent from the last published list.
+///
+/// The session also checks queued writes against its newer echo-aware list. Its result does not
+/// distinguish inserting a token from enabling a list, so undo needs that distinction there.
+pub(super) fn write_core_blacklist_targets(
+    b: &Backend,
+    targets: &[(CoreId, String)],
+    lift: bool,
+) -> Vec<(CoreId, String)> {
+    let mut inserted = Vec::new();
+    for (core, token) in targets {
+        // The writer also reports success for enabling a disabled list with an existing token.
+        let present = !lift && blacklist_contains(&core_blacklist(b, *core).1, token);
+        if matches!(write_core_blacklist(b, *core, token, lift), Ok(true)) && !lift && !present {
+            inserted.push((*core, token.clone()));
         }
     }
+    inserted
 }
 
 /// One preset row per duration, all sending to the same targets.
@@ -268,20 +284,21 @@ fn core_blacklist_writer(
 /// [`TempBanSpan::ALL`] rather than a list of its own: MoonBot's own menu offers the same four
 /// spans, and the set matters — a trader who bans a coin for four hours from one client and looks
 /// for that ban in the other must not have to translate between two sets of presets.
-fn hour_rows(
+pub(super) fn hour_rows(
     key_prefix: &str,
     backend: &Entity<Backend>,
     workspace_group: Option<String>,
-    names: &Rc<CoinNames>,
-    cores: Vec<CoreId>,
+    targets: Vec<(CoreId, String)>,
 ) -> Vec<MoonMenuItem> {
+    let cores: Vec<_> = targets.iter().map(|(core, _)| *core).collect();
+    let targets = Rc::new(targets);
     TempBanSpan::ALL
         .iter()
         .map(|&span| {
             let backend = backend.clone();
             let workspace_group = workspace_group.clone();
             let cores = cores.clone();
-            let names = names.clone();
+            let targets = targets.clone();
             let hours = span.hours();
             MoonMenuItem::with_key(
                 SharedString::from(format!("{key_prefix}-{hours}h")),
@@ -300,7 +317,7 @@ fn hour_rows(
                     if !workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
                         return;
                     }
-                    send_temp_ban(b, &cores, &names, Some(span.duration()));
+                    send_temp_ban(b, &targets, Some(span.duration()));
                 });
             })
         })
@@ -309,7 +326,7 @@ fn hour_rows(
 
 /// One blacklist target row: a checkmark when the coin is already listed, and a click that
 /// revalidates workspace authority then adds or lifts that token.
-fn target_row(
+pub(super) fn target_row(
     key: &'static str,
     label: String,
     already_listed: bool,
@@ -330,27 +347,33 @@ fn target_row(
         })
 }
 
-/// Set or lift a temporary ban on every target, `None` lifting it.
-///
-/// Each core is sent ITS OWN market spelling — see [`temp_ban_symbol`]; a core whose catalogue
-/// cannot name the coin is skipped rather than sent a market it does not have.
-fn send_temp_ban(b: &Backend, cores: &[CoreId], names: &CoinNames, ban: Option<Duration>) {
-    for &core in cores {
-        let Some(symbol) = temp_ban_symbol(names, core) else {
-            log::warn!(
-                "coin_menu: core {} has no market for {}, temp blacklist skipped",
-                moon_core::feed::core_label(core),
-                names.clicked()
-            );
-            continue;
-        };
+/// Set or lift a temporary ban on each resolved market and return the successful sends.
+fn send_temp_ban(
+    b: &Backend,
+    targets: &[(CoreId, String)],
+    ban: Option<Duration>,
+) -> Vec<(CoreId, String)> {
+    let mut sent = Vec::new();
+    for (core, symbol) in targets {
+        let core = *core;
         if let Err(err) = b.session.set_temp_ban(core, symbol.clone(), ban) {
             log::warn!(
                 "coin_menu: temp blacklist {symbol} on core {} failed: {err:#}",
                 moon_core::feed::core_label(core)
             );
+        } else {
+            sent.push((core, symbol.clone()));
         }
     }
+    sent
+}
+
+/// Capture the market each offered core's temporary blacklist can match.
+fn temp_targets(names: &CoinNames, cores: &[CoreId]) -> Vec<(CoreId, String)> {
+    cores
+        .iter()
+        .filter_map(|&core| temp_ban_symbol(names, core).map(|symbol| (core, symbol)))
+        .collect()
 }
 
 /// The symbol ONE core's temporary blacklist is keyed by, or `None` when this context cannot name a
@@ -375,7 +398,7 @@ fn send_temp_ban(b: &Backend, cores: &[CoreId], names: &CoinNames, ban: Option<D
 /// Returns:
 ///     The market to write, or `None` when this core has no market for that coin, or the click
 ///     named none.
-fn temp_ban_symbol(names: &CoinNames, core: CoreId) -> Option<String> {
+pub(super) fn temp_ban_symbol(names: &CoinNames, core: CoreId) -> Option<String> {
     names
         .on(core)
         .map(|name| name.market.clone())

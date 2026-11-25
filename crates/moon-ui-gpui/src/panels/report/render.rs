@@ -128,8 +128,7 @@ impl ReportPanel {
             .on_select_all_rows(move |_window, app| {
                 view_select_all.update(app, |this, cx| this.select_all_report_rows(cx));
             })
-            // The coin cell keeps its own right-click menu and stops propagation; anywhere else on
-            // the row opens the row menu.
+            // Every cell opens the same row or selection menu.
             .on_right_click_row(move |row, window, app| {
                 view_menu.update(app, |this, cx| this.open_row_menu(row, window, cx));
             })
@@ -455,6 +454,7 @@ impl Render for ReportPanel {
             .child(self.export_menu(cx))
             .child(self.columns_menu(cx));
         let filters = h_flex()
+            .track_focus(&self.filter_focus)
             .w_full()
             .flex_wrap()
             .gap(design::ui_px(cx, design::CHROME_GAP))
@@ -694,6 +694,8 @@ impl Render for ReportPanel {
             .size_full()
             .relative()
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_report_key))
+            .on_action(cx.listener(Self::on_report_copy))
             // Set monospace on the panel root, as in Orders, Assets, Analytics, and Screener.
             // Detached panels do not inherit it from the shell header; without this, Report would
             // render in Inter and diverge from the docked view and monospace-based core-selector

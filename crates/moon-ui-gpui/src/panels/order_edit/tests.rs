@@ -69,7 +69,7 @@ fn order_editor_callers_preserve_group_and_chart_authority() {
     let compact =
         |source: &str| -> String { source.chars().filter(|ch| !ch.is_whitespace()).collect() };
     let orders = compact(include_str!("../orders/table.rs"));
-    let menu = compact(include_str!("../../controls/coin_menu.rs"));
+    let menu = compact(include_str!("../../controls/coin_menu/own.rs"));
     let chart = compact(include_str!("../chart/trade.rs"));
 
     assert!(orders.contains("workspace_group:Some(workspace_group)"));

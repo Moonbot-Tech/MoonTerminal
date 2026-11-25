@@ -48,6 +48,9 @@ pub(crate) struct ReportRowMenu {
     pub(crate) trade_window: MoonMenuItem,
     pub(crate) trade_log: Result<MoonMenuItem, &'static str>,
     pub(crate) filter: Option<MoonMenuItem>,
+    /// The focused Report's shortcuts for the available chart and copy actions.
+    pub(crate) chart_hint: Option<String>,
+    pub(crate) copy_hint: Option<String>,
 }
 
 /// Context for the clicked token. Each caller supplies the data available at its location, and the
@@ -183,7 +186,13 @@ fn build_items(mut ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec
             Slot::FilterHere => ctx.report.as_ref().unwrap().filter.clone().unwrap(),
             Slot::CoinReport => coin::coin_report_item(backend, ctx.core, &shown_coin),
             Slot::Compare => coin::compare(&ctx, backend),
-            Slot::CopyTicker => coin::copy_coin_item(&shown_coin),
+            Slot::CopyTicker => {
+                let hint = ctx
+                    .report
+                    .as_ref()
+                    .and_then(|report| report.copy_hint.clone());
+                with_hint(coin::copy_coin_item(&shown_coin), hint)
+            }
             Slot::StrategyGoto => strategy::goto(&ctx, backend, ctx.strat_id.unwrap()),
             Slot::StrategyReport => strategy::report(&ctx, backend, ctx.strat_id.unwrap()),
             Slot::Blacklist => {
@@ -323,6 +332,7 @@ pub(crate) fn write_strategy_blacklist(
 mod blacklist;
 mod coin;
 pub(crate) mod core_ref;
+pub(crate) mod multi;
 mod names;
 mod own;
 mod places;
@@ -351,6 +361,16 @@ fn where_listed_item(
 }
 
 use blacklist::{permanent_blacklist_item, temp_blacklist_item};
+pub(crate) use coin::copy_ticker;
+pub(crate) use own::open_chart_target;
+
+/// Attach the muted hint only when a shortcut is available for the row.
+pub(crate) fn with_hint(item: MoonMenuItem, hint: Option<String>) -> MoonMenuItem {
+    match hint {
+        Some(hint) => item.right_label(hint),
+        None => item,
+    }
+}
 
 #[cfg(test)]
 mod tests;
