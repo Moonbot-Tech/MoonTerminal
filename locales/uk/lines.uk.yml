@@ -15,6 +15,8 @@ lines.path_alpha: "прозорість"
 lines.path_hint: "Сходинки, якими рухали ціну ордера — і надіслані ядром, і зібрані тут. Відрізок власного руху стопа малюється завжди."
 lines.active_alpha: "Прозорість активних"
 lines.pending_dashed: "Відкладений ордер: пунктир входу"
+lines.position_age: "Час у позиції на лінії входу"
+lines.position_age.hint: "у кожного ордера з позицією, поруч із його [N]"
 lines.max_closed: "Макс. закритих ордерів на графіку"
 
 # Settings redesign (phases 3-5)

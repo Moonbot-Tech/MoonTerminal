@@ -15,6 +15,8 @@ lines.path_alpha: "opacity"
 lines.path_hint: "The steps an order's price was moved through — sent by the core or reconstructed here. A stop's own move segment is always drawn."
 lines.active_alpha: "Active opacity"
 lines.pending_dashed: "Pending order: dashed entry"
+lines.position_age: "Time in position on the entry line"
+lines.position_age.hint: "for every order holding a position, beside its [N]"
 lines.max_closed: "Max closed orders drawn"
 
 # Settings redesign (phases 3-5)

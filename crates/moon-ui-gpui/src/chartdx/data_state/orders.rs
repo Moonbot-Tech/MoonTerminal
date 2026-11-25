@@ -340,6 +340,21 @@ impl ChartDataState {
                 let drag_preview_sig =
                     drag_preview.map(|(uid, kind, price)| (uid, kind, price.to_bits()));
                 let figures_sig = self.figures_sig();
+                // The position ages on the entry lines (#1402): which open orders hold a position,
+                // and since when. Answered before the rebuild gate because it moves on a revision
+                // of its own — see `refresh_position_fills` — and the captions alone follow it.
+                let ages_moved = refresh_position_fills(
+                    pr,
+                    self.show_position_age && !frozen,
+                    core_st.orders_table_rev,
+                    &core_st.orders,
+                    &pane.market,
+                    || {
+                        order_lines
+                            .iter_open_market(&pane.market)
+                            .any(|o| o.fill_pct > 0.0 || o.entry_fill_ms.is_some())
+                    },
+                );
                 if force
                     || pr.last_order_lines_rev != order_lines_rev
                     || pr.last_archived_lines_rev != self.archived_lines_rev
@@ -553,24 +568,16 @@ impl ChartDataState {
                         .market_source
                         .as_ref()
                         .and_then(|s| s.quote_usd_rate(pane.core, &pane.market));
-                    build_order_labels(
-                        &mut pr.order_labels,
-                        &mut pr.orderbook_labels,
+                    if rebuild_pane_order_labels(
+                        pr,
                         order_lines,
                         &pane.market,
                         &self.theme,
                         quote_usd,
                         drag_preview,
                         highlight_uid,
-                    );
-                    rebuild_order_label_order(&mut pr.order_label_order, &pr.order_labels);
-                    // The rebuilt labels carry no volume yet. Measuring it here would take the
-                    // market-source lock on a path that deliberately avoids it (`quote_usd_rate`),
-                    // so ask the book path for it with the `u64::MAX` sentinel and wake that path
-                    // — gated on `view_dirty`, it would never run on a quiet market. Only worth
-                    // either when the pane actually has sell lines.
-                    if !pr.orderbook_labels.is_empty() {
-                        pr.last_label_book_rev = u64::MAX;
+                        now,
+                    ) {
                         self.view_dirty = true;
                     }
                     pr.last_order_lines_rev = order_lines_rev;
@@ -587,6 +594,28 @@ impl ChartDataState {
                     pr.last_trade_history_sig = trade_history_sig;
                     pr.last_warn_sig = warn_sig;
                     pr.gpu_prepare_dirty = true;
+                    pixels_changed = true;
+                } else if ages_moved {
+                    // A fill the line store learned from a fast `OrderLines` batch reaches the row
+                    // table only with the next `Orders` batch, and that batch moves no order-line
+                    // revision: the line store already had it. So the ages catch up here, through
+                    // the captions alone — the geometry did not move.
+                    let quote_usd = self
+                        .market_source
+                        .as_ref()
+                        .and_then(|s| s.quote_usd_rate(pane.core, &pane.market));
+                    if rebuild_pane_order_labels(
+                        pr,
+                        order_lines,
+                        &pane.market,
+                        &self.theme,
+                        quote_usd,
+                        drag_preview,
+                        highlight_uid,
+                        now,
+                    ) {
+                        self.view_dirty = true;
+                    }
                     pixels_changed = true;
                 }
             } else {
@@ -630,6 +659,9 @@ impl ChartDataState {
                     );
                     pr.ud_scratch = scratch;
                     pr.order_labels.clear();
+                    pr.order_age_now_ms = None;
+                    pr.order_age_fills.clear();
+                    pr.order_age_table_rev = u64::MAX;
                     pr.order_label_order.clear();
                     pr.orderbook_labels.clear();
                     // Figure readouts live beside the order labels and must go with them: the
@@ -669,15 +701,123 @@ impl ChartDataState {
     }
 }
 
+/// Bring a pane's position fills (#1402) up to date, reporting whether they changed.
+///
+/// The fills ride the ROW TABLE (`orders_table_rev`), not the order-line store the rest of the
+/// label sync follows: the store also learns from the fast `OrderLines` batches, which leave the
+/// table as it was. Caching per table revision does two jobs. It is the catch-up for a fill the
+/// store saw first — the table batch that brings it moves no order-line revision, and this is what
+/// notices it. And it keeps the frames of an order drag or hover, which force a sync per pointer
+/// move, from re-walking the core's rows when nothing in them moved.
+///
+/// The walk itself happens only when the table moved AND `holds_fill` says the store holds an open
+/// order on this market that filled at all; with no position there it could only come back empty.
+/// The store is never behind the table (an `Orders` batch updates the store before it replaces the
+/// table), so an empty answer cached on that gate is caught up by the next table revision.
+///
+/// Args:
+///     pr: The pane whose cache this is.
+///     wanted: The switch is on and the chart is live; off clears the fills outright.
+///     table_rev: The core's current row-table revision.
+///     rows: The core's order rows.
+///     market: The pane's market.
+///     holds_fill: Whether the store holds a filled open order on `market`, asked lazily.
+///
+/// Returns:
+///     Whether the fills differ from the ones the pane's captions were last built from.
+fn refresh_position_fills(
+    pr: &mut PaneRender,
+    wanted: bool,
+    table_rev: u64,
+    rows: &[moon_core::feed::OrderRow],
+    market: &str,
+    holds_fill: impl FnOnce() -> bool,
+) -> bool {
+    if !wanted {
+        // Forget the revision too, so turning the switch back on reads the rows afresh.
+        pr.order_age_table_rev = u64::MAX;
+        let changed = !pr.order_age_fills.is_empty();
+        pr.order_age_fills.clear();
+        return changed;
+    }
+    if pr.order_age_table_rev == table_rev {
+        return false;
+    }
+    pr.order_age_table_rev = table_rev;
+    let fills = match holds_fill() {
+        true => crate::chartdx::text::position_fills(rows, market),
+        false => Vec::new(),
+    };
+    let changed = fills != pr.order_age_fills;
+    pr.order_age_fills = fills;
+    changed
+}
+
+/// Rebuild one pane's order-line captions from the store and its cached position fills.
+///
+/// Shared by the full order rebuild and the captions-only catch-up of the position ages, so the two
+/// cannot build the captions differently.
+///
+/// Returns:
+///     Whether the pane has sell-line depth captions, which the book path must measure — the
+///     caller wakes it.
+// One argument per fact the captions need, as in `build_order_labels` below.
+#[allow(clippy::too_many_arguments)]
+fn rebuild_pane_order_labels(
+    pr: &mut PaneRender,
+    store: &moon_core::session::order_lines::OrderLineStore,
+    market: &str,
+    theme: &ChartTheme,
+    quote_usd: Option<f64>,
+    drag_preview: Option<(u64, LineKind, f32)>,
+    highlight_uid: Option<u64>,
+    now_ms: f64,
+) -> bool {
+    let age_now_ms = crate::chartdx::text::order_age_clock(now_ms as i64);
+    build_order_labels(
+        &mut pr.order_labels,
+        &mut pr.orderbook_labels,
+        store,
+        market,
+        theme,
+        quote_usd,
+        drag_preview,
+        highlight_uid,
+        &pr.order_age_fills,
+        age_now_ms,
+    );
+    // The caption clock steps this pane's ages only while one is there to step.
+    pr.order_age_now_ms = pr
+        .order_labels
+        .iter()
+        .any(|l| l.age.is_some())
+        .then_some(age_now_ms);
+    rebuild_order_label_order(&mut pr.order_label_order, &pr.order_labels);
+    // The rebuilt labels carry no volume yet. Measuring it here would take the market-source lock
+    // on a path that deliberately avoids it (`quote_usd_rate`), so ask the book path for it with
+    // the `u64::MAX` sentinel and wake that path — gated on `view_dirty`, it would never run on a
+    // quiet market. Only worth either when the pane actually has sell lines.
+    if pr.orderbook_labels.is_empty() {
+        return false;
+    }
+    pr.last_label_book_rev = u64::MAX;
+    true
+}
+
 /// Builds market order-line labels for the text layer: size at the buy line, percentage from entry
 /// plus sell quantity at the sell line, and stop percentage at the stop line. Long versus short
 /// determines whether labels appear above or below the line, matching Moonbot category E. Only
 /// open orders receive labels; closed or completed orders do not. Order identity and interaction
 /// flags let the CPU text pass preserve the active order's captions during row arbitration.
-// Eight arguments, and they are eight separate facts a label needs: the two sinks, the store and
-// market it reads, the theme it colours from, the rate it converts with, and the two pointer states
-// (`drag_preview`, `highlight_uid`) that decide which labels are privileged. Bundling them would
-// invent a type for one call site. `build_order_geometry` next door carries the same allow.
+///
+/// The entry line of an order named in `position_fills` states how long it has held its position
+/// instead of the bare tag — `12м 03с [4]` (#1402) — spelled against `age_now_ms` and re-spelled
+/// from then on by the caption clock (`text::step_order_ages`).
+// Ten arguments, and they are ten separate facts a label needs: the two sinks, the store and
+// market it reads, the theme it colours from, the rate it converts with, the two pointer states
+// (`drag_preview`, `highlight_uid`) that decide which labels are privileged, and the position fills
+// with the clock their ages are read against. Bundling them would invent a type for one call site.
+// `build_order_geometry` next door carries the same allow.
 #[allow(clippy::too_many_arguments)]
 fn build_order_labels(
     out: &mut Vec<OrderLabel>,
@@ -688,6 +828,8 @@ fn build_order_labels(
     quote_usd: Option<f64>,
     drag_preview: Option<(u64, LineKind, f32)>,
     highlight_uid: Option<u64>,
+    position_fills: &[(u64, i64)],
+    age_now_ms: i64,
 ) {
     out.clear();
     book_out.clear();
@@ -708,23 +850,30 @@ fn build_order_labels(
         // the flags: `force` is "this is the leg being dragged", `highlighted` is "this order is
         // under the pointer", and `pinned` is `line_is_pinned`'s answer for it — the same one the
         // geometry and the hit test get.
-        let mut push =
-            |kind: LineKind, price: f32, text: String, above: bool, color: u32, priority: u8| {
-                if price.is_finite() && price > 0.0 && !text.is_empty() {
-                    out.push(OrderLabel {
-                        uid: o.uid,
-                        price,
-                        text,
-                        above,
-                        color,
-                        priority,
-                        force: line_forced(kind),
-                        interacting: preview.is_some() || highlight_uid == Some(o.uid),
-                        highlighted: highlight_uid == Some(o.uid),
-                        pinned: moon_chart::order_geometry::line_is_pinned(o, kind),
-                    });
-                }
-            };
+        let mut push = |kind: LineKind,
+                        price: f32,
+                        text: String,
+                        above: bool,
+                        color: u32,
+                        priority: u8,
+                        age: Option<crate::chartdx::text::OrderAge>| {
+            if price.is_finite() && price > 0.0 && !text.is_empty() {
+                out.push(OrderLabel {
+                    uid: o.uid,
+                    price,
+                    text,
+                    above,
+                    color,
+                    priority,
+                    force: line_forced(kind),
+                    interacting: preview.is_some() || highlight_uid == Some(o.uid),
+                    highlighted: highlight_uid == Some(o.uid),
+                    pinned: moon_chart::order_geometry::line_is_pinned(o, kind),
+                    age,
+                    age_drawn: false,
+                });
+            }
+        };
         let buy = line_price(LineKind::Buy);
         let sell = line_price(LineKind::Sell);
         let stop = line_price(LineKind::Stop);
@@ -743,11 +892,25 @@ fn build_order_labels(
                 format!("{text} {tag}")
             }
         };
-        // For an unfilled buy entry, place "size [N]" on one line so the number and size do not
-        // overlap on the same side. For a filled entry, show only [N]. Entry size is always white,
-        // independent of line color and order side.
+        // How long this order has held its position, when it holds one with a stated fill. Taken
+        // from the rows rather than the store's `entry_fill_ms`, which floors the fill to the
+        // creation and folds a future one to "now": the age must be the caption's figure for the
+        // same order, not a start this terminal made up.
+        let age = position_fills
+            .iter()
+            .find(|(uid, _)| *uid == o.uid)
+            .map(|&(_, since_ms)| crate::chartdx::text::OrderAge {
+                since_ms,
+                tag: tag.clone(),
+            });
+        // For an order holding a position, "age [N]" — see `age` above. For an unfilled buy entry,
+        // place "size [N]" on one line so the number and size do not overlap on the same side. For
+        // a filled entry, show only [N]. Entry text is always white, independent of line color and
+        // order side.
         if let Some(bp) = buy {
-            let text = if o.fill_pct <= 0.0 && o.size > 0.0 {
+            let text = if let Some(age) = &age {
+                crate::chartdx::text::order_age_text(age, age_now_ms)
+            } else if o.fill_pct <= 0.0 && o.size > 0.0 {
                 let amount = match quote_usd {
                     Some(rate) if rate > 0.0 => fmt_usd(o.size as f64 * bp as f64 * rate),
                     _ => fmt_amount(o.size),
@@ -763,6 +926,7 @@ fn build_order_labels(
                 !short,
                 ORDER_LABEL_NEUTRAL,
                 PRIO_BUY,
+                age,
             );
         }
         // For a sell line, show profit percentage from entry using a sign-dependent color and the
@@ -789,6 +953,7 @@ fn build_order_labels(
                     short,
                     pct_color(theme, pct),
                     PRIO_SELL_PCT,
+                    None,
                 );
             }
             let remaining = o.exit_size();
@@ -804,6 +969,7 @@ fn build_order_labels(
                     !short,
                     side_color(theme, short),
                     PRIO_SELL_SIZE,
+                    None,
                 );
             }
         }
@@ -820,6 +986,7 @@ fn build_order_labels(
                 short,
                 pct_color(theme, pct),
                 PRIO_STOP_PCT,
+                None,
             );
         }
     }

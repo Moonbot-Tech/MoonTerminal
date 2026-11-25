@@ -111,3 +111,55 @@ fn a_file_without_theme_tables_keeps_a_stored_draw_take_profit() {
     let (set, _) = OrdersStyleSet::resolve("active_alpha = 0.5\n").expect("decodes");
     assert!(set.draw_take_profit, "absent still resolves to drawn");
 }
+
+/// `OrdersStyleSet::show_position_age` arrived after users had saved `orders.toml` without it
+/// (#1402). A new display feature ships ON, so such a file shows the age — in both the themed and
+/// the legacy flat shape — and a stored off is the user's and survives a save and a load.
+#[test]
+fn position_age_reads_on_when_absent_and_keeps_a_stored_off() {
+    let themed = "draw_take_profit = false\n\n[dark]\nactive_alpha = 0.8\n";
+    let (set, _) = OrdersStyleSet::resolve(themed).expect("a pre-#1402 orders.toml decodes");
+    assert!(set.show_position_age, "absent resolves to shown");
+    assert!(
+        !set.draw_take_profit,
+        "the neighbouring switch keeps its own answer"
+    );
+    let (flat, _) = OrdersStyleSet::resolve("active_alpha = 0.5\n").expect("decodes");
+    assert!(flat.show_position_age, "the flat branch defaults it on too");
+
+    let (flat_off, _) = OrdersStyleSet::resolve("show_position_age = false\n").expect("decodes");
+    assert!(
+        !flat_off.show_position_age,
+        "the flat branch keeps a stored off"
+    );
+    let off = OrdersStyleSet {
+        show_position_age: false,
+        ..OrdersStyleSet::default()
+    };
+    let text = toml::to_string_pretty(&off).expect("the set serializes");
+    let (back, write_back) = OrdersStyleSet::resolve(&text).expect("its own output decodes");
+    assert!(
+        !back.show_position_age,
+        "a stored off must not be rewritten"
+    );
+    assert!(!write_back);
+}
+
+/// Pasting a set copied before the switch existed keeps the user's current answer for it, in the
+/// themed and the flat shape alike; a pasted file that carries the switch wins.
+#[test]
+fn pasting_a_set_without_position_age_keeps_the_current_choice() {
+    let current = OrdersStyleSet {
+        show_position_age: false,
+        ..OrdersStyleSet::default()
+    };
+    let old = "[dark.take_profit]\ncolor = [9, 9, 9]\n";
+    let pasted = OrdersStyleSet::parse_share(old, &current).expect("an orders set");
+    assert!(!pasted.show_position_age);
+    let flat = "[take_profit]\ncolor = [9, 9, 9]\n";
+    let pasted = OrdersStyleSet::parse_share(flat, &current).expect("a flat set");
+    assert!(!pasted.show_position_age);
+    let new = "show_position_age = true\n\n[dark.take_profit]\ncolor = [9, 9, 9]\n";
+    let pasted = OrdersStyleSet::parse_share(new, &current).expect("an orders set");
+    assert!(pasted.show_position_age);
+}

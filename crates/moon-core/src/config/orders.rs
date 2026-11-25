@@ -304,6 +304,13 @@ pub struct OrdersStyleSet {
     /// on — that gate lives in the order-line store, where the flag arrives. An `orders.toml` from
     /// before this field reads it as on, so an upgrade keeps the line a chart already showed.
     pub draw_take_profit: bool,
+    /// Whether the entry line of an order that holds a position prints how long it has held it
+    /// (#1402), beside its `[N]` tag: `12м 03с [4]`.
+    ///
+    /// Set-level, like `draw_take_profit` above and for the same reason: it is a readout, not a
+    /// colour, and a theme change must not take it away. A new display feature ships ON, so an
+    /// `orders.toml` from before this field reads it as on; a stored off is never rewritten.
+    pub show_position_age: bool,
     pub dark: OrdersStyle,
     pub light: OrdersStyle,
 }
@@ -313,6 +320,7 @@ impl Default for OrdersStyleSet {
         // Defaults = the user's current sets: dark plus its OWN light set (baked from orders.toml).
         Self {
             draw_take_profit: true,
+            show_position_age: true,
             dark: OrdersStyle::default(),
             light: OrdersStyle::default_light(),
         }
@@ -381,12 +389,17 @@ impl OrdersStyleSet {
         // A file carrying no theme table can still hold the set-level switch — hand-trimmed to it,
         // say — and a stored answer is kept whatever shape the rest of the file has.
         let flat: OrdersStyle = toml::from_str(text)?;
-        let draw_take_profit = toml::from_str::<toml::Value>(text)?
-            .get("draw_take_profit")
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(true);
+        let value = toml::from_str::<toml::Value>(text)?;
+        // Both set-level switches default to on when absent, the shipped behaviour.
+        let stored = |key: &str| {
+            value
+                .get(key)
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true)
+        };
         let set = Self {
-            draw_take_profit,
+            draw_take_profit: stored("draw_take_profit"),
+            show_position_age: stored("show_position_age"),
             light: OrdersStyle::default_light(),
             dark: flat,
         };
@@ -422,6 +435,9 @@ impl OrdersStyleSet {
             if v.get("draw_take_profit").is_none() {
                 set.draw_take_profit = current.draw_take_profit;
             }
+            if v.get("show_position_age").is_none() {
+                set.show_position_age = current.show_position_age;
+            }
             return Some(set);
         }
         if v.as_table()
@@ -432,6 +448,7 @@ impl OrdersStyleSet {
             let flat: OrdersStyle = toml::from_str(text).ok()?;
             return Some(Self {
                 draw_take_profit: current.draw_take_profit,
+                show_position_age: current.show_position_age,
                 dark: flat,
                 light: current.light.clone(),
             });
