@@ -1,11 +1,13 @@
-//! Unit tests for the synthetic feed's still market.
+//! Unit tests for the synthetic feed: its still market, its announced build, its command drain.
 
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::run_from;
 use crate::config::ServerConfig;
-use crate::feed::{FeedMsg, FeedTx, MarketDirtyFlags, QueuedCmd};
+use crate::feed::{
+    ConnStatus, CoreCmd, CoreFeatures, FeedMsg, FeedTx, MarketDirtyFlags, QueuedCmd,
+};
 
 const MOMENT_MS: f64 = 1_785_000_000_000.0;
 
@@ -20,6 +22,21 @@ const RUN_FOR: Duration = Duration::from_millis(300);
 /// Returns:
 ///     The messages, in order.
 fn sent_by_a_feed(still_at: Option<f64>) -> Vec<FeedMsg> {
+    sent_by_a_commanded_feed(still_at, Vec::new()).0
+}
+
+/// Everything a feed sends while it runs for [`RUN_FOR`], with `commands_midway` queued halfway.
+///
+/// Args:
+///     still_at: The moment to hold the market at; `None` for the ordinary stream.
+///     commands_midway: Commands queued for the feed after half of the run.
+///
+/// Returns:
+///     The messages in order, and how many were sent before the commands were queued.
+fn sent_by_a_commanded_feed(
+    still_at: Option<f64>,
+    commands_midway: Vec<CoreCmd>,
+) -> (Vec<FeedMsg>, usize) {
     let server: ServerConfig =
         serde_json::from_str(r#"{"id": 91002, "name": "still fixture"}"#).unwrap();
     let (data, sent) = mpsc::channel();
@@ -33,10 +50,22 @@ fn sent_by_a_feed(still_at: Option<f64>) -> Vec<FeedMsg> {
             still_at,
         )
     });
-    std::thread::sleep(RUN_FOR);
+    std::thread::sleep(RUN_FOR / 2);
+    let mut messages: Vec<FeedMsg> = sent.try_iter().collect();
+    let before = messages.len();
+    for cmd in commands_midway {
+        commands
+            .send(QueuedCmd {
+                at: Instant::now(),
+                cmd,
+            })
+            .unwrap();
+    }
+    std::thread::sleep(RUN_FOR / 2);
     drop(commands);
     feed.join().unwrap().unwrap();
-    sent.try_iter().collect()
+    messages.extend(sent.try_iter());
+    (messages, before)
 }
 
 /// How many times a feed reported a change of this kind of market data.
@@ -95,4 +124,53 @@ fn the_ordinary_stream_keeps_running() {
     let sent = sent_by_a_feed(None);
     assert!(reports_of(&sent, MarketDirtyFlags::HISTORY) > 1);
     assert!(reports_of(&sent, MarketDirtyFlags::ORDERBOOK) > 1);
+}
+
+/// A synthetic core plays a current core, so it must announce both optional commands after `Ready`.
+///
+/// Breakage: without the announcement the store keeps `CoreFeatures::default()` and every control
+/// gated on it — the order menu's forced cancellation, the exchange-wide entries cancel — stays
+/// disabled on the fixture, the bench and the capture build. Sent before `Ready` it is lost too:
+/// the store forgets the build on every non-Ready status.
+#[test]
+fn a_synthetic_core_announces_a_current_build_after_ready() {
+    let sent = sent_by_a_feed(Some(MOMENT_MS));
+    let ready = sent
+        .iter()
+        .position(|message| matches!(message, FeedMsg::Status(ConnStatus::Ready)))
+        .expect("the feed reports Ready");
+    let announced = sent
+        .iter()
+        .position(|message| {
+            matches!(message, FeedMsg::CoreFeatures(features)
+                if features.force_cancel && features.exchange_buys_cancel)
+        })
+        .expect("the feed announces a current build");
+    assert!(ready < announced);
+    assert!(!sent.iter().any(|message| matches!(message,
+    FeedMsg::CoreFeatures(features) if *features != CoreFeatures {
+        exchange_buys_cancel: true,
+        force_cancel: true,
+    })));
+}
+
+/// A forced cancellation sent to a synthetic core leaves the feed running: it keeps streaming after
+/// the command and ends cleanly when the terminal goes away.
+///
+/// This proves survival only. The drain executes no command of any kind, so there is nothing about
+/// the command's effect to observe here.
+///
+/// Breakage: a synth that handled the new command by panicking, ending its loop or blocking would
+/// take the fixture's only core down at the first answered confirmation; the join in
+/// [`sent_by_a_commanded_feed`] fails on a panic and the stream count on a stop or a stall.
+#[test]
+fn a_forced_cancellation_leaves_the_stream_running() {
+    let (sent, before) = sent_by_a_commanded_feed(
+        None,
+        vec![
+            CoreCmd::ForceCancelOrder { uid: 1 },
+            CoreCmd::CancelOrder { uid: 1 },
+        ],
+    );
+    assert!(reports_of(&sent[before..], MarketDirtyFlags::HISTORY) > 1);
 }
