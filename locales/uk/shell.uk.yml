@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "Є"
 chart.volumes.hvol_backdrop_off: "Немає"
 chart.volumes.hvol_overlay: "Накласти на графік"
 chart.volumes.hvol_overlay_hint: "Як нижні обсяги: поверх свічок, без тла і рамки, стовпчики від лівого краю всередину"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Закрити термінал?"
+shell.quit_confirm.body: "Закриється весь термінал разом з вікнами графіків, а не один графік. Ядра продовжать працювати, ордери залишаться, а розкладка вікон повернеться під час наступного запуску."
+shell.quit_confirm.stay: "Залишитися"
+shell.quit_confirm.quit: "Закрити термінал"

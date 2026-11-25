@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "Açık"
 chart.volumes.hvol_backdrop_off: "Kapalı"
 chart.volumes.hvol_overlay: "Grafiğin üstüne bindir"
 chart.volumes.hvol_overlay_hint: "Alttaki hacimler gibi: mumların üstünde, altlık ve çerçeve yok, çubuklar sol kenardan içeri büyür"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Terminal kapatılsın mı?"
+shell.quit_confirm.body: "Yalnızca bir grafik değil, grafik pencereleriyle birlikte tüm terminal kapanır. Çekirdekler çalışmaya devam eder, emirler kalır ve pencere düzeni bir sonraki açılışta geri gelir."
+shell.quit_confirm.stay: "Kal"
+shell.quit_confirm.quit: "Terminali kapat"

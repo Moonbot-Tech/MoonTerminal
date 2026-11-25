@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "Ligado"
 chart.volumes.hvol_backdrop_off: "Desligado"
 chart.volumes.hvol_overlay: "Sobrepor no gráfico"
 chart.volumes.hvol_overlay_hint: "Como os volumes de baixo: sobre os candles, sem fundo nem moldura, as linhas crescem da borda esquerda para dentro"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Fechar o terminal?"
+shell.quit_confirm.body: "O terminal inteiro fecha junto com as janelas de gráficos, não apenas um gráfico. Os núcleos continuam rodando, as ordens permanecem e o layout das janelas volta na próxima inicialização."
+shell.quit_confirm.stay: "Ficar"
+shell.quit_confirm.quit: "Fechar o terminal"

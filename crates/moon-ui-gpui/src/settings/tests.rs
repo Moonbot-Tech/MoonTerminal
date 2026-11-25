@@ -111,6 +111,11 @@ fn page_dirt_appears_exactly_when_the_draft_is_dirty() {
     let mut d = saved.clone();
     d.ui_scale += 0.25;
     edits.push(d);
+    // The quit question (#1170): left out of either signature, a ticked box would never reach
+    // Save, or would mark no page as unsaved.
+    let mut d = saved.clone();
+    d.confirm_quit = !d.confirm_quit;
+    edits.push(d);
     for draft in edits {
         assert!(draft_dirty(&saved, &draft));
         assert_eq!(super::dirty_pages(&saved, &draft).len(), 1);

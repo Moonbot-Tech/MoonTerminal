@@ -431,6 +431,13 @@ pub struct SettingsFile {
     /// and an unknown code degrades to it.
     #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub number_notation: Notation,
+    /// Whether closing the last main window asks before the whole terminal quits (#1170).
+    ///
+    /// Off by default, by the developer's call: an older file that omits it, or carries a value
+    /// that is not a bool, reads as `false` and the close quits at once exactly as before. No
+    /// schema bump: the absent key already reads correctly and the next save materializes it.
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
+    pub confirm_quit: bool,
     /// Next uid to issue, persisted so deleted identities are not reused.
     ///
     /// Zero falls back to one past the highest surviving uid. This field is the only durable

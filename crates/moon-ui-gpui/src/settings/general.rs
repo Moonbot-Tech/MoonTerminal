@@ -205,12 +205,14 @@ pub(super) struct GeneralControls {
     pub(super) idle_secs: AnyElement,
     pub(super) log_files: AnyElement,
     pub(super) retention: AnyElement,
+    /// Checkbox of the quit question on the last main window's close (#1170).
+    pub(super) confirm_quit: AnyElement,
 }
 
 /// One General row before layout: id, label, hint, long help, control.
 type GeneralRow = (&'static str, String, String, Option<String>, AnyElement);
 
-/// The General page body: language and money, charts, logs.
+/// The General page body: language and money, charts, logs, exit.
 ///
 /// Args:
 ///     c: The page's controls.
@@ -350,12 +352,23 @@ pub(super) fn general_body(
                 ),
             ],
         ))
+        .child(section(
+            "general-sec-exit",
+            s("general.sec.exit"),
+            vec![row(
+                "general-confirm-quit",
+                s("general.confirm_quit.label"),
+                s("general.confirm_quit.hint"),
+                Some(s("general.confirm_quit.more")),
+                c.confirm_quit,
+            )],
+        ))
         .into_any_element()
 }
 
 /// Every row id of the General page, top to bottom.
 #[cfg(test)]
-const GENERAL_ROWS: [&str; 9] = [
+const GENERAL_ROWS: [&str; 10] = [
     "general-language",
     "general-notation",
     "general-valuation",
@@ -365,6 +378,7 @@ const GENERAL_ROWS: [&str; 9] = [
     "general-idle",
     "general-log-files",
     "general-retention",
+    "general-confirm-quit",
 ];
 
 /// Remembered enabled idle timeout, or the default when none is valid.
@@ -436,7 +450,8 @@ impl SettingsView {
     }
 
     /// Build the General page body: locale, number notation, the USDT valuation, chart grouping,
-    /// book-zone pan, Main-window idle closing, and file logging with its retention.
+    /// book-zone pan, Main-window idle closing, file logging with its retention, and the quit
+    /// question.
     ///
     /// Args:
     ///     cx: Settings context that supplies the active draft and palette.
@@ -444,7 +459,7 @@ impl SettingsView {
     /// Returns:
     ///     The assembled General-page content.
     pub(super) fn general_tab(&self, cx: &Context<Self>) -> AnyElement {
-        let (split, scz, idle_secs, logf) = {
+        let (split, scz, idle_secs, logf, ask_quit) = {
             let b = self.backend.read(cx);
             let d = b.preview.as_ref().unwrap_or(&b.config);
             (
@@ -452,6 +467,7 @@ impl SettingsView {
                 d.separate_control_zones,
                 d.main_idle_close_secs,
                 d.log_to_file,
+                d.confirm_quit,
             )
         };
         // Remember the last valid enabled timeout and restore it when the checkbox is re-enabled.
@@ -533,11 +549,22 @@ impl SettingsView {
                 Some(t!("general.unit.days").to_string()),
                 logf,
             ),
+            // Ask before the last main window's close quits the terminal; off by default.
+            confirm_quit: self
+                .draft_checkbox(cx, "confirm-quit", ask_quit, |p, v| {
+                    if p.confirm_quit != v {
+                        p.confirm_quit = v;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .into_any_element(),
         };
         general_body(controls, &|key| self.more_toggle(key, cx), cx)
     }
 
-    /// The Main page: language, money, charts and logs. MoonBot import is the sidebar's footer
+    /// The Main page: language, money, charts, logs and exit. MoonBot import is the sidebar's footer
     /// link; only while the narrow window hides the sidebar does it move into this header.
     pub(super) fn general_page(&self, narrow: bool, cx: &Context<Self>) -> super::frame::PageParts {
         let body = self.general_tab(cx);

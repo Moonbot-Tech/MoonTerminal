@@ -63,7 +63,7 @@ settings.page.hotkeys.desc: "与 Moonbot 兼容的按键和鼠标手势。更改
 settings.page.hotkeys.keywords: "快捷键 热键 按键 鼠标 手势 组合键 moonbot"
 settings.page.general.title: "基本"
 settings.page.general.desc: "语言、金额计算和图表行为。"
-settings.page.general.keywords: "语言 汇率 usdt 日志 自动关闭 标签页 全景"
+settings.page.general.keywords: "语言 汇率 usdt 日志 自动关闭 标签页 全景 退出"
 settings.page.security.title: "安全"
 settings.page.security.desc: "两个相互独立的密码，以及允许打开连接文件的计算机列表。"
 settings.page.security.keywords: "密码 加密 servers.enc 计算机 设备"

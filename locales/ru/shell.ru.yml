@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "Есть"
 chart.volumes.hvol_backdrop_off: "Нет"
 chart.volumes.hvol_overlay: "Наложить на график"
 chart.volumes.hvol_overlay_hint: "Как нижние объёмы: поверх свечей, без фона и рамки, столбики от левого края внутрь"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Закрыть терминал?"
+shell.quit_confirm.body: "Закроется весь терминал вместе с окнами графиков, а не один график. Ядра продолжат работать, ордера останутся, а раскладка окон вернётся при следующем запуске."
+shell.quit_confirm.stay: "Остаться"
+shell.quit_confirm.quit: "Закрыть терминал"

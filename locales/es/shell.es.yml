@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "Sí"
 chart.volumes.hvol_backdrop_off: "No"
 chart.volumes.hvol_overlay: "Superponer al gráfico"
 chart.volumes.hvol_overlay_hint: "Como los volúmenes inferiores: sobre las velas, sin fondo ni marco, las filas crecen desde el borde izquierdo"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "¿Cerrar el terminal?"
+shell.quit_confirm.body: "Se cierra todo el terminal junto con sus ventanas de gráficos, no solo un gráfico. Los núcleos siguen funcionando, las órdenes se mantienen y la disposición de las ventanas vuelve en el próximo inicio."
+shell.quit_confirm.stay: "Quedarse"
+shell.quit_confirm.quit: "Cerrar el terminal"
