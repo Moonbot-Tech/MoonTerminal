@@ -12,7 +12,7 @@ use gpui::*;
 use moon_ui::{
     MoonBackgroundPolicy, MoonButtonSize, MoonButtonVariant, MoonDataTable, MoonDataTableColumn,
     MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonPalette, MoonVirtualListScrollHandle, MoonWindowFrame, Root, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -198,6 +198,9 @@ pub struct ScreenerView {
     /// order is volume, so the coin leaves the line it was clicked on. Only the coin-name click
     /// and the row double-click set it; a chart opened anywhere else leaves it where it was.
     opened_mark: Option<(CoreId, String)>,
+    /// Vertical scroll of the table's rows, held here so the arrow, Home, End and Page keys can
+    /// move it (`super::keys`): the controlled table no longer handles those keys itself.
+    rows_scroll: MoonVirtualListScrollHandle,
     focus: FocusHandle,
 }
 
@@ -408,6 +411,7 @@ impl ScreenerView {
             scan_choice: scan::ScanChoice::Any,
             scan_pct_input,
             opened_mark: None,
+            rows_scroll: MoonVirtualListScrollHandle::new(),
             focus: cx.focus_handle(),
         };
         this.rebuild(cx);
@@ -873,44 +877,71 @@ impl ScreenerView {
             ),
             p,
             cx,
-            MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
-                let entry = &prepared.entries[table_rows[ix]];
-                screener_row(entry, &view, p, &row_cols, &row_style)
-                    .selected(is_opened(opened_mark.as_ref(), entry))
-            })
-            .columns(
-                visible
-                    .iter()
-                    .map(|&&(key, title, width, right)| {
-                        let title = match key {
-                            super::auto_figures::AUTO_FIGURES_KEY => scan_title.clone(),
-                            _ => column_label(key, title),
-                        };
-                        let col = MoonDataTableColumn::new(key, title, width).sortable(true);
-                        let col = if right { col.right() } else { col };
-                        if key == "market" {
-                            col.fixed_left()
-                        } else {
-                            col
-                        }
+            // The wrapper holds only the table, so its key listener hears a key only while the
+            // table itself has focus, never while a footer input does.
+            div()
+                .size_full()
+                .on_key_down(cx.listener(Self::scroll_by_key))
+                .child(
+                    MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
+                        let entry = &prepared.entries[table_rows[ix]];
+                        screener_row(entry, &view, p, &row_cols, &row_style)
+                            .selected(is_opened(opened_mark.as_ref(), entry))
                     })
-                    .collect::<Vec<_>>(),
-            )
-            .state(&self.table_state)
-            .style(design::table_style(p))
-            .on_sort(move |key, ascending, _window, app| {
-                let key = key.to_string();
-                sort_view.update(app, |t, cx| t.set_sort(&key, !ascending, cx));
-            })
-            .on_double_click_row(move |ix, _window, app| {
-                dbl_view.update(app, |t, cx| t.open_chart(ix, cx));
-            })
-            // The only tint a row gets is the opened-row mark, which the row itself carries. The
-            // table's own selection is a LINE number — set by a click and by the arrow, Home, End
-            // and Page keys — and would light another coin after the next rebuild, beside the
-            // mark and in the same colour, so the table owns none.
-            .controlled_row_selection(true),
+                    .track_scroll(&self.rows_scroll)
+                    .columns(
+                        visible
+                            .iter()
+                            .map(|&&(key, title, width, right)| {
+                                let title = match key {
+                                    super::auto_figures::AUTO_FIGURES_KEY => scan_title.clone(),
+                                    _ => column_label(key, title),
+                                };
+                                let col =
+                                    MoonDataTableColumn::new(key, title, width).sortable(true);
+                                let col = if right { col.right() } else { col };
+                                if key == "market" {
+                                    col.fixed_left()
+                                } else {
+                                    col
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .state(&self.table_state)
+                    .style(design::table_style(p))
+                    .on_sort(move |key, ascending, _window, app| {
+                        let key = key.to_string();
+                        sort_view.update(app, |t, cx| t.set_sort(&key, !ascending, cx));
+                    })
+                    .on_double_click_row(move |ix, _window, app| {
+                        dbl_view.update(app, |t, cx| t.open_chart(ix, cx));
+                    })
+                    // The only tint a row gets is the opened-row mark, which the row itself
+                    // carries. The table's own selection is a LINE number — set by a click and
+                    // by the arrow, Home, End and Page keys — and would light another coin after
+                    // the next rebuild, beside the mark and in the same colour, so the table owns
+                    // none. That mode also leaves those keys unhandled; `scroll_by_key` gives
+                    // them back as scrolling only.
+                    .controlled_row_selection(true),
+                ),
         )
+    }
+
+    /// Scroll the table for Up, Down, PageUp, PageDown, Home and End, selecting nothing.
+    ///
+    /// The controlled table passes these keys through unhandled (#1424), so without this they
+    /// would do nothing at all. Only the viewport moves: no row is selected and the opened-coin
+    /// mark stays on its coin (`super::keys::scroll_by_key`).
+    ///
+    /// Args:
+    ///     event: The key press that bubbled up from the focused table.
+    ///     window: Window the table lives in.
+    ///     cx: Screener context, notified so the next frame lays the list out at its new offset.
+    fn scroll_by_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if super::keys::scroll_by_key(&self.rows_scroll, self.rows.len(), event, window, cx) {
+            cx.notify();
+        }
     }
 
     /// Build the core multi-selector over the cores the display preset shows.

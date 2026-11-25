@@ -14,10 +14,12 @@
 //! current controls through compact row indices without rebuilding market data on the UI thread.
 //! [`auto_figures`] is the auto-figures column: the all-markets scan its Calculate button runs over
 //! the local 5-minute kline cache, the answers, and the column's order and filter. [`coin_copy`] is
-//! the row menu's "copy the coins" entries.
+//! the row menu's "copy the coins" entries. [`keys`] scrolls the table from the keyboard without
+//! selecting a row.
 
 mod auto_figures;
 mod coin_copy;
+mod keys;
 mod prepared;
 mod table;
 mod view;
