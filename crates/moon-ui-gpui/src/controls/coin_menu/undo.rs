@@ -1,7 +1,6 @@
 //! One-shot reversal of the blacklist additions made by a single menu click.
 
 use std::cell::Cell;
-use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{App, Entity, Window};
@@ -87,17 +86,34 @@ impl UndoRecord {
     }
 }
 
-/// Walk writes in reverse so consecutive insertions into one list restore the original bytes.
-fn revert_plan(steps: Vec<UndoStep>) -> impl Iterator<Item = UndoStep> {
-    steps.into_iter().rev()
+/// Whether the current workspace authorizes reversing the entire record.
+#[derive(Debug, PartialEq, Eq)]
+enum UndoDecision {
+    Refused,
+    Revert,
 }
 
-/// Take the action once, even if the button receives another click while dismissing.
-fn take_record(record: &Cell<Option<UndoRecord>>) -> Option<UndoRecord> {
-    record.take()
+/// Refuse the whole undo when any recorded core has left the workspace.
+fn undo_decision(allowed: bool) -> UndoDecision {
+    if allowed {
+        UndoDecision::Revert
+    } else {
+        UndoDecision::Refused
+    }
 }
 
-/// Show one actionable toast in the window where the click originated.
+/// Consume the record once and replay its inverses from newest to oldest.
+fn run_undo_once(cell: &Cell<Option<UndoRecord>>, mut revert: impl FnMut(UndoStep)) -> bool {
+    let Some(record) = cell.take() else {
+        return false;
+    };
+    for step in record.steps.into_iter().rev() {
+        revert(step);
+    }
+    true
+}
+
+/// Show the undo action and report a workspace refusal in the originating window.
 pub(super) fn show_undo_toast(
     record: UndoRecord,
     backend: Entity<Backend>,
@@ -106,23 +122,29 @@ pub(super) fn show_undo_toast(
     app: &mut App,
 ) {
     let toast = record.toast.clone();
-    let record = Rc::new(Cell::new(Some(record)));
+    let cores: Vec<_> = record.steps.iter().map(|step| step.core).collect();
+    let record = Cell::new(Some(record));
+    let on_undo = move |window: &mut Window, app: &mut App| {
+        let refused = backend.update(app, |b, _| {
+            let allowed = workspace_action_allows_cores(b, workspace_group.as_deref(), &cores);
+            match undo_decision(allowed) {
+                UndoDecision::Refused => record.take().is_some(),
+                UndoDecision::Revert => {
+                    run_undo_once(&record, |step| apply_revert(b, step));
+                    false
+                }
+            }
+        });
+        if refused {
+            window.push_notification(
+                MoonNotification::info(t!("coin_menu.undo.refused").to_string()),
+                app,
+            );
+        }
+    };
     window.push_notification(
         MoonNotification::success(toast)
-            .action(t!("coin_menu.undo.action").to_string(), move |_, app| {
-                let Some(record) = take_record(&record) else {
-                    return;
-                };
-                backend.update(app, |b, _| {
-                    let cores: Vec<_> = record.steps.iter().map(|step| step.core).collect();
-                    if !workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
-                        return;
-                    }
-                    for step in revert_plan(record.steps) {
-                        apply_revert(b, step);
-                    }
-                });
-            })
+            .action(t!("coin_menu.undo.action").to_string(), on_undo)
             .autohide_after(Duration::from_secs(6)),
         app,
     );

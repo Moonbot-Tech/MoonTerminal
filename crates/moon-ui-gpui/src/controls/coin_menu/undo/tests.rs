@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 use moon_core::session::SessionManager;
 
-use super::{UndoRecord, UndoStep, revert_plan, take_record, temp_restore_span};
+use super::{UndoDecision, UndoRecord, UndoStep, run_undo_once, temp_restore_span, undo_decision};
 
 /// Build a recorded successful insertion without a connection.
 fn added(_: &SessionManager) -> anyhow::Result<bool> {
@@ -27,10 +27,9 @@ fn undo_records_only_inserted_pairs() {
     .into_iter()
     .flatten()
     .collect();
-    let record = UndoRecord::new(steps, |_| "Added two coins".to_string()).unwrap();
-    let actual: Vec<_> = revert_plan(record.steps)
-        .map(|step| (step.core, step.coin))
-        .collect();
+    let record = Cell::new(UndoRecord::new(steps, |_| "Added two coins".to_string()));
+    let mut actual = Vec::new();
+    assert!(run_undo_once(&record, |step| actual.push((step.core, step.coin))));
     assert_eq!(
         actual,
         [(1, "XBETA".to_string()), (1, "XALPHA".to_string())]
@@ -50,8 +49,17 @@ fn undo_is_one_shot() {
         .into_iter()
         .collect();
     let record = Cell::new(UndoRecord::new(steps, |_| "Added XALPHA".to_string()));
-    assert!(take_record(&record).is_some());
-    assert!(take_record(&record).is_none());
+    let mut reverted = Vec::new();
+    assert!(run_undo_once(&record, |step| reverted.push(step.coin)));
+    assert!(!run_undo_once(&record, |step| reverted.push(step.coin)));
+    assert_eq!(reverted, ["XALPHA"]);
+}
+
+/// Denying workspace access must select the refusal path before any inverse can run.
+#[test]
+fn undo_refused_when_core_left_workspace() {
+    assert_eq!(undo_decision(false), UndoDecision::Refused);
+    assert_eq!(undo_decision(true), UndoDecision::Revert);
 }
 
 /// The deferred undo action must revalidate all the targets before applying any inverse.
