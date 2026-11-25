@@ -22,6 +22,13 @@ orders.settings: "Settings"
 orders.kind.all: "All"
 orders.kind.real: "Real"
 orders.kind.emu: "Emulator"
+# Order-origin filter beside the kind filter: who placed the order. `both` is the trigger
+# label while every origin is shown, worded apart from `orders.kind.all` beside it.
+orders.origin.all: "All"
+orders.origin.auto: "Auto"
+orders.origin.manual: "Manual"
+orders.origin.both: "Auto/Manual"
+orders.origin.tip: "Who placed the order: Auto — a strategy, Manual — you, by hand. An order driven by a Manual strategy counts as Manual."
 orders.only_current: "Only current market orders"
 # Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
 # than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
@@ -40,6 +47,8 @@ orders.footer_total: "Total: %{total} · real: %{real} · emulated: %{emu}"
 # exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
 # `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
 orders.footer_total_tip: "Total: %{total} — open orders of the selected cores (and of the current market only, when that filter is on).\nReal: %{real} — orders on the real account, not the emulator.\nEmulated: %{emu} — Moonbot emulator orders.\nThe All / Real / Emulator filter does not change these counts."
+# Appended to the footer tooltip while the origin filter is on; %{origin} is its label.
+orders.footer_origin_tip: "Only %{origin} orders are counted: the Auto / Manual filter is on."
 orders.show_all: "Show all"
 orders.sort.profit: "Profit first"
 orders.sort.sell: "Sell first"

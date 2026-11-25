@@ -52,6 +52,7 @@ impl Panel for OrdersPanel {
                 "group": self.group,
                 "primary": self.view.primary.to_u8(),
                 "kind": self.view.kind.to_u8(),
+                "origin": self.view.origin.to_u8(),
                 "newest_first": self.view.newest_first,
                 "only_current": self.view.only_current_market,
                 "coin": self.coin_query,
@@ -155,6 +156,7 @@ impl Render for OrdersPanel {
             .py_1()
             .child(self.source_combo(&cores, cx))
             .child(self.kind_combo(cx))
+            .child(self.origin_combo(cx))
             // Sized as the Alerts and Report coin fields are; at a narrow panel it shrinks toward a
             // floor that still shows a few letters rather than pushing the menus off the bar.
             .child(
@@ -214,9 +216,10 @@ impl Render for OrdersPanel {
             cx,
         );
 
-        // Footer with total, real, and emulated open-order counts, plus the marker's own facts
-        // when the workspace preset hides a core. The head — the existing localized total string
-        // — is `flex_none` so the figures never yield; the marker's facts clip from the right.
+        // Footer with total, real, and emulated open-order counts (after the origin filter, before
+        // the kind filter), plus the marker's own facts when the workspace preset hides a core.
+        // The head — the existing localized total string — is `flex_none` so the figures never
+        // yield; the marker's facts clip from the right.
         let total = self.count_real + self.count_emu;
         let head = t!(
             "orders.footer_total",
@@ -230,13 +233,24 @@ impl Render for OrdersPanel {
         // the idiom `panels/report/totals.rs` uses for its own footer. It is unconditional: the
         // head states the figures on every render, so there is never a state in which it has
         // nothing to explain.
-        let head_tip = t!(
+        let mut head_tip = t!(
             "orders.footer_total_tip",
             total = total,
             real = self.count_real,
             emu = self.count_emu
         )
         .to_string();
+        // Unlike the kind filter, the origin filter DOES narrow these counts (they are its rows,
+        // split by kind), so the explanation says so whenever it is on.
+        let origin_label = match view.origin {
+            OrderOrigin::All => None,
+            OrderOrigin::Auto => Some(t!("orders.origin.auto")),
+            OrderOrigin::Manual => Some(t!("orders.origin.manual")),
+        };
+        if let Some(origin) = origin_label {
+            head_tip.push('\n');
+            head_tip.push_str(&t!("orders.footer_origin_tip", origin = origin));
+        }
         let footer_split = scope_marker::scope_footer(head, Some(&marker));
         let footer_tip = scope_marker::scope_footer_tooltip(&footer_split, Some(&marker));
         let footer = crate::panels::footer_row(cx)

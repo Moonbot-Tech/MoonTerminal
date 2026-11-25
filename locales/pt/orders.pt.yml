@@ -22,6 +22,13 @@ orders.settings: "Configurações"
 orders.kind.all: "Todas"
 orders.kind.real: "Reais"
 orders.kind.emu: "Emulador"
+# Order-origin filter beside the kind filter: who placed the order. `both` is the trigger
+# label while every origin is shown, worded apart from `orders.kind.all` beside it.
+orders.origin.all: "Todas"
+orders.origin.auto: "Automáticas"
+orders.origin.manual: "Manuais"
+orders.origin.both: "Auto/Manuais"
+orders.origin.tip: "Quem colocou a ordem: Automáticas — uma estratégia, Manuais — você, à mão. Uma ordem conduzida por uma estratégia Manual conta como manual."
 orders.only_current: "Só ordens do mercado atual"
 # Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
 # than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
@@ -40,6 +47,8 @@ orders.footer_total: "Total: %{total} · reais: %{real} · emulador: %{emu}"
 # exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
 # `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
 orders.footer_total_tip: "Total: %{total} — ordens abertas dos núcleos selecionados (e só do mercado atual, quando esse filtro está ligado).\nReais: %{real} — ordens da conta real, não do emulador.\nEmulador: %{emu} — ordens do emulador Moonbot.\nO filtro Todas / Reais / Emulador não muda estas contagens."
+# Appended to the footer tooltip while the origin filter is on; %{origin} is its label.
+orders.footer_origin_tip: "Só são contadas as ordens «%{origin}»: o filtro Auto / Manuais está ligado."
 orders.show_all: "Mostrar todas"
 orders.sort.profit: "Lucro primeiro"
 orders.sort.sell: "Sell primeiro"

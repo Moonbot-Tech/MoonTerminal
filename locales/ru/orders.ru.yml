@@ -22,6 +22,13 @@ orders.settings: "Настройки"
 orders.kind.all: "Все"
 orders.kind.real: "Реальные"
 orders.kind.emu: "Эмуляторные"
+# Order-origin filter beside the kind filter: who placed the order. `both` is the trigger
+# label while every origin is shown, worded apart from `orders.kind.all` beside it.
+orders.origin.all: "Все"
+orders.origin.auto: "Авто"
+orders.origin.manual: "Ручные"
+orders.origin.both: "Авто/Ручные"
+orders.origin.tip: "Кто поставил ордер: «Авто» — стратегия, «Ручные» — вы сами. Ордер, которым управляет стратегия Manual, считается ручным."
 orders.only_current: "Только ордера текущего маркета"
 # Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
 # than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
@@ -40,6 +47,8 @@ orders.footer_total: "Всего: %{total} · реальные: %{real} · эм�
 # exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
 # `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
 orders.footer_total_tip: "Всего: %{total} — открытые ордера выбранных ядер (и только текущего маркета, если этот фильтр включён).\nРеальные: %{real} — ордера реального счёта, не эмулятор.\nЭмуляторные: %{emu} — ордера эмулятора Moonbot.\nФильтр «Все / Реальные / Эмуляторные» на эти счётчики не влияет."
+# Appended to the footer tooltip while the origin filter is on; %{origin} is its label.
+orders.footer_origin_tip: "Считаются только ордера «%{origin}»: включён фильтр Авто / Ручные."
 orders.show_all: "Показать все"
 orders.sort.profit: "Profit первые"
 orders.sort.sell: "Sell первые"

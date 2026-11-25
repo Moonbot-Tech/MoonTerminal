@@ -22,6 +22,13 @@ orders.settings: "Cài đặt"
 orders.kind.all: "Tất cả"
 orders.kind.real: "Thật"
 orders.kind.emu: "Giả lập"
+# Order-origin filter beside the kind filter: who placed the order. `both` is the trigger
+# label while every origin is shown, worded apart from `orders.kind.all` beside it.
+orders.origin.all: "Tất cả"
+orders.origin.auto: "Tự động"
+orders.origin.manual: "Thủ công"
+orders.origin.both: "Mọi nguồn"
+orders.origin.tip: "Ai đặt lệnh: Tự động — một chiến lược, Thủ công — bạn tự đặt. Lệnh do chiến lược Manual điều khiển được tính là thủ công."
 orders.only_current: "Chỉ lệnh của thị trường hiện tại"
 # Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
 # than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
@@ -40,6 +47,8 @@ orders.footer_total: "Tổng: %{total} · thật: %{real} · giả lập: %{emu}
 # exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
 # `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
 orders.footer_total_tip: "Tổng: %{total} — lệnh đang mở của các core đã chọn (và chỉ thị trường hiện tại, khi bộ lọc đó bật).\nThật: %{real} — lệnh trên tài khoản thật, không phải giả lập.\nGiả lập: %{emu} — lệnh giả lập Moonbot.\nBộ lọc Tất cả / Thật / Giả lập không đổi các số này."
+# Appended to the footer tooltip while the origin filter is on; %{origin} is its label.
+orders.footer_origin_tip: "Chỉ đếm các lệnh «%{origin}»: bộ lọc Tự động / Thủ công đang bật."
 orders.show_all: "Hiện tất cả"
 orders.sort.profit: "Profit trước"
 orders.sort.sell: "Sell trước"

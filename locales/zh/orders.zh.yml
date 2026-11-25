@@ -22,6 +22,13 @@ orders.settings: "设置"
 orders.kind.all: "全部"
 orders.kind.real: "真实"
 orders.kind.emu: "模拟"
+# Order-origin filter beside the kind filter: who placed the order. `both` is the trigger
+# label while every origin is shown, worded apart from `orders.kind.all` beside it.
+orders.origin.all: "全部"
+orders.origin.auto: "自动"
+orders.origin.manual: "手动"
+orders.origin.both: "自动/手动"
+orders.origin.tip: "谁下的订单：自动 — 策略；手动 — 您亲手下单。由 Manual 策略驱动的订单算作手动。"
 orders.only_current: "仅当前市场的订单"
 # Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
 # than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
@@ -40,6 +47,8 @@ orders.footer_total: "总计：%{total} · 真实：%{real} · 模拟：%{emu}"
 # exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
 # `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
 orders.footer_total_tip: "总计：%{total}——所选内核的挂单（启用该过滤器时仅限当前市场）。\n真实：%{real}——真实账户上的订单，不是模拟器。\n模拟：%{emu}——Moonbot 模拟器的订单。\n“全部 / 真实 / 模拟”过滤器不影响这些计数。"
+# Appended to the footer tooltip while the origin filter is on; %{origin} is its label.
+orders.footer_origin_tip: "仅统计“%{origin}”订单：已启用“自动 / 手动”过滤器。"
 orders.show_all: "显示全部"
 orders.sort.profit: "Profit 优先"
 orders.sort.sell: "Sell 优先"
