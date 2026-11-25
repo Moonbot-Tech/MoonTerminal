@@ -86,6 +86,7 @@ pub(super) fn is_live_action(cmd: &CoreCmd) -> bool {
         | CoreCmd::UpdateVersion { .. }
         | CoreCmd::SetAutoDetect(_)
         | CoreCmd::CancelAllOrders
+        | CoreCmd::CancelAllExchangeBuys
         // Irreversible one-shots: a late one wipes what accumulated since the press.
         | CoreCmd::ResetProfit(_)
         | CoreCmd::ClearProblems

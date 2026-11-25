@@ -215,8 +215,10 @@ pub(crate) struct Shell {
     /// seed from — in which case every write is refused rather than aimed at whatever core is
     /// active. See `core_settings::resolve_core_settings_write`.
     core_settings_target: Option<moon_core::session::CoreId>,
-    /// Confirmation stage for Cancel All Orders: the first click arms it and the second sends it.
-    core_settings_cancel_confirm: bool,
+    /// The popup's destructive action waiting for its confirming click — Cancel All Orders or
+    /// Cancel Entries On Exchange. The first click arms it and the second sends it; one slot for
+    /// both, so a click can only ever confirm the action that was armed.
+    core_settings_armed: Option<core_settings::armed::ArmedAction>,
     /// Whether the core-settings coin blacklist uses its fixed-height multiline editor instead of
     /// the collapsed single-line field.
     core_settings_bl_expanded: bool,

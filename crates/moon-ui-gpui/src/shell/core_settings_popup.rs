@@ -1,8 +1,9 @@
 //! Frame of the core-settings popover opened by the gear button beside the header core selector.
 //!
 //! The popup has two halves with deliberately different contracts. Above the tab strip sit the
-//! ACTIONS — restart, emulator, cancel all orders — which act on the core the moment they are
-//! pressed, because none of them is a value to be reviewed before committing. Below it sit the
+//! ACTIONS — restart, emulator, cancel entries on exchange, cancel all orders — which act on the
+//! core the moment they are pressed (the two cancellations after one confirming click), because
+//! none of them is a value to be reviewed before committing. Below it sit the
 //! tabs, [`general`] and [`autostart`], which edit ONE staged draft and reach the core only when OK
 //! is pressed, the way the Moonbot settings window they reproduce does.
 //!
@@ -30,7 +31,10 @@ use moon_core::session::CoreId;
 
 use crate::panels::popup_title;
 use crate::shell::Shell;
-use crate::shell::core_settings::{BlacklistReveal, resolve_core_settings_write};
+use crate::shell::core_settings::armed::{ArmedAction, ExchangeCancelOffer};
+use crate::shell::core_settings::{
+    BlacklistReveal, exchange_cancel_offer, group_core_name, resolve_core_settings_write,
+};
 use crate::{Backend, design};
 
 /// Unscaled content width shared with the popover host.
@@ -194,12 +198,13 @@ pub(crate) fn core_settings_tab_strip(
 ///     widgets: Editors and sliders prepared by Shell for this render.
 ///     editors: Retained blacklist and strategy-filter editors.
 ///     blacklist_expanded: Whether to render the multiline blacklist editor.
-///     cancel_confirm: Whether Cancel All Orders is awaiting confirmation.
+///     armed: The destructive action awaiting its confirming click, if any.
 ///     bl_reveal: Coin highlighted on the blacklist, when a reveal is showing.
 ///     view: Shell entity used by tab switching, staging, OK, and Cancel.
 ///     tab_strip: Pre-rendered contrast-safe tab strip, built where a mutable window is available.
 ///     cx: Application context used to read state and render controls.
-///     on_cancel_all: Callback for the staged Cancel All Orders action.
+///     on_armed: Callback for a click on either two-click action (Cancel All Orders, Cancel
+///         Entries On Exchange), told which one was clicked.
 ///     on_toggle_blacklist: Callback that toggles the blacklist editor mode.
 ///
 /// Returns:
@@ -212,12 +217,12 @@ pub(crate) fn core_settings_content(
     widgets: &SettingsWidgets,
     editors: &TextEditors<'_>,
     blacklist_expanded: bool,
-    cancel_confirm: bool,
+    armed: Option<ArmedAction>,
     bl_reveal: Option<BlacklistReveal<'_>>,
     view: &Entity<Shell>,
     tab_strip: AnyElement,
     cx: &App,
-    on_cancel_all: impl Fn(&mut App) + 'static,
+    on_armed: impl Fn(ArmedAction, &mut Window, &mut App) + 'static,
     on_toggle_blacklist: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let TabCtx {
@@ -262,7 +267,7 @@ pub(crate) fn core_settings_content(
             .into_any_element();
     };
 
-    let actions = action_row(&cs, cancel_confirm, ctx, cx, on_cancel_all);
+    let actions = action_row(&cs, armed, ctx, cx, on_armed);
 
     let body = match draft {
         Some(draft) => match tab {
@@ -345,13 +350,19 @@ fn expert_switch(ctx: &TabCtx<'_>, view: &Entity<Shell>, cx: &App) -> impl IntoE
         )
 }
 
-/// Immediate actions above the tab strip: restart, emulator, cancel all orders.
+/// Immediate actions above the tab strip: restart, emulator, cancel entries on exchange, cancel all
+/// orders.
+///
+/// The two cancellations share one confirmation slot (`core_settings::armed`): each asks once on
+/// its own button, and the exchange one also names the core it addresses in a banner while armed,
+/// because its reach — orders on the exchange that this terminal may never have seen — is not
+/// visible anywhere in the popup.
 fn action_row(
     cs: &moon_core::feed::ClientSettings,
-    cancel_confirm: bool,
+    armed: Option<ArmedAction>,
     ctx: &TabCtx<'_>,
     cx: &App,
-    on_cancel_all: impl Fn(&mut App) + 'static,
+    on_armed: impl Fn(ArmedAction, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let TabCtx {
         backend,
@@ -359,6 +370,19 @@ fn action_row(
         seeded,
         p,
     } = *ctx;
+    let on_armed = std::rc::Rc::new(on_armed);
+    // A RENDER-time read of the core to draw the exchange button for, resolved through the same
+    // guard the click re-runs: only the core the popup was opened over, and only while it is still
+    // the active one. Spelled `ctx.seeded` and `(group)` because it is a read, not a handler — the
+    // contract test counts the handler shape `(&group)` against `resolve_core_settings_write(seeded`.
+    let (exchange_offer, exchange_core_name) = {
+        let b = backend.read(cx);
+        let target = resolve_core_settings_write(ctx.seeded, b.active_trade_core(group));
+        (
+            exchange_cancel_offer(b, target),
+            target.map(|core| group_core_name(b, group, core)),
+        )
+    };
     let restart_btn = {
         let backend = backend.clone();
         let group = group.to_string();
@@ -389,17 +413,50 @@ fn action_row(
     );
     // Reset Session and Reset All live on the AutoStart tab beside the counters they clear, which
     // is where Moonbot puts them and the only place their effect is visible.
-    let cancel_all = MoonButton::new("core-cancel-all")
-        .label(if cancel_confirm {
-            t!("core_settings.cancel_all_confirm").to_string()
+    let cancel_all_armed = armed == Some(ArmedAction::CancelAll);
+    let cancel_all = {
+        let on_armed = on_armed.clone();
+        MoonButton::new("core-cancel-all")
+            .label(if cancel_all_armed {
+                t!("core_settings.cancel_all_confirm").to_string()
+            } else {
+                t!("core_settings.cancel_all").to_string()
+            })
+            .variant(MoonButtonVariant::Danger)
+            .selected(cancel_all_armed)
+            .padding_x(12.0)
+            .on_click(move |_, window, app| on_armed(ArmedAction::CancelAll, window, app))
+            .render()
+    };
+    // Armed only while it can still be sent. `Shell::reconcile_core_settings_popup` clears the slot
+    // once the core drops or loses N1; this guard covers the frame before that reconcile runs.
+    let exchange_armed = armed == Some(ArmedAction::ExchangeEntries) && exchange_offer.available();
+    let exchange_cancel = {
+        let tooltip = match exchange_offer {
+            ExchangeCancelOffer::Offered => t!("core_settings.exch_cancel_hint"),
+            ExchangeCancelOffer::NeedsNewerCore => t!("core_settings.exch_cancel_needs_core"),
+            ExchangeCancelOffer::Offline => t!("core_settings.exch_cancel_offline"),
+        };
+        let button = MoonButton::new("core-cancel-exchange-entries")
+            .label(if exchange_armed {
+                t!("core_settings.exch_cancel_confirm").to_string()
+            } else {
+                t!("core_settings.exch_cancel").to_string()
+            })
+            .variant(MoonButtonVariant::Danger)
+            .selected(exchange_armed)
+            .disabled(!exchange_offer.available())
+            .padding_x(12.0)
+            .tooltip(tooltip.to_string());
+        if exchange_offer.available() {
+            let on_armed = on_armed.clone();
+            button
+                .on_click(move |_, window, app| on_armed(ArmedAction::ExchangeEntries, window, app))
+                .render()
         } else {
-            t!("core_settings.cancel_all").to_string()
-        })
-        .variant(MoonButtonVariant::Danger)
-        .selected(cancel_confirm)
-        .padding_x(12.0)
-        .on_click(move |_, _w, app| on_cancel_all(app))
-        .render();
+            button.render()
+        }
+    };
     v_flex()
         .w_full()
         .gap(design::ui_px(cx, 6.0))
@@ -411,7 +468,31 @@ fn action_row(
                 .child(restart_btn)
                 .child(emu_check)
                 .child(div().flex_1())
+                .child(exchange_cancel)
                 .child(cancel_all),
+        )
+        // The confirmation's question: which account, and what the core will reach. Shown only
+        // while armed, so an unarmed popup carries no extra line.
+        .when_some(
+            exchange_armed.then_some(exchange_core_name).flatten(),
+            |this, core| {
+                let danger = design::danger_color(p);
+                this.child(
+                    div()
+                        .w_full()
+                        .px(design::ui_px(cx, 6.0))
+                        .py(design::ui_px(cx, 3.0))
+                        .rounded(design::r_button(cx))
+                        .bg(rgba_from(danger, 0.14))
+                        .border_1()
+                        .border_color(rgb(danger))
+                        .text_color(rgb(p.text))
+                        .text_size(design::t_caption(cx))
+                        .child(
+                            t!("core_settings.exch_cancel_armed", core = core.as_str()).to_string(),
+                        ),
+                )
+            },
         )
         // Display a prominent warning banner while emulator mode is enabled.
         .when(cs.emu_mode, |this| {

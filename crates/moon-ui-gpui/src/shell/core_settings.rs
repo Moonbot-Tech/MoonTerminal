@@ -1,11 +1,13 @@
 //! Hosts the core-settings popover opened by the gear button beside the header core selector.
-//! Owns open state, the staged draft both tabs edit, the two blacklist editors, and the Cancel All
-//! confirmation. `crate::shell::core_settings_popup` renders the content.
+//! Owns open state, the staged draft both tabs edit, the two blacklist editors, and the shared
+//! confirmation of the two destructive actions ([`armed`]). `crate::shell::core_settings_popup`
+//! renders the content.
 //!
 //! Everything below the tab strip commits on OK through [`Shell::commit_core_draft`]; the actions
-//! ABOVE it (restart, emulator, cancel all) act immediately, because none of them is a value to be
-//! reviewed before committing.
+//! ABOVE it (restart, emulator, cancel all, cancel entries on exchange) act immediately, because
+//! none of them is a value to be reviewed before committing.
 
+pub(crate) mod armed;
 pub(crate) mod draft;
 pub(crate) mod editors;
 
@@ -13,7 +15,7 @@ use std::time::Instant;
 
 use gpui::*;
 
-use moon_ui::{MoonButton, MoonPalette};
+use moon_ui::{MoonButton, MoonNotification, MoonPalette, MoonWindowExt as _};
 
 use moon_core::session::CoreId;
 
@@ -157,6 +159,47 @@ pub(crate) fn resolve_core_settings_write(
     }
 }
 
+/// What the exchange-entries button offers for the core the popup may write to.
+///
+/// Read from the store at render AND at the confirming click, through this one function, so the
+/// button and its click cannot disagree about the core's connection or its reported build.
+///
+/// Args:
+///     backend: Application state holding the session store.
+///     target: [`resolve_core_settings_write`]'s answer; `None` reads as offline.
+///
+/// Returns:
+///     The button's state, see [`armed::exchange_cancel_offer`].
+pub(crate) fn exchange_cancel_offer(
+    backend: &crate::Backend,
+    target: Option<CoreId>,
+) -> armed::ExchangeCancelOffer {
+    let Some(core) = target else {
+        return armed::ExchangeCancelOffer::Offline;
+    };
+    let features = backend
+        .session
+        .store()
+        .core(core)
+        .map(|data| data.features)
+        .unwrap_or_default();
+    armed::exchange_cancel_offer(backend.session.core_run_state(core).online, features)
+}
+
+/// The name the header pill shows for `core` in `group`, or its id when the group has no name.
+///
+/// The exchange confirmation and its toast name the core the same way the pill above them does,
+/// so the user reads one account name in all three places.
+pub(crate) fn group_core_name(backend: &crate::Backend, group: &str, core: CoreId) -> String {
+    backend
+        .group_cores(group)
+        .into_iter()
+        .find(|(id, _)| *id == core)
+        .map(|(_, name)| name)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| core.to_string())
+}
+
 impl Shell {
     /// Handle `MoonPopover::on_open_change` for the core-settings gear button.
     ///
@@ -173,7 +216,7 @@ impl Shell {
             return;
         }
         self.core_settings_open = open;
-        self.core_settings_cancel_confirm = false;
+        self.core_settings_armed = None;
         if open {
             self.core_settings_bl_expanded = false;
             self.core_settings_target = self.backend.read(cx).active_trade_core(&self.group);
@@ -253,6 +296,20 @@ impl Shell {
         if core_config_gone && self.core_settings_draft.is_some() {
             log::info!("core settings popup closed: the core it was opened over is gone");
             self.close_core_settings_popup();
+            return;
+        }
+        // An armed exchange cancellation is a question asked about the core as it was at the
+        // first click. Once that core drops or stops proving 7.73 N1 the question is void, so it is
+        // cleared here rather than merely drawn unarmed: otherwise the core coming back would bring
+        // the confirmation back with it, and one click would send on an answer from before the
+        // outage.
+        if self.core_settings_armed == Some(armed::ArmedAction::ExchangeEntries)
+            && !exchange_cancel_offer(b, Some(core)).available()
+        {
+            log::info!(
+                "core settings: exchange cancellation disarmed, the core can no longer take it"
+            );
+            self.core_settings_armed = None;
         }
     }
 
@@ -260,7 +317,7 @@ impl Shell {
     pub(super) fn close_core_settings_popup(&mut self) {
         self.core_settings_open = false;
         self.core_settings_target = None;
-        self.core_settings_cancel_confirm = false;
+        self.core_settings_armed = None;
         self.core_settings_draft = None;
         self.core_settings_seed = None;
         self.core_settings_editors.clear();
@@ -333,24 +390,67 @@ impl Shell {
             .update(cx, |st, c| st.set_value(text, window, c));
     }
 
-    /// Require one confirmation click before cancelling all orders for the popup's core.
+    /// Handle a click on one of the popup's two destructive actions: the first click arms it, a
+    /// second click on the same button sends it once to the popup's core ([`armed::press`]).
     ///
     /// The confirmation was armed against the core the popup was seeded from; if the active core
-    /// moved between the two clicks, the second click cancels nothing rather than wiping the orders
-    /// of a core the user never armed it for.
-    pub(super) fn core_settings_cancel_all_click(&mut self, cx: &mut Context<Self>) {
-        if !self.core_settings_cancel_confirm {
-            self.core_settings_cancel_confirm = true;
-            cx.notify();
-            return;
-        }
-        self.core_settings_cancel_confirm = false;
+    /// moved between the two clicks, the second click sends nothing rather than acting on a core
+    /// the user never armed it for. The exchange cancellation is re-checked against the core's
+    /// connection and reported build at the confirming click too, since either can change while
+    /// the button sits armed. Its outcome is a toast that says "sent", never "cancelled": the
+    /// core's own order updates are what report the exchange's answer.
+    ///
+    /// Args:
+    ///     pressed: The button that was clicked.
+    ///     window: Window that shows the outcome toast.
+    ///     cx: Shell context.
+    pub(super) fn core_settings_armed_click(
+        &mut self,
+        pressed: armed::ArmedAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let b = self.backend.read(cx);
-        if let Some(core) =
-            resolve_core_settings_write(self.core_settings_target, b.active_trade_core(&self.group))
-            && let Err(error) = b.session.cancel_all_orders(core)
-        {
-            log::warn!("cancel all orders failed: {error:#}");
+        let target = resolve_core_settings_write(
+            self.core_settings_target,
+            b.active_trade_core(&self.group),
+        );
+        let available = match pressed {
+            // The session refuses an offline core itself, and Cancel All has no version gate.
+            armed::ArmedAction::CancelAll => true,
+            armed::ArmedAction::ExchangeEntries => exchange_cancel_offer(b, target).available(),
+        };
+        let press = armed::press(self.core_settings_armed, pressed, target, available);
+        self.core_settings_armed = match press {
+            armed::Press::Arm(action) => Some(action),
+            armed::Press::Send(..) | armed::Press::Disarm => None,
+        };
+        match press {
+            armed::Press::Send(armed::ArmedAction::CancelAll, core) => {
+                if let Err(error) = b.session.cancel_all_orders(core) {
+                    log::warn!("cancel all orders failed: {error:#}");
+                }
+            }
+            armed::Press::Send(armed::ArmedAction::ExchangeEntries, core) => {
+                let name = group_core_name(b, &self.group, core);
+                let note = match b.session.cancel_exchange_entries(core) {
+                    Ok(()) => MoonNotification::info(
+                        t!("core_settings.exch_cancel_sent", core = name.as_str()).to_string(),
+                    ),
+                    Err(error) => {
+                        log::warn!("cancel exchange entries failed: {error:#}");
+                        MoonNotification::warning(
+                            t!("core_settings.exch_cancel_failed", core = name.as_str())
+                                .to_string(),
+                        )
+                    }
+                };
+                window.push_notification(note, cx);
+            }
+            armed::Press::Arm(action) => {
+                log::info!("core settings: {action:?} armed, waiting for the confirming click");
+            }
+            armed::Press::Disarm => {}
         }
         cx.notify();
     }
@@ -576,12 +676,16 @@ impl Shell {
             &widgets,
             &editors,
             self.core_settings_bl_expanded,
-            self.core_settings_cancel_confirm,
+            self.core_settings_armed,
             reveal,
             &view,
             tab_strip,
             cx,
-            move |app| cancel_view.update(app, |this, cx| this.core_settings_cancel_all_click(cx)),
+            move |action, window, app| {
+                cancel_view.update(app, |this, cx| {
+                    this.core_settings_armed_click(action, window, cx);
+                });
+            },
             move |window, app| {
                 toggle_view.update(app, |this, cx| {
                     let expanding = !this.core_settings_bl_expanded;

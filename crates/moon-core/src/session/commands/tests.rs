@@ -316,3 +316,84 @@ fn force_cancel_queues_its_own_command() {
         "force cancel must not fall back to the ordinary cancel: {kinds:?}"
     );
 }
+
+/// Mark the fixture core connected and say whether it has reported the 7.73 N1 build.
+fn set_exchange_cancel_state(session: &mut SessionManager, ready: bool, n1: bool) {
+    let data = session.store.core_mut(CORE).unwrap();
+    data.status = if ready {
+        crate::feed::ConnStatus::Ready
+    } else {
+        crate::feed::ConnStatus::Disconnected
+    };
+    data.features = crate::feed::CoreFeatures {
+        exchange_buys_cancel: n1,
+        ..Default::default()
+    };
+}
+
+/// A confirmed exchange-entry cancellation queues exactly one command of its own, even with an
+/// empty local order snapshot.
+///
+/// Mutations it catches: route the call to `CancelMarketBuys`/`CancelAllOrders` (the core's own
+/// BUY/pending or the account-wide cancel would run instead of the Markets Table action), send it
+/// once per local market (an empty snapshot then sends nothing), or send it twice. The feed's
+/// mapping onto `trade().cancel_all_exchange_buys()` needs a live `MoonClient` and is not reached
+/// here.
+#[test]
+fn exchange_entry_cancel_queues_one_command_with_an_empty_snapshot() {
+    let mut session = fixture(false, "");
+    set_exchange_cancel_state(&mut session, true, true);
+    assert!(session.store.core(CORE).unwrap().orders.is_empty());
+    session.cancel_exchange_entries(CORE).unwrap();
+    let (_, queued, _) = session
+        ._attempts
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the retry loop's second attempt drains the queue");
+    let kinds: Vec<_> = queued.iter().map(|q| &q.cmd).collect();
+    let sent = kinds
+        .iter()
+        .filter(|cmd| matches!(cmd, crate::feed::CoreCmd::CancelAllExchangeBuys))
+        .count();
+    assert_eq!(sent, 1, "exactly one exchange cancellation: {kinds:?}");
+    assert!(
+        !kinds.iter().any(|cmd| matches!(
+            cmd,
+            crate::feed::CoreCmd::CancelMarketBuys { .. } | crate::feed::CoreCmd::CancelAllOrders
+        )),
+        "the exchange cancellation must not fall back to another cancel: {kinds:?}"
+    );
+}
+
+/// A core that is offline, or connected without proving 7.73 N1, gets nothing queued.
+///
+/// Mutation: drop either refusal in `cancel_exchange_entries`. An older core silently ignores
+/// the request, so the toast would claim a cancellation that never happens; an offline core would
+/// take it whenever it reconnects. A sentinel command queued afterwards proves the queue was read.
+#[test]
+fn exchange_entry_cancel_refuses_offline_and_unproved_cores() {
+    let mut session = fixture(false, "");
+    set_exchange_cancel_state(&mut session, false, true);
+    assert!(session.cancel_exchange_entries(CORE).is_err());
+    set_exchange_cancel_state(&mut session, true, false);
+    assert!(session.cancel_exchange_entries(CORE).is_err());
+    session
+        .cancel_market_buys(CORE, "SENTINELUSDT".to_string())
+        .unwrap();
+    let (_, queued, _) = session
+        ._attempts
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the retry loop's second attempt drains the queue");
+    let kinds: Vec<_> = queued.iter().map(|q| &q.cmd).collect();
+    assert!(
+        kinds
+            .iter()
+            .any(|cmd| matches!(cmd, crate::feed::CoreCmd::CancelMarketBuys { .. })),
+        "the sentinel must have been drained: {kinds:?}"
+    );
+    assert!(
+        !kinds
+            .iter()
+            .any(|cmd| matches!(cmd, crate::feed::CoreCmd::CancelAllExchangeBuys)),
+        "a refused request must not reach the queue: {kinds:?}"
+    );
+}

@@ -894,6 +894,17 @@ pub enum CoreCmd {
     /// Cancel every order for the core from the confirmed core-settings action. This performs a
     /// live exchange action through moonproto `account().cancel_all_orders()`.
     CancelAllOrders,
+    /// Run the core's exchange-wide entry-order cancellation (MoonBot 7.73 N1+, MoonProto UI/63)
+    /// through moonproto `trade().cancel_all_exchange_buys()` — the Markets Table action.
+    ///
+    /// Not [`Self::CancelMarketBuys`] nor moonproto `trade().cancel_all_buys()`: the core itself
+    /// fetches the open orders from the exchange and applies its exchange-specific entry/exit
+    /// filter, so orders placed outside MoonBot and orders this terminal never saw are covered, and
+    /// on futures that filter may take orders on either side. Core-only pending orders are outside
+    /// it. Nothing local is enumerated or cleared; the core's own order updates report the result.
+    /// Older cores ignore it silently, so callers gate it on `CoreFeatures::exchange_buys_cancel`.
+    /// This is a live exchange action.
+    CancelAllExchangeBuys,
     /// Set the coin blacklist state and text. The feed patches
     /// `use_coins_black_list`/`coins_black_list_text` in the retained settings snapshot and sends
     /// it in full.

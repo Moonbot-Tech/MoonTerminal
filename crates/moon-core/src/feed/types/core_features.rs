@@ -17,8 +17,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CoreFeatures {
     /// MoonBot 7.73 N1+: `cancel_all_exchange_buys`, the exchange-wide entry-order cancellation.
-    /// Not read yet: it is the gate for that command's control (#1290), kept beside the N2 one so
-    /// both builds are detected in one place.
+    /// Gates that command twice (#1290): the core-settings popup offers its button only on such a
+    /// core, and `SessionManager::cancel_exchange_entries` refuses to queue it anywhere else.
     ///
     /// Driven by `RuntimeStateCommand::moon_stream_enabled`, the Moon Streamer switch N1 added to
     /// the same report; MoonProto documents it as `None` on every core before N1. An N2 tail
