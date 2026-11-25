@@ -190,11 +190,13 @@ pub(in crate::chartdx) struct PaneRender {
     /// otherwise keep printing the previous one's arbitrage prices until the quarter-second was up.
     /// Every other readout here follows the new market on the revision that changed it.
     pub(in crate::chartdx) label_arb_market: String,
-    /// Wall clock the funding countdown is measured against, QUANTIZED TO THE MINUTE.
+    /// Wall clock the clock captions — the countdowns and the position stopwatch — are measured
+    /// against, QUANTIZED to the step `ChartLabelsCfg::countdown_clock_ms` picks: a minute, or a
+    /// second while a caption prints seconds.
     ///
     /// Quantized because it is part of the caption cache key: the raw clock would differ on every
-    /// revision and re-format a countdown that prints the same minute either way. Zero while no
-    /// countdown is configured, so an unused clock cannot wake anything.
+    /// revision and re-format a countdown that prints the same figure either way. Zero while no
+    /// clock caption is configured, so an unused clock cannot wake anything.
     pub(in crate::chartdx) label_now_ms: i64,
     /// What this pane's market buttons state, as the panel last pushed it.
     ///

@@ -594,7 +594,8 @@ impl ChartDataState {
 
     /// Advance the countdown captions when their quantized clock moves, WITHOUT a market sync.
     ///
-    /// A countdown is the one caption whose value changes with nothing but the clock, and the sync
+    /// A countdown — and the position stopwatch, which is one run forwards — is a caption whose
+    /// value changes with nothing but the clock, and the sync
     /// that normally re-formats captions runs only when the view is dirty or a market revision
     /// moved. On a quiet market neither happens for minutes, and the countdown would sit frozen —
     /// which is the one failure a clock on screen must not have.

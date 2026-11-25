@@ -180,6 +180,9 @@ fn sample_inputs() -> LabelInputs {
         exposure: 495.96,
         has_exposure: true,
         has_position: true,
+        // Twelve minutes and three seconds before the sample clock, which stands at the epoch: the
+        // preview prints the figure in its common `12м 03с` shape rather than a bare second.
+        position_since_ms: Some(-723_000),
     };
     LabelInputs {
         ticker: "BTC-USDT".to_string(),
