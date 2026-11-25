@@ -250,6 +250,9 @@ pub(super) struct LineKind {
     pub(super) markers: bool,
     /// Whether the line has a separate look for an order that is not filled yet (entries only).
     pub(super) pending: bool,
+    /// Whether the card offers the app-wide "draw" switch, `OrdersStyleSet::draw_take_profit`
+    /// (#1409). The take-profit line only: it is the one line that marks a price no order sits at.
+    pub(super) draw_switch: bool,
 }
 
 /// The ten order lines, in table order.
@@ -259,60 +262,70 @@ pub(super) const LINE_KINDS: [LineKind; 10] = [
         name: "lines.name.buy_long",
         markers: true,
         pending: true,
+        draw_switch: false,
     },
     LineKind {
         key: "buy_short",
         name: "lines.name.buy_short",
         markers: true,
         pending: true,
+        draw_switch: false,
     },
     LineKind {
         key: "sell",
         name: "lines.name.sell_long",
         markers: true,
         pending: false,
+        draw_switch: false,
     },
     LineKind {
         key: "sell_short",
         name: "lines.name.sell_short",
         markers: true,
         pending: false,
+        draw_switch: false,
     },
     LineKind {
         key: "stop",
         name: "lines.name.stop",
         markers: true,
         pending: false,
+        draw_switch: false,
     },
     LineKind {
         key: "trailing",
         name: "lines.name.trailing",
         markers: true,
         pending: false,
+        draw_switch: false,
     },
     LineKind {
         key: "take_profit",
         name: "lines.name.take_profit",
         markers: true,
         pending: false,
+        draw_switch: true,
     },
     LineKind {
         key: "vstop",
         name: "lines.name.vstop",
         markers: true,
         pending: false,
+        draw_switch: false,
     },
     LineKind {
         key: "pending_cond",
         name: "lines.name.pending",
         markers: true,
         pending: false,
+        draw_switch: false,
     },
     LineKind {
         key: "liq",
         name: "lines.name.liquidation",
         markers: false,
         pending: false,
+        draw_switch: false,
     },
 ];
 
@@ -718,8 +731,8 @@ impl SettingsView {
         })
     }
 
-    /// The selected line's card rows: colour, width, dash, the not-filled look of an entry, and
-    /// the crosses and knots of a line that has them.
+    /// The selected line's card rows: the take-profit line's app-wide draw switch, colour, width,
+    /// dash, the not-filled look of an entry, and the crosses and knots of a line that has them.
     fn line_card_rows(&self, idx: usize, cx: &Context<Self>) -> Vec<AnyElement> {
         let kind = &LINE_KINDS[idx];
         let ed = self.lines.ed(idx);
@@ -731,7 +744,31 @@ impl SettingsView {
             |st: &Entity<MoonColorPickerState>| super::common::swatch_picker(st).into_any_element();
         // Element ids carry the row so a retained checkbox never shows another line's state.
         let check_id = |what: &str| SharedString::from(format!("line-{}-{what}", kind.key));
-        let mut rows = vec![
+        let mut rows = Vec::new();
+        // First, above the looks: when the line is off, nothing below it shows on a chart.
+        if kind.draw_switch {
+            let cur = {
+                let b = self.backend.read(cx);
+                b.preview
+                    .as_ref()
+                    .unwrap_or(&b.config)
+                    .orders
+                    .draw_take_profit
+            };
+            rows.push(card_row(
+                "lines-card-draw",
+                t!("lines.draw").to_string(),
+                self.draft_checkbox(cx, check_id("draw"), cur, |p, v| {
+                    let changed = p.orders.draw_take_profit != v;
+                    p.orders.draw_take_profit = v;
+                    changed
+                })
+                .label(t!("lines.take_profit.draw_hint").to_string())
+                .into_any_element(),
+                cx,
+            ));
+        }
+        rows.extend([
             card_row(
                 "lines-card-color",
                 t!("badges.col.color").to_string(),
@@ -756,7 +793,7 @@ impl SettingsView {
                 .into_any_element(),
                 cx,
             ),
-        ];
+        ]);
         // Only entry lines have a separate colour and opacity for unfilled orders (`fill == 0`).
         // An absent pending colour falls back to the line's primary colour.
         if kind.pending {

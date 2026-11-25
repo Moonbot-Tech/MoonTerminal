@@ -292,6 +292,18 @@ impl OrdersStyle {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct OrdersStyleSet {
+    /// Whether the take-profit line is drawn on any chart at all (#1409).
+    ///
+    /// Beside the two sets rather than inside [`OrdersStyle`], because it is not a matter of looks:
+    /// a user who wants the MoonBot chart, which has no take-profit line, wants it gone in either
+    /// theme, and a per-theme switch would bring it back on the next theme change. Declared before
+    /// the two tables so the serialized file keeps its plain value ahead of them.
+    ///
+    /// Off hides only the LINE: the order keeps its take-profit, trailing still waits for that
+    /// price, and every other line stays. On still draws it only while the order's own trailing is
+    /// on — that gate lives in the order-line store, where the flag arrives. An `orders.toml` from
+    /// before this field reads it as on, so an upgrade keeps the line a chart already showed.
+    pub draw_take_profit: bool,
     pub dark: OrdersStyle,
     pub light: OrdersStyle,
 }
@@ -300,6 +312,7 @@ impl Default for OrdersStyleSet {
     fn default() -> Self {
         // Defaults = the user's current sets: dark plus its OWN light set (baked from orders.toml).
         Self {
+            draw_take_profit: true,
             dark: OrdersStyle::default(),
             light: OrdersStyle::default_light(),
         }
@@ -365,8 +378,15 @@ impl OrdersStyleSet {
             return Ok((set, cloned_light));
         }
         // Old flat file → take the dark set from the file and the light set from its own default.
+        // A file carrying no theme table can still hold the set-level switch — hand-trimmed to it,
+        // say — and a stored answer is kept whatever shape the rest of the file has.
         let flat: OrdersStyle = toml::from_str(text)?;
+        let draw_take_profit = toml::from_str::<toml::Value>(text)?
+            .get("draw_take_profit")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true);
         let set = Self {
+            draw_take_profit,
             light: OrdersStyle::default_light(),
             dark: flat,
         };
@@ -396,13 +416,22 @@ impl OrdersStyleSet {
                 .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
         };
         if table_has("dark") || table_has("light") {
-            return toml::from_str(text).ok();
+            let mut set: Self = toml::from_str(text).ok()?;
+            // A set copied before the switch existed carries no answer for it, and pasting its
+            // colours must not quietly bring back a line the user turned off.
+            if v.get("draw_take_profit").is_none() {
+                set.draw_take_profit = current.draw_take_profit;
+            }
+            return Some(set);
         }
         if v.as_table()
             .is_some_and(|t| KEYS.iter().any(|k| t.contains_key(*k)))
         {
+            // A flat file predates the set-level switch, so it says nothing about it: the
+            // current choice stays, like the light set beside it.
             let flat: OrdersStyle = toml::from_str(text).ok()?;
             return Some(Self {
+                draw_take_profit: current.draw_take_profit,
                 dark: flat,
                 light: current.light.clone(),
             });

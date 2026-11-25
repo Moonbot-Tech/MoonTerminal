@@ -791,8 +791,16 @@ impl OrderLineStore {
                     fill_start_ms,
                     LineKind::Trailing as usize,
                 ),
+                // The take-profit price is what trailing waits for, and nothing else reads it: it
+                // places no order and does not follow the price. With the order's trailing off it
+                // points at a price nothing uses — a hand trade's strategy writes the percent even
+                // then, and turning trailing off later does not clear it — so the line exists only
+                // while the order's OWN trailing flag is on (#1409). `ts_on` is that flag, the one
+                // «Stops» edits on an open order; after the fill it is no longer inherited from the
+                // strategy. Off disables the line, which drops it from the chart whole; on again
+                // re-enables it at the same price. The row's `take_profit` itself is untouched.
                 (
-                    go(f, r.take_profit),
+                    go(f && r.ts_on, r.take_profit),
                     fill_start_ms,
                     LineKind::TakeProfit as usize,
                 ),

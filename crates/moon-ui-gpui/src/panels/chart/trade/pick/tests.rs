@@ -71,15 +71,28 @@ fn entry_cancel_mode_targets_buy_lines_only() {
 /// drag fill guard here would leave an entry order under the cursor impossible to cancel.
 #[test]
 fn entry_cancel_admits_a_partially_filled_entry() {
-    assert!(OrderHitMode::EntryCancel.admits(LineKind::Buy, 37.5));
+    assert!(OrderHitMode::EntryCancel.admits(LineKind::Buy, 37.5, true));
 }
 
 /// `trade/pick.rs:OrderHitMode::admits` must reject a filled Buy during Drag; removing that guard
 /// would make dragging a historical entry send a move command for a completed order.
 #[test]
 fn drag_mode_rejects_a_filled_entry() {
-    assert!(OrderHitMode::Drag { cross_only: false }.admits(LineKind::Buy, 0.0));
-    assert!(!OrderHitMode::Drag { cross_only: false }.admits(LineKind::Buy, 0.01));
+    assert!(OrderHitMode::Drag { cross_only: false }.admits(LineKind::Buy, 0.0, true));
+    assert!(!OrderHitMode::Drag { cross_only: false }.admits(LineKind::Buy, 0.01, true));
+}
+
+/// `trade/pick.rs:OrderHitMode::admits` must refuse the take-profit line while the order-line
+/// settings hide it (#1409): dropping the `line_kind_drawn` check would let the pointer grab a line
+/// that is not on screen and send a take-profit move for it. The other drag targets stay grabbable.
+#[test]
+fn a_hidden_take_profit_line_cannot_be_grabbed() {
+    let drag = OrderHitMode::Drag { cross_only: false };
+    assert!(drag.admits(LineKind::TakeProfit, 100.0, true));
+    assert!(!drag.admits(LineKind::TakeProfit, 100.0, false));
+    for kind in [LineKind::Sell, LineKind::Stop, LineKind::Trailing] {
+        assert!(drag.admits(kind, 100.0, false), "{kind:?} stays grabbable");
+    }
 }
 
 /// `trade/pick.rs:OrderHitMode::cross_band_only` must be true only for cross-only Drag; widening

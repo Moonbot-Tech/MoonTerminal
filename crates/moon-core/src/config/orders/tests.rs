@@ -46,3 +46,68 @@ fn both_theme_sets_default_to_the_line_colour_for_the_path() {
     assert!(set.dark.path.use_line_color);
     assert!(set.light.path.use_line_color);
 }
+
+/// `OrdersStyleSet::draw_take_profit` arrived after users had saved `orders.toml` without it (#1409).
+/// Such a file must load with the line still drawn — an upgrade must not hide what a chart showed —
+/// and keep everything else it carries.
+#[test]
+fn an_orders_toml_written_before_draw_take_profit_still_draws_the_line() {
+    let text = "\
+[dark]
+active_alpha = 0.8
+
+[dark.take_profit]
+color = [1, 2, 3]
+";
+    let set: OrdersStyleSet = toml::from_str(text).expect("a pre-#1409 orders.toml must decode");
+    assert!(set.draw_take_profit, "an absent switch resolves to drawn");
+    assert_eq!(set.dark.take_profit.color, [1, 2, 3]);
+    assert!((set.dark.active_alpha - 0.8).abs() < 1e-6);
+}
+
+/// A stored OFF is the user's choice and must survive a save and a load — the value sits at the
+/// top of the file, ahead of the two theme tables, so it must also serialize there at all.
+#[test]
+fn a_stored_draw_take_profit_off_survives_a_round_trip() {
+    let set = OrdersStyleSet {
+        draw_take_profit: false,
+        ..OrdersStyleSet::default()
+    };
+    let text = toml::to_string_pretty(&set).expect("the set serializes");
+    let (back, write_back) = OrdersStyleSet::resolve(&text).expect("its own output decodes");
+    assert!(!back.draw_take_profit, "a stored off must not be rewritten");
+    assert!(!write_back, "nothing needed migrating");
+    assert_eq!(back, set);
+}
+
+/// Pasting a set copied before the switch existed changes the colours it carries, not the user's
+/// answer to a question that file never asked; a pasted file that does carry it wins.
+#[test]
+fn pasting_a_set_without_the_switch_keeps_the_current_choice() {
+    let current = OrdersStyleSet {
+        draw_take_profit: false,
+        ..OrdersStyleSet::default()
+    };
+    let old = "[dark.take_profit]\ncolor = [9, 9, 9]\n";
+    let pasted = OrdersStyleSet::parse_share(old, &current).expect("an orders set");
+    assert!(!pasted.draw_take_profit);
+    assert_eq!(pasted.dark.take_profit.color, [9, 9, 9]);
+
+    let flat = "[take_profit]\ncolor = [9, 9, 9]\n";
+    let pasted = OrdersStyleSet::parse_share(flat, &current).expect("a flat set");
+    assert!(!pasted.draw_take_profit);
+
+    let new = "draw_take_profit = true\n\n[dark.take_profit]\ncolor = [9, 9, 9]\n";
+    let pasted = OrdersStyleSet::parse_share(new, &current).expect("an orders set");
+    assert!(pasted.draw_take_profit);
+}
+
+/// A file with no theme table takes the legacy flat branch of `resolve`, and that branch must not
+/// reset a stored switch: a stored off stays off even in a file trimmed down to it.
+#[test]
+fn a_file_without_theme_tables_keeps_a_stored_draw_take_profit() {
+    let (set, _) = OrdersStyleSet::resolve("draw_take_profit = false\n").expect("decodes");
+    assert!(!set.draw_take_profit);
+    let (set, _) = OrdersStyleSet::resolve("active_alpha = 0.5\n").expect("decodes");
+    assert!(set.draw_take_profit, "absent still resolves to drawn");
+}

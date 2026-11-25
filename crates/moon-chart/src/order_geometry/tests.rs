@@ -29,6 +29,7 @@ fn bench_day_of_order_reprices_geometry() {
             "COIN_A",
             &OrdersStyle::default(),
             &ChartGraphicsCfg::default(),
+            true,
             1.0,
             None,
             None,
@@ -149,6 +150,7 @@ fn bench_goal_b_order_geometry_revision() {
                 "XALPHAUSDT",
                 &OrdersStyle::default(),
                 &ChartGraphicsCfg::default(),
+                true,
                 1.0,
                 None,
                 None,
@@ -289,6 +291,7 @@ fn draw_order_segments(
         "BTCUSDT",
         style,
         graphics,
+        true,
         1.0,
         None,
         None,
@@ -322,6 +325,7 @@ fn draw_order_markers(
         "BTCUSDT",
         style,
         graphics,
+        true,
         1.0,
         None,
         None,
@@ -428,6 +432,7 @@ fn an_order_dated_only_by_its_exit_survives_a_window_before_its_creation() {
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
+        true,
         1.0,
         None,
         None,
@@ -470,6 +475,7 @@ fn moonshot_zone_keeps_moonbot_fixed_opacity() {
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
+        true,
         1.0,
         None,
         None,
@@ -509,6 +515,7 @@ fn server_trace_is_separate_from_active_order_line() {
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
+        true,
         1.0,
         None,
         None,
@@ -737,6 +744,7 @@ fn dragging_order_keeps_server_trace_visible() {
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
+        true,
         1.0,
         None,
         Some((42, LineKind::Buy, 62_000.0)),
@@ -873,6 +881,7 @@ fn a_closed_orders_local_staircase_fades_with_the_order() {
         "BTCUSDT",
         &style,
         &ChartGraphicsCfg::default(),
+        true,
         1.0,
         None,
         None,
@@ -1020,6 +1029,8 @@ fn filled_order_without_trace(now: f64) -> OrderRow {
     row.stop_loss = Some(59_000.0);
     row.trailing = Some(59_500.0);
     row.take_profit = Some(62_000.0);
+    // The take-profit line exists only while the order's own trailing is on (#1409).
+    row.ts_on = true;
     row.vstop = Some(58_000.0);
     row.pending_cond = Some(57_000.0);
     row.filled = true;
@@ -1054,6 +1065,7 @@ fn geometry_for_scaled(
         "BTCUSDT",
         &OrdersStyle::default(),
         graphics,
+        true,
         scale,
         None,
         None,
@@ -1219,6 +1231,7 @@ fn entry_fill_before_a_fallback_creation_is_clamped_to_the_line_start() {
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
+        true,
         1.0,
         None,
         None,
@@ -1310,6 +1323,7 @@ fn bright_closed_trades_leave_cancelled_orders_under_closed_alpha() {
         "BTCUSDT",
         &style,
         &graphics,
+        true,
         1.0,
         None,
         None,
@@ -1449,6 +1463,7 @@ fn filled_repriced_entry_path_stops_at_fill_without_post_fill_risers() {
         "BTCUSDT",
         &OrdersStyle::default(),
         &ChartGraphicsCfg::default(),
+        true,
         1.0,
         None,
         None,
@@ -1631,6 +1646,7 @@ fn moonshot_zone_toggle_hides_only_the_corridor() {
             "BTCUSDT",
             &OrdersStyle::default(),
             &graphics,
+            true,
             1.0,
             None,
             None,
@@ -1867,6 +1883,7 @@ fn draw_strategy_segments(
         "BTCUSDT",
         style,
         &graphics,
+        true,
         1.0,
         None,
         None,
@@ -1904,6 +1921,8 @@ fn strategy_colors_and_all_five_patterns_reach_order_geometry() {
                     row.stop_loss = Some(59_000.0);
                     row.trailing = Some(59_100.0);
                     row.take_profit = Some(63_000.0);
+                    // Trailing on, or the take-profit line is not drawn at all (#1409).
+                    row.ts_on = true;
                     row.vstop = Some(58_000.0);
                     row.pending_cond = Some(60_500.0);
                     row.liq = Some(50_000.0);
@@ -2188,4 +2207,52 @@ fn sparse_strategy_defaults_and_late_schema_override_global_styles() {
         bytemuck::cast_slice::<SegInstance, u8>(&before),
         bytemuck::cast_slice::<SegInstance, u8>(&other_kind)
     );
+}
+
+/// `OrdersStyleSet::draw_take_profit` off removes the take-profit line from the picture and nothing
+/// else: the stop, the trailing stop and the exit of the same order stay where they were (#1409).
+#[test]
+fn take_profit_switch_off_hides_only_the_take_profit_line() {
+    let now = now_unix_ms();
+    let mut store = OrderLineStore::default();
+    assert!(store.update(&[filled_order_without_trace(now)], 0));
+    let draw = |draw_take_profit: bool| {
+        let (mut zones, mut hlines, mut segs, mut markers) = Default::default();
+        build_order_geometry(
+            &store,
+            &[],
+            None,
+            "BTCUSDT",
+            &OrdersStyle::default(),
+            &ChartGraphicsCfg::default(),
+            draw_take_profit,
+            1.0,
+            None,
+            None,
+            now - 700_000.0,
+            now + 100_000.0,
+            0.0,
+            800_000.0,
+            800_000.0,
+            &mut zones,
+            &mut hlines,
+            &mut segs,
+            &mut markers,
+        );
+        segs
+    };
+    let has = |segs: &[SegInstance], price: f32| segs.iter().any(|seg| near(seg.p0, price));
+
+    let shown = draw(true);
+    assert!(
+        has(&shown, 62_000.0),
+        "switch on: the take-profit line is drawn"
+    );
+    let hidden = draw(false);
+    assert!(!has(&hidden, 62_000.0), "switch off: no take-profit line");
+    for price in [61_000.0, 59_000.0, 59_500.0, 58_000.0] {
+        assert!(has(&hidden, price), "price {price} must stay drawn");
+    }
+    assert!(!line_kind_drawn(LineKind::TakeProfit, false));
+    assert!(line_kind_drawn(LineKind::Stop, false));
 }

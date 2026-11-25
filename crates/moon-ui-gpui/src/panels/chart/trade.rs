@@ -691,6 +691,10 @@ impl ChartPanel {
             |t_ms: f64| plot.x + ((t_ms - epoch_ms) as f32 - left_rel) / window_ms * plot.w;
         let threshold = (6.0 * self.last_ppp).max(6.0);
         let mut best: Option<OrderCandidate> = None;
+        // The order-line settings can hide the take-profit line on every chart (#1409); a line
+        // that is not drawn must not be grabbed either. Read from the engine, so the answer is the
+        // one the picture on screen was drawn under.
+        let draw_take_profit = self.chart.draws_take_profit();
         if let Some(core_data) = self.backend.read(cx).session.store().core(core) {
             // Iterated, not collected: this runs on every mouse-move past the probe threshold, and
             // the ranking below ends on a unique `seq`, so the winner does not depend on the order
@@ -709,7 +713,7 @@ impl ChartPanel {
                     // is historical; manage the position through its Sell exit and stops instead.
                     // The keyboard route admits a filled entry because it is still cancellable on
                     // the exchange.
-                    if !mode.admits(kind, order.fill_pct) {
+                    if !mode.admits(kind, order.fill_pct, draw_take_profit) {
                         continue;
                     }
                     let line = &order.lines[kind as usize];

@@ -140,6 +140,25 @@ pub fn line_is_pinned(order: &RetainedOrder, kind: LineKind) -> bool {
         && order.lines[kind as usize].off_ms.is_none()
 }
 
+/// Whether lines of this kind are drawn on the chart at all, under the user's order-line settings.
+///
+/// Only the take-profit line can be switched off, by `OrdersStyleSet::draw_take_profit` (#1409),
+/// and the answer is asked in two places that must agree: the geometry that draws the line, and
+/// the hit test that lets the pointer grab and drag it. A hidden line that could still be dragged
+/// would reprice an order the user cannot see a handle for. Whether a given order HAS the line —
+/// its trailing, its fill — is the order-line store's to say, not this function's.
+///
+/// Args:
+///     kind: Which leg.
+///     draw_take_profit: The user's take-profit switch.
+///
+/// Returns:
+///     Whether lines of `kind` may be drawn and grabbed.
+#[inline]
+pub fn line_kind_drawn(kind: LineKind, draw_take_profit: bool) -> bool {
+    kind != LineKind::TakeProfit || draw_take_profit
+}
+
 /// Traced line kinds: the style each is drawn with, paired with the leg it belongs to.
 fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
     [
@@ -171,6 +190,10 @@ fn traced_kinds(s: &OrdersStyle) -> [(&LineStyle, LineKind); 7] {
 /// The four output buffers are CLEARED first and then filled: this builds one store's whole
 /// picture, it does not append. A caller drawing a second store beside the first hands it buffers
 /// of its own and extends — the terminal's archived-lines pass does exactly that.
+///
+/// `draw_take_profit` is the user's app-wide take-profit switch ([`line_kind_drawn`]). It is an
+/// argument of its own rather than a field of `style`, because `style` is ONE theme's set and the
+/// switch belongs to neither theme.
 #[allow(clippy::too_many_arguments)]
 pub fn build_order_geometry(
     store: &OrderLineStore,
@@ -179,6 +202,7 @@ pub fn build_order_geometry(
     market: &str,
     style: &OrdersStyle,
     graphics: &ChartGraphicsCfg,
+    draw_take_profit: bool,
     // Device pixels per logical pixel. Marker half-extents are PHYSICAL px, so the fill arrow
     // needs it for the same reason a trade-history arrow does.
     scale: f32,
@@ -321,6 +345,10 @@ pub fn build_order_geometry(
         let path = &style.path;
 
         for (st, kind) in kinds {
+            // Switched off in the order-line settings: not drawn on any chart, trace included.
+            if !line_kind_drawn(kind, draw_take_profit) {
+                continue;
+            }
             // After an order closes (filled/cancelled), ONLY its entry/exit (Buy/Sell) remain
             // on the chart, translucent (`closed_alpha`). Remove stop/trailing/vstop/take-profit/
             // pending lines and their server traces for a closed order.
