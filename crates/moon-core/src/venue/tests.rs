@@ -373,6 +373,38 @@ fn binance_spot_and_futures_are_separate_wallets() {
     assert_eq!(uid(MarketKind::Futures), uid(MarketKind::Futures));
 }
 
+/// Breakage: `AccountMergeKey::with_currency` ignored on Binance — a USDT-M and a USDC-M core on
+/// one uid each report their own currency's equity; folded, the smaller of the two vanished from
+/// every total. On Bybit's unified account every core reports the whole account, so it still
+/// folds.
+#[test]
+fn binance_cores_in_different_currencies_are_different_money() {
+    let key = |brand, currency| {
+        super::merge_key(
+            Some(Venue {
+                brand,
+                kind: MarketKind::Futures,
+            }),
+            crate::account::AccountIdentity::from_auth("acct-a", "", 777),
+        )
+        .map(|key| key.with_currency(Some(currency)))
+    };
+    assert_ne!(key(Brand::Binance, "USDT"), key(Brand::Binance, "USDC"));
+    assert_eq!(key(Brand::Binance, "USDT"), key(Brand::Binance, "usdt"));
+    assert_eq!(key(Brand::Bybit, "USDT"), key(Brand::Bybit, "USDC"));
+    let spot = |currency| {
+        super::merge_key(
+            Some(Venue {
+                brand: Brand::Binance,
+                kind: MarketKind::Spot,
+            }),
+            crate::account::AccountIdentity::from_auth("", "", 777),
+        )
+        .map(|key| key.with_currency(Some(currency)))
+    };
+    assert_eq!(spot("USDT"), spot("BTC"), "spot keeps its fold");
+}
+
 /// Breakage: `merge_key` leaving the brand out of the key — one account id reused on two
 /// exchanges names two different wallets.
 #[test]

@@ -334,12 +334,39 @@ pub struct AccountMergeKey {
     /// `None` on a brand whose spot and futures share one wallet; otherwise the market, so only
     /// cores on the same market of a separate-wallet brand merge.
     kind: Option<MarketKind>,
+    /// On a separate-wallet brand, the currency the core reports its balance in (see
+    /// [`Self::with_currency`]); `None` otherwise.
+    currency: Option<String>,
 }
 
 impl AccountMergeKey {
     /// The brand whose wallet this key names.
     pub const fn brand(&self) -> Brand {
         self.brand
+    }
+
+    /// Narrow a futures key to the currency the core reports its balance in, on a brand whose
+    /// markets keep separate wallets.
+    ///
+    /// A Binance USDT-M core and a USDC-M core on one uid share a futures wallet, but each reports
+    /// the equity of its OWN currency: the USDT core its USDT balance, the USDC core its USDC
+    /// balance. They are different money; folding them kept the larger reading and dropped the
+    /// other from every total. On a shared-wallet brand (Bybit unified account) every core reports
+    /// the whole account, so the fold stays as it is; spot and quarterly keys are left alone too,
+    /// as nothing there has been seen to report per currency.
+    ///
+    /// Args:
+    ///     currency: The core's account currency (`CoreBase`), or `None` while unknown.
+    ///
+    /// Returns:
+    ///     The key, narrowed on a separate-wallet brand's futures market.
+    pub fn with_currency(mut self, currency: Option<&str>) -> Self {
+        if self.brand.wallet_scope() == WalletScope::PerMarket
+            && self.kind == Some(MarketKind::Futures)
+        {
+            self.currency = currency.map(|c| c.trim().to_ascii_uppercase());
+        }
+        self
     }
 }
 
@@ -379,6 +406,7 @@ pub fn merge_key(
         brand: venue.brand,
         account,
         kind,
+        currency: None,
     })
 }
 

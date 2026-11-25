@@ -1740,10 +1740,23 @@ impl SessionManager {
     /// Return which exchange account and wallet the core's balance is, or `None` when unknown.
     ///
     /// The key every balance total folds shared accounts by ([`super::balances`]), decided per
-    /// brand by `venue::merge_key` from the core's venue and its stated account identity.
+    /// brand by `venue::merge_key` from the core's venue and its stated account identity, and on a
+    /// separate-wallet brand's futures market narrowed to the core's currency
+    /// ([`AccountMergeKey::with_currency`]).
+    ///
+    /// The currency comes from the live `CoreBase` and, once the session has ended, from the
+    /// retained balance snapshot: an offline core still contributes that snapshot to the total,
+    /// and a key that lost its currency there would no longer fold with its live sibling.
     pub fn account_merge_key(&self, core: CoreId) -> Option<AccountMergeKey> {
         let venue = self.core_venue.get(&core).and_then(|v| v.resolved());
+        let currency = self.core_base(core).or_else(|| {
+            self.store
+                .core(core)
+                .map(|cd| cd.assets.base_currency.trim())
+                .filter(|base| !base.is_empty())
+        });
         crate::venue::merge_key(venue, self.account_identity(core))
+            .map(|key| key.with_currency(currency))
     }
 
     /// Return the core account's base currency, such as `USDT` or `BTC`, once `CoreBase` has
