@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, types::Value};
 
+use super::calendar::NOT_A_TRADE;
 use super::groups::group_quote_scope;
 use super::strategy_meta::{StrategyMetadata, SummaryMetadata, read_metadata};
 use super::{CoreSeries, DayPoint, GroupStat, PeriodStats, Query, TopTrade};
@@ -100,7 +101,12 @@ impl RawGroup {
 /// Active-lens metrics shared by strategy and coin Summary groups.
 #[derive(Clone, Debug, Default)]
 struct GroupAccumulator {
+    /// Whether any row, Funding included, reached this group yet. The strategy-identity check
+    /// needs "first row", which `n` no longer answers once Funding rows stay out of it.
+    seen: bool,
+    /// Trades, Funding rows excluded.
     n: i64,
+    /// Active-lens profit, Funding money included.
     profit: f64,
     wins: i64,
     win_sum: f64,
@@ -117,23 +123,18 @@ struct GroupAccumulator {
 impl GroupAccumulator {
     /// Add one active-lens row while preserving SQL aggregate semantics.
     ///
+    /// A Funding row ([`NOT_A_TRADE`]) is money without a trade: it adds to the group's profit,
+    /// raw profit and quote identity, and to nothing that counts or ranks trades — not `n`, the
+    /// wins, the profit-factor sums, best/worst, nor the spend behind the average order (the
+    /// funded position is not an order the group placed).
+    ///
     /// Args:
     ///     row: Chronological report row to aggregate.
     ///     include_raw: Whether raw-money fields belong to this pass instead of a neutral source.
     fn push(&mut self, row: &TradeRow, include_raw: bool) {
-        self.n += 1;
+        self.seen = true;
         let profit = row.pnl.unwrap_or(0.0);
         self.profit += profit;
-        if profit > 0.0 {
-            self.wins += 1;
-            self.win_sum += profit;
-        } else {
-            self.loss_sum -= profit;
-        }
-        if let Some(value) = row.pnl {
-            self.best = Some(self.best.map_or(value, |best| best.max(value)));
-            self.worst = Some(self.worst.map_or(value, |worst| worst.min(value)));
-        }
         if let Some(name) = &row.core_name {
             if self.core_name.as_ref().is_none_or(|current| name > current) {
                 self.core_name = Some(name.clone());
@@ -143,7 +144,22 @@ impl GroupAccumulator {
             self.cores.insert(core_uid);
         }
         if include_raw {
-            self.raw.push(row.raw_profit, row.spent, &row.basecurrency);
+            let spent = if row.is_trade { row.spent } else { None };
+            self.raw.push(row.raw_profit, spent, &row.basecurrency);
+        }
+        if !row.is_trade {
+            return;
+        }
+        self.n += 1;
+        if profit > 0.0 {
+            self.wins += 1;
+            self.win_sum += profit;
+        } else {
+            self.loss_sum -= profit;
+        }
+        if let Some(value) = row.pnl {
+            self.best = Some(self.best.map_or(value, |best| best.max(value)));
+            self.worst = Some(self.worst.map_or(value, |worst| worst.min(value)));
         }
     }
 }
@@ -169,6 +185,8 @@ struct TradeRow {
     raw_profit: Option<f64>,
     spent: Option<f64>,
     basecurrency: Value,
+    /// False for a Funding row ([`NOT_A_TRADE`]): money that is not a trade.
+    is_trade: bool,
 }
 
 /// Core-local bucket accumulation before the dense Summary grid is known.
@@ -187,6 +205,10 @@ struct CoreAccumulator {
 /// Intermediate current-period state filled by one chronological row stream.
 #[derive(Default)]
 struct Accumulator {
+    /// Drop Funding rows entirely instead of folding their money in. Set for the Percent lens:
+    /// a percent return measures a trade against its own spend, and funding has none — the
+    /// Calendar withholds it from that lens for the same reason (`calendar::funding_by_bucket`).
+    skip_funding: bool,
     stats: PeriodStats,
     days: Vec<DayPoint>,
     hours: [(f64, i64); 24],
@@ -207,6 +229,16 @@ struct Accumulator {
 impl Accumulator {
     /// Consume one current-period row into every Summary projection.
     ///
+    /// A Funding row follows the Calendar's rule ([`NOT_A_TRADE`]): its money joins the profit,
+    /// the cumulative curve and its drawdown, the time buckets and the per-core and group money,
+    /// while every trade figure — the count (so the average's denominator), wins and losses, both
+    /// streaks, the duration, the hour-of-day profile, per-core wins and the best/worst lists —
+    /// leaves it out. Under [`Self::skip_funding`] it contributes nothing at all.
+    ///
+    /// Unlike the Calendar's `funding_by_bucket`, rows are not deduplicated here: a redelivered
+    /// Funding accrual still adds its money twice, as it did before Funding stopped counting as
+    /// a trade.
+    ///
     /// Args:
     ///     row: Chronological report row shared by every projection.
     ///     bucket: Time-grid bucket width in seconds.
@@ -226,27 +258,33 @@ impl Accumulator {
         include_inline_raw: bool,
         axis: &crate::db::ReportAxis,
     ) -> rusqlite::Result<()> {
+        if !row.is_trade && self.skip_funding {
+            return Ok(());
+        }
         let profit = row.pnl.unwrap_or(0.0);
+        let trades = i64::from(row.is_trade);
         // `closedate` is the CORE's wall clock; it reaches true UTC before any civil bucket or
         // hour slot is taken from it. The duration below is a DIFFERENCE on that one clock and
         // cancels the offset, so it deliberately stays raw.
         let core_uid = row.core_uid.unwrap_or(0) as u64;
         let closedate_utc = axis.to_utc(row.closedate, core_uid);
-        self.stats.n += 1;
         self.stats.profit += profit;
-        self.duration_seconds += (row.closedate - row.buydate).max(0);
-        if profit > 0.0 {
-            self.stats.wins += 1;
-            self.win_sum += profit;
-            self.current_wins += 1;
-            self.current_losses = 0;
-            self.stats.win_streak = self.stats.win_streak.max(self.current_wins);
-        } else {
-            self.stats.losses += 1;
-            self.loss_sum -= profit;
-            self.current_losses += 1;
-            self.current_wins = 0;
-            self.stats.loss_streak = self.stats.loss_streak.max(self.current_losses);
+        if row.is_trade {
+            self.stats.n += 1;
+            self.duration_seconds += (row.closedate - row.buydate).max(0);
+            if profit > 0.0 {
+                self.stats.wins += 1;
+                self.win_sum += profit;
+                self.current_wins += 1;
+                self.current_losses = 0;
+                self.stats.win_streak = self.stats.win_streak.max(self.current_wins);
+            } else {
+                self.stats.losses += 1;
+                self.loss_sum -= profit;
+                self.current_losses += 1;
+                self.current_wins = 0;
+                self.stats.loss_streak = self.stats.loss_streak.max(self.current_losses);
+            }
         }
         self.cumulative += profit;
         self.peak = self.peak.max(self.cumulative);
@@ -271,19 +309,23 @@ impl Accumulator {
         match self.days.last_mut() {
             Some(day) if day.start == bucket_start => {
                 day.profit += profit;
-                day.trades += 1;
+                day.trades += trades;
             }
             _ => self.days.push(DayPoint {
                 start: bucket_start,
                 profit,
-                trades: 1,
+                trades,
             }),
         }
-        let hour = crate::util::display_time::minute_of_day(closedate_utc, axis.zone())
-            .map(|minute| minute as usize / 60)
-            .unwrap_or(0);
-        self.hours[hour].0 += profit;
-        self.hours[hour].1 += 1;
+        // The hour-of-day profile ranks hours by TRADING result, like the Calendar's own profile;
+        // funding lands on the venue's fixed settlement hours and would only paint those red.
+        if row.is_trade {
+            let hour = crate::util::display_time::minute_of_day(closedate_utc, axis.zone())
+                .map(|minute| minute as usize / 60)
+                .unwrap_or(0);
+            self.hours[hour].0 += profit;
+            self.hours[hour].1 += 1;
+        }
 
         let core = self.cores.entry(core_uid).or_default();
         if core.name.is_empty() {
@@ -291,12 +333,14 @@ impl Accumulator {
         }
         let core_bucket = core.buckets.entry(bucket_start).or_default();
         core_bucket.0 += profit;
-        core_bucket.1 += 1;
-        if profit > 0.0 {
-            core.wins += 1;
-            core.win_sum += profit;
-        } else {
-            core.loss_sum -= profit;
+        core_bucket.1 += trades;
+        if row.is_trade {
+            if profit > 0.0 {
+                core.wins += 1;
+                core.win_sum += profit;
+            } else {
+                core.loss_sum -= profit;
+            }
         }
 
         let (strategy_text, core_uid) = match (&row.strategy_text, row.core_uid) {
@@ -311,7 +355,7 @@ impl Accumulator {
         };
         let groups = self.strategies.entry(core_uid).or_default();
         let push_strategy = |strategy: &mut GroupAccumulator| {
-            if strategy.n == 0 {
+            if !strategy.seen {
                 strategy.strategy_id = row.strategy_id;
                 strategy.strategy_core = row.core_uid;
             } else if strategy.strategy_id != row.strategy_id {
@@ -333,7 +377,7 @@ impl Accumulator {
             coin.push(&row, include_inline_raw);
             self.coins.insert(row.coin.clone(), coin);
         }
-        if row.pnl.is_some() {
+        if row.is_trade && row.pnl.is_some() {
             push_top_row(&mut self.best_rows, &row, true);
             push_top_row(&mut self.worst_rows, &row, false);
         }
@@ -360,6 +404,10 @@ impl Accumulator {
         max_buckets: usize,
     ) -> rusqlite::Result<()> {
         if self.stats.n > 0 {
+            // Profit over TRADES: Funding money stays in the numerator as the holding cost of
+            // those trades, but its rows no longer dilute the denominator. The same quotient
+            // `GroupStat::avg` gives each strategy and coin row, so one strategy never shows two
+            // averages.
             self.stats.avg = self.stats.profit / self.stats.n as f64;
             self.stats.avg_dur_min = self.duration_seconds as f64 / self.stats.n as f64 / 60.0;
             self.stats.pf = profit_factor(self.win_sum, self.loss_sum);
@@ -404,7 +452,7 @@ impl TradeRow {
     /// Map one row of [`current_stream_sql`] into its typed form.
     ///
     /// Args:
-    ///     row: Statement row with the fourteen projected columns, including its UTC order key.
+    ///     row: Statement row with the fifteen projected columns, including its UTC order key.
     ///
     /// Returns:
     ///     The typed row, or the column conversion error.
@@ -426,6 +474,7 @@ impl TradeRow {
             raw_profit: row.get(9)?,
             spent: row.get(10)?,
             basecurrency: row.get(11)?,
+            is_trade: row.get(14)?,
         })
     }
 
@@ -472,6 +521,9 @@ impl TradeRow {
             .then_with(|| sql_num_cmp(self.raw_profit, rhs.raw_profit))
             .then_with(|| sql_num_cmp(self.spent, rhs.spent))
             .then_with(|| sql_value_cmp(&self.basecurrency, &rhs.basecurrency))
+            // Last: every term above can tie between a trade and a Funding row, and which one
+            // comes first moves the drawdown's peak.
+            .then_with(|| self.is_trade.cmp(&rhs.is_trade))
     }
 }
 
@@ -627,7 +679,8 @@ fn current_stream_sql(src: &str, true_time: &str, inline_raw: &str) -> String {
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
                 COALESCE(o.isshort,0), {inline_raw},
                 CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
-                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time}
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time},
+                {NOT_A_TRADE}
          FROM {src}
          WHERE {true_time} >= ?3 AND {true_time} < ?4
          ORDER BY {true_time}"
@@ -750,7 +803,12 @@ fn read_with_window(
     let mut statement = conn
         .prepare(&sql)
         .map_err(|error| read_fail_on(conn, CTX, error))?;
-    let mut accumulator = Accumulator::default();
+    // The Percent metric is exactly the Percent projection: `scope_decision_on` maps it there
+    // before any quote preflight, so the metric alone decides it here.
+    let mut accumulator = Accumulator {
+        skip_funding: q.metric == crate::db::ProfitMetric::Percent,
+        ..Default::default()
+    };
     let mut window_from = q.from;
     while window_from < q.to {
         let window_to = window_from
@@ -874,9 +932,11 @@ fn read_raw_groups(
     q: &Query,
 ) -> ReadResult<(HashMap<String, RawGroup>, HashMap<String, RawGroup>)> {
     const CTX: &str = "analytics: summary raw groups";
+    // Funding money stays in the raw profit, but its spend is the funded position, not an order
+    // the group placed, so it stays out of the average order — as in `GroupAccumulator::push`.
     let sql = format!(
         "SELECT CAST(o.strategyid AS TEXT), o.core_uid, COALESCE(o.coin,''),
-                o.profitbtc, o.spentbtc, o.basecurrency
+                o.profitbtc, CASE WHEN {NOT_A_TRADE} THEN o.spentbtc END, o.basecurrency
          FROM {src}"
     );
     let mut statement = conn

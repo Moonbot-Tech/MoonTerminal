@@ -1094,6 +1094,7 @@ fn mixed_quote_summary_becomes_usdt_only_after_complete_coverage() {
         day,
         3_600,
         &crate::db::ReportAxis::identity_core_local(),
+        false,
     )
     .expect("scan compatible previous period")
     .0;
@@ -1361,6 +1362,7 @@ fn corrupt_replica_surfaces_error_not_empty() {
             wide.to,
             86_400,
             &crate::db::ReportAxis::identity_core_local(),
+            false,
         )
         .is_err(),
         "скан периода обязан вернуть ошибку, а не усечённую статистику"
@@ -1741,8 +1743,8 @@ fn correctness_3_previous_summary_scale_probe() {
     let source = unified_from(&conn, &query)
         .expect("scale source")
         .expect("scale source exists");
-    let direct =
-        scan_period(&conn, &source, 1000, 2000, 3600, &axis).expect("direct previous scale scan");
+    let direct = scan_period(&conn, &source, 1000, 2000, 3600, &axis, false)
+        .expect("direct previous scale scan");
     assert_eq!(direct.0.n, 100_000);
     let mut samples = Vec::new();
     for _ in 0..6 {
@@ -1757,4 +1759,242 @@ fn correctness_3_previous_summary_scale_probe() {
     }
     samples.sort_by(f64::total_cmp);
     println!("analytics previous Summary 100000: {:.3} ms", samples[3]);
+}
+
+/// Funding is money without a trade: the Calendar keeps it in profit and out of every trade
+/// figure (`calendar::NOT_A_TRADE`), and Summary must say the same about the same rows. One
+/// +10 trade and one -0.5 funding charge are one trade, one win, no loss, profit 9.5.
+#[test]
+fn summary_keeps_funding_money_out_of_trade_counts() {
+    let path = temp_db("summary_funding");
+    let day = 1_780_000_000i64 / 86_400 * 86_400 + 3_600;
+    let conn = build_replica(
+        &path,
+        &[(day, 10.0, "BTCUSDT"), (day + 60, -0.5, "BTCUSDT")],
+    );
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN sellreason TEXT;
+         UPDATE orders_rep SET sellreason = 'Sell Price' WHERE newrecid = 1;
+         UPDATE orders_rep SET sellreason = 'Funding', buydate = closedate WHERE newrecid = 2;",
+    )
+    .unwrap();
+    let scoped = summary_on(&conn, &q(day - 86_400, day + 86_400), false, false).expect("reads");
+    let s = scoped.data().expect("single-quote summary is comparable");
+    assert_eq!(s.cur.n, 1, "funding is not a trade");
+    assert_eq!((s.cur.wins, s.cur.losses), (1, 0));
+    assert!(
+        (s.cur.winrate() - 100.0).abs() < 1e-9,
+        "winrate={}",
+        s.cur.winrate()
+    );
+    assert!(
+        (s.cur.profit - 9.5).abs() < 1e-9,
+        "funding money stays in profit"
+    );
+    drop(conn);
+    remove_db(&path);
+}
+
+/// A replica with the same day booked twice, one day apart: a +10 trade, a -0.5 Funding charge a
+/// minute later on a 1000 position, then a -2 trade. Every trade lasts five minutes; the Funding
+/// row has `buydate == closedate`, as the core books it.
+///
+/// Returns:
+///     The database path, the open replica, and the start of the second (current) day.
+fn funding_replica(tag: &str) -> (std::path::PathBuf, Connection, i64) {
+    let path = temp_db(tag);
+    let day = 1_780_000_000i64 / 86_400 * 86_400;
+    let rows = [day - 86_400 + 3_600, day + 3_600]
+        .into_iter()
+        .flat_map(|start| {
+            [
+                (start, 10.0, "BTCUSDT"),
+                (start + 60, -0.5, "BTCUSDT"),
+                (start + 120, -2.0, "BTCUSDT"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let conn = build_replica(&path, &rows);
+    conn.execute_batch(
+        "ALTER TABLE orders_rep ADD COLUMN sellreason TEXT;
+         UPDATE orders_rep SET sellreason = 'Sell Price';
+         UPDATE orders_rep SET sellreason = 'Funding', buydate = closedate, spentbtc = 1000.0
+          WHERE newrecid IN (2, 5);",
+    )
+    .unwrap();
+    (path, conn, day)
+}
+
+/// `summary_stream::Accumulator::push` / `GroupAccumulator::push` and `scan_period` -- counting a
+/// Funding row in any trade figure, or dropping its money, makes Summary disagree with the
+/// Calendar over the same rows. Each assertion below names a figure the row used to move: the
+/// count, wins/losses, the average (7.5 over 2 trades, not over 3 rows), the duration (5 min, not
+/// 3.3), the
+/// best/worst lists, the trading hour (01:00 holds 8 over 2 trades), per-core wins, the groups'
+/// counts and average order (100, not 400) — while profit (7.5) and the drawdown of the booked
+/// curve (10 -> 9.5 -> 7.5) keep the money. The comparison period follows the same rule.
+#[test]
+fn summary_keeps_funding_out_of_every_trade_figure_in_both_periods() {
+    let (path, conn, day) = funding_replica("summary_funding_figures");
+    let current = q(day, day + 86_400);
+    let scoped = summary_on(&conn, &current, false, false).expect("reads");
+    let s = scoped.data().expect("single-quote summary is comparable");
+
+    for (label, stats) in [
+        ("current", &s.cur),
+        (
+            "previous",
+            s.prev.as_ref().expect("comparable previous period"),
+        ),
+    ] {
+        assert_eq!((stats.n, stats.wins, stats.losses), (2, 1, 1), "{label}");
+        assert!(
+            (stats.profit - 7.5).abs() < 1e-9,
+            "{label} profit={}",
+            stats.profit
+        );
+        assert!((stats.avg - 3.75).abs() < 1e-9, "{label} avg={}", stats.avg);
+        assert!(
+            (stats.avg_dur_min - 5.0).abs() < 1e-9,
+            "{label} dur={}",
+            stats.avg_dur_min
+        );
+        assert_eq!((stats.win_streak, stats.loss_streak), (1, 1), "{label}");
+        assert!((stats.pf - 5.0).abs() < 1e-9, "{label} pf={}", stats.pf);
+        assert!(
+            (stats.max_dd - 2.5).abs() < 1e-9,
+            "{label} max_dd={}",
+            stats.max_dd
+        );
+    }
+    assert_eq!(s.best.len(), 2, "funding is not a best trade");
+    assert_eq!(s.worst.len(), 2, "funding is not a worst trade");
+    assert!((s.worst[0].profit + 2.0).abs() < 1e-9);
+    let (hour, hour_profit, hour_trades) = s.best_hour.expect("a profitable hour");
+    assert_eq!((hour, hour_trades), (1, 2));
+    assert!(
+        (hour_profit - 8.0).abs() < 1e-9,
+        "hour profit={hour_profit}"
+    );
+    assert_eq!(s.days.iter().map(|d| d.trades).sum::<i64>(), 2);
+    assert!((s.days.iter().map(|d| d.profit).sum::<f64>() - 7.5).abs() < 1e-9);
+    let [core] = s.core_days.as_slice() else {
+        panic!("one core: {:?}", s.core_days);
+    };
+    assert_eq!((core.trades, core.wins), (2, 1));
+    assert!((core.total - 7.5).abs() < 1e-9);
+    assert!((core.pf() - 5.0).abs() < 1e-9);
+    for group in s.strategies.iter().chain(&s.coins) {
+        assert_eq!((group.n, group.wins), (2, 1), "{}", group.key);
+        assert!((group.profit - 7.5).abs() < 1e-9, "{}", group.key);
+        assert!((group.raw_profit - 7.5).abs() < 1e-9, "{}", group.key);
+        assert!(
+            (group.avg_order - 100.0).abs() < 1e-9,
+            "{} avg_order",
+            group.key
+        );
+        assert_eq!((group.best, group.worst), (10.0, -2.0), "{}", group.key);
+    }
+    assert_eq!((s.strategies.len(), s.coins.len()), (1, 1));
+
+    // The Calendar is the independent oracle the issue names: same rows, same answers.
+    let calendar =
+        calendar::calendar_period_from(&conn, &current, Some(&q(day - 86_400, day)), false)
+            .expect("calendar reads");
+    let calendar = calendar.data().expect("calendar is comparable");
+    let mut month = calendar::CellTotals::default();
+    for cell in &calendar.current {
+        month.merge(&cell.totals);
+    }
+    let previous = calendar.previous.expect("calendar comparison");
+    for (label, totals, stats) in [
+        ("current", &month, &s.cur),
+        ("previous", &previous, s.prev.as_ref().unwrap()),
+    ] {
+        assert_eq!(
+            (totals.trades, totals.wins),
+            (stats.n, stats.wins),
+            "{label}"
+        );
+        assert!((totals.profit - stats.profit).abs() < 1e-9, "{label}");
+    }
+    drop(conn);
+    remove_db(&path);
+}
+
+/// `groups::groups` -- the Strategies tab reads the same `GroupStat` rows Summary lists, so a
+/// Funding row counted there would show one strategy with two different trade counts.
+#[test]
+fn strategies_tab_keeps_funding_out_of_group_trade_figures() {
+    let (path, conn, day) = funding_replica("strategies_funding");
+    let base = strategy_base_on(&conn, &q(day, day + 86_400), false).expect("reads");
+    let base = base.data().expect("single-quote base is comparable");
+    assert_eq!(base.trades, 2);
+    for group in base.strategies.iter().chain(&base.coins) {
+        assert_eq!((group.n, group.wins), (2, 1), "{}", group.key);
+        assert!((group.profit - 7.5).abs() < 1e-9, "{}", group.key);
+        assert!(
+            (group.avg_order - 100.0).abs() < 1e-9,
+            "{} avg_order",
+            group.key
+        );
+        assert_eq!((group.best, group.worst), (10.0, -2.0), "{}", group.key);
+        assert!((group.pf - 5.0).abs() < 1e-9, "{}", group.key);
+    }
+    drop(conn);
+    remove_db(&path);
+}
+
+/// The Percent lens measures a trade against its own spend, and Funding has none: like the
+/// Calendar (`calendar::funding_by_bucket`), Summary and the Strategies tab leave it out of
+/// that lens entirely, while the lens-neutral raw money still carries it.
+#[test]
+fn percent_lens_leaves_funding_out_entirely() {
+    let (path, conn, day) = funding_replica("percent_funding");
+    let mut current = q(day, day + 86_400);
+    current.metric = crate::db::ProfitMetric::Percent;
+    let scoped = summary_on(&conn, &current, false, false).expect("reads");
+    let s = scoped.data().expect("percent summary is comparable");
+    for (label, stats) in [("current", &s.cur), ("previous", s.prev.as_ref().unwrap())] {
+        assert_eq!((stats.n, stats.wins, stats.losses), (2, 1, 1), "{label}");
+        // +10 % and -2 % on a 100 spend; the funding row would add -0.05 %.
+        assert!(
+            (stats.profit - 8.0).abs() < 1e-9,
+            "{label} profit={}",
+            stats.profit
+        );
+        assert!(
+            (stats.max_dd - 2.0).abs() < 1e-9,
+            "{label} max_dd={}",
+            stats.max_dd
+        );
+    }
+    let base = strategy_base_on(&conn, &current, false).expect("percent base");
+    let base = base.data().expect("percent base is comparable");
+    for group in s.strategies.iter().chain(&base.strategies) {
+        assert_eq!(group.n, 2, "{}", group.key);
+        assert!(
+            (group.profit - 8.0).abs() < 1e-9,
+            "{} profit={}",
+            group.key,
+            group.profit
+        );
+        assert!(
+            (group.raw_profit - 7.5).abs() < 1e-9,
+            "{} raw={}",
+            group.key,
+            group.raw_profit
+        );
+        assert!(
+            (group.avg_order - 100.0).abs() < 1e-9,
+            "{} avg_order",
+            group.key
+        );
+    }
+    let calendar = calendar::calendar_period_from(&conn, &current, None, false).expect("reads");
+    let calendar = calendar.data().expect("percent calendar is comparable");
+    let profit: f64 = calendar.current.iter().map(|cell| cell.totals.profit).sum();
+    assert!((profit - s.cur.profit).abs() < 1e-9, "calendar={profit}");
+    drop(conn);
+    remove_db(&path);
 }

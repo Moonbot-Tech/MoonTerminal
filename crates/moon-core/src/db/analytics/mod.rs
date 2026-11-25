@@ -42,6 +42,7 @@ pub use profit_monitor::{
 pub use query::{ANALYTICS_HORIZON_SECS, ANALYTICS_MAX_SPAN_SECS, PreviousPeriodBasis, Query};
 
 pub(in crate::db) use calendar::FEE_ROW;
+use calendar::NOT_A_TRADE;
 use groups::groups;
 pub(in crate::db) use groups::{coin_groups_from_source, strategies_for_coins_on};
 use query::ProjectionMode;
@@ -53,16 +54,23 @@ pub(in crate::db) use strategy_meta::read_metadata;
 
 /// Period totals: counters and metrics computed from the trade sequence ordered by
 /// `closedate`, including profit factor, maximum drawdown, streaks, and duration.
+///
+/// Funding rows are money, not trades (`calendar::NOT_A_TRADE`, the Calendar's rule for the
+/// same rows): they are in `profit` and on the curve behind `max_dd`, and in no other field.
 #[derive(Clone, Debug, Default)]
 pub struct PeriodStats {
+    /// Trades, Funding rows excluded.
     pub n: i64,
     pub wins: i64,
     pub losses: i64,
+    /// Everything the period booked: trades plus Funding money.
     pub profit: f64,
     /// Sum of wins divided by the sum of losses (99 when there are wins but no losses).
     pub pf: f64,
+    /// Profit per trade: `profit` (Funding money included, as the holding cost of the trades)
+    /// over `n` (Funding rows excluded) — the quotient `GroupStat::avg` gives each group too.
     pub avg: f64,
-    /// Maximum drawdown of the cumulative profit curve over the period.
+    /// Maximum drawdown of the cumulative profit curve over the period, Funding included.
     pub max_dd: f64,
     pub win_streak: i64,
     pub loss_streak: i64,
@@ -1015,7 +1023,9 @@ fn previous_stats(
             return None;
         }
     }
-    scan_period(conn, src, previous_from, q.from, bucket, axis)
+    // Same Percent rule as the current stream, so both periods count Funding alike.
+    let skip_funding = q.metric == ProfitMetric::Percent;
+    scan_period(conn, src, previous_from, q.from, bucket, axis, skip_funding)
         .map(|(stats, _, _)| stats)
         .ok()
 }
@@ -1133,6 +1143,9 @@ fn min_closedate(conn: &Connection, axis: &crate::db::ReportAxis) -> ReadResult<
 ///     bucket: Civil bucket width in seconds.
 ///     axis: Per-core time axis. `closedate` is the CORE's own wall clock, so it reaches true UTC
 ///         through the axis before any civil bucket or hour slot is derived from it.
+///     skip_funding: Drop Funding rows entirely (the Percent lens) instead of folding their
+///         money into profit, the curve and the bucket profit. Either way they stay out of every
+///         trade figure, exactly as `summary_stream::Accumulator::push` treats them.
 ///
 /// Returns:
 ///     Sequence statistics, dense time buckets, and 24 selected-zone hour aggregates.
@@ -1150,6 +1163,7 @@ fn scan_period(
     to: i64,
     bucket: i64,
     axis: &crate::db::ReportAxis,
+    skip_funding: bool,
 ) -> ReadResult<(PeriodStats, Vec<DayPoint>, [(f64, i64); 24])> {
     const CTX: &str = "analytics: scan_period";
     let mut st = PeriodStats::default();
@@ -1164,7 +1178,8 @@ fn scan_period(
             .to_string()
     };
     let sql = format!(
-        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.pnl, 0), o.core_uid
+        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), COALESCE(o.pnl, 0), o.core_uid,
+                {NOT_A_TRADE}
          FROM {src} ORDER BY {order}"
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -1180,6 +1195,7 @@ fn scan_period(
                     rusqlite::types::ValueRef::Integer(uid) => uid as u64,
                     _ => 0,
                 },
+                r.get::<_, bool>(4)?,
             ))
         })
         .map_err(|e| read_fail_on(conn, CTX, e))?;
@@ -1190,26 +1206,33 @@ fn scan_period(
     let mut dur_ms_total = 0i64;
     for row in rows {
         // Every column here moves a number, so no row is skippable: dropping
-        // one would silently understate n / profit / pf / max_dd.
-        let (close, buy, profit, core_uid) = row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        // one would silently understate n / profit / pf / max_dd. The one deliberate exception is
+        // a Funding row under `skip_funding`, which this lens has no number for.
+        let (close, buy, profit, core_uid, is_trade) =
+            row.map_err(|e| read_fail_on(conn, CTX, e))?;
+        if !is_trade && skip_funding {
+            continue;
+        }
         // Duration below is a DIFFERENCE on one clock and cancels the offset, so it stays raw;
         // only the values that become civil buckets are corrected.
         let close_utc = axis.to_utc(close, core_uid);
-        st.n += 1;
         st.profit += profit;
-        dur_ms_total += (close - buy).max(0);
-        if profit > 0.0 {
-            st.wins += 1;
-            wsum += profit;
-            cur_w += 1;
-            cur_l = 0;
-            st.win_streak = st.win_streak.max(cur_w);
-        } else {
-            st.losses += 1;
-            lsum -= profit;
-            cur_l += 1;
-            cur_w = 0;
-            st.loss_streak = st.loss_streak.max(cur_l);
+        if is_trade {
+            st.n += 1;
+            dur_ms_total += (close - buy).max(0);
+            if profit > 0.0 {
+                st.wins += 1;
+                wsum += profit;
+                cur_w += 1;
+                cur_l = 0;
+                st.win_streak = st.win_streak.max(cur_w);
+            } else {
+                st.losses += 1;
+                lsum -= profit;
+                cur_l += 1;
+                cur_w = 0;
+                st.loss_streak = st.loss_streak.max(cur_l);
+            }
         }
         cum += profit;
         peak = peak.max(cum);
@@ -1231,23 +1254,27 @@ fn scan_period(
                 ),
             ));
         };
+        let trades = i64::from(is_trade);
         match days.last_mut() {
             Some(d) if d.start == start => {
                 d.profit += profit;
-                d.trades += 1;
+                d.trades += trades;
             }
             _ => days.push(DayPoint {
                 start,
                 profit,
-                trades: 1,
+                trades,
             }),
         }
-        let h = crate::util::display_time::minute_of_day(close_utc, axis.zone())
-            .map(|minute| minute as usize / 60)
-            .unwrap_or(0);
-        let slot = &mut hours[h];
-        slot.0 += profit;
-        slot.1 += 1;
+        // Trading hours only, as in the current stream's hour profile.
+        if is_trade {
+            let h = crate::util::display_time::minute_of_day(close_utc, axis.zone())
+                .map(|minute| minute as usize / 60)
+                .unwrap_or(0);
+            let slot = &mut hours[h];
+            slot.0 += profit;
+            slot.1 += 1;
+        }
     }
     if st.n > 0 {
         st.avg = st.profit / st.n as f64;

@@ -243,7 +243,9 @@ impl AnalyticsView {
         &mut self,
         cx: &Context<Self>,
     ) -> Result<Rc<SummaryDerived>, Note> {
-        let data = self.data.view(|d| d.cur.n == 0)?;
+        // Empty means no trade AND no money, the Calendar's own test: a period holding only
+        // Funding (a position kept open, nothing closed) has no trades but real money to show.
+        let data = self.data.view(|d| d.cur.n == 0 && d.cur.profit == 0.0)?;
         let backend = self.backend.read(cx);
         let (cached, _) = ensure_derived(
             &mut self.summary_derived,
