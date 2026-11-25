@@ -13,9 +13,11 @@
 //! sorting, and row rendering. [`prepared`] holds coherent market publications and applies the
 //! current controls through compact row indices without rebuilding market data on the UI thread.
 //! [`auto_figures`] is the auto-figures column: the all-markets scan its Calculate button runs over
-//! the local 5-minute kline cache, the answers, and the column's order and filter.
+//! the local 5-minute kline cache, the answers, and the column's order and filter. [`coin_copy`] is
+//! the row menu's "copy the coins" entries.
 
 mod auto_figures;
+mod coin_copy;
 mod prepared;
 mod table;
 mod view;

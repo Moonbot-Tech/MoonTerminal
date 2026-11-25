@@ -670,9 +670,10 @@ pub(super) fn screener_row(
 /// Open the shared coin context menu from a Screener row's market right-click.
 ///
 /// A Screener row carries no strategy and no order, so the menu holds navigation and the blacklist
-/// entries. Its "N cores" targets are the cores the table can currently show — the Singleton display
-/// preset narrowed by the source selector, the filter the rows themselves went through — as the
-/// Assets and Orders menus use their own panel filter. The window belongs to no group, so the
+/// entries, followed by the Screener's own entries that copy the listed coins
+/// (`super::coin_copy`). Its "N cores" targets are the cores the table can currently show — the
+/// Singleton display preset narrowed by the source selector, the filter the rows themselves went
+/// through — as the Assets and Orders menus use their own panel filter. The window belongs to no group, so the
 /// actions keep the unscoped authority the row's left click already has.
 ///
 /// Args:
@@ -715,6 +716,9 @@ fn open_screener_coin_menu(
             .unwrap_or_default();
         (selected, name)
     };
+    // Only the Screener has a sorted list of coins to copy, so its entries ride the menu's
+    // caller slot and the shared menu stays the same everywhere else.
+    let trailing = super::coin_copy::copy_items(panel.coin_lists((core, &market)));
     let ctx = CoinMenuCtx {
         core,
         core_name,
@@ -729,7 +733,7 @@ fn open_screener_coin_menu(
         short: false,
         origin: CoinMenuOrigin::OrderTable,
         history: None,
-        trailing: Vec::new(),
+        trailing,
         filter_here: None,
     };
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);
@@ -738,8 +742,9 @@ fn open_screener_coin_menu(
 /// Build a full-cell clickable market cell.
 ///
 /// Clicking asks the ChartTabs group owning `row.core` to open or focus the market in Main and
-/// select `Tab::Main`, without raising or focusing that group's OS window. A right click opens the
-/// shared coin menu for the row's core and market.
+/// select `Tab::Main`, without raising or focusing that group's OS window, and moves the Screener's
+/// opened-row mark onto this row. A right click opens the shared coin menu for the row's core and
+/// market.
 fn market_cell(
     e: &Entry,
     view: &Entity<ScreenerView>,
@@ -764,12 +769,7 @@ fn market_cell(
         .font_weight(FontWeight::MEDIUM)
         .child(e.row.coin.clone())
         .on_click(move |_, _window, app| {
-            view.update(app, |this, cx| {
-                this.backend.update(cx, |b, bcx| {
-                    b.open_on_main((core, market.clone()), false);
-                    bcx.notify();
-                });
-            });
+            view.update(app, |this, cx| this.open_on_main(core, market.clone(), cx));
         })
         .on_mouse_down(
             MouseButton::Right,

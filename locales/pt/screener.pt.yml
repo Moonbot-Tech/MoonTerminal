@@ -43,3 +43,9 @@ screener.af_unread: "cache não lido"
 screener.af_stale: "cache atrasado %{age}"
 screener.af_press_calculate: "Pressione «Calcular» para escolher moedas por figuras automáticas"
 screener.af_running: "Calculando figuras automáticas…"
+# The row menu's copy entries (#1164): every listed coin, or those from the top of the current sort
+# through the clicked row, as one comma-separated line. The menu shows the count; %{n} in the toast
+# is that count.
+screener.copy_coins_on_screen: "Copiar moedas na tela"
+screener.copy_coins_through_row: "Copiar moedas até esta linha"
+screener.coins_copied: "Moedas copiadas: %{n}"

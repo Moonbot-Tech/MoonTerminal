@@ -636,3 +636,33 @@ fn the_collecting_line_counts_whole_seconds_and_never_reads_zero() {
     assert_eq!(super::collecting_seconds(Some(now - 4_000), now), 1);
     assert_eq!(super::collecting_seconds(None, now), 1);
 }
+
+/// The opened-row mark lights the row of its core and market and no other (#1424).
+///
+/// Mutation: match by market alone, and with several cores picked every core's row of the coin
+/// is tinted. Mutation: tint with no mark, and a fresh Screener opens with a lit row.
+#[test]
+fn the_opened_mark_names_one_core_and_market() {
+    use super::is_opened;
+
+    let row = |core, market: &str| Entry {
+        row: ScreenerRow {
+            provider: core,
+            core,
+            market: market.into(),
+            coin: "ETH".into(),
+            ..Default::default()
+        }
+        .into(),
+        core_name: "synthetic".into(),
+        market_uc: market.to_uppercase().into(),
+        coin_uc: "ETH".into(),
+        venue: Default::default(),
+    };
+    let mark = (2, "ETHUSDT".to_string());
+
+    assert!(is_opened(Some(&mark), &row(2, "ETHUSDT")));
+    assert!(!is_opened(Some(&mark), &row(1, "ETHUSDT")));
+    assert!(!is_opened(Some(&mark), &row(2, "ETHUSDC")));
+    assert!(!is_opened(None, &row(2, "ETHUSDT")));
+}

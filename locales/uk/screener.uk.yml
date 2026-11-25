@@ -43,3 +43,9 @@ screener.af_unread: "кеш не прочитано"
 screener.af_stale: "кеш відстає %{age}"
 screener.af_press_calculate: "Натисніть «Розрахувати», щоб відібрати монети за автофігурами"
 screener.af_running: "Іде розрахунок автофігур…"
+# The row menu's copy entries (#1164): every listed coin, or those from the top of the current sort
+# through the clicked row, as one comma-separated line. The menu shows the count; %{n} in the toast
+# is that count.
+screener.copy_coins_on_screen: "Копіювати монети на екрані"
+screener.copy_coins_through_row: "Копіювати монети до цього рядка"
+screener.coins_copied: "Скопійовано монет: %{n}"
