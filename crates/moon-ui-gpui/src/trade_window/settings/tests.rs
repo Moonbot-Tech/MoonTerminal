@@ -8,9 +8,126 @@ use moon_core::market::candles::{
 };
 
 use super::{
-    PINNED_TF_MIN, TRADE_WINDOW_MODES, candles_for_default, pinned_candle_view,
-    trade_window_mode_segment,
+    PINNED_TF_MIN, TRADE_WINDOW_MODES, candles_for_default, drawn_graphics, graphics_for_default,
+    main_chart_marker_scale, pinned_candle_view, trade_window_mode_segment,
 };
+
+/// A layout whose Main, Compare and trade-window kinds each carry a cross size of their own.
+fn layout_with_kind_sizes(
+    main: f32,
+    compare: f32,
+    trade: f32,
+) -> moon_core::config::layout::WindowLayout {
+    use moon_core::config::ChartTabKind;
+    let mut layout = moon_core::config::layout::WindowLayout::default();
+    for (kind, size) in [
+        (ChartTabKind::Main, main),
+        (ChartTabKind::Compare, compare),
+        (ChartTabKind::Trade, trade),
+    ] {
+        let mut cfg = layout.chart_graphics_for(kind);
+        cfg.marker_scale = size;
+        layout.store_chart_graphics(kind, cfg);
+    }
+    layout
+}
+
+/// One tab spec carrying, or not, a cross size of its own.
+fn spec(
+    group: &str,
+    num: u32,
+    marker_scale: Option<f32>,
+) -> crate::persistence::chart_persist::ChartTabSpec {
+    let mut spec = crate::persistence::chart_persist::ChartTabSpec::new(
+        group.to_string(),
+        num,
+        moon_core::config::ChartBucket::Shared,
+    );
+    spec.chart_graphics = marker_scale.map(|size| moon_core::config::ChartGraphicsCfg {
+        marker_scale: size,
+        ..Default::default()
+    });
+    spec
+}
+
+/// The crosses follow the Main TAB of the trade's own window: its per-tab size, not the
+/// trade-window kind's, not another window's Main, not a numbered tab beside it (#1261).
+///
+/// Breakage: reading the trade-window kind's set — the reported bug — answers 0.5; resolving the
+/// window by anything but the core's group answers the other window's 3.0; matching on the group
+/// alone picks up the AddTo tab's 1.5.
+#[test]
+fn the_cross_size_is_the_main_tab_of_the_cores_own_window() {
+    let config = crate::test_support::fixtures::app_config(20);
+    let (group_a, group_b) = (
+        config.servers[0].group.clone(),
+        config.servers[10].group.clone(),
+    );
+    assert_ne!(group_a, group_b, "the fixture spans two windows");
+    let layout = layout_with_kind_sizes(0.7, 1.0, 0.5);
+    let specs = vec![
+        spec(&group_a, 1, Some(1.5)),
+        spec(&group_b, 0, Some(3.0)),
+        spec(&group_a, 0, Some(2.0)),
+    ];
+    let core_a = config.servers[0].id;
+    let core_b = config.servers[10].id;
+    assert_eq!(
+        main_chart_marker_scale(&layout, &config.servers, &specs, core_a),
+        2.0
+    );
+    assert_eq!(
+        main_chart_marker_scale(&layout, &config.servers, &specs, core_b),
+        3.0
+    );
+}
+
+/// A Main tab with no size of its own draws the Main default, and so do the crosses; so does an
+/// unknown core or a window whose Main tab stored nothing.
+///
+/// Breakage: falling back to the trade-window kind — the reported bug — answers 0.5 everywhere.
+#[test]
+fn a_main_tab_without_its_own_size_answers_the_main_default() {
+    let config = crate::test_support::fixtures::app_config(20);
+    let group_a = config.servers[0].group.clone();
+    let layout = layout_with_kind_sizes(0.7, 1.0, 0.5);
+    let core_a = config.servers[0].id;
+    let core_b = config.servers[10].id;
+    let plain = vec![spec(&group_a, 0, None)];
+    assert_eq!(
+        main_chart_marker_scale(&layout, &config.servers, &plain, core_a),
+        0.7
+    );
+    assert_eq!(
+        main_chart_marker_scale(&layout, &config.servers, &plain, core_b),
+        0.7,
+        "a window whose Main tab stored nothing"
+    );
+    assert_eq!(
+        main_chart_marker_scale(&layout, &config.servers, &plain, 9_999),
+        0.7,
+        "a core the configuration no longer lists"
+    );
+}
+
+/// Only the size is borrowed: drawing takes the main chart's, and storing puts the kind's own
+/// back, so a row in the popup never writes the main chart's size into the trade-window set.
+///
+/// Breakage: copying the main chart's whole set would move the price-line flag below; storing what
+/// is drawn would freeze the main chart's size into the kind and outlive the next change there.
+#[test]
+fn only_the_cross_size_is_borrowed_and_never_stored() {
+    let stored = moon_core::config::ChartGraphicsCfg {
+        marker_scale: 0.5,
+        last_price_line: false,
+        ..Default::default()
+    };
+    let drawn = drawn_graphics(stored, 2.0);
+    assert_eq!(drawn.marker_scale, 2.0);
+    assert!(!drawn.last_price_line, "the kind's own flag stays");
+    let written = graphics_for_default(drawn, stored.marker_scale);
+    assert_eq!(written, moon_chart::normalize_chart_graphics(stored));
+}
 
 /// A trade-window edit must survive restart without changing Main or resetting the other flag.
 #[test]
