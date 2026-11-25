@@ -32,6 +32,20 @@ pub(in crate::chartdx) fn collect_open_stats(
                 out[basis_index(basis)].open_orders += 1;
             }
         }
+        // The stopwatch's start: the earliest entry fill among the orders that hold a position.
+        // `entry_fill_time_ms` is the entry leg's CLOSE, and only an order that holds a position
+        // makes that a fill — a cancelled entry that filled nothing carries one too. A holder with
+        // no stated fill (a sale of coins already held has no entry leg) contributes nothing
+        // rather than a start invented from when this terminal first saw it.
+        if let Some(fill) = position_since(row) {
+            for basis in PnlBasis::ALL {
+                if basis.accepts(row.emulator) {
+                    let s = &mut out[basis_index(basis)];
+                    s.position_since_ms =
+                        Some(s.position_since_ms.map_or(fill, |held| held.min(fill)));
+                }
+            }
+        }
         // Exposure asks less than the PnL does: a size and a mark, no entry price. Each figure
         // degrades on its own inputs rather than dragging the others down with it — the rule the
         // chart overlay these captions replaced was careful about.
@@ -62,4 +76,15 @@ pub(in crate::chartdx) fn collect_open_stats(
     }
     let strategy = newest.map(|(_, name)| name.to_string()).unwrap_or_default();
     (out, strategy)
+}
+
+/// When this order's position was entered, Unix ms, or `None` when it holds none or states no fill.
+///
+/// The `> 1.0` test is the wire's own "unknown" convention for these times (`0` means the core sent
+/// none), the one the order-line store applies to the same field. A non-finite value is refused
+/// before the cast, which would otherwise turn it into a confident epoch or `i64::MAX`.
+fn position_since(row: &moon_core::feed::OrderRow) -> Option<i64> {
+    position_qty(row)?;
+    let fill = row.entry_fill_time_ms;
+    (fill.is_finite() && fill > 1.0).then_some(fill as i64)
 }

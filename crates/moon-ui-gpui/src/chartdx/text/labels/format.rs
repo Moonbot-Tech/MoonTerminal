@@ -271,6 +271,40 @@ pub(super) fn ceil_div(value: i64, step: i64) -> i64 {
     value.div_euclid(step) + i64::from(value.rem_euclid(step) > 0)
 }
 
+/// Format how long a position has been open — `0с`, `42с`, `12м 03с`, `3ч 05м`, `2д 03ч` — or
+/// nothing for a fill that is still in the future.
+///
+/// The percent ruler's spelling, which already measures a stretch of time on this chart, so one
+/// duration reads alike in both places; rounded DOWN like it, because a stopwatch states what has
+/// elapsed. The ruler's milliseconds are not taken: under a second this prints `0с`, the figure a
+/// stopwatch shows the moment it starts.
+///
+/// The clock it is measured against is floored to the second on the WALL-CLOCK grid, which a fill
+/// does not sit on, so the printed figure can trail the true age by under a second — `41с` at
+/// 42.0 s after a fill at x.5 s. That is the price of one shared step per second, and the
+/// direction is chosen: flooring the fill as well would turn the lag into an overstatement, and a
+/// stopwatch must never claim time that has not passed. Up to a second of a fresh fill can sit
+/// AFTER the clock for the same reason. That stretch reads `0с` rather than nothing, or a new position would stay
+/// invisible for up to a second; only a fill a whole second or more past the clock is a date in
+/// the future, and that prints nothing rather than a negative or a huge figure.
+///
+/// Args:
+///     since_ms: The oldest holder's entry fill, Unix ms.
+///     now_ms: The caption clock, Unix ms, floored to the second.
+///
+/// Returns:
+///     The figure, or `None` for a fill dated in the future.
+pub(super) fn fmt_position_age(since_ms: i64, now_ms: i64) -> Option<String> {
+    let elapsed = now_ms.saturating_sub(since_ms);
+    if elapsed <= -1_000 {
+        return None;
+    }
+    if elapsed < 1_000 {
+        return Some(format!("0{}", t!("chart_labels.unit_second")));
+    }
+    Some(crate::chartdx::ruler::duration_text(elapsed as f64))
+}
+
 /// Format a candle countdown as `23ч 05м`, `47м 03с` or `42с`.
 ///
 /// Three steps rather than one shape, because the figure a reader needs changes with the distance:

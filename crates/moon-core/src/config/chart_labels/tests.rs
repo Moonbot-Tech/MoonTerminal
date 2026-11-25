@@ -1568,3 +1568,50 @@ fn a_stored_caption_set_does_not_gain_the_eye() {
         }
     }
 }
+
+/// The position stopwatch takes the one-second step for as long as it is drawn, a position or
+/// not, and it pulls a far countdown beside it down to that step rather than being held to the
+/// minute. Dropping its arm from `countdown_clock_ms` would freeze it between market revisions.
+#[test]
+fn the_position_stopwatch_steps_every_second_while_drawn() {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
+    row.push_part(ChartLabelField::PositionAge);
+    cfg.rows[0] = row;
+    assert_eq!(cfg.countdown_clock_ms(0, 1_234_567), Some(1_234_000));
+
+    // Beside funding, which alone would step by the minute, the finer step wins.
+    cfg.rows[0].push_part(ChartLabelField::FundingIn);
+    assert_eq!(cfg.countdown_clock_ms(0, 1_234_567), Some(1_234_000));
+}
+
+/// No factory set draws the stopwatch: it is the caption that costs a one-second tick, and a chart
+/// that does not print it must not pay for one.
+#[test]
+fn no_factory_set_draws_the_position_stopwatch() {
+    for (name, cfg) in [
+        ("main", ChartLabelsCfg::default()),
+        ("trade", ChartLabelsCfg::trade_default()),
+        ("compare", ChartLabelsCfg::compare_default()),
+    ] {
+        assert!(
+            !cfg.any_drawn(|f| f == ChartLabelField::PositionAge),
+            "the {name} set draws the stopwatch"
+        );
+    }
+}
+
+/// The stored name is the wire form: renaming the variant without a migration would drop the
+/// caption from every saved chart.
+#[test]
+fn the_position_stopwatch_is_stored_by_its_own_name() {
+    let stored = serde_json::to_string(&ChartLabelField::PositionAge).expect("writes");
+    assert_eq!(stored, "\"position_age\"");
+    let back: ChartLabelField = serde_json::from_str("\"position_age\"").expect("reads");
+    assert_eq!(back, ChartLabelField::PositionAge);
+    assert!(ChartLabelField::PositionAge.uses_pnl_basis());
+    assert_eq!(
+        ChartLabelField::PositionAge.group(),
+        ChartLabelGroup::Position
+    );
+}

@@ -2102,3 +2102,118 @@ fn a_button_carries_what_it_would_do() {
         moon_core::config::ChartAction::TempBan
     );
 }
+
+// --- position stopwatch ---------------------------------------------------------------------------
+
+/// A filled order whose entry leg closed at `fill_ms`.
+fn held_since(uid: u64, fill_ms: f64) -> OrderRow {
+    let mut row = order(100.0, 110.0);
+    row.uid = uid;
+    row.entry_fill_time_ms = fill_ms;
+    row
+}
+
+/// The clock starts at the OLDEST holder's fill, so adding to the position does not restart it,
+/// and closing that holder hands the clock to the oldest one still open. A working entry is no
+/// holder even when the leg carries a close time — a cancelled entry that filled nothing does.
+#[test]
+fn the_stopwatch_starts_at_the_oldest_holders_fill() {
+    let first = held_since(1, 1_000_000.0);
+    let added = held_since(2, 1_600_000.0);
+    let mut working = held_since(3, 400_000.0);
+    working.filled = false;
+    working.fill_pct = 0.0;
+    let since = |rows: &[OrderRow]| {
+        collect_open_stats(rows, "BTCUSDT").0[basis_index(PnlBasis::All)].position_since_ms
+    };
+    assert_eq!(
+        since(&[added.clone(), first.clone(), working.clone()]),
+        Some(1_000_000)
+    );
+    let mut closed = first;
+    closed.job_is_done = true;
+    assert_eq!(since(&[closed, added, working]), Some(1_600_000));
+}
+
+/// A holder that states no fill — a sale of coins already held has no entry leg — starts nothing,
+/// and does not hide the fill of another holder beside it.
+#[test]
+fn a_holder_without_a_fill_starts_nothing() {
+    let bare = held_since(1, 0.0);
+    let since = |rows: &[OrderRow]| {
+        collect_open_stats(rows, "BTCUSDT").0[basis_index(PnlBasis::All)].position_since_ms
+    };
+    assert_eq!(since(std::slice::from_ref(&bare)), None);
+    assert_eq!(since(&[bare, held_since(2, 5_000.0)]), Some(5_000));
+}
+
+/// The stopwatch follows the caption's basis like the size beside it: an emulated holder's older
+/// fill must not start the clock of the real orders.
+#[test]
+fn the_stopwatch_follows_the_basis() {
+    let real = held_since(1, 9_000.0);
+    let mut emu = held_since(2, 2_000.0);
+    emu.emulator = true;
+    let (basis, _) = collect_open_stats(&[real, emu], "BTCUSDT");
+    assert_eq!(
+        basis[basis_index(PnlBasis::All)].position_since_ms,
+        Some(2_000)
+    );
+    assert_eq!(
+        basis[basis_index(PnlBasis::Real)].position_since_ms,
+        Some(9_000)
+    );
+    assert_eq!(
+        basis[basis_index(PnlBasis::Emulator)].position_since_ms,
+        Some(2_000)
+    );
+}
+
+/// The ruler's spelling, rounded down, from `0с` on the opening second; a fill a second or more
+/// past the clock prints nothing, and one inside the clock's own second reads `0с`.
+#[test]
+fn the_stopwatch_prints_the_rulers_spelling() {
+    let _locale = crate::test_locale::force("ru");
+    let fill = 10_000_000_i64;
+    let at = |elapsed_ms: i64| {
+        let mut inputs = inputs_with(&[held_since(1, fill as f64)]);
+        inputs.now_ms = fill + elapsed_ms;
+        one_field(ChartLabelField::PositionAge, inputs)
+    };
+    let shown = |value: &str| Some(expect("chart_labels.short.position_age", value));
+    assert_eq!(at(0), shown("0с"));
+    assert_eq!(at(999), shown("0с"));
+    assert_eq!(
+        at(-999),
+        shown("0с"),
+        "a fresh fill inside the clock's second"
+    );
+    assert_eq!(at(-1_000), None, "a fill dated in the future");
+    assert_eq!(at(42_900), shown("42с"));
+    assert_eq!(at(12 * 60_000 + 3_999), shown("12м 03с"));
+    assert_eq!(at(3 * 3_600_000 + 5 * 60_000 + 59_000), shown("3ч 05м"));
+    assert_eq!(at(2 * 86_400_000 + 3 * 3_600_000 + 1), shown("2д 03ч"));
+}
+
+/// A fill off the second grid: the floored clock may trail the true age but never runs ahead of
+/// it. Flooring the fill too would print `42с` here, half a second before 42 s have passed.
+#[test]
+fn the_stopwatch_never_overstates_a_fill_off_the_second_grid() {
+    let _locale = crate::test_locale::force("ru");
+    let fill = 10_000_500_i64;
+    let mut inputs = inputs_with(&[held_since(1, fill as f64)]);
+    // A wall clock at 10_042.4 s is 41.9 s past the fill; floored, it stands 41.5 s past it.
+    inputs.now_ms = 10_042_000;
+    assert_eq!(
+        one_field(ChartLabelField::PositionAge, inputs),
+        Some(expect("chart_labels.short.position_age", "41с"))
+    );
+}
+
+/// Nothing open prints nothing — not `0с`, which would claim a position that does not exist.
+#[test]
+fn no_position_prints_no_stopwatch() {
+    let mut inputs = inputs_with(&[]);
+    inputs.now_ms = 10_000_000;
+    assert_eq!(one_field(ChartLabelField::PositionAge, inputs), None);
+}

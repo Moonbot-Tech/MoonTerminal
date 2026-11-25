@@ -56,12 +56,14 @@ pub(in crate::chartdx) struct LabelInputs {
     /// `None` until a caption asks for any of it — the sync path does not read the snapshot for a
     /// figure nobody prints.
     pub context: Option<moon_core::market::MarketContextReadout>,
-    /// Wall clock the countdown captions are measured against, in Unix milliseconds.
+    /// Wall clock the countdown captions and the position stopwatch are measured against, in Unix
+    /// milliseconds.
     ///
     /// Carried as an INPUT rather than read at format time so the cache key sees it: a countdown
     /// re-formats when the figure it prints changes, and not on every revision in between. Already
-    /// QUANTIZED by the sync to the coarsest step the drawn countdowns can live with — a minute
-    /// while every one of them is far out, a second once one is inside its last hour.
+    /// QUANTIZED by the sync to the coarsest step the drawn clock captions can live with — a minute
+    /// while every countdown is far out, a second once one is inside its last hour or while the
+    /// stopwatch is drawn.
     pub now_ms: i64,
     /// The chart's own candle timeframe in milliseconds, for a countdown caption set to `Авто`.
     ///
@@ -178,6 +180,14 @@ pub(in crate::chartdx) struct BasisStats {
     /// Whether any order contributed a result at all. Distinguishes "flat" from "nothing open",
     /// which a bare zero cannot.
     pub has_position: bool,
+    /// Entry fill of the OLDEST order holding a position, Unix ms, or `None` while no holder states
+    /// a fill.
+    ///
+    /// A start moment rather than an age, so the stopwatch climbs against the caption clock without
+    /// the order walk re-running every second. Gated on the position quantity alone — not on the
+    /// entry and mark prices the result needs — because a position whose mark has not arrived has
+    /// still been open all along.
+    pub position_since_ms: Option<i64>,
 }
 
 impl BasisStats {

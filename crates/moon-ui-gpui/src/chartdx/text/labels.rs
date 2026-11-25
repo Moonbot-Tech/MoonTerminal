@@ -40,9 +40,9 @@ pub(crate) use filter_line::FilterLineTarget;
 pub(in crate::chartdx) use format::hours_and_minutes;
 use format::{
     EYE_HIDDEN, EYE_SHOWN, LOCK_CLOSED, LOCK_OPEN, STAR_OFF, STAR_ON, caption_prefix, colored_sign,
-    cut, detect_line, figure, fmt_countdown, fmt_tf_countdown, liquidations, marked,
-    no_cursor_dash, non_empty, not_measured, plain, price_label, signed_pct_label, span_label,
-    tags_text, volume, volume_amount, volume_bar, window,
+    cut, detect_line, figure, fmt_countdown, fmt_position_age, fmt_tf_countdown, liquidations,
+    marked, no_cursor_dash, non_empty, not_measured, plain, price_label, signed_pct_label,
+    span_label, tags_text, volume, volume_amount, volume_bar, window,
 };
 pub(in crate::chartdx) use inputs::{ActionInputs, BasisStats, LabelInputs, basis_index};
 pub(in crate::chartdx) use pnl::collect_open_stats;
@@ -614,6 +614,13 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
         ChartLabelField::OpenOrders => {
             (stats.open_orders > 0).then(|| (stats.open_orders.to_string(), None))
         }
+        // Against the shared caption clock, which this field pulls to its one-second step while it
+        // is drawn — see `countdown_clock_ms`. Silent with no holder that states a fill, like every
+        // other position figure here with nothing open.
+        ChartLabelField::PositionAge => stats
+            .position_since_ms
+            .and_then(|since| fmt_position_age(since, inputs.now_ms))
+            .map(|text| (text, None)),
         ChartLabelField::Exposure => stats
             .has_exposure
             .then(|| (plain(&short_label(stats.exposure)), None)),
