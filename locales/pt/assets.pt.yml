@@ -57,7 +57,7 @@ assets.balances_tip_idle: "Fora de operação"
 assets.balances_tip_shared: "%{cores} — conta %{brand} compartilhada, contada uma vez"
 assets.balances_tip_shared_unknown: "%{cores} — conta compartilhada da corretora, contada uma vez"
 assets.balances_tip_idle_as_of: "Fora de operação: atualizado %{t}"
-assets.balances_tip_idle_withheld: "Fora de operação: não é avaliado enquanto houver núcleos offline ou não identificados (faltam: %{n})"
+assets.balances_tip_idle_withheld: "Fora de operação: avaliação indisponível (núcleos desativados, desconectados ou não identificados: %{n})"
 assets.section_positions: "Posições"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Todos os núcleos"
@@ -126,6 +126,7 @@ assets.wallet.filtered_empty_many: "Todos os %{n} ativos estão ocultos pelo fil
 # Hover on the amber mark after a core name in the wallets core list: after the wallet and
 # coin lines (built in code), the age of those figures.
 assets.wallet.idle_as_of: "Atualizado: %{t}"
+assets.wallet.idle_scope: "Só são considerados os núcleos deste terminal."
 assets.wallets_hint: "Carteiras · arraste uma moeda entre os contêineres"
 assets.refresh_hint: "Atualizar os saldos do núcleo"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

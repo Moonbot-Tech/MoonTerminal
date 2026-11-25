@@ -57,7 +57,7 @@ assets.balances_tip_idle: "İşlem dışı"
 assets.balances_tip_shared: "%{cores} — ortak %{brand} hesabı, bir kez sayıldı"
 assets.balances_tip_shared_unknown: "%{cores} — ortak borsa hesabı, bir kez sayıldı"
 assets.balances_tip_idle_as_of: "İşlem dışı: %{t} itibarıyla"
-assets.balances_tip_idle_withheld: "İşlem dışı: çevrimdışı veya tanınmamış çekirdek varken değerlendirilmez (beklenen: %{n})"
+assets.balances_tip_idle_withheld: "İşlem dışı: değerlendirme yapılamıyor (devre dışı, bağlantısız veya tanımlanamayan çekirdek sayısı: %{n})"
 assets.section_positions: "Pozisyonlar"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Tüm çekirdekler"
@@ -126,6 +126,7 @@ assets.wallet.filtered_empty_many: "%{n} varlığın tümü %{thr}$ değer filtr
 # Hover on the amber mark after a core name in the wallets core list: after the wallet and
 # coin lines (built in code), the age of those figures.
 assets.wallet.idle_as_of: "%{t} itibarıyla"
+assets.wallet.idle_scope: "Yalnızca bu terminaldeki çekirdekler hesaba katılır."
 assets.wallets_hint: "Cüzdanlar · bir coin'i kaplar arasında sürükleyin"
 assets.refresh_hint: "Çekirdek bakiyelerini yenile"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

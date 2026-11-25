@@ -57,7 +57,7 @@ assets.balances_tip_idle: "Không giao dịch"
 assets.balances_tip_shared: "%{cores} — tài khoản %{brand} chung, chỉ tính một lần"
 assets.balances_tip_shared_unknown: "%{cores} — tài khoản sàn chung, chỉ tính một lần"
 assets.balances_tip_idle_as_of: "Không giao dịch: dữ liệu lúc %{t}"
-assets.balances_tip_idle_withheld: "Không giao dịch: chưa đánh giá khi còn core ngoại tuyến hoặc chưa nhận diện (còn chờ: %{n})"
+assets.balances_tip_idle_withheld: "Không giao dịch: chưa thể đánh giá (số core bị tắt, mất kết nối hoặc chưa nhận diện: %{n})"
 assets.section_positions: "Vị thế"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Mọi core"
@@ -126,6 +126,7 @@ assets.wallet.filtered_empty_many: "Cả %{n} tài sản bị ẩn bởi bộ l�
 # Hover on the amber mark after a core name in the wallets core list: after the wallet and
 # coin lines (built in code), the age of those figures.
 assets.wallet.idle_as_of: "Dữ liệu lúc %{t}"
+assets.wallet.idle_scope: "Chỉ tính các core trong terminal này."
 assets.wallets_hint: "Ví · kéo coin giữa các ngăn"
 assets.refresh_hint: "Làm mới số dư core"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

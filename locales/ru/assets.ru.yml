@@ -57,7 +57,7 @@ assets.balances_tip_idle: "Вне торговли"
 assets.balances_tip_shared: "%{cores} — общий счёт %{brand}, учтён один раз"
 assets.balances_tip_shared_unknown: "%{cores} — общий биржевой счёт, учтён один раз"
 assets.balances_tip_idle_as_of: "Вне торговли: данные на %{t}"
-assets.balances_tip_idle_withheld: "Вне торговли: не оценивается, пока есть ядра без связи или неопознанные (ждём: %{n})"
+assets.balances_tip_idle_withheld: "Вне торговли: оценка недоступна (отключённых, недоступных или неопознанных ядер: %{n})"
 assets.section_positions: "Позиции"
 # Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
 assets.all_cores: "Все ядра"
@@ -126,6 +126,7 @@ assets.wallet.filtered_empty_many: "Все %{n} активов скрыты фи
 # Hover on the amber mark after a core name in the wallets core list: after the wallet and
 # coin lines (built in code), the age of those figures.
 assets.wallet.idle_as_of: "Данные на %{t}"
+assets.wallet.idle_scope: "Учитываются только ядра этого терминала."
 assets.wallets_hint: "Кошельки · перетащи монету между контейнерами"
 assets.refresh_hint: "Обновить балансы ядра"
 # --- Wallet-section display settings (the gear beside the refresh button) ---

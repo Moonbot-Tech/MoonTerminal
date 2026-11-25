@@ -1,9 +1,12 @@
 // Explicit imports, NOT `use super::*`: the panel's parent re-exports `gpui::*`, whose own `test`
 // shadows the built-in attribute.
 use super::{FooterIdle, IdleInput, footer_idle, idle_report, trading_wallet};
+use crate::panels::assets::cache::idle_inputs;
 use moon_core::account::AccountIdentity;
-use moon_core::feed::{TransferAssetRow, TransferAssetsSnapshot, WalletKind};
-use moon_core::venue::{Brand, MarketKind, Venue, wallets_key};
+use moon_core::config::{AppConfig, ServerConfig};
+use moon_core::feed::{ConnStatus, TransferAssetRow, TransferAssetsSnapshot, WalletKind};
+use moon_core::session::CoreStore;
+use moon_core::venue::{Brand, CoreVenue, MarketKind, Venue, wallets_key};
 
 /// A priced coin worth `value` USDT.
 fn coin(currency: &str, value: f64) -> TransferAssetRow {
@@ -61,6 +64,93 @@ fn core<'a>(
         wallets: held,
         seen_ms: held.map_or([0; 3], |held| held.arrived_ms),
     }
+}
+
+/// A configured core and group, with all other connection settings at their defaults.
+fn configured_core(id: u64, name: &str, group: &str) -> ServerConfig {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "uid": id,
+        "name": name,
+        "group": group,
+    }))
+    .expect("valid core fixture")
+}
+
+/// Run the wallet cache input path with two ready Binance Spot cores on different accounts.
+/// Both report futures margin. The configured Futures core on acct-1 has no session.
+fn report_with_binance_spot_cores(config: &AppConfig) -> super::IdleReport {
+    let mut store = CoreStore::default();
+    for id in [1, 3] {
+        store.ensure(id);
+        let data = store.core_mut(id).expect("registered spot core");
+        data.status = ConnStatus::Ready;
+        data.transfer_rev = 1;
+        data.transfer_assets = wallets(Vec::new(), vec![coin("USDT", 100.0)]);
+        data.transfer_seen_ms = data.transfer_assets.arrived_ms;
+    }
+    let venue = CoreVenue::identify(3, "", None);
+    let mut inputs = idle_inputs(config, &store, |id| match id {
+        1 => (Some(&venue), AccountIdentity::from_auth("acct-1", "", 100)),
+        3 => (Some(&venue), AccountIdentity::from_auth("acct-3", "", 300)),
+        _ => (None, None),
+    });
+    for input in &mut inputs {
+        input.visible = matches!(input.core, 1 | 3);
+        input.counted = input.visible;
+    }
+    idle_report(&inputs, 1.0)
+}
+
+/// The configured futures sibling belongs to a different connection group from the spot cores.
+fn binance_roster() -> AppConfig {
+    AppConfig::headless(vec![
+        configured_core(1, "CORE_A", "UNIT_01"),
+        configured_core(2, "CORE_B", "UNIT_02"),
+        configured_core(3, "CORE_C", "UNIT_01"),
+    ])
+}
+
+/// Omitting an Act-off core would mark its sibling's futures margin and the other account's.
+#[test]
+fn strict_idle_withholds_binance_marks_when_futures_core_is_off() {
+    let mut config = binance_roster();
+    config.servers[1].active = false;
+
+    let report = report_with_binance_spot_cores(&config);
+
+    assert!(report.marks.is_empty());
+    assert_eq!(footer_idle(&report).waiting_for, 1);
+}
+
+/// Filtering out an inactive group would make the futures balance look unused on both accounts.
+#[test]
+fn strict_idle_withholds_binance_marks_when_futures_group_is_off() {
+    let mut config = binance_roster();
+    config.group_mut("UNIT_02").active = false;
+
+    let report = report_with_binance_spot_cores(&config);
+
+    assert!(report.marks.is_empty());
+    assert_eq!(footer_idle(&report).waiting_for, 1);
+}
+
+/// Keeping a removed core in the blocker roster would prevent both idle marks from returning.
+#[test]
+fn strict_idle_restores_binance_marks_when_off_core_is_removed() {
+    let mut config = binance_roster();
+    config.servers[1].active = false;
+    assert!(report_with_binance_spot_cores(&config).marks.is_empty());
+    config.servers.remove(1);
+
+    let report = report_with_binance_spot_cores(&config);
+
+    assert_eq!(report.marks.len(), 2);
+    for id in [1, 3] {
+        assert_eq!(report.marks[&id].wallets[0].kind, WalletKind::Futures);
+    }
+    assert_eq!(footer_idle(&report).total, 200.0);
+    assert_eq!(footer_idle(&report).waiting_for, 0);
 }
 
 /// Breakage: `trading_wallet` following the market on Bybit — the Unified Trading account a Bybit

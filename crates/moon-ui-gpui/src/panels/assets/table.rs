@@ -561,10 +561,8 @@ impl AssetsView {
 
     /// The idle-money mark of a core row: quiet amber text right after the name.
     ///
-    /// Its hover adds only what the mark cannot carry: which coins each wallet holds, and how old
-    /// the figures are. No heading and no instruction: a line about what "the bots" do read as a
-    /// statement about the core the mark stands beside, and what to do with the money is the
-    /// user's call — the row click opens the core's containers as it always did.
+    /// Its hover lists the coins in each wallet, the age of the figures and the scope of the
+    /// assessment.
     fn idle_marker(&self, cid: CoreId, p: MoonPalette, cx: &Context<Self>) -> Option<AnyElement> {
         let mark = self.cached_idle.marks.get(&cid)?;
         let b = self.backend.read(cx);
@@ -596,7 +594,10 @@ impl AssetsView {
                 .truncate()
                 .text_size(design::t_caption(cx))
                 .text_color(rgb(p.amber))
-                .tooltip(crate::panels::common::text_tooltip(tip))
+                .tooltip(crate::panels::common::text_tooltip_with_detail(
+                    tip,
+                    t!("assets.wallet.idle_scope").to_string(),
+                ))
                 .child(idle_mark_text(mark, brand))
                 .into_any_element(),
         )

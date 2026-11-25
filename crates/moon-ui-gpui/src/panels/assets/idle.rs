@@ -23,16 +23,16 @@
 //! - and marked once, on its first core the panel shows — the same Funding balance on two rows
 //!   would read as twice the money.
 //!
-//! A mark tells the user to move money, so it is drawn only for an account that is established:
+//! A mark describes wallet usage by the cores in this terminal. It requires an established account:
 //! - a core that has not stated which account it is on carries no mark, and neither does one that
 //!   is not connected and ready right now, whatever it stated on an earlier connection
 //!   ([`IdleInput::ready`]): the terminal cannot see what such a core does meanwhile, and it may
 //!   come back on another account;
 //! - and while such a core exists it may be the very sibling that trades the wallet a mark would
-//!   name — on its own exchange when that much is known, on any exchange while it has not said
-//!   even that. The accounts it could belong to are not judged until it identifies itself. A core
-//!   on an exchange this terminal does not model is on none of the marked ones and holds nothing
-//!   back.
+//!   name. Input from a configured core without a ready connection (including switched-off cores)
+//!   has unknown exchange and can withhold any account's mark. For a ready core that has stated
+//!   only its exchange, withholding is limited to that exchange. A ready core on an exchange this
+//!   terminal does not model holds nothing back.
 //!
 //! The footer names the same money as one sum (`assets.balances_tip_idle`), and there it follows
 //! the footer's own scope: an account whose shown cores are all set to stay out of the total
