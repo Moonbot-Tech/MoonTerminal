@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Лимиты биржи ещё не загружены 
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Сводка по всей группе: предел ордера задаёт биржа конкретного сервера — выберите сервер."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Лимит позиции при ПРИМЕНЁННОМ плече: %{cap}. Он ниже макс. ордера (%{order}), поэтому именно он остановит ордер крупнее. Меньше плечо — выше предел; смена плеча отразится здесь только после того, как биржа её приняла и ядро сообщило новый предел."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Лимит позиции при ПРИМЕНЁННОМ плече: %{cap}. Макс. ордер для этого рынка биржа не задала, так что это единственный предел. Меньше плечо — выше предел; смена плеча отразится здесь только после того, как биржа её приняла и ядро сообщило новый предел."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Макс. ордер: %{order}. Лимит позиции при ПРИМЕНЁННОМ плече (%{cap}) не ниже, поэтому ордер крупнее остановит именно макс. ордер. Меньше плечо — выше лимит позиции; смена плеча отразится здесь только после того, как биржа её приняла и ядро сообщило новый предел."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "Максимальное плечо этой монеты по данным биржи."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
@@ -683,6 +690,7 @@ chart_labels.field.open_pnl_pct: "Open, %"
 chart_labels.field.open_pnl_money: "Open, деньги"
 chart_labels.field.open_orders: "Ордеров"
 chart_labels.field.pos_size: "Размер позиции"
+chart_labels.field.position_age: "Время в позиции"
 chart_labels.field.exposure: "Экспозиция"
 chart_labels.field.exchange_delta_1h: "Биржа Δ 1ч"
 chart_labels.field.exchange_delta_24h: "Биржа Δ 24ч"
@@ -836,6 +844,7 @@ chart_labels.short.delta_24h: "Δ24ч"
 chart_labels.short.pnl: "Open"
 chart_labels.short.orders: "Ордеров"
 chart_labels.short.position: "Позиция"
+chart_labels.short.position_age: "В сделке"
 chart_labels.short.exchange_1h: "Биржа 1ч"
 chart_labels.short.exchange_24h: "Биржа 24ч"
 chart_labels.short.btc_1h: "BTC 1ч"
@@ -910,3 +919,8 @@ chart.volumes.hvol_backdrop_on: "Есть"
 chart.volumes.hvol_backdrop_off: "Нет"
 chart.volumes.hvol_overlay: "Наложить на график"
 chart.volumes.hvol_overlay_hint: "Как нижние объёмы: поверх свечей, без фона и рамки, столбики от левого края внутрь"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Закрыть терминал?"
+shell.quit_confirm.body: "Закроется весь терминал вместе с окнами графиков, а не один график. Ядра продолжат работать, ордера останутся, а раскладка окон вернётся при следующем запуске."
+shell.quit_confirm.stay: "Остаться"
+shell.quit_confirm.quit: "Закрыть терминал"

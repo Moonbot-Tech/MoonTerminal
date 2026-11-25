@@ -51,6 +51,13 @@ pub(in crate::chartdx) struct ChartDataState {
     /// Text measurement awaiting the next frame's atomic layout/input geometry update.
     pub(in crate::chartdx) pending_price_axis_width: Option<f32>,
     pub(in crate::chartdx) orders: OrdersStyle,
+    /// The app-wide take-profit switch, `OrdersStyleSet::draw_take_profit` (#1409). Kept beside
+    /// `orders` rather than in it: `orders` is the active theme's set, and the switch is neither's.
+    pub(in crate::chartdx) draw_take_profit: bool,
+    /// The app-wide position-age switch, `OrdersStyleSet::show_position_age` (#1402): whether the
+    /// entry line of a position-holding order prints how long it has held it. Beside
+    /// `draw_take_profit` for the same reason.
+    pub(in crate::chartdx) show_position_age: bool,
     pub(in crate::chartdx) follow: bool,
     pub(in crate::chartdx) present_rate_hz: f32,
     pub(in crate::chartdx) w: u32,

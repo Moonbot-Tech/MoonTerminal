@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Bu piyasanın borsa sınırları henüz yüklenmedi."
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Tam özet: emir tavanı tek bir borsa hesabına aittir — görmek için bir sunucu seçin."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "UYGULANMIŞ kaldıraçta pozisyon tavanı: %{cap}. Maks. emirden (%{order}) düşük olduğu için daha büyük bir emri durduran budur. Kaldıraç düştükçe yükselir; kaldıraç değişikliği burada ancak borsa onu kabul edip çekirdek yeni tavanı bildirdikten sonra görünür."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "UYGULANMIŞ kaldıraçta pozisyon tavanı: %{cap}. Borsa bu piyasa için maks. emir belirtmiyor, bu yüzden tek tavan budur. Kaldıraç düştükçe yükselir; kaldıraç değişikliği burada ancak borsa onu kabul edip çekirdek yeni tavanı bildirdikten sonra görünür."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Maks. emir: %{order}. UYGULANMIŞ kaldıraçtaki pozisyon tavanı (%{cap}) daha düşük değil, bu yüzden daha büyük bir emri durduran budur. Kaldıraç düştükçe pozisyon tavanı yükselir; kaldıraç değişikliği burada ancak borsa onu kabul edip çekirdek yeni tavanı bildirdikten sonra görünür."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "Borsanın bu coin için bildirdiği en yüksek kaldıraç."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
@@ -683,6 +690,7 @@ chart_labels.field.open_pnl_pct: "Açık, %"
 chart_labels.field.open_pnl_money: "Açık, para"
 chart_labels.field.open_orders: "Emirler"
 chart_labels.field.pos_size: "Pozisyon büyüklüğü"
+chart_labels.field.position_age: "Pozisyonda geçen süre"
 chart_labels.field.exposure: "Açık risk"
 chart_labels.field.exchange_delta_1h: "Borsa Δ 1sa"
 chart_labels.field.exchange_delta_24h: "Borsa Δ 24sa"
@@ -836,6 +844,7 @@ chart_labels.short.delta_24h: "Δ24sa"
 chart_labels.short.pnl: "Açık"
 chart_labels.short.orders: "Emir"
 chart_labels.short.position: "Pozisyon"
+chart_labels.short.position_age: "İşlemde"
 chart_labels.short.exchange_1h: "Borsa 1sa"
 chart_labels.short.exchange_24h: "Borsa 24sa"
 chart_labels.short.btc_1h: "BTC 1sa"
@@ -910,3 +919,8 @@ chart.volumes.hvol_backdrop_on: "Açık"
 chart.volumes.hvol_backdrop_off: "Kapalı"
 chart.volumes.hvol_overlay: "Grafiğin üstüne bindir"
 chart.volumes.hvol_overlay_hint: "Alttaki hacimler gibi: mumların üstünde, altlık ve çerçeve yok, çubuklar sol kenardan içeri büyür"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Terminal kapatılsın mı?"
+shell.quit_confirm.body: "Yalnızca bir grafik değil, grafik pencereleriyle birlikte tüm terminal kapanır. Çekirdekler çalışmaya devam eder, emirler kalır ve pencere düzeni bir sonraki açılışta geri gelir."
+shell.quit_confirm.stay: "Kal"
+shell.quit_confirm.quit: "Terminali kapat"

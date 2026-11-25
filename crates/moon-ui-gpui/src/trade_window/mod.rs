@@ -433,12 +433,17 @@ pub(crate) struct TradeWindowView {
     settings_open: bool,
     /// The trade-window candle setting this window last pinned its candles from.
     ///
-    /// Graphics and captions reach the panel by its holding no override at all: it re-reads the
-    /// kind's stored set on every backend notification. The candles cannot travel that way — the
-    /// panel's candle override is always in place, because it carries the window's timeframe pin
-    /// — so `settings::follow_candle_default` re-pins from the stored set whenever this differs
-    /// from it, whichever window's popup moved it.
+    /// Captions reach the panel by its holding no override at all: it re-reads the kind's stored
+    /// set on every backend notification. The candles cannot travel that way — the panel's candle
+    /// override is always in place, because it carries the window's timeframe pin — so
+    /// `settings::follow_candle_default` re-pins from the stored set whenever this differs from
+    /// it, whichever window's popup moved it.
     candles_followed: moon_core::market::CandleViewCfg,
+    /// The graphics this window last pinned on its panel: the trade-window kind's stored set with
+    /// the main chart's trade-cross size (`settings::drawn_graphics`). An override for the same
+    /// reason as the candles — that one field comes from another chart, which the panel's own
+    /// kind default cannot name — re-pinned by `settings::follow_graphics` whenever it differs.
+    graphics_followed: moon_core::config::ChartGraphicsCfg,
     /// Core and exchange-native market the trade was resolved to.
     core: CoreId,
     market: String,

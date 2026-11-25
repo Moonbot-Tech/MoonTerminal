@@ -193,15 +193,16 @@ impl ChartLabelsCfg {
             .filter(|p| p.is_drawn())
     }
 
-    /// The wall clock the drawn countdown captions should be formatted against, QUANTIZED to the
-    /// coarsest step they can live with — or `None` when none of them is drawn.
+    /// The wall clock the drawn clock captions — the countdowns and the position stopwatch — should
+    /// be formatted against, QUANTIZED to the coarsest step they can live with — or `None` when
+    /// none of them is drawn.
     ///
     /// The quantum is the whole cost control for these captions. A countdown that re-formatted on
     /// every market revision would reshape a pane's whole caption set several times a second on a
     /// busy coin to print the same string; quantizing makes the caption cache answer "unchanged"
-    /// until the figure actually moves. A minute is enough while every countdown is far out, and
-    /// only a countdown inside its last hour — which is when the caption starts printing seconds —
-    /// buys the second-by-second step.
+    /// until the figure actually moves. A minute is enough while every countdown is far out; a
+    /// countdown inside its last hour — which is when the caption starts printing seconds — buys
+    /// the second-by-second step, and so does the position stopwatch for as long as it is drawn.
     ///
     /// The threshold carries a minute of SLACK past the hour so the step changes just BEFORE the
     /// display needs it. Without it the switch waits for the next minute tick, and the caption
@@ -227,6 +228,12 @@ impl ChartLabelsCfg {
                 // configuration is what this reads, and a caption that only started ticking once a
                 // ban began would print the minute it was set at until the next revision arrived.
                 ChartLabelField::TempBanLeft => 60_000,
+                // The position stopwatch prints seconds for its whole first minute and climbs from
+                // `0с`, so it takes the fine step for as long as it is DRAWN — before a position
+                // exists too. Gated on the configuration like the ban readout above: a clock that
+                // only started once the fill arrived would hold that fill's first figure until the
+                // next market revision happened to re-format it.
+                ChartLabelField::PositionAge => 1_000,
                 ChartLabelField::TfCloseIn => {
                     match part.tf.remaining_ms(chart_tf_ms, now_ms) < COUNTDOWN_SECOND_STEP_BELOW_MS
                     {

@@ -39,6 +39,8 @@ impl ChartDataState {
             order_book_width_px: moon_core::config::book_width::DEFAULT,
             pending_price_axis_width: None,
             orders: OrdersStyle::default(),
+            draw_take_profit: true,
+            show_position_age: true,
             follow: true,
             present_rate_hz: 60.0,
             w: 1024,
@@ -593,7 +595,8 @@ impl ChartDataState {
 
     /// Advance the countdown captions when their quantized clock moves, WITHOUT a market sync.
     ///
-    /// A countdown is the one caption whose value changes with nothing but the clock, and the sync
+    /// A countdown — and the position stopwatch, which is one run forwards — is a caption whose
+    /// value changes with nothing but the clock, and the sync
     /// that normally re-formats captions runs only when the view is dirty or a market revision
     /// moved. On a quiet market neither happens for minutes, and the countdown would sit frozen —
     /// which is the one failure a clock on screen must not have.
@@ -609,6 +612,12 @@ impl ChartDataState {
     /// change once. The monotonic `now` is the one the frame already took, so this costs one
     /// `Instant` comparison on the frames it skips — on every chart, not only on those that print
     /// no countdown.
+    ///
+    /// The same clock steps the position ages on the order lines (#1402), on the one-second grid
+    /// `text::order_age_clock` gives, and ONLY on panes whose captions carry one
+    /// (`PaneRender::order_age_now_ms`). A pane steps once per second however many of its orders
+    /// hold a position, and asks for a present only when a caption the last text pass drew now
+    /// reads differently: an aged caption scrolled out of the plot re-spells silently.
     fn tick_countdown_captions(&mut self, now: Instant) {
         // Gated exactly like `pull_market_source_if_visible`: a scene nobody is looking at must not
         // reshape text once a second, and the tick below catches its captions up the moment it
@@ -624,25 +633,34 @@ impl ChartDataState {
         }
         self.last_countdown_check = Some(now);
         let tf_ms = self.candle_view.tf_ms();
+        let now_ms = now_unix_ms() as i64;
         let mut st = self.render.borrow_mut();
-        let Some(clock) = st
-            .chart_labels
-            .countdown_clock_ms(tf_ms, now_unix_ms() as i64)
-        else {
-            return;
-        };
+        let clock = st.chart_labels.countdown_clock_ms(tf_ms, now_ms);
+        let age_clock = crate::chartdx::text::order_age_clock(now_ms);
         for idx in 0..st.panes.len() {
             // A pane the text pass skips must not be re-formatted for it, and must not raise a
             // present: `prepare_text` draws captions for ACTIVE panes only, so a vacated slot held
             // through its grace period would otherwise repaint the scene once a second for a
             // picture nobody is drawing.
-            if !st.panes[idx].active || st.panes[idx].label_now_ms == clock {
+            if !st.panes[idx].active {
                 continue;
             }
-            st.panes[idx].label_now_ms = clock;
-            crate::diag::bump(&crate::diag::CHART_COUNTDOWN_TICK);
-            if st.refresh_pane_labels(idx) {
-                st.needs_present = true;
+            if let Some(clock) = clock
+                && st.panes[idx].label_now_ms != clock
+            {
+                st.panes[idx].label_now_ms = clock;
+                crate::diag::bump(&crate::diag::CHART_COUNTDOWN_TICK);
+                if st.refresh_pane_labels(idx) {
+                    st.needs_present = true;
+                }
+            }
+            let pr = &mut st.panes[idx];
+            if pr.order_age_now_ms.is_some_and(|held| held != age_clock) {
+                pr.order_age_now_ms = Some(age_clock);
+                if crate::chartdx::text::step_order_ages(&mut pr.order_labels, age_clock) {
+                    crate::diag::bump(&crate::diag::CHART_ORDER_AGE_TICK);
+                    st.needs_present = true;
+                }
             }
         }
     }

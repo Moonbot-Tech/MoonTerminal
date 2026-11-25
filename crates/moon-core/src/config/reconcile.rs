@@ -63,6 +63,8 @@ pub struct Merged {
     pub live_scope: LiveScope,
     /// How a shortened figure spells its unit.
     pub number_notation: Notation,
+    /// Whether closing the last main window asks before the terminal quits.
+    pub confirm_quit: bool,
     /// Durable uid counter, already advanced past any uid handed out during this merge.
     pub next_uid: UidCounter,
     /// Legacy hotkeys from settings.toml (schema < v13), used only for one-time migration
@@ -111,6 +113,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let report_valuation_mode = meta.report_valuation_mode;
     let live_scope = meta.live_scope;
     let number_notation = meta.number_notation;
+    let confirm_quit = meta.confirm_quit;
     let hotkeys = meta.hotkeys;
     let mut telegram = sf.telegram;
     dirty |= telegram.adopt_legacy_owner();
@@ -230,6 +233,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
         report_valuation_mode,
         live_scope,
         number_notation,
+        confirm_quit,
         next_uid,
         hotkeys,
         dirty,
@@ -267,6 +271,7 @@ pub fn split(
     report_valuation_mode: ValuationMode,
     live_scope: LiveScope,
     number_notation: Notation,
+    confirm_quit: bool,
     next_uid: u64,
     telegram: TelegramConfig,
 ) -> (ServersFile, SettingsFile) {
@@ -306,6 +311,7 @@ pub fn split(
         report_valuation_mode,
         live_scope,
         number_notation,
+        confirm_quit,
         next_uid,
         servers: servers
             .iter()

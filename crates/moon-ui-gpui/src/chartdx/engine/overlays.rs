@@ -19,6 +19,49 @@ impl ChartEngine {
         }
     }
 
+    /// Applies the app-wide take-profit switch (`OrdersStyleSet::draw_take_profit`, #1409).
+    ///
+    /// Invalidates every pane's order geometry the way a style change does, because the line
+    /// appears or goes with no change to the order store. Returns whether it changed.
+    pub fn set_draw_take_profit(&mut self, draw: bool) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.draw_take_profit == draw {
+            return false;
+        }
+        data.draw_take_profit = draw;
+        data.mark_view_dirty();
+        drop(data);
+        for pr in &mut self.state.borrow_mut().panes {
+            pr.last_order_lines_rev = u64::MAX;
+        }
+        true
+    }
+
+    /// Applies the app-wide position-age switch (`OrdersStyleSet::show_position_age`, #1402).
+    ///
+    /// Invalidates every pane's order labels the way the take-profit switch does: the entry-line
+    /// captions gain or lose their age with no change to the order store. Returns whether it
+    /// changed.
+    pub fn set_show_position_age(&mut self, show: bool) -> bool {
+        let mut data = self.data.borrow_mut();
+        if data.show_position_age == show {
+            return false;
+        }
+        data.show_position_age = show;
+        data.mark_view_dirty();
+        drop(data);
+        for pr in &mut self.state.borrow_mut().panes {
+            pr.last_order_lines_rev = u64::MAX;
+        }
+        true
+    }
+
+    /// The take-profit switch this chart last drew under, for the hit test: a line the chart does
+    /// not draw must not be grabbable either (`moon_chart::order_geometry::line_kind_drawn`).
+    pub fn draws_take_profit(&self) -> bool {
+        self.data.borrow().draw_take_profit
+    }
+
     pub fn set_order_visual(
         &mut self,
         highlight: Option<(CoreId, u64)>,

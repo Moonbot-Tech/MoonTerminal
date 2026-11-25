@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Exchange limits have not loaded for this market yet."
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Full summary: an order cap belongs to one exchange account - select a server to see it."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Position cap at the APPLIED leverage: %{cap}. It is below the per-order maximum (%{order}), so it is what stops a larger order. Lower leverage raises it; a leverage change shows here only after the exchange has accepted it and the core has reported the new cap."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Position cap at the APPLIED leverage: %{cap}. The exchange states no per-order maximum for this market, so this is the only ceiling. Lower leverage raises it; a leverage change shows here only after the exchange has accepted it and the core has reported the new cap."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Per-order maximum: %{order}. The position cap at the APPLIED leverage (%{cap}) is not lower, so this is what stops a larger order. Lower leverage raises the position cap; a leverage change shows here only after the exchange has accepted it and the core has reported the new cap."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "This coin's maximum leverage as stated by the exchange."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
@@ -683,6 +690,7 @@ chart_labels.field.open_pnl_pct: "Open, %"
 chart_labels.field.open_pnl_money: "Open, money"
 chart_labels.field.open_orders: "Orders"
 chart_labels.field.pos_size: "Position size"
+chart_labels.field.position_age: "Time in position"
 chart_labels.field.exposure: "Exposure"
 chart_labels.field.exchange_delta_1h: "Exchange Δ 1h"
 chart_labels.field.exchange_delta_24h: "Exchange Δ 24h"
@@ -836,6 +844,7 @@ chart_labels.short.delta_24h: "Δ24h"
 chart_labels.short.pnl: "Open"
 chart_labels.short.orders: "Orders"
 chart_labels.short.position: "Position"
+chart_labels.short.position_age: "In trade"
 chart_labels.short.exchange_1h: "Exch 1h"
 chart_labels.short.exchange_24h: "Exch 24h"
 chart_labels.short.btc_1h: "BTC 1h"
@@ -910,3 +919,8 @@ chart.volumes.hvol_backdrop_on: "On"
 chart.volumes.hvol_backdrop_off: "Off"
 chart.volumes.hvol_overlay: "Overlay on the chart"
 chart.volumes.hvol_overlay_hint: "Like the bottom volumes: over the candles, no backdrop or frame, rows grow inward from the left edge"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Close the terminal?"
+shell.quit_confirm.body: "The whole terminal closes together with its chart windows, not just one chart. The cores keep running, the orders stay, and the window layout comes back on the next launch."
+shell.quit_confirm.stay: "Stay"
+shell.quit_confirm.quit: "Close terminal"

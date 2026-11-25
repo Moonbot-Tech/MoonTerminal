@@ -61,6 +61,18 @@ impl Render for IdentityWidthProbe {
         let core_w = super::core_col_w(std::slice::from_ref(&group), scale, cx);
         let widths = super::metric_col_widths(std::slice::from_ref(&group), cx);
         let p = MoonPalette::active(cx);
+        // The real totals row under the same columns, so its geometry is checked against the
+        // header and the body exactly as theirs are against each other.
+        let drawn_metrics = (0..super::METRIC_COLS.len())
+            .filter(|i| self.all_metrics || [0, 1, 2, 3, 5, 6].contains(i))
+            .fold(0u16, |mask, i| mask | super::metric_bit(i));
+        let drawn = if self.with_core {
+            drawn_metrics | super::COL_BIT_CORE
+        } else {
+            drawn_metrics
+        };
+        let totals = super::super::StratTotals::of(std::slice::from_ref(&group), &[0], false);
+        let footer = super::totals_row(drawn, &totals, 1, p, core_w, &widths, cx);
         v_flex()
             .w_full()
             .font_family(design::mono())
@@ -139,7 +151,19 @@ impl Render for IdentityWidthProbe {
                         ),
                     )
             }))
+            .child(footer)
     }
+}
+
+/// The totals row's cell under metric `i` of [`IdentityWidthProbe`]. Every drawn column has
+/// one, an empty total included: the empty cell still holds its column's box.
+fn footer_cell(visual: &mut gpui::VisualTestContext, i: usize) -> gpui::Bounds<gpui::Pixels> {
+    visual
+        .debug_bounds(leak(format!(
+            "an-strat-total-{}",
+            super::METRIC_COLS[i].key
+        )))
+        .expect("totals cell")
 }
 
 /// Identity cells must fit their labels before the name receives all remaining row space.
@@ -196,7 +220,23 @@ fn strategy_and_core_share_spare_width_without_stretching_metrics(cx: &mut gpui:
                                     cell.right() <= row.right(),
                                     "metric escaped: {language:?} {theme:?} width {width}"
                                 );
+                                // The totals row squeezes with the rows at every width: each
+                                // figure stays under its own column and inside the card.
+                                let total = footer_cell(&mut visual, i);
+                                assert!(
+                                    (total.left() - cell.left()).abs() <= px(0.5)
+                                        && (total.size.width - cell.size.width).abs() <= px(0.5),
+                                    "totals drift: {language:?} {theme:?} width {width}"
+                                );
                             }
+                            let label = visual
+                                .debug_bounds("an-strat-totals-label")
+                                .expect("totals label");
+                            let first = footer_cell(&mut visual, 0);
+                            assert!(
+                                label.right() <= first.left(),
+                                "totals label ran into the figures: {language:?} width {width}"
+                            );
                             if with_core {
                                 let core = visual.debug_bounds("identity-row-core").expect("core");
                                 assert!(name.right() <= core.left(), "identity columns overlap");
@@ -357,6 +397,21 @@ fn all_strategy_metrics_fit_and_align(cx: &mut gpui::TestAppContext) {
                 assert!(
                     f32::from(row.size.width) <= required + gutter + 1.0,
                     "numeric column absorbed spare row space: {}",
+                    column.key
+                );
+                let total = footer_cell(&mut visual, i);
+                assert!((total.left() - row.left()).abs() <= px(0.5));
+                let total_required = visual.update(|_, cx| {
+                    let group = strategy_geometry_group();
+                    super::super::StratTotals::of(std::slice::from_ref(&group), &[0], false)
+                        .cell(column)
+                        .map_or(0.0, |(text, _)| {
+                            design::mono_body_text_width(cx, &text, 400.0)
+                        })
+                });
+                assert!(
+                    f32::from(total.size.width) >= total_required,
+                    "total clipped on a wide host: {}",
                     column.key
                 );
                 previous = row;
@@ -1112,7 +1167,7 @@ impl Render for CardProgressProbe {
             .flex_none()
             .h(design::ui_px(cx, 28.0))
             .child("row");
-        let card = strat_list_frame(p, toolbar, filter, header, table_row, cx);
+        let card = strat_list_frame(p, toolbar, filter, header, table_row, None, cx);
         div().size_full().child(
             h_flex()
                 .size_full()
@@ -1700,6 +1755,89 @@ fn the_ready_column_filter_and_empty_state_fit_every_language(cx: &mut gpui::Tes
                     }
                 }
             }
+        }
+    }
+}
+
+/// The totals row inside the real card frame, under the live "By coin" columns: the frame and
+/// the kind/auto spacers are what the bare geometry probe above does not draw.
+struct CardFooterProbe;
+
+impl Render for CardFooterProbe {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let group = strategy_geometry_group();
+        let scale = design::font_scale(cx);
+        let core_w = super::core_col_w(std::slice::from_ref(&group), scale, cx);
+        let widths = super::metric_col_widths(std::slice::from_ref(&group), cx);
+        let drawn =
+            StratMode::Coins.drawn_cols(StratMode::Coins.default_cols() | super::metric_bit(3));
+        let totals = super::super::StratTotals::of(std::slice::from_ref(&group), &[0], false);
+        let footer = super::totals_row(drawn, &totals, 1, p, core_w, &widths, cx);
+        let block = |sel: &'static str, h: f32| {
+            div()
+                .debug_selector(move || sel.to_string())
+                .w_full()
+                .flex_none()
+                .h(design::ui_px(cx, h))
+        };
+        div()
+            .size_full()
+            .font_family(design::mono())
+            .text_size(design::t_body(cx))
+            .child(strat_list_frame(
+                p,
+                block("card-toolbar", 32.0),
+                block("card-filter", 32.0),
+                block("card-header", 22.0),
+                div().size_full().debug_selector(|| "card-list".into()),
+                Some(footer),
+                cx,
+            ))
+    }
+}
+
+/// Every drawn totals cell lies inside the card and is wide enough for its figure, at a narrow
+/// and a wide card. Breaks if the footer's fixed group collapses or slides out of the frame.
+#[gpui::test]
+fn the_totals_row_draws_its_figures_inside_the_card(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        MoonTheme::install_config(
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, 1.0),
+            cx,
+        )
+    });
+    let _locale = crate::test_locale::force("ru");
+    for (width, zoom) in [
+        (1400.0, 1.0),
+        (2600.0, 1.0),
+        (2000.0, 1.375),
+        (2752.0, 1.375),
+    ] {
+        let window = cx.open_window(gpui::size(px(width), px(400.0)), |_, _| CardFooterProbe);
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let card = visual.debug_bounds("an-strat-card").expect("card");
+        let row = visual.debug_bounds("an-strat-totals").expect("totals row");
+        assert!(row.right() <= card.right() && row.bottom() <= card.bottom());
+        let totals = super::super::StratTotals::of(&[strategy_geometry_group()], &[0], false);
+        for i in [0usize, 1, 5] {
+            let cell = footer_cell(&mut visual, i);
+            let text = totals.cell(&super::METRIC_COLS[i]).expect("a figure").0;
+            let need = visual.update(|_, cx| design::mono_body_text_width(cx, &text, 400.0));
+            assert!(
+                cell.left() >= row.left() && cell.right() <= row.right(),
+                "totals cell {i} outside its row at width {width}: {cell:?} in {row:?}"
+            );
+            assert!(
+                f32::from(cell.size.width) >= need,
+                "totals cell {i} too narrow at width {width}: {cell:?}, needs {need}"
+            );
         }
     }
 }

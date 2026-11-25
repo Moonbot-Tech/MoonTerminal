@@ -63,7 +63,7 @@ settings.page.hotkeys.desc: "Клавиши и жесты мыши, совмес
 settings.page.hotkeys.keywords: "хоткей клавиша мышь жест сочетание"
 settings.page.general.title: "Основное"
 settings.page.general.desc: "Язык, расчёт сумм и поведение графиков."
-settings.page.general.keywords: "язык курс usdt лог автозакрытие вкладка панорама"
+settings.page.general.keywords: "язык курс usdt лог автозакрытие вкладка панорама выход"
 settings.page.security.title: "Безопасность"
 settings.page.security.desc: "Два независимых пароля и список компьютеров, которым открыт файл подключений."
 settings.page.security.keywords: "пароль шифрование servers.enc машина"

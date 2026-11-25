@@ -295,7 +295,12 @@ fn new_view(
     // What the pin was taken from: with no override yet, the effective view IS the
     // trade-window kind's stored set, and `follow_candle_default` re-pins when it moves.
     let mut candles_followed = moon_core::market::CandleViewCfg::default();
+    // The graphics, pinned before the first frame so the crosses never flash at the kind's own
+    // size: the trade-window set with the main chart's cross size (#1261).
+    let mut graphics_followed = moon_core::config::ChartGraphicsCfg::default();
     panel.update(vcx, |panel, pcx| {
+        graphics_followed = super::settings::drawn_graphics_now(owner.read(pcx), core);
+        panel.set_chart_graphics(Some(graphics_followed), pcx);
         let user = panel.effective_candle_view(pcx);
         user_candle_mode = user.mode;
         candles_followed = user;
@@ -382,6 +387,7 @@ fn new_view(
         fit_frame: None,
         applied_frame: None,
         candles_followed,
+        graphics_followed,
         core,
         market,
         stamps,
@@ -449,12 +455,13 @@ fn new_view(
     // What the view watches the application for: the strategy list of a core that was still
     // connecting when it opened — a revision compare per notification, see
     // `retry_strategy_name`, and nothing at all once the name is in...
-    // ...and the trade-window candle setting, which any trade view's popup moves: a compare per
-    // notification, a re-pin only when it changed (graphics and captions reach the panel on their
-    // own, since it holds no override for them).
+    // ...and the trade-window candle and graphics settings, which any trade view's popup moves,
+    // with the main chart's cross size beside them: a compare per notification, a re-pin only
+    // when one changed (captions reach the panel on their own, since it holds no override).
     vcx.observe(owner, |this: &mut TradeWindowView, _backend, cx| {
         this.retry_strategy_name(cx);
         this.follow_candle_default(cx);
+        this.follow_graphics(cx);
     })
     .detach();
     // ...and the archived order traces it asked the resolver for, on the resolver's own wake: a

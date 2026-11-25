@@ -1,10 +1,14 @@
-//! Source, order-kind, column, sorting, and filtering controls for the Orders panel.
+//! Source, order-kind, order-origin, column, sorting, and filtering controls for the Orders panel.
 
 use super::*;
 use rust_i18n::t;
 
 /// Maximum fitted width that keeps the pinned Auto core inside the narrow Orders panel by itself.
 const AUTO_CORE_TRIGGER_MAX_W: f32 = 250.0;
+/// Font-scaled bounds of the origin trigger, which fits its current label between them. The
+/// ceiling is the kind trigger's own width, so the second axis never claims more than the first.
+const ORIGIN_TRIGGER_MIN_W: f32 = 56.0;
+const ORIGIN_TRIGGER_MAX_W: f32 = 102.0;
 /// Minimum settings-menu width preserving the former compact footprint.
 const SETTINGS_MENU_MIN_W: f32 = 220.0;
 /// Maximum settings-menu width before unusually long translations truncate safely.
@@ -140,6 +144,58 @@ impl OrdersPanel {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(102.0)
+            .fit_menu_width(138.0, 560.0)
+            .items(items)
+    }
+
+    /// Builds the All, Auto and Manual order-origin dropdown, the second filter axis beside
+    /// [`Self::kind_combo`].
+    ///
+    /// With every origin shown the trigger names both sides ("Auto/Manual") rather than "All",
+    /// because the kind dropdown right beside it already reads "All" and two identical words in a
+    /// row say nothing about which filter is which. An active origin filter renders selected: it
+    /// hides orders, and a trader who forgot it must see at a glance why the table is short.
+    ///
+    /// Narrow docks: the trigger fits its CURRENT label instead of reserving the widest one, so a
+    /// filtered bar ("Auto", "Manual") costs less than the default one, and the coin field beside
+    /// it still yields first. The Classic bar itself does not wrap (see the layout in `render.rs`).
+    pub(super) fn origin_combo(&self, cx: &Context<Self>) -> impl IntoElement {
+        let cur = match self.view.origin {
+            OrderOrigin::All => t!("orders.origin.both"),
+            OrderOrigin::Auto => t!("orders.origin.auto"),
+            OrderOrigin::Manual => t!("orders.origin.manual"),
+        };
+        let view = cx.entity();
+        let items = crate::panels::radio_items(
+            [
+                (
+                    OrderOrigin::All,
+                    "origin-all".into(),
+                    t!("orders.origin.all").to_string().into(),
+                ),
+                (
+                    OrderOrigin::Auto,
+                    "origin-auto".into(),
+                    t!("orders.origin.auto").to_string().into(),
+                ),
+                (
+                    OrderOrigin::Manual,
+                    "origin-manual".into(),
+                    t!("orders.origin.manual").to_string().into(),
+                ),
+            ],
+            self.view.origin,
+            crate::panels::RadioMark::Check,
+            move |app, origin| Self::mutate(&view, app, |v| v.origin = origin),
+        );
+        MoonDropdown::new("orders-origin")
+            .label(cur)
+            .trigger_caret(true)
+            .trigger_variant(MoonButtonVariant::Soft)
+            .trigger_size(MoonButtonSize::density(cx))
+            .fit_trigger_width(ORIGIN_TRIGGER_MIN_W, ORIGIN_TRIGGER_MAX_W)
+            .trigger_tooltip(t!("orders.origin.tip").to_string())
+            .selected(self.view.origin != OrderOrigin::All)
             .fit_menu_width(138.0, 560.0)
             .items(items)
     }

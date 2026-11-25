@@ -77,7 +77,7 @@ fn experimental_modes_install_moonui_colour_roles_on_their_own_side() {
     }
 }
 
-/// The General page with every long help unfolded keeps its three sections apart, every row and
+/// The General page with every long help unfolded keeps its four sections apart, every row and
 /// control inside the body, and no unfolded help cut off, in every language at the default and
 /// the minimum window.
 #[gpui::test]
@@ -100,6 +100,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 idle_secs: stub("probe-idle-secs", 130.0, 28.0),
                 log_files: stub("probe-logf", 18.0, 18.0),
                 retention: stub("probe-retention", 130.0, 28.0),
+                confirm_quit: stub("probe-confirm-quit", 18.0, 18.0),
             };
             general_body(controls, &all_open, cx)
         }),
@@ -124,6 +125,7 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 ("general-live-scope", "general.live_scope.more"),
                 ("general-idle", "general.main_idle_close_hint"),
                 ("general-retention", "general.log_retention_hint"),
+                ("general-confirm-quit", "general.confirm_quit.more"),
             ]
             .map(|(id, key)| (format!("{id}-more-text"), rust_i18n::t!(key).to_string()))
             .to_vec();
@@ -131,13 +133,18 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 container: "probe-body",
                 inside,
                 no_overlap: vec![
-                    ["general-sec-lang", "general-sec-charts", "general-sec-logs"]
-                        .map(String::from)
-                        .to_vec(),
+                    [
+                        "general-sec-lang",
+                        "general-sec-charts",
+                        "general-sec-logs",
+                        "general-sec-exit",
+                    ]
+                    .map(String::from)
+                    .to_vec(),
                     GENERAL_ROWS.map(String::from).to_vec(),
                 ],
                 wraps,
-                last: Some("general-sec-logs".into()),
+                last: Some("general-sec-exit".into()),
                 ..Default::default()
             }
         },
@@ -163,6 +170,7 @@ fn general_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
         "general.idle_close.label",
         "general.log_files.label",
         "general.log_retention.label",
+        "general.confirm_quit.label",
     ];
     cx.update(moon_ui::init);
     let make = host(|_, cx| {
@@ -177,6 +185,7 @@ fn general_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
             idle_secs: stub("probe-idle-secs", 130.0, 28.0),
             log_files: stub("probe-logf", 18.0, 18.0),
             retention: stub("probe-retention", 130.0, 28.0),
+            confirm_quit: stub("probe-confirm-quit", 18.0, 18.0),
         };
         general_body(controls, &all_open, cx)
     });

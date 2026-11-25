@@ -1037,6 +1037,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.report_valuation_mode.hash(&mut h);
     cfg.live_scope.hash(&mut h);
     cfg.number_notation.hash(&mut h);
+    cfg.confirm_quit.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
     cfg.charts_stack_compress.hash(&mut h);
@@ -1255,6 +1256,7 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     cfg.report_valuation_mode.hash(&mut h);
     cfg.live_scope.hash(&mut h);
     cfg.number_notation.hash(&mut h);
+    cfg.confirm_quit.hash(&mut h);
     cfg.ui_theme_mode.hash(&mut h);
     cfg.charts_split_by_core.hash(&mut h);
     cfg.charts_stack_scroll.hash(&mut h);
@@ -1345,6 +1347,7 @@ fn page_sig(cfg: &AppConfig, tab: Tab) -> Option<u64> {
             cfg.main_idle_close_secs.hash(&mut h);
             cfg.log_to_file.hash(&mut h);
             cfg.log_retention_days.hash(&mut h);
+            cfg.confirm_quit.hash(&mut h);
         }
         Tab::TgBot => {
             hash_json(&mut h, &cfg.telegram.token);

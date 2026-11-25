@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Giới hạn sàn của thị trường này chưa tả
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Tổng cả nhóm: trần lệnh thuộc một tài khoản sàn — chọn một máy chủ để xem."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Trần vị thế ở đòn bẩy ĐÃ ÁP DỤNG: %{cap}. Trần này thấp hơn lệnh tối đa (%{order}), nên chính nó chặn một lệnh lớn hơn. Đòn bẩy thấp hơn thì trần cao hơn; việc đổi đòn bẩy chỉ hiện ở đây sau khi sàn chấp nhận và lõi báo trần mới."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Trần vị thế ở đòn bẩy ĐÃ ÁP DỤNG: %{cap}. Sàn không đặt lệnh tối đa cho thị trường này, nên đây là trần duy nhất. Đòn bẩy thấp hơn thì trần cao hơn; việc đổi đòn bẩy chỉ hiện ở đây sau khi sàn chấp nhận và lõi báo trần mới."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Lệnh tối đa: %{order}. Trần vị thế ở đòn bẩy ĐÃ ÁP DỤNG (%{cap}) không thấp hơn, nên chính lệnh tối đa chặn một lệnh lớn hơn. Đòn bẩy thấp hơn thì trần vị thế cao hơn; việc đổi đòn bẩy chỉ hiện ở đây sau khi sàn chấp nhận và lõi báo trần mới."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "Đòn bẩy tối đa của coin này theo sàn."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
@@ -683,6 +690,7 @@ chart_labels.field.open_pnl_pct: "Mở, %"
 chart_labels.field.open_pnl_money: "Mở, tiền"
 chart_labels.field.open_orders: "Lệnh"
 chart_labels.field.pos_size: "Cỡ vị thế"
+chart_labels.field.position_age: "Thời gian giữ vị thế"
 chart_labels.field.exposure: "Mức phơi nhiễm"
 chart_labels.field.exchange_delta_1h: "Sàn Δ 1h"
 chart_labels.field.exchange_delta_24h: "Sàn Δ 24h"
@@ -836,6 +844,7 @@ chart_labels.short.delta_24h: "Δ24h"
 chart_labels.short.pnl: "Mở"
 chart_labels.short.orders: "Lệnh"
 chart_labels.short.position: "Vị thế"
+chart_labels.short.position_age: "Đang giữ"
 chart_labels.short.exchange_1h: "Sàn 1h"
 chart_labels.short.exchange_24h: "Sàn 24h"
 chart_labels.short.btc_1h: "BTC 1h"
@@ -910,3 +919,8 @@ chart.volumes.hvol_backdrop_on: "Có"
 chart.volumes.hvol_backdrop_off: "Không"
 chart.volumes.hvol_overlay: "Đè lên biểu đồ"
 chart.volumes.hvol_overlay_hint: "Như khối lượng dưới: trên nến, không nền không khung, các hàng mọc từ mép trái vào trong"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Đóng terminal?"
+shell.quit_confirm.body: "Toàn bộ terminal sẽ đóng cùng các cửa sổ biểu đồ, không chỉ một biểu đồ. Các lõi vẫn tiếp tục chạy, lệnh vẫn giữ nguyên và bố cục cửa sổ sẽ trở lại ở lần khởi động sau."
+shell.quit_confirm.stay: "Ở lại"
+shell.quit_confirm.quit: "Đóng terminal"

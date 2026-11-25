@@ -478,7 +478,8 @@ fn source_consuming_coin_groups_do_not_repeat_scope_preflight() {
         to: 30,
         ..Default::default()
     };
-    let source = "(SELECT * FROM coin_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source =
+        "(SELECT *, NULL AS sellreason FROM coin_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
     let groups = coin_groups_from_source(&conn, &query, source)
         .expect("source was validated by the compound caller");

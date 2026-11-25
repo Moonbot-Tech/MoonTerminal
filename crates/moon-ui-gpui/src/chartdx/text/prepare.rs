@@ -82,6 +82,13 @@ impl RenderState {
             if !active {
                 continue;
             }
+            // Which aged order captions this pass draws is decided below, from scratch: a caption
+            // drawn last frame and scrolled away since must stop waking the caption clock.
+            if self.panes[idx].order_age_now_ms.is_some() {
+                for label in &mut self.panes[idx].order_labels {
+                    label.age_drawn = false;
+                }
+            }
             let cached_last_price = self.panes[idx].cached_last_price;
             let prospective_usd = self.panes[idx].prospective_usd;
             // Read the band SEMANTICALLY. `volume_style.m` carries a reciprocal and a ratio,
@@ -537,6 +544,11 @@ impl RenderState {
                         h: m.line_height.as_f32(),
                         solid: false,
                     });
+                    // On screen now, so its next second is worth a present.
+                    let drawn = &mut self.panes[idx].order_labels[caption.source];
+                    if drawn.age.is_some() {
+                        drawn.age_drawn = true;
+                    }
                 }
                 self.panes[idx].order_caption_scratch = captions;
             }

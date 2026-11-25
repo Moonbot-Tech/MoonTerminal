@@ -12,7 +12,7 @@ use gpui::*;
 use moon_ui::{
     MoonBackgroundPolicy, MoonButtonSize, MoonButtonVariant, MoonDataTable, MoonDataTableColumn,
     MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent, MoonInputState, MoonMenuItem,
-    MoonPalette, MoonWindowFrame, Root, h_flex, v_flex,
+    MoonPalette, MoonVirtualListScrollHandle, MoonWindowFrame, Root, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -191,6 +191,16 @@ pub struct ScreenerView {
     /// Session-only: the auto-figures list's choice, and the approach distance box beside it.
     scan_choice: scan::ScanChoice,
     scan_pct_input: Entity<MoonInputState>,
+    /// Session-only: core and canonical market of the last coin opened on a chart FROM this
+    /// window (#1424), painted with the table's selected-row tint on whichever line lists it now.
+    ///
+    /// The identity, not a line number: the list is rebuilt about once a second and its default
+    /// order is volume, so the coin leaves the line it was clicked on. Only the coin-name click
+    /// and the row double-click set it; a chart opened anywhere else leaves it where it was.
+    opened_mark: Option<(CoreId, String)>,
+    /// Vertical scroll of the table's rows, held here so the arrow, Home, End and Page keys can
+    /// move it (`super::keys`): the controlled table no longer handles those keys itself.
+    rows_scroll: MoonVirtualListScrollHandle,
     focus: FocusHandle,
 }
 
@@ -400,6 +410,8 @@ impl ScreenerView {
             scan_task: None,
             scan_choice: scan::ScanChoice::Any,
             scan_pct_input,
+            opened_mark: None,
+            rows_scroll: MoonVirtualListScrollHandle::new(),
             focus: cx.focus_handle(),
         };
         this.rebuild(cx);
@@ -763,10 +775,39 @@ impl ScreenerView {
         };
         let core = e.row.core;
         let market = e.row.market.clone();
+        self.open_on_main(core, market, cx);
+    }
+
+    /// Open `market` of `core` on Main and move the opened-row mark onto it.
+    ///
+    /// The one path both opening gestures of this window take — the coin-name click and the row
+    /// double-click — so the mark cannot be set by one and forgotten by the other. Main is not
+    /// raised and the list is not scrolled: the user stays in the Screener where he was.
+    ///
+    /// Args:
+    ///     core: Core of the clicked row; the chart opens on it.
+    ///     market: Canonical market name of the clicked row.
+    ///     cx: Screener context, notified so the tint moves in the next frame.
+    pub(super) fn open_on_main(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
         self.backend.update(cx, |b, bcx| {
-            b.open_on_main((core, market), false);
+            b.open_on_main((core, market.clone()), false);
             bcx.notify();
         });
+        if self.opened_mark.as_ref() != Some(&(core, market.clone())) {
+            self.opened_mark = Some((core, market));
+            cx.notify();
+        }
+    }
+
+    /// The coin lists the row menu's copy entries offer, taken from the rows listed now.
+    ///
+    /// Args:
+    ///     clicked: Core and canonical market of the right-clicked row.
+    ///
+    /// Returns:
+    ///     Every listed coin, and those from the top through the clicked row.
+    pub(super) fn coin_lists(&self, clicked: (CoreId, &str)) -> super::coin_copy::CoinLists {
+        super::coin_copy::coin_lists(&self.prepared.entries, &self.rows, clicked)
     }
 
     /// Render each virtual row from the same publication that owns its selected index.
@@ -779,7 +820,7 @@ impl ScreenerView {
         let prepared = self.prepared.clone();
         let sort_view = cx.entity();
         let dbl_view = cx.entity();
-        let state_reset = self.table_state.clone();
+        let opened_mark = self.opened_mark.clone();
         // Share one canonically ordered visible-column list between the header and row renderer.
         let visible: Rc<Vec<&'static ColDef>> = Rc::new(
             COLS.iter()
@@ -836,52 +877,71 @@ impl ScreenerView {
             ),
             p,
             cx,
-            MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
-                screener_row(
-                    &prepared.entries[table_rows[ix]],
-                    &view,
-                    p,
-                    &row_cols,
-                    &row_style,
-                )
-            })
-            .columns(
-                visible
-                    .iter()
-                    .map(|&&(key, title, width, right)| {
-                        let title = match key {
-                            super::auto_figures::AUTO_FIGURES_KEY => scan_title.clone(),
-                            _ => column_label(key, title),
-                        };
-                        let col = MoonDataTableColumn::new(key, title, width).sortable(true);
-                        let col = if right { col.right() } else { col };
-                        if key == "market" {
-                            col.fixed_left()
-                        } else {
-                            col
-                        }
+            // The wrapper holds only the table, so its key listener hears a key only while the
+            // table itself has focus, never while a footer input does.
+            div()
+                .size_full()
+                .on_key_down(cx.listener(Self::scroll_by_key))
+                .child(
+                    MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
+                        let entry = &prepared.entries[table_rows[ix]];
+                        screener_row(entry, &view, p, &row_cols, &row_style)
+                            .selected(is_opened(opened_mark.as_ref(), entry))
                     })
-                    .collect::<Vec<_>>(),
-            )
-            .state(&self.table_state)
-            .style(design::table_style(p))
-            .on_sort(move |key, ascending, _window, app| {
-                let key = key.to_string();
-                sort_view.update(app, |t, cx| t.set_sort(&key, !ascending, cx));
-            })
-            .on_double_click_row(move |ix, _window, app| {
-                dbl_view.update(app, |t, cx| t.open_chart(ix, cx));
-            })
-            .on_select_row(move |_ix, _window, app| {
-                // Row selection is unused, as in Orders, so clear every selection field immediately.
-                state_reset.update(app, |s, c| {
-                    s.selected_row = None;
-                    s.selected_column = None;
-                    s.selected_cell = None;
-                    c.notify();
-                });
-            }),
+                    .track_scroll(&self.rows_scroll)
+                    .columns(
+                        visible
+                            .iter()
+                            .map(|&&(key, title, width, right)| {
+                                let title = match key {
+                                    super::auto_figures::AUTO_FIGURES_KEY => scan_title.clone(),
+                                    _ => column_label(key, title),
+                                };
+                                let col =
+                                    MoonDataTableColumn::new(key, title, width).sortable(true);
+                                let col = if right { col.right() } else { col };
+                                if key == "market" {
+                                    col.fixed_left()
+                                } else {
+                                    col
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .state(&self.table_state)
+                    .style(design::table_style(p))
+                    .on_sort(move |key, ascending, _window, app| {
+                        let key = key.to_string();
+                        sort_view.update(app, |t, cx| t.set_sort(&key, !ascending, cx));
+                    })
+                    .on_double_click_row(move |ix, _window, app| {
+                        dbl_view.update(app, |t, cx| t.open_chart(ix, cx));
+                    })
+                    // The only tint a row gets is the opened-row mark, which the row itself
+                    // carries. The table's own selection is a LINE number — set by a click and
+                    // by the arrow, Home, End and Page keys — and would light another coin after
+                    // the next rebuild, beside the mark and in the same colour, so the table owns
+                    // none. That mode also leaves those keys unhandled; `scroll_by_key` gives
+                    // them back as scrolling only.
+                    .controlled_row_selection(true),
+                ),
         )
+    }
+
+    /// Scroll the table for Up, Down, PageUp, PageDown, Home and End, selecting nothing.
+    ///
+    /// The controlled table passes these keys through unhandled (#1424), so without this they
+    /// would do nothing at all. Only the viewport moves: no row is selected and the opened-coin
+    /// mark stays on its coin (`super::keys::scroll_by_key`).
+    ///
+    /// Args:
+    ///     event: The key press that bubbled up from the focused table.
+    ///     window: Window the table lives in.
+    ///     cx: Screener context, notified so the next frame lays the list out at its new offset.
+    fn scroll_by_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if super::keys::scroll_by_key(&self.rows_scroll, self.rows.len(), event, window, cx) {
+            cx.notify();
+        }
     }
 
     /// Build the core multi-selector over the cores the display preset shows.
@@ -1186,6 +1246,21 @@ impl Render for ScreenerView {
 /// Whether the Type list lets a market kind through: every kind while nothing is ticked.
 fn type_admits(selected: &HashSet<Option<MarketKind>>, kind: Option<MarketKind>) -> bool {
     selected.is_empty() || selected.contains(&kind)
+}
+
+/// Whether `entry` is the row the opened-row mark names (#1424).
+///
+/// Matched by core and market, never by line: the same market is one row per core, and the list
+/// is re-sorted about once a second, so either shortcut would tint a coin the user never opened.
+///
+/// Args:
+///     mark: Core and canonical market of the last coin opened from this window, if any.
+///     entry: The listed row being drawn.
+///
+/// Returns:
+///     `true` only for the row of that core and market.
+pub(super) fn is_opened(mark: Option<&(CoreId, String)>, entry: &Entry) -> bool {
+    mark.is_some_and(|(core, market)| entry.row.core == *core && entry.row.market == *market)
 }
 
 /// Tick or untick one choice of a list whose empty selection means "all".

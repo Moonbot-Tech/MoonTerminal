@@ -163,6 +163,13 @@ toolbar.limits_unknown: "该市场的交易所限额尚未加载。"
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "当前为整组汇总：订单上限由具体服务器对应的交易所决定 — 请选择服务器。"
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "已应用杠杆下的仓位上限：%{cap}。它低于最大订单（%{order}），因此更大的订单会被它拦住。杠杆越低，上限越高；杠杆变更只有在交易所接受、且核心报告新上限之后才会反映在这里。"
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "已应用杠杆下的仓位上限：%{cap}。交易所未对该市场规定最大订单，因此这是唯一的上限。杠杆越低，上限越高；杠杆变更只有在交易所接受、且核心报告新上限之后才会反映在这里。"
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "最大订单：%{order}。已应用杠杆下的仓位上限（%{cap}）不更低，因此更大的订单会被最大订单拦住。杠杆越低，仓位上限越高；杠杆变更只有在交易所接受、且核心报告新上限之后才会反映在这里。"
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "交易所给出的该币种最大杠杆。"
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
@@ -683,6 +690,7 @@ chart_labels.field.open_pnl_pct: "Open, %"
 chart_labels.field.open_pnl_money: "Open，金额"
 chart_labels.field.open_orders: "订单数"
 chart_labels.field.pos_size: "仓位大小"
+chart_labels.field.position_age: "持仓时间"
 chart_labels.field.exposure: "敞口"
 chart_labels.field.exchange_delta_1h: "交易所 Δ 1h"
 chart_labels.field.exchange_delta_24h: "交易所 Δ 24h"
@@ -836,6 +844,7 @@ chart_labels.short.delta_24h: "Δ24h"
 chart_labels.short.pnl: "Open"
 chart_labels.short.orders: "订单数"
 chart_labels.short.position: "仓位"
+chart_labels.short.position_age: "持仓"
 chart_labels.short.exchange_1h: "交易所 1h"
 chart_labels.short.exchange_24h: "交易所 24h"
 chart_labels.short.btc_1h: "BTC 1h"
@@ -910,3 +919,8 @@ chart.volumes.hvol_backdrop_on: "有"
 chart.volumes.hvol_backdrop_off: "无"
 chart.volumes.hvol_overlay: "叠加到图表"
 chart.volumes.hvol_overlay_hint: "与底部成交量相同：叠在K线之上，无背景和边框，条形从左边缘向内延伸"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "关闭终端？"
+shell.quit_confirm.body: "将关闭整个终端及其图表窗口，而不只是一个图表。核心继续运行，订单保留，窗口布局会在下次启动时恢复。"
+shell.quit_confirm.stay: "留下"
+shell.quit_confirm.quit: "关闭终端"

@@ -262,6 +262,8 @@ fn spawn_group_window_inner(
         windowing::configure_dwm_window(window);
         windowing::configure_shell_clear_color(window, cx);
         windowing::set_group_window_icon(window, icon_id);
+        // Ask before this window's close quits the terminal, when the user turned that on (#1170).
+        crate::window::quit_confirm::install(window, b.clone(), cx);
         let view = cx.new(|cx| Shell::new(b, g, focus, epoch, theme, window, cx));
         cx.new(|cx| {
             windowing::frame(

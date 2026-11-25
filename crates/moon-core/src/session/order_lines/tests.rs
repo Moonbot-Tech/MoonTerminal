@@ -1953,3 +1953,68 @@ fn bench_ten_core_components() {
         );
     }
 }
+
+/// The take-profit line follows the order's own trailing flag (#1409): absent while it is off, gone
+/// whole when it is switched off, and back at the same price when it is switched on again. The row's
+/// take-profit stays set throughout — only the line answers to trailing.
+#[test]
+fn take_profit_line_exists_only_while_the_orders_trailing_is_on() {
+    let now = now_unix_ms();
+    let mut store = OrderLineStore::default();
+    let mut row = filled_order(7, now);
+    row.take_profit = Some(63_000.0);
+    row.ts_on = false;
+    store.update(std::slice::from_ref(&row), 0);
+    assert_eq!(
+        store.current_line_price(7, LineKind::TakeProfit),
+        None,
+        "trailing off: the take-profit price points at nothing, so no line"
+    );
+    assert_eq!(
+        store.current_line_price(7, LineKind::Stop),
+        Some(59_000.0),
+        "the gate is the take-profit's alone"
+    );
+
+    row.ts_on = true;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert_eq!(
+        store.current_line_price(7, LineKind::TakeProfit),
+        Some(63_000.0)
+    );
+    let started = line_start(&store, 7, LineKind::TakeProfit);
+
+    row.ts_on = false;
+    assert!(
+        store.update(std::slice::from_ref(&row), 0),
+        "switching trailing off must reach the chart"
+    );
+    assert_eq!(store.current_line_price(7, LineKind::TakeProfit), None);
+    assert!(
+        store.orders[&7].lines[LineKind::TakeProfit as usize]
+            .off_ms
+            .is_some(),
+        "the line is disabled, which the geometry drops whole, drawn piece included"
+    );
+
+    row.ts_on = true;
+    assert!(store.update(std::slice::from_ref(&row), 0));
+    assert_eq!(
+        store.current_line_price(7, LineKind::TakeProfit),
+        Some(63_000.0),
+        "back at the same take-profit price"
+    );
+    assert_eq!(line_start(&store, 7, LineKind::TakeProfit), started);
+}
+
+/// Before the fill there is no take-profit line whatever trailing says: the gate adds a condition,
+/// it does not replace the fill one.
+#[test]
+fn take_profit_line_waits_for_the_fill_even_with_trailing_on() {
+    let mut store = OrderLineStore::default();
+    let mut row = order(8);
+    row.take_profit = Some(63_000.0);
+    row.ts_on = true;
+    store.update(std::slice::from_ref(&row), 0);
+    assert_eq!(store.current_line_price(8, LineKind::TakeProfit), None);
+}

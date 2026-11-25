@@ -86,6 +86,47 @@ impl OrderKind {
     }
 }
 
+/// Order-origin filter: every order, only strategy-placed ones, or only hand-placed ones.
+///
+/// A second axis beside [`OrderKind`], so "manual real orders" is expressible. Which orders count
+/// as manual is decided by [`super::origin::is_manual_order`], not here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OrderOrigin {
+    All,
+    /// Orders placed by a strategy other than a Manual-kind one.
+    Auto,
+    /// Orders the trader placed by hand, including those driven by a Manual-kind strategy.
+    Manual,
+}
+
+impl OrderOrigin {
+    /// Stable persistence code for `docks.json`. An unknown or absent code reads as `All`, so a
+    /// layout saved before this filter existed shows every order, as it did before.
+    pub(super) fn to_u8(self) -> u8 {
+        match self {
+            OrderOrigin::All => 0,
+            OrderOrigin::Auto => 1,
+            OrderOrigin::Manual => 2,
+        }
+    }
+    pub(super) fn from_u8(v: u8) -> Self {
+        match v {
+            1 => OrderOrigin::Auto,
+            2 => OrderOrigin::Manual,
+            _ => OrderOrigin::All,
+        }
+    }
+
+    /// Whether an order of the given origin passes this filter.
+    pub(super) fn admits(self, manual: bool) -> bool {
+        match self {
+            OrderOrigin::All => true,
+            OrderOrigin::Auto => !manual,
+            OrderOrigin::Manual => manual,
+        }
+    }
+}
+
 /// Order-table columns in canonical order.
 ///
 /// A column's position in [`OrdCol::ALL`] is its bit number in
@@ -178,10 +219,13 @@ impl OrdCol {
 /// Default view mask with every column visible.
 pub(super) const ALL_COLUMNS_MASK: u32 = (1u32 << OrdCol::ALL.len()) - 1;
 
-/// Per-panel table view state: order kind, current-market filter, sorting, and visible columns.
+/// Per-panel table view state: order kind and origin, current-market filter, sorting, and visible
+/// columns.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OrdersViewState {
     pub(super) kind: OrderKind,
+    /// Strategy-placed vs hand-placed filter, independent of [`Self::kind`].
+    pub(super) origin: OrderOrigin,
     pub(super) only_current_market: bool,
     pub(super) primary: PrimarySort,
     pub(super) newest_first: bool,
@@ -216,6 +260,8 @@ impl Default for OrdersViewState {
             // and their exit legs are immediately visible. The sort and kind menus persist changes
             // to `docks.json`.
             kind: OrderKind::Real,
+            // Every origin, so a new or upgraded panel shows what it showed before this filter.
+            origin: OrderOrigin::All,
             only_current_market: false,
             primary: PrimarySort::SellFirst,
             newest_first: true,

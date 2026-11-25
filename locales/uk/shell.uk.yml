@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Ліміти біржі ще не завантажен�
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Повне зведення: межа ордера належить одному біржовому рахунку - виберіть сервер, щоб її побачити."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Ліміт позиції за ЗАСТОСОВАНОГО плеча: %{cap}. Він нижчий за макс. ордер (%{order}), тож саме він зупинить більший ордер. Менше плече — вища межа; зміна плеча відобразиться тут лише після того, як біржа її прийняла і ядро повідомило нову межу."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Ліміт позиції за ЗАСТОСОВАНОГО плеча: %{cap}. Макс. ордер для цього ринку біржа не задала, тож це єдина межа. Менше плече — вища межа; зміна плеча відобразиться тут лише після того, як біржа її прийняла і ядро повідомило нову межу."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Макс. ордер: %{order}. Ліміт позиції за ЗАСТОСОВАНОГО плеча (%{cap}) не нижчий, тож більший ордер зупинить саме макс. ордер. Менше плече — вищий ліміт позиції; зміна плеча відобразиться тут лише після того, як біржа її прийняла і ядро повідомило нову межу."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "Максимальне плече цієї монети за даними біржі."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
@@ -683,6 +690,7 @@ chart_labels.field.open_pnl_pct: "Open, %"
 chart_labels.field.open_pnl_money: "Open, гроші"
 chart_labels.field.open_orders: "Ордерів"
 chart_labels.field.pos_size: "Розмір позиції"
+chart_labels.field.position_age: "Час у позиції"
 chart_labels.field.exposure: "Експозиція"
 chart_labels.field.exchange_delta_1h: "Біржа Δ 1 год"
 chart_labels.field.exchange_delta_24h: "Біржа Δ 24 год"
@@ -836,6 +844,7 @@ chart_labels.short.delta_24h: "Δ24год"
 chart_labels.short.pnl: "Open"
 chart_labels.short.orders: "Ордерів"
 chart_labels.short.position: "Позиція"
+chart_labels.short.position_age: "В угоді"
 chart_labels.short.exchange_1h: "Біржа 1 год"
 chart_labels.short.exchange_24h: "Біржа 24 год"
 chart_labels.short.btc_1h: "BTC 1 год"
@@ -910,3 +919,8 @@ chart.volumes.hvol_backdrop_on: "Є"
 chart.volumes.hvol_backdrop_off: "Немає"
 chart.volumes.hvol_overlay: "Накласти на графік"
 chart.volumes.hvol_overlay_hint: "Як нижні обсяги: поверх свічок, без тла і рамки, стовпчики від лівого краю всередину"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Закрити термінал?"
+shell.quit_confirm.body: "Закриється весь термінал разом з вікнами графіків, а не один графік. Ядра продовжать працювати, ордери залишаться, а розкладка вікон повернеться під час наступного запуску."
+shell.quit_confirm.stay: "Залишитися"
+shell.quit_confirm.quit: "Закрити термінал"

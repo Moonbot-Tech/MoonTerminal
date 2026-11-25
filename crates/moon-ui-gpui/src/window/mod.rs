@@ -5,5 +5,6 @@ pub(crate) mod detached;
 pub(crate) mod group_window;
 pub(crate) mod input_hook;
 pub(crate) mod login;
+pub(crate) mod quit_confirm;
 pub(crate) mod titles;
 pub(crate) mod windowing;

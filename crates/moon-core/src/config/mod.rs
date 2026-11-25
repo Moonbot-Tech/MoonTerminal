@@ -346,6 +346,12 @@ pub struct AppConfig {
     /// Stored here; PRINTED through the process-wide copy `util::fmt::set_notation` holds, which
     /// the application writes at startup and after a saved change.
     pub number_notation: Notation,
+    /// Whether closing the last main window asks before the whole terminal quits
+    /// (`settings.toml`, #1170). Defaults to `false`: the close quits at once, as it always did.
+    ///
+    /// Read from the SAVED config at the moment of the close, never from the Settings draft, so an
+    /// unsaved tick does not change what the cross does.
+    pub confirm_quit: bool,
     /// Next uid candidate after config entries and the supplied durable-store floor are reconciled.
     ///
     /// Private to `config`: a `pub` field could be overwritten with a stale counter from
@@ -411,6 +417,7 @@ impl AppConfig {
             report_valuation_mode: Default::default(),
             live_scope: Default::default(),
             number_notation: Default::default(),
+            confirm_quit: Default::default(),
             hotkeys: Default::default(),
             theme: Default::default(),
             orders: Default::default(),
@@ -531,6 +538,7 @@ impl AppConfig {
                 report_valuation_mode: merged.report_valuation_mode,
                 live_scope: merged.live_scope,
                 number_notation: merged.number_notation,
+                confirm_quit: merged.confirm_quit,
                 next_uid: merged.next_uid,
                 hotkeys,
                 theme,
@@ -853,6 +861,7 @@ impl AppConfig {
             report_valuation_mode: settings.report_valuation_mode,
             live_scope: settings.live_scope,
             number_notation: settings.number_notation,
+            confirm_quit: settings.confirm_quit,
             // The counter starts above the highest uid issued above, before applying the optional
             // store floor. This mode can share `data/` with encrypted-config runs.
             next_uid: UidCounter::new(next, uid_floor),
@@ -979,6 +988,7 @@ impl AppConfig {
             self.report_valuation_mode,
             self.live_scope,
             self.number_notation,
+            self.confirm_quit,
             self.next_uid.get(),
             self.telegram.clone(),
         );
@@ -1127,6 +1137,8 @@ impl AppConfig {
             LiveScope::default(),
             // The notation only respells figures already on screen: no session or window.
             Notation::default(),
+            // The quit question is read when a window closes: no session or window.
+            false,
             // The uid counter advances on save and does not describe structure by itself.
             0,
             // Telegram credentials are not a session/window reconnect trigger, and the token

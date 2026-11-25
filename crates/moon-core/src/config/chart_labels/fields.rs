@@ -53,6 +53,17 @@ pub enum ChartLabelField {
     OpenOrders,
     /// Open position size in the base coin.
     PosSize,
+    /// How long the position has been open: a stopwatch from the ENTRY FILL of the oldest order
+    /// that holds a position right now. See [`PnlBasis`] for which orders count.
+    ///
+    /// The fill, never the placement: a limit that sat in the book for an hour before it filled has
+    /// been in the trade for none of that hour. Adding to the position does not restart it, and
+    /// when the oldest holder closes the clock moves to the oldest one still open — one figure for
+    /// the coin, a long and a short included, because the question it answers is how long this
+    /// coin has had money in it. Absent from the factory set: it is the one position figure that
+    /// needs the caption clock to step every second, and a chart that does not print it must not
+    /// pay for that.
+    PositionAge,
     /// Current notional of what is open, in the market's quote currency: position size times the
     /// mark price.
     ///
@@ -246,7 +257,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 62] = [
+    pub const ALL: [ChartLabelField; 63] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -262,6 +273,7 @@ impl ChartLabelField {
         ChartLabelField::OpenPnlMoney,
         ChartLabelField::OpenOrders,
         ChartLabelField::PosSize,
+        ChartLabelField::PositionAge,
         ChartLabelField::Exposure,
         ChartLabelField::OrderStrategy,
         ChartLabelField::ExchangeDelta1h,
@@ -355,6 +367,7 @@ impl ChartLabelField {
             | ChartLabelField::OpenPnlMoney
             | ChartLabelField::OpenOrders
             | ChartLabelField::PosSize
+            | ChartLabelField::PositionAge
             | ChartLabelField::Exposure => ChartLabelGroup::Position,
             ChartLabelField::ExchPosSize
             | ChartLabelField::LiqPrice
@@ -397,6 +410,7 @@ impl ChartLabelField {
             ChartLabelField::OpenPnlMoney => "chart_labels.field.open_pnl_money",
             ChartLabelField::OpenOrders => "chart_labels.field.open_orders",
             ChartLabelField::PosSize => "chart_labels.field.pos_size",
+            ChartLabelField::PositionAge => "chart_labels.field.position_age",
             ChartLabelField::Exposure => "chart_labels.field.exposure",
             ChartLabelField::OrderStrategy => "chart_labels.field.order_strategy",
             ChartLabelField::ExchangeDelta1h => "chart_labels.field.exchange_delta_1h",
@@ -462,6 +476,9 @@ impl ChartLabelField {
             }
             ChartLabelField::OpenOrders => Some("chart_labels.short.orders"),
             ChartLabelField::PosSize => Some("chart_labels.short.position"),
+            // Its own word rather than the size's `Позиция`: a bare `12м 03с` beside the funding or
+            // the candle countdown would read as one more countdown.
+            ChartLabelField::PositionAge => Some("chart_labels.short.position_age"),
             ChartLabelField::Exposure => Some("chart_labels.short.exposure"),
             ChartLabelField::ExchangeDelta1h => Some("chart_labels.short.exchange_1h"),
             ChartLabelField::ExchangeDelta24h => Some("chart_labels.short.exchange_24h"),
@@ -518,6 +535,7 @@ impl ChartLabelField {
                 | ChartLabelField::OpenPnlMoney
                 | ChartLabelField::OpenOrders
                 | ChartLabelField::PosSize
+                | ChartLabelField::PositionAge
                 | ChartLabelField::Exposure
         )
     }
@@ -733,6 +751,7 @@ impl ChartLabelField {
             // Counts and sizes carry their caption too: a bare "2" over the candles names nothing.
             ChartLabelField::OpenOrders
             | ChartLabelField::PosSize
+            | ChartLabelField::PositionAge
             | ChartLabelField::Exposure
             | ChartLabelField::FundingIn
             | ChartLabelField::Bid

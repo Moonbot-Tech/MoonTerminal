@@ -63,7 +63,7 @@ settings.page.hotkeys.desc: "Phím và cử chỉ chuột tương thích với M
 settings.page.hotkeys.keywords: "phím tắt phím chuột cử chỉ tổ hợp moonbot"
 settings.page.general.title: "Chính"
 settings.page.general.desc: "Ngôn ngữ, cách tính số tiền và hành vi của biểu đồ."
-settings.page.general.keywords: "ngôn ngữ tỷ giá usdt nhật ký tự đóng tab toàn cảnh"
+settings.page.general.keywords: "ngôn ngữ tỷ giá usdt nhật ký tự đóng tab toàn cảnh thoát"
 settings.page.security.title: "Bảo mật"
 settings.page.security.desc: "Hai mật khẩu độc lập và danh sách máy tính được phép mở tệp kết nối."
 settings.page.security.keywords: "mật khẩu mã hóa servers.enc máy"

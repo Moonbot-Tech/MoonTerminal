@@ -63,26 +63,64 @@ pub struct MarketLimits {
     /// The exchange's cap on the WHOLE position in this coin at the CURRENT leverage, in the quote
     /// currency (MoonBot's `<max. N>`), or `None` when the core has not stated one.
     ///
+    /// The same unit as `max_order` on every market, so the two can be compared: a coin-margined
+    /// market's coin-denominated cap is converted at the ask — see [`position_cap_quote`].
+    ///
     /// Per ACCOUNT, unlike the two fields above: it is read from the consumer core's own snapshot,
     /// never from the market-data provider, because each account carries its own leverage.
     ///
-    /// Unlike `max_order` it is leverage-dependent: lowering leverage raises it. See
-    /// [`position_cap`].
+    /// Unlike `max_order` it is leverage-dependent: lowering leverage raises it.
     pub position_cap: Option<f64>,
 }
 
-/// The leverage-dependent position cap as it may be shown, from the core's raw `bn_max_value`.
+/// The core's raw `bn_max_value` as a stated cap, still in the unit the core stored it in.
 ///
 /// Zero and non-finite both mean the core stated nothing, so they map to `None` — the UI hides the
-/// row rather than print a `0` that reads as "you may hold nothing".
+/// row rather than print a `0` that reads as "you may hold nothing". The unit is NOT normalised
+/// here: quote currency on a linear market, the base coin on a coin-margined one. Every reader
+/// goes through [`position_cap_quote`], which converts it.
 ///
 /// Args:
 ///     raw: The market's `max_value()` as the core reports it.
 ///
 /// Returns:
-///     The cap in quote currency, or `None` when it is unknown.
+///     The raw cap, or `None` when it is unknown.
 pub(crate) fn position_cap(raw: f64) -> Option<f64> {
     (raw.is_finite() && raw > 0.0).then_some(raw)
+}
+
+/// The position cap in the market's QUOTE currency — the unit [`MarketLimits::max_order`] is in —
+/// from the core's raw `bn_max_value`.
+///
+/// The raw figure is not in one unit across markets. On a linear market the core stores the
+/// exchange's notional cap (Binance `maxNotionalValue`), already in quote currency. On a
+/// coin-margined market it stores the exchange's QUANTITY cap in the base coin (Binance COIN-M
+/// `maxQty`), and MoonBot's own order clamp prices it as `bn_max_value * price` there
+/// (`QBinanceEngine`); its `<max. N BTC>` label says the same. Printing that coin count beside a
+/// USD per-order cap — or comparing the two — is the coin-versus-dollar mistake
+/// [`market_quantity_unit`] exists to prevent, so the coin amount is converted at the current ask,
+/// exactly as a linear quantity cap is in [`max_order_notional`].
+///
+/// Args:
+///     raw: The market's `max_value()` from the CONSUMER core's snapshot.
+///     unit: What the market's quantity counts, from [`market_quantity_unit`].
+///     ask: The market's current best ask, used only on a coin-margined market.
+///
+/// Returns:
+///     The cap in quote currency, or `None` when there is none to state: the core stated no cap,
+///     the unit is not known, or a coin-margined market's price has not arrived. None of those may
+///     be guessed into a figure that sizes real orders.
+pub(crate) fn position_cap_quote(
+    raw: f64,
+    unit: Option<MarketQuantityUnit>,
+    ask: f64,
+) -> Option<f64> {
+    let cap = position_cap(raw)?;
+    let value = match unit? {
+        MarketQuantityUnit::Coins => cap,
+        MarketQuantityUnit::Contracts(_) => cap * ask,
+    };
+    (value.is_finite() && value > 0.0).then_some(value)
 }
 
 /// What one unit of a market's `quantity` field IS.
@@ -288,8 +326,9 @@ pub(crate) fn min_order_floor(
 /// Takes the market's FIGURES as primitives rather than the market itself, because `moonproto`'s
 /// `Market` is not re-exported at its crate root and cannot be named here. Both readers of the rule
 /// — `screener_rows` and [`MarketDataSource::market_limits`] — go through this function, so the
-/// Screener's `Max.Order` column and the trading toolbar can never print two different caps for one
-/// coin.
+/// Screener's `Max.Order` column, the leverage popup's max-order row and the chart's `Max order`
+/// caption can never print two different per-order caps for one coin. The toolbar's `MAX` starts
+/// from this same figure and shows the position cap instead only when that one is lower.
 ///
 /// Args:
 ///     quote: The market's quote currency; empty means coin-margined. See [`market_quantity_unit`].

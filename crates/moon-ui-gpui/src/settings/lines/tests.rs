@@ -53,6 +53,15 @@ fn ten_rows_map_to_ten_distinct_orders_keys() {
             .collect::<Vec<_>>(),
         vec!["buy", "buy_short"]
     );
+    // Only the take-profit card carries the app-wide draw switch (#1409).
+    assert_eq!(
+        LINE_KINDS
+            .iter()
+            .filter(|kind| kind.draw_switch)
+            .map(|kind| kind.key)
+            .collect::<Vec<_>>(),
+        vec!["take_profit"]
+    );
 }
 
 /// The Lines page keeps its table rows, the card and the shared box inside the body, every table
@@ -78,6 +87,7 @@ fn lines_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 closed_alpha: stub("probe-closed", 180.0, 22.0),
                 max_closed: stub("probe-max", 130.0, 28.0),
                 pending_dashed: stub("probe-pending", 18.0, 18.0),
+                position_age: stub("probe-position-age", 18.0, 18.0),
                 path: stub("probe-path", 240.0, 90.0),
             };
             lines_body(parts, &all_open, cx)

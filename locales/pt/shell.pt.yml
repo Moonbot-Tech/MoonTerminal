@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Os limites da corretora ainda não carregaram para este
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Resumo completo: o teto da ordem é de uma conta da corretora — escolha um servidor para vê-lo."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Teto da posição na alavancagem APLICADA: %{cap}. Está abaixo da ordem máxima (%{order}), então é ele que barra uma ordem maior. Alavancagem menor aumenta o teto; uma mudança de alavancagem só aparece aqui depois que a corretora a aceita e o núcleo informa o novo teto."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Teto da posição na alavancagem APLICADA: %{cap}. A corretora não define ordem máxima para este mercado, então este é o único teto. Alavancagem menor aumenta o teto; uma mudança de alavancagem só aparece aqui depois que a corretora a aceita e o núcleo informa o novo teto."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Ordem máxima: %{order}. O teto da posição na alavancagem APLICADA (%{cap}) não é menor, então é isto que barra uma ordem maior. Alavancagem menor aumenta o teto da posição; uma mudança de alavancagem só aparece aqui depois que a corretora a aceita e o núcleo informa o novo teto."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "Alavancagem máxima desta moeda, segundo a corretora."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
@@ -683,6 +690,7 @@ chart_labels.field.open_pnl_pct: "Aberto, %"
 chart_labels.field.open_pnl_money: "Aberto, dinheiro"
 chart_labels.field.open_orders: "Ordens"
 chart_labels.field.pos_size: "Tamanho da posição"
+chart_labels.field.position_age: "Tempo em posição"
 chart_labels.field.exposure: "Exposição"
 chart_labels.field.exchange_delta_1h: "Corretora Δ 1h"
 chart_labels.field.exchange_delta_24h: "Corretora Δ 24h"
@@ -836,6 +844,7 @@ chart_labels.short.delta_24h: "Δ24h"
 chart_labels.short.pnl: "Aberto"
 chart_labels.short.orders: "Ordens"
 chart_labels.short.position: "Posição"
+chart_labels.short.position_age: "Na operação"
 chart_labels.short.exchange_1h: "Corr 1h"
 chart_labels.short.exchange_24h: "Corr 24h"
 chart_labels.short.btc_1h: "BTC 1h"
@@ -910,3 +919,8 @@ chart.volumes.hvol_backdrop_on: "Ligado"
 chart.volumes.hvol_backdrop_off: "Desligado"
 chart.volumes.hvol_overlay: "Sobrepor no gráfico"
 chart.volumes.hvol_overlay_hint: "Como os volumes de baixo: sobre os candles, sem fundo nem moldura, as linhas crescem da borda esquerda para dentro"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Fechar o terminal?"
+shell.quit_confirm.body: "O terminal inteiro fecha junto com as janelas de gráficos, não apenas um gráfico. Os núcleos continuam rodando, as ordens permanecem e o layout das janelas volta na próxima inicialização."
+shell.quit_confirm.stay: "Ficar"
+shell.quit_confirm.quit: "Fechar o terminal"

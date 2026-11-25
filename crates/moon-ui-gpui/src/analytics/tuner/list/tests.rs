@@ -139,6 +139,7 @@ fn numeric_conditions_filter_visible_rows_and_invalidate_the_memo() {
         idx,
         enabled_filter_available: available,
         pool,
+        totals: Default::default(),
     };
     key.conditions[0].number = "-".into();
     assert!(!memo_is_fresh(Some(&cached), &key));
@@ -220,6 +221,7 @@ fn the_memo_is_reused_only_while_nothing_changed() {
         idx: vec![0, 1, 2],
         enabled_filter_available: true,
         pool: 3,
+        totals: Default::default(),
     });
     assert!(
         memo_is_fresh(cached.as_ref(), &key()),
@@ -490,6 +492,7 @@ fn a_new_batch_generation_misses_the_memo() {
         idx: vec![],
         enabled_filter_available: false,
         pool: 0,
+        totals: Default::default(),
     };
     let mut k = key();
     assert!(memo_is_fresh(Some(&cached), &k));

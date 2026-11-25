@@ -107,6 +107,7 @@ fn retired_keys_leave_the_persistence_pipeline_quietly() {
         merged.report_valuation_mode,
         merged.live_scope,
         merged.number_notation,
+        merged.confirm_quit,
         merged.next_uid.get(),
         merged.telegram,
     );
@@ -397,6 +398,7 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         merged.report_valuation_mode,
         merged.live_scope,
         merged.number_notation,
+        merged.confirm_quit,
         merged.next_uid.get(),
         TelegramConfig::default(),
     );
@@ -472,6 +474,7 @@ fn the_station_tick_round_trips_and_an_older_file_reads_it_off() {
         merged.report_valuation_mode,
         merged.live_scope,
         merged.number_notation,
+        merged.confirm_quit,
         merged.next_uid.get(),
         TelegramConfig::default(),
     );
@@ -531,6 +534,7 @@ fn the_endpoint_override_round_trips_through_servers_enc() {
         merged.report_valuation_mode,
         merged.live_scope,
         merged.number_notation,
+        merged.confirm_quit,
         merged.next_uid.get(),
         TelegramConfig::default(),
     );
@@ -606,6 +610,7 @@ fn the_transport_survives_a_split() {
         crate::db::valuation::ValuationMode::default(),
         crate::config::LiveScope::default(),
         crate::config::Notation::default(),
+        false,
         8,
         TelegramConfig::default(),
     );
@@ -670,6 +675,7 @@ id = 2981",
         crate::db::valuation::ValuationMode::default(),
         crate::config::LiveScope::default(),
         crate::config::Notation::default(),
+        false,
         8,
         TelegramConfig::default(),
     );
@@ -721,6 +727,7 @@ fn the_total_mode_survives_a_split_and_reload() {
             crate::db::valuation::ValuationMode::default(),
             crate::config::LiveScope::default(),
             crate::config::Notation::default(),
+            false,
             8,
             TelegramConfig::default(),
         );
@@ -749,4 +756,55 @@ fn a_malformed_total_mode_reads_as_auto_and_keeps_the_rest() {
             "{bad} must not cost the neighbouring fields"
         );
     }
+}
+
+/// Catches the quit question (#1170) going on by default or getting lost on the way to disk. A
+/// `settings.toml` written before the setting existed — or one carrying a value that is not a
+/// bool — must load with the question OFF and the rest of the file intact; a stored `true` must
+/// come out of `merge` and go back into the file through `split`, or a ticked box would hold for
+/// one session and silently untick on the next launch.
+#[test]
+fn the_quit_question_defaults_off_and_survives_merge_and_split() {
+    for old in [
+        "ui_scale = 1.25\n",
+        "confirm_quit = \"yes\"\nui_scale = 1.25\n",
+    ] {
+        let meta: SettingsFile = toml::from_str(old)
+            .unwrap_or_else(|e| panic!("`{old}` must load without the setting: {e}"));
+        assert_eq!(meta.ui_scale, 1.25, "`{old}` must keep its other fields");
+        let merged = merge(ServersFile::default(), meta, None);
+        assert!(!merged.confirm_quit, "`{old}` must leave the question off");
+    }
+
+    let stored: SettingsFile =
+        toml::from_str("confirm_quit = true\n").expect("a stored question must load");
+    let merged = merge(ServersFile::default(), stored, None);
+    assert!(merged.confirm_quit, "merge must read the stored choice");
+    let (_, meta) = split(
+        &merged.servers,
+        &merged.groups,
+        &merged.core_groups,
+        merged.language,
+        merged.market_mode,
+        merged.charts_split_by_core,
+        merged.charts_stack_scroll,
+        merged.charts_stack_compress,
+        merged.chart_stack_height,
+        merged.separate_control_zones,
+        merged.main_idle_close_secs,
+        merged.log_to_file,
+        merged.log_retention_days,
+        merged.ui_theme_mode,
+        merged.ui_scale,
+        merged.chart_memory_percent,
+        merged.core_sort,
+        merged.report_valuation_mode,
+        merged.live_scope,
+        merged.number_notation,
+        merged.confirm_quit,
+        merged.next_uid.get(),
+        TelegramConfig::default(),
+    );
+    let text = toml::to_string(&meta).expect("settings must serialize");
+    assert!(text.contains("confirm_quit = true"), "{text}");
 }

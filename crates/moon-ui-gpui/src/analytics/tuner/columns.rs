@@ -45,6 +45,27 @@ pub(super) struct MetricCol {
     pub(super) signed: Option<fn(&GroupStat) -> f64>,
     /// Value used when the list is sorted by this column.
     pub(super) sort: fn(&GroupStat) -> f64,
+    /// What the strategy list's totals row puts under this column. A field rather than a list
+    /// kept beside the table, so a new column cannot reach the totals row without someone
+    /// deciding whether its cells add up. The coin table has no totals row and ignores it.
+    pub(super) total: TotalRule,
+}
+
+/// How one metric column reads in the strategy list's totals row (#1455).
+///
+/// The row is a synthetic aggregate folded from the admitted rows (`list::totals`), drawn
+/// through the column's own `text`; the rule decides whether that text may be shown at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TotalRule {
+    /// A count or a pooled ratio (trades, win rate): always meaningful for the set.
+    Plain,
+    /// A money figure in the active lens (profit, per-trade average, best, worst): shown only
+    /// when every admitted row is in one unit, otherwise an em dash — a sum across quotes is
+    /// no amount at all.
+    Money,
+    /// Cannot be aggregated from what a row keeps (Profit %, average order, profit factor, the
+    /// coin-list counts): the cell stays empty rather than showing a sum of ratios.
+    Blank,
 }
 
 pub(super) const COL_TRADES: MetricCol = MetricCol {
@@ -54,6 +75,7 @@ pub(super) const COL_TRADES: MetricCol = MetricCol {
     text: |g| g.n.to_string(),
     signed: None,
     sort: |g| g.n as f64,
+    total: TotalRule::Plain,
 };
 pub(super) const COL_PROFIT: MetricCol = MetricCol {
     key: "analytics.col.profit",
@@ -62,6 +84,7 @@ pub(super) const COL_PROFIT: MetricCol = MetricCol {
     text: tuner_profit_text,
     signed: Some(|g| g.profit),
     sort: |g| g.profit,
+    total: TotalRule::Money,
 };
 /// Average positive order spend in quote currency over the lens-neutral strategy scope.
 pub(super) const COL_AVG_ORDER: MetricCol = MetricCol {
@@ -71,6 +94,7 @@ pub(super) const COL_AVG_ORDER: MetricCol = MetricCol {
     text: tuner_avg_order_text,
     signed: None,
     sort: |g| g.avg_order,
+    total: TotalRule::Blank,
 };
 /// Raw total strategy profit as a percentage of its average positive order size.
 pub(super) const COL_PROFIT_PCT: MetricCol = MetricCol {
@@ -84,6 +108,7 @@ pub(super) const COL_PROFIT_PCT: MetricCol = MetricCol {
     },
     signed: Some(|g| g.profit_pct_of_avg_order()),
     sort: |g| g.profit_pct_of_avg_order(),
+    total: TotalRule::Blank,
 };
 pub(super) const COL_AVG: MetricCol = MetricCol {
     key: "analytics.kpi.avg_short",
@@ -92,6 +117,7 @@ pub(super) const COL_AVG: MetricCol = MetricCol {
     text: |g| fmt_signed(g.avg()),
     signed: Some(|g| g.avg()),
     sort: |g| g.avg(),
+    total: TotalRule::Money,
 };
 pub(super) const COL_WINRATE: MetricCol = MetricCol {
     key: "analytics.kpi.winrate",
@@ -100,6 +126,7 @@ pub(super) const COL_WINRATE: MetricCol = MetricCol {
     text: |g| format!("{:.1}%", g.winrate()),
     signed: None,
     sort: |g| g.winrate(),
+    total: TotalRule::Plain,
 };
 pub(super) const COL_PF: MetricCol = MetricCol {
     key: "analytics.col.pf",
@@ -108,6 +135,7 @@ pub(super) const COL_PF: MetricCol = MetricCol {
     text: |g| format!("{:.2}", g.pf),
     signed: None,
     sort: |g| g.pf,
+    total: TotalRule::Blank,
 };
 pub(super) const COL_BEST: MetricCol = MetricCol {
     key: "analytics.col.best",
@@ -116,6 +144,7 @@ pub(super) const COL_BEST: MetricCol = MetricCol {
     text: |g| fmt_signed(g.best),
     signed: Some(|g| g.best),
     sort: |g| g.best,
+    total: TotalRule::Money,
 };
 /// How many coins the strategy's blacklist / whitelist name. Zero renders EMPTY, not "0":
 /// most strategies list nothing, and a column of zeros reads as data where there is none.
@@ -126,6 +155,7 @@ pub(super) const COL_BL: MetricCol = MetricCol {
     text: |g| blank_if_zero(g.bl),
     signed: None,
     sort: |g| g.bl as f64,
+    total: TotalRule::Blank,
 };
 pub(super) const COL_WL: MetricCol = MetricCol {
     key: "analytics.coins.white",
@@ -134,6 +164,7 @@ pub(super) const COL_WL: MetricCol = MetricCol {
     text: |g| blank_if_zero(g.wl),
     signed: None,
     sort: |g| g.wl as f64,
+    total: TotalRule::Blank,
 };
 
 /// A count that renders as nothing when it is zero.
@@ -148,6 +179,7 @@ pub(super) const COL_WORST: MetricCol = MetricCol {
     text: |g| fmt_signed(g.worst),
     signed: Some(|g| g.worst),
     sort: |g| g.worst,
+    total: TotalRule::Money,
 };
 
 /// Explain single-trade extremes without widening either comparison table's headings.

@@ -97,6 +97,10 @@ impl Render for ChartPanel {
             // Settings draft while one is open). Every table is complete in theme.toml, with no
             // runtime palette overrides, so each is editable in the same way.
             let orders = eff.orders.get(palette.is_light()).clone();
+            // App-wide, not per theme: it sits beside the two sets (#1409).
+            let draw_take_profit = eff.orders.draw_take_profit;
+            // App-wide for the same reason (#1402).
+            let show_position_age = eff.orders.show_position_age;
             let theme = eff.chart_theme().clone();
             // Candles use the panel's per-tab override, or the default of the KIND of tab this
             // panel sits on — the main chart, a torn-off window, or a comparison. Resolving the
@@ -124,7 +128,7 @@ impl Render for ChartPanel {
             .then(|| b.report_axis_arc(crate::chartdx::axes::display_zone()));
             (
                 theme,
-                orders,
+                (orders, draw_take_profit, show_position_age),
                 (b.follow, b.live_resume_gen()),
                 eff.live_scope,
                 prospective,
@@ -144,7 +148,9 @@ impl Render for ChartPanel {
             .chart
             .set_order_book_width(self.settings_sig.chart_graphics.book_width_px)
             | self.chart.set_theme(theme)
-            | self.chart.set_orders(orders_style)
+            | self.chart.set_orders(orders_style.0)
+            | self.chart.set_draw_take_profit(orders_style.1)
+            | self.chart.set_show_position_age(orders_style.2)
             | self.chart.set_scale(self.scale)
             | self.chart.set_orderbook_enabled(self.orderbook_enabled)
             | self.chart.set_orderbook_only(self.orderbook_only)

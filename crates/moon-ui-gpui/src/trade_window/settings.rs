@@ -19,10 +19,22 @@
 //! the "other trades" toggle already are. No per-window override and no "make default" press: a
 //! window is not a tab and has no spec to hold a value of its own, and a reader adjusting the
 //! picture of one trade means every trade they will open next. Every open trade window follows
-//! the stored set: the panel re-reads graphics and captions on the backend notification because
-//! it holds no override for them, and the candles are re-pinned by
-//! [`TradeWindowView::follow_candle_default`]. No reset either: the rows are few, and each shows
-//! what it is set to.
+//! the stored set: the panel re-reads captions on the backend notification because it holds no
+//! override for them, the graphics are re-pinned by [`TradeWindowView::follow_graphics`] and the
+//! candles by [`TradeWindowView::follow_candle_default`]. No reset either: the rows are few, and
+//! each shows what it is set to.
+//!
+//! # The cross size is the main chart's
+//!
+//! One field of the graphics is NOT the kind's: the trade-cross size («Размер трейдов»,
+//! `marker_scale`). The window draws the crosses at whatever the MAIN chart draws them at, so the
+//! prints read the same on the live chart and on the closed trade, and a later change there shows
+//! on the next window — and on an open one, at the next backend notification. There is no size
+//! row here: a second control would start from the factory size, which is the gap that asked for
+//! this (#1261). "The main chart" is resolved by [`main_chart_marker_scale`]. Only that one field
+//! is taken: copying Main's whole set would also move this window's price lines and volume band.
+//! The kind's own stored size is kept for old files and the ⧉ press still writes it, but nothing
+//! draws it any more: a ⧉ press addressing «Окно сделки» moves every OTHER field it carries.
 //!
 //! The write goes through `store_*`, not the ⧉ row's `set_*_default`: that press also SEPARATES
 //! the tab kinds from Main, which is a deliberate statement with its own wording there, and a row
@@ -38,19 +50,25 @@
 //! [`candles_for_default`] restores the stored timeframe before the write.
 
 use gpui::*;
-use moon_core::config::{ChartGraphicsCfg, ChartTabKind, TradeHistoryStyle};
+use moon_core::config::{
+    ChartBucket, ChartGraphicsCfg, ChartTabKind, ServerConfig, TradeHistoryStyle,
+    layout::WindowLayout,
+};
 use moon_core::market::candles::{
     CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_MODE_OUTLINE, CANDLE_MODE_OUTLINE_IN_ZONE,
     CandleViewCfg,
 };
+use moon_core::session::CoreId;
 use moon_ui::{MoonCheckbox, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::{TradeWindowState, TradeWindowView};
+use crate::Backend;
 use crate::chart_tabs::{ARROW_SCALES, CANDLE_OUTLINES, CONNECTOR_PX, nearest, seg_row};
 use crate::design;
 use crate::panels::common::popup_gear_trigger_dense;
 use crate::panels::{popup_close_button, popup_group, popup_group_inset_px, popup_title};
+use crate::persistence::chart_persist::ChartTabSpec;
 
 /// Row allowance — the chart popups' own, so this popup is as wide as theirs by construction:
 /// the widest row here is the six arrow-size segments at a sixth of it each.
@@ -133,6 +151,104 @@ pub(super) fn candles_for_default(shown: CandleViewCfg, stored_tf_min: u32) -> C
     }
 }
 
+/// The trade-cross size the main chart of `core`'s window draws at.
+///
+/// "The main chart" is the Main tab of the window group the trade's core is configured in — the
+/// group IS the window (`ServerConfig::group`), and each one has a Main tab of its own, stored in
+/// `charts.json` as `num == 0` with the shared bucket. That tab draws its own per-tab value when
+/// it holds one (the graphics popup writes there), and otherwise the Main kind default — which is
+/// also the answer for a core the configuration no longer lists, or a group whose Main tab never
+/// stored a spec.
+///
+/// One case this cannot see: a Main tab under the comparison lock with no size of its own draws
+/// the Compare default, but Main's lock lives only on the live stack (`MainStack::compare_anchor`)
+/// and is never written to its spec, so it is not reachable from here. A size picked on that tab
+/// is stored as its own value and IS followed; only the unset fallback answers Main's default.
+///
+/// Args:
+///     layout: The layout holding the per-kind defaults.
+///     servers: The configured cores, for the core's group.
+///     specs: The stored tab specs.
+///     core: The trade's core.
+///
+/// Returns:
+///     The raw multiplier; the caller normalises it with the rest of the set.
+pub(super) fn main_chart_marker_scale(
+    layout: &WindowLayout,
+    servers: &[ServerConfig],
+    specs: &[ChartTabSpec],
+    core: CoreId,
+) -> f32 {
+    let main_tab = servers
+        .iter()
+        .find(|server| server.id == core)
+        .and_then(|server| {
+            specs
+                .iter()
+                .find(|spec| spec.matches(&server.group, 0, &ChartBucket::Shared))
+        });
+    main_tab
+        .and_then(|spec| spec.chart_graphics)
+        .unwrap_or_else(|| layout.chart_graphics_for(ChartTabKind::Main))
+        .marker_scale
+}
+
+/// The graphics a trade window draws: the kind's stored set with the main chart's cross size.
+///
+/// Args:
+///     stored: The trade-window kind's stored set.
+///     main_marker_scale: The main chart's cross size ([`main_chart_marker_scale`]).
+///
+/// Returns:
+///     The set to draw, normalised: it is compared on every backend notification, and an
+///     out-of-range value would read as a change for ever.
+pub(super) fn drawn_graphics(stored: ChartGraphicsCfg, main_marker_scale: f32) -> ChartGraphicsCfg {
+    moon_chart::normalize_chart_graphics(ChartGraphicsCfg {
+        marker_scale: main_marker_scale,
+        ..stored
+    })
+}
+
+/// The graphics a trade window on `core`'s trade draws right now, read off the backend.
+///
+/// Args:
+///     backend: Application state.
+///     core: The trade's core.
+///
+/// Returns:
+///     See [`drawn_graphics`].
+pub(super) fn drawn_graphics_now(backend: &Backend, core: CoreId) -> ChartGraphicsCfg {
+    let main = main_chart_marker_scale(
+        &backend.layout,
+        &backend.config.servers,
+        &backend.chart_specs,
+        core,
+    );
+    drawn_graphics(backend.layout.chart_graphics_for(ChartTabKind::Trade), main)
+}
+
+/// The graphics a row here stores for the trade-window kind.
+///
+/// The cross size is the main chart's and only borrowed for drawing, so a row here never writes
+/// it into the kind's set: the set keeps the size it already carried, as
+/// [`candles_for_default`] keeps the timeframe.
+///
+/// Args:
+///     shown: The graphics as this window draws them, main chart's cross size included.
+///     stored_marker_scale: The cross size the kind's stored set carries.
+///
+/// Returns:
+///     The set to store.
+pub(super) fn graphics_for_default(
+    shown: ChartGraphicsCfg,
+    stored_marker_scale: f32,
+) -> ChartGraphicsCfg {
+    ChartGraphicsCfg {
+        marker_scale: stored_marker_scale,
+        ..shown
+    }
+}
+
 /// One checkbox bound to a single [`ChartGraphicsCfg`] flag on the window.
 fn graphics_cb(
     entity: &Entity<TradeWindowView>,
@@ -159,10 +275,26 @@ impl TradeWindowView {
         matches!(&self.state, TradeWindowState::Ready { source, .. } if source.is_ticks())
     }
 
-    /// The chart-drawing settings as the chart draws them: the trade-window kind's stored set,
-    /// normalised (the panel holds no override of its own for them).
+    /// The chart-drawing settings as the chart draws them: the trade-window kind's stored set with
+    /// the main chart's cross size, normalised — the override [`Self::follow_graphics`] pinned.
     pub(super) fn graphics_cfg(&self, cx: &App) -> ChartGraphicsCfg {
         self.panel.read(cx).effective_chart_graphics(cx)
+    }
+
+    /// Re-pin the graphics when the trade-window kind's set or the main chart's cross size moved.
+    ///
+    /// Run from the backend observer, so the common case — nothing moved — costs two short lookups
+    /// and one compare. An override rather than none, unlike the captions: the cross size comes
+    /// from another chart, so the panel cannot find it by reading its own kind's default.
+    pub(super) fn follow_graphics(&mut self, cx: &mut Context<Self>) {
+        let now = drawn_graphics_now(self.backend.read(cx), self.core);
+        if now == self.graphics_followed {
+            return;
+        }
+        self.graphics_followed = now;
+        self.panel
+            .update(cx, |panel, pcx| panel.set_chart_graphics(Some(now), pcx));
+        cx.notify();
     }
 
     /// The candle settings as the USER chose them: the panel's effective set with the user's own
@@ -174,21 +306,26 @@ impl TradeWindowView {
     }
 
     /// Edit the trade-window graphics, for every trade window at once.
+    ///
+    /// The cross size stays out of the write ([`graphics_for_default`]); this window re-pins at
+    /// once through [`Self::follow_graphics`], the others through their observers.
     fn write_graphics(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut ChartGraphicsCfg)) {
         let mut cfg = self.graphics_cfg(cx);
         f(&mut cfg);
         self.backend.update(cx, |b, bcx| {
+            let kind = ChartTabKind::Trade;
+            let stored = graphics_for_default(cfg, b.layout.chart_graphics_for(kind).marker_scale);
             // Normalised on the way in, as the ⧉ row's slot does: the value is COMPARED on every
             // notification, and an out-of-range number would read as a change for ever.
-            if b.layout.store_chart_graphics(
-                ChartTabKind::Trade,
-                moon_chart::normalize_chart_graphics(cfg),
-            ) {
+            if b.layout
+                .store_chart_graphics(kind, moon_chart::normalize_chart_graphics(stored))
+            {
                 b.layout_dirty = true;
             }
-            // Every trade window's panel re-reads the kind's graphics on this.
+            // Every trade window re-pins the kind's graphics on this.
             bcx.notify();
         });
+        self.follow_graphics(cx);
         cx.notify();
     }
 
@@ -215,9 +352,9 @@ impl TradeWindowView {
     /// Re-pin the candles from the trade-window kind's stored set when it moved.
     ///
     /// Run from the backend observer, so the common case — nothing moved — costs one compare.
-    /// Graphics and captions need no counterpart: with no override the panel re-reads their
-    /// stored set itself. The candles do, because their override is never absent (see
-    /// [`TradeWindowView::candles_followed`]).
+    /// Captions need no counterpart: with no override the panel re-reads their stored set itself.
+    /// The candles do, because their override is never absent (see
+    /// [`TradeWindowView::candles_followed`]); the graphics have [`Self::follow_graphics`].
     pub(super) fn follow_candle_default(&mut self, cx: &mut Context<Self>) {
         let now = self
             .backend

@@ -43,3 +43,9 @@ screener.af_unread: "缓存未读取"
 screener.af_stale: "缓存落后 %{age}"
 screener.af_press_calculate: "点击「计算」以按自动图形筛选币种"
 screener.af_running: "正在计算自动图形…"
+# The row menu's copy entries (#1164): every listed coin, or those from the top of the current sort
+# through the clicked row, as one comma-separated line. The menu shows the count; %{n} in the toast
+# is that count.
+screener.copy_coins_on_screen: "复制屏幕上的币种"
+screener.copy_coins_through_row: "复制到此行为止的币种"
+screener.coins_copied: "已复制 %{n} 个币种"

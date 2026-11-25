@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use super::super::metrics::{profit_factor, winrate};
 use super::super::read_fail::read_fail_on;
 use super::super::{QuoteCurrency, QuoteScope, ReadFail, ReadResult};
+use super::calendar::NOT_A_TRADE;
 use super::{Query, raw_money_projection_on, scope_decision_on, unified_from, unified_from_mode};
 
 /// Aggregate for a strategy-and-core or coin group.
@@ -35,7 +36,11 @@ pub struct GroupStat {
     /// means no strategy DB or a coin group; 0 means deleted, 1 present but disabled,
     /// and 2 present and enabled.
     pub alive: Option<i64>,
+    /// Trades, Funding rows excluded (`calendar::NOT_A_TRADE`). `wins`, `pf`, `best`, `worst`
+    /// and `avg_order` count trades only as well.
     pub n: i64,
+    /// Active-lens profit, Funding money included — except under the Percent lens, where Funding
+    /// has no spend to be a return on and is left out, as the Calendar does.
     pub profit: f64,
     /// Raw quote-currency profit, independent of the active Analytics profit lens.
     pub raw_profit: f64,
@@ -365,7 +370,7 @@ pub(super) fn groups(
     // aggregate never reads. The fence prevents SQLite from expanding pnl and identity CASEs
     // again for every aggregate and GROUP BY expression.
     let narrow = "o.strategyid, o.core_uid, o.core_name, o.coin, o.pnl,
-                  o.profitbtc, o.spentbtc, o.basecurrency";
+                  o.profitbtc, o.spentbtc, o.basecurrency, o.sellreason";
     let (normalized, src, raw_src) = if by_strategy {
         let raw = raw_src
             .map(|source| {
@@ -453,7 +458,8 @@ pub(super) fn groups(
                 ", raw AS (
                      SELECT {key} AS k,
                             COALESCE(SUM(o.profitbtc), 0) AS raw_profit,
-                            COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order,
+                            COALESCE(AVG(CASE WHEN {NOT_A_TRADE} AND o.spentbtc > 0
+                                              THEN o.spentbtc END), 0) AS avg_order,
                             MIN(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_min,
                             MAX(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_max,
                             COUNT(CASE WHEN typeof(o.basecurrency) = 'integer' THEN 1 END) AS quote_integral,
@@ -476,26 +482,39 @@ pub(super) fn groups(
             "a.quote_min, a.quote_max, a.quote_integral, a.quote_rows",
         )
     };
+    // Funding is money without a trade (`NOT_A_TRADE`), the rule the Summary stream's
+    // `GroupAccumulator::push` applies to the same groups: its money stays in `profit` and
+    // `raw_profit`, and it is in nothing that counts or ranks trades, nor in the average order
+    // (the funded position is not an order the group placed). Under the Percent lens its rows
+    // are dropped before grouping, since a percent return on no spend is no number at all —
+    // which also keeps a funding-only group off that lens, as in the stream.
+    let funding_filter = if q.metric == crate::db::ProfitMetric::Percent {
+        format!("WHERE {NOT_A_TRADE}")
+    } else {
+        String::new()
+    };
     let sql = format!(
         "WITH {normalized}a AS (
              SELECT {key} AS k,
                     {pair}
                     MAX(o.core_name) AS core_name,
                     COUNT(DISTINCT o.core_uid) AS cores_n,
-                    COUNT(*) AS n,
+                    COALESCE(SUM({NOT_A_TRADE}),0) AS n,
                     COALESCE(SUM(o.pnl),0) AS profit,
-                    COALESCE(SUM(o.pnl > 0),0) AS wins,
-                    COALESCE(SUM(CASE WHEN o.pnl > 0 THEN o.pnl END),0) AS wsum,
-                    COALESCE(SUM(CASE WHEN o.pnl <= 0 THEN -o.pnl END),0) AS lsum,
-                    COALESCE(MAX(o.pnl),0) AS best,
-                    COALESCE(MIN(o.pnl),0) AS worst,
+                    COALESCE(SUM({NOT_A_TRADE} AND o.pnl > 0),0) AS wins,
+                    COALESCE(SUM(CASE WHEN {NOT_A_TRADE} AND o.pnl > 0 THEN o.pnl END),0) AS wsum,
+                    COALESCE(SUM(CASE WHEN {NOT_A_TRADE} AND o.pnl <= 0 THEN -o.pnl END),0) AS lsum,
+                    COALESCE(MAX(CASE WHEN {NOT_A_TRADE} THEN o.pnl END),0) AS best,
+                    COALESCE(MIN(CASE WHEN {NOT_A_TRADE} THEN o.pnl END),0) AS worst,
                     COALESCE(SUM(o.profitbtc), 0) AS raw_profit,
-                    COALESCE(AVG(CASE WHEN o.spentbtc > 0 THEN o.spentbtc END), 0) AS avg_order,
+                    COALESCE(AVG(CASE WHEN {NOT_A_TRADE} AND o.spentbtc > 0
+                                      THEN o.spentbtc END), 0) AS avg_order,
                     MIN(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_min,
                     MAX(CASE WHEN typeof(o.basecurrency) = 'integer' THEN o.basecurrency END) AS quote_max,
                     COUNT(CASE WHEN typeof(o.basecurrency) = 'integer' THEN 1 END) AS quote_integral,
                     COUNT(*) AS quote_rows
              FROM {src}
+             {funding_filter}
              GROUP BY k
          ){raw_cte}
          SELECT a.k, {name_fallback}, a.core_name, a.cores_n,

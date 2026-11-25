@@ -762,7 +762,8 @@ pub(crate) use labels::FilterLineTarget;
 /// the real formatter, applied to sample values.
 pub(crate) use labels::preview_row;
 pub(in crate::chartdx) use labels::{
-    ActionInputs, ActionMark, BasisStats, LabelInputs, LabelState, collect_open_stats,
+    ActionInputs, ActionMark, BasisStats, LabelInputs, LabelState, OrderAge, collect_open_stats,
+    order_age_clock, order_age_text, position_fills, step_order_ages,
 };
 
 /// Width of `text` at `size` in the caption font, without touching the retained run list.

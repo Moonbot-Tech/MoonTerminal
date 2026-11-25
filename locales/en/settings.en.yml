@@ -63,7 +63,7 @@ settings.page.hotkeys.desc: "Moonbot-compatible keys and mouse gestures. Changes
 settings.page.hotkeys.keywords: "hotkey key mouse gesture shortcut moonbot"
 settings.page.general.title: "Main"
 settings.page.general.desc: "Language, amount calculation and chart behavior."
-settings.page.general.keywords: "language rate usdt log auto close tab panorama"
+settings.page.general.keywords: "language rate usdt log auto close tab panorama exit quit"
 settings.page.security.title: "Security"
 settings.page.security.desc: "Two independent passwords and the list of computers allowed to open the connections file."
 settings.page.security.keywords: "password encryption servers.enc machine"

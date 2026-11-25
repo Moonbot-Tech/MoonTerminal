@@ -63,7 +63,7 @@ settings.page.hotkeys.desc: "Moonbot ile uyumlu tuşlar ve fare hareketleri. De�
 settings.page.hotkeys.keywords: "kısayol tuş fare hareket kombinasyon moonbot"
 settings.page.general.title: "Ana"
 settings.page.general.desc: "Dil, tutar hesaplama ve grafik davranışı."
-settings.page.general.keywords: "dil kur usdt günlük otomatik kapatma sekme panorama"
+settings.page.general.keywords: "dil kur usdt günlük otomatik kapatma sekme panorama çıkış"
 settings.page.security.title: "Güvenlik"
 settings.page.security.desc: "İki bağımsız parola ve bağlantı dosyasını açabilen bilgisayarların listesi."
 settings.page.security.keywords: "parola şifreleme servers.enc makine"
