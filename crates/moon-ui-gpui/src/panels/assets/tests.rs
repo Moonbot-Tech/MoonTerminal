@@ -252,6 +252,21 @@ fn removed_core_is_pruned_from_retained_assets_state() {
     assert_eq!(wallet, Some(2));
 }
 
+/// A deleted remembered core must fall back within the filtered list, not to a hidden full-scope
+/// core. Choosing `valid.first()` here would let core 2 take over Wallets while only core 3 is
+/// listed, leaving no highlighted row and refreshing a core the user did not select.
+#[test]
+fn removed_wallet_core_falls_back_to_the_first_listed_core() {
+    let mut filter = HashSet::from([1, 3]);
+    let mut wallet = Some(1);
+
+    let changed = reconcile_retained_assets_state(&[2, 3], &[3], &mut filter, &mut wallet);
+
+    assert!(changed);
+    assert_eq!(filter, HashSet::from([3]));
+    assert_eq!(wallet, Some(3));
+}
+
 /// Group Assets keeps Core shortcuts passive in Auto and validates delayed chart navigation.
 ///
 /// Mutation: restore either Auto selection writer or replace the authorized Main request with the

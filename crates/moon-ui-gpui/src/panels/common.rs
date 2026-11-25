@@ -675,10 +675,12 @@ pub(crate) fn popup_gear_trigger_dense(
 /// [`design::mono`].
 struct TooltipFace {
     text: SharedString,
+    detail: Option<SharedString>,
     mono: bool,
 }
 
 impl Render for TooltipFace {
+    /// Render the existing MoonUI tooltip with its optional muted detail.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let want = if self.mono {
             design::mono()
@@ -696,26 +698,38 @@ impl Render for TooltipFace {
         };
         MoonTooltip::new(self.text.clone())
             .mono(mono)
+            .when_some(self.detail.clone(), MoonTooltip::detail)
             .render(window, cx)
     }
 }
 
-/// Build a tooltip factory for one face.
+/// Build a single-text tooltip in the requested face.
+fn tooltip_face(
+    text: impl Into<SharedString>,
+    mono: bool,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    tooltip_face_with_detail(text, mono, None)
+}
+
+/// Build a tooltip factory with optional secondary text.
 ///
 /// Args:
 ///     text: Complete tooltip content.
 ///     mono: `true` for [`design::mono`], `false` for [`design::ui_font`].
+///     detail: Optional muted text below the main content.
 ///
 /// Returns:
 ///     A handler suitable for `Styled::tooltip`.
-fn tooltip_face(
+fn tooltip_face_with_detail(
     text: impl Into<SharedString>,
     mono: bool,
+    detail: Option<SharedString>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text = text.into();
     move |_window, cx| {
         cx.new(|_| TooltipFace {
             text: text.clone(),
+            detail: detail.clone(),
             mono,
         })
         .into()
@@ -737,6 +751,14 @@ pub(crate) fn text_tooltip(
     text: impl Into<SharedString>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     tooltip_face(text, false)
+}
+
+/// Build a prose tooltip with a muted detail line under the main text.
+pub(crate) fn text_tooltip_with_detail(
+    text: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    tooltip_face_with_detail(text, false, Some(detail.into()))
 }
 
 /// Build the handler for a tooltip that is only a value.

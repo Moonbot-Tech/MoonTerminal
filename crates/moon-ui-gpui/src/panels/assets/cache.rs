@@ -1,6 +1,11 @@
 //! Signature-gated caches for the asset table and the wallet section.
 
 use super::*;
+use moon_core::account::AccountIdentity;
+use moon_core::config::{AppConfig, ServerConfig};
+use moon_core::session::CoreStore;
+use moon_core::session::store::CoreData;
+use moon_core::venue::CoreVenue;
 
 /// Folds every configured id and total mode without allocating, including out-of-scope cores.
 pub(super) fn total_modes_sig(servers: &[moon_core::config::ServerConfig]) -> u64 {
@@ -149,6 +154,11 @@ impl AssetsView {
         self.effective_wallet_core(b)
             .and_then(|core| core_brand(b, core))
             .hash(&mut keys);
+        // The idle-money marks judge each account by ALL its cores, the hidden ones included, so
+        // every configured core's wallet account and wallet revision enter here: a sibling outside
+        // the filter that refreshes, or an account identity that lands after the wallets, moves
+        // no revision of the scoped cores.
+        idle_sig(b).hash(&mut keys);
         let sig = cores
             .iter()
             // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
@@ -238,6 +248,7 @@ impl AssetsView {
         self.cached_roster_auto_w = None;
         self.cached_all_futures = self.all_scope_cores_futures(b);
         self.rebuild_wallet_cache(b);
+        self.rebuild_idle(b);
         // Skip non-finite row values so one bad price cannot turn the whole Σ into `NaN`, but
         // COUNT what was skipped — a silently shortened sum is indistinguishable from an honest
         // one, and the footer needs to say so.
@@ -322,7 +333,7 @@ impl AssetsView {
             let thr = self.min_value_usd;
             let mut rows: Vec<TransferAssetRow> = all_items
                 .into_iter()
-                .filter(|a| thr <= 0.0 || a.value_usdt > thr)
+                .filter(|a| super::wallets::above_dust(a.value_usdt, thr))
                 .collect();
             rows.sort_by(|a, b| {
                 b.value_usdt
@@ -339,4 +350,113 @@ impl AssetsView {
         self.cached_wallets = Rc::new(snapshots);
         self.cached_wallet_key = Some(key);
     }
+
+    /// Recompute the idle-money marks of the wallets core list ([`super::idle`]).
+    ///
+    /// Include every configured core, even those outside the panel scope or switched off.
+    /// The mark lands on the account's first visible core only after every possible member
+    /// can be accounted for.
+    /// Reads `cached_aggs`, so it runs after they are rebuilt.
+    pub(super) fn rebuild_idle(&mut self, b: &Backend) {
+        let store = b.session.store();
+        let venues = b.session.core_venues();
+        let visible: std::collections::HashSet<CoreId> =
+            self.cached_cores.iter().map(|(id, _)| *id).collect();
+        // The cores the footer total counts — the same aggregates it is summed from, so the idle
+        // sum beside it cannot disagree about a core set to stay out of the total.
+        let counted: std::collections::HashSet<CoreId> = self
+            .cached_aggs
+            .iter()
+            .filter(|agg| agg.mode != moon_core::config::TotalMode::Exclude)
+            .map(|agg| agg.id)
+            .collect();
+        let mut inputs = idle_inputs(&b.config, store, |id| {
+            (venues.get(&id), b.session.account_identity(id))
+        });
+        for input in &mut inputs {
+            input.visible = visible.contains(&input.core);
+            input.counted = counted.contains(&input.core);
+        }
+        let report = super::idle::idle_report(&inputs, self.min_value_usd);
+        // The footer's share stays in unix-ms: the tooltip words its age as it opens
+        // (`AssetsView::footer_tip`), in the clock zone and against the day of that moment.
+        self.cached_idle_footer = super::idle::footer_idle(&report);
+        self.cached_idle = Rc::new(report);
+    }
+}
+
+/// Whether a core is connected and ready right now — the only state in which the idle-money
+/// marks take its exchange account for established (`idle::IdleInput::ready`).
+fn core_ready(core: &CoreData) -> bool {
+    core.status == moon_core::feed::ConnStatus::Ready
+}
+
+/// Whether the terminal is configured to connect to this core, including its group switch.
+fn idle_connection_enabled(config: &AppConfig, server: &ServerConfig) -> bool {
+    server.active
+        && config
+            .group_ref(&server.group)
+            .is_none_or(|group| group.active)
+}
+
+/// Build wallet inputs in canonical order. Cores without a ready connection may trade from an
+/// account on any exchange, so only ready connections supply venue, account and wallet data.
+pub(super) fn idle_inputs<'a>(
+    config: &AppConfig,
+    store: &'a CoreStore,
+    identity: impl Fn(CoreId) -> (Option<&'a CoreVenue>, Option<AccountIdentity>),
+) -> Vec<super::idle::IdleInput<'a>> {
+    let mut inputs: Vec<_> = config
+        .servers
+        .iter()
+        .map(|server| {
+            let id = server.id;
+            let core = store
+                .core(id)
+                .filter(|core| idle_connection_enabled(config, server) && core_ready(core));
+            let (reported_venue, account) = core.map_or((None, None), |_| identity(id));
+            let venue = reported_venue.and_then(CoreVenue::resolved);
+            super::idle::IdleInput {
+                core: id,
+                visible: false,
+                counted: false,
+                ready: core.is_some(),
+                exchange_known: reported_venue.is_some(),
+                venue,
+                key: moon_core::venue::wallets_key(venue, account),
+                wallets: core
+                    .filter(|cd| cd.transfer_rev > 0)
+                    .map(|cd| &cd.transfer_assets),
+                seen_ms: core.map_or([0; 3], |cd| cd.transfer_seen_ms),
+            }
+        })
+        .collect();
+    CoreOrder::new(config).sort_by(&mut inputs, |input| input.core);
+    inputs
+}
+
+/// Invalidate idle marks when configured membership, connection eligibility, or ready wallet
+/// inputs change. An absent session can still withhold a mark until its core leaves the config.
+fn idle_sig(b: &Backend) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let store = b.session.store();
+    let venues = b.session.core_venues();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for server in &b.config.servers {
+        let id = server.id;
+        id.hash(&mut h);
+        let enabled = idle_connection_enabled(&b.config, server);
+        enabled.hash(&mut h);
+        let core = store.core(id).filter(|core| enabled && core_ready(core));
+        core.is_some().hash(&mut h);
+        if let Some(core) = core {
+            let reported_venue = venues.get(&id);
+            let venue = reported_venue.and_then(CoreVenue::resolved);
+            reported_venue.is_some().hash(&mut h);
+            venue.hash(&mut h);
+            moon_core::venue::wallets_key(venue, b.session.account_identity(id)).hash(&mut h);
+            core.transfer_rev.hash(&mut h);
+        }
+    }
+    h.finish()
 }

@@ -379,6 +379,15 @@ pub struct CoreData {
     pub schema_rev: u64,
     pub assets_rev: u64,
     pub transfer_rev: u64,
+    /// The newest arrival time each wallet list has ever had on this core, in
+    /// `WalletKind::ALL` order; `0` for a wallet never answered.
+    ///
+    /// It outlives the lists themselves. A replacement feed starts from empty, unanswered lists,
+    /// and what this core knew of its wallets is gone with the old ones. A reader that then falls
+    /// back on another core of the same account must be able to tell that the list it finds there
+    /// is OLDER than one this core once held: the idle-money marks (`panels::assets::idle`) do
+    /// not judge such a wallet until it is fetched again.
+    pub transfer_seen_ms: [i64; 3],
     pub license_rev: u64,
     pub client_settings_rev: u64,
     pub core_config_rev: u64,
@@ -612,6 +621,7 @@ impl CoreData {
             assets_stale: false,
             assets_rev: 0,
             transfer_rev: 0,
+            transfer_seen_ms: [0; 3],
             license_rev: 0,
             client_settings_rev: 0,
             core_config_rev: 0,
@@ -1192,6 +1202,9 @@ impl CoreData {
                 self.assets_rev = self.assets_rev.wrapping_add(1);
             }
             FeedMsg::TransferAssets(transfer) => {
+                for (seen, arrived) in self.transfer_seen_ms.iter_mut().zip(transfer.arrived_ms) {
+                    *seen = (*seen).max(arrived);
+                }
                 self.transfer_assets = transfer;
                 self.transfer_rev = self.transfer_rev.wrapping_add(1);
             }

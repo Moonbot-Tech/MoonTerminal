@@ -51,3 +51,29 @@ fn coin_margined_source_is_judged_by_its_wallets() {
     assert!(source_priced(true, true, true, 0.0));
     assert!(!source_priced(true, false, false, 1.0));
 }
+
+/// Breakage: every wallet re-dated whenever any one of them is answered — a refresh that gets a
+/// fresh Spot list while the Futures request fails would stamp the old Futures list with the new
+/// time, and a reader picking the newest list among an account's cores would take the stale one.
+#[test]
+fn a_wallet_is_dated_only_when_its_own_revision_moves() {
+    let mut arrivals = super::WalletArrivals::default();
+    assert_eq!(arrivals.observe([0, 0, 0], 1_000), [0, 0, 0]);
+    assert_eq!(arrivals.observe([1, 2, 0], 2_000), [2_000, 2_000, 0]);
+    // Spot is answered again; Futures is not.
+    assert_eq!(arrivals.observe([3, 2, 0], 3_000), [3_000, 2_000, 0]);
+    // A transfer between two wallets moves both of them, and only them.
+    assert_eq!(arrivals.observe([3, 4, 4], 4_000), [3_000, 4_000, 4_000]);
+}
+
+/// Breakage: lists answered by a process that has gone away keeping their times — after a server
+/// restart MoonProto still holds them, and dated as before they would vouch for the wallets of
+/// whatever account the replacement runs. Only a wallet answered again gets a time.
+#[test]
+fn forgotten_arrivals_come_back_only_with_a_new_answer() {
+    let mut arrivals = super::WalletArrivals::default();
+    arrivals.observe([1, 2, 0], 2_000);
+    arrivals.forget();
+    assert_eq!(arrivals.observe([1, 2, 0], 3_000), [0, 0, 0]);
+    assert_eq!(arrivals.observe([3, 2, 0], 4_000), [4_000, 0, 0]);
+}
