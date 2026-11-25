@@ -28,6 +28,7 @@ analytics.kpi.maxdd: ru es uk tr vi zh
 analytics.kpi.pf: ru es uk tr vi zh
 analytics.kpi.winrate: ru es uk zh
 analytics.minutes: es pt zh
+analytics.strat.total_n: es pt
 analytics.sum.chart.lines_top: pt vi
 analytics.sum.chart.total: es pt
 analytics.sum.cores.conc.top5: pt vi
