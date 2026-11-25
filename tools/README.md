@@ -61,6 +61,7 @@ settings still load.
 | `MOON_SYNTH_BOOKHZ` | 20 | order-book updates/sec per market |
 | `MOON_SYNTH_DEPTH` | 50 | levels per side of the order book |
 | `MOON_SYNTH_SEED` | 1 | price-walker seed |
+| `MOON_SYNTH_ENTRY_CORRECTION_EVERY_SEC` | off | send a manual-entry price correction (MoonBot 7.73 N2) for the first market this often, cycling both limits / upper only / lower only / none / an uncharted market |
 | `MOON_STRESS_WINDOWS` | 10 | AddToChart tabs emitted at startup (`add_to_chart` 1..=N) |
 | `MOON_STRESS_CHARTS` | 5 | panels on each of those tabs |
 
