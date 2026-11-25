@@ -63,6 +63,7 @@ pub(super) fn is_live_action(cmd: &CoreCmd) -> bool {
         | CoreCmd::PlacePendingOrder { .. }
         | CoreCmd::MoveOrder { .. }
         | CoreCmd::CancelOrder { .. }
+        | CoreCmd::ForceCancelOrder { .. }
         | CoreCmd::SetOrderStop { .. }
         | CoreCmd::MoveOrderStopPrice { .. }
         | CoreCmd::UpdateOrderStopsForm { .. }

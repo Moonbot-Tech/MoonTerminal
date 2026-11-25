@@ -785,6 +785,21 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::CancelOrder { uid }, "cancel order")
     }
 
+    /// Force the cancellation of a stuck core order by `uid` (MoonBot 7.73 N2+).
+    ///
+    /// Not a stronger [`Self::cancel_order`]: after three unconfirmed checks the core stops
+    /// tracking the order and keeps cancelling it in the background, so it may stay open on the
+    /// exchange. Callers ask the user first and offer it only where
+    /// `CoreFeatures::force_cancel_gate` returns `Offered`. `Ok` means the command was queued for
+    /// the core, not that anything was cancelled.
+    pub fn force_cancel_order(&self, core: CoreId, uid: u64) -> Result<()> {
+        self.send_core_cmd(
+            core,
+            CoreCmd::ForceCancelOrder { uid },
+            "force cancel order",
+        )
+    }
+
     /// Toggle market-level panic sell for a core from the chart button.
     pub fn panic_sell_market(&self, core: CoreId, market: String, on: bool) -> Result<()> {
         self.send_core_cmd(

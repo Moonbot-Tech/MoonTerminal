@@ -172,6 +172,7 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
         }),
         screener_copy: !ctx.screener_copy.is_empty(),
         blacklist: !ctx.coin.is_empty(),
+        force_cancel: force_cancel::gate(b, ctx.core, ctx.order_uid),
     };
 
     let mut items = Vec::new();
@@ -186,6 +187,8 @@ fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<Moo
             Slot::JoinSells => own::join_sells(&ctx, backend),
             Slot::Split(uid, parts) => own::split_order(&ctx, backend, uid, parts),
             Slot::Cancel(uid) => own::cancel_order(&ctx, backend, uid),
+            Slot::ForceCancel(uid) => force_cancel::item(&ctx, backend, b, uid),
+            Slot::ForceCancelNeedsCore => force_cancel::needs_core_item(),
             Slot::ScreenerCopy => {
                 items.extend(ctx.screener_copy.iter().cloned());
                 continue;
@@ -337,6 +340,7 @@ pub(crate) fn write_strategy_blacklist(
 mod blacklist;
 mod coin;
 pub(crate) mod core_ref;
+mod force_cancel;
 pub(crate) mod multi;
 mod names;
 mod own;

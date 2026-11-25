@@ -956,6 +956,30 @@ fn a_server_restart_forgets_the_previous_instances_run_state() {
     assert_eq!(core.strategies_running_rev, trading_rev);
 }
 
+/// The build's features are kept while the core is up and forgotten whenever it may not be the
+/// same process any more.
+///
+/// Mutation: drop either reset line in the `Status` or `RunStateForgotten` arm. A core updated
+/// from N2 to an older build, or one that has just lost its link, would keep offering a forced
+/// cancellation the process now answering ignores.
+#[test]
+fn core_features_are_forgotten_with_the_process_that_reported_them() {
+    let n2 = crate::feed::CoreFeatures::from_runtime_report(Some(true), Some(()));
+    let mut core = CoreData::new();
+    assert_eq!(core.features, crate::feed::CoreFeatures::default());
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::CoreFeatures(n2));
+    assert_eq!(core.features, n2);
+
+    core.apply(FeedMsg::Status(ConnStatus::Connecting));
+    assert_eq!(core.features, crate::feed::CoreFeatures::default());
+
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::CoreFeatures(n2));
+    core.apply(FeedMsg::RunStateForgotten);
+    assert_eq!(core.features, crate::feed::CoreFeatures::default());
+}
+
 /// The core republishes its API request quota every few minutes, usually with the same number. The
 /// revision must track the VALUE, or every reader watching it would rebuild on an unchanged quota
 /// several times an hour.

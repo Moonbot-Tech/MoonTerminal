@@ -66,6 +66,17 @@ pub(in crate::feed::live) fn runtime_state_from_proto(
     }
 }
 
+/// Read which optional commands the core's build acts on from the tails of its runtime report.
+///
+/// `moon_stream_enabled` is `None` on every core before 7.73 N1 and `moon_streamer` is omitted by
+/// every core before N2 (`RuntimeStateCommand`'s own docs and `moonproto::core_compatibility`);
+/// [`CoreFeatures::from_runtime_report`] owns what each tail proves.
+pub(in crate::feed::live) fn core_features_from_proto(
+    s: &moonproto::RuntimeStateCommand,
+) -> CoreFeatures {
+    CoreFeatures::from_runtime_report(s.moon_stream_enabled, s.moon_streamer.as_ref())
+}
+
 /// Project the core's report profit counters shown beside the AutoStart loss caps.
 ///
 /// The two pairs are the core's own hourly and trade-window counters; they come from the report

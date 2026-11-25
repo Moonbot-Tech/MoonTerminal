@@ -1,5 +1,7 @@
 //! Decide which shared coin-menu rows appear and in what order.
 
+use moon_core::feed::ForceCancelGate;
+
 /// Origin of the menu, which determines whether opening the chart would be redundant.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CoinMenuOrigin {
@@ -34,6 +36,10 @@ pub(super) struct MenuFacts<Row, Log> {
     pub(super) report: Option<ReportFacts<Row, Log>>,
     pub(super) screener_copy: bool,
     pub(super) blacklist: bool,
+    /// Whether the clicked order gets a forced cancellation, decided by
+    /// `CoreFeatures::force_cancel_gate` from its status and the core's build. Read only when
+    /// [`Self::order`] is set.
+    pub(super) force_cancel: ForceCancelGate,
 }
 
 /// One menu row or a set of adjacent rows realized from the same snapshot.
@@ -48,6 +54,10 @@ pub(super) enum Slot<Row, Log> {
     JoinSells,
     Split(u64, i32),
     Cancel(u64),
+    /// The forced cancellation of a stuck order, opening its confirmation.
+    ForceCancel(u64),
+    /// The same row, disabled, on a core that has not proved it is 7.73 N2+.
+    ForceCancelNeedsCore,
     ScreenerCopy,
     FilterHere(Row),
     CoinReport,
@@ -63,6 +73,15 @@ impl<Row, Log> Slot<Row, Log> {
     /// Emphasize the action that opens the clicked trade or order for inspection.
     pub(super) fn emphasized(&self) -> bool {
         matches!(self, Self::TradeWindow(_) | Self::OrderEdit(_))
+    }
+}
+
+/// The force-cancel row for `uid` under `gate`, or `None` when the order has no active leg.
+fn force_cancel_slot<Row, Log>(gate: ForceCancelGate, uid: u64) -> Option<Slot<Row, Log>> {
+    match gate {
+        ForceCancelGate::NotEligible => None,
+        ForceCancelGate::NeedsNewerCore => Some(Slot::ForceCancelNeedsCore),
+        ForceCancelGate::Offered => Some(Slot::ForceCancel(uid)),
     }
 }
 
@@ -91,8 +110,17 @@ pub(super) fn plan<Row: Copy, Log: Copy>(facts: &MenuFacts<Row, Log>) -> Vec<Slo
             if facts.split_n != fixed {
                 own.push(Split(uid, facts.split_n));
             }
+            // A sell line has no ordinary Cancel, so the forced one stands behind its own
+            // separator instead of reading as a third split.
+            if let Some(slot) = force_cancel_slot(facts.force_cancel, uid) {
+                own.extend([Sep, slot]);
+            }
         }
-        Some(Order::Buy(uid) | Order::Table(uid)) => own.extend([OrderEdit(uid), Sep, Cancel(uid)]),
+        Some(Order::Buy(uid) | Order::Table(uid)) => {
+            own.extend([OrderEdit(uid), Sep, Cancel(uid)]);
+            // Directly under the ordinary Cancel: the two are read as one choice.
+            own.extend(force_cancel_slot(facts.force_cancel, uid));
+        }
         None => {}
     }
     let screener = if facts.screener_copy {

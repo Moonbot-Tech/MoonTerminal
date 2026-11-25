@@ -69,6 +69,15 @@ fn classification_separates_actions_from_state() {
     assert!(!is_live_action(&CoreCmd::RefreshProblems));
 }
 
+/// A forced cancellation pressed during an outage must not fire whenever the core comes back.
+///
+/// Mutation: classify `ForceCancelOrder` as desired state. A confirmation answered on an order
+/// that has since been joined, split or filled would then force it after the reconnect.
+#[test]
+fn force_cancel_is_a_live_action() {
+    assert!(is_live_action(&CoreCmd::ForceCancelOrder { uid: 7 }));
+}
+
 /// An observer change or cancellation waits out no outage; a refresh may.
 ///
 /// Mutation: classify every watchdog command as state. An Apply pressed during an outage then

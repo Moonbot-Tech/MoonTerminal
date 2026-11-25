@@ -1,6 +1,7 @@
 //! Domain types sent from the backend to the UI. They are independent of moonproto so the UI and
 //! rendering layer do not need to know about the transport.
 
+mod core_features;
 mod core_folders;
 mod core_problem;
 mod core_settings;
@@ -8,6 +9,7 @@ mod core_status;
 mod core_telegram;
 mod core_watchdog;
 
+pub use core_features::{CoreFeatures, ForceCancelGate};
 pub use core_folders::CoreFolders;
 pub use core_problem::{CoreProblem, CoreProblemCategory, CoreProblems};
 pub use core_settings::{
@@ -223,6 +225,11 @@ pub enum FeedMsg {
     TempBlacklist(Vec<TempBlacklistRow>),
     /// Core runtime and passive-mode state sent on `RuntimeStateUpdated`.
     RuntimeState(RuntimeState),
+    /// Optional commands the connected build acts on, derived from the same runtime report as
+    /// [`Self::RuntimeState`] and sent beside it — see [`CoreFeatures`] for which tail drives
+    /// which flag. Deliberately its own message: [`RuntimeState`] is the run/detect state the RUN
+    /// controls compare and re-confirm, and the build is a property of the process, not of that.
+    CoreFeatures(CoreFeatures),
     /// Projection of the core's full safe-share configuration, sent on `SharedConfigUpdated`,
     /// `ClientSettingsUpdated`, or `LevManageUpdated` — the projection overlays the compact
     /// snapshots, so any of the three can change it even with no new full snapshot.
