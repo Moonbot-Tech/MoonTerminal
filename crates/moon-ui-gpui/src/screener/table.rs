@@ -716,9 +716,7 @@ fn open_screener_coin_menu(
             .unwrap_or_default();
         (selected, name)
     };
-    // Only the Screener has a sorted list of coins to copy, so its entries ride the menu's
-    // caller slot and the shared menu stays the same everywhere else.
-    let trailing = super::coin_copy::copy_items(panel.coin_lists((core, &market)));
+    let screener_copy = super::coin_copy::copy_items(panel.coin_lists((core, &market)));
     let ctx = CoinMenuCtx {
         core,
         core_name,
@@ -733,8 +731,8 @@ fn open_screener_coin_menu(
         short: false,
         origin: CoinMenuOrigin::OrderTable,
         history: None,
-        trailing,
-        filter_here: None,
+        report: None,
+        screener_copy,
     };
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);
 }

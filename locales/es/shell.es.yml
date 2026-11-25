@@ -277,7 +277,7 @@ chart.order_menu.cancel: "Cancel"
 chart.order_menu.join_sells: "Join all sells"
 chart.order_menu.split: "Split order (%{n})"
 coin_menu.open: "Abrir en el gráfico"
-coin_menu.view_trades: "Ver operaciones"
+coin_menu.view_trades: "Mostrar en el gráfico"
 coin_menu.view_trades_not_ready: "Historial de operaciones: el mercado no está listo"
 chart.trade_history.loading: "Cargando historial de operaciones..."
 chart.trade_history.not_ready: "El historial de operaciones no está listo"
@@ -290,7 +290,7 @@ chart.trade_history.hover.more: "%{n} más"
 # active-language characters consume the overlay width budget on a narrow chart. The P/L wording
 # deliberately matches `chart.trade_history.hover.pnl`; two names for the same quantity on one chart
 # would imply a distinction that does not exist.
-coin_menu.compare: "Comparar"
+coin_menu.compare: "Comparar en gráficos"
 # The two blacklist submenus and the targets they share. The targets are named on their own — the
 # list they are added to is the parent row, so repeating it in every child would print it six times.
 coin_menu.bl_group: "Añadir a la lista negra"
@@ -306,11 +306,12 @@ coin_menu.tbl_left: "%{symbol}: quedan %{left}"
 # from the last snapshot before the outage, and a ban keeps expiring whether or not we can see it.
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (sin conexión)"
 coin_menu.tbl_clear: "Levantar la prohibición"
-coin_menu.strategy_goto: "Ir a la estrategia"
-coin_menu.strategy_report: "Todas las operaciones de esta estrategia en el informe"
-coin_menu.copy_coin: "Copiar %{coin}"
-coin_menu.coin_report: "Todas las operaciones de esta moneda en el informe"
-coin_menu.coin_filter: "Filtrar %{coin}"
+coin_menu.strategy_goto: "Abrir la estrategia"
+coin_menu.strategy_report: "Todas las operaciones de la estrategia"
+coin_menu.copy_coin: "Copiar el símbolo"
+coin_menu.coin_report: "Todas las operaciones de %{coin}"
+coin_menu.coin_filter: "Solo %{coin} en este informe"
+coin_menu.new_report: "nuevo informe"
 coin_menu.coin_copied: "Copiado: %{coin}"
 coin_menu.where_listed: "Dónde está esta moneda en la lista negra…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---

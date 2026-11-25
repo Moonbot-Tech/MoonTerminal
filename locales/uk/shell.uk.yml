@@ -277,7 +277,7 @@ chart.order_menu.cancel: "Cancel"
 chart.order_menu.join_sells: "Join all sells"
 chart.order_menu.split: "Split order (%{n})"
 coin_menu.open: "Відкрити на графіку"
-coin_menu.view_trades: "Глянь угоди"
+coin_menu.view_trades: "Показати на графіку"
 coin_menu.view_trades_not_ready: "Історія угод: ринок ще не завантажено"
 chart.trade_history.loading: "Завантаження історії угод..."
 chart.trade_history.not_ready: "Історія угод поки недоступна"
@@ -290,7 +290,7 @@ chart.trade_history.hover.more: "ще %{n}"
 # active-language characters consume the overlay width budget on a narrow chart. The P/L wording
 # deliberately matches `chart.trade_history.hover.pnl`; two names for the same quantity on one chart
 # would imply a distinction that does not exist.
-coin_menu.compare: "Порівняти"
+coin_menu.compare: "Порівняти на графіках"
 # The two blacklist submenus and the targets they share. The targets are named on their own — the
 # list they are added to is the parent row, so repeating it in every child would print it six times.
 coin_menu.bl_group: "У ЧС"
@@ -306,11 +306,12 @@ coin_menu.tbl_left: "%{symbol}: залишилось %{left}"
 # from the last snapshot before the outage, and a ban keeps expiring whether or not we can see it.
 coin_menu.tbl_left_stale: "%{symbol}: ~%{left} (немає зв'язку)"
 coin_menu.tbl_clear: "Зняти"
-coin_menu.strategy_goto: "Перейти до стратегії"
-coin_menu.strategy_report: "Усі угоди цієї стратегії в звіті"
-coin_menu.copy_coin: "Копіювати %{coin}"
-coin_menu.coin_report: "Усі угоди монети в звіті"
-coin_menu.coin_filter: "Фільтр %{coin}"
+coin_menu.strategy_goto: "Відкрити стратегію"
+coin_menu.strategy_report: "Усі угоди стратегії"
+coin_menu.copy_coin: "Копіювати тикер"
+coin_menu.coin_report: "Усі угоди %{coin}"
+coin_menu.coin_filter: "Лише %{coin} у цьому звіті"
+coin_menu.new_report: "новий звіт"
 coin_menu.coin_copied: "Скопійовано: %{coin}"
 coin_menu.where_listed: "Де монета в чорних списках…"
 # --- Chart-tab layout popup (Fit/Scroll with separate heights) ---

@@ -412,8 +412,8 @@ fn open_lock_coin_menu(
             // Already on this chart: the menu leaves out «Открыть на графике».
             origin: crate::controls::CoinMenuOrigin::ChartLine,
             history: None,
-            trailing: Vec::new(),
-            filter_here: None,
+            report: None,
+            screener_copy: Vec::new(),
         }
     };
     crate::controls::open_coin_menu(ctx, backend.clone(), at, window, app);

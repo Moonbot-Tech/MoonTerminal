@@ -1,6 +1,6 @@
 //! Shared coin-menu value and delayed workspace-authority regressions.
 
-/// Every mutating callback in `coin_menu.rs:build_items` must validate current workspace authority
+/// Every mutating callback in `own.rs` must validate current workspace authority
 /// inside its Backend update and before its first command helper.
 ///
 /// Mutation: remove or move the guard after any listed command. A menu opened on core 7 could then
@@ -10,7 +10,7 @@
 ///     Nothing; every listed callback must retain guard-before-effect ordering.
 #[test]
 fn shared_menu_mutations_revalidate_before_their_first_side_effect() {
-    let source = include_str!("../coin_menu.rs");
+    let source = include_str!("own.rs");
     let cases = [
         ("\"coin-order-edit\"", "crate::panels::open_order_edit("),
         ("\"coin-order-join\"", "b.session.join_sells("),
@@ -159,74 +159,302 @@ fn menu_callers_preserve_scoped_and_unscoped_authority() {
     assert!(chart.contains("workspace_group:self.workspace_group.clone()"));
 }
 
-/// Shared-menu Open, Compare, and Strategy entries must carry the same group authority as writes.
-///
-/// Mutation: call an unconditional request or omit `workspace_group` from `open_goto`. A menu
-/// retained across a rail switch would navigate to its old core or switch singleton scope.
+/// Shared-menu navigation keeps the same captured group authority as order mutations.
 #[test]
 fn shared_menu_navigation_revalidates_captured_workspace_scope() {
-    let source = include_str!("../coin_menu.rs");
+    let own = include_str!("own.rs");
+    let coin = include_str!("coin.rs");
+    let strategy = include_str!("strategy.rs");
 
-    assert!(source.contains("b.open_on_main_if_authorized("));
-    assert!(source.contains("b.open_compare_if_authorized("));
-    let goto = source
+    assert!(own.contains("b.open_on_main_if_authorized("));
+    assert!(coin.contains("b.open_compare_if_authorized("));
+    let goto = strategy
         .split("crate::strategies::open_goto(")
         .nth(1)
         .expect("strategy navigation must exist");
     assert!(goto.contains("workspace_group.clone(),"));
 }
 
-/// The scoped strategy Report belongs to the shared strategy section, immediately after Go to
-/// strategy, so every host exposes both actions under the same `strat_id` condition.
+/// Strategy Report must still open a Report for the clicked strategy.
 #[test]
-fn strategy_report_action_follows_goto_in_the_same_strategy_section() {
-    let source = include_str!("../coin_menu.rs");
-    let section = source
-        .split("// Strategy actions.")
-        .nth(1)
-        .and_then(|tail| tail.split("// Order actions.").next())
-        .expect("shared strategy section must remain discoverable");
-    let goto = section
-        .find("\"coin-strat-goto\"")
-        .expect("strategy navigation must remain in the section");
-    let report = section
-        .find("\"coin-strat-report\"")
-        .expect("strategy Report action must share the section's strat_id condition");
-
-    assert!(
-        goto < report,
-        "Report action must directly follow strategy_goto"
-    );
-    assert!(section.contains("crate::panels::open_scoped_report("));
-    assert!(section.contains("crate::panels::ReportScope::for_strategy("));
+fn strategy_report_opens_the_scoped_report() {
+    let source = include_str!("strategy.rs");
+    assert!(source.contains("crate::panels::open_scoped_report("));
+    assert!(source.contains("crate::panels::ReportScope::for_strategy("));
 }
 
-/// The coin entries sit directly under the strategy Report entry, ahead of the order section, and
-/// key off the printed coin rather than the blacklist token or a strategy.
-///
-/// Mutation: moving the coin block under `if let Some(sid) = ctx.strat_id` hides it on manual
-/// rows; gating it on `coin` (the resolved base) hides it on a Report row whose market no longer
-/// resolves; moving it after `// Order actions.` separates it from its strategy twin.
-#[test]
-fn coin_entries_follow_the_strategy_report_on_the_printed_coin() {
-    let source = include_str!("../coin_menu.rs");
-    let body = source
-        .split("fn build_items(")
-        .nth(1)
-        .expect("menu builder must exist");
-    let strategy_report = body
-        .find("\"coin-strat-report\"")
-        .expect("strategy Report entry must exist");
-    let coin_block = body
-        .find("if !shown_coin.is_empty() {")
-        .expect("coin entries must key off the printed coin");
-    let orders = body
-        .find("// Order actions.")
-        .expect("order section must exist");
+use super::plan::{CoinMenuOrigin, MenuFacts, Order, ReportFacts, Slot, plan};
+use Slot::*;
 
-    assert!(strategy_report < coin_block && coin_block < orders);
-    let block = &body[coin_block..orders];
-    assert!(block.contains("copy_coin_item(&shown_coin)"));
-    assert!(block.contains("coin_report_item(backend, core, &shown_coin)"));
-    assert!(block.contains("ctx.filter_here"));
+/// A listed market with a printed ticker and a resolved blacklist token.
+fn market_facts() -> MenuFacts {
+    MenuFacts {
+        surface: CoinMenuOrigin::OrderTable,
+        has_market: true,
+        coin_shown: true,
+        strategy: false,
+        order: None,
+        split_n: 7,
+        report: None,
+        screener_copy: false,
+        blacklist: true,
+    }
+}
+
+/// A Report row with a resolved task and an available filter action.
+fn report_facts() -> MenuFacts {
+    MenuFacts {
+        report: Some(ReportFacts {
+            trade_log: Ok(()),
+            filter_coin: true,
+        }),
+        ..market_facts()
+    }
+}
+
+/// Moving strategy above coin actions would break the approved order on Report rows.
+#[test]
+fn plan_report_row_with_strategy() {
+    let facts = MenuFacts {
+        strategy: true,
+        ..report_facts()
+    };
+    assert_eq!(
+        plan(&facts),
+        [
+            TradeWindow,
+            ShowOnChart,
+            TradeLog {
+                disabled_reason: None
+            },
+            Sep,
+            FilterHere,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            StrategyGoto,
+            StrategyReport,
+            Sep,
+            Blacklist
+        ]
+    );
+}
+
+/// A manual Report row must still expose its coin actions and omit the empty strategy group.
+#[test]
+fn plan_report_row_without_strategy() {
+    assert_eq!(
+        plan(&report_facts()),
+        [
+            TradeWindow,
+            ShowOnChart,
+            TradeLog {
+                disabled_reason: None
+            },
+            Sep,
+            FilterHere,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            Blacklist
+        ]
+    );
+}
+
+/// Dropping an unavailable log would hide why the clicked trade cannot show its log.
+#[test]
+fn plan_report_row_missing_task_keeps_disabled_log_in_place() {
+    let mut facts = report_facts();
+    facts.report.as_mut().unwrap().trade_log = Err("report.trade_log.no_task");
+    assert_eq!(
+        plan(&facts),
+        [
+            TradeWindow,
+            ShowOnChart,
+            TradeLog {
+                disabled_reason: Some("report.trade_log.no_task")
+            },
+            Sep,
+            FilterHere,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            Blacklist
+        ]
+    );
+    // A stored Report ticker remains usable even when the market catalog cannot resolve it.
+    facts.has_market = false;
+    facts.blacklist = false;
+    assert_eq!(
+        plan(&facts),
+        [
+            TradeWindow,
+            NotReady,
+            TradeLog {
+                disabled_reason: Some("report.trade_log.no_task")
+            },
+            Sep,
+            FilterHere,
+            CoinReport,
+            CopyTicker
+        ]
+    );
+}
+
+/// The sell line groups split commands behind its own separator and avoids duplicate split counts.
+#[test]
+fn plan_chart_sell_line_splits_behind_own_separator() {
+    let mut facts = MenuFacts {
+        surface: CoinMenuOrigin::ChartLine,
+        strategy: true,
+        order: Some(Order::Sell),
+        ..market_facts()
+    };
+    assert_eq!(
+        plan(&facts),
+        [
+            OrderEdit,
+            JoinSells,
+            Sep,
+            Split(3),
+            Split(7),
+            Sep,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            StrategyGoto,
+            StrategyReport,
+            Sep,
+            Blacklist
+        ]
+    );
+    facts.split_n = 3;
+    assert_eq!(
+        plan(&facts),
+        [
+            OrderEdit,
+            JoinSells,
+            Sep,
+            Split(3),
+            Sep,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            StrategyGoto,
+            StrategyReport,
+            Sep,
+            Blacklist
+        ]
+    );
+}
+
+/// A buy line must keep Cancel behind the order separator and omit Report-only filtering.
+#[test]
+fn plan_chart_buy_line_cancel_after_separator_no_filter() {
+    let facts = MenuFacts {
+        surface: CoinMenuOrigin::ChartLine,
+        order: Some(Order::Buy),
+        ..market_facts()
+    };
+    assert_eq!(
+        plan(&facts),
+        [
+            OrderEdit, Sep, Cancel, Sep, CoinReport, Compare, CopyTicker, Sep, Blacklist
+        ]
+    );
+}
+
+/// Orders still opens the chart before order actions, unlike an order line on the chart.
+#[test]
+fn plan_orders_table_row() {
+    let facts = MenuFacts {
+        order: Some(Order::Table),
+        ..market_facts()
+    };
+    assert_eq!(
+        plan(&facts),
+        [
+            OpenOnChart,
+            OrderEdit,
+            Sep,
+            Cancel,
+            Sep,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            Blacklist
+        ]
+    );
+}
+
+/// Assets and Screener omit order and strategy actions. Screener keeps its own copy entries.
+#[test]
+fn plan_assets_screener_row_no_strategy_no_order() {
+    let mut facts = market_facts();
+    assert_eq!(
+        plan(&facts),
+        [
+            OpenOnChart,
+            Sep,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            Blacklist
+        ]
+    );
+    facts.screener_copy = true;
+    assert_eq!(
+        plan(&facts),
+        [
+            OpenOnChart,
+            ScreenerCopy,
+            Sep,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            Blacklist
+        ]
+    );
+}
+
+/// Skipping any group, including a chart ban lock's own group, must leave no dangling separators.
+#[test]
+fn plan_never_leading_trailing_or_double_separator() {
+    for surface in [CoinMenuOrigin::ChartLine, CoinMenuOrigin::OrderTable] {
+        for order in [
+            None,
+            Some(Order::Sell),
+            Some(Order::Buy),
+            Some(Order::Table),
+        ] {
+            for mask in 0..64u8 {
+                let has = |bit: u8| mask & bit != 0;
+                let slots = plan(&MenuFacts {
+                    surface,
+                    has_market: has(1),
+                    coin_shown: has(2),
+                    strategy: has(4),
+                    order,
+                    split_n: 7,
+                    report: has(8).then_some(ReportFacts {
+                        trade_log: Ok(()),
+                        filter_coin: true,
+                    }),
+                    screener_copy: has(16),
+                    blacklist: has(32),
+                });
+                assert_ne!(slots.first(), Some(&Sep));
+                assert_ne!(slots.last(), Some(&Sep));
+                assert!(!slots.windows(2).any(|pair| pair == [Sep, Sep]));
+            }
+        }
+    }
 }

@@ -2,6 +2,7 @@
 //! raw-schema titles, and base widths.
 
 use super::*;
+use crate::controls::coin_menu::ReportRowMenu;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
 use moon_core::db::{QuoteCurrency, ReportAxis};
 use rust_i18n::t;
@@ -335,7 +336,7 @@ pub(super) fn report_data_row(
 ///     values: The row's cell values, parallel to `cols`.
 ///     cols: Runtime report schema in source order.
 ///     scope: Exact row target plus menu selection and workspace authority.
-///     trailing: Entries only the Report can build, appended after the shared ones.
+///     report: Trade actions and the filter captured from this Report row.
 ///     backend: Shared backend read for market, core, and strategy names.
 ///     cx: Application context.
 ///
@@ -345,7 +346,7 @@ pub(super) fn row_coin_menu_ctx(
     values: &[Value],
     cols: &[String],
     scope: ReportCoinMenuScope,
-    trailing: Vec<MoonMenuItem>,
+    report: ReportRowMenu,
     backend: &Entity<Backend>,
     cx: &App,
 ) -> CoinMenuCtx {
@@ -368,8 +369,7 @@ pub(super) fn row_coin_menu_ctx(
         })
         .filter(|id| *id != 0);
     let b = backend.read(cx);
-    // An empty coin still yields a context: the shared menu drops its token actions and the row
-    // keeps whatever the caller appended.
+    // An empty coin still yields the Report's trade actions.
     let market = if coin.is_empty() {
         String::new()
     } else {
@@ -415,8 +415,8 @@ pub(super) fn row_coin_menu_ctx(
             coin,
             target.focus_record_id,
         )),
-        trailing,
-        filter_here: None,
+        report: Some(report),
+        screener_copy: Vec::new(),
     }
 }
 

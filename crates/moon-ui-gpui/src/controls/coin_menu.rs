@@ -18,16 +18,16 @@
 use std::rc::Rc;
 
 use gpui::*;
-use moon_ui::{
-    MoonContextMenuWindowExt as _, MoonMenuItem, MoonNotification, MoonTone, MoonWindowExt as _,
-};
+use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonWindowExt as _};
 use rust_i18n::t;
 
-use moon_core::config::SPLIT_ORDER_PARTS;
 use moon_core::session::CoreId;
 use moon_core::symbol::coin_list::contains as blacklist_contains;
 
 use crate::Backend;
+
+pub use plan::CoinMenuOrigin;
+use plan::{MenuFacts, Order, ReportFacts, Slot};
 
 /// Minimum fitted width preserving the former shared coin-menu footprint.
 const MENU_MIN_WIDTH: f32 = 220.0;
@@ -42,11 +42,12 @@ pub enum OrderSide {
     Sell,
 }
 
-/// Origin of the menu. It controls minor behavior such as omitting Open on Chart when already there.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CoinMenuOrigin {
-    OrderTable,
-    ChartLine,
+/// Actions captured from one Report row before a later publication can change its index.
+#[derive(Clone)]
+pub(crate) struct ReportRowMenu {
+    pub(crate) trade_window: MoonMenuItem,
+    pub(crate) trade_log: Result<MoonMenuItem, &'static str>,
+    pub(crate) filter: Option<MoonMenuItem>,
 }
 
 /// Context for the clicked token. Each caller supplies the data available at its location, and the
@@ -84,17 +85,10 @@ pub struct CoinMenuCtx {
     pub origin: CoinMenuOrigin,
     /// Report-only durable-history scope. Other producers use the default exact-target history.
     pub history: Option<crate::backend::ChartHistoryScope>,
-    /// Entries the caller appends after everything this menu builds, behind their own separator.
-    ///
-    /// This is how a panel adds an action that only IT can express — the Report's trade log needs a
-    /// task number no other caller has — without this module learning about that panel. Empty for
-    /// callers that add nothing.
-    pub trailing: Vec<MoonMenuItem>,
-    /// The clicked panel's own "narrow this list to the coin" entry, placed among the coin actions.
-    ///
-    /// Only the Report has a list to narrow, so only it supplies one; every other caller passes
-    /// `None`. Like [`Self::trailing`] it keeps panel state out of this module.
-    pub filter_here: Option<MoonMenuItem>,
+    /// Report-only trade actions and the filter for the current Report.
+    pub(crate) report: Option<ReportRowMenu>,
+    /// Screener-only copy actions over the table's captured sorted rows.
+    pub(crate) screener_copy: Vec<MoonMenuItem>,
 }
 
 impl CoinMenuCtx {
@@ -135,365 +129,78 @@ pub fn open_coin_menu(
     );
 }
 
-/// Builds context-dependent entries. It reads core state through `cx` to mark existing blacklist
-/// membership and gates the strategy entry on its schema.
-///
-/// Args:
-///     ctx: Captured row or chart context, including optional workspace mutation authority.
-///     backend: Shared live terminal and workspace state.
-///     cx: Application context used to read initial checked-state snapshots.
-///
-/// Returns:
-///     Navigation and currently applicable mutation entries for the clicked token or order.
-fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
+/// Capture the current row facts, plan its groups, and realize each slot with the shared backend.
+fn build_items(mut ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
     let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "coin-menu");
     let b = backend.read(cx);
-    let core = ctx.core;
-    let coin = ctx.coin.clone();
     let shown_coin = ctx.shown_coin().to_string();
-    let mut items: Vec<MoonMenuItem> = Vec::new();
+    let facts = MenuFacts {
+        surface: ctx.origin,
+        has_market: !ctx.market.is_empty(),
+        coin_shown: !shown_coin.is_empty(),
+        strategy: ctx.strat_id.is_some(),
+        order: ctx.order_uid.map(|_| match ctx.side {
+            Some(OrderSide::Sell) => Order::Sell,
+            Some(OrderSide::Buy) => Order::Buy,
+            None => Order::Table,
+        }),
+        // Use the settings draft when present, matching the split hotkey.
+        split_n: b
+            .preview
+            .as_ref()
+            .unwrap_or(&b.config)
+            .hotkeys
+            .split_n_parts(),
+        report: ctx.report.as_ref().map(|report| ReportFacts {
+            trade_log: report
+                .trade_log
+                .as_ref()
+                .map(|_| ())
+                .map_err(|reason| *reason),
+            filter_coin: report.filter.is_some(),
+        }),
+        screener_copy: !ctx.screener_copy.is_empty(),
+        blacklist: !ctx.coin.is_empty(),
+    };
 
-    // Navigation requires a market. Do not duplicate Open when already on the chart, and skip
-    // balance rows that have no market.
-    let has_market = !ctx.market.is_empty();
-    if !has_market && ctx.history.is_some() {
-        items.push(
-            MoonMenuItem::with_key(
-                "coin-open-not-ready",
-                t!("coin_menu.view_trades_not_ready").to_string(),
-            )
-            .disabled(true),
-        );
-    }
-    if has_market && ctx.origin != CoinMenuOrigin::ChartLine {
-        let backend_open = backend.clone();
-        let market = ctx.market.clone();
-        let workspace_group = ctx.workspace_group.clone();
-        let history = ctx.history.clone();
-        items.push(
-            MoonMenuItem::with_key(
-                "coin-open",
-                t!(if history.is_some() {
-                    "coin_menu.view_trades"
-                } else {
-                    "coin_menu.open"
-                })
-                .to_string(),
-            )
-            .on_click(move |_, window, app| {
-                window.close_context_menu(app);
-                backend_open.update(app, |b, bcx| {
-                    let opened = if let Some(history) = history.clone() {
-                        b.open_report_on_main_if_authorized(
-                            workspace_group.as_deref(),
-                            (core, market.clone()),
-                            history,
-                            false,
-                        )
-                    } else {
-                        b.open_on_main_if_authorized(
-                            workspace_group.as_deref(),
-                            (core, market.clone()),
-                            false,
-                        )
-                    };
-                    if opened {
-                        bcx.notify();
-                    }
-                });
-            }),
-        );
-    }
-    if has_market {
-        let backend_cmp = backend.clone();
-        let market = ctx.market.clone();
-        let workspace_group = ctx.workspace_group.clone();
-        items.push(
-            MoonMenuItem::with_key("coin-compare", t!("coin_menu.compare").to_string()).on_click(
-                move |_, window, app| {
-                    window.close_context_menu(app);
-                    backend_cmp.update(app, |b, bcx| {
-                        if b.open_compare_if_authorized(
-                            workspace_group.as_deref(),
-                            (core, market.clone()),
-                        ) {
-                            bcx.notify();
-                        }
-                    });
-                },
-            ),
-        );
-    }
-
-    // Blacklist actions. Every one of them writes a TOKEN, so a context without one — a table row
-    // whose coin cell is empty — gets none of them rather than entries that would write nothing.
-    if !coin.is_empty() {
-        if !items.is_empty() {
-            items.push(MoonMenuItem::separator());
-        }
-
-        // Resolved once and shared: the three entries below must agree on what each core calls
-        // this coin, and each of them would otherwise search every catalog again.
-        let names = Rc::new(names::CoinNames::resolve(b, &ctx));
-        items.push(permanent_blacklist_item(&ctx, b, backend, &coin, &names));
-        if let Some(item) = temp_blacklist_item(&ctx, b, backend, &names) {
-            items.push(item);
-        }
-        let count = places::places_summary(&places::listed_places(b, &names)).0;
-        items.push(where_listed_item(backend, &names, count));
-    } // end of the token-dependent blacklist actions
-
-    // Strategy actions.
-    if let Some(sid) = ctx.strat_id {
-        items.push(MoonMenuItem::separator());
-        let backend_g = backend.clone();
-        let workspace_group = ctx.workspace_group.clone();
-        items.push(
-            MoonMenuItem::with_key("coin-strat-goto", t!("coin_menu.strategy_goto").to_string())
-                .on_click(move |_, window, app| {
-                    window.close_context_menu(app);
-                    let owner_display = window.display(app).map(|d| d.id());
-                    crate::strategies::open_goto(
-                        backend_g.clone(),
-                        core,
-                        sid,
-                        workspace_group.clone(),
-                        Some(window.window_handle()),
-                        owner_display,
-                        app,
-                    );
-                }),
-        );
-        let backend_report = backend.clone();
-        let strategy_name = ctx.strat_name.clone().unwrap_or_else(|| sid.to_string());
-        items.push(
-            MoonMenuItem::with_key(
-                "coin-strat-report",
-                t!("coin_menu.strategy_report").to_string(),
-            )
-            .on_click(move |_, window, app| {
-                window.close_context_menu(app);
-                let owner = window.window_handle();
-                let owner_display = window.display(app).map(|display| display.id());
-                let backend = backend_report.clone();
-                let scope = crate::panels::ReportScope::for_strategy(
-                    moon_core::db::ReportStrategyKey {
-                        core_uid: core,
-                        strategy_id: sid as i64,
-                    },
-                    strategy_name.clone(),
-                );
-                // Deferred: clicked inside the standalone Report itself, this window is leased
-                // for the click, and the retarget's `handle.update` would fail and open a second
-                // Report instead of reusing the singleton.
-                app.defer(move |app| {
-                    crate::panels::open_scoped_report(
-                        backend,
-                        scope,
-                        Some(owner),
-                        owner_display,
-                        app,
-                    );
-                });
-            }),
-        );
-    }
-
-    // Coin actions: they join the strategy section when there is one, so «Все сделки монеты»
-    // sits directly under «Все сделки стратегии»; a manual row opens a section of its own.
-    if !shown_coin.is_empty() {
-        if ctx.strat_id.is_none() && !items.is_empty() {
-            items.push(MoonMenuItem::separator());
-        }
-        items.push(copy_coin_item(&shown_coin));
-        items.push(coin_report_item(backend, core, &shown_coin));
-        if let Some(item) = ctx.filter_here {
-            items.push(item);
-        }
-    }
-
-    // Order actions.
-    if let Some(uid) = ctx.order_uid {
-        items.push(MoonMenuItem::separator());
-        let backend_e = backend.clone();
-        let workspace_group = ctx.workspace_group.clone();
-        items.push(
-            MoonMenuItem::with_key("coin-order-edit", t!("chart.order_menu.edit").to_string())
-                .on_click(move |_, window, app| {
-                    window.close_context_menu(app);
-                    let authorized = backend_e.update(app, |b, _| {
-                        workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
-                    });
-                    if !authorized {
-                        return;
-                    }
-                    crate::panels::open_order_edit(
-                        backend_e.clone(),
-                        workspace_group.clone(),
-                        core,
-                        uid,
-                        window,
-                        app,
-                    );
-                }),
-        );
-        match ctx.side {
-            Some(OrderSide::Sell) => {
-                let backend_j = backend.clone();
-                let market_j = ctx.market.clone();
-                let short = ctx.short;
-                let workspace_group = ctx.workspace_group.clone();
-                items.push(
-                    MoonMenuItem::with_key(
-                        "coin-order-join",
-                        t!("chart.order_menu.join_sells").to_string(),
-                    )
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        backend_j.update(app, |b, _| {
-                            if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
-                            {
-                                let _ = b.session.join_sells(core, market_j.clone(), short);
-                            }
-                        });
-                    }),
-                );
-                // Two Split entries, as in Moonbot: the fixed three and the configurable Split
-                // Order X count. The second is dropped when both would send the same number. The
-                // count comes from the settings DRAFT for the same reason the hotkey reads it —
-                // with the settings window open, the draft is the number the user is looking at —
-                // and each entry SENDS the number its own label showed, rather than re-reading a
-                // value that an edit made meanwhile would have changed under the click.
-                let split_n = b
-                    .preview
-                    .as_ref()
-                    .unwrap_or(&b.config)
-                    .hotkeys
-                    .split_n_parts();
-                for (key, parts) in [
-                    ("coin-order-split", SPLIT_ORDER_PARTS),
-                    ("coin-order-split-n", split_n),
-                ] {
-                    if key.ends_with("-n") && split_n == SPLIT_ORDER_PARTS {
-                        continue;
-                    }
-                    let backend_sp = backend.clone();
-                    let workspace_group = ctx.workspace_group.clone();
-                    items.push(
-                        MoonMenuItem::with_key(
-                            key,
-                            t!("chart.order_menu.split", n = parts).to_string(),
-                        )
-                        .on_click(move |_, window, app| {
-                            window.close_context_menu(app);
-                            backend_sp.update(app, |b, _| {
-                                if workspace_action_allows_cores(
-                                    b,
-                                    workspace_group.as_deref(),
-                                    &[core],
-                                ) {
-                                    let _ = b.session.split_order(core, uid, parts);
-                                }
-                            });
-                        }),
-                    );
-                }
+    let mut items = Vec::new();
+    for slot in plan::plan(&facts) {
+        let item = match slot {
+            Slot::TradeWindow => ctx.report.as_ref().unwrap().trade_window.clone(),
+            Slot::ShowOnChart | Slot::OpenOnChart => own::open_chart(&ctx, backend),
+            Slot::NotReady => own::chart_not_ready(),
+            Slot::TradeLog { disabled_reason } => {
+                own::trade_log(ctx.report.as_ref().unwrap(), disabled_reason)
             }
-            // A chart Buy line or a table row with side=None cancels the entire order by UID.
-            Some(OrderSide::Buy) | None => {
-                let backend_c = backend.clone();
-                let workspace_group = ctx.workspace_group.clone();
-                items.push(
-                    MoonMenuItem::with_key(
-                        "coin-order-cancel",
-                        t!("chart.order_menu.cancel").to_string(),
-                    )
-                    .tone(MoonTone::Danger)
-                    .on_click(move |_, window, app| {
-                        window.close_context_menu(app);
-                        backend_c.update(app, |b, _| {
-                            if workspace_action_allows_cores(b, workspace_group.as_deref(), &[core])
-                            {
-                                let _ = b.session.cancel_order(core, uid);
-                            }
-                        });
-                    }),
-                );
+            Slot::OrderEdit => own::order_edit(&ctx, backend, ctx.order_uid.unwrap()),
+            Slot::JoinSells => own::join_sells(&ctx, backend),
+            Slot::Split(parts) => own::split_order(&ctx, backend, ctx.order_uid.unwrap(), parts),
+            Slot::Cancel => own::cancel_order(&ctx, backend, ctx.order_uid.unwrap()),
+            Slot::ScreenerCopy => {
+                items.append(&mut ctx.screener_copy);
+                continue;
             }
-        }
+            Slot::FilterHere => ctx.report.as_ref().unwrap().filter.clone().unwrap(),
+            Slot::CoinReport => coin::coin_report_item(backend, ctx.core, &shown_coin),
+            Slot::Compare => coin::compare(&ctx, backend),
+            Slot::CopyTicker => coin::copy_coin_item(&shown_coin),
+            Slot::StrategyGoto => strategy::goto(&ctx, backend, ctx.strat_id.unwrap()),
+            Slot::StrategyReport => strategy::report(&ctx, backend, ctx.strat_id.unwrap()),
+            Slot::Blacklist => {
+                // Resolve once so the menu and its dialog use the same spelling for each core.
+                let names = Rc::new(names::CoinNames::resolve(b, &ctx));
+                items.push(permanent_blacklist_item(
+                    &ctx, b, backend, &ctx.coin, &names,
+                ));
+                items.extend(temp_blacklist_item(&ctx, b, backend, &names));
+                let count = places::places_summary(&places::listed_places(b, &names)).0;
+                where_listed_item(backend, &names, count)
+            }
+            Slot::Sep => MoonMenuItem::separator(),
+        };
+        items.push(item);
     }
-
-    // Whatever the caller could express and this module could not, last and behind its own rule.
-    if !ctx.trailing.is_empty() {
-        if !items.is_empty() {
-            items.push(MoonMenuItem::separator());
-        }
-        items.extend(ctx.trailing);
-    }
-
     items
-}
-
-/// The "copy the ticker" entry: the coin cell is not selectable text, so this is how a ticker
-/// reaches the Report's coin field, a strategy coin list or a message.
-///
-/// The clipboard gets exactly the printed coin — no blacklist spelling, no market key, no
-/// keyboard-layout mapping (`龙虾` stays `龙虾`). The ticker is not a secret, so the toast may
-/// name it; it is deliberately not logged.
-///
-/// Args:
-///     coin: The coin as the clicked surface prints it, trimmed and non-empty.
-///
-/// Returns:
-///     The menu entry, its label naming the ticker.
-fn copy_coin_item(coin: &str) -> MoonMenuItem {
-    let coin = coin.to_string();
-    MoonMenuItem::with_key(
-        "coin-copy",
-        t!("coin_menu.copy_coin", coin = coin.as_str()).to_string(),
-    )
-    .on_click(move |_, window, app| {
-        window.close_context_menu(app);
-        app.write_to_clipboard(ClipboardItem::new_string(coin.clone()));
-        window.push_notification(
-            MoonNotification::success(
-                t!("coin_menu.coin_copied", coin = coin.as_str()).to_string(),
-            ),
-            app,
-        );
-    })
-}
-
-/// The "every trade of this coin" entry, the twin of «Все сделки стратегии в отчёте».
-///
-/// It opens or retargets the same singleton standalone Report the strategy entry uses — all
-/// time, every strategy, the clicked row's one core, the exact ticker — and leaves the report
-/// the user clicked in untouched.
-///
-/// Args:
-///     backend: Shared backend holding the singleton Report window.
-///     core: Core of the clicked row; the same ticker on another core is another market.
-///     coin: The coin as the clicked surface prints it, trimmed and non-empty.
-///
-/// Returns:
-///     The menu entry; the window title, not the label, carries the ticker.
-fn coin_report_item(backend: &Entity<Backend>, core: CoreId, coin: &str) -> MoonMenuItem {
-    let backend = backend.clone();
-    let coin = coin.to_string();
-    MoonMenuItem::with_key("coin-coin-report", t!("coin_menu.coin_report").to_string()).on_click(
-        move |_, window, app| {
-            window.close_context_menu(app);
-            let owner = window.window_handle();
-            let owner_display = window.display(app).map(|display| display.id());
-            let backend = backend.clone();
-            let scope = crate::panels::ReportScope::for_coin(core, &coin);
-            // Deferred for the same reason as the strategy entry: a click inside the standalone
-            // Report leases that window, and a nested retarget would open a second one.
-            app.defer(move |app| {
-                crate::panels::open_scoped_report(backend, scope, Some(owner), owner_display, app);
-            });
-        },
-    )
 }
 
 /// Validate every captured mutation target against one current workspace authority snapshot.
@@ -614,10 +321,14 @@ pub(crate) fn write_strategy_blacklist(
 }
 
 mod blacklist;
+mod coin;
 pub(crate) mod core_ref;
 mod names;
+mod own;
 mod places;
 mod places_dialog;
+mod plan;
+mod strategy;
 
 /// The "where is this coin blacklisted" row.
 ///
