@@ -334,62 +334,11 @@ impl Query {
         mask: &StrategyMask,
     ) -> Vec<String> {
         let has = |n: &str| cols.contains(n);
-        let column = |name: &str| match alias {
-            Some(alias) => format!("{alias}.{name}"),
-            None => name.to_string(),
+        let column = |name: &str| aliased_column(alias, name);
+        let mut w = match self.shared_predicate(period, cols, alias, mask) {
+            std::ops::ControlFlow::Continue(w) => w,
+            std::ops::ControlFlow::Break(closed) => return vec![closed],
         };
-        let mut w = String::from(period);
-        if has("deleted") {
-            w.push_str(&format!(" AND COALESCE({},0) = 0", column("deleted")));
-        }
-        if !self.cores.is_empty() {
-            if !has("core_uid") {
-                w.push_str(" AND 1=0");
-                return vec![w];
-            }
-            let list = self
-                .cores
-                .iter()
-                .map(|c| (*c as i64).to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            w.push_str(&format!(" AND {} IN ({list})", column("core_uid")));
-        }
-        if has("isshort") {
-            match self.side {
-                SideFilter::All => {}
-                SideFilter::Long => {
-                    w.push_str(&format!(" AND COALESCE({},0) = 0", column("isshort")))
-                }
-                SideFilter::Short => {
-                    w.push_str(&format!(" AND COALESCE({},0) = 1", column("isshort")))
-                }
-            }
-        }
-        if has("emulator") {
-            match self.emulator {
-                None => {}
-                Some(false) => w.push_str(&format!(" AND COALESCE({},0) = 0", column("emulator"))),
-                Some(true) => w.push_str(&format!(" AND COALESCE({},0) = 1", column("emulator"))),
-            }
-        }
-        // The strategy-NAME mask, before the raw-strategy branching below so every branch inherits
-        // it. A mask the source cannot answer fails CLOSED: matching nothing is the only honest
-        // answer, and it is what the Report already does (`report_read::append_strategy_name_mask`).
-        match mask {
-            StrategyMask::Off => {}
-            StrategyMask::Unavailable => {
-                w.push_str(" AND 1=0");
-                return vec![w];
-            }
-            StrategyMask::Match(_) | StrategyMask::Exclude(_)
-                if !has("core_uid") || !has("strategyid") =>
-            {
-                w.push_str(" AND 1=0");
-                return vec![w];
-            }
-            StrategyMask::Match(_) | StrategyMask::Exclude(_) => {}
-        }
         // Which id the mask is matched against. With attribution the effective expression, so a
         // LIQUIDATION row booked under the strategy named in it matches that strategy's name;
         // without it the physical column, which is what `sid` already reduces to there.
@@ -418,47 +367,9 @@ impl Query {
 
         let raw_sid = column("strategyid");
         let core_uid = column("core_uid");
-        let mut any_core = std::collections::BTreeSet::new();
-        for &(want, core) in &self.strategies {
-            if core.is_none() {
-                any_core.insert(want);
-            }
-        }
-        let mut by_core: std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>> =
-            std::collections::BTreeMap::new();
-        if has("core_uid") {
-            for &(want, core) in &self.strategies {
-                if let Some(core) = core.filter(|_| !any_core.contains(&want)) {
-                    by_core.entry(core).or_default().insert(want);
-                }
-            }
-        }
+        let (any_core, by_core) = self.strategy_scopes(has("core_uid"));
         let scoped_predicate = |value: &str, keep: fn(i64) -> bool| {
-            let render_ids = |ids: Vec<i64>| match ids.as_slice() {
-                [] => None,
-                [id] => Some(format!("{value} = {id}")),
-                _ => Some(format!(
-                    "{value} IN ({})",
-                    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
-                )),
-            };
-            let mut terms = Vec::new();
-            if let Some(term) =
-                render_ids(any_core.iter().copied().filter(|id| keep(*id)).collect())
-            {
-                terms.push(term);
-            }
-            for (core, ids) in &by_core {
-                if let Some(term) = render_ids(ids.iter().copied().filter(|id| keep(*id)).collect())
-                {
-                    terms.push(format!("({core_uid} = {} AND {term})", *core as i64));
-                }
-            }
-            match terms.as_slice() {
-                [] => None,
-                [term] => Some(term.clone()),
-                _ => Some(format!("({})", terms.join(" OR "))),
-            }
+            scoped_strategy_predicate(value, keep, &any_core, &by_core, &core_uid)
         };
 
         // The `direct` branch already constrains the RAW key to a non-zero id, where the effective
@@ -494,6 +405,180 @@ impl Query {
         } else {
             branches
         }
+    }
+
+    /// Build the predicate every raw-strategy branch of one physical source shares.
+    ///
+    /// Period, soft-delete, core, side and emulator filters, then the strategy-NAME mask's
+    /// fail-closed checks — in that order, because the closed predicate keeps every filter
+    /// appended before it.
+    ///
+    /// Args:
+    ///     period: Caller-supplied period predicate.
+    ///     cols: Columns available on the physical source.
+    ///     alias: Optional table alias used for every physical report column.
+    ///     mask: Strategy-NAME mask already resolved against this read's connection.
+    ///
+    /// Returns:
+    ///     `Continue` with the shared predicate, or `Break` with the source's complete predicate
+    ///     when it can match no row (`... AND 1=0`), which the caller returns as its only branch.
+    fn shared_predicate(
+        &self,
+        period: &str,
+        cols: &std::collections::HashSet<String>,
+        alias: Option<&str>,
+        mask: &StrategyMask,
+    ) -> std::ops::ControlFlow<String, String> {
+        let has = |n: &str| cols.contains(n);
+        let column = |name: &str| aliased_column(alias, name);
+        let mut w = String::from(period);
+        if has("deleted") {
+            w.push_str(&format!(" AND COALESCE({},0) = 0", column("deleted")));
+        }
+        if !self.cores.is_empty() {
+            if !has("core_uid") {
+                w.push_str(" AND 1=0");
+                return std::ops::ControlFlow::Break(w);
+            }
+            let list = self
+                .cores
+                .iter()
+                .map(|c| (*c as i64).to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            w.push_str(&format!(" AND {} IN ({list})", column("core_uid")));
+        }
+        if has("isshort") {
+            match self.side {
+                SideFilter::All => {}
+                SideFilter::Long => {
+                    w.push_str(&format!(" AND COALESCE({},0) = 0", column("isshort")))
+                }
+                SideFilter::Short => {
+                    w.push_str(&format!(" AND COALESCE({},0) = 1", column("isshort")))
+                }
+            }
+        }
+        if has("emulator") {
+            match self.emulator {
+                None => {}
+                Some(false) => w.push_str(&format!(" AND COALESCE({},0) = 0", column("emulator"))),
+                Some(true) => w.push_str(&format!(" AND COALESCE({},0) = 1", column("emulator"))),
+            }
+        }
+        // The strategy-NAME mask, before the raw-strategy branching below so every branch inherits
+        // it. A mask the source cannot answer fails CLOSED: matching nothing is the only honest
+        // answer, and it is what the Report already does (`report_read::append_strategy_name_mask`).
+        match mask {
+            StrategyMask::Off => {}
+            StrategyMask::Unavailable => {
+                w.push_str(" AND 1=0");
+                return std::ops::ControlFlow::Break(w);
+            }
+            StrategyMask::Match(_) | StrategyMask::Exclude(_)
+                if !has("core_uid") || !has("strategyid") =>
+            {
+                w.push_str(" AND 1=0");
+                return std::ops::ControlFlow::Break(w);
+            }
+            StrategyMask::Match(_) | StrategyMask::Exclude(_) => {}
+        }
+        std::ops::ControlFlow::Continue(w)
+    }
+
+    /// Split the selected strategies into any-core ids and per-core ids.
+    ///
+    /// A core-specific id shadowed by the same any-core id is dropped, and without a `core_uid`
+    /// column no per-core id is kept at all.
+    ///
+    /// Args:
+    ///     has_core_uid: Whether the physical source carries `core_uid`.
+    ///
+    /// Returns:
+    ///     The any-core id set and the per-core id sets, both ordered.
+    fn strategy_scopes(
+        &self,
+        has_core_uid: bool,
+    ) -> (
+        std::collections::BTreeSet<i64>,
+        std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>>,
+    ) {
+        let mut any_core = std::collections::BTreeSet::new();
+        for &(want, core) in &self.strategies {
+            if core.is_none() {
+                any_core.insert(want);
+            }
+        }
+        let mut by_core: std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>> =
+            std::collections::BTreeMap::new();
+        if has_core_uid {
+            for &(want, core) in &self.strategies {
+                if let Some(core) = core.filter(|_| !any_core.contains(&want)) {
+                    by_core.entry(core).or_default().insert(want);
+                }
+            }
+        }
+        (any_core, by_core)
+    }
+}
+
+/// Qualify a physical report column with the optional table alias.
+///
+/// Args:
+///     alias: Optional table alias.
+///     name: Bare column name.
+///
+/// Returns:
+///     `alias.name`, or `name` when there is no alias.
+fn aliased_column(alias: Option<&str>, name: &str) -> String {
+    match alias {
+        Some(alias) => format!("{alias}.{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// Render the strategy-id predicate of one raw-strategy branch.
+///
+/// Any-core ids become one `=`/`IN` term, each core's ids one `(core = .. AND ..)` term, and
+/// several terms are OR-ed inside parentheses.
+///
+/// Args:
+///     value: SQL yielding the row's strategy id for this branch.
+///     keep: Which selected ids belong to this branch.
+///     any_core: Ids selected on every core.
+///     by_core: Ids selected per core.
+///     core_uid: The row's core column, qualified by the caller's alias.
+///
+/// Returns:
+///     The predicate, or `None` when no selected id belongs to this branch.
+fn scoped_strategy_predicate(
+    value: &str,
+    keep: fn(i64) -> bool,
+    any_core: &std::collections::BTreeSet<i64>,
+    by_core: &std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>>,
+    core_uid: &str,
+) -> Option<String> {
+    let render_ids = |ids: Vec<i64>| match ids.as_slice() {
+        [] => None,
+        [id] => Some(format!("{value} = {id}")),
+        _ => Some(format!(
+            "{value} IN ({})",
+            ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+        )),
+    };
+    let mut terms = Vec::new();
+    if let Some(term) = render_ids(any_core.iter().copied().filter(|id| keep(*id)).collect()) {
+        terms.push(term);
+    }
+    for (core, ids) in by_core {
+        if let Some(term) = render_ids(ids.iter().copied().filter(|id| keep(*id)).collect()) {
+            terms.push(format!("({core_uid} = {} AND {term})", *core as i64));
+        }
+    }
+    match terms.as_slice() {
+        [] => None,
+        [term] => Some(term.clone()),
+        _ => Some(format!("({})", terms.join(" OR "))),
     }
 }
 
