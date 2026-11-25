@@ -97,8 +97,14 @@ impl OrderHitMode {
     /// boundary as the old skip — because a filled entry's live limit is historical and the
     /// position is managed through its Sell exit and stops. EntryCancel admits a Buy at any fill:
     /// a partially filled entry is still live on the exchange and still cancellable.
-    pub(super) fn admits(self, kind: LineKind, fill_pct: f32) -> bool {
-        if !self.kinds().contains(&kind) {
+    ///
+    /// No mode admits a kind the chart does not draw (`draw_take_profit` off hides the
+    /// take-profit line, #1409): a grab on a hidden line would reprice an order through a handle
+    /// the user cannot see. The rule is `line_kind_drawn`, the one the geometry asks.
+    pub(super) fn admits(self, kind: LineKind, fill_pct: f32, draw_take_profit: bool) -> bool {
+        if !self.kinds().contains(&kind)
+            || !moon_chart::order_geometry::line_kind_drawn(kind, draw_take_profit)
+        {
             return false;
         }
         match self {

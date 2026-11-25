@@ -39,6 +39,7 @@ impl ChartDataState {
             order_book_width_px: moon_core::config::book_width::DEFAULT,
             pending_price_axis_width: None,
             orders: OrdersStyle::default(),
+            draw_take_profit: true,
             follow: true,
             present_rate_hz: 60.0,
             w: 1024,

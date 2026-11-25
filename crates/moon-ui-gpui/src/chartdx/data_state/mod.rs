@@ -51,6 +51,9 @@ pub(in crate::chartdx) struct ChartDataState {
     /// Text measurement awaiting the next frame's atomic layout/input geometry update.
     pub(in crate::chartdx) pending_price_axis_width: Option<f32>,
     pub(in crate::chartdx) orders: OrdersStyle,
+    /// The app-wide take-profit switch, `OrdersStyleSet::draw_take_profit` (#1409). Kept beside
+    /// `orders` rather than in it: `orders` is the active theme's set, and the switch is neither's.
+    pub(in crate::chartdx) draw_take_profit: bool,
     pub(in crate::chartdx) follow: bool,
     pub(in crate::chartdx) present_rate_hz: f32,
     pub(in crate::chartdx) w: u32,
