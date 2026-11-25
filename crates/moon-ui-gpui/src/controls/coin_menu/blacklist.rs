@@ -13,6 +13,7 @@
 //! A multi-core row sends every core ITS OWN spelling of the coin, resolved once per menu by
 //! [`CoinNames`]; a core that does not carry the coin is not a target and is not counted.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -20,6 +21,8 @@ use gpui::*;
 use moon_ui::{MoonMenuItem, MoonTone, MoonWindowExt as _};
 use rust_i18n::t;
 
+use super::core_ref::core_session_name;
+use super::multi::distinct_tickers;
 use moon_core::config::TempBanSpan;
 use moon_core::session::CoreId;
 use moon_core::symbol::coin_list::strategy_contains;
@@ -200,7 +203,7 @@ fn temporary_rows(
         "tbl-core",
         backend,
         ctx.workspace_group.clone(),
-        temp_targets(names, &[core]),
+        temp_targets(names, ctx.shown_coin(), &[core]),
     ));
 
     if !group.is_empty() {
@@ -212,16 +215,15 @@ fn temporary_rows(
             "tbl-cores",
             backend,
             ctx.workspace_group.clone(),
-            temp_targets(names, group),
+            temp_targets(names, ctx.shown_coin(), group),
         ));
     }
 
     if let Some(label) = held.lift_label() {
-        rows.push(MoonMenuItem::separator());
         let backend = backend.clone();
         let workspace_group = ctx.workspace_group.clone();
         let held_cores = held.cores.clone();
-        let targets = temp_targets(names, &held_cores);
+        let targets = temp_targets(names, ctx.shown_coin(), &held_cores);
         rows.push(
             MoonMenuItem::with_key("tbl-clear", label)
                 .tone(MoonTone::Danger)
@@ -305,12 +307,7 @@ fn core_blacklist_writer(
             write_core_blacklist_targets(b, &targets, lift),
             |steps| match steps {
                 [step] => {
-                    let core = b
-                        .session
-                        .sessions()
-                        .iter()
-                        .find(|session| session.id == step.core)
-                        .map_or_else(|| step.core.to_string(), |session| session.name.clone());
+                    let core = core_session_name(b, step.core);
                     t!(
                         "coin_menu.undo.added_core",
                         coin = coin.as_str(),
@@ -360,6 +357,32 @@ fn add_step(b: &Backend, core: CoreId, strategy: Option<u64>, coin: &str) -> Opt
     }
 }
 
+/// Submit one permanent-list write and keep one inverse per affected core.
+pub(super) fn add_core_blacklist_batch(b: &Backend, targets: &[(CoreId, String)]) -> Vec<UndoStep> {
+    let mut by_core = BTreeMap::<_, Vec<_>>::new();
+    for (core, token) in targets {
+        by_core.entry(*core).or_default().push(token.as_str());
+    }
+    by_core
+        .into_iter()
+        .filter_map(
+            |(core, coins)| match b.session.add_many_to_blacklist(core, &coins) {
+                Ok(Some((inserted, revert))) => {
+                    Some(UndoStep::inserted_many(core, inserted, revert))
+                }
+                Ok(None) => None,
+                Err(err) => {
+                    log::warn!(
+                        "coin_menu: bulk blacklist add on core {} failed: {err:#}",
+                        moon_core::feed::core_label(core)
+                    );
+                    None
+                }
+            },
+        )
+        .collect()
+}
+
 /// One preset row per duration, all sending to the same targets.
 ///
 /// [`TempBanSpan::ALL`] rather than a list of its own: MoonBot's own menu offers the same four
@@ -369,9 +392,9 @@ pub(super) fn hour_rows(
     key_prefix: &str,
     backend: &Entity<Backend>,
     workspace_group: Option<String>,
-    targets: Vec<(CoreId, String)>,
+    targets: Vec<TempTarget>,
 ) -> Vec<MoonMenuItem> {
-    let cores: Vec<_> = targets.iter().map(|(core, _)| *core).collect();
+    let cores: Vec<_> = targets.iter().map(|target| target.core).collect();
     let targets = Rc::new(targets);
     TempBanSpan::ALL
         .iter()
@@ -401,7 +424,7 @@ pub(super) fn hour_rows(
                         return None;
                     }
                     UndoRecord::new(send_temp_ban(b, &targets, Some(span.duration())), |steps| {
-                        temp_added_caption(b, steps, &caption_span)
+                        temp_added_caption(steps, &caption_span, |core| core_session_name(b, core))
                     })
                 });
                 if let Some(record) = record {
@@ -452,59 +475,101 @@ pub(super) fn target_row(
         })
 }
 
-/// Set or lift each temporary ban, retaining an inverse only for successful adds.
-/// The published snapshot cannot account for queued changes that have yet to echo.
-fn send_temp_ban(
-    b: &Backend,
-    targets: &[(CoreId, String)],
-    ban: Option<Duration>,
-) -> Vec<UndoStep> {
+/// Set or lift each temporary ban, retaining the session's inverse for successful adds.
+fn send_temp_ban(b: &Backend, targets: &[TempTarget], ban: Option<Duration>) -> Vec<UndoStep> {
     let mut steps = Vec::new();
-    for (core, symbol) in targets {
-        let core = *core;
-        let prior = ban.and_then(|_| b.session.store().core(core)?.temp_ban_until_ms(symbol));
-        let result = b.session.set_temp_ban(core, symbol.clone(), ban);
-        if let Err(err) = &result {
-            log::warn!(
+    for TempTarget {
+        core,
+        symbol,
+        ticker,
+    } in targets
+    {
+        let result = match ban {
+            Some(span) => b
+                .session
+                .add_temp_ban_with_undo(*core, symbol.clone(), span)
+                .map(Some),
+            None => b
+                .session
+                .set_temp_ban(*core, symbol.clone(), None)
+                .map(|()| None),
+        };
+        match result {
+            Ok(revert) => steps.extend(UndoStep::temp_sent(*core, ticker, revert)),
+            Err(err) => log::warn!(
                 "coin_menu: temp blacklist {symbol} on core {} failed: {err:#}",
-                moon_core::feed::core_label(core)
-            );
-        }
-        if ban.is_some() {
-            steps.extend(UndoStep::temp_sent(core, symbol, prior, result.is_ok()));
+                moon_core::feed::core_label(*core)
+            ),
         }
     }
     steps
 }
 
-/// Name a single successful market and core, or count successful bans in a bulk action.
-fn temp_added_caption(b: &Backend, steps: &[UndoStep], span: &str) -> String {
+/// Use printed tickers and the actual destination cores in the temporary-ban toast.
+fn temp_added_caption(
+    steps: &[UndoStep],
+    span: &str,
+    core_name: impl FnOnce(CoreId) -> String,
+) -> String {
     match steps {
-        [step] => {
-            let core = b
-                .session
-                .sessions()
-                .iter()
-                .find(|session| session.id == step.core)
-                .map_or_else(|| step.core.to_string(), |session| session.name.clone());
-            t!(
-                "coin_menu.undo.added_temp",
-                coin = step.coin.as_str(),
-                core = core,
-                span = span
-            )
-        }
+        [step] => t!(
+            "coin_menu.undo.added_temp",
+            coin = step.coins[0].as_str(),
+            core = core_name(step.core),
+            span = span,
+        ),
         _ => t!(
-            "coin_menu.undo.added_temp_bulk",
+            plural_key("coin_menu.undo.added_temp_bulk", steps.len() as u64),
+            coins = toast_tickers(steps.iter().flat_map(|step| step.coins.iter().cloned())),
+            target = toast_cores(steps, core_name),
             n = steps.len(),
-            span = span
+            span = span,
         ),
     }
     .to_string()
 }
 
-/// Capture the market each offered core's temporary blacklist can match.
-pub(super) fn temp_targets(names: &CoinNames, cores: &[CoreId]) -> Vec<(CoreId, String)> {
+/// Name the first three affected tickers, with a localized count of the remaining coins.
+pub(super) fn toast_tickers(tickers: impl IntoIterator<Item = String>) -> String {
+    let coins = distinct_tickers(tickers);
+    let shown = coins[..coins.len().min(3)].join(", ");
+    if coins.len() > 3 {
+        t!(
+            "coin_menu.undo.more_coins",
+            coins = shown,
+            n = coins.len() - 3
+        )
+        .to_string()
+    } else {
+        shown
+    }
+}
+
+/// Name a single core and count distinct cores for a broader write.
+pub(super) fn toast_cores(steps: &[UndoStep], core_name: impl FnOnce(CoreId) -> String) -> String {
+    let cores: std::collections::BTreeSet<_> = steps.iter().map(|step| step.core).collect();
+    if cores.len() == 1 {
+        core_name(*cores.first().expect("one core"))
+    } else {
+        t!("coin_menu.undo.core_count", n = cores.len()).to_string()
+    }
+}
+
+/// The shown ticker identifies the action, while the symbol addresses the core.
+#[derive(Clone)]
+pub(super) struct TempTarget {
+    pub(super) core: CoreId,
+    pub(super) symbol: String,
+    pub(super) ticker: String,
+}
+
+/// Capture the printed ticker and the market each offered core can match.
+pub(super) fn temp_targets(names: &CoinNames, shown: &str, cores: &[CoreId]) -> Vec<TempTarget> {
+    let ticker = if shown.is_empty() {
+        names.clicked()
+    } else {
+        shown
+    };
     cores
         .iter()
         .filter_map(|&core| {
@@ -516,7 +581,11 @@ pub(super) fn temp_targets(names: &CoinNames, cores: &[CoreId]) -> Vec<(CoreId, 
                 );
                 return None;
             };
-            Some((core, symbol))
+            Some(TempTarget {
+                core,
+                symbol,
+                ticker: ticker.to_string(),
+            })
         })
         .collect()
 }

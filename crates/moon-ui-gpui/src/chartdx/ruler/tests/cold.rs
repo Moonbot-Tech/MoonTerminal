@@ -31,6 +31,8 @@ fn localized_tests_initialize_on_default_stacks() {
 /// Localized targets whose dictionary must initialize on the dedicated large stack.
 /// Keep these independent of source scanning so moving or removing a guard cannot hide a target.
 const COLD_LOOKUPS: &[&str] = &[
+    "controls::coin_menu::blacklist::tests::temp_toast_names_ticker_not_symbol",
+    "controls::coin_menu::multi::tests::multi_toast_names_coins_and_cores",
     "controls::coin_menu::tests::layout::fitted_menu_no_truncation_all_locales",
     "panels::report::window::tests::plural_scope_title_caps_at_three",
     "core_cmds::tests::navigation_keeps_disclosure_until_explicit_hide",

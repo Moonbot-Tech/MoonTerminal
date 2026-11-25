@@ -25,12 +25,10 @@ const FIRST_ORIGIN: (f32, f32) = (160.0, 120.0);
 /// How far each further window is offset from the previous one.
 const CASCADE_STEP: f32 = 34.0;
 
-/// How many trade windows may be open at once.
-///
-/// The goal asks for a second trade beside the first; it does not ask for a wall of them, and each
-/// one holds a chart engine with its own GPU resources. Two is the stated requirement, enforced
-/// rather than hoped for: a third open retires the oldest.
-const MAX_WINDOWS: usize = 2;
+impl TradeSeed {
+    /// Each open trade owns a chart engine. Going over this limit retires the oldest window.
+    pub(crate) const MAX_WINDOWS: usize = 2;
+}
 
 /// Restores the remembered Y scale and frames the fills when that scale can hold them.
 pub(super) fn restore_price_frame(
@@ -75,8 +73,8 @@ pub(crate) fn open_trade_window(backend: &Entity<Backend>, seed: TradeSeed, cx: 
     }
     // Retire the oldest BEFORE opening, so the cap is never momentarily exceeded and the cascade
     // below counts the windows that will actually coexist.
-    if open.len() >= MAX_WINDOWS {
-        let excess = open.len() + 1 - MAX_WINDOWS;
+    if open.len() >= TradeSeed::MAX_WINDOWS {
+        let excess = open.len() + 1 - TradeSeed::MAX_WINDOWS;
         for (_, handle) in open.iter().take(excess) {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }

@@ -4,77 +4,190 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+mod temp_bans;
+pub(super) use temp_bans::TempBanIntents;
+
 /// How long a blacklist this process sent may stand in for the core's echo of it; well past the
 /// round trip. Past it the store is trusted even if the echo never came.
 const BLACKLIST_ECHO_WAIT: Duration = Duration::from_secs(15);
 
-/// One coin blacklist this process sent: the switch and text it wrote, the switch and text the
-/// store held when it did, and when. For a strategy's list the switch is always `true`.
+/// The latest accepted list and the snapshots that can still precede its echo.
 #[derive(Clone, Debug)]
 pub(super) struct SentBlacklist {
-    before: (bool, String),
-    sent: (bool, String),
+    before: Vec<(Instant, BlacklistValue)>,
+    sent: BlacklistValue,
     at: Instant,
+    epoch: Instant,
+    generation: u64,
+    token_generations: HashMap<String, u64>,
+    flag_generation: u64,
 }
 
+/// The switch and text travel together. Strategy lists are always enabled.
+type BlacklistValue = (bool, String);
+
+/// The exact inserted tokens and their shared inverse for a bulk click.
+type BlacklistBatchUndo<F> = (Vec<String>, F);
+
 impl SentBlacklist {
-    /// While the core still shows the starting snapshot, use the most recent accepted edit.
-    fn effective<'a>(&'a self, in_store: &'a (bool, String)) -> &'a (bool, String) {
-        if self.at.elapsed() < BLACKLIST_ECHO_WAIT && self.before == *in_store {
+    /// Recognize both the initial snapshot and an intermediate echo of our writes.
+    fn pending(&self, in_store: &BlacklistValue) -> bool {
+        self.at.elapsed() < BLACKLIST_ECHO_WAIT
+            && self.sent != *in_store
+            && self
+                .before
+                .iter()
+                .any(|(at, value)| at.elapsed() < BLACKLIST_ECHO_WAIT && value == in_store)
+    }
+
+    /// Use the newest accepted edit while its predecessor is still published.
+    fn effective<'a>(&'a self, in_store: &'a BlacklistValue) -> &'a BlacklistValue {
+        if self.pending(in_store) {
             &self.sent
         } else {
             in_store
         }
     }
+
+    /// Register a write and invalidate ownership only where it changed a token or the switch.
+    fn record(
+        previous: Option<Self>,
+        in_store: BlacklistValue,
+        sent: BlacklistValue,
+        strategy: bool,
+        writes_flag: bool,
+    ) -> Self {
+        let now = Instant::now();
+        let Some(mut entry) = previous.filter(|entry| entry.at.elapsed() < BLACKLIST_ECHO_WAIT)
+        else {
+            return Self {
+                before: vec![(now, in_store)],
+                sent,
+                at: now,
+                epoch: now,
+                generation: 1,
+                token_generations: HashMap::new(),
+                flag_generation: 1,
+            };
+        };
+        entry.observe(&in_store, strategy);
+        let generation = entry.generation + 1;
+        let flag_generation = if writes_flag || entry.sent.0 != sent.0 {
+            generation
+        } else {
+            entry.flag_generation
+        };
+        entry.retain_token_owners(&sent.1, strategy);
+        let before = if entry.pending(&in_store) {
+            entry
+                .before
+                .retain(|(at, _)| at.elapsed() < BLACKLIST_ECHO_WAIT);
+            entry.before.push((now, entry.sent));
+            entry.before
+        } else {
+            vec![(now, in_store)]
+        };
+        Self {
+            before,
+            sent,
+            at: now,
+            epoch: entry.epoch,
+            generation,
+            token_generations: entry.token_generations,
+            flag_generation,
+        }
+    }
+
+    /// Once the latest write echoes, a later snapshot owns its own state.
+    fn observe(&mut self, published: &BlacklistValue, strategy: bool) {
+        if !self.pending(published) {
+            self.before.clear();
+            if *published != self.sent {
+                self.generation += 1;
+                if published.0 != self.sent.0 {
+                    self.flag_generation = self.generation;
+                }
+                self.retain_token_owners(&published.1, strategy);
+                self.sent = published.clone();
+            }
+        }
+    }
+
+    /// A token that disappears has lost its original owner even if it is later added again.
+    fn retain_token_owners(&mut self, next: &str, strategy: bool) {
+        let contains = if strategy {
+            crate::symbol::coin_list::strategy_contains
+        } else {
+            crate::symbol::coin_list::contains
+        };
+        self.token_generations
+            .retain(|coin, _| contains(next, coin));
+    }
 }
 
-/// The exact list mutation sent by one successful insertion.
+/// The list mutation sent by one click, with ownership per inserted token.
 struct BlacklistAdd {
-    coin: String,
+    coins: Vec<String>,
     before: String,
     after: String,
     enabled_flag: bool,
+    generation: u64,
+    at: Instant,
+    epoch: Instant,
 }
 
 impl BlacklistAdd {
-    /// Restore the original bytes when possible and preserve other edits otherwise.
-    fn revert(&self, enabled: bool, text: &str, strategy: bool) -> (bool, String) {
-        if text == self.after {
-            (enabled && !self.enabled_flag, self.before.clone())
-        } else {
-            let text = if strategy {
-                crate::symbol::coin_list::strategy_edit(text, &self.coin, true)
-            } else {
-                crate::symbol::coin_list::remove(text, &self.coin)
-            };
-            (enabled, text)
+    /// Restore exact bytes only when doing so cannot overwrite another pending write.
+    fn revert(
+        &self,
+        entry: &SentBlacklist,
+        in_store: &BlacklistValue,
+        strategy: bool,
+    ) -> BlacklistValue {
+        let current = entry.effective(in_store);
+        let owned = |coin: &String| {
+            entry.token_generations.get(&coin.to_ascii_uppercase()) == Some(&self.generation)
+        };
+        if self.epoch != entry.epoch || self.at.elapsed() >= BLACKLIST_ECHO_WAIT {
+            return current.clone();
         }
+        let text = if current.1 == self.after
+            && (!entry.pending(in_store) || entry.generation == self.generation)
+            && self.coins.iter().all(owned)
+        {
+            self.before.clone()
+        } else {
+            self.coins
+                .iter()
+                .filter(|coin| owned(coin))
+                .fold(current.1.clone(), |text, coin| {
+                    if strategy {
+                        crate::symbol::coin_list::strategy_remove(&text, coin)
+                    } else {
+                        crate::symbol::coin_list::remove(&text, coin)
+                    }
+                })
+        };
+        let disable =
+            self.enabled_flag && entry.flag_generation <= self.generation && text == self.before;
+        (current.0 && !disable, text)
     }
 }
 
-/// Compute a token edit and capture the inverse only for a new entry.
+/// Compute a token edit and report whether it inserted a new entry.
 fn blacklist_token_edit(
-    (enabled, base): (bool, String),
+    (enabled, base): &BlacklistValue,
     coin: &str,
     lift: bool,
     strategy: bool,
-) -> (Option<(bool, String)>, Option<BlacklistAdd>) {
+) -> (BlacklistValue, bool) {
     let after = if strategy {
-        crate::symbol::coin_list::strategy_edit(&base, coin, lift)
+        crate::symbol::coin_list::strategy_edit(base, coin, lift)
     } else {
-        crate::symbol::coin_list::edit(&base, coin, lift)
+        crate::symbol::coin_list::edit(base, coin, lift)
     };
-    let on = enabled || !lift;
-    if after == base && on == enabled {
-        return (None, None);
-    }
-    let add = (!lift && after != base).then(|| BlacklistAdd {
-        coin: coin.to_string(),
-        before: base,
-        after: after.clone(),
-        enabled_flag: !enabled,
-    });
-    (Some((on, after)), add)
+    let inserted = !lift && after != *base;
+    ((*enabled || !lift, after), inserted)
 }
 
 use anyhow::{Result, anyhow};
@@ -249,6 +362,42 @@ impl SessionManager {
         if edits.is_empty() {
             return Ok(());
         }
+        let lists: Vec<_> = edits
+            .iter()
+            .filter_map(|(id, fields)| {
+                fields
+                    .iter()
+                    .rfind(|(name, _)| name == crate::feed::FIELD_COINS_BLACK_LIST)
+                    .map(|(_, text)| ((core, Some(*id)), text.clone()))
+            })
+            .collect();
+        if lists.is_empty() {
+            return self.send_strategy_fields(core, edits, apply_to_orders);
+        }
+        let mut sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let snapshots: Vec<_> = lists
+            .into_iter()
+            .map(|(key, text)| Ok((key, self.blacklist_snapshot(key)?, text)))
+            .collect::<Result<_>>()?;
+        self.send_strategy_fields(core, edits, apply_to_orders)?;
+        for (key, in_store, text) in snapshots {
+            let entry =
+                SentBlacklist::record(sent.remove(&key), in_store, (true, text), true, false);
+            sent.insert(key, entry);
+        }
+        Ok(())
+    }
+
+    /// Send strategy fields after the caller has coordinated any blacklist tracking.
+    fn send_strategy_fields(
+        &self,
+        core: CoreId,
+        edits: Vec<(u64, Vec<(String, String)>)>,
+        apply_to_orders: bool,
+    ) -> Result<()> {
         self.send_core_cmd(
             core,
             CoreCmd::EditStrategyFields {
@@ -1256,7 +1405,19 @@ impl SessionManager {
 
     /// Set the core's coin-blacklist state and text.
     pub fn set_blacklist(&self, core: CoreId, on: bool, text: String) -> Result<()> {
-        self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
+        let key = (core, None);
+        let mut sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let next = (on, text);
+        let in_store = self
+            .blacklist_snapshot(key)
+            .unwrap_or_else(|_| next.clone());
+        self.send_blacklist_edit(key, &next)?;
+        let entry = SentBlacklist::record(sent.remove(&key), in_store, next, false, true);
+        sent.insert(key, entry);
+        Ok(())
     }
 
     /// Put one coin on the core's own blacklist, or with `lift` take it off.
@@ -1268,7 +1429,7 @@ impl SessionManager {
     ///
     /// Args:
     ///     core: Core whose list is rewritten: from the settings it last sent, or from what this
-    ///         process sent while the core has not echoed it ([`Self::blacklist_base`]).
+    ///         process sent while the core has not echoed it.
     ///     coin: The core's spelling of the coin ([`crate::symbol::coin_list`]).
     ///     lift: Take the coin off instead of putting it on.
     ///
@@ -1279,7 +1440,7 @@ impl SessionManager {
     ///     An empty coin; a core that has not sent its settings yet; the core's command channel
     ///     refused it.
     pub fn write_core_blacklist(&self, core: CoreId, coin: &str, lift: bool) -> Result<bool> {
-        self.write_blacklist_token((core, None), coin, lift)
+        self.write_blacklist_tokens((core, None), &[coin], lift, false)
             .map(|(sent, _)| sent)
     }
 
@@ -1292,8 +1453,29 @@ impl SessionManager {
         coin: &str,
     ) -> Result<Option<impl FnOnce(&Self) -> Result<bool> + use<>>> {
         let key = (core, strategy);
-        let (_, add) = self.write_blacklist_token(key, coin, false)?;
+        let (_, add) = self.write_blacklist_tokens(key, &[coin], false, false)?;
         Ok(add.map(move |add| move |session: &Self| session.revert_blacklist_add(key, &add)))
+    }
+
+    /// Add the tokens from one bulk click to one core list and return one shared inverse.
+    /// A bulk click that only enables a disabled list can reverse that switch as well.
+    pub fn add_many_to_blacklist(
+        &self,
+        core: CoreId,
+        coins: &[&str],
+    ) -> Result<Option<BlacklistBatchUndo<impl FnOnce(&Self) -> Result<bool> + use<>>>> {
+        let key = (core, None);
+        let (_, add) = self.write_blacklist_tokens(key, coins, false, true)?;
+        Ok(add.map(move |add| {
+            let affected = if add.coins.is_empty() {
+                coins.iter().map(|coin| coin.to_string()).collect()
+            } else {
+                add.coins.clone()
+            };
+            (affected, move |session: &Self| {
+                session.revert_blacklist_add(key, &add)
+            })
+        }))
     }
 
     /// Read the last published list, keeping the core-wide and strategy defaults distinct.
@@ -1324,51 +1506,110 @@ impl SessionManager {
     }
 
     /// Edit from the same echo-aware base for both regular writes and tracked adds.
-    fn write_blacklist_token(
+    fn write_blacklist_tokens(
         &self,
         key: (CoreId, Option<u64>),
-        coin: &str,
+        coins: &[&str],
         lift: bool,
+        track_flag_only: bool,
     ) -> Result<(bool, Option<BlacklistAdd>)> {
-        if coin.trim().is_empty() {
+        if coins.iter().any(|coin| coin.trim().is_empty()) {
             return Err(anyhow!("an empty coin is not a blacklist entry"));
         }
+        let mut sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let in_store = self.blacklist_snapshot(key)?;
-        let (next, add) = blacklist_token_edit(
-            self.blacklist_base(key, &in_store),
-            coin,
-            lift,
-            key.1.is_some(),
-        );
-        let Some(next) = next else {
+        let base = sent
+            .get(&key)
+            .map_or(&in_store, |entry| entry.effective(&in_store));
+        let mut next = base.clone();
+        let mut inserted = Vec::new();
+        for coin in coins {
+            let (edited, added) = blacklist_token_edit(&next, coin, lift, key.1.is_some());
+            next = edited;
+            if added {
+                inserted.push(coin.to_string());
+            }
+        }
+        if next == *base {
             return Ok((false, None));
-        };
-        self.send_blacklist_edit(key, in_store, next)?;
+        }
+        let enabled_flag = !base.0 && next.0;
+        let before = base.1.clone();
+        self.send_blacklist_edit(key, &next)?;
+        let mut entry =
+            SentBlacklist::record(sent.remove(&key), in_store, next, key.1.is_some(), false);
+        let add = (!inserted.is_empty() || (track_flag_only && enabled_flag)).then(|| {
+            for coin in &inserted {
+                entry
+                    .token_generations
+                    .insert(coin.to_ascii_uppercase(), entry.generation);
+            }
+            BlacklistAdd {
+                coins: inserted,
+                before,
+                after: entry.sent.1.clone(),
+                enabled_flag,
+                generation: entry.generation,
+                at: entry.at,
+                epoch: entry.epoch,
+            }
+        });
+        sent.insert(key, entry);
         Ok((true, add))
     }
 
     /// Reverse a recorded insertion through the current effective list.
     fn revert_blacklist_add(&self, key: (CoreId, Option<u64>), add: &BlacklistAdd) -> Result<bool> {
+        let mut sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let Some(entry) = sent.get_mut(&key) else {
+            return Ok(false);
+        };
         let in_store = self.blacklist_snapshot(key)?;
-        let current = self.blacklist_base(key, &in_store);
-        let restored = add.revert(current.0, &current.1, key.1.is_some());
-        if restored == current {
+        entry.observe(&in_store, key.1.is_some());
+        let restored = add.revert(entry, &in_store, key.1.is_some());
+        if restored == *entry.effective(&in_store) {
             return Ok(false);
         }
-        self.send_blacklist_edit(key, in_store, restored)?;
+        self.send_blacklist_edit(key, &restored)?;
+        let entry = SentBlacklist::record(
+            sent.remove(&key),
+            in_store,
+            restored,
+            key.1.is_some(),
+            false,
+        );
+        sent.insert(key, entry);
         Ok(true)
     }
 
-    /// Submit the edit and remember it only once the command channel accepted it.
-    fn send_blacklist_edit(
-        &self,
-        key: (CoreId, Option<u64>),
-        in_store: (bool, String),
-        next: (bool, String),
-    ) -> Result<()> {
+    /// Reconcile each published list so a later external edit cannot look like an old echo.
+    pub(super) fn observe_blacklist_echo(&self, core: CoreId, strategies: bool) {
+        let mut sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        sent.retain(|_, entry| entry.at.elapsed() < BLACKLIST_ECHO_WAIT);
+        for (&key, entry) in &mut *sent {
+            if key.0 != core || key.1.is_some() != strategies {
+                continue;
+            }
+            if let Ok(published) = self.blacklist_snapshot(key) {
+                entry.observe(&published, strategies);
+            }
+        }
+    }
+
+    /// Submit an edit while its caller holds the list tracker through queue acceptance.
+    fn send_blacklist_edit(&self, key: (CoreId, Option<u64>), next: &BlacklistValue) -> Result<()> {
         let (core, strategy) = key;
         if let Some(strategy) = strategy {
-            self.edit_strategies(
+            self.send_strategy_fields(
                 core,
                 vec![(
                     strategy,
@@ -1377,54 +1618,12 @@ impl SessionManager {
                         next.1.clone(),
                     )],
                 )],
-            )?;
+                false,
+            )
         } else {
-            self.set_blacklist(core, next.0, next.1.clone())?;
+            let (on, text) = next.clone();
+            self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
         }
-        self.note_blacklist_sent(key, in_store, next);
-        Ok(())
-    }
-
-    /// The switch and list a one-coin edit of `key` starts from: what this process sent last,
-    /// while the store still holds what it held then (the echo is not in yet) and within
-    /// [`BLACKLIST_ECHO_WAIT`]; otherwise what the store holds — the echo, or a change made
-    /// elsewhere, which an edit from the sent list would revert.
-    fn blacklist_base(
-        &self,
-        key: (CoreId, Option<u64>),
-        in_store: &(bool, String),
-    ) -> (bool, String) {
-        let sent = self
-            .blacklists_sent
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        sent.get(&key)
-            .map_or(in_store, |entry| entry.effective(in_store))
-            .clone()
-    }
-
-    /// Remember what was just sent for `key` and what the store held when it was, for
-    /// [`Self::blacklist_base`]. A pending entry keeps its `before`: the store has not moved
-    /// since that first send.
-    fn note_blacklist_sent(
-        &self,
-        key: (CoreId, Option<u64>),
-        in_store: (bool, String),
-        sent_now: (bool, String),
-    ) {
-        let mut sent = self
-            .blacklists_sent
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        sent.retain(|_, entry| entry.at.elapsed() < BLACKLIST_ECHO_WAIT);
-        sent.insert(
-            key,
-            SentBlacklist {
-                before: in_store,
-                sent: sent_now,
-                at: Instant::now(),
-            },
-        );
     }
 
     /// Put one coin on a strategy's `CoinsBlackList`, or with `lift` take it off, through the
@@ -1453,7 +1652,7 @@ impl SessionManager {
         coin: &str,
         lift: bool,
     ) -> Result<bool> {
-        self.write_blacklist_token((core, Some(strategy)), coin, lift)
+        self.write_blacklist_tokens((core, Some(strategy)), &[coin], lift, false)
             .map(|(sent, _)| sent)
     }
 
@@ -1481,44 +1680,6 @@ impl SessionManager {
                         .any(|field| field.name == crate::feed::FIELD_COINS_BLACK_LIST)
                 })
             })
-    }
-
-    /// Ban ONE market temporarily, or lift the ban it is under.
-    ///
-    /// The two controls that offer this — the coin menu's rows and the chart's button — spelled the
-    /// same delta by hand, and "an empty add list plus a removal means lift" is a wire convention
-    /// worth stating once. `None` lifts.
-    ///
-    /// Args:
-    ///     core: Core that holds the list.
-    ///     symbol: The MARKET the ban is keyed by; see `feed::types::temp_blacklist_rows`.
-    ///     span: How long to ban for, or `None` to lift a ban that is running.
-    pub fn set_temp_ban(
-        &self,
-        core: CoreId,
-        symbol: String,
-        span: Option<std::time::Duration>,
-    ) -> Result<()> {
-        let (adds, removes) = match span {
-            Some(span) => (vec![(symbol, span)], Vec::new()),
-            None => (Vec::new(), vec![symbol]),
-        };
-        self.set_temp_blacklist(core, adds, removes)
-    }
-
-    /// Edit the core's temporary blacklist as a delta: set `adds` to their durations, drop
-    /// `removes`. See [`CoreCmd::SetTempBlacklist`] for why this is not a whole-list write.
-    pub fn set_temp_blacklist(
-        &self,
-        core: CoreId,
-        adds: Vec<(String, std::time::Duration)>,
-        removes: Vec<String>,
-    ) -> Result<()> {
-        self.send_core_cmd(
-            core,
-            CoreCmd::SetTempBlacklist { adds, removes },
-            "set temp blacklist",
-        )
     }
 
     /// Locally exclude blacklisted coins from the core's Active Lib market-delta calculation.

@@ -7,7 +7,7 @@ use gpui_component::{input::Copy, kbd::Kbd};
 use moon_core::config::HotkeysConfig;
 
 use super::ReportPanel;
-use crate::hotkeys::{DISPATCH, Step, binding_id};
+use crate::hotkeys::{BindingId, DISPATCH, Step, parse_binding, recorded_keystroke};
 
 /// The row commands available from the focused Report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,14 +38,18 @@ pub(super) fn report_keymap(hotkeys: &HotkeysConfig) -> ReportKeymap {
         (FilterCoin, &["f", "shift-f"]),
         (CopyTicker, &[copy]),
     ];
-    // These are configured strokes, so compare their canonical identities before dispatch.
+    // The shell accepts native-layout letters as well as their physical Latin equivalents.
     let mut occupied = HashSet::new();
     for step in DISPATCH {
         match step {
-            Step::Slot(slot) => occupied.extend(binding_id(hotkeys.key(*slot))),
-            Step::Builtin(builtin) => {
-                occupied.extend(builtin.strokes.iter().filter_map(|raw| binding_id(raw)))
-            }
+            Step::Slot(slot) => occupied.extend(parse_binding(hotkeys.key(*slot)).map(physical_id)),
+            Step::Builtin(builtin) => occupied.extend(
+                builtin
+                    .strokes
+                    .iter()
+                    .filter_map(|raw| parse_binding(raw))
+                    .map(physical_id),
+            ),
         }
     }
     ReportKeymap(
@@ -54,21 +58,27 @@ pub(super) fn report_keymap(hotkeys: &HotkeysConfig) -> ReportKeymap {
             .filter_map(|(action, candidates)| {
                 candidates
                     .iter()
-                    .filter_map(|candidate| crate::hotkeys::parse_binding(candidate))
-                    .find(|stroke| !occupied.contains(&(stroke.modifiers, stroke.key.clone())))
+                    .filter_map(|candidate| parse_binding(candidate))
+                    .find(|stroke| !occupied.contains(&physical_id(stroke.clone())))
                     .map(|stroke| (action, stroke))
             })
             .collect(),
     )
 }
 
+/// Compare bindings and events by the same physical letter and modifiers.
+fn physical_id(stroke: Keystroke) -> BindingId {
+    let stroke = recorded_keystroke(stroke);
+    (stroke.modifiers, stroke.key)
+}
+
 impl ReportKeymap {
     /// Match the physical letter and modifiers, ignoring the event's typed character.
     pub(super) fn matches(&self, keystroke: &Keystroke) -> Option<ReportKey> {
-        let event = crate::hotkeys::recorded_keystroke(keystroke.clone());
-        self.0.iter().find_map(|(action, stroke)| {
-            (stroke.key == event.key && stroke.modifiers == event.modifiers).then_some(*action)
-        })
+        let event = physical_id(keystroke.clone());
+        self.0
+            .iter()
+            .find_map(|(action, stroke)| (physical_id(stroke.clone()) == event).then_some(*action))
     }
 
     /// Format exactly the stroke that dispatch will recognize, using platform key names.
@@ -82,12 +92,21 @@ impl ReportKeymap {
 
 /// Reject strokes outside the raw Report candidates before resolving any configured bindings.
 fn is_row_key_candidate(stroke: &Keystroke) -> bool {
-    let m = stroke.modifiers;
+    let (m, key) = physical_id(stroke.clone());
+    if key == "c" {
+        return !m.alt
+            && !m.shift
+            && !m.function
+            && if cfg!(target_os = "macos") {
+                m.platform && !m.control
+            } else {
+                m.control && !m.platform
+            };
+    }
     if m.alt || m.platform || m.function {
         return false;
     }
-    let event = crate::hotkeys::recorded_keystroke(stroke.clone());
-    match event.key.as_str() {
+    match key.as_str() {
         "enter" => !(m.control && m.shift),
         "g" => !m.control || m.shift,
         "l" | "f" => !m.control,
@@ -120,7 +139,7 @@ impl ReportPanel {
             && !self.filter_focus.contains_focused(window, cx)
     }
 
-    /// Dispatch the raw row keys once per press. Copy arrives through the root's bound action.
+    /// Dispatch raw row keys, including native-layout copy when the root's binding does not match.
     pub(super) fn on_report_key(
         &mut self,
         event: &KeyDownEvent,
@@ -131,7 +150,6 @@ impl ReportPanel {
             && is_row_key_candidate(&event.keystroke)
             && self.row_shortcuts_active(window, cx)
             && let Some(action) = self.report_keys(cx).matches(&event.keystroke)
-            && action != ReportKey::CopyTicker
             && self.run_report_key(action, window, cx)
         {
             cx.stop_propagation();

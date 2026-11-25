@@ -1,8 +1,11 @@
 //! Multi-row menu order, localized counts, copy, and blacklist target regressions.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use super::{
-    MultiFacts, MultiSlot, capped_trade_rows, distinct_targets, distinct_tickers, plan_multi,
-    tickers_text,
+    BlacklistTargets, MultiFacts, MultiSlot, TempTarget, TradeSeed, UndoStep, capped_trade_rows,
+    distinct_targets, distinct_tickers, multi_added_caption, plan_multi, tickers_text,
 };
 
 /// Five trades on three tickers preserve the approved captions and compact grouping.
@@ -15,7 +18,20 @@ fn plan_multi_five_rows_three_coins() {
         rows: 5,
         coins: ["ABC", "DEF", "GHI"].map(str::to_owned).to_vec(),
     };
-    let slots = plan_multi(&facts);
+    let targets = BlacklistTargets {
+        own: facts.coins.iter().cloned().map(|coin| (1, coin)).collect(),
+        temporary: facts
+            .coins
+            .iter()
+            .map(|coin| TempTarget {
+                core: 1,
+                symbol: format!("{coin}USDT"),
+                ticker: coin.clone(),
+            })
+            .collect(),
+        ..BlacklistTargets::default()
+    };
+    let slots = plan_multi(&facts, &targets);
     assert_eq!(
         slots,
         [
@@ -71,12 +87,56 @@ fn multi_add_targets_dedupe_core_token() {
 
 /// The menu and Enter must preserve order and cap a larger selection before resolving any rows.
 #[test]
-fn trade_windows_capped_at_20() {
-    let rows: Vec<_> = (1..=25).rev().collect();
+fn trade_windows_cap_follows_max_windows() {
+    let rows: Vec<_> = (1..=TradeSeed::MAX_WINDOWS + 1).rev().collect();
 
     let capped = capped_trade_rows(&rows);
-    assert_eq!(capped.len(), 20);
-    assert_eq!(capped.first(), Some(&25));
-    assert_eq!(capped.last(), Some(&6));
-    assert_eq!(capped_trade_rows(&[8, 3]), &[8, 3]);
+    assert_eq!(capped, &rows[..TradeSeed::MAX_WINDOWS]);
+    assert_eq!(capped_trade_rows(&[8]), &[8]);
+}
+
+/// Unresolved printed tickers stay in Report actions but never inflate blacklist captions.
+#[test]
+fn multi_bl_caption_counts_resolvable_coins_only() {
+    let facts = MultiFacts {
+        rows: 5,
+        coins: ["XALPHA", "XBETA", "XGAMMA"].map(str::to_owned).to_vec(),
+    };
+    let targets = BlacklistTargets {
+        own: vec![
+            (1, "XALPHA".to_string()),
+            (2, "10XBETA".to_string()),
+            (3, "xbeta".to_string()),
+        ],
+        tickers: Rc::new(HashMap::from([(
+            (2, "10XBETA".to_string()),
+            "XBETA".to_string(),
+        )])),
+        temporary: vec![TempTarget {
+            core: 1,
+            symbol: "XALPHAUSDT".to_string(),
+            ticker: "XALPHA".to_string(),
+        }],
+        ..BlacklistTargets::default()
+    };
+    let slots = plan_multi(&facts, &targets);
+    assert!(slots.contains(&MultiSlot::Filter(3)));
+    assert!(slots.contains(&MultiSlot::Permanent(2)));
+    assert!(slots.contains(&MultiSlot::Temporary(1)));
+}
+
+/// Name the first three printed tickers and name or count only the affected destinations.
+#[test]
+fn multi_toast_names_coins_and_cores() {
+    let _locale = crate::test_locale::force("ru");
+    let coins = ["XALPHA", "XBETA", "XGAMMA", "XDELTA"].map(str::to_owned);
+    let step = |core| UndoStep::inserted_many(core, Vec::new(), |_| Ok(true));
+    assert_eq!(
+        multi_added_caption(&[step(1)], coins.clone(), |_| "CORE_A".to_string()),
+        "XALPHA, XBETA, XGAMMA и ещё 1 в ЧС · CORE_A"
+    );
+    assert_eq!(
+        multi_added_caption(&[step(1), step(2)], coins, |_| panic!("multiple cores")),
+        "XALPHA, XBETA, XGAMMA и ещё 1 в ЧС · Ядер: 2"
+    );
 }

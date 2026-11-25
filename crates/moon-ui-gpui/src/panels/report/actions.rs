@@ -864,7 +864,7 @@ impl ReportPanel {
             })
     }
 
-    /// Capture actionable trade-window targets from the first twenty selected rows.
+    /// Capture actionable trade-window targets up to the host's limit.
     fn selected_trade_targets(&self, rows: &[usize], cx: &App) -> Vec<RecordTarget> {
         capped_trade_rows(rows)
             .iter()
@@ -896,27 +896,25 @@ impl ReportPanel {
 
     /// Capture the selection once so a refreshed table cannot retarget an open menu.
     fn open_selected_rows_menu(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(data) = self.data.data() else {
+        if self.data.data().is_none() {
             return;
-        };
+        }
         let rows = self.selected_row_indices();
         let targets = self.selected_trade_targets(&rows, cx);
         let clipped = rows.len() > capped_trade_rows(&rows).len();
-        let row_tickers: Vec<_> = rows
-            .iter()
-            .map(|&row| (row, self.row_ticker(row)))
-            .collect();
-        let coins = distinct_tickers(row_tickers.iter().map(|(_, ticker)| ticker.clone()));
+        let coins = distinct_tickers(rows.iter().map(|&row| self.row_ticker(row)));
         let mut seen = HashSet::new();
-        let contexts: Vec<_> = row_tickers
+        let contexts: Vec<_> = rows
             .iter()
-            .filter(|(row, ticker)| {
+            .filter_map(|&row| {
+                let context = self.row_menu_context(row, None, cx)?;
                 seen.insert((
-                    data.core_uids.get(*row).copied(),
-                    ticker.trim().to_ascii_uppercase(),
+                    context.core,
+                    self.row_ticker(row).trim().to_ascii_uppercase(),
+                    context.market.to_ascii_uppercase(),
                 ))
+                .then_some(context)
             })
-            .filter_map(|(row, _)| self.row_menu_context(*row, None, cx))
             .collect();
         let view = cx.entity();
         let trade_windows: Option<ReportSelectionAction> = (!targets.is_empty()).then(|| {

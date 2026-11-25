@@ -92,3 +92,71 @@ fn g_with_many_rows_not_consumed() {
         Some(ReportKey::OpenWindow)
     );
 }
+
+/// Run the actual Windows physical-key normalization against a Russian layout.
+#[cfg(target_os = "windows")]
+fn with_russian_layout(test: impl FnOnce()) {
+    use std::sync::Mutex;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        ACTIVATE_KEYBOARD_LAYOUT_FLAGS, ActivateKeyboardLayout, GetKeyboardLayout, HKL,
+        LoadKeyboardLayoutW,
+    };
+    use windows::core::w;
+
+    struct Restore(HKL);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = unsafe { ActivateKeyboardLayout(self.0, ACTIVATE_KEYBOARD_LAYOUT_FLAGS(0)) };
+        }
+    }
+
+    static LAYOUT: Mutex<()> = Mutex::new(());
+    let _guard = LAYOUT.lock().unwrap_or_else(|err| err.into_inner());
+    let _restore = Restore(unsafe { GetKeyboardLayout(0) });
+    let russian = unsafe { LoadKeyboardLayoutW(w!("00000419"), ACTIVATE_KEYBOARD_LAYOUT_FLAGS(0)) }
+        .expect("Russian keyboard layout");
+    unsafe { ActivateKeyboardLayout(russian, ACTIVATE_KEYBOARD_LAYOUT_FLAGS(0)) }
+        .expect("activate Russian keyboard layout");
+    test();
+}
+
+/// A configured Cyrillic spelling occupies the Report candidate on its physical key.
+#[cfg(target_os = "windows")]
+#[test]
+fn cyrillic_configured_g_occupies_g() {
+    with_russian_layout(|| {
+        let mut hotkeys = HotkeysConfig::default();
+        hotkeys.set_key(KeySlot::SwitchCharts, "п".into());
+        let map = report_keymap(&hotkeys);
+        assert_eq!(map.matches(&stroke("п")), None);
+        assert_eq!(map.matches(&stroke("g")), None);
+        assert_eq!(
+            map.matches(&stroke("shift-п")),
+            Some(ReportKey::ShowOnChart)
+        );
+        assert_eq!(
+            map.hint(ReportKey::ShowOnChart),
+            Some(Kbd::format(&stroke("shift-g")))
+        );
+    });
+}
+
+/// The raw path reaches Copy when the root cannot match its Latin binding.
+#[cfg(target_os = "windows")]
+#[test]
+fn ctrl_c_cyrillic_layout_copies_ticker() {
+    with_russian_layout(|| {
+        let event = stroke("ctrl-с");
+        let map = report_keymap(&HotkeysConfig::default());
+        assert!(is_row_key_candidate(&event));
+        assert_eq!(
+            map.matches(&event)
+                .and_then(|action| for_selection(action, 1)),
+            Some(ReportKey::CopyTicker)
+        );
+        assert_eq!(
+            map.hint(ReportKey::CopyTicker),
+            Some(Kbd::format(&stroke("ctrl-c")))
+        );
+    });
+}

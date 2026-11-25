@@ -8,13 +8,18 @@ use moon_core::session::CoreId;
 use moon_ui::{MoonMenuItem, MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
 
-use super::blacklist::{hour_rows, target_row, temp_targets, write_core_blacklist_targets};
+use super::blacklist::{
+    TempTarget, add_core_blacklist_batch, hour_rows, target_row, temp_targets, toast_cores,
+    toast_tickers,
+};
+use super::core_ref::core_session_name;
 use super::names::CoinNames;
-use super::undo::UndoRecord;
+use super::undo::{UndoRecord, UndoStep};
 use super::{CoinMenuCtx, open_menu_items};
 use crate::Backend;
 use crate::display_text::plural_key;
 use crate::panels::{ReportScope, open_scoped_report};
+use crate::trade_window::TradeSeed;
 
 /// Counts come from the selected rows and their distinct printed coins.
 pub(crate) struct MultiFacts {
@@ -22,9 +27,9 @@ pub(crate) struct MultiFacts {
     pub(crate) coins: Vec<String>,
 }
 
-/// Keep one menu click or shortcut from opening more than twenty trade windows.
+/// Use the trade-window host's cap for one Report action.
 pub(crate) fn capped_trade_rows(rows: &[usize]) -> &[usize] {
-    &rows[..rows.len().min(20)]
+    &rows[..rows.len().min(TradeSeed::MAX_WINDOWS)]
 }
 
 /// The slots in a compact Report multi-selection menu.
@@ -40,7 +45,7 @@ enum MultiSlot {
 }
 
 /// Order row commands, coin commands, then blacklist writes with one separator between groups.
-fn plan_multi(facts: &MultiFacts) -> Vec<MultiSlot> {
+fn plan_multi(facts: &MultiFacts, targets: &BlacklistTargets) -> Vec<MultiSlot> {
     use MultiSlot::*;
     let coins = facts.coins.len();
     vec![
@@ -50,8 +55,8 @@ fn plan_multi(facts: &MultiFacts) -> Vec<MultiSlot> {
         NewReport,
         Copy,
         Sep,
-        Permanent(coins),
-        Temporary(coins),
+        Permanent(targets.permanent_count()),
+        Temporary(targets.temporary_count()),
     ]
 }
 
@@ -136,7 +141,7 @@ pub(crate) fn open_multi_coin_menu(
     let group = rows.first().and_then(|row| row.workspace_group.clone());
     let targets = BlacklistTargets::resolve(rows, backend.read(cx));
     let has_coins = !facts.coins.is_empty();
-    let items = plan_multi(&facts)
+    let items = plan_multi(&facts, &targets)
         .into_iter()
         .map(|slot| {
             let label = slot.label();
@@ -221,12 +226,13 @@ fn new_report_item(
 }
 
 /// All blacklist targets are resolved before the menu opens, under each core's own spelling.
+#[derive(Default)]
 struct BlacklistTargets {
     own: Vec<(CoreId, String)>,
     selected: Vec<(CoreId, String)>,
     /// The Report's ticker for each permanent target, even when destination spellings differ.
     tickers: Rc<HashMap<(CoreId, String), String>>,
-    temporary: Vec<(CoreId, String)>,
+    temporary: Vec<TempTarget>,
     source_name: String,
 }
 
@@ -244,7 +250,11 @@ impl BlacklistTargets {
             }
             let names = CoinNames::resolve_for(backend, row, Some(&row.selected_cores));
             let shown = row.shown_coin();
-            let ticker = if shown.is_empty() { &row.coin } else { shown }.to_ascii_uppercase();
+            let ticker = if shown.is_empty() {
+                row.coin.clone()
+            } else {
+                shown.to_string()
+            };
             if let Some(name) = names.on(row.core) {
                 own.push((row.core, name.coin.clone()));
                 tickers
@@ -259,15 +269,49 @@ impl BlacklistTargets {
                         .or_insert_with(|| ticker.clone());
                 }
             }
-            temporary.extend(temp_targets(&names, &[row.core]));
+            temporary.extend(temp_targets(&names, &ticker, &[row.core]));
         }
+        let mut seen_markets = HashSet::new();
+        temporary.retain(|target| {
+            seen_markets.insert((target.core, target.symbol.to_ascii_uppercase()))
+        });
         Self {
             own: distinct_targets(own),
             selected: distinct_targets(selected),
             tickers: Rc::new(tickers),
-            temporary: distinct_targets(temporary),
+            temporary,
             source_name,
         }
+    }
+
+    /// Count only the coins available on a permanent target offered by this submenu.
+    fn permanent_count(&self) -> usize {
+        let selected = if self.offers_selected() {
+            self.selected.as_slice()
+        } else {
+            &[]
+        };
+        distinct_tickers(
+            self.own
+                .iter()
+                .chain(selected)
+                .map(|(core, token)| target_ticker(&self.tickers, *core, token).to_string()),
+        )
+        .len()
+    }
+
+    /// Count visible coins with an addressable temporary-ban market.
+    fn temporary_count(&self) -> usize {
+        distinct_tickers(self.temporary.iter().map(|target| target.ticker.clone())).len()
+    }
+
+    /// A selected-cores row is useful only when it expands the available destinations.
+    fn offers_selected(&self) -> bool {
+        target_core_count(&self.selected) > 1
+            && self
+                .selected
+                .iter()
+                .any(|target| !self.own.contains(target))
     }
 
     /// Offer the row cores and, where it expands the destinations, the selected cores.
@@ -278,7 +322,6 @@ impl BlacklistTargets {
         group: Option<String>,
     ) -> MoonMenuItem {
         let own_core_count = target_core_count(&self.own);
-        let selected_core_count = target_core_count(&self.selected);
         let mut rows = Vec::new();
         if !self.own.is_empty() {
             let label = if own_core_count == 1 {
@@ -295,13 +338,12 @@ impl BlacklistTargets {
                 group.clone(),
             ));
         }
-        if selected_core_count > 1
-            && self
-                .selected
-                .iter()
-                .any(|target| !self.own.contains(target))
-        {
-            let label = t!("coin_menu.target_cores", n = selected_core_count).to_string();
+        if self.offers_selected() {
+            let label = t!(
+                "coin_menu.target_cores",
+                n = target_core_count(&self.selected)
+            )
+            .to_string();
             rows.push(add_row(
                 "multi-bl-cores",
                 label,
@@ -354,19 +396,45 @@ fn add_row(
         group,
         cores,
         move |b, _| {
-            UndoRecord::new(write_core_blacklist_targets(b, &targets, false), |steps| {
-                let coins: HashSet<_> = steps
+            UndoRecord::new(add_core_blacklist_batch(b, &targets), |steps| {
+                let inserted: HashSet<_> = steps
                     .iter()
-                    .map(|step| {
-                        tickers
-                            .get(&(step.core, step.coin.to_ascii_uppercase()))
-                            .map_or(step.coin.as_str(), String::as_str)
-                    })
+                    .flat_map(|step| step.coins.iter().map(|coin| (step.core, coin.as_str())))
                     .collect();
-                multi_count("coin_menu.undo.added_multi", coins.len())
+                let successful = targets
+                    .iter()
+                    .filter(|(core, token)| inserted.contains(&(*core, token.as_str())));
+                let coins = successful
+                    .map(|(core, token)| target_ticker(&tickers, *core, token).to_string());
+                multi_added_caption(steps, coins, |core| core_session_name(b, core))
             })
         },
     )
+}
+
+/// Use the printed ticker even when this core's list needs a different spelling.
+fn target_ticker<'a>(
+    tickers: &'a HashMap<(CoreId, String), String>,
+    core: CoreId,
+    token: &'a str,
+) -> &'a str {
+    tickers
+        .get(&(core, token.to_ascii_uppercase()))
+        .map_or(token, String::as_str)
+}
+
+/// Describe only the coins and destinations that actually received a permanent add.
+fn multi_added_caption(
+    steps: &[UndoStep],
+    coins: impl IntoIterator<Item = String>,
+    core_name: impl FnOnce(CoreId) -> String,
+) -> String {
+    t!(
+        "coin_menu.undo.added_multi",
+        coins = toast_tickers(coins),
+        target = toast_cores(steps, core_name),
+    )
+    .to_string()
 }
 
 #[cfg(test)]

@@ -17,8 +17,9 @@ type Revert = Box<dyn FnOnce(&SessionManager) -> anyhow::Result<bool>>;
 /// A successfully submitted insertion with its original target and watch information.
 pub(super) struct UndoStep {
     pub(super) core: CoreId,
-    pub(super) coin: String,
+    pub(super) coins: Vec<String>,
     pub(super) strategy: Option<u64>,
+    temporary: bool,
     revert: Revert,
 }
 
@@ -32,39 +33,39 @@ impl UndoStep {
     ) -> Option<Self> {
         revert.map(|revert| Self {
             core,
-            coin: coin.to_string(),
+            coins: vec![coin.to_string()],
             strategy,
+            temporary: false,
             revert: Box::new(revert),
         })
     }
 
-    /// Record a successful temporary ban against the deadline published before the send.
-    /// Queued changes that the core has yet to echo are absent from this snapshot.
+    /// Record one inverse for all the tokens added to a core list by a bulk click.
+    pub(super) fn inserted_many(
+        core: CoreId,
+        coins: Vec<String>,
+        revert: impl FnOnce(&SessionManager) -> anyhow::Result<bool> + 'static,
+    ) -> Self {
+        Self {
+            core,
+            coins,
+            strategy: None,
+            temporary: false,
+            revert: Box::new(revert),
+        }
+    }
+
+    /// Keep the UI ticker with the inverse, which already owns the destination symbol.
     pub(super) fn temp_sent(
         core: CoreId,
-        symbol: &str,
-        prior: Option<i64>,
-        sent: bool,
+        ticker: &str,
+        revert: Option<impl FnOnce(&SessionManager) -> anyhow::Result<bool> + 'static>,
     ) -> Option<Self> {
-        Self::inserted(
-            core,
-            symbol,
-            None,
-            sent.then(|| {
-                let symbol = symbol.to_string();
-                move |session: &SessionManager| {
-                    let remaining = temp_restore_span(prior, moon_core::util::now_unix_ms_i64());
-                    session.set_temp_ban(core, symbol, remaining).map(|()| true)
-                }
-            }),
-        )
+        Self::inserted(core, ticker, None, revert).map(|mut step| {
+            step.temporary = true;
+            step
+        })
     }
-}
-
-/// Restore only time remaining at undo; a missing or elapsed deadline clears the ban.
-fn temp_restore_span(prior: Option<i64>, now: i64) -> Option<Duration> {
-    let remaining = prior?.saturating_sub(now);
-    (remaining > 0).then(|| Duration::from_millis(remaining as u64))
 }
 
 /// Undo steps and the localized success caption for one click.
@@ -83,22 +84,6 @@ impl UndoRecord {
             toast: toast(&steps),
             steps,
         })
-    }
-}
-
-/// Whether the current workspace authorizes reversing the entire record.
-#[derive(Debug, PartialEq, Eq)]
-enum UndoDecision {
-    Refused,
-    Revert,
-}
-
-/// Refuse the whole undo when any recorded core has left the workspace.
-fn undo_decision(allowed: bool) -> UndoDecision {
-    if allowed {
-        UndoDecision::Revert
-    } else {
-        UndoDecision::Refused
     }
 }
 
@@ -125,21 +110,17 @@ pub(super) fn show_undo_toast(
     let cores: Vec<_> = record.steps.iter().map(|step| step.core).collect();
     let record = Cell::new(Some(record));
     let on_undo = move |window: &mut Window, app: &mut App| {
-        let refused = backend.update(app, |b, _| {
+        let notice = backend.update(app, |b, _| {
             let allowed = workspace_action_allows_cores(b, workspace_group.as_deref(), &cores);
-            match undo_decision(allowed) {
-                UndoDecision::Refused => record.take().is_some(),
-                UndoDecision::Revert => {
-                    run_undo_once(&record, |step| apply_revert(b, step));
-                    false
-                }
+            if !allowed {
+                return record.take().map(|_| t!("coin_menu.undo.refused"));
             }
+            let mut changed_ban = false;
+            run_undo_once(&record, |step| changed_ban |= apply_revert(b, step));
+            changed_ban.then(|| t!("coin_menu.undo.temp_changed"))
         });
-        if refused {
-            window.push_notification(
-                MoonNotification::info(t!("coin_menu.undo.refused").to_string()),
-                app,
-            );
+        if let Some(notice) = notice {
+            window.push_notification(MoonNotification::info(notice.to_string()), app);
         }
     };
     window.push_notification(
@@ -150,25 +131,28 @@ pub(super) fn show_undo_toast(
     );
 }
 
-/// Submit one inverse and keep the same strategy-edit watch as the original action.
-fn apply_revert(b: &mut Backend, step: UndoStep) {
+/// Submit one inverse and report whether a newer temporary-ban state refused it.
+fn apply_revert(b: &mut Backend, step: UndoStep) -> bool {
     if let Some(sid) = step.strategy
         && !b.session.strategy_has_blacklist(step.core, sid)
     {
-        return;
+        return false;
     }
     match (step.revert)(&b.session) {
         Ok(true) => {
-            if let Some(sid) = step.strategy {
-                b.watch_strategy_edit(step.core, sid, step.coin);
+            if let Some(sid) = step.strategy
+                && let Some(coin) = step.coins.into_iter().next()
+            {
+                b.watch_strategy_edit(step.core, sid, coin);
             }
         }
-        Ok(false) => {}
+        Ok(false) => return step.temporary,
         Err(err) => log::warn!(
             "coin_menu: undo blacklist on core {} failed: {err:#}",
             step.core
         ),
     }
+    false
 }
 
 #[cfg(test)]

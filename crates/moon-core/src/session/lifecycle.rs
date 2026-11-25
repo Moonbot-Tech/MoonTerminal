@@ -451,6 +451,15 @@ impl SessionManager {
     /// and base before coordination recomputes the provider role and last command. Removal leaves
     /// this state absent.
     fn clear_core_coordination(&mut self, id: CoreId) {
+        self.blacklists_sent
+            .get_mut()
+            .unwrap_or_else(|err| err.into_inner())
+            .retain(|(core, _), _| *core != id);
+        self.store
+            .temp_ban_intents
+            .get_mut()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove_core(id);
         self.catchup_last.remove(&id);
         // An in-flight listing may finish after removal; its old diagnostic set cannot rejoin.
         self.catchup_unknown.remove(&id);
@@ -868,9 +877,21 @@ impl SessionManager {
                         }
                     }
                     other => {
+                        let blacklist_echo = match &other {
+                            FeedMsg::ClientSettings(_) => Some(false),
+                            FeedMsg::Strategies(_) => Some(true),
+                            _ => None,
+                        };
+                        let temp_ban_echo = matches!(&other, FeedMsg::TempBlacklist(_));
                         if let Some(core) = self.store.core_mut(sess.id) {
                             core.apply(other);
                             stats.ui_state = true;
+                        }
+                        if let Some(strategies) = blacklist_echo {
+                            self.observe_blacklist_echo(sess.id, strategies);
+                        }
+                        if temp_ban_echo {
+                            self.observe_temp_ban_echo(sess.id);
                         }
                     }
                 }

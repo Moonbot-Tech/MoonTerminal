@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 use moon_core::session::SessionManager;
 
-use super::{UndoDecision, UndoRecord, UndoStep, run_undo_once, temp_restore_span, undo_decision};
+use super::{UndoRecord, UndoStep, run_undo_once};
 
 /// Build a recorded successful insertion without a connection.
 fn added(_: &SessionManager) -> anyhow::Result<bool> {
@@ -29,10 +29,13 @@ fn undo_records_only_inserted_pairs() {
     .collect();
     let record = Cell::new(UndoRecord::new(steps, |_| "Added two coins".to_string()));
     let mut actual = Vec::new();
-    assert!(run_undo_once(&record, |step| actual.push((step.core, step.coin))));
+    assert!(run_undo_once(&record, |step| actual.push((step.core, step.coins))));
     assert_eq!(
         actual,
-        [(1, "XBETA".to_string()), (1, "XALPHA".to_string())]
+        [
+            (1, vec!["XBETA".to_string()]),
+            (1, vec!["XALPHA".to_string()])
+        ]
     );
 }
 
@@ -50,16 +53,9 @@ fn undo_is_one_shot() {
         .collect();
     let record = Cell::new(UndoRecord::new(steps, |_| "Added XALPHA".to_string()));
     let mut reverted = Vec::new();
-    assert!(run_undo_once(&record, |step| reverted.push(step.coin)));
-    assert!(!run_undo_once(&record, |step| reverted.push(step.coin)));
+    assert!(run_undo_once(&record, |step| reverted.extend(step.coins)));
+    assert!(!run_undo_once(&record, |step| reverted.extend(step.coins)));
     assert_eq!(reverted, ["XALPHA"]);
-}
-
-/// Denying workspace access must select the refusal path before any inverse can run.
-#[test]
-fn undo_refused_when_core_left_workspace() {
-    assert_eq!(undo_decision(false), UndoDecision::Refused);
-    assert_eq!(undo_decision(true), UndoDecision::Revert);
 }
 
 /// The deferred undo action must revalidate all the targets before applying any inverse.
@@ -77,33 +73,15 @@ fn undo_revalidates_workspace_before_write() {
     assert!(update < guard && guard < effect);
 }
 
-/// A newly added ban must be cleared when nothing was published before it.
-#[test]
-fn temp_undo_without_prior_clears() {
-    assert_eq!(temp_restore_span(None, 10_000), None);
-}
-
-/// Undo preserves the old deadline, so the time between add and undo does not extend it.
-#[test]
-fn temp_undo_restores_prior_remaining() {
-    assert_eq!(
-        temp_restore_span(Some(45_000), 10_000),
-        Some(std::time::Duration::from_secs(35))
-    );
-}
-
-/// A prior ban that already expired must be cleared, including at the exact deadline.
-#[test]
-fn temp_undo_expired_prior_clears() {
-    assert_eq!(temp_restore_span(Some(9_999), 10_000), None);
-    assert_eq!(temp_restore_span(Some(10_000), 10_000), None);
-}
-
 /// An error sending the add leaves no undo step or success toast.
 #[test]
 fn temp_failed_send_records_nothing() {
-    let steps = UndoStep::temp_sent(1, "XALPHA", Some(45_000), false)
-        .into_iter()
-        .collect();
+    let steps = UndoStep::temp_sent(
+        1,
+        "XALPHA",
+        None::<fn(&SessionManager) -> anyhow::Result<bool>>,
+    )
+    .into_iter()
+    .collect();
     assert!(UndoRecord::new(steps, |_| panic!("failed sends have no toast")).is_none());
 }
