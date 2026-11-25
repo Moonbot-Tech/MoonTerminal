@@ -1509,26 +1509,34 @@ impl ReportPanel {
     /// Enable the dedicated Report title bar while retaining detached table controls.
     ///
     /// Args:
-    ///     window: Standalone Report window whose geometry is persisted.
+    ///     window: Standalone Report window.
+    ///     persist_bounds: Whether this is the singleton that owns saved Report geometry.
     ///     cx: Panel context used to restore detached widths and repaint.
     ///
     /// Returns:
     ///     Nothing.
-    pub(crate) fn mark_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn mark_standalone(
+        &mut self,
+        window: &mut Window,
+        persist_bounds: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.mark_table_detached(cx);
         self.standalone = true;
         self.standalone_window = Some(window.window_handle());
-        cx.observe_window_bounds(window, |this, window, cx| {
-            let geom = crate::window::windowing::window_geom_rect(window, cx);
-            this.backend.update(cx, |backend, _| {
-                let geom = geom.keeping_display_of(backend.layout.report_window);
-                if backend.layout.report_window != Some(geom) {
-                    backend.layout.report_window = Some(geom);
-                    backend.layout_dirty = true;
-                }
-            });
-        })
-        .detach();
+        if persist_bounds {
+            cx.observe_window_bounds(window, |this, window, cx| {
+                let geom = crate::window::windowing::window_geom_rect(window, cx);
+                this.backend.update(cx, |backend, _| {
+                    let geom = geom.keeping_display_of(backend.layout.report_window);
+                    if backend.layout.report_window != Some(geom) {
+                        backend.layout.report_window = Some(geom);
+                        backend.layout_dirty = true;
+                    }
+                });
+            })
+            .detach();
+        }
         cx.notify();
     }
 

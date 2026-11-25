@@ -1,5 +1,7 @@
 //! Shared coin-menu value and delayed workspace-authority regressions.
 
+mod layout;
+
 /// Every mutating callback in `own.rs` must validate current workspace authority
 /// inside its Backend update and before its first command helper.
 ///

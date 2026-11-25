@@ -95,10 +95,11 @@ pub(super) fn plan<Row: Copy, Log: Copy>(facts: &MenuFacts<Row, Log>) -> Vec<Slo
         Some(Order::Buy(uid) | Order::Table(uid)) => own.extend([OrderEdit(uid), Sep, Cancel(uid)]),
         None => {}
     }
-    let screener = facts
-        .screener_copy
-        .then(|| vec![ScreenerCopy])
-        .unwrap_or_default();
+    let screener = if facts.screener_copy {
+        vec![ScreenerCopy]
+    } else {
+        Vec::new()
+    };
 
     let mut coin = Vec::new();
     if facts.coin_shown {
@@ -118,7 +119,11 @@ pub(super) fn plan<Row: Copy, Log: Copy>(facts: &MenuFacts<Row, Log>) -> Vec<Slo
         .strategy
         .map(|sid| vec![StrategyGoto(sid), StrategyReport(sid)])
         .unwrap_or_default();
-    let blacklist = facts.blacklist.then(|| vec![Blacklist]).unwrap_or_default();
+    let blacklist = if facts.blacklist {
+        vec![Blacklist]
+    } else {
+        Vec::new()
+    };
     let mut slots = Vec::new();
     for group in [own, screener, coin, strategy, blacklist] {
         if !group.is_empty() {

@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 use moon_core::session::SessionManager;
 
-use super::{UndoRecord, UndoStep, revert_plan, take_record};
+use super::{UndoRecord, UndoStep, revert_plan, take_record, temp_restore_span};
 
 /// Build a recorded successful insertion without a connection.
 fn added(_: &SessionManager) -> anyhow::Result<bool> {
@@ -67,4 +67,35 @@ fn undo_revalidates_workspace_before_write() {
         .unwrap();
     let effect = source.find("apply_revert(b, step)").unwrap();
     assert!(update < guard && guard < effect);
+}
+
+/// A newly added ban must be cleared when nothing was published before it.
+#[test]
+fn temp_undo_without_prior_clears() {
+    assert_eq!(temp_restore_span(None, 10_000), None);
+}
+
+/// Undo preserves the old deadline, so the time between add and undo does not extend it.
+#[test]
+fn temp_undo_restores_prior_remaining() {
+    assert_eq!(
+        temp_restore_span(Some(45_000), 10_000),
+        Some(std::time::Duration::from_secs(35))
+    );
+}
+
+/// A prior ban that already expired must be cleared, including at the exact deadline.
+#[test]
+fn temp_undo_expired_prior_clears() {
+    assert_eq!(temp_restore_span(Some(9_999), 10_000), None);
+    assert_eq!(temp_restore_span(Some(10_000), 10_000), None);
+}
+
+/// An error sending the add leaves no undo step or success toast.
+#[test]
+fn temp_failed_send_records_nothing() {
+    let steps = UndoStep::temp_sent(1, "XALPHA", Some(45_000), false)
+        .into_iter()
+        .collect();
+    assert!(UndoRecord::new(steps, |_| panic!("failed sends have no toast")).is_none());
 }

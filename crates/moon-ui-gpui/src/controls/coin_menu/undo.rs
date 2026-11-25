@@ -38,6 +38,34 @@ impl UndoStep {
             revert: Box::new(revert),
         })
     }
+
+    /// Record a successful temporary ban against the deadline published before the send.
+    /// Queued changes that the core has yet to echo are absent from this snapshot.
+    pub(super) fn temp_sent(
+        core: CoreId,
+        symbol: &str,
+        prior: Option<i64>,
+        sent: bool,
+    ) -> Option<Self> {
+        Self::inserted(
+            core,
+            symbol,
+            None,
+            sent.then(|| {
+                let symbol = symbol.to_string();
+                move |session: &SessionManager| {
+                    let remaining = temp_restore_span(prior, moon_core::util::now_unix_ms_i64());
+                    session.set_temp_ban(core, symbol, remaining).map(|()| true)
+                }
+            }),
+        )
+    }
+}
+
+/// Restore only time remaining at undo; a missing or elapsed deadline clears the ban.
+fn temp_restore_span(prior: Option<i64>, now: i64) -> Option<Duration> {
+    let remaining = prior?.saturating_sub(now);
+    (remaining > 0).then(|| Duration::from_millis(remaining as u64))
 }
 
 /// Undo steps and the localized success caption for one click.
@@ -102,10 +130,10 @@ pub(super) fn show_undo_toast(
 
 /// Submit one inverse and keep the same strategy-edit watch as the original action.
 fn apply_revert(b: &mut Backend, step: UndoStep) {
-    if let Some(sid) = step.strategy {
-        if !b.session.strategy_has_blacklist(step.core, sid) {
-            return;
-        }
+    if let Some(sid) = step.strategy
+        && !b.session.strategy_has_blacklist(step.core, sid)
+    {
+        return;
     }
     match (step.revert)(&b.session) {
         Ok(true) => {

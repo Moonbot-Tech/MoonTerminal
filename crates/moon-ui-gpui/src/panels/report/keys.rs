@@ -1,10 +1,13 @@
 //! Report-local shortcuts and their menu hints, resolved from one keymap.
 
+use std::collections::HashSet;
+
 use gpui::{App, Context, KeyDownEvent, Keystroke, Window};
 use gpui_component::{input::Copy, kbd::Kbd};
 use moon_core::config::HotkeysConfig;
 
 use super::ReportPanel;
+use crate::hotkeys::{DISPATCH, Step, binding_id};
 
 /// The row commands available from the focused Report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +38,16 @@ pub(super) fn report_keymap(hotkeys: &HotkeysConfig) -> ReportKeymap {
         (FilterCoin, &["f", "shift-f"]),
         (CopyTicker, &[copy]),
     ];
+    // These are configured strokes, so compare their canonical identities before dispatch.
+    let mut occupied = HashSet::new();
+    for step in DISPATCH {
+        match step {
+            Step::Slot(slot) => occupied.extend(binding_id(hotkeys.key(*slot))),
+            Step::Builtin(builtin) => {
+                occupied.extend(builtin.strokes.iter().filter_map(|raw| binding_id(raw)))
+            }
+        }
+    }
     ReportKeymap(
         candidates
             .into_iter()
@@ -42,7 +55,7 @@ pub(super) fn report_keymap(hotkeys: &HotkeysConfig) -> ReportKeymap {
                 candidates
                     .iter()
                     .filter_map(|candidate| crate::hotkeys::parse_binding(candidate))
-                    .find(|stroke| crate::hotkeys::resolve_binding(stroke, hotkeys).is_none())
+                    .find(|stroke| !occupied.contains(&(stroke.modifiers, stroke.key.clone())))
                     .map(|stroke| (action, stroke))
             })
             .collect(),
@@ -64,6 +77,21 @@ impl ReportKeymap {
             .iter()
             .find(|(candidate, _)| *candidate == action)
             .map(|(_, stroke)| Kbd::format(stroke))
+    }
+}
+
+/// Reject strokes outside the raw Report candidates before resolving any configured bindings.
+fn is_row_key_candidate(stroke: &Keystroke) -> bool {
+    let m = stroke.modifiers;
+    if m.alt || m.platform || m.function {
+        return false;
+    }
+    let event = crate::hotkeys::recorded_keystroke(stroke.clone());
+    match event.key.as_str() {
+        "enter" => !(m.control && m.shift),
+        "g" => !m.control || m.shift,
+        "l" | "f" => !m.control,
+        _ => false,
     }
 }
 
@@ -100,6 +128,7 @@ impl ReportPanel {
         cx: &mut Context<Self>,
     ) {
         if !event.is_held
+            && is_row_key_candidate(&event.keystroke)
             && self.row_shortcuts_active(window, cx)
             && let Some(action) = self.report_keys(cx).matches(&event.keystroke)
             && action != ReportKey::CopyTicker

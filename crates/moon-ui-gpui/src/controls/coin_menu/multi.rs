@@ -5,13 +5,13 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_core::session::CoreId;
-use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonNotification, MoonWindowExt as _};
+use moon_ui::{MoonMenuItem, MoonNotification, MoonWindowExt as _};
 use rust_i18n::t;
 
-use super::blacklist::{hour_rows, target_row, temp_ban_symbol, write_core_blacklist_targets};
+use super::blacklist::{hour_rows, target_row, temp_targets, write_core_blacklist_targets};
 use super::names::CoinNames;
 use super::undo::UndoRecord;
-use super::{CoinMenuCtx, MENU_MAX_WIDTH, MENU_MIN_WIDTH};
+use super::{CoinMenuCtx, open_menu_items};
 use crate::Backend;
 use crate::display_text::plural_key;
 use crate::panels::{ReportScope, open_scoped_report};
@@ -189,13 +189,12 @@ pub(crate) fn open_multi_coin_menu(
             }
         })
         .collect();
-    window.open_fitted_moon_context_menu(
-        cx,
+    open_menu_items(
         "multi-coin-context-menu",
         window.mouse_position(),
         items,
-        MENU_MIN_WIDTH,
-        MENU_MAX_WIDTH,
+        window,
+        cx,
     );
 }
 
@@ -260,9 +259,7 @@ impl BlacklistTargets {
                         .or_insert_with(|| ticker.clone());
                 }
             }
-            if let Some(symbol) = temp_ban_symbol(&names, row.core) {
-                temporary.push((row.core, symbol));
-            }
+            temporary.extend(temp_targets(&names, &[row.core]));
         }
         Self {
             own: distinct_targets(own),

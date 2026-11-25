@@ -235,7 +235,7 @@ fn temporary_rows(
                         ) {
                             return;
                         }
-                        send_temp_ban(b, &targets, None);
+                        let _ = send_temp_ban(b, &targets, None);
                     });
                 }),
         );
@@ -381,25 +381,38 @@ pub(super) fn hour_rows(
             let cores = cores.clone();
             let targets = targets.clone();
             let hours = span.hours();
+            // Spelled in DAYS only past a day, matching MoonBot's own menu.
+            let caption_span = if hours > 24 {
+                t!("coin_menu.tbl_days", n = hours / 24)
+            } else {
+                t!("coin_menu.tbl_hours", n = hours)
+            }
+            .to_string();
             MoonMenuItem::with_key(
                 SharedString::from(format!("{key_prefix}-{hours}h")),
-                // Spelled in DAYS only past a day: MoonBot's own menu reads "24 hours" and
-                // "3 days", and "72 часа" is a figure the reader has to convert back.
-                match hours > 24 {
-                    true => t!("coin_menu.tbl_days", n = hours / 24).to_string(),
-                    false => t!("coin_menu.tbl_hours", n = hours).to_string(),
-                },
+                caption_span.clone(),
             )
             .on_click(move |_, window, app| {
                 window.close_context_menu(app);
-                backend.update(app, |b, _| {
+                let record = backend.update(app, |b, _| {
                     // Re-validated against the LIVE workspace: the menu may have been open while
                     // an Auto workspace moved the core out of this group's scope.
                     if !workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
-                        return;
+                        return None;
                     }
-                    send_temp_ban(b, &targets, Some(span.duration()));
+                    UndoRecord::new(send_temp_ban(b, &targets, Some(span.duration())), |steps| {
+                        temp_added_caption(b, steps, &caption_span)
+                    })
                 });
+                if let Some(record) = record {
+                    show_undo_toast(
+                        record,
+                        backend.clone(),
+                        workspace_group.clone(),
+                        window,
+                        app,
+                    );
+                }
             })
         })
         .collect()
@@ -439,32 +452,72 @@ pub(super) fn target_row(
         })
 }
 
-/// Set or lift a temporary ban on each resolved market and return the successful sends.
+/// Set or lift each temporary ban, retaining an inverse only for successful adds.
+/// The published snapshot cannot account for queued changes that have yet to echo.
 fn send_temp_ban(
     b: &Backend,
     targets: &[(CoreId, String)],
     ban: Option<Duration>,
-) -> Vec<(CoreId, String)> {
-    let mut sent = Vec::new();
+) -> Vec<UndoStep> {
+    let mut steps = Vec::new();
     for (core, symbol) in targets {
         let core = *core;
-        if let Err(err) = b.session.set_temp_ban(core, symbol.clone(), ban) {
+        let prior = ban.and_then(|_| b.session.store().core(core)?.temp_ban_until_ms(symbol));
+        let result = b.session.set_temp_ban(core, symbol.clone(), ban);
+        if let Err(err) = &result {
             log::warn!(
                 "coin_menu: temp blacklist {symbol} on core {} failed: {err:#}",
                 moon_core::feed::core_label(core)
             );
-        } else {
-            sent.push((core, symbol.clone()));
+        }
+        if ban.is_some() {
+            steps.extend(UndoStep::temp_sent(core, symbol, prior, result.is_ok()));
         }
     }
-    sent
+    steps
+}
+
+/// Name a single successful market and core, or count successful bans in a bulk action.
+fn temp_added_caption(b: &Backend, steps: &[UndoStep], span: &str) -> String {
+    match steps {
+        [step] => {
+            let core = b
+                .session
+                .sessions()
+                .iter()
+                .find(|session| session.id == step.core)
+                .map_or_else(|| step.core.to_string(), |session| session.name.clone());
+            t!(
+                "coin_menu.undo.added_temp",
+                coin = step.coin.as_str(),
+                core = core,
+                span = span
+            )
+        }
+        _ => t!(
+            "coin_menu.undo.added_temp_bulk",
+            n = steps.len(),
+            span = span
+        ),
+    }
+    .to_string()
 }
 
 /// Capture the market each offered core's temporary blacklist can match.
-fn temp_targets(names: &CoinNames, cores: &[CoreId]) -> Vec<(CoreId, String)> {
+pub(super) fn temp_targets(names: &CoinNames, cores: &[CoreId]) -> Vec<(CoreId, String)> {
     cores
         .iter()
-        .filter_map(|&core| temp_ban_symbol(names, core).map(|symbol| (core, symbol)))
+        .filter_map(|&core| {
+            let Some(symbol) = temp_ban_symbol(names, core) else {
+                log::warn!(
+                    "coin_menu: core {} has no market for {}, temp blacklist skipped",
+                    moon_core::feed::core_label(core),
+                    names.clicked()
+                );
+                return None;
+            };
+            Some((core, symbol))
+        })
         .collect()
 }
 

@@ -122,10 +122,21 @@ pub fn open_coin_menu(
     if items.is_empty() {
         return;
     }
+    open_menu_items("coin-context-menu", pos, items, window, cx);
+}
+
+/// Place single-row and multi-row menus in the same fitted Root-owned overlay.
+fn open_menu_items(
+    menu_id: &'static str,
+    position: Point<Pixels>,
+    items: Vec<MoonMenuItem>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     window.open_fitted_moon_context_menu(
         cx,
-        "coin-context-menu",
-        pos,
+        menu_id,
+        position,
         items,
         MENU_MIN_WIDTH,
         MENU_MAX_WIDTH,

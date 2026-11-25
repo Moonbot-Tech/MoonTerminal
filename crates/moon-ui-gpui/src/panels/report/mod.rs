@@ -612,8 +612,6 @@ pub enum ReportScopeSubject {
         cores: Vec<CoreId>,
         /// Exact stored tickers, in visible row order.
         coins: Vec<String>,
-        /// The same comma-separated text shown in the coin field on open.
-        title: String,
     },
 }
 
@@ -683,13 +681,8 @@ impl ReportScope {
             .into_iter()
             .filter(|&core| seen.insert(core))
             .collect();
-        let title = coins.join(", ");
         Some(Self {
-            subject: ReportScopeSubject::Coins {
-                cores,
-                coins,
-                title,
-            },
+            subject: ReportScopeSubject::Coins { cores, coins },
             date_from: None,
             date_to: None,
             side: SideFilter::All,
@@ -723,11 +716,11 @@ impl ReportScope {
     }
 
     /// Return the subject text used in the window title.
-    pub fn title_subject(&self) -> &str {
+    pub fn title_subject(&self) -> String {
         match &self.subject {
-            ReportScopeSubject::Strategy { name, .. } => name,
-            ReportScopeSubject::Coin { coin, .. } => coin,
-            ReportScopeSubject::Coins { title, .. } => title,
+            ReportScopeSubject::Strategy { name, .. } => name.clone(),
+            ReportScopeSubject::Coin { coin, .. } => coin.clone(),
+            ReportScopeSubject::Coins { coins, .. } => plural_scope_title(coins),
         }
     }
 
@@ -744,9 +737,20 @@ impl ReportScope {
         match &self.subject {
             ReportScopeSubject::Strategy { .. } => String::new(),
             ReportScopeSubject::Coin { coin, .. } => exact_coin_field_text(coin),
-            ReportScopeSubject::Coins { title, .. } => title.clone(),
+            ReportScopeSubject::Coins { coins, .. } => coins.join(", "),
         }
     }
+}
+
+/// Limit the title to three tickers while the coin field and exact query keep the full set.
+fn plural_scope_title(coins: &[String]) -> String {
+    let mut title = coins[..coins.len().min(3)].join(", ");
+    if coins.len() > 3 {
+        let more = t!("report.scope_more_coins", n = coins.len() - 3);
+        title.push(' ');
+        title.push_str(&more);
+    }
+    title
 }
 
 /// Spell one ticker as the Report coin field's exact-match text.

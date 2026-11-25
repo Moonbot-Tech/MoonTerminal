@@ -152,7 +152,7 @@ city.TOR: es tr pt vi
 city.TYO: tr vi
 coin_bl_places.cores_one: vi
 coin_menu.target_core: vi
-coin_menu.tbl_left_stale: pt
+coin_menu.tbl_minutes: es pt
 common.db_read_failed_file: vi
 common.size_gb: es tr pt vi zh
 common.size_kb: es tr pt vi zh

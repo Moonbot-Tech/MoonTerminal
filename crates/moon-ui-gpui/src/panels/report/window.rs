@@ -12,6 +12,34 @@ const REPORT_WINDOW_MARGIN: f32 = 24.0;
 const REPORT_WINDOW_MIN_W: f32 = 900.0;
 const REPORT_WINDOW_MIN_H: f32 = 520.0;
 
+/// Track independent Report windows by handle so a closed window stops adding an offset.
+#[derive(Default)]
+struct MultiCoinWindows(Vec<AnyWindowHandle>);
+
+impl gpui::Global for MultiCoinWindows {}
+
+/// Only the reusable Report window owns the persisted bounds.
+fn persists_report_bounds(subject: &ReportScopeSubject) -> bool {
+    !matches!(subject, ReportScopeSubject::Coins { .. })
+}
+
+/// Offset each independent Report by 24 pixels, keeping its title bar reachable.
+fn cascade_report_bounds(
+    mut bounds: Bounds<Pixels>,
+    visible: Option<Bounds<Pixels>>,
+    already_open: usize,
+) -> Bounds<Pixels> {
+    let offset = px(REPORT_WINDOW_MARGIN * (already_open + 1) as f32);
+    bounds.origin.x += offset;
+    bounds.origin.y += offset;
+    if let Some(visible) = visible {
+        let title_reach = px(2.0 * REPORT_WINDOW_MARGIN);
+        bounds.origin.x = bounds.origin.x.min(visible.right() - title_reach);
+        bounds.origin.y = bounds.origin.y.min(visible.bottom() - title_reach);
+    }
+    bounds
+}
+
 /// Fit the requested large Report window inside one display's usable desktop.
 ///
 /// Args:
@@ -217,7 +245,11 @@ impl ReportPanel {
                 self.scoped_coin
                     .as_deref()
                     .filter(|seeded| *seeded == self.coin_query)
-                    .map(|seeded| seeded.trim().to_string())
+                    .map(|seeded| {
+                        self.exact_coins
+                            .as_deref()
+                            .map_or_else(|| seeded.trim().to_string(), plural_scope_title)
+                    })
             })
     }
 
@@ -242,6 +274,11 @@ impl ReportPanel {
         };
         let title = self.standalone_title();
         let subject = self.standalone_title_subject();
+        let title_coins = self
+            .scoped_coin
+            .as_deref()
+            .filter(|seeded| *seeded == self.coin_query && self.selected_strategy_name().is_none())
+            .and_then(|_| self.exact_coins.clone());
         let selected = self.sel_cores.clone();
         let cores = self.cores.clone();
         cx.defer(move |cx| {
@@ -250,6 +287,9 @@ impl ReportPanel {
                 crate::window::titles::retitle(
                     handle,
                     move |_| {
+                        if let Some(coins) = &title_coins {
+                            return scoped_report_title(&plural_scope_title(coins));
+                        }
                         subject
                             .as_deref()
                             .map_or_else(|| report_title(&selected, &cores), scoped_report_title)
@@ -280,7 +320,7 @@ pub fn open_scoped(
     cx: &mut App,
 ) {
     // A bulk action can start in the singleton itself, so its destination must be independent.
-    let singleton = !matches!(&scope.subject, ReportScopeSubject::Coins { .. });
+    let singleton = persists_report_bounds(&scope.subject);
     let existing = if singleton {
         let backend = backend.read(cx);
         (backend.report_window, backend.report_window_view.clone())
@@ -289,8 +329,8 @@ pub fn open_scoped(
     };
     if let (Some(handle), Some(view)) = existing {
         let next = scope.clone();
-        let title_text = scoped_report_title(next.title_subject());
-        let title_subject = next.title_subject().to_string();
+        let title_text = scoped_report_title(&next.title_subject());
+        let title_subject = next.title_subject();
         if handle
             .update(cx, |_, window, app| {
                 let updated = view
@@ -338,22 +378,25 @@ pub fn open_scoped(
     let display = display_id
         .and_then(|display_id| cx.find_display(display_id))
         .or_else(|| cx.primary_display());
-    let bounds = restored_report_bounds(
-        saved,
-        display.as_ref().map(|display| display.visible_bounds()),
-        saved_origin_is_visible,
-    );
+    let visible = display.as_ref().map(|display| display.visible_bounds());
+    let mut bounds = restored_report_bounds(saved, visible, saved_origin_is_visible);
+    if !singleton {
+        let live = cx.windows();
+        let windows = cx.default_global::<MultiCoinWindows>();
+        windows.0.retain(|handle| live.contains(handle));
+        bounds = cascade_report_bounds(bounds, visible, windows.0.len());
+    }
     // The minimum is design pixels; the window API takes the platform's.
     let zoom = moon_ui::MoonTheme::content_zoom(cx);
     let min_size = size(
         px((REPORT_WINDOW_MIN_W * zoom).min(f32::from(bounds.size.width))),
         px((REPORT_WINDOW_MIN_H * zoom).min(f32::from(bounds.size.height))),
     );
-    let title_subject = scope.title_subject().to_string();
-    let title = move |_: &App| scoped_report_title(&title_subject);
+    let title_scope = scope.clone();
+    let title = move |_: &App| scoped_report_title(&title_scope.title_subject());
     let mut options = crate::window::windowing::tool_window_options(
         title(cx),
-        crate::window::windowing::restored_window_bounds(saved, bounds),
+        crate::window::windowing::restored_window_bounds(saved.filter(|_| singleton), bounds),
         Some(min_size),
         owner,
     );
@@ -366,7 +409,7 @@ pub fn open_scoped(
             ReportPanel::new_with_scope(backend_for_window.clone(), group, Some(scope), window, cx)
         });
         panel.update(cx, |panel, panel_cx| {
-            panel.mark_standalone(window, panel_cx)
+            panel.mark_standalone(window, singleton, panel_cx)
         });
         if singleton {
             backend_for_window.update(cx, |backend, _| {
@@ -386,6 +429,10 @@ pub fn open_scoped(
             backend.update(cx, |backend, _| {
                 backend.report_window = Some(handle);
             });
+        } else {
+            cx.default_global::<MultiCoinWindows>()
+                .0
+                .push(handle.into());
         }
         crate::window::titles::track(handle.into(), owner.is_some(), title, cx);
         crate::window::windowing::activate_new_window(handle.into(), cx);
