@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use super::super::super::AnalyticsView;
 use super::super::auto_picks::{AutoClass, AutoEmpty, AutoFilter, cell_tip};
-use super::super::columns::strategy_metric_cell;
+use super::super::columns::{MetricCol, TotalRule, strategy_metric_cell};
 use super::super::ready::ReadyFilter;
 use super::super::{
     AUTO_MIN_W, AUTO_W, COL_BIT_AUTO, COL_BIT_CORE, COL_BIT_KIND, COL_BIT_LASTEDIT, COL_BIT_READY,
@@ -22,7 +22,7 @@ use super::super::{
     READY_MIN_W, READY_W, SORT_AUTO, SORT_CORE, SORT_KIND, SORT_LASTEDIT, SORT_NAME, SORT_READY,
     STRAT_NAME_MIN_W, StratMode, metric_bit,
 };
-use super::MAX_ROWS;
+use super::{MAX_ROWS, StratTotals};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::GroupStat;
@@ -277,6 +277,20 @@ impl AnalyticsView {
             None
         };
         let toolbar = strat_toolbar(mode_btn, progress, counter, p, cx);
+        // Only under drawn rows: every empty face above already says why there is nothing to
+        // add up, and a row of zeros under it would contradict that sentence.
+        let footer = match (&self.strat_visible, shown > 0) {
+            (Some(visible), true) => Some(totals_row(
+                self.strat_mode.drawn_cols(self.strat_cols()),
+                &visible.totals,
+                shown,
+                p,
+                core_w,
+                &metric_widths,
+                cx,
+            )),
+            _ => None,
+        };
         // The header row stays OUTSIDE the virtual list so it cannot scroll away.
         strat_list_frame(
             p,
@@ -288,6 +302,7 @@ impl AnalyticsView {
                 .children(self.condition_chips(cx)),
             self.header_row(p, core_w, &metric_widths, cx),
             list,
+            footer,
             cx,
         )
     }
@@ -379,7 +394,8 @@ fn strat_toolbar(
         .into_any_element()
 }
 
-/// The strategy-list card's column: toolbar, filter bar, header, list, with no status slot.
+/// The strategy-list card's column: toolbar, filter bar, header, list, totals, with no status
+/// slot.
 ///
 /// The view and the layout probe both call this. A probe that draws the progress line in a
 /// bare full-width box never sees the zero-width wrap that happens only inside this column.
@@ -390,6 +406,8 @@ fn strat_toolbar(
 ///     filter_bar: Search and the list filters.
 ///     header: The sortable column titles, kept outside the scroller.
 ///     list: The virtual rows, or the empty-state note that replaces them.
+///     footer: The totals row, pinned under the scroller like the header above it; `None`
+///         while the list shows an empty state.
 ///     cx: App, for sizing.
 ///
 /// Returns:
@@ -400,6 +418,7 @@ fn strat_list_frame(
     filter_bar: impl IntoElement,
     header: impl IntoElement,
     list: impl IntoElement,
+    footer: Option<AnyElement>,
     cx: &App,
 ) -> AnyElement {
     v_flex()
@@ -421,7 +440,156 @@ fn strat_list_frame(
         .child(filter_bar)
         .child(header)
         .child(div().w_full().flex_1().min_h_0().child(list))
+        .children(footer)
         .into_any_element()
+}
+
+/// The totals row pinned under the strategy list (#1455): "Total (N)" in the name column and,
+/// under each visible metric, the aggregate its [`TotalRule`] allows.
+///
+/// It sums EVERY row the list's filters admit, the ones past the [`MAX_ROWS`] draw cap
+/// included; the label's tooltip says so, and says how many rows are drawn when the cap cuts.
+/// It is not a selection and moves none: it has no click handler, and the tuning scope and the
+/// right-hand card stay where they were.
+///
+/// The geometry is the row's: the same name/fixed-column split, the same widths and floors,
+/// the same right padding for the scrollbar, so every figure stands under its column at any
+/// width. A narrow host squeezes it exactly like the rows: cells truncate down to their floor
+/// and carry the full value in a tooltip.
+///
+/// Args:
+///     drawn: The columns drawn on this axis (`StratMode::drawn_cols`), the mask the rows'
+///         `col_shown` reads — passed as the mask so a layout probe draws the very same row.
+///     totals: The aggregate memoized with the row order.
+///     shown: How many rows the list draws.
+///     p: Active palette.
+///     core_w: Shared measured core-column width.
+///     metric_widths: Shared preferred widths of the numeric columns.
+///     cx: App, for sizing.
+///
+/// Returns:
+///     The footer row (`an-strat-totals`).
+fn totals_row(
+    drawn: u16,
+    totals: &StratTotals,
+    shown: usize,
+    p: MoonPalette,
+    core_w: f32,
+    metric_widths: &[f32],
+    cx: &App,
+) -> AnyElement {
+    let mut tip = t!("analytics.strat.total_tip", n = totals.rows).to_string();
+    if totals.rows > shown {
+        tip.push('\n');
+        tip.push_str(&t!(
+            "analytics.strat.total_tip_capped",
+            shown = shown,
+            n = totals.rows
+        ));
+    }
+    let shows = |bit: u16| drawn & bit != 0;
+    // Empty cells hold their column's place so the figures to their right stay aligned.
+    let spacer = |w: f32, min: f32| {
+        div()
+            .w(design::font_w_px(cx, w))
+            .min_w(design::font_w_px(cx, min))
+            .flex_shrink_1()
+    };
+    h_flex()
+        .debug_selector(|| "an-strat-totals".to_string())
+        .w_full()
+        .flex_none()
+        .h(px(strat_row_h(cx)))
+        .pl(design::ui_px(cx, 8.0))
+        .pr(design::ui_px(cx, MOON_SCROLLBAR_TRACK) + design::ui_px(cx, 8.0))
+        .gap(design::ui_px(cx, 8.0))
+        .items_center()
+        .justify_between()
+        .when(!design::is_facet(cx), |el| el.bg(moon(p.table_head)))
+        .border_t_1()
+        .border_color(moon(p.border))
+        // The label is the name column ITSELF, a plain text cell like the header's, not a
+        // flex child inside an `h_flex` like a row's name. Nested that way, outside a virtual
+        // list, the figures to its right stopped painting as soon as the card was wide enough to
+        // fit them (seen live on the fixture at 2300 px; the layout bounds stayed correct).
+        .child(
+            column_width(
+                div()
+                    .id("an-strat-totals-label")
+                    .debug_selector(|| "an-strat-totals-label".to_string())
+                    .truncate()
+                    .font_family(design::ui_font())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(moon(p.text))
+                    .tooltip(crate::panels::common::text_tooltip(tip)),
+                SORT_NAME,
+                None,
+                cx,
+            )
+            .child(t!("analytics.strat.total_n", n = totals.rows).to_string()),
+        )
+        .child(
+            fixed_columns(cx)
+                .children(shows(COL_BIT_KIND).then(|| spacer(KIND_W, KIND_MIN_W)))
+                .children(
+                    shows(COL_BIT_CORE)
+                        .then(|| column_width(div(), SORT_CORE, Some((core_w, CORE_MIN_W)), cx)),
+                )
+                .children(
+                    METRIC_COLS
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| shows(metric_bit(*i)))
+                        .map(|(i, c)| totals_metric_cell(c, totals, p, metric_widths[i])),
+                )
+                .children(
+                    shows(COL_BIT_LASTEDIT)
+                        .then(|| lastedit_spacing(spacer(LASTEDIT_W, LASTEDIT_MIN_W), cx)),
+                )
+                .children(shows(COL_BIT_AUTO).then(|| spacer(AUTO_W, AUTO_MIN_W)))
+                .children(shows(COL_BIT_READY).then(|| spacer(READY_W, READY_MIN_W))),
+        )
+        .into_any_element()
+}
+
+/// One totals cell, at the same measured width and with the same sign colouring and
+/// truncation as [`strategy_metric_cell`] in the rows above; an empty cell keeps the width.
+///
+/// Args:
+///     col: The metric column the cell sits under.
+///     totals: The list's aggregate.
+///     p: Active palette.
+///     width: The column's measured width, in pixels.
+///
+/// Returns:
+///     The cell (`an-strat-total-<column key>`).
+fn totals_metric_cell(
+    col: &MetricCol,
+    totals: &StratTotals,
+    p: MoonPalette,
+    width: f32,
+) -> Stateful<Div> {
+    let key = col.key;
+    let cell = div()
+        .id(SharedString::from(format!("an-strat-total-{key}")))
+        .debug_selector(move || format!("an-strat-total-{key}"))
+        .w(px(width))
+        .min_w_0()
+        .flex_shrink_1()
+        .truncate()
+        .text_right();
+    match totals.cell(col) {
+        Some((text, signed)) => {
+            let color = match signed {
+                Some(value) => super::super::super::summary::sign_color(p, value),
+                None => p.text_soft,
+            };
+            cell.text_color(moon(color))
+                .tooltip(crate::panels::common::text_tooltip_value(text.clone()))
+                .child(text)
+        }
+        None => cell,
+    }
 }
 
 /// A comparison-table row; single-click selects, double-click opens its scoped report.
@@ -1209,10 +1377,22 @@ fn cached_metric_widths(
 /// resizing columns as conditions are edited. The
 /// measurement covers the complete loaded result rather than the filtered slice, so searching or
 /// changing the row cap cannot make the numeric cluster jump.
+///
+/// The totals row's cells are measured too, through [`super::totals::widest_totals`]: a sum over
+/// hundreds of rows is wider than any one of them, and the footer is the figure the user opens
+/// the tab for — it must not be the one cell that ellipsizes on a wide window.
 fn metric_col_widths(groups: &[GroupStat], cx: &App) -> Vec<f32> {
     let mut widest = vec![(0usize, String::new()); METRIC_COLS.len()];
-    for group in groups {
+    let bounds = super::totals::widest_totals(groups);
+    for (group, is_bound) in groups
+        .iter()
+        .map(|g| (g, false))
+        .chain(bounds.iter().map(|g| (g, true)))
+    {
         for (index, column) in METRIC_COLS.iter().enumerate() {
+            if is_bound && column.total == TotalRule::Blank {
+                continue;
+            }
             let text = (column.text)(group);
             let chars = text.chars().count();
             if chars > widest[index].0 {

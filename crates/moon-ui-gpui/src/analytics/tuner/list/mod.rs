@@ -13,6 +13,9 @@ pub(in crate::analytics) use conditions::Conditions;
 mod select;
 /// The list card, its rows and the sortable header row.
 mod table;
+/// The totals row's aggregate over every admitted row (#1455).
+mod totals;
+pub(in crate::analytics) use totals::StratTotals;
 
 #[cfg(test)]
 mod tests;
@@ -142,6 +145,10 @@ pub(in crate::analytics) struct VisibleRows {
     /// Rows passing every filter but the auto-pick and tuning ones: the counter's "of M", so
     /// turning either on cannot move the denominator.
     pub(in crate::analytics) pool: usize,
+    /// The footer's aggregate over every index in `idx` — the whole filtered list, past the
+    /// draw cap too. Folded here, with the order it describes, so hover and scroll redraws reuse
+    /// it and the total can never describe a different set than the rows above it.
+    pub(in crate::analytics::tuner) totals: StratTotals,
 }
 
 /// Sort only as deep as the list can draw.
@@ -415,11 +422,13 @@ impl AnalyticsView {
         let key = self.strat_visible_key(all);
         if !memo_is_fresh(self.strat_visible.as_ref(), &key) {
             let (idx, enabled_filter_available, pool) = filter_sort_indices(all, &key);
+            let totals = StratTotals::of(all, &idx, key.percent);
             self.strat_visible = Some(VisibleRows {
                 key,
                 idx,
                 enabled_filter_available,
                 pool,
+                totals,
             });
         }
         self.visible_indices()
