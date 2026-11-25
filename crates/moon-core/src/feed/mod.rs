@@ -32,7 +32,7 @@ pub use mode_advice::{SiblingOutcome, suggest_alternate_mode};
 pub use news::{NewsItem, NewsSnapshot};
 pub use order_gate::FeedRx;
 pub use report_traces::{ArchivedLineKind, ArchivedOrderTrace, ReportTracesOutcome};
-pub use strategies::{field_text_is_valid, strategy_kind_is_hidden};
+pub use strategies::{field_text_is_valid, strat_kind_name, strategy_kind_is_hidden};
 pub use types::*;
 
 use std::sync::atomic::{AtomicBool, Ordering};

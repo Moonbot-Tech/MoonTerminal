@@ -5,7 +5,7 @@ use super::*;
 impl OrdersPanel {
     /// Reconstruct the panel from `docks.json` by applying the `PanelInfo` view state after `new`.
     ///
-    /// Sorting, order kind, current-market filtering, and column settings are restored. The core
+    /// Sorting, order kind and origin, current-market filtering, and column settings are restored. The core
     /// selection is intentionally not persisted and therefore starts as all cores, matching the
     /// original egui product behavior.
     pub fn restored(
@@ -175,6 +175,15 @@ fn view_from_info(info: &PanelInfo) -> OrdersViewState {
         if let Some(k) = j.get("kind").and_then(|x| x.as_u64()) {
             v.kind = OrderKind::from_u8(k as u8);
         }
+        // Absent in every layout saved before the origin filter existed; the default (All) then
+        // stands, so an upgrade shows the same rows as before.
+        if let Some(o) = j
+            .get("origin")
+            .and_then(|x| x.as_u64())
+            .and_then(|x| u8::try_from(x).ok())
+        {
+            v.origin = OrderOrigin::from_u8(o);
+        }
         if let Some(n) = j.get("newest_first").and_then(|x| x.as_bool()) {
             v.newest_first = n;
         }
@@ -230,3 +239,6 @@ fn column_order_from_info(info: &PanelInfo) -> Vec<SharedString> {
         })
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests;

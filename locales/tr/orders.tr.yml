@@ -22,6 +22,13 @@ orders.settings: "Ayarlar"
 orders.kind.all: "Tümü"
 orders.kind.real: "Gerçek"
 orders.kind.emu: "Emülatör"
+# Order-origin filter beside the kind filter: who placed the order. `both` is the trigger
+# label while every origin is shown, worded apart from `orders.kind.all` beside it.
+orders.origin.all: "Tümü"
+orders.origin.auto: "Oto"
+orders.origin.manual: "Manuel"
+orders.origin.both: "Oto/Manuel"
+orders.origin.tip: "Emri kim verdi: Oto — bir strateji, Manuel — siz, elle. Manual stratejisinin yönettiği emir manuel sayılır."
 orders.only_current: "Yalnızca geçerli piyasanın emirleri"
 # Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
 # than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
@@ -40,6 +47,8 @@ orders.footer_total: "Toplam: %{total} · gerçek: %{real} · emülatör: %{emu}
 # exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
 # `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
 orders.footer_total_tip: "Toplam: %{total} — seçilen çekirdeklerin açık emirleri (bu filtre açıkken yalnızca geçerli piyasa).\nGerçek: %{real} — gerçek hesaptaki emirler, emülatör değil.\nEmülatör: %{emu} — Moonbot emülatör emirleri.\nTümü / Gerçek / Emülatör filtresi bu sayaçları değiştirmez."
+# Appended to the footer tooltip while the origin filter is on; %{origin} is its label.
+orders.footer_origin_tip: "Yalnızca «%{origin}» emirleri sayılır: Oto / Manuel filtresi açık."
 orders.show_all: "Tümünü göster"
 orders.sort.profit: "Önce kâr"
 orders.sort.sell: "Önce Sell"

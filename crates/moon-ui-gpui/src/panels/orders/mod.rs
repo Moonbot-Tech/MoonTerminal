@@ -13,6 +13,7 @@
 
 mod coin_filter;
 mod controls;
+mod origin;
 mod persist;
 mod render;
 mod sort;
@@ -24,7 +25,9 @@ mod tests;
 
 pub(crate) use sort::executed;
 use sort::{apply_main_lift, sort_or_reuse_entries};
-use view::{ALL_COLUMNS_MASK, MainOnTop, OrdCol, OrderKind, OrdersViewState, PrimarySort};
+use view::{
+    ALL_COLUMNS_MASK, MainOnTop, OrdCol, OrderKind, OrderOrigin, OrdersViewState, PrimarySort,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -376,8 +379,9 @@ pub struct OrdersPanel {
     /// intervening render, expired map entries can remain allocated longer. Feed rows normally
     /// converge on the next tick because the feed keeps a matching override.
     pub(super) stop_overlay: std::collections::HashMap<(CoreId, u64, u8), (bool, Instant)>,
-    /// Footer counts for real and emulated orders before the kind filter but after core and current
-    /// market filters. Updated by [`Self::rebuild_cache`].
+    /// Footer counts for real and emulated orders: after the core, current-market, coin and origin
+    /// filters, before the kind filter (the two counts ARE the kind breakdown, so filtering them by
+    /// kind would zero one of them). Updated by [`Self::rebuild_cache`].
     count_real: usize,
     count_emu: usize,
     dock: Option<WeakEntity<DockArea>>,
@@ -762,7 +766,8 @@ impl OrdersPanel {
     /// Collect, filter, and base-sort rows.
     ///
     /// Return `(rows, real_count, emulated_count, sort_signature)`. Counts apply the core,
-    /// current-market and coin filters but precede the kind filter, matching the footer totals.
+    /// current-market, coin and origin filters but precede the kind filter, matching the footer
+    /// totals.
     fn build_entries(
         &self,
         b: &Backend,
@@ -782,8 +787,8 @@ impl OrdersPanel {
                     .core(session.id)
                     .map(|data| (session.id, session.name.as_str(), data.orders.as_slice()))
             });
-        // Apply the effective Classic or Auto core scope, the current-market filter and the coin
-        // filter before the order-kind filter, so the footer counts what the table shows.
+        // Apply the effective Classic or Auto core scope, the current-market, coin and origin
+        // filters before the order-kind filter, so the footer counts what the table shows.
         let previous: HashMap<_, _> = self
             .cached_entries
             .iter()
@@ -800,6 +805,10 @@ impl OrdersPanel {
                             None => true,
                         })
                     && coin_filter::matches_coin(&row.coin, &self.coin_query)
+                    && (view.origin == OrderOrigin::All
+                        || view
+                            .origin
+                            .admits(origin::is_manual_order(row.strat_id, &row.strat)))
             },
             &previous,
             revisions,

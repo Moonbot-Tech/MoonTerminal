@@ -935,7 +935,11 @@ pub fn strategy_kind_is_hidden(ordinal: u8) -> bool {
 }
 
 /// Returns the Moonbot strategy type (kind) for a `StrategyKind` ordinal.
-pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
+///
+/// Public because `OrderRow::strat` carries the kind only as this name: a reader classifying an
+/// order by kind (the Orders panel's origin filter) compares against this producer's output
+/// instead of keeping a second copy of the literal.
+pub fn strat_kind_name(ordinal: u8) -> &'static str {
     match ordinal {
         0 => "Unknown",
         1 => "Telegram",
