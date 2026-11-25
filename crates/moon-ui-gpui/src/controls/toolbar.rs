@@ -16,7 +16,7 @@ use moon_ui::{
 use super::DASH;
 use super::metric::{metric_button, sl_toggle};
 use super::strips::{self, sell_strip, size_strip};
-use super::{MaxOrderReadout, STRATEGIES_ICON, TradeMetric, fmt_field2, fmt_field2_signed};
+use super::{MaxCeiling, STRATEGIES_ICON, TradeMetric, fmt_field2, fmt_field2_signed};
 use crate::backend::{ManualSource, ManualStop};
 use crate::panels::common::text_tooltip;
 use crate::shell::Shell;

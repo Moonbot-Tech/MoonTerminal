@@ -27,6 +27,7 @@
 //!   they all share;
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
 //! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
+//! - [`max_ceiling`] weighs the per-order cap against the position cap for the row's `MAX`;
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
 //! - [`row_selection`] holds the controlled multi-row click algorithm — plain, Ctrl, Shift and
 //!   select-all over a keyed row order — shared by Report and Core Status;
@@ -54,6 +55,7 @@ pub(crate) mod date_range;
 mod fmt;
 mod label_fields;
 mod manual_strat;
+mod max_ceiling;
 mod metric;
 pub(crate) mod row_selection;
 mod scale;
@@ -77,6 +79,7 @@ pub use fmt::{ellipsize, fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub(crate) use label_fields::{field_picker, row_display_name, row_title};
 pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;
+pub use max_ceiling::MaxCeiling;
 pub use metric::{MetricTarget, OpenMetricPopup, TradeMetric, metric_popup_content};
 
 use moon_core::market::{MarketLimits, MaxOrderSource};

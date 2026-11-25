@@ -4,7 +4,8 @@ use crate::account::AccountIdentity;
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
 use crate::market::source::{
-    MarketLabel, MarketLimits, max_order_notional, position_cap, session_usdt,
+    MarketLabel, MarketLimits, market_quantity_unit, max_order_notional, position_cap_quote,
+    session_usdt,
 };
 use crate::session::CoreId;
 
@@ -1083,7 +1084,8 @@ impl MarketDataSource {
     ///
     /// `max_order` goes through the shared [`max_order_notional`] rule rather than repeating it,
     /// so the Screener's `Max.Order` column and the trading toolbar cannot disagree about one
-    /// coin's cap.
+    /// coin's per-order cap. The toolbar's `MAX` weighs it against `position_cap` and may show
+    /// the lower position cap instead (#1067).
     ///
     /// TWO snapshots, for the same reason as [`Self::market_figures`]: the order cap and the
     /// maximum leverage are venue facts and come from the deduplicated PROVIDER, while the
@@ -1115,23 +1117,34 @@ impl MarketDataSource {
         };
         let snapshot = client.snapshot_versioned()?;
         let handle = snapshot.markets().get(market)?;
-        let mut limits = handle.with(|m| MarketLimits {
-            max_order: max_order_notional(
-                &m.base_currency,
-                m.max_notional(),
-                m.max_qty(),
+        // The unit and the ask come from the PROVIDER's record, beside the order cap they also
+        // convert: they are venue facts, and the consumer's snapshot contributes only its own
+        // account's cap below.
+        let (mut limits, unit, ask) = handle.with(|m| {
+            (
+                MarketLimits {
+                    max_order: max_order_notional(
+                        &m.base_currency,
+                        m.max_notional(),
+                        m.max_qty(),
+                        m.price.ask,
+                        m.contract_size(),
+                    ),
+                    max_leverage: m.max_leverage,
+                    position_cap: None,
+                },
+                market_quantity_unit(&m.base_currency, m.contract_size()),
                 m.price.ask,
-                m.contract_size(),
-            ),
-            max_leverage: m.max_leverage,
-            position_cap: None,
+            )
         });
         if let Some(core_snapshot) = self
             .core_client(core)
             .and_then(|client| client.snapshot_versioned())
         {
             if let Some(handle) = core_snapshot.markets().get(market) {
-                limits.position_cap = handle.with(|m| position_cap(m.max_value()));
+                // In quote currency on every market, so the toolbar can compare it with
+                // `max_order` and the popup prints it under the same unit.
+                limits.position_cap = handle.with(|m| position_cap_quote(m.max_value(), unit, ask));
             }
         }
         Some(limits)

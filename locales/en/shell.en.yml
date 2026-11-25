@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Exchange limits have not loaded for this market yet."
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Full summary: an order cap belongs to one exchange account - select a server to see it."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Position cap at the APPLIED leverage: %{cap}. It is below the per-order maximum (%{order}), so it is what stops a larger order. Lower leverage raises it; a leverage change shows here only after the exchange has accepted it and the core has reported the new cap."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Position cap at the APPLIED leverage: %{cap}. The exchange states no per-order maximum for this market, so this is the only ceiling. Lower leverage raises it; a leverage change shows here only after the exchange has accepted it and the core has reported the new cap."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Per-order maximum: %{order}. The position cap at the APPLIED leverage (%{cap}) is not lower, so this is what stops a larger order. Lower leverage raises the position cap; a leverage change shows here only after the exchange has accepted it and the core has reported the new cap."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "This coin's maximum leverage as stated by the exchange."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.
