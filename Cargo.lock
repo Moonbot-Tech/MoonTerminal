@@ -5058,7 +5058,7 @@ dependencies = [
 [[package]]
 name = "moonproto"
 version = "0.1.0"
-source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#2f2443e12f2328f1b1ef13e0692f59ea9fe81867"
+source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#fe02d799278af941fe8e7fcde1d8d58bcf906994"
 dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
@@ -6238,7 +6238,7 @@ dependencies = [
 [[package]]
 name = "polling"
 version = "3.11.0"
-source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#2f2443e12f2328f1b1ef13e0692f59ea9fe81867"
+source = "git+https://github.com/Moonbot-Tech/MoonProtoBeta#fe02d799278af941fe8e7fcde1d8d58bcf906994"
 dependencies = [
  "cfg-if",
  "concurrent-queue",
