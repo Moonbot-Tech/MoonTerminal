@@ -853,7 +853,8 @@ fn global_wallet_core(cores: &[(CoreId, String)], retained: Option<CoreId>) -> O
 ///     effective: Current query scope, supplied explicitly to prevent the two domains being
 ///         accidentally conflated during future cache refactors.
 ///     selected_filter: Retained Classic multi-core filter to prune for removed cores.
-///     selected_wallet: Retained Classic wallet/detail core to repair when removed.
+///     selected_wallet: Retained Classic wallet/detail core to repair with the first effective core
+///         when removed.
 ///
 /// Returns:
 ///     `true` when the retained wallet/detail core changed and its cache must be rebuilt.
@@ -870,7 +871,9 @@ fn reconcile_retained_assets_state(
     if selected_wallet.is_some_and(|core| valid.contains(&core)) {
         return false;
     }
-    let next = valid.first().copied();
+    // Validity comes from the full scope, but fallback follows the cores actually listed. Choosing
+    // a valid but filtered-out core here would silently replace the removed pick with a hidden one.
+    let next = effective.first().copied();
     let changed = *selected_wallet != next;
     *selected_wallet = next;
     changed

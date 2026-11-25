@@ -754,12 +754,14 @@ impl AssetsView {
         // that core is listed or remains elsewhere in the panel's full scope, so a filtered-out
         // Classic pick keeps its own balances without a highlighted row. A removed core instead
         // falls back to the first listed core for the header, refresh button, and transfers.
-        let scope_cores = self.scope_cores(self.backend.read(cx));
-        let selected = resolve_bottom_wallet_core(
-            self.cached_wallet_key.and_then(|(core, ..)| core),
-            aggs,
-            &scope_cores,
-        );
+        let cached = self.cached_wallet_key.and_then(|(core, ..)| core);
+        // A listed or absent cache needs no second canonical ordering pass; only an unlisted cached
+        // id must prove that it still exists in the full scope.
+        let scope_cores = cached
+            .filter(|core| !aggs.iter().any(|agg| agg.id == *core))
+            .map(|_| self.scope_cores(self.backend.read(cx)));
+        let selected =
+            resolve_bottom_wallet_core(cached, aggs, scope_cores.as_deref().unwrap_or_default());
         // Its name, also when the filter has taken its row out of the list.
         let selected_name = selected.and_then(|core| {
             aggs.iter()
@@ -767,6 +769,7 @@ impl AssetsView {
                 .map(|agg| agg.name.clone())
                 .or_else(|| {
                     scope_cores
+                        .as_ref()?
                         .iter()
                         .find(|(id, _)| *id == core)
                         .map(|(_, name)| name.clone())
@@ -1062,8 +1065,7 @@ fn resolve_bottom_wallet_core(
 ) -> Option<CoreId> {
     cached
         .filter(|core| {
-            aggs.iter().any(|agg| agg.id == *core)
-                || scope_cores.iter().any(|(id, _)| id == core)
+            aggs.iter().any(|agg| agg.id == *core) || scope_cores.iter().any(|(id, _)| id == core)
         })
         .or_else(|| aggs.first().map(|agg| agg.id))
 }
