@@ -56,7 +56,7 @@ fn an_off_grid_stamp_is_filed_at_its_bucket() {
     assert_eq!(ring_open_ms(at(5, 0), later), Some(at(0, 0)));
     assert_eq!(ring_open_ms(at(7, 20), later), Some(at(0, 0)));
     assert_eq!(ring_open_ms(at(12, 25), later), Some(at(5, 0)));
-    let c = ring_candle(wire(at(7, 20)), true, later).expect("sealed row");
+    let c = ring_candle(wire(at(7, 20)), later).expect("sealed row");
     assert_eq!(c.t_open_ms, at(0, 0) as f64);
 }
 
@@ -69,28 +69,23 @@ fn an_off_grid_stamp_is_filed_at_its_bucket() {
 /// stored at 1970.
 #[test]
 fn only_sealed_buckets_are_stored() {
-    let c = ring_candle(wire(NOW_BUCKET), true, NOW_BUCKET).expect("sealed row");
+    let c = ring_candle(wire(NOW_BUCKET), NOW_BUCKET).expect("sealed row");
     assert_eq!(c.t_open_ms, (NOW_BUCKET - 300_000) as f64);
-    assert_eq!(
-        ring_candle(wire(NOW_BUCKET + 300_000), true, NOW_BUCKET),
-        None
-    );
-    assert_eq!(ring_candle(wire(0), true, NOW_BUCKET), None);
+    assert_eq!(ring_candle(wire(NOW_BUCKET + 300_000), NOW_BUCKET), None);
+    assert_eq!(ring_candle(wire(0), NOW_BUCKET), None);
 }
 
-/// A snapshot row's volume is split by the venue: turnover on a quote venue, base coins elsewhere.
+/// A snapshot row's wire volume is the quote, on every venue; the base is its OHLC4 estimate.
 ///
-/// By hand: on a quote venue the wire 5.0 is the quote and the base is 5 / OHLC4 = 5 / 10 = 0.5;
-/// on a base venue the 5.0 is base and the quote 5 * (12 + 12 + 8 + 8) / 4 = 50.
+/// By hand: the wire 5.0 is the quote and the base is 5 / OHLC4 = 5 / ((12 + 12 + 8 + 8) / 4) =
+/// 0.5.
 ///
-/// Breakage: the wire figure read as base on a quote venue (a turnover ten times too large), or as
-/// quote on a base venue.
+/// Breakage: the wire figure read as base coins, which made the stored quote 5 * 10 = 50 — the
+/// price times too large, measured as a 225 000 B $ day for Bybit BTCUSDT on 2026-11-25.
 #[test]
-fn a_snapshot_rows_volume_follows_the_venue() {
-    let quote = ring_candle(wire(NOW_BUCKET), true, NOW_BUCKET).expect("row");
-    assert_eq!((quote.volume, quote.quote_volume), (0.5, 5.0));
-    let base = ring_candle(wire(NOW_BUCKET), false, NOW_BUCKET).expect("row");
-    assert_eq!((base.volume, base.quote_volume), (5.0, 50.0));
+fn a_snapshot_rows_wire_volume_is_the_quote() {
+    let row = ring_candle(wire(NOW_BUCKET), NOW_BUCKET).expect("row");
+    assert_eq!((row.volume, row.quote_volume), (0.5, 5.0));
 }
 
 /// A row with a price that is not a positive finite number, or a volume that is negative or not
@@ -127,11 +122,11 @@ fn a_broken_ring_row_is_not_stored() {
         },
     ];
     for row in broken {
-        assert_eq!(ring_candle(row, true, NOW_BUCKET), None, "{row:?}");
+        assert_eq!(ring_candle(row, NOW_BUCKET), None, "{row:?}");
     }
     let zero_volume = WireRow {
         volume: 0.0,
         ..wire(NOW_BUCKET)
     };
-    assert!(ring_candle(zero_volume, false, NOW_BUCKET).is_some());
+    assert!(ring_candle(zero_volume, NOW_BUCKET).is_some());
 }

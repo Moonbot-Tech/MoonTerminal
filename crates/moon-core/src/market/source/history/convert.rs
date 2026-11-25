@@ -10,8 +10,9 @@ use super::*;
 ///     t_open_ms: Bucket open time, Unix milliseconds.
 ///     open, high, low, close: The bucket's OHLC, pre-normalization.
 ///     volume: The wire volume figure as the source reported it.
-///     volume_is_quote: `true` when `volume` is quote-currency turnover (a Binance Futures row),
-///         `false` when it is base-currency volume — see `crate::venue::deep_volume_is_quote`.
+///     volume_is_quote: `true` when `volume` is quote-currency turnover (a deep row of a venue
+///         `crate::venue::deep_volume_is_quote` names, or any 5-minute ring row), `false` when it
+///         is base-currency volume.
 ///
 /// Returns:
 ///     The chart candle with normalized OHLC and both volume fields resolved.
@@ -68,17 +69,14 @@ pub(super) fn deep_row_candle(
 /// boundary rows resampled into the wrong coarse bucket. This shift is unrelated to the volume
 /// question below and must not move.
 ///
-/// The ring row is a moonproto `DeepPrice` under a different wire shape (`Candle5mRow`, built by
-/// `Candle5mRow::from_deep_price`): same Delphi record, same core, same `volume` field, so it
-/// takes the same `volume_is_quote` flag as [`deep_row_candle`] rather than always being treated
-/// as base.
+/// The ring's `volume` is quote money on every venue, unknown ones included — unlike the deep rows,
+/// whose unit [`deep_row_candle`] takes per venue. Measured, and why the two differ:
+/// `crate::market::source::refresh::ring`'s module doc.
 ///
 /// Args:
 ///     r: The retained 5-minute snapshot ring row.
-///     volume_is_quote: Whether this row's `volume` slot is quote-currency turnover.
 pub(super) fn snap5_row_candle(
     r: &moonproto::state::Candle5mRow,
-    volume_is_quote: bool,
 ) -> crate::market::candles::ChartCandle {
     wire_row_candle(
         (r.time().unix_millis() - SNAP5_TF_MS) as f64,
@@ -87,7 +85,7 @@ pub(super) fn snap5_row_candle(
         r.low(),
         r.close(),
         r.volume(),
-        volume_is_quote,
+        true,
     )
 }
 

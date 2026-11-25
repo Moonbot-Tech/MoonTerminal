@@ -21,9 +21,9 @@
 //! older executable that only knows `chunks` keeps reading exactly the v1 data it always
 //! did. See `read_rows` and `upsert_one`.
 //!
-//! A v1 row's `volume` slot is not always base coins: Binance Futures deep-history rows carry
-//! quote-currency turnover instead. Which producer wrote a v1 row, by kind, decides whether that
-//! reinterpretation is SOUND to apply on read:
+//! A v1 row's `volume` slot is not always base coins: the core's deep-history rows carry
+//! quote-currency turnover instead (`crate::venue::deep_volume_is_quote`). Which producer wrote a
+//! v1 row, by kind, decides whether that reinterpretation is SOUND to apply on read:
 //!
 //! | kind | producers under the real exchange key | reinterpreted? |
 //! |---|---|---|
@@ -36,9 +36,18 @@
 //! exchange's rows ambiguous; [`legacy_volume_is_quote`] leaves that key unchanged.
 //!
 //! See [`legacy_volume_is_quote`] for the full argument. `chunks_v2` rows are NEVER
-//! reinterpreted on read, at any kind: goal E (`chunks_v2`) was unreleased when this
-//! reinterpretation shipped, so no v2 row poisoned by the old bug ever existed in the field —
-//! there is nothing for a v2 migration to correct.
+//! reinterpreted on read, at any kind: a v2 row stores both volumes, so it is read as written.
+//!
+//! # The one-time repair of v2 rows (`repair`)
+//!
+//! Until 2026-11-25 only Binance Futures was known to send quote volume, so every other venue's
+//! deep rows and every venue's 5-minute ring rows were written to `chunks_v2` with the turnover
+//! taken for coins and the quote set to it times the price — Bybit BTCUSDT showed a 225 000 B $
+//! day. Those rows are fixed once, on the first open by a build that knows the right units, by the
+//! same producer argument as the table above: kinds with ONE producer (the ring kind, and the
+//! coarse 30/60/240/1440) are rewritten in place, while kinds 1 and 5, whose rows from two
+//! producers cannot be told apart, are deleted for the affected venues and refilled by the core.
+//! The `repair` module's doc has the details and what it costs.
 //!
 //! # The core's 5-minute ring: a kind of its own
 //!
@@ -56,9 +65,9 @@
 //! close BY ITS SOURCE (`moon_chart::auto_figures::with_ring_rows`), never by its shape. The kind
 //! is pruned with kind 5's retention ([`retention_days`]), so the two age out together.
 //!
-//! Database open and schema creation run synchronously. Startup retention and queued reads
-//! and writes run on a dedicated worker because `Connection` is not `Sync`. Retention runs
-//! before the first queued operation. Synchronous reads wait for startup retention before
+//! Database open and schema creation run synchronously. Startup retention, the one-time repair
+//! (`repair`) and queued reads and writes run on a dedicated worker because `Connection` is not
+//! `Sync`. Retention and the repair run before the first queued operation. Synchronous reads wait for startup retention before
 //! starting their reply timeout; expired queued reads then skip the query. Chart merges coalesce
 //! without blocking, while background batch writers use bounded backpressure instead of dropping rows.
 
@@ -353,6 +362,10 @@ impl KlineCache {
     }
 
     /// Queue one chart merge without blocking, returning its rows to the caller for retry when full.
+    ///
+    /// `Ok` means queued, not stored: in a session whose one-time repair failed (`repair`) the
+    /// worker keeps the cache read-only and drops the rows, which the next deep response offers
+    /// again.
     pub fn merge(
         &self,
         exchange: String,
@@ -405,7 +418,8 @@ impl KlineCache {
     ///
     /// For a writer that keeps a cursor of what it has stored and must move it only past rows that
     /// landed: the recorder's pass over the core's ring (`source/refresh.rs`). All `false` when
-    /// the worker is gone or the transaction did not commit.
+    /// the worker is gone, the transaction did not commit, or the session is read-only after a
+    /// failed one-time repair (`repair`).
     pub fn merge_batch_confirmed(&self, items: Vec<MergeItem>) -> Vec<bool> {
         let count = items.len();
         if count == 0 {
@@ -684,6 +698,13 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bo
         ));
     }
     prune_expired(&conn);
+    // After the prune, so the rows it rewrites are only the ones kept, and before `pruned` is
+    // published, so a synchronous read waits for it as it waits for the prune instead of timing
+    // out into an empty answer its caller may not retry (2.7 s for a real 800 MB cache, measured
+    // on 2026-11-25 in a debug build). A repair that failed leaves the cache read-only for this
+    // session: a fresh row written beside an unrepaired one in the same day chunk would be
+    // rewritten as a wrong one by the retry on the next open.
+    let writable = repair::apply_once(&conn);
     drop(pruned);
     let mut announced = false;
     let mut seen: std::collections::HashSet<(String, String, u32)> =
@@ -696,6 +717,9 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bo
                 kind_min,
                 rows,
             } => {
+                if !writable {
+                    continue;
+                }
                 let item = MergeItem {
                     exchange,
                     market,
@@ -710,7 +734,13 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bo
                     done,
                     stored: Vec::new(),
                 });
-                let stored = write_batch(&conn, items, &mut announced, &mut seen);
+                // Read-only after a failed repair: every item reported as not stored, so the
+                // recorder keeps its marks and offers the rows again next session.
+                let stored = if writable {
+                    write_batch(&conn, items, &mut announced, &mut seen)
+                } else {
+                    vec![false; items.len()]
+                };
                 if let Some(settled) = settled.as_mut() {
                     settled.stored = stored;
                 }
@@ -1093,9 +1123,8 @@ fn unpack_rows_v1(blob: &[u8], day_start: i64, volume_is_quote: bool) -> Vec<Cha
 /// An unknown or unparsable exchange code returns `false`, which keeps the shipped fixture
 /// (`crates/moon-core/fixtures/chart-ace/klines.sqlite`, code `200`, `venue(200) == None`) byte-for-byte unchanged.
 ///
-/// `chunks_v2` rows are NEVER reinterpreted by this or any other function: goal E (`chunks_v2`) is
-/// unreleased as of this change (`git tag --contains 143c6b50` is empty), so no poisoned v2 row
-/// has ever shipped, and post-fix v2 rows are correct by construction.
+/// `chunks_v2` rows are NEVER reinterpreted on read: a v2 row stores both volumes. The v2 rows
+/// written with the wrong unit are fixed once, in place or by deletion (module doc, `repair`).
 fn legacy_volume_is_quote(exchange: &str, kind_min: u32) -> bool {
     let quote_kind = matches!(kind_min, 30 | 60 | 240 | 1440);
     let quote_venue = exchange
@@ -1112,6 +1141,8 @@ fn now_unix_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
 }
+
+mod repair;
 
 #[cfg(test)]
 mod tests;

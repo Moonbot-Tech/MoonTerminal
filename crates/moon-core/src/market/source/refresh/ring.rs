@@ -15,7 +15,10 @@
 //!
 //! - the core's SNAPSHOT (`replace_candles_5m_from_snapshot`): the ring is cleared and the core's
 //!   own sealed candles pushed in one batch. These are the rows the ring is kept for; their
-//!   `volume` is in the unit the venue table names (`crate::venue::deep_volume_is_quote`);
+//!   `volume` is quote money on every venue — MEASURED on 2026-11-25 against the turnover of the
+//!   candles the terminal folded from trades, on codes 2, 3, 4, 6, 8, 9, 13, 15 and on the unknown
+//!   221 and 222, whose DEEP rows are base. So the ring's unit is not the deep table's
+//!   (`crate::venue::deep_volume_is_quote`), and it is not looked up per venue at all;
 //! - the client's own LIVE seal (`seal_current_candle_if_due`), one row at a time, built from the
 //!   futures trade stream: `volume` is `price * qty`, quote money on every venue. Such a row covers
 //!   only time this terminal was connected and receiving those very trades — which the recorder
@@ -30,16 +33,17 @@
 //! reconnect brings a fresh snapshot that covers the outage), a clipped cursor (a new snapshot
 //! under the same client, or more pushes than the ring holds), or an oldest row older than last
 //! time — and otherwise takes nothing: every row pushed since is a live seal, whose bucket the recorder's real candle already
-//! holds, and whose volume is in another unit. Skipping them is the cache's allowed economy (no
-//! ring row is needed where a real candle exists) and keeps one volume unit in the kind.
+//! holds. Skipping them is the cache's allowed economy (no ring row is needed where a real candle
+//! exists).
 //!
 //! What this cannot see: the live seals pushed between a snapshot and the first pass that reads it
 //! — none while the pass comes within five minutes of the snapshot (a live candle starts with the
 //! first trade after the snapshot and seals at least five minutes later), a few after a longer
 //! stall — and a new snapshot under the same client that holds at least as many rows as the old
-//! ring had pushes and reaches no further back (the old cursor is then not clipped). Such a live row is stored as a snapshot row; on a venue that
-//! sends base volume its quote is then the turnover times the price. Its bucket also holds the
-//! recorder's real candle, which every reader of the ring kind prefers, so it is not read.
+//! ring had pushes and reaches no further back (the old cursor is then not clipped). Such a live
+//! row is stored as a snapshot row, which is harmless: its volume is quote money like a snapshot
+//! row's, and its bucket also holds the recorder's real candle, which every reader of the ring kind
+//! prefers.
 //!
 //! The pass's mark moves only once the cache confirms the rows stored (`refresh.rs`): a failed
 //! write leaves the previous mark, and the next pass takes the whole ring again.
@@ -107,15 +111,14 @@ pub(super) struct WireRow {
     pub high: f32,
     pub low: f32,
     pub close: f32,
-    /// The wire volume figure of a SNAPSHOT row: base coins, or quote money on a venue that sends
-    /// turnover (module doc).
+    /// The wire volume figure of a SNAPSHOT row: quote money on every venue (module doc).
     pub volume: f32,
 }
 
 /// One snapshot row as the cache stores it under the ring kind: filed at [`ring_open_ms`], the
 /// wire's prices normalised as every other wire row is (`normalize_ohlc`), and its volume split
-/// into base and quote the way the chart's snapshot layer splits the same rows
-/// (`split_wire_volume` with the venue's `volume_is_quote`).
+/// into base and quote the way the chart's snapshot layer splits the same rows: the wire figure is
+/// the quote, the base its OHLC4 estimate (`split_wire_volume` with `volume_is_quote = true`).
 ///
 /// The open and close are stored as the wire gives them; no reader takes them for prices (the
 /// ring kind's readers mark the whole row as having none).
@@ -123,11 +126,7 @@ pub(super) struct WireRow {
 /// `None` — nothing stored — for an unusable stamp, a wire price that is not a positive finite
 /// number, and a volume that is negative or not finite: a cache row is kept for fifteen days, and a
 /// wrong one would stand for all of them.
-pub(super) fn ring_candle(
-    row: WireRow,
-    volume_is_quote: bool,
-    cur_bucket_ms: i64,
-) -> Option<ChartCandle> {
+pub(super) fn ring_candle(row: WireRow, cur_bucket_ms: i64) -> Option<ChartCandle> {
     let t_open = ring_open_ms(row.stamp_ms, cur_bucket_ms)?;
     // All four wire prices first: `normalize_ohlc` spans a broken row's range over all four fields
     // and `f32::max` skips a NaN, so a NaN high would come out as the open, and a NaN open would
@@ -146,8 +145,7 @@ pub(super) fn ring_candle(
     if !(row.volume.is_finite() && row.volume >= 0.0) {
         return None;
     }
-    let (volume, quote_volume) =
-        split_wire_volume(row.volume, open, high, low, close, volume_is_quote);
+    let (volume, quote_volume) = split_wire_volume(row.volume, open, high, low, close, true);
     Some(ChartCandle {
         t_open_ms: t_open as f64,
         open,
