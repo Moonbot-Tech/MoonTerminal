@@ -10,95 +10,100 @@ pub enum CoinMenuOrigin {
 /// Order actions available at the clicked point.
 #[derive(Clone, Copy)]
 pub(super) enum Order {
-    Sell,
-    Buy,
-    Table,
+    Sell(u64),
+    Buy(u64),
+    Table(u64),
 }
 
-/// Report-only row availability, with the locale key for an unavailable trade log.
+/// Captured Report actions, including the log result used by the row renderer.
 #[derive(Clone, Copy)]
-pub(super) struct ReportFacts {
-    pub(super) trade_log: Result<(), &'static str>,
-    pub(super) filter_coin: bool,
+pub(super) struct ReportFacts<Row, Log> {
+    pub(super) trade_window: Row,
+    pub(super) trade_log: Log,
+    pub(super) filter_coin: Option<Row>,
 }
 
 /// Captured row and market facts needed to place menu entries.
-pub(super) struct MenuFacts {
+pub(super) struct MenuFacts<Row, Log> {
     pub(super) surface: CoinMenuOrigin,
     pub(super) has_market: bool,
     pub(super) coin_shown: bool,
-    pub(super) strategy: bool,
+    pub(super) strategy: Option<u64>,
     pub(super) order: Option<Order>,
     pub(super) split_n: i32,
-    pub(super) report: Option<ReportFacts>,
+    pub(super) report: Option<ReportFacts<Row, Log>>,
     pub(super) screener_copy: bool,
     pub(super) blacklist: bool,
 }
 
 /// One menu row or a set of adjacent rows realized from the same snapshot.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Slot {
-    TradeWindow,
+pub(super) enum Slot<Row, Log> {
+    TradeWindow(Row),
     ShowOnChart,
     OpenOnChart,
     NotReady,
-    TradeLog {
-        disabled_reason: Option<&'static str>,
-    },
-    OrderEdit,
+    TradeLog(Log),
+    OrderEdit(u64),
     JoinSells,
-    Split(i32),
-    Cancel,
+    Split(u64, i32),
+    Cancel(u64),
     ScreenerCopy,
-    FilterHere,
+    FilterHere(Row),
     CoinReport,
     Compare,
     CopyTicker,
-    StrategyGoto,
-    StrategyReport,
+    StrategyGoto(u64),
+    StrategyReport(u64),
     Blacklist,
     Sep,
 }
 
+impl<Row, Log> Slot<Row, Log> {
+    /// Emphasize the action that opens the clicked trade or order for inspection.
+    pub(super) fn emphasized(&self) -> bool {
+        matches!(self, Self::TradeWindow(_) | Self::OrderEdit(_))
+    }
+}
+
 /// Place each nonempty group after the preceding group, with one separator between them.
-pub(super) fn plan(facts: &MenuFacts) -> Vec<Slot> {
+pub(super) fn plan<Row: Copy, Log: Copy>(facts: &MenuFacts<Row, Log>) -> Vec<Slot<Row, Log>> {
     use Slot::*;
 
     let mut own = Vec::new();
     if let Some(report) = facts.report {
         own.extend([
-            TradeWindow,
+            TradeWindow(report.trade_window),
             if facts.has_market {
                 ShowOnChart
             } else {
                 NotReady
             },
-            TradeLog {
-                disabled_reason: report.trade_log.err(),
-            },
+            TradeLog(report.trade_log),
         ]);
     } else if facts.has_market && facts.surface != CoinMenuOrigin::ChartLine {
         own.push(OpenOnChart);
     }
     match facts.order {
-        Some(Order::Sell) => {
+        Some(Order::Sell(uid)) => {
             let fixed = moon_core::config::SPLIT_ORDER_PARTS;
-            own.extend([OrderEdit, JoinSells, Sep, Split(fixed)]);
+            own.extend([OrderEdit(uid), JoinSells, Sep, Split(uid, fixed)]);
             if facts.split_n != fixed {
-                own.push(Split(facts.split_n));
+                own.push(Split(uid, facts.split_n));
             }
         }
-        Some(Order::Buy | Order::Table) => own.extend([OrderEdit, Sep, Cancel]),
+        Some(Order::Buy(uid) | Order::Table(uid)) => own.extend([OrderEdit(uid), Sep, Cancel(uid)]),
         None => {}
     }
-    if facts.screener_copy {
-        own.push(ScreenerCopy);
-    }
+    let screener = facts
+        .screener_copy
+        .then(|| vec![ScreenerCopy])
+        .unwrap_or_default();
 
     let mut coin = Vec::new();
     if facts.coin_shown {
-        if facts.report.is_some_and(|report| report.filter_coin) {
-            coin.push(FilterHere);
+        if let Some(filter) = facts.report.and_then(|report| report.filter_coin) {
+            coin.push(FilterHere(filter));
         }
         coin.push(CoinReport);
     }
@@ -111,11 +116,11 @@ pub(super) fn plan(facts: &MenuFacts) -> Vec<Slot> {
 
     let strategy = facts
         .strategy
-        .then(|| vec![StrategyGoto, StrategyReport])
+        .map(|sid| vec![StrategyGoto(sid), StrategyReport(sid)])
         .unwrap_or_default();
     let blacklist = facts.blacklist.then(|| vec![Blacklist]).unwrap_or_default();
     let mut slots = Vec::new();
-    for group in [own, coin, strategy, blacklist] {
+    for group in [own, screener, coin, strategy, blacklist] {
         if !group.is_empty() {
             if !slots.is_empty() {
                 slots.push(Sep);

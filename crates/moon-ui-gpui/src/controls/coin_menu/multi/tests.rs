@@ -32,6 +32,13 @@ fn plan_multi_five_rows_three_coins() {
     assert_eq!(slots[0].label(), "Окна сделок (5)");
     assert_eq!(slots[2].label(), "Только эти 3 монеты в отчёте");
     assert_eq!(slots[6].label(), "Добавить 3 монеты в ЧС");
+    assert_eq!(
+        slots
+            .into_iter()
+            .filter(|slot| slot.emphasized())
+            .collect::<Vec<_>>(),
+        [TradeWindows(5)]
+    );
 }
 
 /// Repeated tickers keep their first spelling and never insert commas or a trailing line.

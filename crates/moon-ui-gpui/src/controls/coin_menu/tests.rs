@@ -187,12 +187,12 @@ use super::plan::{CoinMenuOrigin, MenuFacts, Order, ReportFacts, Slot, plan};
 use Slot::*;
 
 /// A listed market with a printed ticker and a resolved blacklist token.
-fn market_facts() -> MenuFacts {
+fn market_facts() -> MenuFacts<(), Result<(), &'static str>> {
     MenuFacts {
         surface: CoinMenuOrigin::OrderTable,
         has_market: true,
         coin_shown: true,
-        strategy: false,
+        strategy: None,
         order: None,
         split_n: 7,
         report: None,
@@ -202,11 +202,12 @@ fn market_facts() -> MenuFacts {
 }
 
 /// A Report row with a resolved task and an available filter action.
-fn report_facts() -> MenuFacts {
+fn report_facts() -> MenuFacts<(), Result<(), &'static str>> {
     MenuFacts {
         report: Some(ReportFacts {
+            trade_window: (),
             trade_log: Ok(()),
-            filter_coin: true,
+            filter_coin: Some(()),
         }),
         ..market_facts()
     }
@@ -216,25 +217,23 @@ fn report_facts() -> MenuFacts {
 #[test]
 fn plan_report_row_with_strategy() {
     let facts = MenuFacts {
-        strategy: true,
+        strategy: Some(19),
         ..report_facts()
     };
     assert_eq!(
         plan(&facts),
         [
-            TradeWindow,
+            TradeWindow(()),
             ShowOnChart,
-            TradeLog {
-                disabled_reason: None
-            },
+            TradeLog(Ok(())),
             Sep,
-            FilterHere,
+            FilterHere(()),
             CoinReport,
             Compare,
             CopyTicker,
             Sep,
-            StrategyGoto,
-            StrategyReport,
+            StrategyGoto(19),
+            StrategyReport(19),
             Sep,
             Blacklist
         ]
@@ -247,13 +246,11 @@ fn plan_report_row_without_strategy() {
     assert_eq!(
         plan(&report_facts()),
         [
-            TradeWindow,
+            TradeWindow(()),
             ShowOnChart,
-            TradeLog {
-                disabled_reason: None
-            },
+            TradeLog(Ok(())),
             Sep,
-            FilterHere,
+            FilterHere(()),
             CoinReport,
             Compare,
             CopyTicker,
@@ -271,13 +268,11 @@ fn plan_report_row_missing_task_keeps_disabled_log_in_place() {
     assert_eq!(
         plan(&facts),
         [
-            TradeWindow,
+            TradeWindow(()),
             ShowOnChart,
-            TradeLog {
-                disabled_reason: Some("report.trade_log.no_task")
-            },
+            TradeLog(Err("report.trade_log.no_task")),
             Sep,
-            FilterHere,
+            FilterHere(()),
             CoinReport,
             Compare,
             CopyTicker,
@@ -291,13 +286,11 @@ fn plan_report_row_missing_task_keeps_disabled_log_in_place() {
     assert_eq!(
         plan(&facts),
         [
-            TradeWindow,
+            TradeWindow(()),
             NotReady,
-            TradeLog {
-                disabled_reason: Some("report.trade_log.no_task")
-            },
+            TradeLog(Err("report.trade_log.no_task")),
             Sep,
-            FilterHere,
+            FilterHere(()),
             CoinReport,
             CopyTicker
         ]
@@ -309,25 +302,25 @@ fn plan_report_row_missing_task_keeps_disabled_log_in_place() {
 fn plan_chart_sell_line_splits_behind_own_separator() {
     let mut facts = MenuFacts {
         surface: CoinMenuOrigin::ChartLine,
-        strategy: true,
-        order: Some(Order::Sell),
+        strategy: Some(19),
+        order: Some(Order::Sell(23)),
         ..market_facts()
     };
     assert_eq!(
         plan(&facts),
         [
-            OrderEdit,
+            OrderEdit(23),
             JoinSells,
             Sep,
-            Split(3),
-            Split(7),
+            Split(23, 3),
+            Split(23, 7),
             Sep,
             CoinReport,
             Compare,
             CopyTicker,
             Sep,
-            StrategyGoto,
-            StrategyReport,
+            StrategyGoto(19),
+            StrategyReport(19),
             Sep,
             Blacklist
         ]
@@ -336,17 +329,17 @@ fn plan_chart_sell_line_splits_behind_own_separator() {
     assert_eq!(
         plan(&facts),
         [
-            OrderEdit,
+            OrderEdit(23),
             JoinSells,
             Sep,
-            Split(3),
+            Split(23, 3),
             Sep,
             CoinReport,
             Compare,
             CopyTicker,
             Sep,
-            StrategyGoto,
-            StrategyReport,
+            StrategyGoto(19),
+            StrategyReport(19),
             Sep,
             Blacklist
         ]
@@ -358,13 +351,21 @@ fn plan_chart_sell_line_splits_behind_own_separator() {
 fn plan_chart_buy_line_cancel_after_separator_no_filter() {
     let facts = MenuFacts {
         surface: CoinMenuOrigin::ChartLine,
-        order: Some(Order::Buy),
+        order: Some(Order::Buy(23)),
         ..market_facts()
     };
     assert_eq!(
         plan(&facts),
         [
-            OrderEdit, Sep, Cancel, Sep, CoinReport, Compare, CopyTicker, Sep, Blacklist
+            OrderEdit(23),
+            Sep,
+            Cancel(23),
+            Sep,
+            CoinReport,
+            Compare,
+            CopyTicker,
+            Sep,
+            Blacklist
         ]
     );
 }
@@ -373,16 +374,16 @@ fn plan_chart_buy_line_cancel_after_separator_no_filter() {
 #[test]
 fn plan_orders_table_row() {
     let facts = MenuFacts {
-        order: Some(Order::Table),
+        order: Some(Order::Table(23)),
         ..market_facts()
     };
     assert_eq!(
         plan(&facts),
         [
             OpenOnChart,
-            OrderEdit,
+            OrderEdit(23),
             Sep,
-            Cancel,
+            Cancel(23),
             Sep,
             CoinReport,
             Compare,
@@ -414,6 +415,7 @@ fn plan_assets_screener_row_no_strategy_no_order() {
         plan(&facts),
         [
             OpenOnChart,
+            Sep,
             ScreenerCopy,
             Sep,
             CoinReport,
@@ -431,22 +433,23 @@ fn plan_never_leading_trailing_or_double_separator() {
     for surface in [CoinMenuOrigin::ChartLine, CoinMenuOrigin::OrderTable] {
         for order in [
             None,
-            Some(Order::Sell),
-            Some(Order::Buy),
-            Some(Order::Table),
+            Some(Order::Sell(23)),
+            Some(Order::Buy(23)),
+            Some(Order::Table(23)),
         ] {
             for mask in 0..64u8 {
                 let has = |bit: u8| mask & bit != 0;
-                let slots = plan(&MenuFacts {
+                let slots = plan(&MenuFacts::<(), Result<(), &str>> {
                     surface,
                     has_market: has(1),
                     coin_shown: has(2),
-                    strategy: has(4),
+                    strategy: has(4).then_some(19),
                     order,
                     split_n: 7,
                     report: has(8).then_some(ReportFacts {
+                        trade_window: (),
                         trade_log: Ok(()),
-                        filter_coin: true,
+                        filter_coin: Some(()),
                     }),
                     screener_copy: has(16),
                     blacklist: has(32),
@@ -456,5 +459,34 @@ fn plan_never_leading_trailing_or_double_separator() {
                 assert!(!slots.windows(2).any(|pair| pair == [Sep, Sep]));
             }
         }
+    }
+}
+
+/// Exactly the Report trade window and the order editor receive emphasis.
+#[test]
+fn emphasized_slot_is_main_action_per_surface() {
+    let order = |surface, order| MenuFacts {
+        surface,
+        order: Some(order),
+        ..market_facts()
+    };
+    for (facts, expected) in [
+        (report_facts(), vec![TradeWindow(())]),
+        (
+            order(CoinMenuOrigin::ChartLine, Order::Sell(23)),
+            vec![OrderEdit(23)],
+        ),
+        (
+            order(CoinMenuOrigin::ChartLine, Order::Buy(23)),
+            vec![OrderEdit(23)],
+        ),
+        (
+            order(CoinMenuOrigin::OrderTable, Order::Table(23)),
+            vec![OrderEdit(23)],
+        ),
+        (market_facts(), vec![]),
+    ] {
+        let emphasized: Vec<_> = plan(&facts).into_iter().filter(Slot::emphasized).collect();
+        assert_eq!(emphasized, expected);
     }
 }

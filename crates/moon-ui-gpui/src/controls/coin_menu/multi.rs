@@ -1,6 +1,7 @@
 //! Report multi-selection menu, with stable ordering and add-only blacklist targets.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use gpui::*;
 use moon_core::session::CoreId;
@@ -9,6 +10,7 @@ use rust_i18n::t;
 
 use super::blacklist::{hour_rows, target_row, temp_ban_symbol, write_core_blacklist_targets};
 use super::names::CoinNames;
+use super::undo::UndoRecord;
 use super::{CoinMenuCtx, MENU_MAX_WIDTH, MENU_MIN_WIDTH};
 use crate::Backend;
 use crate::display_text::plural_key;
@@ -54,6 +56,11 @@ fn plan_multi(facts: &MultiFacts) -> Vec<MultiSlot> {
 }
 
 impl MultiSlot {
+    /// Emphasize the multi-selection equivalent of opening one trade window.
+    fn emphasized(self) -> bool {
+        matches!(self, Self::TradeWindows(_))
+    }
+
     /// Localize a slot's caption using its row or coin count.
     fn label(self) -> String {
         match self {
@@ -133,7 +140,7 @@ pub(crate) fn open_multi_coin_menu(
         .into_iter()
         .map(|slot| {
             let label = slot.label();
-            match slot {
+            let item = match slot {
                 MultiSlot::TradeWindows(_) => {
                     let item = MoonMenuItem::with_key("multi-trade-windows", label);
                     match trade_windows.take() {
@@ -174,6 +181,11 @@ pub(crate) fn open_multi_coin_menu(
                         targets.temporary.clone(),
                     )),
                 MultiSlot::Sep => MoonMenuItem::separator(),
+            };
+            if slot.emphasized() {
+                item.emphasized(true)
+            } else {
+                item
             }
         })
         .collect();
@@ -213,6 +225,8 @@ fn new_report_item(
 struct BlacklistTargets {
     own: Vec<(CoreId, String)>,
     selected: Vec<(CoreId, String)>,
+    /// The Report's ticker for each permanent target, even when destination spellings differ.
+    tickers: Rc<HashMap<(CoreId, String), String>>,
     temporary: Vec<(CoreId, String)>,
     source_name: String,
 }
@@ -222,6 +236,7 @@ impl BlacklistTargets {
     fn resolve(rows: &[CoinMenuCtx], backend: &Backend) -> Self {
         let mut own = Vec::new();
         let mut selected = Vec::new();
+        let mut tickers = HashMap::new();
         let mut temporary = Vec::new();
         let mut source_name = String::new();
         for row in rows.iter().filter(|row| !row.coin.is_empty()) {
@@ -229,14 +244,22 @@ impl BlacklistTargets {
                 source_name.clone_from(&row.core_name);
             }
             let names = CoinNames::resolve_for(backend, row, Some(&row.selected_cores));
+            let shown = row.shown_coin();
+            let ticker = if shown.is_empty() { &row.coin } else { shown }.to_ascii_uppercase();
             if let Some(name) = names.on(row.core) {
                 own.push((row.core, name.coin.clone()));
+                tickers
+                    .entry((row.core, name.coin.to_ascii_uppercase()))
+                    .or_insert_with(|| ticker.clone());
             }
-            selected.extend(
-                row.selected_cores
-                    .iter()
-                    .filter_map(|&core| names.on(core).map(|name| (core, name.coin.clone()))),
-            );
+            for &core in &row.selected_cores {
+                if let Some(name) = names.on(core) {
+                    selected.push((core, name.coin.clone()));
+                    tickers
+                        .entry((core, name.coin.to_ascii_uppercase()))
+                        .or_insert_with(|| ticker.clone());
+                }
+            }
             if let Some(symbol) = temp_ban_symbol(&names, row.core) {
                 temporary.push((row.core, symbol));
             }
@@ -244,6 +267,7 @@ impl BlacklistTargets {
         Self {
             own: distinct_targets(own),
             selected: distinct_targets(selected),
+            tickers: Rc::new(tickers),
             temporary: distinct_targets(temporary),
             source_name,
         }
@@ -269,6 +293,7 @@ impl BlacklistTargets {
                 "multi-bl-core",
                 label,
                 &self.own,
+                self.tickers.clone(),
                 backend,
                 group.clone(),
             ));
@@ -284,6 +309,7 @@ impl BlacklistTargets {
                 "multi-bl-cores",
                 label,
                 &self.selected,
+                self.tickers.clone(),
                 backend,
                 group,
             ));
@@ -317,6 +343,7 @@ fn add_row(
     key: &'static str,
     label: String,
     targets: &[(CoreId, String)],
+    tickers: Rc<HashMap<(CoreId, String), String>>,
     backend: &Entity<Backend>,
     group: Option<String>,
 ) -> MoonMenuItem {
@@ -330,7 +357,17 @@ fn add_row(
         group,
         cores,
         move |b, _| {
-            write_core_blacklist_targets(b, &targets, false);
+            UndoRecord::new(write_core_blacklist_targets(b, &targets, false), |steps| {
+                let coins: HashSet<_> = steps
+                    .iter()
+                    .map(|step| {
+                        tickers
+                            .get(&(step.core, step.coin.to_ascii_uppercase()))
+                            .map_or(step.coin.as_str(), String::as_str)
+                    })
+                    .collect();
+                multi_count("coin_menu.undo.added_multi", coins.len())
+            })
         },
     )
 }

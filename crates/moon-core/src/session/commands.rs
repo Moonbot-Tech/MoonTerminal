@@ -17,6 +17,66 @@ pub(super) struct SentBlacklist {
     at: Instant,
 }
 
+impl SentBlacklist {
+    /// While the core still shows the starting snapshot, use the most recent accepted edit.
+    fn effective<'a>(&'a self, in_store: &'a (bool, String)) -> &'a (bool, String) {
+        if self.at.elapsed() < BLACKLIST_ECHO_WAIT && self.before == *in_store {
+            &self.sent
+        } else {
+            in_store
+        }
+    }
+}
+
+/// The exact list mutation sent by one successful insertion.
+struct BlacklistAdd {
+    coin: String,
+    before: String,
+    after: String,
+    enabled_flag: bool,
+}
+
+impl BlacklistAdd {
+    /// Restore the original bytes when possible and preserve other edits otherwise.
+    fn revert(&self, enabled: bool, text: &str, strategy: bool) -> (bool, String) {
+        if text == self.after {
+            (enabled && !self.enabled_flag, self.before.clone())
+        } else {
+            let text = if strategy {
+                crate::symbol::coin_list::strategy_edit(text, &self.coin, true)
+            } else {
+                crate::symbol::coin_list::remove(text, &self.coin)
+            };
+            (enabled, text)
+        }
+    }
+}
+
+/// Compute a token edit and capture the inverse only for a new entry.
+fn blacklist_token_edit(
+    (enabled, base): (bool, String),
+    coin: &str,
+    lift: bool,
+    strategy: bool,
+) -> (Option<(bool, String)>, Option<BlacklistAdd>) {
+    let after = if strategy {
+        crate::symbol::coin_list::strategy_edit(&base, coin, lift)
+    } else {
+        crate::symbol::coin_list::edit(&base, coin, lift)
+    };
+    let on = enabled || !lift;
+    if after == base && on == enabled {
+        return (None, None);
+    }
+    let add = (!lift && after != base).then(|| BlacklistAdd {
+        coin: coin.to_string(),
+        before: base,
+        after: after.clone(),
+        enabled_flag: !enabled,
+    });
+    (Some((on, after)), add)
+}
+
 use anyhow::{Result, anyhow};
 
 use crate::account::AccountIdentity;
@@ -1219,34 +1279,110 @@ impl SessionManager {
     ///     An empty coin; a core that has not sent its settings yet; the core's command channel
     ///     refused it.
     pub fn write_core_blacklist(&self, core: CoreId, coin: &str, lift: bool) -> Result<bool> {
-        if coin.trim().is_empty() {
-            return Err(anyhow!("an empty coin is not a blacklist entry"));
+        self.write_blacklist_token((core, None), coin, lift)
+            .map(|(sent, _)| sent)
+    }
+
+    /// Add one coin and return its inverse only if the effective list gained the token.
+    /// A flag-only write follows the usual add behavior without producing an undo action.
+    pub fn add_to_blacklist(
+        &self,
+        core: CoreId,
+        strategy: Option<u64>,
+        coin: &str,
+    ) -> Result<Option<impl FnOnce(&Self) -> Result<bool> + use<>>> {
+        let key = (core, strategy);
+        let (_, add) = self.write_blacklist_token(key, coin, false)?;
+        Ok(add.map(move |add| move |session: &Self| session.revert_blacklist_add(key, &add)))
+    }
+
+    /// Read the last published list, keeping the core-wide and strategy defaults distinct.
+    fn blacklist_snapshot(
+        &self,
+        (core, strategy): (CoreId, Option<u64>),
+    ) -> Result<(bool, String)> {
+        let data = self.store().core(core);
+        if let Some(strategy) = strategy {
+            let current = data
+                .and_then(|data| data.strategies.iter().find(|s| s.id == strategy))
+                .and_then(|s| {
+                    s.fields
+                        .iter()
+                        .find(|(name, _)| name == crate::feed::FIELD_COINS_BLACK_LIST)
+                        .map(|(_, value)| value.clone())
+                })
+                .unwrap_or_default();
+            return Ok((true, current));
         }
         // Without the core's own settings there is no list to edit: rewriting it from nothing
         // would replace every coin already on it with this one.
-        let Some((enabled, stored)) = self
-            .store()
-            .core(core)
-            .and_then(|data| data.client_settings.as_ref())
+        data.and_then(|data| data.client_settings.as_ref())
             .map(|cs| (cs.use_blacklist, cs.blacklist_text.clone()))
-        else {
-            return Err(anyhow!(
-                "core {core} has not sent its settings yet: blacklist not written"
-            ));
+            .ok_or_else(|| {
+                anyhow!("core {core} has not sent its settings yet: blacklist not written")
+            })
+    }
+
+    /// Edit from the same echo-aware base for both regular writes and tracked adds.
+    fn write_blacklist_token(
+        &self,
+        key: (CoreId, Option<u64>),
+        coin: &str,
+        lift: bool,
+    ) -> Result<(bool, Option<BlacklistAdd>)> {
+        if coin.trim().is_empty() {
+            return Err(anyhow!("an empty coin is not a blacklist entry"));
+        }
+        let in_store = self.blacklist_snapshot(key)?;
+        let (next, add) = blacklist_token_edit(
+            self.blacklist_base(key, &in_store),
+            coin,
+            lift,
+            key.1.is_some(),
+        );
+        let Some(next) = next else {
+            return Ok((false, None));
         };
-        let key = (core, None);
-        let in_store = (enabled, stored);
-        let (enabled, base) = self.blacklist_base(key, &in_store);
-        let new = crate::symbol::coin_list::edit(&base, coin, lift);
-        // Nothing to change — a lift of an unlisted coin, an add of a listed one on a list
-        // already on.
-        if new == base && (lift || enabled) {
+        self.send_blacklist_edit(key, in_store, next)?;
+        Ok((true, add))
+    }
+
+    /// Reverse a recorded insertion through the current effective list.
+    fn revert_blacklist_add(&self, key: (CoreId, Option<u64>), add: &BlacklistAdd) -> Result<bool> {
+        let in_store = self.blacklist_snapshot(key)?;
+        let current = self.blacklist_base(key, &in_store);
+        let restored = add.revert(current.0, &current.1, key.1.is_some());
+        if restored == current {
             return Ok(false);
         }
-        let on = if lift { enabled } else { true };
-        self.set_blacklist(core, on, new.clone())?;
-        self.note_blacklist_sent(key, in_store, (on, new));
+        self.send_blacklist_edit(key, in_store, restored)?;
         Ok(true)
+    }
+
+    /// Submit the edit and remember it only once the command channel accepted it.
+    fn send_blacklist_edit(
+        &self,
+        key: (CoreId, Option<u64>),
+        in_store: (bool, String),
+        next: (bool, String),
+    ) -> Result<()> {
+        let (core, strategy) = key;
+        if let Some(strategy) = strategy {
+            self.edit_strategies(
+                core,
+                vec![(
+                    strategy,
+                    vec![(
+                        crate::feed::FIELD_COINS_BLACK_LIST.to_string(),
+                        next.1.clone(),
+                    )],
+                )],
+            )?;
+        } else {
+            self.set_blacklist(core, next.0, next.1.clone())?;
+        }
+        self.note_blacklist_sent(key, in_store, next);
+        Ok(())
     }
 
     /// The switch and list a one-coin edit of `key` starts from: what this process sent last,
@@ -1262,14 +1398,9 @@ impl SessionManager {
             .blacklists_sent
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match sent.get(&key) {
-            Some(entry)
-                if entry.at.elapsed() < BLACKLIST_ECHO_WAIT && entry.before == *in_store =>
-            {
-                entry.sent.clone()
-            }
-            _ => in_store.clone(),
-        }
+        sent.get(&key)
+            .map_or(in_store, |entry| entry.effective(in_store))
+            .clone()
     }
 
     /// Remember what was just sent for `key` and what the store held when it was, for
@@ -1322,36 +1453,8 @@ impl SessionManager {
         coin: &str,
         lift: bool,
     ) -> Result<bool> {
-        let current = self
-            .store()
-            .core(core)
-            .and_then(|data| data.strategies.iter().find(|s| s.id == strategy))
-            .and_then(|s| {
-                s.fields
-                    .iter()
-                    .find(|(name, _)| name == crate::feed::FIELD_COINS_BLACK_LIST)
-                    .map(|(_, value)| value.clone())
-            })
-            .unwrap_or_default();
-        if coin.trim().is_empty() {
-            return Err(anyhow!("an empty coin is not a blacklist entry"));
-        }
-        let key = (core, Some(strategy));
-        let in_store = (true, current);
-        let (_, base) = self.blacklist_base(key, &in_store);
-        let new = crate::symbol::coin_list::strategy_edit(&base, coin, lift);
-        if new == base {
-            return Ok(false);
-        }
-        self.edit_strategies(
-            core,
-            vec![(
-                strategy,
-                vec![(crate::feed::FIELD_COINS_BLACK_LIST.to_string(), new.clone())],
-            )],
-        )?;
-        self.note_blacklist_sent(key, in_store, (true, new));
-        Ok(true)
+        self.write_blacklist_token((core, Some(strategy)), coin, lift)
+            .map(|(sent, _)| sent)
     }
 
     /// Whether a strategy's kind has a `CoinsBlackList` at all, by the core's schema: an edit of a
@@ -1525,3 +1628,6 @@ impl SessionManager {
         self.last_cmd.clear();
     }
 }
+
+#[cfg(test)]
+mod tests;

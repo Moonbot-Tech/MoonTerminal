@@ -1,4 +1,4 @@
-//! The two blacklist entries of the coin menu, each a submenu over the same targets.
+//! Permanent and temporary actions in the coin menu's blacklist submenu.
 //!
 //! Why nested rather than flat, which is how the permanent list used to be listed: the temporary
 //! list doubles every target and multiplies it by five durations. Flat, that is over a dozen rows
@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::*;
-use moon_ui::{MoonMenuItem, MoonWindowExt as _};
+use moon_ui::{MoonMenuItem, MoonTone, MoonWindowExt as _};
 use rust_i18n::t;
 
 use moon_core::config::TempBanSpan;
@@ -25,23 +25,75 @@ use moon_core::session::CoreId;
 use moon_core::symbol::coin_list::strategy_contains;
 
 use super::names::CoinNames;
+use super::places;
+use super::state::{BlState, HeldBan, bl_right_label, permanent_count};
+use super::undo::{UndoRecord, UndoStep, show_undo_toast};
 use super::{
-    CoinMenuCtx, blacklist_contains, core_blacklist, strategy_blacklist,
-    workspace_action_allows_cores, write_core_blacklist, write_strategy_blacklist,
+    CoinMenuCtx, blacklist_contains, core_blacklist, strategy_blacklist, where_listed_item,
+    with_hint, workspace_action_allows_cores, write_core_blacklist, write_strategy_blacklist,
 };
 use crate::Backend;
-use crate::display_text::fmt_ban_left;
+use crate::display_text::plural_key;
 
-/// The "add to a blacklist" submenu, over whichever of the three targets this context has.
-pub(super) fn permanent_blacklist_item(
+/// Sections of the blacklist submenu, in their visible order.
+#[derive(Debug, PartialEq, Eq)]
+enum Section {
+    Permanent,
+    Sep,
+    Temporary,
+    WhereListed,
+}
+
+/// Keep the same sections when a coin has no market for a temporary ban.
+fn submenu_plan(temporary: bool) -> Vec<Section> {
+    let mut sections = vec![Section::Permanent];
+    if temporary {
+        sections.extend([Section::Sep, Section::Temporary]);
+    }
+    sections.extend([Section::Sep, Section::WhereListed]);
+    sections
+}
+
+/// Build the shared submenu and its muted permanent-count and ban label.
+pub(super) fn blacklist_item(
+    ctx: &CoinMenuCtx,
+    b: &Backend,
+    backend: &Entity<Backend>,
+    names: &Rc<CoinNames>,
+) -> MoonMenuItem {
+    let places = places::listed_places(b, names);
+    let group = temp_group(ctx, names);
+    let held = held_ban(ctx.core, &group, b, names);
+    let state = BlState {
+        listed: permanent_count(&places),
+        ban: held.here,
+    };
+    let mut rows = Vec::new();
+    for section in submenu_plan(temp_ban_symbol(names, ctx.core).is_some()) {
+        match section {
+            Section::Permanent => rows.extend(permanent_rows(ctx, b, backend, &ctx.coin, names)),
+            Section::Sep => rows.push(MoonMenuItem::separator()),
+            Section::Temporary => rows.extend(temporary_rows(ctx, backend, names, &group, &held)),
+            Section::WhereListed => rows.push(where_listed_item(backend, names, places.len())),
+        }
+    }
+    let item =
+        MoonMenuItem::with_key("coin-bl", t!("coin_menu.blacklist").to_string()).submenu(rows);
+    with_hint(item, bl_right_label(&state))
+}
+
+/// Permanent actions over whichever of the three targets this context has.
+fn permanent_rows(
     ctx: &CoinMenuCtx,
     b: &Backend,
     backend: &Entity<Backend>,
     coin: &str,
     names: &CoinNames,
-) -> MoonMenuItem {
+) -> Vec<MoonMenuItem> {
     let core = ctx.core;
-    let mut rows: Vec<MoonMenuItem> = Vec::new();
+    let mut rows = vec![MoonMenuItem::label(
+        t!("coin_menu.bl_permanent").to_string(),
+    )];
 
     let (_, held) = core_blacklist(b, core);
     rows.push(target_row(
@@ -51,7 +103,7 @@ pub(super) fn permanent_blacklist_item(
         backend.clone(),
         ctx.workspace_group.clone(),
         vec![core],
-        core_blacklist_writer(vec![(core, coin.to_string())]),
+        core_blacklist_writer(vec![(core, coin.to_string())], coin.to_string()),
     ));
 
     // The selected cores that carry the coin, each with the token ITS lists match. Fewer than two
@@ -72,7 +124,7 @@ pub(super) fn permanent_blacklist_item(
             backend.clone(),
             ctx.workspace_group.clone(),
             targets.iter().map(|(core, _)| *core).collect(),
-            core_blacklist_writer(targets),
+            core_blacklist_writer(targets, coin.to_string()),
         ));
     }
 
@@ -81,10 +133,12 @@ pub(super) fn permanent_blacklist_item(
     if let Some(sid) = ctx.strat_id
         && b.session.strategy_has_blacklist(core, sid)
     {
-        let label = match ctx.strat_name.as_deref().filter(|name| !name.is_empty()) {
-            Some(name) => t!("coin_menu.target_strategy", name = name.to_string()).to_string(),
-            None => t!("coin_menu.target_strategy", name = sid.to_string()).to_string(),
-        };
+        let name = ctx
+            .strat_name
+            .clone()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| sid.to_string());
+        let label = t!("coin_menu.target_strategy", name = name.as_str()).to_string();
         // A strategy list takes spaces between coins (`ANC GALA`); the comma-only
         // `blacklist_contains` above would show a listed coin unchecked and add it again.
         let in_strategy = strategy_contains(&strategy_blacklist(b, core, sid), coin);
@@ -98,35 +152,49 @@ pub(super) fn permanent_blacklist_item(
             {
                 let coin = coin.to_string();
                 move |b, cores| {
+                    let mut inserted = Vec::new();
                     for &core in cores {
                         // Re-checked inside the click for the same reason the workspace is:
                         // the schema can change between the menu opening and the press.
                         if b.session.strategy_has_blacklist(core, sid) {
                             let lift = strategy_contains(&strategy_blacklist(b, core, sid), &coin);
-                            let _ = write_strategy_blacklist(b, core, sid, &coin, lift);
+                            if lift {
+                                let _ = write_strategy_blacklist(b, core, sid, &coin, lift);
+                            } else if let Some(step) = add_step(b, core, Some(sid), &coin) {
+                                b.watch_strategy_edit(core, sid, coin.clone());
+                                inserted.push(step);
+                            }
                         }
                     }
+                    UndoRecord::new(inserted, |_| {
+                        t!(
+                            "coin_menu.undo.added_strategy",
+                            coin = coin.as_str(),
+                            name = name.as_str()
+                        )
+                        .to_string()
+                    })
                 }
             },
         ));
     }
 
-    MoonMenuItem::with_key("coin-bl", t!("coin_menu.bl_group").to_string()).submenu(rows)
+    rows
 }
 
-/// The "add to the temporary blacklist" submenu, or `None` when this context has no symbol to ban.
-pub(super) fn temp_blacklist_item(
+/// Temporary-ban presets and the lift action for held targets.
+fn temporary_rows(
     ctx: &CoinMenuCtx,
-    b: &Backend,
     backend: &Entity<Backend>,
     names: &Rc<CoinNames>,
-) -> Option<MoonMenuItem> {
+    group: &[CoreId],
+    held: &HeldBan,
+) -> Vec<MoonMenuItem> {
     let core = ctx.core;
-    let symbol = temp_ban_symbol(names, core)?;
     let mut rows: Vec<MoonMenuItem> = Vec::new();
 
     rows.push(MoonMenuItem::label(
-        t!("coin_menu.target_core", core = ctx.core_name.clone()).to_string(),
+        t!("coin_menu.bl_temporary", core = ctx.core_name.clone()).to_string(),
     ));
     rows.extend(hour_rows(
         "tbl-core",
@@ -135,91 +203,29 @@ pub(super) fn temp_blacklist_item(
         temp_targets(names, &[core]),
     ));
 
-    // The selected cores that list the coin under a market of their own. As with the permanent
-    // list, fewer than two is not a group.
-    let group: Vec<CoreId> = ctx
-        .selected_cores
-        .iter()
-        .copied()
-        .filter(|&target| temp_ban_symbol(names, target).is_some())
-        .collect();
-    let group = (group.len() > 1).then_some(group);
-    if let Some(cores) = &group {
+    if !group.is_empty() {
         rows.push(MoonMenuItem::separator());
         rows.push(MoonMenuItem::label(
-            t!("coin_menu.target_cores", n = cores.len()).to_string(),
+            t!("coin_menu.target_cores", n = group.len()).to_string(),
         ));
         rows.extend(hour_rows(
             "tbl-cores",
             backend,
             ctx.workspace_group.clone(),
-            temp_targets(names, cores),
+            temp_targets(names, group),
         ));
     }
 
-    // Lifting is offered wherever a ban is actually held, over the same targets it can be set on:
-    // a ban placed on five cores that can only be lifted on one is a control that half works.
-    // One pass over the targets, and one clock read for the whole menu: every row would otherwise
-    // ask the OS again for the same instant.
-    let now_ms = moon_core::util::now_unix_ms_i64();
-    let mut held_cores: Vec<CoreId> = Vec::new();
-    let mut left_here: Option<Duration> = None;
-    // The same targets the preset rows above are offered for: the group is only listed when more
-    // than one core carries the coin, and a lift that reached a core the menu never offered to ban
-    // would act outside what the reader was shown.
-    let group = group.unwrap_or_default();
-    for target in std::iter::once(core).chain(group.iter().copied()) {
-        let Some(target_symbol) = temp_ban_symbol(names, target) else {
-            continue;
-        };
-        let Some(left) = b
-            .session
-            .store()
-            .core(target)
-            .and_then(|data| data.temp_ban_left(&target_symbol, now_ms))
-        else {
-            continue;
-        };
-        if target == core {
-            left_here = Some(left);
-        }
-        held_cores.push(target);
-    }
-    held_cores.sort_unstable();
-    held_cores.dedup();
-    if !held_cores.is_empty() {
+    if let Some(label) = held.lift_label() {
         rows.push(MoonMenuItem::separator());
-        // The remaining time of the core the menu was opened on; the others may differ, and the
-        // row says which one it is speaking about by naming the coin rather than a core.
-        if let Some(left) = left_here {
-            // The STATE, not the raw latch: a core that has gone quiet since its last snapshot is
-            // extrapolating just as much as one whose settings write is outstanding, and the coin
-            // dropdown's ban rows mark exactly that set.
-            let stale = b.session.store().core(core).is_some_and(|data| {
-                data.client_settings_state() != moon_core::feed::CoreConfigState::Live
-            });
-            // The shared rule, so this row and the chart's caption beside its lock cannot print
-            // the same ban differently. See `display_text::fmt_ban_left`.
-            let left = fmt_ban_left(i64::try_from(left.as_millis()).unwrap_or(i64::MAX));
-            rows.push(MoonMenuItem::label(
-                t!(
-                    if stale {
-                        "coin_menu.tbl_left_stale"
-                    } else {
-                        "coin_menu.tbl_left"
-                    },
-                    symbol = symbol.clone(),
-                    left = left
-                )
-                .to_string(),
-            ));
-        }
         let backend = backend.clone();
         let workspace_group = ctx.workspace_group.clone();
-        let names = names.clone();
+        let held_cores = held.cores.clone();
+        let targets = temp_targets(names, &held_cores);
         rows.push(
-            MoonMenuItem::with_key("tbl-clear", t!("coin_menu.tbl_clear").to_string()).on_click(
-                move |_, window, app| {
+            MoonMenuItem::with_key("tbl-clear", label)
+                .tone(MoonTone::Danger)
+                .on_click(move |_, window, app| {
                     window.close_context_menu(app);
                     backend.update(app, |b, _| {
                         if !workspace_action_allows_cores(
@@ -229,14 +235,53 @@ pub(super) fn temp_blacklist_item(
                         ) {
                             return;
                         }
-                        send_temp_ban(b, &temp_targets(&names, &held_cores), None);
+                        send_temp_ban(b, &targets, None);
                     });
-                },
-            ),
+                }),
         );
     }
 
-    Some(MoonMenuItem::with_key("coin-tbl", t!("coin_menu.tbl_group").to_string()).submenu(rows))
+    rows
+}
+
+/// Offer a separate selected-cores section only when at least two carry the market.
+fn temp_group(ctx: &CoinMenuCtx, names: &CoinNames) -> Vec<CoreId> {
+    let mut group: Vec<_> = ctx
+        .selected_cores
+        .iter()
+        .copied()
+        .filter(|&core| temp_ban_symbol(names, core).is_some())
+        .collect();
+    if group.len() < 2 {
+        group.clear();
+    }
+    group
+}
+
+/// Read the countdown and lift targets from one snapshot and one clock reading.
+fn held_ban(core: CoreId, group: &[CoreId], b: &Backend, names: &CoinNames) -> HeldBan {
+    let now = moon_core::util::now_unix_ms_i64();
+    let store = b.session.store();
+    let mut held = HeldBan::default();
+    for target in std::iter::once(core).chain(group.iter().copied()) {
+        let Some(symbol) = temp_ban_symbol(names, target) else {
+            continue;
+        };
+        let Some(data) = store.core(target) else {
+            continue;
+        };
+        let Some(left) = data.temp_ban_left(&symbol, now) else {
+            continue;
+        };
+        if target == core {
+            let stale = data.client_settings_state() != moon_core::feed::CoreConfigState::Live;
+            held.here = Some((u64::try_from(left.as_millis()).unwrap_or(u64::MAX), stale));
+        }
+        held.cores.push(target);
+    }
+    held.cores.sort_unstable();
+    held.cores.dedup();
+    held
 }
 
 /// The write both core-blacklist rows perform, differing only in the targets they are built with.
@@ -250,33 +295,69 @@ pub(super) fn temp_blacklist_item(
 /// tokens travel with the closure because the click has no other way to learn them.
 fn core_blacklist_writer(
     targets: Vec<(CoreId, String)>,
-) -> impl Fn(&mut Backend, &[CoreId]) + 'static {
+    coin: String,
+) -> impl Fn(&mut Backend, &[CoreId]) -> Option<UndoRecord> + 'static {
     move |b, _cores| {
         let lift = targets
             .iter()
             .all(|(core, token)| blacklist_contains(&core_blacklist(b, *core).1, token));
-        write_core_blacklist_targets(b, &targets, lift);
+        UndoRecord::new(
+            write_core_blacklist_targets(b, &targets, lift),
+            |steps| match steps {
+                [step] => {
+                    let core = b
+                        .session
+                        .sessions()
+                        .iter()
+                        .find(|session| session.id == step.core)
+                        .map_or_else(|| step.core.to_string(), |session| session.name.clone());
+                    t!(
+                        "coin_menu.undo.added_core",
+                        coin = coin.as_str(),
+                        core = core
+                    )
+                    .to_string()
+                }
+                _ => t!(
+                    plural_key("coin_menu.undo.added_cores", steps.len() as u64),
+                    coin = coin.as_str(),
+                    n = steps.len()
+                )
+                .to_string(),
+            },
+        )
     }
 }
 
-/// Submit adds or lifts, returning successful adds absent from the last published list.
-///
-/// The session also checks queued writes against its newer echo-aware list. Its result does not
-/// distinguish inserting a token from enabling a list, so undo needs that distinction there.
+/// Submit adds or lifts, collecting an inverse only for each successful insertion.
 pub(super) fn write_core_blacklist_targets(
     b: &Backend,
     targets: &[(CoreId, String)],
     lift: bool,
-) -> Vec<(CoreId, String)> {
+) -> Vec<UndoStep> {
     let mut inserted = Vec::new();
     for (core, token) in targets {
-        // The writer also reports success for enabling a disabled list with an existing token.
-        let present = !lift && blacklist_contains(&core_blacklist(b, *core).1, token);
-        if matches!(write_core_blacklist(b, *core, token, lift), Ok(true)) && !lift && !present {
-            inserted.push((*core, token.clone()));
+        if lift {
+            let _ = write_core_blacklist(b, *core, token, lift);
+        } else {
+            inserted.extend(add_step(b, *core, None, token));
         }
     }
     inserted
+}
+
+/// Ask the session for an inverse tied to its effective blacklist text and flag.
+fn add_step(b: &Backend, core: CoreId, strategy: Option<u64>, coin: &str) -> Option<UndoStep> {
+    match b.session.add_to_blacklist(core, strategy, coin) {
+        Ok(revert) => UndoStep::inserted(core, coin, strategy, revert),
+        Err(err) => {
+            log::warn!(
+                "coin_menu: add {coin} to blacklist {strategy:?} on core {} failed: {err:#}",
+                moon_core::feed::core_label(core)
+            );
+            None
+        }
+    }
 }
 
 /// One preset row per duration, all sending to the same targets.
@@ -333,17 +414,28 @@ pub(super) fn target_row(
     backend: Entity<Backend>,
     workspace_group: Option<String>,
     cores: Vec<CoreId>,
-    write: impl Fn(&mut Backend, &[CoreId]) + 'static,
+    write: impl Fn(&mut Backend, &[CoreId]) -> Option<UndoRecord> + 'static,
 ) -> MoonMenuItem {
     MoonMenuItem::with_key(key, label)
         .checked(already_listed)
         .on_click(move |_, window, app| {
             window.close_context_menu(app);
-            backend.update(app, |b, _| {
+            let record = backend.update(app, |b, _| {
                 if workspace_action_allows_cores(b, workspace_group.as_deref(), &cores) {
-                    write(b, &cores);
+                    write(b, &cores)
+                } else {
+                    None
                 }
             });
+            if let Some(record) = record {
+                show_undo_toast(
+                    record,
+                    backend.clone(),
+                    workspace_group.clone(),
+                    window,
+                    app,
+                );
+            }
         })
 }
 
@@ -404,3 +496,6 @@ pub(super) fn temp_ban_symbol(names: &CoinNames, core: CoreId) -> Option<String>
         .map(|name| name.market.clone())
         .filter(|market| !market.is_empty())
 }
+
+#[cfg(test)]
+mod tests;

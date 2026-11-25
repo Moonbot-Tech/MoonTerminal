@@ -64,15 +64,12 @@ pub(super) fn chart_not_ready() -> MoonMenuItem {
 }
 
 /// Keep the trade-log row visible with its localized reason when the request is unavailable.
-pub(super) fn trade_log(
-    report: &ReportRowMenu,
-    disabled_reason: Option<&'static str>,
-) -> MoonMenuItem {
-    match disabled_reason {
-        Some(reason) => {
-            MoonMenuItem::with_key("rep-row-trade-log", t!(reason).to_string()).disabled(true)
+pub(super) fn trade_log(report: &ReportRowMenu) -> MoonMenuItem {
+    match &report.trade_log {
+        Err(reason) => {
+            MoonMenuItem::with_key("rep-row-trade-log", t!(*reason).to_string()).disabled(true)
         }
-        None => report.trade_log.as_ref().unwrap().clone(),
+        Ok(item) => item.clone(),
     }
 }
 

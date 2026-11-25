@@ -133,7 +133,7 @@ pub fn open_coin_menu(
 }
 
 /// Capture the current row facts, plan its groups, and realize each slot with the shared backend.
-fn build_items(mut ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
+fn build_items(ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {
     let _stall = crate::diag::stall::span(crate::diag::stall::StallKind::Open, "coin-menu");
     let b = backend.read(cx);
     let shown_coin = ctx.shown_coin().to_string();
@@ -141,11 +141,11 @@ fn build_items(mut ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec
         surface: ctx.origin,
         has_market: !ctx.market.is_empty(),
         coin_shown: !shown_coin.is_empty(),
-        strategy: ctx.strat_id.is_some(),
-        order: ctx.order_uid.map(|_| match ctx.side {
-            Some(OrderSide::Sell) => Order::Sell,
-            Some(OrderSide::Buy) => Order::Buy,
-            None => Order::Table,
+        strategy: ctx.strat_id,
+        order: ctx.order_uid.map(|uid| match ctx.side {
+            Some(OrderSide::Sell) => Order::Sell(uid),
+            Some(OrderSide::Buy) => Order::Buy(uid),
+            None => Order::Table(uid),
         }),
         // Use the settings draft when present, matching the split hotkey.
         split_n: b
@@ -155,12 +155,9 @@ fn build_items(mut ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec
             .hotkeys
             .split_n_parts(),
         report: ctx.report.as_ref().map(|report| ReportFacts {
-            trade_log: report
-                .trade_log
-                .as_ref()
-                .map(|_| ())
-                .map_err(|reason| *reason),
-            filter_coin: report.filter.is_some(),
+            trade_window: &report.trade_window,
+            trade_log: report,
+            filter_coin: report.filter.as_ref(),
         }),
         screener_copy: !ctx.screener_copy.is_empty(),
         blacklist: !ctx.coin.is_empty(),
@@ -168,22 +165,20 @@ fn build_items(mut ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec
 
     let mut items = Vec::new();
     for slot in plan::plan(&facts) {
+        let emphasized = slot.emphasized();
         let item = match slot {
-            Slot::TradeWindow => ctx.report.as_ref().unwrap().trade_window.clone(),
+            Slot::TradeWindow(item) | Slot::FilterHere(item) => item.clone(),
             Slot::ShowOnChart | Slot::OpenOnChart => own::open_chart(&ctx, backend),
             Slot::NotReady => own::chart_not_ready(),
-            Slot::TradeLog { disabled_reason } => {
-                own::trade_log(ctx.report.as_ref().unwrap(), disabled_reason)
-            }
-            Slot::OrderEdit => own::order_edit(&ctx, backend, ctx.order_uid.unwrap()),
+            Slot::TradeLog(report) => own::trade_log(report),
+            Slot::OrderEdit(uid) => own::order_edit(&ctx, backend, uid),
             Slot::JoinSells => own::join_sells(&ctx, backend),
-            Slot::Split(parts) => own::split_order(&ctx, backend, ctx.order_uid.unwrap(), parts),
-            Slot::Cancel => own::cancel_order(&ctx, backend, ctx.order_uid.unwrap()),
+            Slot::Split(uid, parts) => own::split_order(&ctx, backend, uid, parts),
+            Slot::Cancel(uid) => own::cancel_order(&ctx, backend, uid),
             Slot::ScreenerCopy => {
-                items.append(&mut ctx.screener_copy);
+                items.extend(ctx.screener_copy.iter().cloned());
                 continue;
             }
-            Slot::FilterHere => ctx.report.as_ref().unwrap().filter.clone().unwrap(),
             Slot::CoinReport => coin::coin_report_item(backend, ctx.core, &shown_coin),
             Slot::Compare => coin::compare(&ctx, backend),
             Slot::CopyTicker => {
@@ -193,21 +188,20 @@ fn build_items(mut ctx: CoinMenuCtx, backend: &Entity<Backend>, cx: &App) -> Vec
                     .and_then(|report| report.copy_hint.clone());
                 with_hint(coin::copy_coin_item(&shown_coin), hint)
             }
-            Slot::StrategyGoto => strategy::goto(&ctx, backend, ctx.strat_id.unwrap()),
-            Slot::StrategyReport => strategy::report(&ctx, backend, ctx.strat_id.unwrap()),
+            Slot::StrategyGoto(sid) => strategy::goto(&ctx, backend, sid),
+            Slot::StrategyReport(sid) => strategy::report(&ctx, backend, sid),
             Slot::Blacklist => {
                 // Resolve once so the menu and its dialog use the same spelling for each core.
                 let names = Rc::new(names::CoinNames::resolve(b, &ctx));
-                items.push(permanent_blacklist_item(
-                    &ctx, b, backend, &ctx.coin, &names,
-                ));
-                items.extend(temp_blacklist_item(&ctx, b, backend, &names));
-                let count = places::places_summary(&places::listed_places(b, &names)).0;
-                where_listed_item(backend, &names, count)
+                blacklist::blacklist_item(&ctx, b, backend, &names)
             }
             Slot::Sep => MoonMenuItem::separator(),
         };
-        items.push(item);
+        items.push(if emphasized {
+            item.emphasized(true)
+        } else {
+            item
+        });
     }
     items
 }
@@ -338,7 +332,9 @@ mod own;
 mod places;
 mod places_dialog;
 mod plan;
+mod state;
 mod strategy;
+mod undo;
 
 /// The "where is this coin blacklisted" row.
 ///
@@ -360,7 +356,6 @@ fn where_listed_item(
         })
 }
 
-use blacklist::{permanent_blacklist_item, temp_blacklist_item};
 pub(crate) use coin::copy_ticker;
 pub(crate) use own::open_chart_target;
 
