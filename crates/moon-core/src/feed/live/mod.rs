@@ -1302,8 +1302,27 @@ pub(super) fn run(
         // Chart alerts (figures with Alert checked): the core is the authoritative source.
         let mut chart_alerts: Vec<crate::feed::ChartAlertUpdate> = Vec::new();
         let mut chart_texts: Vec<ChartTextRows> = Vec::new();
+        let mut entry_corrections: Vec<crate::feed::EntryPriceCorrection> = Vec::new();
         for ev in &events {
             match ev {
+                // MoonBot 7.73 N2: a manual entry price moved onto an exchange limit. A chart
+                // hint only — the order itself arrives through the order updates as usual.
+                Event::EntryPriceCorrection(notice) => {
+                    log::info!(
+                        "core {} entry price corrected: {} requested {} allowed {}..{}",
+                        crate::feed::core_label(server.id),
+                        notice.market_name,
+                        notice.requested_price,
+                        notice.min_price,
+                        notice.max_price
+                    );
+                    entry_corrections.extend(crate::feed::EntryPriceCorrection::from_wire(
+                        &notice.market_name,
+                        notice.requested_price,
+                        notice.min_price,
+                        notice.max_price,
+                    ));
+                }
                 Event::ChartAlert(ev) if server.feed.alerts => {
                     // During reverse engineering of the TChartObject.Save blob, log the full hex.
                     // Alerts are created manually and are few, so log volume is not a concern.
@@ -1510,6 +1529,13 @@ pub(super) fn run(
             break;
         }
         if !chart_texts.is_empty() && tx.send(FeedMsg::ChartText(chart_texts)).is_err() {
+            break;
+        }
+        if !entry_corrections.is_empty()
+            && tx
+                .send(FeedMsg::EntryPriceCorrections(entry_corrections))
+                .is_err()
+        {
             break;
         }
         let license_state = settings_event_snapshot(

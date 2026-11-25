@@ -38,6 +38,8 @@ impl ChartPanel {
         // Auto figures ride the same observer: a key evaluation per row, a detector run only when
         // a key moved (a candle of the row's timeframe closed, a setting, the market).
         self.sync_auto_figures(cx);
+        // An entry-price notice that arrived on this notification is timed from here on.
+        self.arm_entry_range_timer(cx);
         // The top-left overlay needs no revision gate of its own: it reads the live order rows when
         // GPUI renders. Structural order changes advance `order_lines_rev` through
         // `OrderLineStore::update`, and `ChartDataState::order_signature` already gates that
@@ -353,6 +355,8 @@ impl ChartPanel {
             label_wheel_target: None,
             ttl_timer_armed: false,
             idle_return_task: None,
+            entry_range_task: None,
+            entry_range_armed: None,
             use_track: in_use::UseTrack::default(),
             order_drag: None,
             pending_order_drag: None,
@@ -570,6 +574,8 @@ impl ChartPanel {
             label_wheel_target: None,
             ttl_timer_armed: false,
             idle_return_task: None,
+            entry_range_task: None,
+            entry_range_armed: None,
             use_track: in_use::UseTrack::default(),
             order_drag: None,
             pending_order_drag: None,

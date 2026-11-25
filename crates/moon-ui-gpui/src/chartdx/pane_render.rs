@@ -474,6 +474,9 @@ pub(in crate::chartdx) struct PaneRender {
     pub(in crate::chartdx) ud_scratch: UdScratch,
     /// Warning-badge signature encoded into userdata; `u64::MAX` means dirty.
     pub(in crate::chartdx) last_warn_sig: u64,
+    /// Entry-price notice signature encoded into userdata (`data_state::entry_range`); `0` means
+    /// none is drawn, which is also what a fresh pane draws.
+    pub(in crate::chartdx) last_entry_range_sig: u64,
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
     /// `prepare_text` draws them and maps Y through `view` each frame.
     pub(in crate::chartdx) order_labels: Vec<OrderLabel>,
@@ -825,6 +828,7 @@ impl PaneRender {
             trade_source: None,
             ud_scratch: UdScratch::default(),
             last_warn_sig: u64::MAX,
+            last_entry_range_sig: 0,
             order_labels: Vec::new(),
             order_age_now_ms: None,
             order_age_fills: Vec::new(),

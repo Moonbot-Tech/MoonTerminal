@@ -225,6 +225,11 @@ pub struct ChartPanel {
     /// The per-chart Live scope's idle auto-return for this panel (#688), re-armed by every
     /// gesture that leaves a pane off the live edge; replacing it cancels the previous wait.
     idle_return_task: Option<Task<()>>,
+    /// The one-shot wait for the nearest entry-price notice's next fade step or expiry, and the
+    /// instant it waits for. Replacing the task cancels the previous wait; see
+    /// [`Self::arm_entry_range_timer`].
+    entry_range_task: Option<Task<()>>,
+    entry_range_armed: Option<Instant>,
     /// Whether the reader is using this chart, which holds back its automatic closes.
     use_track: in_use::UseTrack,
     order_drag: Option<OrderDrag>,

@@ -100,6 +100,7 @@ impl ChartDataState {
             last_volume_prepared_rev: 0,
             last_countdown_check: None,
             last_auto_caption_tick: None,
+            entry_range_due: None,
             view_dirty: true,
         }
     }
@@ -136,9 +137,12 @@ impl ChartDataState {
                 .chart_labels
                 .any_drawn(|f| f == moon_core::config::ChartLabelField::StrategyFilters);
         let shared_sigs = (self.figures_sig(), self.news_sig(), self.warn_sig());
+        // The same gate the order sync applies before it draws a notice: live, and with a plot.
+        let wants_entry_range = self.draws_live_market() && !self.orderbook_only;
+        let now = Instant::now();
         let container = self.container.borrow();
         for ix in 0..container.pane_count() {
-            let Some((core, _market)) = container.target_ref(ix) else {
+            let Some((core, market)) = container.target_ref(ix) else {
                 continue;
             };
             // Trade arrows draw with or without a live core, and a camera-only sync is not forced,
@@ -191,6 +195,19 @@ impl ChartDataState {
                     sig = sig.wrapping_mul(31).wrapping_add(core_st.schema_rev);
                     // The closed trades' archived lines ride the same buffer as the live orders.
                     sig = sig.wrapping_mul(31).wrapping_add(self.archived_lines_rev);
+                }
+                // An entry-price notice on THIS pane's core and market, and its fade step: what
+                // wakes the sync on arrival, on every step the panel's timer lands on, and once at
+                // the expiry. Another market's notice on the same core leaves this unchanged.
+                if wants_entry_range {
+                    let range = super::entry_range::pane_entry_range(
+                        &core_st.entry_price_notices,
+                        market,
+                        now,
+                    );
+                    sig = sig
+                        .wrapping_mul(31)
+                        .wrapping_add(super::entry_range::entry_range_sig(range.as_ref()));
                 }
             }
         }

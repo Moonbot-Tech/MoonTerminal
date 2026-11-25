@@ -13,6 +13,11 @@
 //! sent over and over, and the first news, all stamped with that moment. The same seed then gives
 //! the same market however long a run lasts, which a capture run needs for its pictures to come out
 //! the same.
+//!
+//! `MOON_SYNTH_ENTRY_CORRECTION_EVERY_SEC` sends a manual-entry price correction (MoonBot 7.73 N2)
+//! that often, cycling through every shape a core can send (see `entry_correction_case`). It is the
+//! only way to drive the chart's entry-range notice without placing a real order that hits an
+//! exchange limit. Off unless set; a still market sends none.
 
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -316,6 +321,15 @@ fn run_from(
         let _ = tx.send(news_msg(&news));
     }
     let mut last_news = Instant::now();
+    // Manual-entry price corrections (MoonBot 7.73 N2), the one way to drive the chart's notice
+    // without placing a real order that hits an exchange limit. Off unless
+    // `MOON_SYNTH_ENTRY_CORRECTION_EVERY_SEC` is set; each period sends the next case of
+    // `entry_correction_case` for the first market.
+    let correction_every = Some(env_f64("MOON_SYNTH_ENTRY_CORRECTION_EVERY_SEC", 0.0))
+        .filter(|sec| *sec > 0.0)
+        .map(|sec| Duration::from_secs_f64(sec.max(0.5)));
+    let mut last_correction = Instant::now();
+    let mut correction_case = 0u64;
 
     // `MOON_SYNTH_START_PRICE` anchors the whole stream — ticks, and through them the order book,
     // the ticker and the chart's price labels — at a given price instead of the default 100 per
@@ -444,6 +458,20 @@ fn run_from(
                 return Ok(());
             }
         }
+        if !still && correction_every.is_some_and(|every| last_correction.elapsed() >= every) {
+            last_correction = Instant::now();
+            let correction = entry_correction_case(correction_case, &markets[0], price[0]);
+            correction_case += 1;
+            if let Some(correction) = correction {
+                log::info!("synth: entry price correction {correction:?}");
+                if tx
+                    .send(FeedMsg::EntryPriceCorrections(vec![correction]))
+                    .is_err()
+                {
+                    return Ok(());
+                }
+            }
+        }
         std::thread::sleep(Duration::from_millis(2));
     }
 }
@@ -501,6 +529,40 @@ fn synth_news_item(seq: &mut u64, markets: &[String], time_ms: i64) -> NewsItem 
         is_original: true,
         no_translate: false,
     }
+}
+
+/// The market `entry_correction_case` names for the case no chart shows.
+const UNCHARTED_MARKET: &str = "NOCHARTUSDT";
+
+/// The `case`-th synthetic entry-price correction, cycling through every shape a core can send.
+///
+/// In order: both limits with the request above them, only an upper limit, only a lower limit with
+/// the request below it, no limit at all (both zero on the wire), and a correction for a market no
+/// synthetic chart shows. Prices sit a few tenths of a percent from `price`, so each one lands
+/// inside the chart's default one-minute window.
+///
+/// Args:
+///     case: The running number of the correction.
+///     market: The market a chart shows.
+///     price: That market's current price.
+///
+/// Returns:
+///     The correction, built through the same constructor as a live core's; `None` while the
+///     market has no usable price.
+fn entry_correction_case(
+    case: u64,
+    market: &str,
+    price: f64,
+) -> Option<super::EntryPriceCorrection> {
+    let (market, requested, min, max) = match case % 5 {
+        0 => (market, 1.004, 0.997, 1.002),
+        1 => (market, 1.004, 0.0, 1.002),
+        2 => (market, 0.996, 0.998, 0.0),
+        3 => (market, 1.004, 0.0, 0.0),
+        _ => (UNCHARTED_MARKET, 1.004, 0.997, 1.002),
+    };
+    let at = |k: f64| if k > 0.0 { price * k } else { 0.0 };
+    super::EntryPriceCorrection::from_wire(market, at(requested), at(min), at(max))
 }
 
 #[cfg(test)]

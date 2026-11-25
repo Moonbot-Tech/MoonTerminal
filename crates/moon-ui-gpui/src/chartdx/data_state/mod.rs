@@ -241,6 +241,11 @@ pub(in crate::chartdx) struct ChartDataState {
     pub(in crate::chartdx) last_countdown_check: Option<Instant>,
     /// When the auto-figure age captions were last re-checked; see `tick_auto_captions`.
     pub(in crate::chartdx) last_auto_caption_tick: Option<Instant>,
+    /// When the nearest entry-price notice on a pane next changes its picture — a fade step or its
+    /// expiry — as of the last order rebuild; `None` while no pane draws one. The panel arms one
+    /// timer at it (`ChartPanel::arm_entry_range_timer`), so the fade and the expiry need no
+    /// backend notification and nothing repaints once the notice is gone.
+    pub(in crate::chartdx) entry_range_due: Option<Instant>,
     pub(in crate::chartdx) view_dirty: bool,
 }
 
@@ -268,6 +273,7 @@ pub(crate) struct TradeLabels {
 // frames; orders synchronizes orders and line labels; market synchronizes history, order books,
 // and automatic Y scaling.
 pub(in crate::chartdx) mod clusters;
+mod entry_range;
 mod market;
 pub(crate) mod orders;
 mod state;

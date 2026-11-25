@@ -15,7 +15,7 @@ use crate::feed::{
     AssetsSnapshot, ChartAlertUpdate, ChartTextRows, ClientSettings, ConnStatus, CoreConfig,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
     CoreConfigState, CoreFeatures, CoreTelegramState, CoreTgEvent, DetectRow, EngineActionResult,
-    FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState,
+    EntryPriceNotice, FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState,
     STRATEGY_EDIT_NOTE_CAP, STRATEGY_EDIT_NOTE_KEEP_MS, StrategyEditNote, StrategyEditOutcome,
     StrategyEditPhase, StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow,
     TransferAssetsSnapshot,
@@ -271,6 +271,13 @@ pub struct CoreData {
     /// Replaced per market when `FeedMsg::ChartText` arrives. Kept across a brief disconnect so a
     /// chart that still shows the coin does not flash empty while the core rebuilds the strings.
     pub chart_text: HashMap<String, Vec<String>>,
+    /// The latest manual-entry price correction per market (MoonBot 7.73 N2), for the chart to
+    /// show the requested price and the allowed range for a moment.
+    ///
+    /// Keyed by market because the notice is a market-level hint with no order id. Entries older
+    /// than [`crate::feed::ENTRY_NOTICE_RETAIN`] are dropped on the next arrival; how long one is
+    /// actually DRAWN is the chart's decision, read from `received_at`.
+    pub entry_price_notices: HashMap<String, EntryPriceNotice>,
     /// Archived order traces the core answered for closed report rows, by `ReportUID`.
     ///
     /// Filled by [`FeedMsg::ReportTraces`], observed through `report_traces_rev`, and evicted
@@ -465,6 +472,8 @@ pub struct CoreData {
     pub chart_alerts_rev: u64,
     /// Advances when any market's filter-overlay rows change.
     pub chart_text_rev: u64,
+    /// Advances with every filed entry-price notice; also the source of [`EntryPriceNotice::seq`].
+    pub entry_price_rev: u64,
     /// Advances when an archived-trace answer lands in `report_traces`, and when the map is
     /// cleared on `RunStateForgotten` — a reader waiting on an entry has to wake for both.
     pub report_traces_rev: u64,
@@ -567,6 +576,40 @@ impl CoreData {
         true
     }
 
+    /// File entry-price corrections as each market's latest notice, stamped `now`.
+    ///
+    /// A later correction of the same market replaces the earlier one and restarts its display,
+    /// which is what the core means by sending it again. Notices older than
+    /// [`crate::feed::ENTRY_NOTICE_RETAIN`] are dropped here, so the map stays as small as the
+    /// handful of markets corrected in the last minute.
+    ///
+    /// Args:
+    ///     corrections: The corrections, in arrival order.
+    ///     now: The receipt instant every one of them is stamped with.
+    pub fn file_entry_price_notices(
+        &mut self,
+        corrections: Vec<crate::feed::EntryPriceCorrection>,
+        now: std::time::Instant,
+    ) {
+        if corrections.is_empty() {
+            return;
+        }
+        self.entry_price_notices.retain(|_, notice| {
+            now.saturating_duration_since(notice.received_at) < crate::feed::ENTRY_NOTICE_RETAIN
+        });
+        for correction in corrections {
+            self.entry_price_rev = self.entry_price_rev.wrapping_add(1);
+            self.entry_price_notices.insert(
+                correction.market.clone(),
+                EntryPriceNotice {
+                    correction,
+                    received_at: now,
+                    seq: self.entry_price_rev,
+                },
+            );
+        }
+    }
+
     /// Creates an empty connecting core and primes off-thread order-batch retirement.
     pub fn new() -> Self {
         order_retirement::warm_up();
@@ -615,6 +658,7 @@ impl CoreData {
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
             chart_text: HashMap::new(),
+            entry_price_notices: HashMap::new(),
             log: VecDeque::new(),
             server_log_raw: VecDeque::new(),
             sys: crate::feed::CoreSysStatus::default(),
@@ -654,6 +698,7 @@ impl CoreData {
             log_seq: 0,
             chart_alerts_rev: 0,
             chart_text_rev: 0,
+            entry_price_rev: 0,
             report_traces: HashMap::new(),
             report_traces_order: VecDeque::new(),
             report_traces_rev: 0,
@@ -1604,6 +1649,9 @@ impl CoreData {
                 if changed {
                     self.chart_text_rev = self.chart_text_rev.wrapping_add(1);
                 }
+            }
+            FeedMsg::EntryPriceCorrections(corrections) => {
+                self.file_entry_price_notices(corrections, std::time::Instant::now());
             }
             FeedMsg::ReportTraces {
                 report_uid,
