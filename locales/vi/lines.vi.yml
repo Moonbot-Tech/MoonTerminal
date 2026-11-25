@@ -15,6 +15,8 @@ lines.path_alpha: "độ trong"
 lines.path_hint: "Các bước giá lệnh đã được dời — do core gửi hoặc dựng lại tại đây. Đoạn tự dời của Stop luôn được vẽ."
 lines.active_alpha: "Độ trong lệnh đang mở"
 lines.pending_dashed: "Lệnh chờ: đường vào lệnh nét đứt"
+lines.position_age: "Thời gian giữ vị thế trên đường vào lệnh"
+lines.position_age.hint: "ở mỗi lệnh đang giữ vị thế, cạnh [N] của lệnh"
 lines.max_closed: "Số lệnh đã đóng tối đa trên biểu đồ"
 
 # Settings redesign (phases 3-5)

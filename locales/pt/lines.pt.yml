@@ -15,6 +15,8 @@ lines.path_alpha: "opacidade"
 lines.path_hint: "Os degraus pelos quais o preço da ordem foi movido — enviados pelo núcleo ou reconstruídos aqui. O trecho do próprio movimento do stop sempre é desenhado."
 lines.active_alpha: "Opacidade ativa"
 lines.pending_dashed: "Ordem pendente: entrada tracejada"
+lines.position_age: "Tempo em posição na linha de entrada"
+lines.position_age.hint: "em cada ordem com posição, ao lado do seu [N]"
 lines.max_closed: "Máx. ordens fechadas desenhadas"
 
 # Settings redesign (phases 3-5)

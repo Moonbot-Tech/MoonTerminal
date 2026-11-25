@@ -589,6 +589,8 @@ pub(super) struct LinesParts {
     pub(super) closed_alpha: AnyElement,
     pub(super) max_closed: AnyElement,
     pub(super) pending_dashed: AnyElement,
+    /// The app-wide switch for the position age on entry lines (#1402).
+    pub(super) position_age: AnyElement,
     pub(super) path: AnyElement,
 }
 
@@ -677,6 +679,13 @@ pub(super) fn lines_body(
                             parts.pending_dashed,
                         ),
                         row(
+                            "lines-position-age",
+                            t!("lines.position_age").to_string(),
+                            Some(t!("lines.position_age.hint").to_string()),
+                            None,
+                            parts.position_age,
+                        ),
+                        row(
                             "lines-path",
                             t!("lines.path_title").to_string(),
                             Some(t!("lines.path.hint_short").to_string()),
@@ -698,11 +707,12 @@ pub(super) fn lines_body(
 
 /// Every hint-row id of the shared box, top to bottom.
 #[cfg(test)]
-pub(super) const LINES_ALL_ROWS: [&str; 5] = [
+pub(super) const LINES_ALL_ROWS: [&str; 6] = [
     "lines-active-alpha",
     "lines-closed-alpha",
     "lines-max-closed",
     "lines-pending-dashed",
+    "lines-position-age",
     "lines-path",
 ];
 
@@ -728,6 +738,26 @@ impl SettingsView {
             } else {
                 false
             }
+        })
+    }
+
+    /// The app-wide position-age switch, `OrdersStyleSet::show_position_age` (#1402).
+    ///
+    /// Set-level, not per colour set, so it bypasses [`Self::ord_check`] the way the take-profit
+    /// line's draw switch does: a theme change must not flip it.
+    fn position_age_check(&self, cx: &Context<Self>) -> MoonCheckbox {
+        let cur = {
+            let b = self.backend.read(cx);
+            b.preview
+                .as_ref()
+                .unwrap_or(&b.config)
+                .orders
+                .show_position_age
+        };
+        self.draft_checkbox(cx, "position-age", cur, |p, v| {
+            let changed = p.orders.show_position_age != v;
+            p.orders.show_position_age = v;
+            changed
         })
     }
 
@@ -1015,6 +1045,7 @@ impl SettingsView {
                     |o, v| o.pending_dashed = v,
                 )
                 .into_any_element(),
+            position_age: self.position_age_check(cx).into_any_element(),
             path: self.path_controls(cx),
         };
         lines_body(parts, &|key| self.more_toggle(key, cx), cx)

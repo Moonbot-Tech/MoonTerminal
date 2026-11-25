@@ -87,6 +87,7 @@ fn lines_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 closed_alpha: stub("probe-closed", 180.0, 22.0),
                 max_closed: stub("probe-max", 130.0, 28.0),
                 pending_dashed: stub("probe-pending", 18.0, 18.0),
+                position_age: stub("probe-position-age", 18.0, 18.0),
                 path: stub("probe-path", 240.0, 90.0),
             };
             lines_body(parts, &all_open, cx)

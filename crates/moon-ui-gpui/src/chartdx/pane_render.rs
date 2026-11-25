@@ -477,6 +477,20 @@ pub(in crate::chartdx) struct PaneRender {
     /// Prepared order-line labels for size, percentage, and quantity, rebuilt when orders change.
     /// `prepare_text` draws them and maps Y through `view` each frame.
     pub(in crate::chartdx) order_labels: Vec<OrderLabel>,
+    /// The order-age clock the aged captions in `order_labels` were last spelled against, Unix ms
+    /// floored to the second — or `None` while no caption of this pane states a position age.
+    ///
+    /// `None` is the whole gate of the caption clock's order-age step: a pane holding no position
+    /// costs it one `Option` test and nothing else. Set where the labels are built, so a fresh
+    /// build and the clock agree on the figure they already show.
+    pub(in crate::chartdx) order_age_now_ms: Option<i64>,
+    /// `(uid, entry fill)` of the open orders on this pane's market that hold a position, as the
+    /// row table last stated them — the input of the entry-line ages. Empty while the switch is off,
+    /// on a frozen viewer, or with no position.
+    pub(in crate::chartdx) order_age_fills: Vec<(u64, i64)>,
+    /// The row-table revision `order_age_fills` was read at, or `u64::MAX` to read it afresh. See
+    /// `data_state::orders::refresh_position_fills` for why the fills follow this revision.
+    pub(in crate::chartdx) order_age_table_rev: u64,
     /// Figure readouts, rebuilt with figure userdata and drawn by `prepare_text`.
     ///
     /// Most tools fill this only for the figure under the cursor and the one being drawn, so an
@@ -812,6 +826,9 @@ impl PaneRender {
             ud_scratch: UdScratch::default(),
             last_warn_sig: u64::MAX,
             order_labels: Vec::new(),
+            order_age_now_ms: None,
+            order_age_fills: Vec::new(),
+            order_age_table_rev: u64::MAX,
             figure_labels: Vec::new(),
             auto: Default::default(),
             order_label_order: Vec::new(),

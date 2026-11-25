@@ -32,6 +32,7 @@ mod arb;
 mod filter_line;
 mod format;
 mod inputs;
+mod order_age;
 mod pnl;
 mod preview;
 
@@ -45,6 +46,9 @@ use format::{
     span_label, tags_text, volume, volume_amount, volume_bar, window,
 };
 pub(in crate::chartdx) use inputs::{ActionInputs, BasisStats, LabelInputs, basis_index};
+pub(in crate::chartdx) use order_age::{
+    OrderAge, order_age_clock, order_age_text, position_fills, step_order_ages,
+};
 pub(in crate::chartdx) use pnl::collect_open_stats;
 pub(crate) use preview::preview_row;
 

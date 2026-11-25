@@ -216,6 +216,17 @@ pub(crate) struct OrderLabel {
     /// The text is unaffected: it states the order's real price, percentage and size wherever the
     /// line ended up, which is the whole point of pinning the drawing and nothing else.
     pub pinned: bool,
+    /// The fill and tag this caption's `text` is spelled from while it states how long its order
+    /// has held a position (#1402), or `None` for a caption whose text never moves on its own.
+    ///
+    /// Only an entry line of a position-holding order carries one, and only while the order-line
+    /// switch for it is on. The text pass draws `text` as is; the caption clock re-spells it
+    /// once a second through `text::step_order_ages`.
+    pub(in crate::chartdx) age: Option<crate::chartdx::text::OrderAge>,
+    /// Whether the last text pass actually DREW this caption — inside the plot, not thinned off a
+    /// pinned edge. Written by `prepare_text`, read by the caption clock: an aged caption that is
+    /// not on screen re-spells silently and must not wake the scene to show nothing new.
+    pub age_drawn: bool,
 }
 
 /// Prepared sell-depth caption with the same interaction identity as its chart captions.

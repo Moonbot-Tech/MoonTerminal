@@ -430,6 +430,12 @@ diag_counters!(
     // is inside its last hour — which for a 1м/5м/30м/1ч timeframe is always. Higher than that
     // means the clock quantum stopped working.
     CHART_COUNTDOWN_TICK => "chart_countdown_tick",
+    // Panes whose order-line POSITION AGES (#1402) stepped on the caption clock and asked for a
+    // present, per second. Zero on a chart that holds no position or has the switch off; at most
+    // one per active pane per second however many of its orders hold one — more than that means
+    // the step stopped being per pane. A pane whose aged captions are all off screen re-spells
+    // them without counting here, because it raises no present.
+    CHART_ORDER_AGE_TICK => "chart_order_age_tick",
     // Auto figures (`chartdx::auto_figures_sync`, driven by `panels::chart::auto_figures`).
     //
     //   * `autofigures_detect` — detector RUNS: a row whose recompute key moved (a candle of its

@@ -289,7 +289,8 @@ pub(super) fn ceil_div(value: i64, step: i64) -> i64 {
 /// the future, and that prints nothing rather than a negative or a huge figure.
 ///
 /// Args:
-///     since_ms: The oldest holder's entry fill, Unix ms.
+///     since_ms: The entry fill, Unix ms — the oldest holder's for the caption, the order's own
+///         for its entry line (`order_age::order_age_text`), so the two spell one figure alike.
 ///     now_ms: The caption clock, Unix ms, floored to the second.
 ///
 /// Returns:

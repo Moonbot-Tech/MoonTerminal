@@ -15,6 +15,8 @@ lines.path_alpha: "opacidad"
 lines.path_hint: "Los escalones por los que se movió el precio de la orden — enviados por el núcleo o reconstruidos aquí. El tramo de traslado del stop siempre se dibuja."
 lines.active_alpha: "Opacidad activa"
 lines.pending_dashed: "Orden pendiente: entrada discontinua"
+lines.position_age: "Tiempo en posición en la línea de entrada"
+lines.position_age.hint: "en cada orden con posición, junto a su [N]"
 lines.max_closed: "Máx. órdenes cerradas dibujadas"
 
 # Settings redesign (phases 3-5)

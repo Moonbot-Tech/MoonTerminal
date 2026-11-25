@@ -83,7 +83,10 @@ pub(in crate::chartdx) fn collect_open_stats(
 /// The `> 1.0` test is the wire's own "unknown" convention for these times (`0` means the core sent
 /// none), the one the order-line store applies to the same field. A non-finite value is refused
 /// before the cast, which would otherwise turn it into a confident epoch or `i64::MAX`.
-fn position_since(row: &moon_core::feed::OrderRow) -> Option<i64> {
+///
+/// Shared with the order-line ages (`order_age::position_fills`), so the caption and each order's
+/// own line agree on which orders hold a position and since when.
+pub(super) fn position_since(row: &moon_core::feed::OrderRow) -> Option<i64> {
     position_qty(row)?;
     let fill = row.entry_fill_time_ms;
     (fill.is_finite() && fill > 1.0).then_some(fill as i64)

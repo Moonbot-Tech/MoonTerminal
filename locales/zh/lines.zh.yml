@@ -15,6 +15,8 @@ lines.path_alpha: "不透明度"
 lines.path_hint: "订单价格每次移动的台阶——包括内核发来的和终端还原的。止损的移动线段始终绘制。"
 lines.active_alpha: "活动订单不透明度"
 lines.pending_dashed: "条件单：入场线用虚线"
+lines.position_age: "入场线上显示持仓时间"
+lines.position_age.hint: "每个持仓订单，显示在其 [N] 旁"
 lines.max_closed: "图表上绘制的已关闭订单上限"
 
 # Settings redesign (phases 3-5)
