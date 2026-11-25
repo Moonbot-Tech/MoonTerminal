@@ -17,7 +17,12 @@ use crate::db::{ProfitScope, ProfitUnit};
 /// rows carry this reason and 1 910 rows carry that shape, with no row in one set and not the
 /// other. Its money is real and stays in `profit`; its presence in a trade COUNT is not, and it
 /// would also add the funded position to turnover and a zero-spread trade to the fee.
-const NOT_A_TRADE: &str = "COALESCE(o.sellreason,'') <> 'Funding'";
+///
+/// The one trade predicate the Summary stream, its comparison period and the strategy/coin groups
+/// read too, so a window never shows two trade counts for one period. (Those readers fold Funding
+/// money in row by row; only this module deduplicates redelivered accruals, `funding_by_bucket`.)
+/// A source without `sellreason` projects it as NULL, which keeps every row a trade.
+pub(super) const NOT_A_TRADE: &str = "COALESCE(o.sellreason,'') <> 'Funding'";
 
 /// Trade duration in seconds, falling back to zero when the open time is absent.
 ///

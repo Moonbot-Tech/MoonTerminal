@@ -32,7 +32,7 @@ fn core_metrics_match_the_period_win_rule() {
         to: 700,
         ..Default::default()
     };
-    let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
     let parts = read(&conn, source, None, &query, &query.axis, 3_600, false)
         .expect("current-period stream");
     let alpha = parts.core_days.iter().find(|core| core.uid == 11).unwrap();
@@ -148,7 +148,7 @@ fn current_summary_rows_execute_multiple_bounded_statements() {
         to: 2 * QUERY_WINDOW_SECS + 2,
         ..Default::default()
     };
-    let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
     conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql))
         .unwrap();
@@ -173,7 +173,7 @@ fn current_summary_rows_execute_multiple_bounded_statements() {
         let from = 1 + index as i64 * QUERY_WINDOW_SECS;
         let to = (from + QUERY_WINDOW_SECS).min(query.to);
         assert!(statement.contains(&format!(
-            "FROM (SELECT * FROM current_rows WHERE closedate >= {from} AND closedate < {to}) o"
+            "FROM (SELECT *, NULL AS sellreason FROM current_rows WHERE closedate >= {from} AND closedate < {to}) o"
         )));
         assert!(
             statement.contains(&format!(
@@ -205,7 +205,7 @@ fn current_summary_windows_cover_empty_short_exact_and_multi_periods_once() {
         100 + 2 * QUERY_WINDOW_SECS - 1,
     ))
     .expect("window-boundary fixture");
-    let source = "(SELECT * FROM current_rows WHERE ?1 <= ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE ?1 <= ?2) o";
     let cases = [
         (100, 100, 0, 0.0),
         (100, 101, 1, 1.0),
@@ -255,7 +255,7 @@ fn multi_window_results_match_one_window_reference_across_boundary() {
         to: from + 2 * QUERY_WINDOW_SECS,
         ..Default::default()
     };
-    let source = "(SELECT * FROM current_rows WHERE ?1 <= ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE ?1 <= ?2) o";
 
     let bounded = read_with_window(
         &conn,
@@ -347,7 +347,7 @@ fn shifted_two_core_rows_accumulate_in_true_utc_chronology() {
         to: 100_300,
         ..Default::default()
     };
-    let source = "(SELECT * FROM current_rows WHERE ?1 <= ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE ?1 <= ?2) o";
 
     let result = read(&conn, source, None, &query, &axis, 3_600, false)
         .expect("shifted chronological stream");
@@ -400,7 +400,7 @@ fn shifted_window_padding_keeps_extreme_historical_boundary_row() {
     };
     let baked = crate::db::report_axis::MAX_OFFSET_SECS;
     let source = format!(
-        "(SELECT * FROM current_rows
+        "(SELECT *, NULL AS sellreason FROM current_rows
           WHERE closedate >= ?1 + {baked} AND closedate < ?2 + {baked}) o"
     );
 
@@ -443,9 +443,9 @@ fn indexed_union_plan_searches_each_source_inside_bounded_window() {
         chrono_tz::UTC,
     );
     super::super::time_zone::install(&conn, &axis).expect("shifted scalar");
-    let source = "(SELECT * FROM current_a WHERE closedate >= ?1 AND closedate < ?2
+    let source = "(SELECT *, NULL AS sellreason FROM current_a WHERE closedate >= ?1 AND closedate < ?2
                    UNION ALL
-                   SELECT * FROM current_b WHERE closedate >= ?1 AND closedate < ?2) o";
+                   SELECT *, NULL AS sellreason FROM current_b WHERE closedate >= ?1 AND closedate < ?2) o";
     let sql = current_stream_sql(
         source,
         "mt_to_utc(o.closedate, o.core_uid)",
@@ -518,12 +518,12 @@ fn equal_time_mixed_pnl_and_top_rows_ignore_union_planner_order() {
         to: 300,
         ..Default::default()
     };
-    let forward = "(SELECT * FROM tie_a WHERE closedate >= ?1 AND closedate < ?2
+    let forward = "(SELECT *, NULL AS sellreason FROM tie_a WHERE closedate >= ?1 AND closedate < ?2
                      UNION ALL
-                     SELECT * FROM tie_b WHERE closedate >= ?1 AND closedate < ?2) o";
-    let reverse = "(SELECT * FROM tie_b WHERE closedate >= ?1 AND closedate < ?2
+                     SELECT *, NULL AS sellreason FROM tie_b WHERE closedate >= ?1 AND closedate < ?2) o";
+    let reverse = "(SELECT *, NULL AS sellreason FROM tie_b WHERE closedate >= ?1 AND closedate < ?2
                      UNION ALL
-                     SELECT * FROM tie_a WHERE closedate >= ?1 AND closedate < ?2) o";
+                     SELECT *, NULL AS sellreason FROM tie_a WHERE closedate >= ?1 AND closedate < ?2) o";
     let left = read(&conn, forward, None, &query, &query.axis, 3_600, false)
         .expect("forward UNION result");
     let right = read(&conn, reverse, None, &query, &query.axis, 3_600, false)
@@ -580,7 +580,7 @@ fn current_summary_ordering_uses_raw_dates_only_for_zero_offset_axes() {
         to: 300,
         ..Default::default()
     };
-    let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
     let zero_axis = crate::db::ReportAxis::from_measured(
         HashMap::from([(
             1,
@@ -662,7 +662,7 @@ fn textual_strategy_storage_keeps_group_and_top_fallbacks() {
         to: 300,
         ..Default::default()
     };
-    let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
     let result = read(&conn, source, None, &query, &query.axis, 3_600, false)
         .expect("textual strategy remains readable");
@@ -714,7 +714,7 @@ fn summary_strategy_rows_keep_identity_when_head_names_are_missing_or_blank() {
         to: 300,
         ..Default::default()
     };
-    let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let source = "(SELECT *, NULL AS sellreason FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
     let result =
         read(&conn, source, None, &query, &query.axis, 3_600, true).expect("strategy-name summary");
 
@@ -761,7 +761,8 @@ fn former_full_tuple_sql(src: &str, true_time: &str) -> String {
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
                 COALESCE(o.isshort,0), o.profitbtc, o.spentbtc, o.basecurrency,
                 CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
-                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time}
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time},
+                1 AS is_trade
          FROM {src}
          WHERE {true_time} >= ?3 AND {true_time} < ?4
          ORDER BY {true_time},
@@ -775,9 +776,9 @@ fn former_full_tuple_sql(src: &str, true_time: &str) -> String {
 }
 
 /// Two-source UNION shaped like the production unified source, over the tie-heavy fixture.
-const TIE_SOURCE: &str = "(SELECT * FROM tie_rep WHERE closedate >= ?1 AND closedate < ?2
+const TIE_SOURCE: &str = "(SELECT *, NULL AS sellreason FROM tie_rep WHERE closedate >= ?1 AND closedate < ?2
                    UNION ALL
-                   SELECT * FROM tie_legacy WHERE closedate >= ?1 AND closedate < ?2) o";
+                   SELECT *, NULL AS sellreason FROM tie_legacy WHERE closedate >= ?1 AND closedate < ?2) o";
 
 /// Seed a replica-shaped and a legacy-shaped table with `rows` synthetic trades each, drawn from
 /// tiny value sets so equal-closedate ties across cores, equal profits on one core and mixed
@@ -1102,7 +1103,8 @@ fn former_five_term_sql(src: &str, true_time: &str, inline_raw: &str) -> String 
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
                 COALESCE(o.isshort,0), {inline_raw},
                 CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
-                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time}
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END, {true_time},
+                1 AS is_trade
          FROM {src}
          WHERE {true_time} >= ?3 AND {true_time} < ?4
          ORDER BY {true_time}, o.closedate, o.core_uid, o.pnl IS NULL, o.pnl"
