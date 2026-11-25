@@ -75,8 +75,8 @@ pub use limits::{
     MarketLimits, MarketQuantityUnit, MarketTickerReadout, MaxOrder, MaxOrderSource, OrderSizeRules,
 };
 pub(crate) use limits::{
-    market_quantity_unit, max_order_notional, min_order_floor, position_cap, session_base_rate,
-    session_to_usdt, session_usdt,
+    market_quantity_unit, max_order_notional, min_order_floor, position_cap_quote,
+    session_base_rate, session_to_usdt, session_usdt,
 };
 pub use replay_prices::{ReplayPriceLinesRead, overlay_stored_price_lines};
 pub use ring_helpers::MarketDataSource;

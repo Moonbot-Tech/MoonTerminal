@@ -233,7 +233,7 @@ impl Render for Shell {
         // popup, and the command.
         let row_target = controls::TradeMetric::Lev.target(self.backend.read(cx), &self.group);
         let (row_limits, toolbar_quote) = self.limits_for(row_target.as_ref(), cx);
-        let toolbar_max_order = controls::MaxOrderReadout::of(row_limits);
+        let toolbar_max_order = controls::MaxCeiling::of(row_limits);
 
         // Auto Overview draws NO per-core header cluster at all — no gear, no manual-strategy
         // switch — so the popups those elements own lose the only thing that could close them:

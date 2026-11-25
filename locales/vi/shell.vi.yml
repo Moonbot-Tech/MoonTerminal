@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Giới hạn sàn của thị trường này chưa tả
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Tổng cả nhóm: trần lệnh thuộc một tài khoản sàn — chọn một máy chủ để xem."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Trần vị thế ở đòn bẩy ĐÃ ÁP DỤNG: %{cap}. Trần này thấp hơn lệnh tối đa (%{order}), nên chính nó chặn một lệnh lớn hơn. Đòn bẩy thấp hơn thì trần cao hơn; việc đổi đòn bẩy chỉ hiện ở đây sau khi sàn chấp nhận và lõi báo trần mới."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Trần vị thế ở đòn bẩy ĐÃ ÁP DỤNG: %{cap}. Sàn không đặt lệnh tối đa cho thị trường này, nên đây là trần duy nhất. Đòn bẩy thấp hơn thì trần cao hơn; việc đổi đòn bẩy chỉ hiện ở đây sau khi sàn chấp nhận và lõi báo trần mới."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Lệnh tối đa: %{order}. Trần vị thế ở đòn bẩy ĐÃ ÁP DỤNG (%{cap}) không thấp hơn, nên chính lệnh tối đa chặn một lệnh lớn hơn. Đòn bẩy thấp hơn thì trần vị thế cao hơn; việc đổi đòn bẩy chỉ hiện ở đây sau khi sàn chấp nhận và lõi báo trần mới."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "Đòn bẩy tối đa của coin này theo sàn."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.

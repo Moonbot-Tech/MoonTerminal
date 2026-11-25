@@ -24,8 +24,9 @@ use super::*;
 ///     sell_input: Shared input state for the active sell editor.
 ///     shell: Owning shell entity receiving toolbar actions.
 ///     metric_popup: Active trade metric and its popup contents, when open.
-///     max_order: Exchange maximum-order readout for the active leverage target.
-///     quote: Quote token displayed beside a present maximum-order value.
+///     max_order: The `MAX` ceiling for the active leverage target — the lower of the per-order
+///         cap and the position cap at the applied leverage.
+///     quote: Quote token displayed beside a present ceiling.
 ///     chrome_width: Available toolbar width in logical pixels.
 ///     cx: Application context used for state reads and rendering.
 ///
@@ -44,7 +45,7 @@ pub fn toolbar(
     sell_input: &Entity<MoonInputState>,
     shell: &Entity<Shell>,
     metric_popup: Option<(TradeMetric, AnyElement)>,
-    max_order: MaxOrderReadout,
+    max_order: MaxCeiling,
     quote: &str,
     chrome_width: f32,
     cx: &App,
@@ -281,10 +282,12 @@ pub fn toolbar(
                     .and_then(|row| row.mismatches.as_ref()),
             )
         });
-    // The exchange's own cap on a single order, kept permanently on the row rather than only inside
-    // the leverage popover: it bounds every order the row above it composes, and a cap you have to
-    // open a popup to see is a cap you check after sizing rather than before. Compact here, exact in
-    // the popover — one value from one read, at two precisions.
+    // The exchange ceiling on an order, kept permanently on the row rather than only inside the
+    // leverage popover: it bounds every order the row above it composes, and a cap you have to open
+    // a popup to see is a cap you check after sizing rather than before. It is the LOWER of the
+    // per-order cap and the position cap at the applied leverage (#1067) — the one that actually
+    // stops a larger order — and the hover names which. Compact here, both figures exact in the
+    // popover, all from one read.
     let max_order_caption = t!("toolbar.max_order_short").to_string();
     // A cap is one exchange account's rule. `Shell` resolved this readout through
     // `TradeMetric::Lev.target`, which already answers `None` in Overview — but `None` there means
@@ -292,12 +295,12 @@ pub fn toolbar(
     // for a dash the scope caused, so the state is named explicitly instead: value and tooltip then
     // come from ONE value and cannot disagree about why the figure is absent.
     let max_order = if overview {
-        MaxOrderReadout::OutOfScope
+        MaxCeiling::out_of_scope()
     } else {
         max_order
     };
     let max_order_value = max_order.format_compact(|v| fmt::short(v, fmt::Form::Label), quote);
-    let max_order_tip = t!(max_order.tooltip_key()).to_string();
+    let max_order_tip = max_order.tooltip(quote);
     let analytics_label = t!("toolbar.analytics").to_string();
     let strategies_label = t!("toolbar.strategies").to_string();
     let settings_label = t!("shell.settings_btn").to_string();

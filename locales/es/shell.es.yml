@@ -163,6 +163,13 @@ toolbar.limits_unknown: "Los límites del exchange aún no se han cargado para e
 # Hover text when the header scope is the whole group: an order cap belongs to one exchange
 # account, so there is no single figure to state until a server is chosen.
 toolbar.max_order_no_core: "Resumen completo: el límite de orden pertenece a una cuenta del exchange: elige un servidor para verlo."
+# Toolbar MAX hover when the position cap at the applied leverage is below the per-order cap (#1067).
+toolbar.max_cap_binds: "Límite de posición con el apalancamiento APLICADO: %{cap}. Está por debajo de la orden máx. (%{order}), así que es lo que frena una orden mayor. Menos apalancamiento lo eleva; un cambio de apalancamiento se ve aquí solo después de que el exchange lo acepte y el núcleo informe el nuevo límite."
+# Toolbar MAX hover when the position cap is the only ceiling: the exchange states no per-order cap.
+toolbar.max_cap_only: "Límite de posición con el apalancamiento APLICADO: %{cap}. El exchange no fija una orden máx. para este mercado, así que es el único límite. Menos apalancamiento lo eleva; un cambio de apalancamiento se ve aquí solo después de que el exchange lo acepte y el núcleo informe el nuevo límite."
+# Toolbar MAX hover when both caps are known and the per-order cap is the binding one; the per-order
+# provenance sentence (max_order_tip / max_order_derived) follows it on a new line.
+toolbar.max_order_binds: "Orden máx.: %{order}. El límite de posición con el apalancamiento APLICADO (%{cap}) no es menor, así que esto es lo que frena una orden mayor. Menos apalancamiento eleva el límite de posición; un cambio de apalancamiento se ve aquí solo después de que el exchange lo acepte y el núcleo informe el nuevo límite."
 # Hover text on a known maximum leverage.
 toolbar.lev_max_tip: "Apalancamiento máximo de esta moneda según el exchange."
 # Hover text on the dash when the exchange stated no maximum leverage for this market.

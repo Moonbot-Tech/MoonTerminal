@@ -399,11 +399,40 @@ fn the_venue_minimum_is_one_money_figure_for_both_units() {
 /// `bn_max_value` rather than state a cap of nothing.
 #[test]
 fn position_cap_hides_zero_and_non_finite() {
+    use super::limits::position_cap;
     assert_eq!(position_cap(0.0), None);
     assert_eq!(position_cap(-5.0), None);
     assert_eq!(position_cap(f64::NAN), None);
     assert_eq!(position_cap(f64::INFINITY), None);
     assert_eq!(position_cap(25_000.0), Some(25_000.0));
+}
+
+/// Regression target: `limits.rs:position_cap_quote` must state a coin-margined market's cap in
+/// the quote currency, like `max_order` beside it.
+///
+/// The edit this catches: passing the raw coin count through on a COIN-M market. Binance COIN-M
+/// reports `maxQty` — 50 BTC here — and the toolbar would then compare `50` against a per-order
+/// cap of `$1 000 000` and call the 50 the binding ceiling, while the real cap is $5 000 000.
+#[test]
+fn position_cap_is_converted_to_quote_on_a_coin_margined_market() {
+    use MarketQuantityUnit::{Coins, Contracts};
+    // Linear: already a quote-currency notional, untouched and independent of the price.
+    assert_eq!(
+        position_cap_quote(25_000.0, Some(Coins), 0.0),
+        Some(25_000.0)
+    );
+    // Coin-margined: coins times the ask — what MoonBot's own clamp multiplies it by.
+    assert_eq!(
+        position_cap_quote(50.0, Some(Contracts(100.0)), 100_000.0),
+        Some(5_000_000.0)
+    );
+    // No price yet, an unknown unit, or no stated cap: nothing to state, never the raw count.
+    assert_eq!(position_cap_quote(50.0, Some(Contracts(100.0)), 0.0), None);
+    assert_eq!(position_cap_quote(50.0, None, 100_000.0), None);
+    assert_eq!(
+        position_cap_quote(0.0, Some(Contracts(100.0)), 100_000.0),
+        None
+    );
 }
 
 /// A core on a venue the exchange directory does not know still resolves to a replay address —
