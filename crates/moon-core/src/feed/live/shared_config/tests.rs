@@ -1361,6 +1361,12 @@ fn an_echo_without_the_exit_cancel_flag_confirms_an_order_rules_edit() {
 
     echo.trading.auto_start_2.cancel_buys_on_exit = Some(true);
     assert!(rejection_within_mask(&expected, &core_config_from_proto(&echo), mask).is_some());
+
+    // The flag's leniency covers that flag alone: an echo without it that also lost the edit
+    // itself is still a rejection.
+    echo.trading.auto_start_2.cancel_buys_on_exit = None;
+    echo.trading.manual_mode = !sent.trading.manual_mode;
+    assert!(rejection_within_mask(&expected, &core_config_from_proto(&echo), mask).is_some());
 }
 
 /// An edit that does not set the exit-cancel flag leaves it as the core sent it.

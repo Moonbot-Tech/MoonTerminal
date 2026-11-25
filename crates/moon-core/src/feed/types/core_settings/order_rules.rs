@@ -97,10 +97,12 @@ pub struct OrderRulesSettings {
     /// `ClientSettings` packet over the full snapshot whenever the compact one is newer, and that
     /// packet always carries the flag, so an older core projects as `Some(false)` until its next
     /// full snapshot — and moonproto then serializes that value into every full write to it,
-    /// whichever page sent it. The core's full echo comes back without the field, so the area's
-    /// comparison reads a missing flag as `false` — what such a core does at shutdown (see the
-    /// `PartialEq` impl). Otherwise every order-rules edit on it would read as not applied, while
-    /// a tick of this row there still does, because that core will not cancel anything.
+    /// whichever page sent it. The core's full echo comes back without the field, so the write
+    /// CONFIRMATION reads a missing flag as `false` — what such a core does at shutdown (see
+    /// [`OrderRulesSettings::agrees_in_effect`]). Otherwise every order-rules edit on it would read
+    /// as not applied, while a tick of this row there still does, because that core will not
+    /// cancel anything. `PartialEq` stays structural: the flag appearing or vanishing is a change
+    /// the store must publish, since it turns this row live or dead.
     pub cancel_buys_on_exit: Option<bool>,
     /// `trading.manual_mode`: the core takes no entry on its own — signals and detects stop
     /// buying — while manual orders and the management of open positions carry on. Not the
@@ -312,7 +314,7 @@ impl PartialEq for OrderRulesSettings {
             && *analyze_on_start == other.analyze_on_start
             && *sell_auto_move == other.sell_auto_move
             && *dont_buy_delisted == other.dont_buy_delisted
-            && exit_cancel_agrees(*cancel_buys_on_exit, other.cancel_buys_on_exit)
+            && *cancel_buys_on_exit == other.cancel_buys_on_exit
             && *manual_mode == other.manual_mode
             && *use_manual_balance == other.use_manual_balance
             && *play_with == other.play_with
@@ -321,16 +323,26 @@ impl PartialEq for OrderRulesSettings {
     }
 }
 
-/// Whether two projections agree on `cancel_buys_on_exit`, by what the core does at shutdown.
-///
-/// A side without the flag is a core that has no such setting and so cancels nothing on exit —
-/// the same behaviour as `Some(false)`. That is the case [`OrderRulesSettings::cancel_buys_on_exit`]
-/// describes, where the terminal's write carries the compact overlay's `Some(false)` and the older
-/// core's echo carries nothing: it must confirm. A `Some(true)` written to such a core must not —
-/// it will never act on it. Comparing the mapped value keeps the equality transitive.
-/// Field-level diffs (`fields::CORE_FIELDS`) stay strict and still show the flag as absent.
-fn exit_cancel_agrees(a: Option<bool>, b: Option<bool>) -> bool {
-    a.unwrap_or(false) == b.unwrap_or(false)
+impl OrderRulesSettings {
+    /// Whether a write and the core's echo agree on this area by what the core will DO — the
+    /// comparison that confirms or rejects a write, not the structural `==`.
+    ///
+    /// Every field compares as `==` does except `cancel_buys_on_exit`, where a side without the
+    /// flag is a core that has no such setting and so cancels nothing on exit — the same behaviour
+    /// as `Some(false)`. That is the case [`Self::cancel_buys_on_exit`] describes, where the
+    /// terminal's write carries the compact overlay's `Some(false)` and the older core's echo
+    /// carries nothing: it must confirm. A `Some(true)` written to such a core must not — it will
+    /// never act on it.
+    ///
+    /// Not `PartialEq` itself: the session store dedupes arrivals with `==`, and there `None` and
+    /// `Some(false)` must differ, or a core updated to 7.73 N2 would leave the row disabled until
+    /// some other field moved.
+    pub(crate) fn agrees_in_effect(&self, other: &Self) -> bool {
+        let mut mine = self.clone();
+        mine.cancel_buys_on_exit = other.cancel_buys_on_exit;
+        self.cancel_buys_on_exit.unwrap_or(false) == other.cancel_buys_on_exit.unwrap_or(false)
+            && mine == *other
+    }
 }
 
 /// Moonbot's Hotkeys page, "Orders Controls" tab: which mouse gesture places, moves and repositions
