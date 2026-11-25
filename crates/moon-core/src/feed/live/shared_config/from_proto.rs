@@ -243,6 +243,9 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
             analyze_on_start: sig.load_deep_history,
             sell_auto_move: t.sell_auto_move,
             dont_buy_delisted: t.dont_buy_delisted,
+            // Kept as the wire's `Option`: `None` is a core that did not send the field, and the
+            // writer has to be able to tell that apart from an explicit `false`.
+            cancel_buys_on_exit: a2.cancel_buys_on_exit,
             manual_mode: t.manual_mode,
             use_manual_balance: t.use_manual_balance,
             fixed_trade_balance: t.fixed_trade_balance,

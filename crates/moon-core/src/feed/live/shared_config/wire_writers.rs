@@ -126,8 +126,21 @@ fn apply_gestures(cfg: &mut SharedConfig, g: &GestureSettings) {
 /// Fourteen fields of `trading` plus `signals.load_deep_history`, which is the one field of this
 /// area outside `trading` and cannot collide with [`apply_signals`]: that applier owns six other
 /// fields of the same section and none of them is this one.
+///
+/// And `trading.auto_start_2.cancel_buys_on_exit`, written only when BOTH sides hold a value. A
+/// snapshot without it (a core older than 7.73 N2) keeps it absent, so no byte the core does not
+/// know is appended to its Trading section; a projection without it (a page or a bulk overlay
+/// seeded from such a core) leaves a value the core did send untouched, and never turns it into
+/// `None`, which moonproto refuses to write before an unknown Trading tail.
+/// [`apply_auto_start`] writes `auto_start_2` field by field and does not name this one.
 fn apply_order_rules(cfg: &mut SharedConfig, r: &OrderRulesSettings) {
     cfg.signals.load_deep_history = r.analyze_on_start;
+    if let (Some(slot), Some(on)) = (
+        cfg.trading.auto_start_2.cancel_buys_on_exit.as_mut(),
+        r.cancel_buys_on_exit,
+    ) {
+        *slot = on;
+    }
     let t = &mut cfg.trading;
     t.trailing_float = r.trailing_float;
     t.auto_sell_partial = r.auto_sell_partial;

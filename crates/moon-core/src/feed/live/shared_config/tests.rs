@@ -2,7 +2,7 @@ use moonproto::shared_config::SharedConfig;
 
 use super::{
     FieldMask, MAX_ATTEMPTS, QueuedOp, SentAsk, SequenceAction, SharedConfigSequence,
-    apply_core_config, core_config_from_proto, edit_satisfied,
+    apply_core_config, core_config_from_proto, edit_satisfied, rejection_within_mask,
 };
 use crate::feed::{AutoStartSettings, CoreConfig, CoreConfigEditEvent, CoreConfigEditResult};
 
@@ -1272,6 +1272,129 @@ fn the_order_rules_area_round_trips() {
     assert_eq!(written.trading.fixed_trade_balance, 25.5);
     assert_eq!(written.trading.play_with, 333);
     assert_eq!(written.trading.x_ask, -7);
+}
+
+/// What the core would read back from `cfg`: moonproto serializes it and parses the bytes again.
+fn wire_round_trip(cfg: &SharedConfig) -> SharedConfig {
+    let bytes = moonproto::shared_config::serialize_payload(cfg).expect("the config serializes");
+    moonproto::shared_config::parse_payload(&bytes).expect("and parses back")
+}
+
+/// The exit-cancel flag of Moonbot 7.73 N2 reaches the wire from the "Основные" page, both ways.
+///
+/// Through the whole path — projection, page edit, writer, moonproto's own serializer and parser —
+/// so a projection that dropped the field or a writer that never named it fails here, not on a
+/// trader's core at its next shutdown.
+#[test]
+fn an_exit_cancel_edit_reaches_the_wire() {
+    for on in [true, false] {
+        let mut base = SharedConfig::default();
+        base.trading.auto_start_2.cancel_buys_on_exit = Some(!on);
+        let mut page = core_config_from_proto(&base);
+        assert_eq!(page.order_rules.cancel_buys_on_exit, Some(!on));
+        page.order_rules.cancel_buys_on_exit = Some(on);
+
+        let mut written = base.clone();
+        apply_core_config(&mut written, &page, FieldMask::EMPTY.with_order_rules());
+        let parsed = wire_round_trip(&written);
+        assert_eq!(parsed.trading.auto_start_2.cancel_buys_on_exit, Some(on));
+        assert_eq!(
+            core_config_from_proto(&parsed)
+                .order_rules
+                .cancel_buys_on_exit,
+            Some(on)
+        );
+    }
+}
+
+/// A core older than 7.73 N2 sends no exit-cancel flag, and no write may invent one for it — not
+/// even a bulk OK whose page came from a newer core that holds `Some(true)`.
+///
+/// Inventing it would append a byte to the old core's Trading section, and on a snapshot with an
+/// unknown Trading tail moonproto refuses to serialize the field's absence, so the value written
+/// must stay exactly what the core sent: absent.
+#[test]
+fn an_older_core_without_the_exit_cancel_flag_keeps_it_absent() {
+    let mut old = SharedConfig::default();
+    old.trading.auto_start_2.cancel_buys_on_exit = None;
+    let projected = core_config_from_proto(&old);
+    assert_eq!(projected.order_rules.cancel_buys_on_exit, None);
+
+    // A page staged on a newer core, laid over this one: the flag arrives as `Some`.
+    let mut wanted = projected.clone();
+    wanted.order_rules.cancel_buys_on_exit = Some(true);
+    wanted.order_rules.dont_buy_delisted = !wanted.order_rules.dont_buy_delisted;
+
+    let mut written = old.clone();
+    apply_core_config(&mut written, &wanted, FieldMask::EMPTY.with_order_rules());
+    assert_eq!(written.trading.auto_start_2.cancel_buys_on_exit, None);
+    // The rest of the area still lands: the guard skips one field, not the page.
+    assert_eq!(
+        written.trading.dont_buy_delisted,
+        wanted.order_rules.dont_buy_delisted
+    );
+    let parsed = wire_round_trip(&written);
+    assert_eq!(parsed.trading.auto_start_2.cancel_buys_on_exit, None);
+}
+
+/// An older core projects the exit-cancel flag as `Some(false)` while moonproto's compact overlay
+/// is newer than its full snapshot, every full write to it carries that value, and its echo carries
+/// nothing. An unrelated order-rules edit must still confirm against that echo — and both a tick
+/// of the row there (the core will never act on it) and a newer core that answers with the other
+/// value must still read as a rejection.
+#[test]
+fn an_echo_without_the_exit_cancel_flag_confirms_an_order_rules_edit() {
+    let mask = FieldMask::EMPTY.with_order_rules();
+    let mut sent = SharedConfig::default();
+    sent.trading.auto_start_2.cancel_buys_on_exit = Some(false);
+    sent.trading.manual_mode = !sent.trading.manual_mode;
+    let expected = core_config_from_proto(&sent);
+
+    let mut echo = sent.clone();
+    echo.trading.auto_start_2.cancel_buys_on_exit = None;
+    assert!(rejection_within_mask(&expected, &core_config_from_proto(&echo), mask).is_none());
+
+    let mut ticked = sent.clone();
+    ticked.trading.auto_start_2.cancel_buys_on_exit = Some(true);
+    let ticked = core_config_from_proto(&ticked);
+    assert!(rejection_within_mask(&ticked, &core_config_from_proto(&echo), mask).is_some());
+
+    echo.trading.auto_start_2.cancel_buys_on_exit = Some(true);
+    assert!(rejection_within_mask(&expected, &core_config_from_proto(&echo), mask).is_some());
+}
+
+/// An edit that does not set the exit-cancel flag leaves it as the core sent it.
+///
+/// Two ways to lose it: the AutoStart writer, which writes the same `auto_start_2` record, and an
+/// order-rules write whose page carries no value for the flag (seeded from an older core) — which
+/// must not turn the core's `Some` into `None`, the one change moonproto cannot serialize before an
+/// unknown Trading tail.
+#[test]
+fn an_unrelated_edit_keeps_the_exit_cancel_flag_the_core_sent() {
+    let mut base = SharedConfig::default();
+    base.trading.auto_start_2.cancel_buys_on_exit = Some(true);
+    base.trading.unknown_tail = vec![7, 7];
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.order_rules.cancel_buys_on_exit = Some(false);
+    wanted.auto_start.rs_hours += 1;
+    let mut written = base.clone();
+    apply_core_config(&mut written, &wanted, FieldMask::EMPTY.with_auto_start());
+    assert_eq!(
+        written.trading.auto_start_2.rs_hours,
+        wanted.auto_start.rs_hours
+    );
+    assert_eq!(written.trading.auto_start_2.cancel_buys_on_exit, Some(true));
+
+    let mut wanted = core_config_from_proto(&base);
+    wanted.order_rules.cancel_buys_on_exit = None;
+    wanted.order_rules.manual_mode = !wanted.order_rules.manual_mode;
+    let mut written = base.clone();
+    apply_core_config(&mut written, &wanted, FieldMask::EMPTY.with_order_rules());
+    assert_eq!(written.trading.auto_start_2.cancel_buys_on_exit, Some(true));
+    let parsed = wire_round_trip(&written);
+    assert_eq!(parsed.trading.auto_start_2.cancel_buys_on_exit, Some(true));
+    assert_eq!(parsed.trading.unknown_tail, vec![7, 7]);
 }
 
 /// The compact popup draws the exits and the blacklist and NOT the seven rows beside them, so its

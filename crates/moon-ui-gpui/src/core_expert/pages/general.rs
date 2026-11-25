@@ -4,8 +4,9 @@
 //! level, the trailing stop and its level, V-Stop's level and enable flag, the coin blacklist with
 //! its text and its delta filter, the trailing addition, the partial-fill sell, the buy
 //! auto-cancel, the cancel-after-Sell switch, the sell placed under the wall, the fresh-coin and
-//! delisting holds, the trades-into-deltas switch, and the startup analysis and manual mode above
-//! the two columns.
+//! delisting holds, the trades-into-deltas switch, the startup analysis and manual mode above
+//! the two columns, and the cancel-entries-on-exit switch under the right column's group — live
+//! only on a core that sends it (Moonbot 7.73 N2 and newer), disabled with its reason otherwise.
 //!
 //! The "default entry" group is not on Moonbot's settings page at all: Moonbot sets the entry share,
 //! the fixed amount and the buy price from its MAIN window. On a core that runs without that window
@@ -43,7 +44,8 @@ use crate::shell::{
 
 use super::super::CoreExpertView;
 use super::super::widgets::{
-    action, caption, columns, field, flag, group, hint, num, radio_live, rows, slider,
+    action, caption, columns, field, flag, flag_described, group, hint, num, radio_live, rows,
+    slider,
 };
 
 /// Stop-loss distance in per cent, counting down from zero. The reference states no range, so the
@@ -608,6 +610,9 @@ pub(super) fn body(
         ),
     );
 
+    // Moonbot's standalone row under that group, outside any frame.
+    let exit_cancel = cancel_buys_on_exit_row(r, view);
+
     v_flex()
         .w_full()
         .gap(design::ui_px(cx, 10.0))
@@ -642,10 +647,58 @@ pub(super) fn body(
                 .child(order_handling)
                 .child(entry)
                 .child(transfer),
-            risks,
+            v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 8.0))
+                .child(risks)
+                .child(exit_cancel),
             cx,
         ))
         .into_any_element()
+}
+
+/// The "cancel entry orders on exit" row, live only where the core sent the field.
+///
+/// Disabled, with the reason as its description, while the snapshot holds `None` — a core older
+/// than Moonbot 7.73 N2. The setter writes only over a value already there, and the change set's
+/// overlay keeps each core's own presence of the field (`CoreChangeSet::overlay`), so neither
+/// this row nor a bulk click across a selection that mixes old and new cores can invent the field
+/// for a core that never sent it. With an older core drawn, the row stays disabled for the whole
+/// selection: the newer cores in it are edited by drawing one of them.
+///
+/// Args:
+///     r: The staged expert-only rows of the page.
+///     view: Window entity the checkbox stages through.
+///
+/// Returns:
+///     The checkbox with its description.
+fn cancel_buys_on_exit_row(
+    r: &OrderRulesSettings,
+    view: &Entity<CoreExpertView>,
+) -> impl IntoElement {
+    let known = r.cancel_buys_on_exit.is_some();
+    let description = if known {
+        t!("core_expert.gen_cancel_buys_on_exit_hint")
+    } else {
+        t!("core_expert.gen_cancel_buys_on_exit_absent")
+    };
+    flag_described(
+        "exp-gen-exit-cancel",
+        t!("core_expert.gen_cancel_buys_on_exit").to_string(),
+        Some(description.to_string()),
+        r.cancel_buys_on_exit.unwrap_or(false),
+        known,
+        view,
+        set_cancel_buys_on_exit,
+    )
+}
+
+/// Stage the exit-cancel flag, only over a value the core sent — see
+/// [`cancel_buys_on_exit_row`].
+fn set_cancel_buys_on_exit(draft: &mut CoreConfig, on: bool) {
+    if let Some(slot) = draft.order_rules.cancel_buys_on_exit.as_mut() {
+        *slot = on;
+    }
 }
 
 #[cfg(test)]
