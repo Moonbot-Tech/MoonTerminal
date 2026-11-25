@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "On"
 chart.volumes.hvol_backdrop_off: "Off"
 chart.volumes.hvol_overlay: "Overlay on the chart"
 chart.volumes.hvol_overlay_hint: "Like the bottom volumes: over the candles, no backdrop or frame, rows grow inward from the left edge"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Close the terminal?"
+shell.quit_confirm.body: "The whole terminal closes together with its chart windows, not just one chart. The cores keep running, the orders stay, and the window layout comes back on the next launch."
+shell.quit_confirm.stay: "Stay"
+shell.quit_confirm.quit: "Close terminal"

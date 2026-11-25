@@ -63,7 +63,7 @@ settings.page.hotkeys.desc: "Teclas e gestos do mouse compatíveis com o Moonbot
 settings.page.hotkeys.keywords: "atalho tecla mouse gesto combinação moonbot"
 settings.page.general.title: "Principal"
 settings.page.general.desc: "Idioma, cálculo de valores e comportamento dos gráficos."
-settings.page.general.keywords: "idioma câmbio usdt log fechamento automático aba panorama"
+settings.page.general.keywords: "idioma câmbio usdt log fechamento automático aba panorama sair"
 settings.page.security.title: "Segurança"
 settings.page.security.desc: "Duas senhas independentes e a lista de computadores que podem abrir o arquivo de conexões."
 settings.page.security.keywords: "senha criptografia servers.enc máquina"

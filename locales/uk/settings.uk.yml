@@ -63,7 +63,7 @@ settings.page.hotkeys.desc: "Клавіші та жести миші, суміс
 settings.page.hotkeys.keywords: "хоткей клавіша миша жест комбінація moonbot"
 settings.page.general.title: "Основне"
 settings.page.general.desc: "Мова, розрахунок сум і поведінка графіків."
-settings.page.general.keywords: "мова курс usdt лог автозакриття вкладка панорама"
+settings.page.general.keywords: "мова курс usdt лог автозакриття вкладка панорама вихід"
 settings.page.security.title: "Безпека"
 settings.page.security.desc: "Два незалежні паролі та список комп'ютерів, яким відкрито файл підключень."
 settings.page.security.keywords: "пароль шифрування servers.enc машина"

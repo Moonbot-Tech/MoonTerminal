@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "有"
 chart.volumes.hvol_backdrop_off: "无"
 chart.volumes.hvol_overlay: "叠加到图表"
 chart.volumes.hvol_overlay_hint: "与底部成交量相同：叠在K线之上，无背景和边框，条形从左边缘向内延伸"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "关闭终端？"
+shell.quit_confirm.body: "将关闭整个终端及其图表窗口，而不只是一个图表。核心继续运行，订单保留，窗口布局会在下次启动时恢复。"
+shell.quit_confirm.stay: "留下"
+shell.quit_confirm.quit: "关闭终端"

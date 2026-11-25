@@ -910,3 +910,8 @@ chart.volumes.hvol_backdrop_on: "Có"
 chart.volumes.hvol_backdrop_off: "Không"
 chart.volumes.hvol_overlay: "Đè lên biểu đồ"
 chart.volumes.hvol_overlay_hint: "Như khối lượng dưới: trên nến, không nền không khung, các hàng mọc từ mép trái vào trong"
+# Quit question on the last main window's close (#1170).
+shell.quit_confirm.title: "Đóng terminal?"
+shell.quit_confirm.body: "Toàn bộ terminal sẽ đóng cùng các cửa sổ biểu đồ, không chỉ một biểu đồ. Các lõi vẫn tiếp tục chạy, lệnh vẫn giữ nguyên và bố cục cửa sổ sẽ trở lại ở lần khởi động sau."
+shell.quit_confirm.stay: "Ở lại"
+shell.quit_confirm.quit: "Đóng terminal"
