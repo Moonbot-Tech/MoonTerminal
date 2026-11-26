@@ -2,7 +2,7 @@
 
 mod csv;
 mod day_cache;
-mod transport;
+pub(crate) mod transport;
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read};

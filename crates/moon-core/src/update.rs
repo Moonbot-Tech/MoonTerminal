@@ -46,15 +46,25 @@ const RELEASES_URL: &str = "https://api.github.com/repos/Moonbot-Tech/MoonTermin
 /// Synchronous GitHub client intended for a dedicated background executor.
 #[derive(Clone)]
 pub struct GitHubReleaseClient {
+    /// Release-list pages: small bodies under one whole-call ceiling.
     agent: ureq::Agent,
+    /// Release assets: no whole-call ceiling, only a bound on each silent wait.
+    download_agent: ureq::Agent,
     releases_url: String,
 }
+
+/// Whole-call ceiling for one release-list page.
+const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Longest wait for each download step before the body: name lookup, connect, request write.
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl GitHubReleaseClient {
     /// Build a bounded HTTPS-only client for public release metadata and assets.
     ///
     /// Returns:
-    ///     Client with a global timeout and bounded redirect chain.
+    ///     Client with a bounded redirect chain, a whole-call timeout on release metadata and a
+    ///     per-read timeout on asset downloads.
     pub fn new() -> Self {
         Self::build(RELEASES_URL, true)
     }
@@ -68,14 +78,49 @@ impl GitHubReleaseClient {
     /// Returns:
     ///     A bounded synchronous GitHub client.
     fn build(releases_url: &str, https_only: bool) -> Self {
+        Self::build_with(releases_url, https_only, METADATA_TIMEOUT)
+    }
+
+    /// Build the two transports with an explicit release-list ceiling.
+    ///
+    /// A release asset runs past 100 MB, so a whole-call ceiling would fail every link slower
+    /// than size / ceiling. Downloads instead bound each step before the body and each wait for
+    /// fresh bytes, the same per-read deadline the trade archive uses for its long daily bodies.
+    ///
+    /// Args:
+    ///     releases_url: Exact release-list endpoint.
+    ///     https_only: Whether both transports reject all plain-HTTP requests.
+    ///     metadata_timeout: Whole-call ceiling for one release-list page.
+    ///
+    /// Returns:
+    ///     A bounded synchronous GitHub client.
+    fn build_with(releases_url: &str, https_only: bool, metadata_timeout: Duration) -> Self {
         let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(30)))
+            .timeout_global(Some(metadata_timeout))
             .https_only(https_only)
             .max_redirects(5)
             .http_status_as_error(false)
             .build();
+        let download_config = ureq::Agent::config_builder()
+            .timeout_resolve(Some(DOWNLOAD_CONNECT_TIMEOUT))
+            .timeout_connect(Some(DOWNLOAD_CONNECT_TIMEOUT))
+            .timeout_send_request(Some(DOWNLOAD_CONNECT_TIMEOUT))
+            .https_only(https_only)
+            .max_redirects(5)
+            .http_status_as_error(false)
+            .build();
+        let download_agent = {
+            use ureq::unversioned::transport::{Connector, DefaultConnector};
+            ureq::Agent::with_parts(
+                download_config,
+                DefaultConnector::default()
+                    .chain(crate::market::trade_replay::archive::transport::ReadTimeout),
+                ureq::unversioned::resolver::DefaultResolver::default(),
+            )
+        };
         Self {
             agent: ureq::Agent::new_with_config(config),
+            download_agent,
             releases_url: releases_url.to_owned(),
         }
     }
@@ -90,6 +135,19 @@ impl GitHubReleaseClient {
     #[cfg(test)]
     fn for_test(releases_url: &str) -> Self {
         Self::build(releases_url, false)
+    }
+
+    /// Build a loopback-capable client with a shortened release-list ceiling.
+    ///
+    /// Args:
+    ///     releases_url: Loopback fixture endpoint.
+    ///     metadata_timeout: Whole-call ceiling for one release-list page.
+    ///
+    /// Returns:
+    ///     A test-only client that permits plain HTTP.
+    #[cfg(test)]
+    fn for_test_with_metadata_timeout(releases_url: &str, metadata_timeout: Duration) -> Self {
+        Self::build_with(releases_url, false, metadata_timeout)
     }
 
     /// Download an eligible asset into a verified staged executable.

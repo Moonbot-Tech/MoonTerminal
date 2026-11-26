@@ -4,7 +4,7 @@ use ureq::unversioned::transport::{Buffers, ConnectionDetails, Connector, NextTi
 
 /// Wrap the default HTTPS connector after its TLS and proxy negotiation has completed.
 #[derive(Debug)]
-pub(super) struct ReadTimeout;
+pub(crate) struct ReadTimeout;
 
 impl<In: Transport> Connector<In> for ReadTimeout {
     type Out = TimedRead<In>;
@@ -21,7 +21,7 @@ impl<In: Transport> Connector<In> for ReadTimeout {
 
 /// Delegate all transport behavior while bounding each wait for fresh input.
 #[derive(Debug)]
-pub(super) struct TimedRead<In>(In);
+pub(crate) struct TimedRead<In>(In);
 
 impl<In: Transport> Transport for TimedRead<In> {
     /// Preserve the connector's own buffering.
