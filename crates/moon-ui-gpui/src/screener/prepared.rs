@@ -103,7 +103,7 @@ impl GroupView {
 }
 
 /// One display row. Its lead supplies market columns for a grouped venue market.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct SelectedRow {
     pub lead: usize,
     pub group: Option<GroupView>,
@@ -274,7 +274,7 @@ impl Prepared {
             }
     }
 
-    /// Apply the latest controls immediately, sorting indices rather than moving market rows.
+    /// Apply the latest controls immediately, sorting indices and tracking grouped UI stalls.
     pub fn select(
         &self,
         ranks: &[Option<usize>],
@@ -285,6 +285,10 @@ impl Prepared {
         grouped: bool,
     ) -> Selection {
         if grouped {
+            let _stall = crate::diag::stall::span(
+                crate::diag::stall::StallKind::Input,
+                "screener:select-grouped",
+            );
             return self.select_grouped(ranks, coin, min_vol, key, desc);
         }
         // A group's position comes from its FIRST VISIBLE member, not a hidden provider.

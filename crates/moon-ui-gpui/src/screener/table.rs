@@ -540,24 +540,28 @@ pub(super) fn short_listed_captions() -> [SharedString; 3] {
     ]
 }
 
-/// The venue caption with its brand logo, clipped rather than wrapped in a narrow column.
-fn exchange_cell(venue: &EntryVenue, style: &RowStyle) -> impl IntoElement + 'static {
+/// Keep the venue logo visible and show the full caption on hover.
+fn exchange_cell(venue: &EntryVenue, style: &RowStyle) -> MoonDataCell {
     let logo = style
         .logos_ready
         .then_some(venue.brand)
         .flatten()
         .and_then(crate::media::exchange_logos::exchange_logo);
     let (logo_px, logo_gap) = (style.logo_px, style.logo_gap);
-    div()
-        .w_full()
-        .h_full()
-        .flex()
-        .items_center()
-        .gap(logo_gap)
-        .when_some(logo, |cell, logo| {
-            cell.child(img(logo).flex_none().w(logo_px).h(logo_px))
-        })
-        .child(div().min_w_0().truncate().child(venue.label.clone()))
+    MoonDataCell::element(
+        div()
+            .min_w_0()
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(logo_gap)
+            .when_some(logo, |cell, logo| {
+                cell.child(img(logo).flex_none().w(logo_px).h(logo_px))
+            })
+            .child(div().min_w_0().truncate().child(venue.label.clone())),
+    )
+    .tooltip(venue.label.clone())
 }
 
 /// Format a leverage summary with a compact suffix for its known margin modes.
@@ -609,7 +613,7 @@ fn core_tooltip(entries: &[Entry], members: &[usize]) -> String {
     lines.join("\n")
 }
 
-/// Mark the core count with a dotted underline and build its tooltip only on hover.
+/// Truncate the core count above its dotted underline and build its breakdown on hover.
 fn core_cell(
     e: &Entry,
     row: &SelectedRow,
@@ -635,7 +639,7 @@ fn core_cell(
             .relative()
             .min_w_0()
             .text_color(color)
-            .child(label)
+            .child(div().min_w_0().truncate().child(label))
             .child(
                 div()
                     .absolute()
@@ -657,7 +661,7 @@ fn core_cell(
 pub(super) fn screener_row(
     row: &SelectedRow,
     prepared: &Arc<Prepared>,
-    view: &Entity<ScreenerView>,
+    view: &WeakEntity<ScreenerView>,
     p: MoonPalette,
     cols: &[&ColDef],
     style: &RowStyle,
@@ -684,7 +688,7 @@ pub(super) fn screener_row(
     let cells: Vec<MoonDataCell> = cols
         .iter()
         .map(|&&(key, ..)| match key {
-            "market" => MoonDataCell::element(market_cell(row, &prepared.entries, view, p)),
+            "market" => market_cell(row, prepared, view, p),
             COIN_KEY => match r.identity.is_empty() {
                 true => MoonDataCell::text("—").tone(MoonTone::Muted),
                 false => MoonDataCell::text(r.identity.clone()),
@@ -692,7 +696,7 @@ pub(super) fn screener_row(
             "core" => core_cell(e, row, prepared, p),
             EXCHANGE_KEY => match e.venue.label.is_empty() {
                 true => MoonDataCell::text("—").tone(MoonTone::Muted),
-                false => MoonDataCell::element(exchange_cell(&e.venue, style)),
+                false => exchange_cell(&e.venue, style),
             },
             TYPE_KEY => match e.venue.kind {
                 Some(kind) => {
@@ -891,39 +895,48 @@ fn open_screener_coin_menu(
 /// Open the preferred member's chart on click and the group's menu on right click.
 fn market_cell(
     row: &SelectedRow,
-    entries: &[Entry],
-    view: &Entity<ScreenerView>,
+    prepared: &Arc<Prepared>,
+    view: &WeakEntity<ScreenerView>,
     p: MoonPalette,
-) -> impl IntoElement + 'static {
-    let target = MarketTarget::new(row, entries);
-    let market = target.market.clone();
-    let core = target.core;
+) -> MoonDataCell {
+    let lead = &prepared.entries[row.lead].row;
+    let id = SharedString::from(format!("scr-mkt-{}-{}", lead.core, lead.market));
+    let label = SharedString::from(lead.coin.as_str());
+    let row = row.clone();
+    let prepared = prepared.clone();
     let view = view.clone();
+    let row_menu = row.clone();
+    let prepared_menu = prepared.clone();
     let view_menu = view.clone();
-    div()
-        .id(SharedString::from(format!(
-            "scr-mkt-{}-{market}",
-            target.lead_core
-        )))
-        .w_full()
-        .h_full()
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        // Inherit font family and size from the cell's MoonUI cascade; override the text color
-        // with Accent and the font weight with Medium.
-        .text_color(rgb(MoonTone::Accent.color(p)))
-        .font_weight(FontWeight::MEDIUM)
-        .child(entries[row.lead].row.coin.clone())
-        .on_click(move |_, _window, app| {
-            view.update(app, |this, cx| this.open_on_main(core, market.clone(), cx));
-        })
-        .on_mouse_down(
-            MouseButton::Right,
-            move |event: &MouseDownEvent, window, app| {
-                open_screener_coin_menu(&target, &view_menu, event.position, window, app);
-            },
-        )
+    MoonDataCell::element(
+        div()
+            .id(id)
+            .min_w_0()
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .text_color(rgb(MoonTone::Accent.color(p)))
+            .font_weight(FontWeight::MEDIUM)
+            .child(div().min_w_0().truncate().child(label.clone()))
+            .on_click(move |_, _window, app| {
+                let chart = &row.chart_entry(&prepared.entries).row;
+                let _ = view.update(app, |this, cx| {
+                    this.open_on_main(chart.core, chart.market.clone(), cx);
+                });
+            })
+            .on_mouse_down(
+                MouseButton::Right,
+                move |event: &MouseDownEvent, window, app| {
+                    if let Some(view) = view_menu.upgrade() {
+                        let target = MarketTarget::new(&row_menu, &prepared_menu.entries);
+                        open_screener_coin_menu(&target, &view, event.position, window, app);
+                    }
+                },
+            ),
+    )
+    .tooltip(label)
 }
 
 #[cfg(test)]

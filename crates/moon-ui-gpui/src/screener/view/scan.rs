@@ -198,7 +198,7 @@ impl ScreenerView {
     }
 
     /// The column's words, for the row style of one table build.
-    pub(super) fn scan_labels() -> ScanLabels {
+    pub(in crate::screener) fn scan_labels() -> ScanLabels {
         ScanLabels::new(
             |event| t!(crate::chartdx::auto_figures_sync::caption::event_key(event)).to_string(),
             t!("screener.af_nothing").to_string(),

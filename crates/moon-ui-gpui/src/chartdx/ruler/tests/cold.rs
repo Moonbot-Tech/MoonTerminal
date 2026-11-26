@@ -33,6 +33,7 @@ fn localized_tests_initialize_on_default_stacks() {
 const COLD_LOOKUPS: &[&str] = &[
     "screener::table::tests::core_count_plural_forms_ru_en",
     "screener::table::tests::core_tooltip_caps_at_eight_plus_more",
+    "screener::table::tests::default_view_cells_stay_inside_columns_at_min_width_ru_en",
     "screener::table::tests::type_and_listed_cells_use_short_captions_ru_en",
     "screener::view::tests::footer_counter_names_cores_on_multi_scope",
     "screener::view::tests::empty_text_names_active_vol_filter",

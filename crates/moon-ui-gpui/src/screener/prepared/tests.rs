@@ -3,6 +3,56 @@
 use super::*;
 use moon_core::market::ScreenerRow;
 
+/// Measure cold and repeated selections with 4,000 markets repeated over 60 venue members.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn grouped_select_4000x60_probe() {
+    use std::{hint::black_box, time::Instant};
+
+    const MARKETS: usize = 4_000;
+    const CORES: usize = 60;
+    const REPEATS: u32 = 20;
+    let mut rows = entries(CORES as u64, MARKETS);
+    let venue = gpui::SharedString::from("XALPHA Futures");
+    for entry in &mut rows {
+        entry.venue.label = venue.clone();
+    }
+    let prepared = Prepared::new(rows, "vol24", true);
+    let full: Vec<_> = (0..CORES).map(Some).collect();
+    let partial: Vec<_> = (0..CORES)
+        .map(|rank| (rank % 2 == 0).then_some(rank / 2))
+        .collect();
+    let coin = crate::screener::view::CoinQuery::new("");
+    for (scope, ranks, visible) in [("full", &full, CORES), ("partial", &partial, CORES / 2)] {
+        for grouped in [false, true] {
+            let select = || prepared.select(ranks, &coin, 0.0, "vol24", true, grouped);
+            let start = Instant::now();
+            let first = black_box(select());
+            let first_ms = start.elapsed().as_secs_f64() * 1_000.0;
+            // Each provider has two consecutive members. Both scopes retain every provider.
+            let market_count = if grouped {
+                MARKETS
+            } else {
+                MARKETS * (CORES / 2)
+            };
+            assert_eq!(first.shown, market_count);
+            assert_eq!(first.cores_shown, visible);
+            assert_eq!(
+                first.rows.len(),
+                if grouped { MARKETS } else { MARKETS * visible }
+            );
+            let start = Instant::now();
+            for _ in 0..REPEATS {
+                black_box(select());
+            }
+            let repeat_ms = start.elapsed().as_secs_f64() * 1_000.0 / f64::from(REPEATS);
+            println!(
+                "[probe] screener markets={MARKETS} cores={CORES} scope={scope} grouped={grouped} first_ms={first_ms:.3} repeat_mean_ms={repeat_ms:.3}"
+            );
+        }
+    }
+}
+
 /// Independent rows repeat markets across member cores and across two providers.
 fn entries(cores: u64, markets: usize) -> Vec<Entry> {
     (0..cores)

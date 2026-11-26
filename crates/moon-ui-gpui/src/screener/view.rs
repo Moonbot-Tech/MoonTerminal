@@ -818,7 +818,7 @@ impl ScreenerView {
         let p = MoonPalette::active(cx);
         let rows = self.rows.clone();
         let row_count = rows.len();
-        let view = cx.entity();
+        let view = cx.entity().downgrade();
         let table_rows = rows.clone();
         let prepared = self.prepared.clone();
         let sort_view = cx.entity();

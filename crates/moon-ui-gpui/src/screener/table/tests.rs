@@ -1,5 +1,7 @@
 //! Regression tests for Screener columns, sorting, and grouped presentation.
 
+mod layout_fixture;
+
 use std::collections::{HashMap, HashSet};
 
 use moon_core::config::TableSortPreference;
@@ -8,6 +10,72 @@ use super::{
     COLS, column_title, migrate_legacy_keys, migrate_legacy_sort, migrate_legacy_widths,
     restore_sort,
 };
+
+/// Keep long grouped and singleton values inside their default-width columns in both locales.
+#[gpui::test]
+fn default_view_cells_stay_inside_columns_at_min_width_ru_en(cx: &mut gpui::TestAppContext) {
+    use gpui::{Modifiers, px};
+    use layout_fixture::{LONG_COIN, LONG_VENUE, bounds, draw, inside};
+    use std::time::Duration;
+
+    for locale in ["ru", "en"] {
+        let _locale = crate::test_locale::force(locale);
+        let clock = cx.background_executor.clone();
+        let mut visual = layout_fixture::open(cx, super::DEFAULT_COLS);
+        draw(&mut visual);
+
+        for row in 0..2 {
+            let mut previous_right = px(0.0);
+            for (col, key) in super::DEFAULT_COLS.iter().enumerate() {
+                let selector = format!("moon-table-cell-{row}-{col}");
+                let cell = bounds(&mut visual, selector.clone());
+                let content = bounds(&mut visual, format!("{selector}-content"));
+                assert!(
+                    inside(content, cell),
+                    "{locale} row {row} {key}: {content:?} outside {cell:?}"
+                );
+                assert!(
+                    previous_right <= content.left() + px(0.5),
+                    "{locale} row {row} {key} overlaps its left neighbor"
+                );
+                assert!(
+                    cell.right() <= px(900.5),
+                    "{locale} row {row} {key} lies past the window edge"
+                );
+                previous_right = content.right();
+            }
+        }
+
+        for (col, full_text) in [(0, LONG_COIN), (1, LONG_VENUE)] {
+            let cell = bounds(&mut visual, format!("moon-table-cell-0-{col}-content"));
+            visual.simulate_mouse_move(cell.center(), None, Modifiers::none());
+            draw(&mut visual);
+            clock.advance_clock(Duration::from_millis(900));
+            draw(&mut visual);
+            bounds(&mut visual, format!("moon-table-cell-tooltip:{full_text}"));
+        }
+
+        // These optional columns share the production renderer and must fit when enabled.
+        let mut keys = super::DEFAULT_COLS.to_vec();
+        keys.extend([super::TYPE_KEY, super::LISTED_KEY, "step"]);
+        let mut visual = layout_fixture::open(cx, &keys);
+        draw(&mut visual);
+        for key in [super::TYPE_KEY, super::LISTED_KEY, "step"] {
+            let col = COLS
+                .iter()
+                .filter(|col| keys.contains(&col.0))
+                .position(|col| col.0 == key)
+                .expect("optional column");
+            let selector = format!("moon-table-cell-0-{col}");
+            let cell = bounds(&mut visual, selector.clone());
+            let content = bounds(&mut visual, format!("{selector}-content"));
+            assert!(
+                inside(content, cell),
+                "{locale} {key}: {content:?} outside {cell:?}"
+            );
+        }
+    }
+}
 
 /// The default order must match the rendered schema and contain the agreed 16 columns.
 #[test]
