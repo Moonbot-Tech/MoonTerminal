@@ -173,7 +173,7 @@ fn download_into(
     part_file: &mut File,
 ) -> anyhow::Result<()> {
     let mut response = client
-        .agent
+        .download_agent
         .get(download_url)
         .header("Accept", "application/octet-stream")
         .header("User-Agent", user_agent)
@@ -289,7 +289,11 @@ fn copy_verified_bounded(
     let mut total = 0u64;
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        let read = reader.read(&mut buffer).context("read update response")?;
+        // The cause goes into the message itself: the update button shows only the outermost
+        // text, and "time ran out" and "connection dropped" need different answers.
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| anyhow!("read update response: {error}"))?;
         if read == 0 {
             break;
         }
