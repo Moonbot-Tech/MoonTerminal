@@ -582,7 +582,7 @@ impl Shell {
             header_workspace_mode_open: false,
             core_settings_open: false,
             core_settings_target: None,
-            core_settings_cancel_confirm: false,
+            core_settings_armed: None,
             core_settings_bl_expanded: false,
             core_settings_bl_highlight: None,
             quiet_settings_open: false,

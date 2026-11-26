@@ -208,6 +208,22 @@ pub(super) fn force_cancel_order(client: &MoonClient, server_id: u64, uid: u64) 
     );
 }
 
+/// Runs the core's exchange-wide entry-order cancellation (MoonBot 7.73 N1+, MoonProto UI/63):
+/// one `trade().cancel_all_exchange_buys()` request and nothing else.
+///
+/// Deliberately not `trade().cancel_all_buys()`, which handles the core's own BUY/pending orders:
+/// this one has the core fetch the open orders from the exchange and apply its exchange-specific
+/// entry/exit filter, orders placed outside MoonBot included, and leaves core-only pending orders
+/// alone. No local market or order is enumerated and nothing is cleared here — `Ok` means queued,
+/// and the core's own order updates say what the exchange did.
+pub(super) fn cancel_all_exchange_buys(client: &MoonClient, server_id: u64) {
+    report(
+        server_id,
+        "cancel all exchange entry orders",
+        client.trade().cancel_all_exchange_buys(),
+    );
+}
+
 /// Toggles panic sell for a market, matching the chart button's market-level semantics.
 /// This maps to `orders().switch_panic_sell_by_market`; the runtime applies the toggle to
 /// the market's orders and sends the required packets.

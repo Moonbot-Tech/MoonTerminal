@@ -1403,6 +1403,10 @@ pub(super) fn drain_commands(
                     }
                 }
             }
+            Ok(CoreCmd::CancelAllExchangeBuys) => {
+                // No `orders_mutated`: nothing local changes, the core's order updates do.
+                trade::cancel_all_exchange_buys(client, server.id);
+            }
             Ok(CoreCmd::SetBlacklist { on, text }) => {
                 client_settings_sequence.enqueue_blacklist(on, text);
             }

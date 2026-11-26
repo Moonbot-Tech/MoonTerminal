@@ -1418,6 +1418,45 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::CancelAllOrders, "cancel all orders")
     }
 
+    /// Ask the core to cancel its entry orders on the exchange (MoonBot 7.73 N1+, MoonProto UI/63).
+    ///
+    /// One command, whatever the local order snapshot holds: the core fetches the open orders from
+    /// the exchange itself and applies its own exchange-specific entry/exit filter, so an empty
+    /// snapshot must not suppress it. Core-only pending orders are outside it — that is
+    /// `cancel_all_buys`' business, which this never falls back to.
+    ///
+    /// Refused, with nothing queued, for a core that is not connected (the command channel
+    /// outlives a disconnect, see [`Self::cancel_all_orders`]) and for a core that has not proved
+    /// the N1 build through `CoreFeatures::exchange_buys_cancel`: an older core drops the request
+    /// without a word, so sending it there would report a cancellation that never happens.
+    ///
+    /// Args:
+    ///     core: The core whose exchange account the request addresses.
+    ///
+    /// Returns:
+    ///     `Ok` once the command is queued for the core — not that any order was cancelled.
+    pub fn cancel_exchange_entries(&self, core: CoreId) -> Result<()> {
+        if !self.core_run_state(core).online {
+            return Err(anyhow!(
+                "core {core} is not connected: exchange entry cancellation not sent"
+            ));
+        }
+        let supported = self
+            .store()
+            .core(core)
+            .is_some_and(|data| data.features.exchange_buys_cancel);
+        if !supported {
+            return Err(anyhow!(
+                "core {core} has not reported MoonBot 7.73 N1+: exchange entry cancellation not sent"
+            ));
+        }
+        self.send_core_cmd(
+            core,
+            CoreCmd::CancelAllExchangeBuys,
+            "cancel exchange entries",
+        )
+    }
+
     /// Set the core's coin-blacklist state and text.
     pub fn set_blacklist(&self, core: CoreId, on: bool, text: String) -> Result<()> {
         let key = (core, None);

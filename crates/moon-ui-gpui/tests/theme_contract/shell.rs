@@ -1897,7 +1897,7 @@ fn core_settings_writes_go_through_the_guard_or_the_shared_send() {
     let core_settings = code_only(&read_src("shell/core_settings.rs"));
     for signature in [
         "pub(super) fn reconcile_core_settings_popup(",
-        "pub(super) fn core_settings_cancel_all_click(",
+        "pub(super) fn core_settings_armed_click(",
     ] {
         let body = braced_body(&core_settings, signature);
         assert!(

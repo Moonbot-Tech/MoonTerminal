@@ -78,6 +78,16 @@ fn force_cancel_is_a_live_action() {
     assert!(is_live_action(&CoreCmd::ForceCancelOrder { uid: 7 }));
 }
 
+/// The exchange-wide entry cancellation confirmed during an outage must not fire on reconnect.
+///
+/// Mutation: classify `CancelAllExchangeBuys` as desired state. A cancellation the user confirmed
+/// while the link was down would then sweep whatever entries sit on the exchange whenever the core
+/// came back, possibly an hour later and against orders placed since.
+#[test]
+fn exchange_entry_cancel_is_a_live_action() {
+    assert!(is_live_action(&CoreCmd::CancelAllExchangeBuys));
+}
+
 /// An observer change or cancellation waits out no outage; a refresh may.
 ///
 /// Mutation: classify every watchdog command as state. An Apply pressed during an outage then
