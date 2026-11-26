@@ -125,7 +125,7 @@ impl crate::controls::CoreComboHost for ScreenerView {
 pub struct ScreenerView {
     pub(super) backend: Entity<Backend>,
     /// Cached rows after the current source, coin, volume, and sort selections are applied.
-    rows: Rc<Vec<usize>>,
+    rows: Rc<Vec<super::prepared::SelectedRow>>,
     /// Source rows and their dense counting identities are published together.
     prepared: std::sync::Arc<super::prepared::Prepared>,
     /// A newer refresh retires the previous publication task.
@@ -133,11 +133,12 @@ pub struct ScreenerView {
     /// Publication identity independent of user controls, which apply to either snapshot.
     prepare_seq: u64,
     order_counts: OrderCountMemo,
-    /// Distinct markets after source grouping but before the coin and volume filters, the footer's
-    /// "total". Markets, not rows: a market has one row per core sharing its exchange.
+    /// Distinct markets before the coin and volume filters, the footer's "total".
     total: usize,
     /// Distinct markets among [`Self::rows`], the footer's "shown" — counted the same way.
     shown: usize,
+    /// Distinct cores represented by the rows after filtering.
+    cores_shown: usize,
     /// Workspace scope marker over every live session, or `None` when the preset is unresolved.
     /// A resolved full scope still keeps a marker whose facts are empty. Screener is a group-less
     /// singleton with no `EffectiveCoreScope` of its own, so this is built with
@@ -384,6 +385,7 @@ impl ScreenerView {
         let mut this = Self {
             backend,
             rows: Rc::new(Vec::new()),
+            cores_shown: 0,
             prepared: Default::default(),
             prepare_task: None,
             prepare_seq: 0,
@@ -575,14 +577,23 @@ impl ScreenerView {
                     .filter(|_| self.source_admits(*core, venues))
             })
             .collect();
-        let (rows, total, shown) =
-            self.prepared
-                .select(&allowed, &coin, min_vol, &self.sort_key, self.sort_desc);
-        self.listed_waiting =
-            rows.is_empty() && self.prepared.hides_waiting_rows(&allowed, &coin, min_vol);
-        self.rows = Rc::new(rows);
-        self.total = total;
-        self.shown = shown;
+        let grouped = allowed.iter().filter(|rank| rank.is_some()).take(2).count() > 1;
+        let selection = self.prepared.select(
+            &allowed,
+            &coin,
+            min_vol,
+            &self.sort_key,
+            self.sort_desc,
+            grouped,
+        );
+        self.listed_waiting = selection.rows.is_empty()
+            && self
+                .prepared
+                .hides_waiting_rows(&allowed, &coin, min_vol, grouped);
+        self.rows = Rc::new(selection.rows);
+        self.total = selection.total;
+        self.shown = selection.shown;
+        self.cores_shown = selection.cores_shown;
     }
 
     /// Apply the header order immediately and refresh its source data for the next publication.
@@ -769,7 +780,7 @@ impl ScreenerView {
         let Some(e) = self
             .rows
             .get(ix)
-            .and_then(|&index| self.prepared.entries.get(index))
+            .and_then(|row| self.prepared.entries.get(row.lead))
         else {
             return;
         };
@@ -807,7 +818,8 @@ impl ScreenerView {
     /// Returns:
     ///     Every listed coin, and those from the top through the clicked row.
     pub(super) fn coin_lists(&self, clicked: (CoreId, &str)) -> super::coin_copy::CoinLists {
-        super::coin_copy::coin_lists(&self.prepared.entries, &self.rows, clicked)
+        let leads: Vec<_> = self.rows.iter().map(|row| row.lead).collect();
+        super::coin_copy::coin_lists(&self.prepared.entries, &leads, clicked)
     }
 
     /// Render each virtual row from the same publication that owns its selected index.
@@ -884,7 +896,7 @@ impl ScreenerView {
                 .on_key_down(cx.listener(Self::scroll_by_key))
                 .child(
                     MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
-                        let entry = &prepared.entries[table_rows[ix]];
+                        let entry = &prepared.entries[table_rows[ix].lead];
                         screener_row(entry, &view, p, &row_cols, &row_style)
                             .selected(is_opened(opened_mark.as_ref(), entry))
                     })

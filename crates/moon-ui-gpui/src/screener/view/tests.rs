@@ -43,11 +43,11 @@ fn bench_s_screener_keystroke() {
     let ranks: Vec<_> = (0..20).map(Some).collect();
     let query = CoinQuery::new("XA");
     bench::measure("screener_keystroke_warm_filtered_cached_sort", 24, || {
-        let (indices, total, shown) = publication.select(&ranks, &query, 0.0, "vol24", true);
-        assert_eq!(total, 60_000);
-        assert_eq!(shown, 59_980);
-        assert_eq!(indices.len(), shown);
-        (indices, total, shown)
+        let selection = publication.select(&ranks, &query, 0.0, "vol24", true, false);
+        assert_eq!(selection.total, 60_000);
+        assert_eq!(selection.shown, 59_980);
+        assert_eq!(selection.rows.len(), selection.shown);
+        selection
     });
 }
 
