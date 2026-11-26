@@ -267,6 +267,12 @@ impl ChartEngine {
         self.data.borrow().notify_signature(session)
     }
 
+    /// When the nearest entry-price notice on this chart next changes its picture, as of the last
+    /// order rebuild; `None` while no pane draws one. See `ChartDataState::entry_range_due`.
+    pub fn entry_range_due(&self) -> Option<std::time::Instant> {
+        self.data.borrow().entry_range_due
+    }
+
     /// Record whether this chart's scene is on screen.
     ///
     /// An unchanged flag does nothing. A real change drops cadence samples so a

@@ -2035,3 +2035,36 @@ fn a_wallet_list_that_is_replaced_by_an_unanswered_one_leaves_its_time_behind() 
     core.apply(FeedMsg::TransferAssets(snapshot([3_000, 500, 0])));
     assert_eq!(core.transfer_seen_ms, [3_000, 2_000, 0]);
 }
+
+/// `store.rs:file_entry_price_notices` keys a notice by MARKET, so a correction on one coin never
+/// lights another coin's chart; a repeat of the same market replaces the old one under a NEWER
+/// `seq`, which is what restarts its display; and a stale notice is pruned on the next arrival.
+#[test]
+fn entry_price_notices_are_per_market_and_restart_on_repeat() {
+    use crate::feed::{ENTRY_NOTICE_RETAIN, EntryPriceCorrection};
+    let at = std::time::Instant::now();
+    let correction = |market: &str| EntryPriceCorrection::from_wire(market, 0.5, 0.4, 0.6).unwrap();
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::EntryPriceCorrections(vec![correction(
+        "XALPHAUSDT",
+    )]));
+    assert!(core.entry_price_notices.contains_key("XALPHAUSDT"));
+    assert!(!core.entry_price_notices.contains_key("XBETAUSDT"));
+    let first = core.entry_price_notices["XALPHAUSDT"].seq;
+
+    core.file_entry_price_notices(vec![correction("XALPHAUSDT")], at);
+    let repeat = &core.entry_price_notices["XALPHAUSDT"];
+    assert!(repeat.seq > first, "an identical repeat is a new notice");
+    assert_eq!(repeat.received_at, at);
+    assert_eq!(core.entry_price_rev, repeat.seq);
+
+    core.file_entry_price_notices(
+        vec![correction("XBETAUSDT")],
+        at + ENTRY_NOTICE_RETAIN + std::time::Duration::from_millis(1),
+    );
+    assert!(
+        !core.entry_price_notices.contains_key("XALPHAUSDT"),
+        "a notice past the retention is pruned"
+    );
+    assert!(core.entry_price_notices.contains_key("XBETAUSDT"));
+}

@@ -18,6 +18,7 @@ pub mod cursor_labels;
 // `data` / market-source models live in moon-core. Re-export them under the previous path.
 pub use moon_core::data;
 pub mod drawing_snap;
+pub mod entry_range;
 pub mod figures;
 pub use figures::build_figure_geometry;
 pub mod frozen_overlay;

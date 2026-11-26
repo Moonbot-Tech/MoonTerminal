@@ -38,6 +38,9 @@ impl ChartDataState {
         };
         let layout = self.container.borrow().layout(area);
         let now = now_unix_ms();
+        // The entry-price notices age on the monotonic clock their receipt was stamped with.
+        let now_instant = Instant::now();
+        let mut entry_range_due: Option<Instant> = None;
         let mut st = self.render.borrow_mut();
         let mut container = self.container.borrow_mut();
         let mut pixels_changed = false;
@@ -340,6 +343,22 @@ impl ChartDataState {
                 let drag_preview_sig =
                     drag_preview.map(|(uid, kind, price)| (uid, kind, price.to_bits()));
                 let figures_sig = self.figures_sig();
+                // The core's manual-entry price correction on THIS market (MoonBot 7.73 N2), read
+                // from the pane's own core: a live notice, so a frozen viewer draws none, and the
+                // book-only view has no plot to draw it on.
+                let entry_range = (!frozen && !self.orderbook_only)
+                    .then(|| {
+                        super::entry_range::pane_entry_range(
+                            &core_st.entry_price_notices,
+                            &pane.market,
+                            now_instant,
+                        )
+                    })
+                    .flatten();
+                let entry_range_sig = super::entry_range::entry_range_sig(entry_range.as_ref());
+                if let Some(range) = &entry_range {
+                    entry_range_due = Some(entry_range_due.map_or(range.due, |d| d.min(range.due)));
+                }
                 // The position ages on the entry lines (#1402): which open orders hold a position,
                 // and since when. Answered before the rebuild gate because it moves on a revision
                 // of its own — see `refresh_position_fills` — and the captions alone follow it.
@@ -367,6 +386,7 @@ impl ChartDataState {
                     || pr.last_news_sig != news_sig
                     || pr.last_trade_history_sig != trade_history_sig
                     || pr.last_warn_sig != warn_sig
+                    || pr.last_entry_range_sig != entry_range_sig
                 {
                     // Retained buffers: taken out of the pane for the build, handed back after.
                     let mut scratch = std::mem::take(&mut pr.ud_scratch);
@@ -528,6 +548,23 @@ impl ChartDataState {
                     );
                     // Warning badges ride the same layer, after news.
                     self.append_warn_geometry(pane.view.epoch_ms, markers);
+                    // The entry-price notice: its band joins the zones BEFORE the zone hash below
+                    // (it lives in the base cache), and it goes in front of the auto segment, whose
+                    // price-pass redraw cuts the buffers back to that segment's start and would
+                    // otherwise drop it.
+                    if let Some(range) = &entry_range {
+                        let half = f64::from(pane.view.render_range) * 0.5;
+                        let center = f64::from(pane.view.render_center);
+                        super::entry_range::append_entry_range(
+                            range,
+                            &self.theme,
+                            (center - half, center + half),
+                            self.last_ppp,
+                            zones,
+                            hlines,
+                            &mut pr.figure_labels,
+                        );
+                    }
                     // The chart's own auto figures LAST, so the price pass can redraw their
                     // segment alone (`auto_figures_sync::pane`), and BEFORE the zone hash below:
                     // a zone band is a fill in the base cache. Passive figures emit no readouts.
@@ -593,6 +630,7 @@ impl ChartDataState {
                     pr.last_news_sig = news_sig;
                     pr.last_trade_history_sig = trade_history_sig;
                     pr.last_warn_sig = warn_sig;
+                    pr.last_entry_range_sig = entry_range_sig;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 } else if ages_moved {
@@ -678,12 +716,15 @@ impl ChartDataState {
                     pr.last_news_sig = news_sig;
                     pr.last_trade_history_sig = trade_history_sig;
                     pr.last_warn_sig = warn_sig;
+                    // The notice went with the zones and lines this branch emptied.
+                    pr.last_entry_range_sig = 0;
                     pr.gpu_prepare_dirty = true;
                     pixels_changed = true;
                 }
             }
             pr.last_device_gen = device_gen;
         }
+        self.entry_range_due = entry_range_due;
 
         // Captions read both the session and the market, and this is the session half's revision.
         for (idx, _) in &layout {

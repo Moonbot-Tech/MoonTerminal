@@ -40,6 +40,7 @@ pub use core_watchdog::{
 mod client_trade;
 mod command_vocab;
 mod connection;
+mod entry_price;
 mod market_order;
 mod signals_log;
 mod strategy;
@@ -48,6 +49,7 @@ mod wallet;
 pub use client_trade::*;
 pub use command_vocab::*;
 pub use connection::*;
+pub use entry_price::{ENTRY_NOTICE_RETAIN, EntryPriceCorrection, EntryPriceNotice};
 pub use market_order::*;
 pub use signals_log::*;
 pub use strategy::*;
@@ -348,6 +350,10 @@ pub enum FeedMsg {
     /// volume/EMA/tag matches. A selection change or deselection clears the previous market's rows;
     /// an empty vector is the explicit deselection snapshot.
     ChartText(Vec<ChartTextRows>),
+    /// Manual entry prices the core moved onto an exchange price limit (MoonBot 7.73 N2,
+    /// `Event::EntryPriceCorrection`), in arrival order. A chart hint, not an order update: the
+    /// store keeps the latest one per market for the chart to show for a moment.
+    EntryPriceCorrections(Vec<EntryPriceCorrection>),
     /// Core resource telemetry from protocol-v4 `Event::KernelHealth`.
     /// Emitted for every health event; the store gates the Core Status panel with
     /// `sys_rev` only when metric values change.

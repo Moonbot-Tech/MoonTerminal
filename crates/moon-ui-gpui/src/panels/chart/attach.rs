@@ -171,5 +171,46 @@ impl ChartPanel {
         if self.clear_settled_order_drag_preview(cx) && self.apply_order_visual(cx) {
             cx.notify();
         }
+        self.arm_entry_range_timer(cx);
+    }
+
+    /// Wait for the nearest entry-price notice's next fade step or its expiry, then sync once.
+    ///
+    /// A notice changes with nothing but the clock, and a quiet market may send no backend
+    /// notification for its whole three seconds; without this the fade would stall and the
+    /// notice outlive its time. One wait per chart, for the deadline the last order rebuild
+    /// recorded: the wake re-syncs, which records the next deadline, and after the expiry there is
+    /// none, so the chart goes back to zero wakes. A hidden scene arms nothing — its sync does not
+    /// run, so its recorded deadline would never move — and the sync that runs when it is shown
+    /// again records a fresh one. A deadline that passed between the rebuild and this call (or a
+    /// wake that came a hair early) still arms, at once: the next wake then finds the step changed
+    /// and rebuilds, so a visible notice can never freeze mid-fade.
+    pub(super) fn arm_entry_range_timer(&mut self, cx: &mut Context<Self>) {
+        let due = self.chart.entry_range_due().filter(|_| self.scene_visible);
+        if due == self.entry_range_armed {
+            return;
+        }
+        // Dropping the previous task cancels its wait.
+        self.entry_range_task = None;
+        self.entry_range_armed = None;
+        let Some(due) = due else {
+            return;
+        };
+        let delay = due
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        self.entry_range_armed = Some(due);
+        self.entry_range_task = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(delay).await;
+            let _ = cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    this.entry_range_task = None;
+                    this.entry_range_armed = None;
+                    this.sync_orders_if_visible(cx, false);
+                })
+                .is_ok()
+            });
+        }));
     }
 }
