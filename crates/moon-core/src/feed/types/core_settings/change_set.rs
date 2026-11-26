@@ -202,8 +202,17 @@ impl CoreChangeSet {
         let Some(values) = self.shadow.as_deref() else {
             return;
         };
+        // Whether the target core sends the exit-cancel flag at all is a fact about that core, not
+        // a value to carry: a value staged on a 7.73 N2 core must not give an older target the
+        // field, which would draw the row live there and make its OK send a write the writer then
+        // drops. (The copy itself never carries an absence over a value — see the leaf's
+        // `copy_onto` — so a newer target keeps or takes a staged value as usual.)
+        let exit_cancel_sent = into.order_rules.cancel_buys_on_exit.is_some();
         for &index in &self.fields {
             CORE_FIELDS[index].copy_into(values, into);
+        }
+        if !exit_cancel_sent {
+            into.order_rules.cancel_buys_on_exit = None;
         }
         // A field-by-field copy cannot keep the projection's one cross-field rule: with
         // `same_hotkeys_for_move` on, every short gesture mirrors its long one. The target's own

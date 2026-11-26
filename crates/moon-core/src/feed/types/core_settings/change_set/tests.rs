@@ -10,6 +10,34 @@ fn keys(set: &CoreChangeSet) -> Vec<&'static str> {
     set.fields().iter().map(|&i| CORE_FIELDS[i].key).collect()
 }
 
+/// A bulk overlay carries a staged exit-cancel value to a core that sends the flag, and never gives
+/// the flag to an older core that does not.
+#[test]
+fn overlay_keeps_each_cores_own_presence_of_the_exit_cancel_flag() {
+    let mut n2 = base();
+    n2.order_rules.cancel_buys_on_exit = Some(false);
+    let mut set = seeded(&n2);
+    let mut after = n2.clone();
+    after.order_rules.cancel_buys_on_exit = Some(true);
+    set.note_edit(&after, &n2);
+    assert_eq!(keys(&set), vec!["order_rules.cancel_buys_on_exit"]);
+
+    let mut older = base();
+    older.order_rules.cancel_buys_on_exit = None;
+    set.overlay(&mut older);
+    assert_eq!(older.order_rules.cancel_buys_on_exit, None);
+
+    // An edit of another row while the older core is drawn must not wipe the staged value.
+    let mut older_after = older.clone();
+    older_after.order_rules.manual_mode = !older_after.order_rules.manual_mode;
+    set.note_edit(&older_after, &older);
+
+    let mut other_n2 = base();
+    other_n2.order_rules.cancel_buys_on_exit = Some(false);
+    set.overlay(&mut other_n2);
+    assert_eq!(other_n2.order_rules.cancel_buys_on_exit, Some(true));
+}
+
 /// A set seeded from a page, ready for edits measured against that page.
 fn seeded(page: &CoreConfig) -> CoreChangeSet {
     let mut set = CoreChangeSet::default();

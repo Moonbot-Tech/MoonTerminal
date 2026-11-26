@@ -1567,6 +1567,44 @@ fn bench_chart_text_selection_day() {
     );
 }
 
+/// The exit-cancel flag appearing or vanishing is a change of the projection, although the core's
+/// shutdown behaviour is the same either way: a core updated to 7.73 N2 starts sending
+/// `Some(false)`, and the expert window's row must turn live — so the store has to publish it.
+/// The other way round is the compact overlay's `Some(false)` followed by an older core's full
+/// snapshot without the field, where the row must turn back off.
+#[test]
+fn the_exit_cancel_flag_appearing_or_vanishing_bumps_the_config_revision() {
+    let project = |flag: Option<bool>| {
+        let mut wire = moonproto::shared_config::SharedConfig::default();
+        wire.trading.auto_start_2.cancel_buys_on_exit = flag;
+        crate::feed::live::core_config_from_proto(&wire)
+    };
+    for (from, to) in [(None, Some(false)), (Some(false), None)] {
+        let mut cd = CoreData::new();
+        cd.apply(FeedMsg::CoreConfig {
+            config: project(from),
+            from_full_snapshot: true,
+        });
+        let rev = cd.core_config_rev;
+        cd.apply(FeedMsg::CoreConfig {
+            config: project(to),
+            from_full_snapshot: true,
+        });
+        assert_eq!(
+            cd.core_config_rev,
+            rev.wrapping_add(1),
+            "{from:?} -> {to:?}"
+        );
+        assert_eq!(
+            cd.core_config
+                .as_ref()
+                .map(|c| c.order_rules.cancel_buys_on_exit),
+            Some(to),
+            "{from:?} -> {to:?}"
+        );
+    }
+}
+
 /// The drain counter is the barrier a surface waits on for what it sent (see the field's doc):
 /// it moves on the drain alone, and touches neither the data revisions nor the edit row.
 #[test]

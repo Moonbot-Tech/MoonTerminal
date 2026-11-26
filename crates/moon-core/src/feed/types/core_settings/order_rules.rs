@@ -76,6 +76,34 @@ pub struct OrderRulesSettings {
     /// `trading.dont_buy_delisted`: refuse an ordinary signal buy on a market the core has marked
     /// as being delisted. Moonbot's "НЕ покупать delisted", drawn beside the fresh-coin hold.
     pub dont_buy_delisted: bool,
+    /// `trading.auto_start_2.cancel_buys_on_exit`: on a normal core shutdown the core removes its
+    /// own entry orders — manual and strategy ones, unfilled remainders of partial fills — and
+    /// drops the pending entries its restart recovery would otherwise bring back. Positions stay
+    /// open. Closing a terminal or relogging does not trigger it, and a core that itself runs as a
+    /// MoonProto client does not act on it. Added in Moonbot 7.73 N2; off by default.
+    ///
+    /// Here rather than with AutoStart although the wire files it under `auto_start_2`: Moonbot
+    /// draws it on its "Основные" page, and [`crate::feed::AutoStartSettings`]'s writer sets
+    /// `auto_start_2` field by field and never this one — the precedent
+    /// [`crate::feed::SpecialSettings::show_old_listing`] set — so the two cannot collide.
+    ///
+    /// `Option` end to end, because the wire keeps one: `None` is a full snapshot from a core that
+    /// does not send the field (older than 7.73 N2). The writer then leaves the wire value as the
+    /// core sent it — it never invents `Some` on such a snapshot, since moonproto would append a
+    /// byte the core does not know, and never turns a `Some` into `None`, which moonproto refuses
+    /// outright before an unknown Trading tail. The checkbox is drawn disabled while it is `None`.
+    ///
+    /// `None` is not a reliable "older core" signal on its own, though: moonproto lays the compact
+    /// `ClientSettings` packet over the full snapshot whenever the compact one is newer, and that
+    /// packet always carries the flag, so an older core projects as `Some(false)` until its next
+    /// full snapshot — and moonproto then serializes that value into every full write to it,
+    /// whichever page sent it. The core's full echo comes back without the field, so the write
+    /// CONFIRMATION reads a missing flag as `false` — what such a core does at shutdown (see
+    /// [`OrderRulesSettings::agrees_in_effect`]). Otherwise every order-rules edit on it would read
+    /// as not applied, while a tick of this row there still does, because that core will not
+    /// cancel anything. `PartialEq` stays structural: the flag appearing or vanishing is a change
+    /// the store must publish, since it turns this row live or dead.
+    pub cancel_buys_on_exit: Option<bool>,
     /// `trading.manual_mode`: the core takes no entry on its own — signals and detects stop
     /// buying — while manual orders and the management of open positions carry on. Not the
     /// emulator.
@@ -262,6 +290,7 @@ impl PartialEq for OrderRulesSettings {
             analyze_on_start,
             sell_auto_move,
             dont_buy_delisted,
+            cancel_buys_on_exit,
             manual_mode,
             use_manual_balance,
             fixed_trade_balance,
@@ -285,11 +314,34 @@ impl PartialEq for OrderRulesSettings {
             && *analyze_on_start == other.analyze_on_start
             && *sell_auto_move == other.sell_auto_move
             && *dont_buy_delisted == other.dont_buy_delisted
+            && *cancel_buys_on_exit == other.cancel_buys_on_exit
             && *manual_mode == other.manual_mode
             && *use_manual_balance == other.use_manual_balance
             && *play_with == other.play_with
             && *x_ask == other.x_ask
             && *use_current_ask == other.use_current_ask
+    }
+}
+
+impl OrderRulesSettings {
+    /// Whether a write and the core's echo agree on this area by what the core will DO — the
+    /// comparison that confirms or rejects a write, not the structural `==`.
+    ///
+    /// Every field compares as `==` does except `cancel_buys_on_exit`, where a side without the
+    /// flag is a core that has no such setting and so cancels nothing on exit — the same behaviour
+    /// as `Some(false)`. That is the case [`Self::cancel_buys_on_exit`] describes, where the
+    /// terminal's write carries the compact overlay's `Some(false)` and the older core's echo
+    /// carries nothing: it must confirm. A `Some(true)` written to such a core must not — it will
+    /// never act on it.
+    ///
+    /// Not `PartialEq` itself: the session store dedupes arrivals with `==`, and there `None` and
+    /// `Some(false)` must differ, or a core updated to 7.73 N2 would leave the row disabled until
+    /// some other field moved.
+    pub(crate) fn agrees_in_effect(&self, other: &Self) -> bool {
+        let mut mine = self.clone();
+        mine.cancel_buys_on_exit = other.cancel_buys_on_exit;
+        self.cancel_buys_on_exit.unwrap_or(false) == other.cancel_buys_on_exit.unwrap_or(false)
+            && mine == *other
     }
 }
 

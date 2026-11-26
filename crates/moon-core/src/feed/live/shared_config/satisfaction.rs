@@ -72,7 +72,9 @@ pub(super) fn rejection_within_mask(
     if interface && expected.interface != actual.interface {
         areas.push(CoreConfigArea::Interface);
     }
-    if order_rules && expected.order_rules != actual.order_rules {
+    // By effect rather than `!=`: see `OrderRulesSettings::agrees_in_effect` for the one field
+    // where a core that sent nothing and a core that sent `false` behave alike.
+    if order_rules && !expected.order_rules.agrees_in_effect(&actual.order_rules) {
         areas.push(CoreConfigArea::OrderRules);
     }
     if leverage && expected.leverage != actual.leverage {

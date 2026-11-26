@@ -106,7 +106,7 @@ fn read(config: &SharedConfig, selected: Option<&str>, offset: usize) -> Result<
     Ok(
         json!({"source":"ActiveLib core safe-share snapshot","core_config_version":config.core_config_version(),
         "fields":fields,"next_offset":offset+fields.len(),"total_fields":catalog().len(),
-        "contract":"Types and field paths come from the SDK; MoonDoc supplies units and dependencies. JSON null represents a nonfinite core number, not a value to copy into a patch. Preserve unknown fields. A schema default is not a core value. UI-only preferences do not imply a working headless feature."}),
+        "contract":"Types and field paths come from the SDK; MoonDoc supplies units and dependencies. JSON null represents a nonfinite core number, not a value to copy into a patch. On an optional field (such as trading.auto_start_2.cancel_buys_on_exit) null means the core's full snapshot omitted it because its build predates the field; such a core can also read false here once its compact settings arrive, does not act on the setting, and is not changed by patching it. Preserve unknown fields. A schema default is not a core value. UI-only preferences do not imply a working headless feature."}),
     )
 }
 

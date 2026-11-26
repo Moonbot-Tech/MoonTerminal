@@ -232,6 +232,37 @@ fn show_keeps_the_type() {
     assert_eq!(field("special.log_level").show(&a), FieldValue::Int(3));
 }
 
+/// An optional flag the core did not send shows as absent, not as `false`: a cross-core
+/// comparison would otherwise tell a trader an older core holds the setting switched off, when it
+/// holds no such setting at all.
+#[test]
+fn an_absent_optional_flag_shows_as_absent() {
+    let key = "order_rules.cancel_buys_on_exit";
+    let mut a = base();
+    a.order_rules.cancel_buys_on_exit = None;
+    assert_eq!(field(key).show(&a), FieldValue::Absent);
+    a.order_rules.cancel_buys_on_exit = Some(false);
+    assert_eq!(field(key).show(&a), FieldValue::Bool(false));
+}
+
+/// A setter that writes only over a value the core sent — the exit-cancel row's — is still found
+/// by the probe when the drawn core sent nothing, or the row would read as writing no field and
+/// never show a selection's disagreement.
+#[test]
+fn probe_finds_a_setter_that_writes_only_over_a_sent_value() {
+    let mut cfg = base();
+    cfg.order_rules.cancel_buys_on_exit = None;
+    let found = ProbeBases::new(&cfg).fields_written_by(&|c| {
+        if let Some(slot) = c.order_rules.cancel_buys_on_exit.as_mut() {
+            *slot = true;
+        }
+    });
+    assert_eq!(
+        found,
+        vec![index_of("order_rules.cancel_buys_on_exit").expect("in table")]
+    );
+}
+
 /// Exactly the four short move gestures are derived, and only while the mirror is on.
 #[test]
 fn only_short_move_gestures_are_derived_and_only_under_the_mirror() {

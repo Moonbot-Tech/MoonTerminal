@@ -41,6 +41,8 @@ pub struct CoreField {
     copy: fn(&CoreConfig, &mut CoreConfig),
     show: fn(&CoreConfig) -> FieldValue,
     perturb: fn(&mut CoreConfig),
+    /// Give an absent optional leaf a value — see [`ProbeBases::new`]. A no-op for every other leaf.
+    fill_absent: fn(&mut CoreConfig),
     /// When this field is a COPY of another rather than a value of its own — see
     /// [`CoreField::is_derived`]. `None` for the ordinary leaf.
     derived: Option<fn(&CoreConfig) -> bool>,
@@ -96,6 +98,9 @@ pub enum FieldValue {
     Float(f64),
     Text(String),
     List(Vec<String>),
+    /// An optional leaf the core did not send — a field newer than the core's build. Shown as
+    /// such rather than as a default, which would state a value the core never held.
+    Absent,
 }
 
 /// What every leaf type of the table has to be able to do: tell two of its values apart, move
@@ -113,6 +118,14 @@ trait Leaf: Clone {
     fn perturb(&mut self);
     /// The value, for display.
     fn value(&self) -> FieldValue;
+    /// Copy this value onto `into` — see [`CoreField::copy_into`]. A plain copy for every leaf
+    /// but the optional one.
+    fn copy_onto(&self, into: &mut Self) {
+        into.clone_from(self);
+    }
+    /// Give an absent value one, for a probe base only — see [`ProbeBases::new`]. A no-op for
+    /// every leaf that cannot be absent.
+    fn fill_absent(&mut self) {}
 }
 
 impl Leaf for bool {
@@ -124,6 +137,39 @@ impl Leaf for bool {
     }
     fn value(&self) -> FieldValue {
         FieldValue::Bool(*self)
+    }
+}
+
+/// A flag only newer cores send — `None` is a core that omitted it (see
+/// `OrderRulesSettings::cancel_buys_on_exit`).
+///
+/// `perturb` lands on `Some` from `None`: the probe needs a base where a guarded setter (one that
+/// writes only over a value the core sent) can move the field, or that setter would read as
+/// writing nothing. The bases are probe scaffolding, never sent, so the invented value goes
+/// nowhere.
+///
+/// `copy_onto` never copies an absence over a value. A page drawn for an older core holds `None`,
+/// and the change set's edits copy the page into the shadow that keeps the STAGED values; a plain
+/// copy there would wipe a value staged on a newer core of the same selection at the next edit
+/// of any other row. Absence is a property of the core, not something to stage — the overlay
+/// keeps each target's own (`CoreChangeSet::overlay`).
+impl Leaf for Option<bool> {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+    fn perturb(&mut self) {
+        *self = Some(!self.unwrap_or(false));
+    }
+    fn value(&self) -> FieldValue {
+        self.map_or(FieldValue::Absent, FieldValue::Bool)
+    }
+    fn copy_onto(&self, into: &mut Self) {
+        if self.is_some() {
+            *into = *self;
+        }
+    }
+    fn fill_absent(&mut self) {
+        self.get_or_insert(false);
     }
 }
 
@@ -213,9 +259,10 @@ macro_rules! core_fields {
                 differs: |a, b| !Leaf::same(&a.$sec.$f, &b.$sec.$f),
                 // UFCS rather than `.clone()`: most leaves are `Copy`, and a method-call clone on
                 // one is a clippy error under `-D warnings`.
-                copy: |from, into| into.$sec.$f = Clone::clone(&from.$sec.$f),
+                copy: |from, into| Leaf::copy_onto(&from.$sec.$f, &mut into.$sec.$f),
                 show: |cfg| Leaf::value(&cfg.$sec.$f),
                 perturb: |cfg| Leaf::perturb(&mut cfg.$sec.$f),
+                fill_absent: |cfg| Leaf::fill_absent(&mut cfg.$sec.$f),
                 derived: core_fields!(@derived $($pred)?),
             }
         ),* ),* ]
@@ -307,6 +354,7 @@ pub static CORE_FIELDS: &[CoreField] = core_fields! {
         analyze_on_start,
         sell_auto_move,
         dont_buy_delisted,
+        cancel_buys_on_exit,
         manual_mode,
         use_manual_balance,
         fixed_trade_balance,
@@ -618,8 +666,17 @@ pub struct ProbeBases(Box<(CoreConfig, CoreConfig)>);
 impl ProbeBases {
     /// Build the pair from any configuration — which one does not matter, only that the two
     /// disagree.
+    ///
+    /// An optional leaf the core did not send is given a value in both bases first: a setter that
+    /// writes only over a sent value (the exit-cancel row's) moves nothing on a base that holds
+    /// `None`, so with one base left over it would hide whichever value that base already holds.
     pub fn new(cfg: &CoreConfig) -> Self {
-        Self(Box::new((cfg.clone(), perturbed(cfg))))
+        let mut base = cfg.clone();
+        for field in CORE_FIELDS {
+            (field.fill_absent)(&mut base);
+        }
+        let other = perturbed(&base);
+        Self(Box::new((base, other)))
     }
 
     /// The table fields `setter` writes as VALUES, ascending, or empty for a setter that writes
