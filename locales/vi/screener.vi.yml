@@ -2,6 +2,17 @@
 # Column headers (Vol./ASK/Funding/…) are Moonbot domain tokens and remain untranslated in code.
 _version: 1
 
+screener.core_group_one: "%{n} lõi"
+screener.core_group_few: "%{n} lõi"
+screener.core_group_many: "%{n} lõi"
+screener.core_group_more_one: "thêm %{n}"
+screener.core_group_more_few: "thêm %{n}"
+screener.core_group_more_many: "thêm %{n}"
+screener.footer_cores_one: "%{n} lõi"
+screener.footer_cores_few: "%{n} lõi"
+screener.footer_cores_many: "%{n} lõi"
+screener.empty_vol_filter: "Không có coin có Vol. từ %{vol} — hãy xóa bộ lọc"
+
 screener.window_title: "MoonTerminal — Bộ lọc"
 # Three different reasons the coin table can be empty, three different sentences. `screener.empty`
 # is the only one that asks for an action, so it is reserved for the only case where that action

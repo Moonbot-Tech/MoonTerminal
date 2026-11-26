@@ -62,6 +62,11 @@ impl GroupView {
             chart_core,
         }
     }
+
+    /// Find the first member admitted by the current source scope.
+    fn visible_lead(&self, visible: impl Fn(usize) -> bool) -> Option<usize> {
+        self.members.iter().copied().find(|&index| visible(index))
+    }
 }
 
 /// One display row. Its lead supplies market columns for a grouped venue market.
@@ -69,6 +74,23 @@ impl GroupView {
 pub(super) struct SelectedRow {
     pub lead: usize,
     pub group: Option<GroupView>,
+}
+
+impl SelectedRow {
+    /// Resolve the member owning the chart and its native coin spelling.
+    pub(super) fn chart_entry<'a>(&self, entries: &'a [Entry]) -> &'a Entry {
+        let lead = &entries[self.lead];
+        self.group
+            .as_ref()
+            .and_then(|group| {
+                group
+                    .members
+                    .iter()
+                    .map(|&index| &entries[index])
+                    .find(|entry| entry.row.core == group.chart_core)
+            })
+            .unwrap_or(lead)
+    }
 }
 
 /// The selected display rows and market and core counts for the footer.
@@ -207,10 +229,7 @@ impl Prepared {
             && if grouped {
                 self.market_groups.iter().any(|group| {
                     group
-                        .members
-                        .iter()
-                        .copied()
-                        .find(|&index| ranks[self.slots[index].core].is_some())
+                        .visible_lead(|index| ranks[self.slots[index].core].is_some())
                         .is_some_and(waits)
                 })
             } else {
@@ -341,7 +360,7 @@ impl Prepared {
             let lead = if all_visible {
                 Some(full.members[0])
             } else {
-                full.members.iter().copied().find(|&index| visible(index))
+                full.visible_lead(visible)
             };
             let Some(lead) = lead else { return };
             total += 1;
@@ -418,7 +437,7 @@ fn market_group_key(entry: &Entry) -> (Result<&str, CoreId>, &str) {
 }
 
 /// Read the core-specific fields from the shared Screener row.
-fn account(row: &SharedScreenerRow) -> MemberAcct {
+pub(super) fn account(row: &SharedScreenerRow) -> MemberAcct {
     MemberAcct {
         core: row.core,
         leverage_x: row.leverage_x,

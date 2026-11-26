@@ -1,4 +1,4 @@
-//! Account aggregation and compact leverage presentation.
+//! Account aggregation and chart core selection.
 
 use super::*;
 
@@ -20,7 +20,14 @@ fn n_cores_on_one_market_sum_orders_pnl_pos() {
     assert!((agg.pnl - (-638.41)).abs() < 1e-9);
     assert_eq!(agg.session, Some(8.25));
     assert_eq!(agg.pos, 16.5);
-    assert_eq!(lev_text(agg.lev), "10 / 10 I");
+    assert_eq!(
+        agg.lev,
+        LevSummary::Same {
+            x: 10,
+            max: 10,
+            mode: Mode::I
+        }
+    );
 }
 
 /// Report the range when two sets of accounts use different active leverage.
@@ -33,19 +40,35 @@ fn leverage_range_when_members_differ() {
         isolated: Some(true),
         ..Default::default()
     });
-    assert_eq!(lev_text(aggregate(members).lev), "3–5 / 5 I");
+    assert_eq!(
+        aggregate(members).lev,
+        LevSummary::Range {
+            lo: 3,
+            hi: 5,
+            max: 5,
+            mode: Mode::I
+        }
+    );
 }
 
 /// Keep both stated modes in the summary even if the lead reports only one.
 #[test]
-fn mixed_margin_modes_read_i_slash_c() {
+fn mixed_margin_modes_keep_both_modes() {
     let members = [(5, Some(true)), (20, Some(false)), (10, None)].map(|(x, mode)| MemberAcct {
         leverage_x: x,
         max_leverage: 20,
         isolated: mode,
         ..Default::default()
     });
-    assert_eq!(lev_text(aggregate(members).lev), "5–20 / 20 I/C");
+    assert_eq!(
+        aggregate(members).lev,
+        LevSummary::Range {
+            lo: 5,
+            hi: 20,
+            max: 20,
+            mode: Mode::Mixed
+        }
+    );
 }
 
 /// A stated zero or cancelling counters still produce an amount.
@@ -96,6 +119,6 @@ fn unset_leverage_members_fall_back_to_max() {
         max_leverage,
         ..Default::default()
     });
-    assert_eq!(lev_text(aggregate(members).lev), "20");
+    assert_eq!(aggregate(members).lev, LevSummary::Max(20));
     assert_eq!(aggregate([MemberAcct::default()]).lev, LevSummary::None);
 }

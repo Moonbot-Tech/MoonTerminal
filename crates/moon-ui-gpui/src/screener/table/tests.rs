@@ -1,4 +1,4 @@
-//! Regression tests for restoring Screener header sorting.
+//! Regression tests for Screener columns, sorting, and grouped presentation.
 
 use std::collections::{HashMap, HashSet};
 
@@ -477,4 +477,119 @@ fn hiding_the_auto_figures_sort_restores_the_stored_one() {
         super::sort_after_hiding("d1h", false, stored, &without_d1h),
         (("vol24".to_string(), true), true)
     );
+}
+
+/// Keep Russian count inflection and English plurality while showing a singleton's name.
+#[test]
+fn core_count_plural_forms_ru_en() {
+    let name = gpui::SharedString::from("CORE_A");
+    for (locale, expected) in [
+        (
+            "ru",
+            [
+                "CORE_A",
+                "2 ядра",
+                "5 ядер",
+                "11 ядер",
+                "21 ядро",
+                "22 ядра",
+            ],
+        ),
+        (
+            "en",
+            [
+                "CORE_A", "2 cores", "5 cores", "11 cores", "21 cores", "22 cores",
+            ],
+        ),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        for (n, expected) in [1, 2, 5, 11, 21, 22].into_iter().zip(expected) {
+            assert_eq!(super::core_label(&name, n).as_ref(), expected);
+        }
+    }
+}
+
+/// Create a venue market with a distinct name, leverage and PnL on each core.
+fn member(core: u64) -> super::Entry {
+    super::Entry {
+        row: moon_core::market::ScreenerRow {
+            core,
+            provider: core,
+            market: "XALPHAUSDT".into(),
+            coin: "XALPHA".into(),
+            leverage_x: core as i32 + 1,
+            max_leverage: 20,
+            isolated: Some(true),
+            core_pnl: -(core as f64 + 0.5),
+            orders: u32::from(core == 1),
+            ..Default::default()
+        }
+        .into(),
+        core_name: format!("CORE_{core}").into(),
+        market_uc: "XALPHAUSDT".into(),
+        coin_uc: "XALPHA".into(),
+        venue: super::EntryVenue {
+            label: "VENUE".into(),
+            ..Default::default()
+        },
+    }
+}
+
+/// Show eight member accounts in order and a localized remainder for longer lists.
+#[test]
+fn core_tooltip_caps_at_eight_plus_more() {
+    let entries: Vec<_> = (0..10).map(member).collect();
+    let members: Vec<_> = (0..entries.len()).collect();
+    for (locale, more) in [("en", "+2 more"), ("ru", "ещё 2")] {
+        let _locale = crate::test_locale::force(locale);
+        let text = super::core_tooltip(&entries, &members);
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines.len(), 9);
+        assert_eq!(lines[0], "CORE_0 · 1 / 20 I · -0.50$");
+        assert_eq!(lines[7], "CORE_7 · 8 / 20 I · -7.50$");
+        assert_eq!(lines[8], more);
+        assert_eq!(
+            super::core_tooltip(&entries, &members[..8]).lines().count(),
+            8
+        );
+    }
+}
+
+/// Use the same compact leverage style for single accounts and grouped summaries.
+#[test]
+fn leverage_prints_short_mode_letters() {
+    use super::{LevSummary, Mode, lev_text};
+    let row = member(9).row;
+    assert_eq!(
+        lev_text(super::aggregate([super::account(&row)]).lev),
+        "10 / 20 I"
+    );
+    assert_eq!(
+        lev_text(LevSummary::Same {
+            x: 10,
+            max: 10,
+            mode: Mode::C
+        }),
+        "10 / 10 C"
+    );
+    for (lo, hi, max, mode, text) in [
+        (3, 5, 5, Mode::I, "3–5 / 5 I"),
+        (5, 20, 20, Mode::Mixed, "5–20 / 20 I/C"),
+    ] {
+        assert_eq!(lev_text(LevSummary::Range { lo, hi, max, mode }), text);
+    }
+    assert_eq!(lev_text(LevSummary::Max(20)), "20");
+    assert_eq!(lev_text(LevSummary::None), "—");
+}
+
+/// Market clicks must follow the active member even when another member leads the group.
+#[test]
+fn market_cell_click_target_resolves_to_chart_core() {
+    let prepared = super::Prepared::new(vec![member(0), member(1)], "market", false);
+    let coin = super::super::view::CoinQuery::new("");
+    let selection = prepared.select(&[Some(0), Some(1)], &coin, 0.0, "market", false, true);
+    let target = super::MarketTarget::new(&selection.rows[0], &prepared.entries);
+    assert_eq!(target.core, 1);
+    assert_eq!(target.copy_identity(), (0, "XALPHAUSDT"));
+    assert_eq!(target.members.as_deref(), Some(&[0, 1][..]));
 }

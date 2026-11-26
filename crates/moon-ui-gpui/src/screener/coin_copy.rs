@@ -6,8 +6,8 @@
 //! clipboard gets the coin as the Market cell prints it (the coin, not the pair), comma-separated
 //! with no spaces, which is the form a strategy coin list takes.
 //!
-//! With several cores picked the same coin is one row per core; it is written once, where it
-//! first appears. The lists are taken when the menu opens, so the entry copies the rows the user
+//! The list walks the displayed leads; a coin listed on multiple venues is written once, where
+//! it first appears. The lists are taken when the menu opens, so the entry copies the rows the user
 //! was looking at when he clicked, not a publication that arrived while the menu stood open.
 
 use std::collections::HashSet;
@@ -37,8 +37,8 @@ pub(super) struct CoinLists {
 ///
 /// Args:
 ///     entries: The publication's entries, indexed by `rows`.
-///     rows: Indices of the listed rows, in table order.
-///     clicked: Core and canonical market of the right-clicked row.
+///     rows: Lead indices of the listed rows, in table order.
+///     clicked: Lead core and canonical market of the right-clicked row.
 ///
 /// Returns:
 ///     The coin lists for the two menu entries.

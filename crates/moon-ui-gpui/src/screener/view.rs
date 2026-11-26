@@ -21,11 +21,13 @@ use moon_core::session::CoreId;
 use moon_core::venue::{CoreVenue, MarketKind};
 
 use crate::controls::CoreComboHost;
+use crate::display_text::plural_key;
 use crate::panels::data_table_host;
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
 use super::auto_figures::ScanQuery;
+use super::prepared::SelectedRow;
 use super::table::{
     COLS, ColDef, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE, column_label, column_title, moon,
     moon_alpha, parse_vol, screener_row,
@@ -125,7 +127,7 @@ impl crate::controls::CoreComboHost for ScreenerView {
 pub struct ScreenerView {
     pub(super) backend: Entity<Backend>,
     /// Cached rows after the current source, coin, volume, and sort selections are applied.
-    rows: Rc<Vec<super::prepared::SelectedRow>>,
+    rows: Rc<Vec<SelectedRow>>,
     /// Source rows and their dense counting identities are published together.
     prepared: std::sync::Arc<super::prepared::Prepared>,
     /// A newer refresh retires the previous publication task.
@@ -139,6 +141,8 @@ pub struct ScreenerView {
     shown: usize,
     /// Distinct cores represented by the rows after filtering.
     cores_shown: usize,
+    /// Whether the current publication scope contains multiple cores, even if none match.
+    grouped_scope: bool,
     /// Workspace scope marker over every live session, or `None` when the preset is unresolved.
     /// A resolved full scope still keeps a marker whose facts are empty. Screener is a group-less
     /// singleton with no `EffectiveCoreScope` of its own, so this is built with
@@ -386,6 +390,7 @@ impl ScreenerView {
             backend,
             rows: Rc::new(Vec::new()),
             cores_shown: 0,
+            grouped_scope: false,
             prepared: Default::default(),
             prepare_task: None,
             prepare_seq: 0,
@@ -594,6 +599,7 @@ impl ScreenerView {
         self.total = selection.total;
         self.shown = selection.shown;
         self.cores_shown = selection.cores_shown;
+        self.grouped_scope = grouped;
     }
 
     /// Apply the header order immediately and refresh its source data for the next publication.
@@ -773,17 +779,14 @@ impl ScreenerView {
         cx.notify();
     }
 
-    /// Request the row's market on Main for the row's own core, as in an Orders token click.
+    /// Request the row's market on Main for its preferred chart member.
     ///
     /// The request does not activate or raise the owning window.
     fn open_chart(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(e) = self
-            .rows
-            .get(ix)
-            .and_then(|row| self.prepared.entries.get(row.lead))
-        else {
+        let Some(row) = self.rows.get(ix) else {
             return;
         };
+        let e = row.chart_entry(&self.prepared.entries);
         let core = e.row.core;
         let market = e.row.market.clone();
         self.open_on_main(core, market, cx);
@@ -796,7 +799,7 @@ impl ScreenerView {
     /// raised and the list is not scrolled: the user stays in the Screener where he was.
     ///
     /// Args:
-    ///     core: Core of the clicked row; the chart opens on it.
+    ///     core: Chart destination in the clicked row.
     ///     market: Canonical market name of the clicked row.
     ///     cx: Screener context, notified so the tint moves in the next frame.
     pub(super) fn open_on_main(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
@@ -813,7 +816,7 @@ impl ScreenerView {
     /// The coin lists the row menu's copy entries offer, taken from the rows listed now.
     ///
     /// Args:
-    ///     clicked: Core and canonical market of the right-clicked row.
+    ///     clicked: Lead core and canonical market of the right-clicked row.
     ///
     /// Returns:
     ///     Every listed coin, and those from the top through the clicked row.
@@ -864,8 +867,8 @@ impl ScreenerView {
         data_table_host(
             "screener-table-host",
             row_count == 0,
-            // Four-way choice, and the order matters: `scope_empty_text` takes precedence over
-            // every fallback, so a hidden-by-preset Screener never reaches a sentence below it. Of
+            // `scope_empty_text` takes precedence over every fallback, so a hidden-by-preset
+            // Screener never reaches a sentence below it. Of
             // the genuine reasons, only "no session at all" asks for an action — a core hidden by
             // the preset, or connected with no book yet, must not tell the user to go connect
             // something that is already connected. And when rows WERE published and the controls
@@ -882,7 +885,7 @@ impl ScreenerView {
                 } else if let Some(seconds) = self.listed_wait_seconds() {
                     t!("screener.listed_collecting", n = seconds).to_string()
                 } else if self.has_displayed_rows {
-                    t!("screener.empty_filtered").to_string()
+                    empty_filter_text(&self.dvol_input.read(cx).value())
                 } else {
                     t!("screener.empty_no_data").to_string()
                 },
@@ -896,9 +899,9 @@ impl ScreenerView {
                 .on_key_down(cx.listener(Self::scroll_by_key))
                 .child(
                     MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
-                        let entry = &prepared.entries[table_rows[ix].lead];
-                        screener_row(entry, &view, p, &row_cols, &row_style)
-                            .selected(is_opened(opened_mark.as_ref(), entry))
+                        let row = &table_rows[ix];
+                        screener_row(row, &prepared, &view, p, &row_cols, &row_style)
+                            .selected(is_opened(opened_mark.as_ref(), row, &prepared.entries))
                     })
                     .track_scroll(&self.rows_scroll)
                     .columns(
@@ -1135,7 +1138,11 @@ impl ScreenerView {
         // Frozen render idiom (`workspace::scope_marker`): head is the existing formatted count
         // and never clips; the marker's facts trail it, clipping at their right edge when the
         // window narrows, exactly as a dock footer's fixed height requires.
-        let count_head = format!("{} / {} {}", self.shown, self.total, t!("screener.coins"));
+        let count_head = footer_counter(
+            self.shown,
+            self.total,
+            self.grouped_scope.then_some(self.cores_shown),
+        );
         let footer = scope_marker::scope_footer(count_head, self.scope_marker.as_ref());
         let footer_tip = scope_marker::scope_footer_tooltip(&footer, self.scope_marker.as_ref());
         let has_tail = !footer.tail.is_empty();
@@ -1260,19 +1267,52 @@ fn type_admits(selected: &HashSet<Option<MarketKind>>, kind: Option<MarketKind>)
     selected.is_empty() || selected.contains(&kind)
 }
 
-/// Whether `entry` is the row the opened-row mark names (#1424).
-///
-/// Matched by core and market, never by line: the same market is one row per core, and the list
-/// is re-sorted about once a second, so either shortcut would tint a coin the user never opened.
+/// Match the market and any visible member so a regrouped row keeps its opened mark.
 ///
 /// Args:
 ///     mark: Core and canonical market of the last coin opened from this window, if any.
-///     entry: The listed row being drawn.
+///     row: The listed row being drawn.
+///     entries: The publication referenced by the row's lead and members.
 ///
 /// Returns:
-///     `true` only for the row of that core and market.
-pub(super) fn is_opened(mark: Option<&(CoreId, String)>, entry: &Entry) -> bool {
-    mark.is_some_and(|(core, market)| entry.row.core == *core && entry.row.market == *market)
+///     `true` when the row includes the chart core for the marked market.
+pub(super) fn is_opened(
+    mark: Option<&(CoreId, String)>,
+    row: &SelectedRow,
+    entries: &[Entry],
+) -> bool {
+    let lead = &entries[row.lead].row;
+    mark.is_some_and(|(core, market)| {
+        lead.market == *market
+            && (lead.core == *core
+                || row.group.as_ref().is_some_and(|group| {
+                    group
+                        .members
+                        .iter()
+                        .any(|&index| entries[index].row.core == *core)
+                }))
+    })
+}
+
+/// Format the market count, adding the number of represented cores in a multi-core scope.
+fn footer_counter(shown: usize, total: usize, cores: Option<usize>) -> String {
+    let count = format!("{shown} / {total} {}", t!("screener.coins"));
+    if let Some(n) = cores {
+        let key = plural_key("screener.footer_cores", n as u64);
+        let cores = t!(key.as_str(), n = n);
+        format!("{count} · {cores}")
+    } else {
+        count
+    }
+}
+
+/// Name a positive volume threshold as typed when the published rows were filtered out.
+fn empty_filter_text(raw_vol: &str) -> String {
+    if parse_vol(raw_vol.trim()) > 0.0 {
+        t!("screener.empty_vol_filter", vol = raw_vol).to_string()
+    } else {
+        t!("screener.empty_filtered").to_string()
+    }
 }
 
 /// Tick or untick one choice of a list whose empty selection means "all".

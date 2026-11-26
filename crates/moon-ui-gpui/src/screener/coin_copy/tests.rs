@@ -87,3 +87,35 @@ fn a_row_no_longer_listed_offers_only_the_whole_list() {
     assert_eq!(lists.on_screen, ["ETH"]);
     assert!(lists.through_clicked.is_none());
 }
+
+/// A grouped menu finds the lead for copy even if another member owns the chart.
+#[test]
+fn non_lead_chart_core_keeps_copy_through_grouped_row() {
+    use super::super::{prepared::Prepared, table::MarketTarget, view::CoinQuery};
+    let mut members = vec![
+        entry(1, "XALPHAUSDT", "XALPHA"),
+        entry(1, "XBETAUSDT", "XBETA"),
+        entry(2, "XBETAUSDT", "XBETA"),
+        entry(1, "XGAMMAUSDT", "XGAMMA"),
+    ];
+    for member in &mut members {
+        member.venue.label = "VENUE".into();
+    }
+    members[2].row.orders = 1;
+    let prepared = Prepared::new(members, "market", false);
+    let selection = prepared.select(
+        &[Some(0), Some(1)],
+        &CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        true,
+    );
+    let clicked = &selection.rows[1];
+    assert_eq!(clicked.chart_entry(&prepared.entries).row.core, 2);
+    let target = MarketTarget::new(clicked, &prepared.entries);
+    let leads: Vec<_> = selection.rows.iter().map(|row| row.lead).collect();
+    let lists = coin_lists(&prepared.entries, &leads, target.copy_identity());
+    assert_eq!(lists.on_screen, ["XALPHA", "XBETA", "XGAMMA"]);
+    assert_eq!(lists.through_clicked.unwrap(), ["XALPHA", "XBETA"]);
+}

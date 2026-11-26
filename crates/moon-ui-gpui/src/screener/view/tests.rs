@@ -660,9 +660,92 @@ fn the_opened_mark_names_one_core_and_market() {
         venue: Default::default(),
     };
     let mark = (2, "ETHUSDT".to_string());
+    let selected = super::SelectedRow {
+        lead: 0,
+        group: None,
+    };
 
-    assert!(is_opened(Some(&mark), &row(2, "ETHUSDT")));
-    assert!(!is_opened(Some(&mark), &row(1, "ETHUSDT")));
-    assert!(!is_opened(Some(&mark), &row(2, "ETHUSDC")));
-    assert!(!is_opened(None, &row(2, "ETHUSDT")));
+    assert!(is_opened(Some(&mark), &selected, &[row(2, "ETHUSDT")]));
+    assert!(!is_opened(Some(&mark), &selected, &[row(1, "ETHUSDT")]));
+    assert!(!is_opened(Some(&mark), &selected, &[row(2, "ETHUSDC")]));
+    assert!(!is_opened(None, &selected, &[row(2, "ETHUSDT")]));
+}
+
+/// A chart on a visible non-lead member lights the group for that market only.
+#[test]
+fn opened_mark_matches_any_group_member() {
+    use super::super::prepared::Prepared;
+    let entries = (0..3)
+        .map(|core| Entry {
+            row: ScreenerRow {
+                core,
+                provider: core,
+                market: "XALPHAUSDT".into(),
+                ..Default::default()
+            }
+            .into(),
+            core_name: format!("CORE_{core}").into(),
+            market_uc: "XALPHAUSDT".into(),
+            coin_uc: "XALPHA".into(),
+            venue: super::EntryVenue {
+                label: "VENUE".into(),
+                ..Default::default()
+            },
+        })
+        .collect();
+    let prepared = Prepared::new(entries, "market", false);
+    let selection = prepared.select(
+        &[Some(0), Some(1), None],
+        &super::CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        true,
+    );
+    let row = &selection.rows[0];
+    let opened =
+        |core, market: &str| super::is_opened(Some(&(core, market.into())), row, &prepared.entries);
+    assert!(opened(0, "XALPHAUSDT"));
+    assert!(opened(1, "XALPHAUSDT"));
+    assert!(!opened(2, "XALPHAUSDT"));
+    assert!(!opened(1, "XALPHAUSDC"));
+}
+
+/// Keep the multi-core suffix even when filters leave zero cores represented.
+#[test]
+fn footer_counter_names_cores_on_multi_scope() {
+    for (locale, grouped, empty, single) in [
+        (
+            "ru",
+            "8 / 10 монет · 22 ядра",
+            "0 / 10 монет · 0 ядер",
+            "8 / 10 монет",
+        ),
+        (
+            "en",
+            "8 / 10 coins · 22 cores",
+            "0 / 10 coins · 0 cores",
+            "8 / 10 coins",
+        ),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        assert_eq!(super::footer_counter(8, 10, Some(22)), grouped);
+        assert_eq!(super::footer_counter(0, 10, Some(0)), empty);
+        assert_eq!(super::footer_counter(8, 10, None), single);
+    }
+}
+
+/// Keep the typed threshold and show generic filter help when the threshold is inactive.
+#[test]
+fn empty_text_names_active_vol_filter() {
+    use super::empty_filter_text;
+    for (locale, expected) in [
+        ("ru", "Нет монет с Vol. от 1,5M — очистите фильтр"),
+        ("en", "No coins with Vol. from 1,5M — clear the filter"),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        assert_eq!(empty_filter_text("1,5M"), expected);
+        assert_eq!(empty_filter_text("0m"), empty_filter_text(""));
+        assert_eq!(empty_filter_text("garbage"), empty_filter_text(""));
+    }
 }

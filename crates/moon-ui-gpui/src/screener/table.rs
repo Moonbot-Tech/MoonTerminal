@@ -1,10 +1,11 @@
 //! Screener table columns and rows: schema, value formatting, sorting, and `MoonDataRow` rendering.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone};
+use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone, MoonTooltipView};
 use rust_i18n::t;
 
 use moon_core::market::SharedScreenerRow;
@@ -12,9 +13,12 @@ use moon_core::session::CoreId;
 use moon_core::util::fmt::{self, DeltaSign};
 
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
+use crate::display_text::{flatten_lines, plural_key};
 use crate::panels::num;
 
 use super::auto_figures::{AUTO_FIGURES_KEY, ScanBook, ScanLabels};
+use super::grouped::{LevSummary, Mode, aggregate};
+use super::prepared::{Prepared, SelectedRow, account};
 use super::view::ScreenerView;
 
 pub(super) use crate::design::{moon, moon_alpha};
@@ -513,15 +517,115 @@ fn exchange_cell(venue: &EntryVenue, style: &RowStyle) -> impl IntoElement + 'st
         .child(div().min_w_0().truncate().child(venue.label.clone()))
 }
 
-pub(super) fn screener_row(
+/// Format a leverage summary with a compact suffix for its known margin modes.
+pub(super) fn lev_text(lev: LevSummary) -> String {
+    let suffix = |mode| match mode {
+        Mode::I => " I",
+        Mode::C => " C",
+        Mode::Mixed => " I/C",
+        Mode::Unknown => "",
+    };
+    match lev {
+        LevSummary::None => "—".into(),
+        LevSummary::Max(max) => max.to_string(),
+        LevSummary::Same { x, max, mode } => format!("{x} / {max}{}", suffix(mode)),
+        LevSummary::Range { lo, hi, max, mode } => format!("{lo}–{hi} / {max}{}", suffix(mode)),
+    }
+}
+
+/// Show the lead name for a singleton and a localized count for a multi-member group.
+fn core_label(name: &SharedString, n: usize) -> SharedString {
+    if n < 2 {
+        name.clone()
+    } else {
+        let key = plural_key("screener.core_group", n as u64);
+        t!(key.as_str(), n = n).to_string().into()
+    }
+}
+
+/// List at most eight visible members, with their own leverage and PnL.
+fn core_tooltip(entries: &[Entry], members: &[usize]) -> String {
+    const LIMIT: usize = 8;
+    let mut lines: Vec<_> = members
+        .iter()
+        .take(LIMIT)
+        .map(|&index| {
+            let entry = &entries[index];
+            let name = flatten_lines(&entry.core_name);
+            let lev = lev_text(aggregate([account(&entry.row)]).lev);
+            let pnl = fmt::signed_fixed(entry.row.core_pnl, 2)
+                .map_or_else(|| "—".into(), |(text, _)| format!("{text}$"));
+            format!("{name} · {lev} · {pnl}")
+        })
+        .collect();
+    if members.len() > LIMIT {
+        let n = members.len() - LIMIT;
+        let key = plural_key("screener.core_group_more", n as u64);
+        lines.push(t!(key.as_str(), n = n).to_string());
+    }
+    lines.join("\n")
+}
+
+/// Mark the core count with a dotted underline and build its tooltip only on hover.
+fn core_cell(
     e: &Entry,
+    row: &SelectedRow,
+    prepared: &Arc<Prepared>,
+    p: MoonPalette,
+) -> MoonDataCell {
+    let label = core_label(
+        &e.core_name,
+        row.group.as_ref().map_or(1, |group| group.members.len()),
+    );
+    let Some(group) = row.group.as_ref().filter(|group| group.members.len() > 1) else {
+        return MoonDataCell::text(label).tone(MoonTone::Muted);
+    };
+    let members = group.members.clone();
+    let prepared = prepared.clone();
+    let color = rgb(MoonTone::Accent.color(p));
+    MoonDataCell::element(
+        div()
+            .id(SharedString::from(format!(
+                "scr-cores-{}-{}",
+                e.row.core, e.row.market
+            )))
+            .relative()
+            .min_w_0()
+            .text_color(color)
+            .child(label)
+            .child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(1.0))
+                    .bg(checkerboard(color, 1.0)),
+            )
+            .tooltip(move |_, cx| {
+                let text = core_tooltip(&prepared.entries, &members);
+                cx.new(|_| MoonTooltipView::new(text).max_width(440.0))
+                    .into()
+            }),
+    )
+}
+
+/// Render market columns from the lead and account columns from its visible group.
+pub(super) fn screener_row(
+    row: &SelectedRow,
+    prepared: &Arc<Prepared>,
     view: &Entity<ScreenerView>,
     p: MoonPalette,
     cols: &[&ColDef],
     style: &RowStyle,
 ) -> MoonDataRow {
     use moon_core::market::listing::Listing;
+    let e = &prepared.entries[row.lead];
     let r = &e.row;
+    let acct = row
+        .group
+        .as_ref()
+        .map_or_else(|| aggregate([account(r)]), |group| group.agg);
     // Every Screener delta is an unsigned retained-range magnitude. One formatter keeps all six
     // periods free of a misleading forced sign while preserving the shared zero rounding.
     let delta_cell = |v: f64| pct_cell(fmt::pct(v, 1));
@@ -537,12 +641,12 @@ pub(super) fn screener_row(
     let cells: Vec<MoonDataCell> = cols
         .iter()
         .map(|&&(key, ..)| match key {
-            "market" => MoonDataCell::element(market_cell(e, view, p)),
+            "market" => MoonDataCell::element(market_cell(row, &prepared.entries, view, p)),
             COIN_KEY => match r.identity.is_empty() {
                 true => MoonDataCell::text("—").tone(MoonTone::Muted),
                 false => MoonDataCell::text(r.identity.clone()),
             },
-            "core" => MoonDataCell::text(e.core_name.clone()).tone(MoonTone::Muted),
+            "core" => core_cell(e, row, prepared, p),
             EXCHANGE_KEY => match e.venue.label.is_empty() {
                 true => MoonDataCell::text("—").tone(MoonTone::Muted),
                 false => MoonDataCell::element(exchange_cell(&e.venue, style)),
@@ -601,25 +705,10 @@ pub(super) fn screener_row(
                 Some(v) => signed_pct_cell(v),
                 None => MoonDataCell::text("—").tone(MoonTone::Muted),
             },
-            "lev" => {
-                let text = if r.leverage_x > 0 {
-                    let mode = match r.isolated {
-                        Some(true) => " Isolated",
-                        Some(false) => " Cross",
-                        None => "",
-                    };
-                    format!("{} / {}{}", r.leverage_x, r.max_leverage, mode)
-                } else if r.max_leverage > 0 {
-                    format!("{}", r.max_leverage)
-                } else {
-                    "—".to_string()
-                };
-                MoonDataCell::text(text).tone(if r.leverage_x > 0 {
-                    MoonTone::Default
-                } else {
-                    MoonTone::Muted
-                })
-            }
+            "lev" => MoonDataCell::text(lev_text(acct.lev)).tone(match acct.lev {
+                LevSummary::Same { .. } | LevSummary::Range { .. } => MoonTone::Default,
+                LevSummary::None | LevSummary::Max(_) => MoonTone::Muted,
+            }),
             "step" => {
                 // Show the price step as a percentage of ask and as an absolute value, matching
                 // Moonbot's `0.01% / 0.001` format.
@@ -635,17 +724,15 @@ pub(super) fn screener_row(
                 }
             }
             "orders" => {
-                if r.orders > 0 {
-                    MoonDataCell::text(r.orders.to_string()).tone(MoonTone::Accent)
+                if acct.orders > 0 {
+                    MoonDataCell::text(acct.orders.to_string()).tone(MoonTone::Accent)
                 } else {
                     MoonDataCell::text("0").tone(MoonTone::Muted)
                 }
             }
-            "pnl" => money_cell(r.core_pnl),
-            // A dash, not a zero: `None` is "this core does not state the counter" (a build
-            // predating the protocol field, or a base currency the terminal cannot value), and a
-            // real zero arrives as `Some(0.0)` — that one prints, because the core states it.
-            "session_profit" => match r.session {
+            "pnl" => money_cell(acct.pnl),
+            // The amount is absent only when every visible member leaves it unstated.
+            "session_profit" => match acct.session {
                 Some(v) => money_cell(v),
                 None => MoonDataCell::text("—").tone(MoonTone::Muted),
             },
@@ -655,8 +742,8 @@ pub(super) fn screener_row(
                 &style.scan_labels,
             ),
             "pos" => {
-                if r.pos_size != 0.0 {
-                    MoonDataCell::text(num(r.pos_size))
+                if acct.pos != 0.0 {
+                    MoonDataCell::text(num(acct.pos))
                 } else {
                     MoonDataCell::text("0").tone(MoonTone::Muted)
                 }
@@ -667,36 +754,51 @@ pub(super) fn screener_row(
     MoonDataRow::new(cells)
 }
 
-/// Open the shared coin context menu from a Screener row's market right-click.
-///
-/// A Screener row carries no strategy and no order, so the menu holds navigation and the blacklist
-/// entries, followed by the Screener's own entries that copy the listed coins
-/// (`super::coin_copy`). Its "N cores" targets are the cores the table can currently show — the
-/// Singleton display preset narrowed by the source selector, the filter the rows themselves went
-/// through — as the Assets and Orders menus use their own panel filter. The window belongs to no
-/// group, so the actions keep the unscoped authority the row's left click already has.
-///
-/// Args:
-///     core: Core that owns the clicked row; its chart and its blacklists are the menu's targets.
-///     market: Canonical market name used by the navigation entries.
-///     coin: Core-native coin spelling written to blacklist values.
-///     view: The Screener view, read for its backend and source selector.
-///     pos: Window-coordinate popup position.
-///     window: Window that owns the context menu.
-///     app: Application context used to read the live scope and open the menu.
-///
-/// Returns:
-///     Nothing; an applicable menu is opened at `pos`.
-fn open_screener_coin_menu(
+/// Keep the visible lead's copy identity alongside the chart member and group menu scope.
+pub(super) struct MarketTarget {
+    lead_core: CoreId,
     core: CoreId,
     market: String,
     coin: String,
+    members: Option<Vec<CoreId>>,
+}
+
+impl MarketTarget {
+    /// Capture the clicked row's lead and resolve navigation and blacklist targets.
+    pub(super) fn new(row: &SelectedRow, entries: &[Entry]) -> Self {
+        let lead = &entries[row.lead].row;
+        let chart = &row.chart_entry(entries).row;
+        Self {
+            lead_core: lead.core,
+            core: chart.core,
+            market: chart.market.clone(),
+            coin: chart.coin.clone(),
+            members: row.group.as_ref().map(|group| {
+                group
+                    .members
+                    .iter()
+                    .map(|&index| entries[index].row.core)
+                    .collect()
+            }),
+        }
+    }
+
+    /// Identify the displayed row for copy, even when a different member owns the chart.
+    pub(super) fn copy_identity(&self) -> (CoreId, &str) {
+        (self.lead_core, &self.market)
+    }
+}
+
+/// Open the shared menu for the chart member, intersecting group members with the live scope.
+fn open_screener_coin_menu(
+    target: &MarketTarget,
     view: &Entity<ScreenerView>,
     pos: Point<Pixels>,
     window: &mut Window,
     app: &mut App,
 ) {
     app.stop_propagation();
+    let core = target.core;
     let panel = view.read(app);
     let backend = panel.backend.clone();
     let (selected_cores, core_name) = {
@@ -708,6 +810,12 @@ fn open_screener_coin_menu(
             .iter()
             .map(|session| session.id)
             .filter(|&id| b.core_displayed(preset, id) && panel.source_admits(id, venues))
+            .filter(|id| {
+                target
+                    .members
+                    .as_ref()
+                    .is_none_or(|members| members.contains(id))
+            })
             .collect();
         let name = sessions
             .iter()
@@ -716,12 +824,12 @@ fn open_screener_coin_menu(
             .unwrap_or_default();
         (selected, name)
     };
-    let screener_copy = super::coin_copy::copy_items(panel.coin_lists((core, &market)));
+    let screener_copy = super::coin_copy::copy_items(panel.coin_lists(target.copy_identity()));
     let ctx = CoinMenuCtx {
         core,
         core_name,
-        market,
-        coin,
+        market: target.market.clone(),
+        coin: target.coin.clone(),
         selected_cores,
         strat_id: None,
         strat_name: None,
@@ -737,25 +845,23 @@ fn open_screener_coin_menu(
     crate::controls::open_coin_menu(ctx, backend, pos, window, app);
 }
 
-/// Build a full-cell clickable market cell.
-///
-/// Clicking asks the ChartTabs group owning `row.core` to open or focus the market in Main and
-/// select `Tab::Main`, without raising or focusing that group's OS window, and moves the Screener's
-/// opened-row mark onto this row. A right click opens the shared coin menu for the row's core and
-/// market.
+/// Open the preferred member's chart on click and the group's menu on right click.
 fn market_cell(
-    e: &Entry,
+    row: &SelectedRow,
+    entries: &[Entry],
     view: &Entity<ScreenerView>,
     p: MoonPalette,
 ) -> impl IntoElement + 'static {
-    let market = e.row.market.clone();
-    let core = e.row.core;
+    let target = MarketTarget::new(row, entries);
+    let market = target.market.clone();
+    let core = target.core;
     let view = view.clone();
     let view_menu = view.clone();
-    let market_menu = market.clone();
-    let coin_menu = e.row.coin.clone();
     div()
-        .id(SharedString::from(format!("scr-mkt-{core}-{market}")))
+        .id(SharedString::from(format!(
+            "scr-mkt-{}-{market}",
+            target.lead_core
+        )))
         .w_full()
         .h_full()
         .flex()
@@ -765,22 +871,14 @@ fn market_cell(
         // with Accent and the font weight with Medium.
         .text_color(rgb(MoonTone::Accent.color(p)))
         .font_weight(FontWeight::MEDIUM)
-        .child(e.row.coin.clone())
+        .child(entries[row.lead].row.coin.clone())
         .on_click(move |_, _window, app| {
             view.update(app, |this, cx| this.open_on_main(core, market.clone(), cx));
         })
         .on_mouse_down(
             MouseButton::Right,
             move |event: &MouseDownEvent, window, app| {
-                open_screener_coin_menu(
-                    core,
-                    market_menu.clone(),
-                    coin_menu.clone(),
-                    &view_menu,
-                    event.position,
-                    window,
-                    app,
-                );
+                open_screener_coin_menu(&target, &view_menu, event.position, window, app);
             },
         )
 }

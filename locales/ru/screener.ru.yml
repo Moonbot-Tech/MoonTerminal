@@ -2,6 +2,17 @@
 # Column headers (Vol./ASK/Funding/…) are Moonbot domain tokens and remain untranslated in code.
 _version: 1
 
+screener.core_group_one: "%{n} ядро"
+screener.core_group_few: "%{n} ядра"
+screener.core_group_many: "%{n} ядер"
+screener.core_group_more_one: "ещё %{n}"
+screener.core_group_more_few: "ещё %{n}"
+screener.core_group_more_many: "ещё %{n}"
+screener.footer_cores_one: "%{n} ядро"
+screener.footer_cores_few: "%{n} ядра"
+screener.footer_cores_many: "%{n} ядер"
+screener.empty_vol_filter: "Нет монет с Vol. от %{vol} — очистите фильтр"
+
 screener.window_title: "MoonTerminal — Скринер"
 # Three different reasons the coin table can be empty, three different sentences. `screener.empty`
 # is the only one that asks for an action, so it is reserved for the only case where that action

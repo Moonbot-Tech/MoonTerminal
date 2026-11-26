@@ -106,22 +106,6 @@ pub(super) fn chart_core(members: impl IntoIterator<Item = MemberAcct>) -> Optio
     )
 }
 
-/// Format a leverage summary with a compact suffix for its known margin modes.
-pub(super) fn lev_text(lev: LevSummary) -> String {
-    let suffix = |mode| match mode {
-        Mode::I => " I",
-        Mode::C => " C",
-        Mode::Mixed => " I/C",
-        Mode::Unknown => "",
-    };
-    match lev {
-        LevSummary::None => "—".into(),
-        LevSummary::Max(max) => max.to_string(),
-        LevSummary::Same { x, max, mode } => format!("{x} / {max}{}", suffix(mode)),
-        LevSummary::Range { lo, hi, max, mode } => format!("{lo}–{hi} / {max}{}", suffix(mode)),
-    }
-}
-
 /// Index rows by key without disturbing first-seen group or member order.
 pub(super) fn group_slots<K: Eq + Hash>(keys: impl IntoIterator<Item = K>) -> Vec<Vec<usize>> {
     let mut slots = HashMap::new();

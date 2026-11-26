@@ -372,6 +372,31 @@ fn set_venue(entry: &mut Entry, label: &'static str) {
     entry.venue.label = label.into();
 }
 
+/// A grouped market's hidden Listed answer can only come from its visible lead.
+#[test]
+fn pending_non_lead_does_not_make_empty_state_collecting() {
+    let mut rows = entries(3, 2);
+    for entry in &mut rows {
+        set_venue(entry, "VENUE");
+        std::sync::Arc::make_mut(&mut entry.row.market_data).listing = if entry.row.core == 0 {
+            Listing::Both
+        } else {
+            Listing::Pending
+        };
+    }
+    let prepared = Prepared::new(rows, "market", false);
+    let coin = super::super::view::CoinQuery::new("").listed_in(&[Listing::FuturesOnly].into());
+    let ranks = [Some(0), Some(1), Some(2)];
+    assert!(
+        prepared
+            .select(&ranks, &coin, 0.0, "market", false, true)
+            .rows
+            .is_empty()
+    );
+    assert!(!prepared.hides_waiting_rows(&ranks, &coin, 0.0, true));
+    assert!(prepared.hides_waiting_rows(&[None, Some(1), Some(2)], &coin, 0.0, true));
+}
+
 /// The all-core scope separates venues while preserving one row for each canonical market.
 #[test]
 fn all_cores_scope_gives_one_row_per_venue_market() {
