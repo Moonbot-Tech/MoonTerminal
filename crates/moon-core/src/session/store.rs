@@ -14,10 +14,11 @@ use crate::applog::LogLine;
 use crate::feed::{
     AssetsSnapshot, ChartAlertUpdate, ChartTextRows, ClientSettings, ConnStatus, CoreConfig,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
-    CoreConfigState, CoreTelegramState, CoreTgEvent, DetectRow, EngineActionResult, FeedMsg,
-    LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState, STRATEGY_EDIT_NOTE_CAP,
-    STRATEGY_EDIT_NOTE_KEEP_MS, StrategyEditNote, StrategyEditOutcome, StrategyEditPhase,
-    StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow, TransferAssetsSnapshot,
+    CoreConfigState, CoreFeatures, CoreTelegramState, CoreTgEvent, DetectRow, EngineActionResult,
+    FeedMsg, LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState,
+    STRATEGY_EDIT_NOTE_CAP, STRATEGY_EDIT_NOTE_KEEP_MS, StrategyEditNote, StrategyEditOutcome,
+    StrategyEditPhase, StrategyEditRow, StrategyRow, StrategySchemaModel, TempBlacklistRow,
+    TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -173,6 +174,17 @@ pub struct CoreData {
     pub profit_state: Option<ProfitState>,
     /// Core runtime and passive-mode state, or `None` until it arrives.
     pub runtime_state: Option<RuntimeState>,
+    /// Optional commands the connected build acts on; all `false` until its runtime report proves
+    /// the build (see [`CoreFeatures`]).
+    ///
+    /// Cleared on any departure from Ready (on the line that clears [`Self::server_version`]) and
+    /// on `FeedMsg::RunStateForgotten` (beside the run-state values), because a different process
+    /// may answer next, and an older one must not inherit a newer one's controls. The feed re-sends it with every runtime report,
+    /// including the one replayed after a reconnect.
+    ///
+    /// It has NO revision counter, for the reason `server_version` gives: its readers (the order
+    /// menu) read it when they open, and a counter nothing reads is dead weight.
+    pub features: CoreFeatures,
     /// Whether the core's global strategy engine is running, or `None` until it reports.
     ///
     /// `None` is a THIRD state, not a false: a core that has connected but has not yet sent
@@ -590,6 +602,7 @@ impl CoreData {
             core_config_edit: None,
             profit_state: None,
             runtime_state: None,
+            features: CoreFeatures::default(),
             strategies_running: None,
             hedge_mode: None,
             api_expiry: None,
@@ -1051,6 +1064,7 @@ impl CoreData {
                     }
                     self.server_version = None;
                     self.server_version_suffix = None;
+                    self.features = CoreFeatures::default();
                     if self.runtime_state_confirmed {
                         self.runtime_state_confirmed = false;
                         self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
@@ -1363,10 +1377,13 @@ impl CoreData {
                     self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
                 }
             }
+            FeedMsg::CoreFeatures(features) => self.features = features,
             FeedMsg::RunStateForgotten => {
                 // A different MoonBot answers now, so the retained halves describe a process that
                 // is gone. Unlike a reconnect this drops the VALUES, not just their confirmation:
-                // there is nothing here for the new instance to be judged by.
+                // there is nothing here for the new instance to be judged by. The build goes with
+                // them: an update from N2 to an older build must not keep N2's controls.
+                self.features = CoreFeatures::default();
                 if self.runtime_state.take().is_some() || self.runtime_state_confirmed {
                     self.runtime_state_confirmed = false;
                     self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);

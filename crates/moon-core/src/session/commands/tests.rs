@@ -287,3 +287,32 @@ fn temp_undo_skips_when_ban_refreshed_later() {
     assert!(!older(&session).unwrap());
     assert!(newer(&session).unwrap());
 }
+
+/// The menu's forced cancellation reaches the core queue as its own command, never as a cancel.
+///
+/// Mutation: make `force_cancel_order` send `CoreCmd::CancelOrder`. The confirmation the user
+/// accepted would then promise the background cancellation and get the ordinary one, which a
+/// stuck order already ignores. This stops at the session queue: the feed's mapping onto
+/// `orders().force_cancel` needs a live `MoonClient` and is not reached here.
+#[test]
+fn force_cancel_queues_its_own_command() {
+    let session = fixture(false, "");
+    session.force_cancel_order(CORE, 4242).unwrap();
+    let (_, queued, _) = session
+        ._attempts
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the retry loop's second attempt drains the queue");
+    let kinds: Vec<_> = queued.iter().map(|q| &q.cmd).collect();
+    assert!(
+        kinds
+            .iter()
+            .any(|cmd| matches!(cmd, crate::feed::CoreCmd::ForceCancelOrder { uid: 4242 })),
+        "force cancel was not queued: {kinds:?}"
+    );
+    assert!(
+        !kinds
+            .iter()
+            .any(|cmd| matches!(cmd, crate::feed::CoreCmd::CancelOrder { .. })),
+        "force cancel must not fall back to the ordinary cancel: {kinds:?}"
+    );
+}

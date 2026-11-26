@@ -52,6 +52,7 @@ fn report_rows() -> Vec<Option<Row>> {
         }),
         screener_copy: false,
         blacklist: true,
+        force_cancel: moon_core::feed::ForceCancelGate::NotEligible,
     })
     .into_iter()
     .map(|slot| {

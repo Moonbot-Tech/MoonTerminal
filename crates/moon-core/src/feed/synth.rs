@@ -222,6 +222,17 @@ fn run_from(
         is_started: !env_flag("MOON_SYNTH_STOPPED"),
         auto_detect_active: true,
     }));
+    // The build's optional commands, announced beside the run state exactly as `feed::live` sends
+    // them beside every runtime report — after `Ready`, because the store forgets them on any other
+    // status. The synthetic core stands in for a current core, so it claims both the N1 and the N2
+    // commands; leaving them at the default would keep every control gated on them permanently
+    // disabled on the bench, the fixture and the capture build, where nobody could drive or shoot
+    // it. Claiming them sends nothing anywhere: the command drain below executes no command, so a
+    // forced cancellation is dropped exactly like an ordinary one and the order stays put.
+    let _ = tx.send(FeedMsg::CoreFeatures(crate::feed::CoreFeatures {
+        exchange_buys_cancel: true,
+        force_cancel: true,
+    }));
     let _ = tx.send(FeedMsg::StrategiesRunning(!env_flag(
         "MOON_SYNTH_TRADING_OFF",
     )));
@@ -339,8 +350,10 @@ fn run_from(
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
-        // No command is executed, but a panel that sent one shows "sent, waiting" until the core's
-        // next snapshot arrives; only the Telegram page does, and it asks on opening.
+        // No command is executed — an order cancel, forced or not, included: the synthetic orders
+        // are recorded snapshots, and the menu's toast says "sent", which stays true. A panel that
+        // sent one shows "sent, waiting" until the core's next snapshot arrives; only the Telegram
+        // page does, and it asks on opening.
         if core_state && commanded {
             account::send_telegram(tx);
         }

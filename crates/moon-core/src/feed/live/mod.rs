@@ -108,9 +108,9 @@ pub(in crate::feed) use client_settings::ClientSettingsSequence;
 pub(in crate::feed) use commands::ChartTextWanted;
 use commands::{CommandDrain, LocalStratEdits, StrategyPlacementGuard, drain_commands};
 use convert::{
-    build_captured_rows, build_snapshot_rows, client_settings_from_proto, license_state_from_proto,
-    overlay_captured_rows, profit_state_from_proto, runtime_state_from_proto,
-    settings_event_snapshot, sys_status_from_proto, telegram_from_proto,
+    build_captured_rows, build_snapshot_rows, client_settings_from_proto, core_features_from_proto,
+    license_state_from_proto, overlay_captured_rows, profit_state_from_proto,
+    runtime_state_from_proto, settings_event_snapshot, sys_status_from_proto, telegram_from_proto,
 };
 pub use convert::{percentage_stop_price, percentage_take_price};
 use deadline::CoalescedDeadline;
@@ -1004,6 +1004,11 @@ pub(super) fn run(
                             let _ = tx.send(FeedMsg::RuntimeState(
                                 convert::runtime_state_from_proto(runtime),
                             ));
+                            // The store forgets the build on every departure from Ready, like
+                            // `server_version`, so the same report has to vouch for it again.
+                            let _ = tx.send(FeedMsg::CoreFeatures(
+                                convert::core_features_from_proto(runtime),
+                            ));
                         }
                     }
                     if run_state_seen.trading {
@@ -1563,16 +1568,19 @@ pub(super) fn run(
             &client,
             |ev| matches!(ev, &Event::Settings(SettingsEvent::RuntimeStateUpdated)),
             |state| {
-                state
-                    .settings()
-                    .runtime_state
-                    .as_ref()
-                    .map(runtime_state_from_proto)
+                state.settings().runtime_state.as_ref().map(|runtime| {
+                    (
+                        runtime_state_from_proto(runtime),
+                        core_features_from_proto(runtime),
+                    )
+                })
             },
         );
-        if let Some(state) = runtime_state {
+        if let Some((state, features)) = runtime_state {
             run_state_seen.runtime = true;
-            if tx.send(FeedMsg::RuntimeState(state)).is_err() {
+            if tx.send(FeedMsg::RuntimeState(state)).is_err()
+                || tx.send(FeedMsg::CoreFeatures(features)).is_err()
+            {
                 break;
             }
         }

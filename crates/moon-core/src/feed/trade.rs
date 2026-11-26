@@ -196,6 +196,18 @@ pub(super) fn cancel_order(client: &MoonClient, server_id: u64, uid: u64) {
     );
 }
 
+/// Forces the cancellation of a stuck core order by `uid` (MoonBot 7.73 N2+). The runtime picks
+/// the active leg itself — `ForceCancelBuy` for `BuySet`, `ForceCancelSell` for `SellSet` — and
+/// sends nothing for any other status. `Ok` means queued: the order leaves the list only when the
+/// core's own updates say so, and it may stay open on the exchange.
+pub(super) fn force_cancel_order(client: &MoonClient, server_id: u64, uid: u64) {
+    report(
+        server_id,
+        format!("force cancel order {uid}"),
+        client.orders().force_cancel(uid),
+    );
+}
+
 /// Toggles panic sell for a market, matching the chart button's market-level semantics.
 /// This maps to `orders().switch_panic_sell_by_market`; the runtime applies the toggle to
 /// the market's orders and sends the required packets.

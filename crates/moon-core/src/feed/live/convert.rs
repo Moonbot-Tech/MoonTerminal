@@ -13,12 +13,12 @@ use moonproto::{Event, MoonClient};
 use crate::config::TakeProfitMode;
 use crate::feed::strategies::strat_kind_name;
 use crate::feed::{
-    ApiKeyExpiry, ClientSettings, ClientSettingsEdit, ConnFault, ConnFaultKind, CoreIdentityFacts,
-    CoreInitStep, CoreProblem, CoreProblemCategory, CoreProblems, CoreStartupState,
-    CoreStartupStatus, CoreSysStatus, CoreTelegramActiveProxy, CoreTelegramAuthDetails,
-    CoreTelegramCodeType, CoreTelegramError, CoreTelegramService, CoreTelegramState,
-    EngineActionKind, EngineActionResult, LicenseState, NewsSnapshot, OrderRow, OrderTrace,
-    OrderTracePoint, ProfitState, RuntimeState, WalletKind,
+    ApiKeyExpiry, ClientSettings, ClientSettingsEdit, ConnFault, ConnFaultKind, CoreFeatures,
+    CoreIdentityFacts, CoreInitStep, CoreProblem, CoreProblemCategory, CoreProblems,
+    CoreStartupState, CoreStartupStatus, CoreSysStatus, CoreTelegramActiveProxy,
+    CoreTelegramAuthDetails, CoreTelegramCodeType, CoreTelegramError, CoreTelegramService,
+    CoreTelegramState, EngineActionKind, EngineActionResult, LicenseState, NewsSnapshot, OrderRow,
+    OrderTrace, OrderTracePoint, ProfitState, RuntimeState, WalletKind,
 };
 
 mod client_edit;
@@ -39,8 +39,9 @@ pub(super) use news_trace::{
 pub(super) use orders::{build_captured_rows, build_snapshot_rows, overlay_captured_rows};
 pub use orders::{percentage_stop_price, percentage_take_price};
 pub(super) use settings::{
-    client_settings_from_proto, profit_state_from_proto, runtime_state_from_proto,
-    settings_event_snapshot, snapshot_when, startup_status_from_proto, sys_status_from_proto,
+    client_settings_from_proto, core_features_from_proto, profit_state_from_proto,
+    runtime_state_from_proto, settings_event_snapshot, snapshot_when, startup_status_from_proto,
+    sys_status_from_proto,
 };
 pub(super) use wallet::{engine_action_result, folders_from_proto, strategies_publish_sig};
 

@@ -1108,6 +1108,10 @@ pub(super) fn drain_commands(
                 trade::cancel_order(client, server.id, uid);
                 *orders_mutated = true;
             }
+            Ok(CoreCmd::ForceCancelOrder { uid }) => {
+                trade::force_cancel_order(client, server.id, uid);
+                *orders_mutated = true;
+            }
             Ok(CoreCmd::SetOrderStop { uid, kind, on }) => {
                 trade::set_order_stop(client, server.id, uid, kind, on);
                 *orders_mutated = true;

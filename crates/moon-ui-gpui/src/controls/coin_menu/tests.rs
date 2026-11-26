@@ -187,6 +187,7 @@ fn strategy_report_opens_the_scoped_report() {
 
 use super::plan::{CoinMenuOrigin, MenuFacts, Order, ReportFacts, Slot, plan};
 use Slot::*;
+use moon_core::feed::ForceCancelGate;
 
 /// A listed market with a printed ticker and a resolved blacklist token.
 fn market_facts() -> MenuFacts<(), Result<(), &'static str>> {
@@ -200,6 +201,7 @@ fn market_facts() -> MenuFacts<(), Result<(), &'static str>> {
         report: None,
         screener_copy: false,
         blacklist: true,
+        force_cancel: ForceCancelGate::NotEligible,
     }
 }
 
@@ -439,7 +441,14 @@ fn plan_never_leading_trailing_or_double_separator() {
             Some(Order::Buy(23)),
             Some(Order::Table(23)),
         ] {
-            for mask in 0..64u8 {
+            for (mask, force_cancel) in (0..64u8).flat_map(|mask| {
+                [
+                    ForceCancelGate::NotEligible,
+                    ForceCancelGate::NeedsNewerCore,
+                    ForceCancelGate::Offered,
+                ]
+                .map(|gate| (mask, gate))
+            }) {
                 let has = |bit: u8| mask & bit != 0;
                 let slots = plan(&MenuFacts::<(), Result<(), &str>> {
                     surface,
@@ -455,6 +464,7 @@ fn plan_never_leading_trailing_or_double_separator() {
                     }),
                     screener_copy: has(16),
                     blacklist: has(32),
+                    force_cancel,
                 });
                 assert_ne!(slots.first(), Some(&Sep));
                 assert_ne!(slots.last(), Some(&Sep));
@@ -491,4 +501,129 @@ fn emphasized_slot_is_main_action_per_surface() {
         let emphasized: Vec<_> = plan(&facts).into_iter().filter(Slot::emphasized).collect();
         assert_eq!(emphasized, expected);
     }
+}
+
+/// The forced cancellation sits directly under Cancel on a buy line and an Orders row.
+///
+/// Mutation: drop the slot for `Offered`, or emit it for `NotEligible`. A stuck BuySet would lose
+/// its only way out, or a pending entry would offer an action MoonProto never sends.
+#[test]
+fn plan_force_cancel_follows_cancel_only_when_offered() {
+    for (surface, order) in [
+        (CoinMenuOrigin::ChartLine, Order::Buy(23)),
+        (CoinMenuOrigin::OrderTable, Order::Table(23)),
+    ] {
+        let facts = |force_cancel| MenuFacts {
+            surface,
+            order: Some(order),
+            force_cancel,
+            ..market_facts()
+        };
+        let own = |facts: &MenuFacts<(), Result<(), &'static str>>| {
+            let slots = plan(facts);
+            let cancel = slots.iter().position(|slot| *slot == Cancel(23)).unwrap();
+            slots[cancel + 1..]
+                .iter()
+                .take_while(|slot| **slot != Sep)
+                .count()
+        };
+        let offered = plan(&facts(ForceCancelGate::Offered));
+        let cancel = offered.iter().position(|slot| *slot == Cancel(23)).unwrap();
+        assert_eq!(offered[cancel + 1], ForceCancel(23));
+        let needs = plan(&facts(ForceCancelGate::NeedsNewerCore));
+        let cancel = needs.iter().position(|slot| *slot == Cancel(23)).unwrap();
+        assert_eq!(needs[cancel + 1], ForceCancelNeedsCore);
+        assert_eq!(own(&facts(ForceCancelGate::NotEligible)), 0);
+        assert!(
+            !plan(&facts(ForceCancelGate::NotEligible))
+                .iter()
+                .any(|slot| matches!(slot, ForceCancel(_) | ForceCancelNeedsCore))
+        );
+    }
+}
+
+/// A sell line has no ordinary Cancel, so the forced one stands behind its own separator.
+///
+/// Mutation: append it to the split group. It would read as a third split row.
+#[test]
+fn plan_force_cancel_on_a_sell_line_has_its_own_group() {
+    let slots = plan(&MenuFacts {
+        surface: CoinMenuOrigin::ChartLine,
+        order: Some(Order::Sell(23)),
+        force_cancel: ForceCancelGate::Offered,
+        ..market_facts()
+    });
+    assert_eq!(
+        slots[..7],
+        [
+            OrderEdit(23),
+            JoinSells,
+            Sep,
+            Split(23, 3),
+            Split(23, 7),
+            Sep,
+            ForceCancel(23)
+        ]
+    );
+}
+
+/// No order, no forced cancellation, whatever the gate says.
+///
+/// Mutation: read the gate before the order. An Assets row would show a cancel for nothing.
+#[test]
+fn plan_force_cancel_needs_an_order() {
+    let slots = plan(&MenuFacts {
+        force_cancel: ForceCancelGate::Offered,
+        ..market_facts()
+    });
+    assert!(
+        !slots
+            .iter()
+            .any(|slot| matches!(slot, ForceCancel(_) | ForceCancelNeedsCore))
+    );
+}
+
+/// The forced cancellation is sent only from the confirmation's answer, after the workspace, the
+/// order's eligibility and its leg are re-checked, and never as the ordinary cancel.
+///
+/// Mutation: send from the menu row's click, move either check after the send, compare only the
+/// gate, or call `cancel_order`. A click would then skip the question, a group switched by Auto
+/// would still be forced, a buy that filled into SellSet while the dialog was open would have its
+/// take-profit forced instead, or the wrong command would go out.
+#[test]
+fn force_cancel_sends_only_from_the_checked_answer() {
+    let source = include_str!("force_cancel.rs");
+    let row = source
+        .split_once("\"coin-order-force-cancel\"")
+        .expect("the force-cancel row")
+        .1
+        .split_once("fn needs_core_item(")
+        .unwrap()
+        .0;
+    assert!(row.contains("ask("), "the row must open the question");
+    assert!(
+        !row.contains("b.session."),
+        "the row itself must not send anything"
+    );
+    let answer = source
+        .split_once("fn confirm(")
+        .expect("the answer handler")
+        .1;
+    let update = answer
+        .find(".update(app, |b, _|")
+        .expect("re-reads Backend");
+    let guard = answer
+        .find("workspace_action_allows_cores(")
+        .expect("re-checks the workspace");
+    let still = answer
+        .find("order_state(b, core, uid) != Some((ForceCancelGate::Offered, leg.clone()))")
+        .expect("re-checks the order and its leg");
+    let send = answer
+        .find("b.session.force_cancel_order(")
+        .expect("sends the forced cancellation");
+    assert!(update < guard && guard < send && still < send);
+    assert!(
+        !source.contains(".cancel_order("),
+        "never the ordinary cancel"
+    );
 }

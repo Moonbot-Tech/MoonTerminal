@@ -701,6 +701,13 @@ pub enum CoreCmd {
     MoveOrder { uid: u64, new_price: f64 },
     /// Cancel a core order by `uid` through moonproto `orders().cancel`.
     CancelOrder { uid: u64 },
+    /// Force the cancellation of a stuck order by `uid` through moonproto `orders().force_cancel`
+    /// (MoonBot 7.73 N2+). A sibling of [`Self::CancelOrder`], never a flag on it: the core stops
+    /// tracking the order after three unconfirmed checks and keeps cancelling in the background,
+    /// so the order may stay open on the exchange — a different promise from an ordinary cancel.
+    /// The runtime picks the active BUY or SELL leg and sends nothing for any other status; an
+    /// older core ignores the request. Offer it only where `CoreFeatures::force_cancel_gate` does.
+    ForceCancelOrder { uid: u64 },
     /// Toggle the SL, TS, or VStop flag of one core order by `uid`, as triggered by a cell click in
     /// the Orders table. The feed reads the retained order snapshot and flips the requested flag
     /// while preserving its level, spread, and percentage or fixed mode. It sends
