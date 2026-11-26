@@ -14,6 +14,7 @@ use moon_core::session::CoreId;
 use moon_core::util::fmt::{self, DeltaSign};
 
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
+use crate::design;
 use crate::display_text::{flatten_lines, plural_key};
 use crate::panels::num;
 
@@ -513,6 +514,9 @@ pub(super) struct RowStyle {
     /// Edge of a logo and the gap after it, already in theme pixels.
     pub(super) logo_px: Pixels,
     pub(super) logo_gap: Pixels,
+    /// Base font size passed to MoonDataCell to render the exchange caption.
+    pub(super) exchange_font_base: f32,
+    /// Rendered ellipsis width at the exchange caption's font size.
     pub(super) exchange_ellipsis: Pixels,
     /// Captions of the three market kinds, in [`kind_rank`] order.
     pub(super) kinds: [SharedString; 3],
@@ -543,15 +547,16 @@ pub(super) fn short_listed_captions() -> [SharedString; 3] {
     ]
 }
 
-const EXCHANGE_FONT_SIZE: f32 = 10.5;
+/// Exchange captions sit half a design pixel below the terminal body text.
+const EXCHANGE_FONT_STEP: f32 = -0.5;
 
-/// Reserve enough room for the ellipsis at the current table font and scale.
-pub(super) fn exchange_ellipsis_width(cx: &App) -> Pixels {
-    let tokens = MoonTheme::active_tokens(cx);
+/// Resolve the cell's base font size and measure its ellipsis at the same density-tier size.
+pub(super) fn exchange_caption_metrics(cx: &App) -> (f32, Pixels) {
     let text = cx.text_system();
-    let font = text.resolve_font(&font(tokens.font_family(true)));
-    text.layout_width(font, px(tokens.font(EXCHANGE_FONT_SIZE)), '…')
-        .ceil()
+    let font = text.resolve_font(&font(MoonTheme::active_tokens(cx).font_family(true)));
+    let size = design::t_body_step_px(cx, EXCHANGE_FONT_STEP);
+    let ellipsis = text.layout_width(font, size, '…').ceil();
+    (design::body_font_base(cx, EXCHANGE_FONT_STEP), ellipsis)
 }
 
 /// Keep the caption on the first line even when the logo has to wrap out of sight.
@@ -600,7 +605,7 @@ fn exchange_cell(venue: &EntryVenue, style: &RowStyle) -> MoonDataCell {
                 )
             }),
     )
-    .font_size(EXCHANGE_FONT_SIZE)
+    .font_size(style.exchange_font_base)
     .overflow_tooltip_with_inset(venue.label.clone(), inset, minimum_caption)
 }
 

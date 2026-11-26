@@ -21,7 +21,7 @@ use crate::screener::{
     auto_figures::{MarketScan, ScanBook},
     prepared::{Prepared, SelectedRow},
     table::{
-        COLS, ColDef, Entry, EntryVenue, RowStyle, column_label, exchange_ellipsis_width,
+        COLS, ColDef, Entry, EntryVenue, RowStyle, column_label, exchange_caption_metrics,
         screener_row, short_kind_captions, short_listed_captions,
     },
     view::{CoinQuery, MIN_WINDOW_SIZE, ScreenerView},
@@ -145,6 +145,7 @@ pub(super) fn open(
         )]
     ));
     let [both, spot_only, futures_only] = short_listed_captions();
+    let (exchange_font_base, exchange_ellipsis) = cx.update(|cx| exchange_caption_metrics(cx));
     let window = cx.open_window(MIN_WINDOW_SIZE, move |_, cx| LayoutTable {
         widths: narrow_exchange.then(|| {
             cx.new(|_| {
@@ -160,7 +161,8 @@ pub(super) fn open(
             logos_ready: true,
             logo_px: px(13.0),
             logo_gap: px(5.0),
-            exchange_ellipsis: exchange_ellipsis_width(cx),
+            exchange_font_base,
+            exchange_ellipsis,
             kinds: short_kind_captions(),
             both,
             spot_only,

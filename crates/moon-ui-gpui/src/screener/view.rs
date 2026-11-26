@@ -30,7 +30,7 @@ use super::auto_figures::ScanQuery;
 use super::prepared::{FilterMatches, SelectedRow};
 use super::table::{
     COLS, ColDef, DEFAULT_MIN_VOL, DEFAULT_SORT, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE,
-    column_label, column_title, exchange_ellipsis_width, migrate_layout, moon, moon_alpha,
+    column_label, column_title, exchange_caption_metrics, migrate_layout, moon, moon_alpha,
     parse_vol, reset_layout_to_default, restore_visible_columns, screener_row, short_kind_captions,
     short_listed_captions,
 };
@@ -875,11 +875,13 @@ impl ScreenerView {
         // Captions and logo geometry are the same for every row of this build, so they are
         // resolved once here rather than per visible row per frame.
         let [both, spot_only, futures_only] = short_listed_captions();
+        let (exchange_font_base, exchange_ellipsis) = exchange_caption_metrics(cx);
         let row_style = Rc::new(RowStyle {
             logos_ready: self.exchange_logos_ready,
             logo_px: design::ui_px(cx, 13.0),
             logo_gap: design::ui_px(cx, 5.0),
-            exchange_ellipsis: exchange_ellipsis_width(cx),
+            exchange_font_base,
+            exchange_ellipsis,
             kinds: short_kind_captions(),
             both,
             spot_only,
