@@ -13,9 +13,8 @@ fn grouped_select_4000x60_probe() {
     const CORES: usize = 60;
     const REPEATS: u32 = 20;
     let mut rows = entries(CORES as u64, MARKETS);
-    let venue = gpui::SharedString::from("XALPHA Futures");
     for entry in &mut rows {
-        entry.venue.label = venue.clone();
+        entry.venue.id = Some(ExchangeId::new(4));
     }
     let prepared = Prepared::new(rows, "vol24", true);
     let full: Vec<_> = (0..CORES).map(Some).collect();
@@ -25,6 +24,12 @@ fn grouped_select_4000x60_probe() {
     let coin = crate::screener::view::CoinQuery::new("");
     for (scope, ranks, visible) in [("full", &full, CORES), ("partial", &partial, CORES / 2)] {
         for grouped in [false, true] {
+            if grouped && scope == "partial" {
+                let start = Instant::now();
+                prepared.install_partial_groups(prepared.prepare_partial_groups(ranks.to_vec()));
+                let prime_ms = start.elapsed().as_secs_f64() * 1_000.0;
+                println!("[probe] partial-scope background prime_ms={prime_ms:.3}");
+            }
             let select = || prepared.select(ranks, &coin, 0.0, "vol24", true, grouped);
             let start = Instant::now();
             let first = black_box(select());
@@ -420,6 +425,7 @@ fn only_the_listed_list_hiding_a_waiting_row_counts_as_a_wait() {
 fn set_venue(entry: &mut Entry, label: &'static str) {
     std::sync::Arc::make_mut(&mut entry.row.market_data).provider = entry.row.core;
     entry.venue.label = label.into();
+    entry.venue.id = Some(ExchangeId::new(4));
 }
 
 /// A grouped market's hidden Listed answer can only come from its visible lead.
@@ -452,12 +458,12 @@ fn pending_non_lead_does_not_make_empty_state_collecting() {
 fn all_cores_scope_gives_one_row_per_venue_market() {
     let mut rows = entries(3, 2);
     for row in &mut rows {
-        row.venue.label = if row.row.core < 2 {
-            "VENUE_A"
-        } else {
-            "VENUE_B"
-        }
-        .into();
+        // Sharing a human caption must not merge distinct venue IDs.
+        row.venue.label = "SAME CAPTION".into();
+        row.venue.id = Some(ExchangeId::with_dex(
+            4,
+            if row.row.core < 2 { "DEX_A" } else { "DEX_B" },
+        ));
     }
     let prepared = Prepared::new(rows, "market", false);
     let selection = prepared.select(
@@ -515,7 +521,14 @@ fn single_core_scope_keeps_per_core_rows() {
 fn per_core_mode_separate_providers_still_group_by_venue() {
     let mut rows = entries(2, 1);
     for row in &mut rows {
-        set_venue(row, "VENUE_A");
+        set_venue(
+            row,
+            if row.row.core == 0 {
+                "CAPTION_A"
+            } else {
+                "CAPTION_B"
+            },
+        );
     }
     let prepared = Prepared::new(rows, "market", false);
     let selection = prepared.select(

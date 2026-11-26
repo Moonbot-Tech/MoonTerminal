@@ -36,6 +36,7 @@ const COLD_LOOKUPS: &[&str] = &[
     "screener::table::tests::default_view_cells_stay_inside_columns_at_min_width_ru_en",
     "screener::table::tests::type_and_listed_cells_use_short_captions_ru_en",
     "screener::view::tests::footer_counter_names_cores_on_multi_scope",
+    "screener::view::tests::all_core_scope_groups_before_the_second_core_publishes",
     "screener::view::tests::empty_text_names_active_vol_filter",
     "controls::coin_menu::blacklist::tests::temp_toast_names_ticker_not_symbol",
     "controls::coin_menu::multi::tests::multi_toast_names_coins_and_cores",

@@ -11,6 +11,7 @@ screener.core_group_more_many: "ещё %{n}"
 screener.footer_cores_one: "%{n} ядро"
 screener.footer_cores_few: "%{n} ядра"
 screener.footer_cores_many: "%{n} ядер"
+screener.empty_query_and_vol: "Нет монет по запросу «%{query}» (Vol. от %{vol})"
 screener.empty_vol_filter: "Нет монет с Vol. от %{vol} — очистите фильтр"
 
 screener.window_title: "MoonTerminal — Скринер"

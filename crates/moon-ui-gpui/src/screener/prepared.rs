@@ -3,6 +3,7 @@
 use super::auto_figures::AUTO_FIGURES_KEY;
 use super::grouped::{Aggregate, LevSummary, MemberAcct, aggregate, chart_core, group_slots};
 use super::table::{Entry, sort_indices};
+use moon_core::feed::ExchangeId;
 use moon_core::market::SharedScreenerRow;
 use moon_core::market::listing::Listing;
 use moon_core::session::CoreId;
@@ -34,7 +35,7 @@ pub(super) struct Prepared {
 }
 
 /// The latest partial core scope and its most recently requested publication sort.
-struct PartialGroups {
+pub(super) struct PartialGroups {
     ranks: Vec<Option<usize>>,
     groups: Vec<Option<GroupView>>,
     sort: Option<(String, bool)>,
@@ -132,6 +133,36 @@ pub(super) struct Selection {
     pub total: usize,
     pub shown: usize,
     pub cores_shown: usize,
+    pub filters: FilterMatches,
+}
+
+/// Evidence for what removed the last row, collected along the normal selection pass.
+#[derive(Default)]
+pub(super) struct FilterMatches {
+    pub market: bool,
+    pub without_volume: bool,
+}
+
+impl FilterMatches {
+    /// Record the Market match before the other filters, and the candidate before Vol.
+    fn admits(
+        &mut self,
+        row: &SelectionRow,
+        entry: &Entry,
+        text_matches: &[bool],
+        query: &super::view::CoinQuery,
+        min_vol: f64,
+    ) -> bool {
+        let market = text_matches[row.search];
+        self.market |= market;
+        let volume = min_vol <= 0.0 || min_vol.is_nan() || row.volume >= min_vol;
+        if !market || (!volume && self.without_volume) {
+            return false;
+        }
+        let without_volume = query.admits_listing(row.listing) && query.admits_scan(entry);
+        self.without_volume |= without_volume;
+        without_volume && volume
+    }
 }
 
 impl Prepared {
@@ -323,15 +354,11 @@ impl Prepared {
         let mut cores_shown = vec![false; self.cores.len()];
         let mut indices = Vec::with_capacity(self.entries.len());
         let text_matches = self.text_matches(coin);
-        let volume_active = min_vol > 0.0;
+        let mut filters = FilterMatches::default();
         let mut admit = |index: usize| {
             let row = &self.slots[index];
             total[row.market] = true;
-            if text_matches[row.search]
-                && (!volume_active || row.volume >= min_vol)
-                && coin.admits_listing(row.listing)
-                && coin.admits_scan(&self.entries[index])
-            {
+            if filters.admits(row, &self.entries[index], &text_matches, coin, min_vol) {
                 shown[row.market] = true;
                 cores_shown[row.core] = true;
                 indices.push(index);
@@ -363,6 +390,7 @@ impl Prepared {
             total: total.into_iter().filter(|&v| v).count(),
             shown: shown.into_iter().filter(|&v| v).count(),
             cores_shown: cores_shown.into_iter().filter(|&v| v).count(),
+            filters,
         }
     }
 
@@ -378,22 +406,45 @@ impl Prepared {
 
     /// Prepare the current partial scope off-thread with the next market publication.
     pub fn prime_partial_groups(&self, visible: &HashMap<CoreId, Option<usize>>) {
-        let ranks: Vec<_> = self
-            .cores
+        let ranks = self.ranks_for(visible);
+        if self.needs_scope_prime(&ranks, visible.len() > 1) {
+            self.install_partial_groups(self.prepare_partial_groups(ranks));
+        }
+    }
+
+    /// Map the admitted live sessions to the ranks of the cores in this publication.
+    pub(super) fn ranks_for(&self, visible: &HashMap<CoreId, Option<usize>>) -> Vec<Option<usize>> {
+        self.cores
             .iter()
             .map(|core| visible.get(core).copied().flatten())
-            .collect();
+            .collect()
+    }
+
+    /// A full scope is already prepared, and an empty scope has no groups to build.
+    pub(super) fn needs_scope_prime(&self, ranks: &[Option<usize>], grouped: bool) -> bool {
         let count = ranks.iter().flatten().count();
-        if (2..self.cores.len()).contains(&count) {
-            let mut cache = self.partial_group_cache(&ranks);
-            if self.sort_key != AUTO_FIGURES_KEY {
-                cache.as_mut().expect("partial groups cached").sort(
-                    self,
-                    &self.sort_key,
-                    self.sort_desc,
-                );
-            }
+        grouped
+            && (1..self.cores.len()).contains(&count)
+            && self
+                .partial_groups
+                .lock()
+                .expect("partial group cache")
+                .as_ref()
+                .is_none_or(|scope| scope.ranks != ranks)
+    }
+
+    /// Build a replacement without holding the cache lock on the published rows.
+    pub(super) fn prepare_partial_groups(&self, ranks: Vec<Option<usize>>) -> PartialGroups {
+        let mut scope = self.build_partial_groups(ranks);
+        if self.sort_key != AUTO_FIGURES_KEY {
+            scope.sort(self, &self.sort_key, self.sort_desc);
         }
+        scope
+    }
+
+    /// Install the completed membership after the caller checks its scope is still current.
+    pub(super) fn install_partial_groups(&self, scope: PartialGroups) {
+        *self.partial_groups.lock().expect("partial group cache") = Some(scope);
     }
 
     /// Cache visible groups for the current core scope, bounded to one scope per publication.
@@ -403,31 +454,36 @@ impl Prepared {
     ) -> std::sync::MutexGuard<'_, Option<PartialGroups>> {
         let mut cache = self.partial_groups.lock().expect("partial group cache");
         if cache.as_ref().is_none_or(|scope| scope.ranks != ranks) {
-            let visible = |index: usize| ranks[self.slots[index].core].is_some();
-            let groups = self
-                .market_groups
-                .iter()
-                .map(|full| {
-                    if full.members.iter().copied().all(visible) {
-                        return Some(full.clone());
-                    }
-                    let members: Vec<_> = full
-                        .members
-                        .iter()
-                        .copied()
-                        .filter(|&index| visible(index))
-                        .collect();
-                    (!members.is_empty()).then(|| GroupView::new(&self.entries, members.into()))
-                })
-                .collect();
-            *cache = Some(PartialGroups {
-                ranks: ranks.to_vec(),
-                groups,
-                sort: None,
-                sorted_leads: Vec::new(),
-            });
+            *cache = Some(self.build_partial_groups(ranks.to_vec()));
         }
         cache
+    }
+
+    /// Reaggregate only groups that lost members to the current scope.
+    fn build_partial_groups(&self, ranks: Vec<Option<usize>>) -> PartialGroups {
+        let visible = |index: usize| ranks[self.slots[index].core].is_some();
+        let groups = self
+            .market_groups
+            .iter()
+            .map(|full| {
+                if full.members.iter().copied().all(visible) {
+                    return Some(full.clone());
+                }
+                let members: Vec<_> = full
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(|&index| visible(index))
+                    .collect();
+                (!members.is_empty()).then(|| GroupView::new(&self.entries, members.into()))
+            })
+            .collect();
+        PartialGroups {
+            ranks,
+            groups,
+            sort: None,
+            sorted_leads: Vec::new(),
+        }
     }
 
     /// Filter venue markets on their first visible member and reuse scope totals and stable sorts.
@@ -440,6 +496,15 @@ impl Prepared {
         desc: bool,
     ) -> Selection {
         let allowed = ranks.iter().filter(|rank| rank.is_some()).count();
+        if allowed == 0 {
+            return Selection {
+                rows: Vec::new(),
+                total: 0,
+                shown: 0,
+                cores_shown: 0,
+                filters: FilterMatches::default(),
+            };
+        }
         let all_visible = allowed == self.cores.len();
         let scan_sort = key == AUTO_FIGURES_KEY;
         let cached_sort = !scan_sort && key == self.sort_key && desc == self.sort_desc;
@@ -485,7 +550,7 @@ impl Prepared {
             }
         };
         let text_matches = self.text_matches(coin);
-        let volume_active = min_vol > 0.0;
+        let mut filters = FilterMatches::default();
         let mut cores_shown = vec![false; self.cores.len()];
         let mut core_count = 0;
         let mut filtered: Vec<_> = leads
@@ -493,10 +558,7 @@ impl Prepared {
             .copied()
             .filter(|&lead| {
                 let row = &self.slots[lead];
-                text_matches[row.search]
-                    && (!volume_active || row.volume >= min_vol)
-                    && coin.admits_listing(row.listing)
-                    && coin.admits_scan(&self.entries[lead])
+                filters.admits(row, &self.entries[lead], &text_matches, coin, min_vol)
             })
             .collect();
         if scan_sort {
@@ -528,17 +590,14 @@ impl Prepared {
             rows,
             total: leads.len(),
             cores_shown: core_count,
+            filters,
         }
     }
 }
 
 /// Keep named venues separate from the fallback identity for unidentified providers.
-fn market_group_key(entry: &Entry) -> (Result<&str, CoreId>, &str) {
-    let venue = if entry.venue.label.is_empty() {
-        Err(entry.row.provider)
-    } else {
-        Ok(entry.venue.label.as_ref())
-    };
+fn market_group_key(entry: &Entry) -> (Result<ExchangeId, CoreId>, &str) {
+    let venue = entry.venue.id.ok_or(entry.row.provider);
     (venue, entry.row.market.as_str())
 }
 

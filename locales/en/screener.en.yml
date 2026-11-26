@@ -11,6 +11,7 @@ screener.core_group_more_many: "+%{n} more"
 screener.footer_cores_one: "%{n} core"
 screener.footer_cores_few: "%{n} cores"
 screener.footer_cores_many: "%{n} cores"
+screener.empty_query_and_vol: "No coins match “%{query}” (Vol. from %{vol})"
 screener.empty_vol_filter: "No coins with Vol. from %{vol} — clear the filter"
 
 screener.window_title: "MoonTerminal — Screener"

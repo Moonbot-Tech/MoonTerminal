@@ -1,30 +1,35 @@
 //! Synthetic Screener rows for the minimum-width rendering test.
 
+use gpui::prelude::FluentBuilder as _;
+
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-    Bounds, Context, IntoElement, ParentElement as _, Pixels, Render, Styled as _, TestAppContext,
-    VisualTestContext, WeakEntity, Window, div, px, size,
+    AppContext as _, Bounds, Context, IntoElement, ParentElement as _, Pixels, Render, Styled as _,
+    TestAppContext, VisualTestContext, WeakEntity, Window, div, px,
 };
 use moon_chart::auto_figures::scan::ScanAnswer;
 use moon_core::{
     config::UiThemeMode,
+    feed::ExchangeId,
     market::{ScreenerRow, listing::Listing},
-    venue::MarketKind,
+    venue::{Brand, MarketKind},
 };
-use moon_ui::{MoonDataTable, MoonDataTableColumn, MoonPalette, MoonTheme};
+use moon_ui::{MoonDataTable, MoonDataTableColumn, MoonDataTableState, MoonPalette, MoonTheme};
 
 use crate::screener::{
     auto_figures::{MarketScan, ScanBook},
     prepared::{Prepared, SelectedRow},
     table::{
-        COLS, ColDef, Entry, EntryVenue, RowStyle, column_label, screener_row, short_kind_captions,
-        short_listed_captions,
+        COLS, ColDef, Entry, EntryVenue, RowStyle, column_label, exchange_ellipsis_width,
+        screener_row, short_kind_captions, short_listed_captions,
     },
-    view::{CoinQuery, ScreenerView},
+    view::{CoinQuery, MIN_WINDOW_SIZE, ScreenerView},
 };
 
 pub(super) const LONG_COIN: &str = "XALPHAEXCEPTIONALLYLONGSYMBOL";
+pub(super) const LONG_CORE: &str = "CORE_XALPHA_LONG_LABEL_33";
+pub(super) const MIN_DRAG_WIDTH: f32 = 40.0;
 pub(super) const LONG_VENUE: &str = "XALPHA International Quarterly Futures Exchange";
 
 /// Create a grouped market with mixed leverage and a singleton with a long core name.
@@ -61,7 +66,8 @@ fn entry(core: u64) -> Entry {
         coin_uc: coin.into(),
         venue: EntryVenue {
             label: LONG_VENUE.into(),
-            brand: None,
+            id: Some(ExchangeId::new(4)),
+            brand: Some(Brand::Binance),
             kind: Some(MarketKind::Quarterly),
         },
     }
@@ -73,6 +79,7 @@ struct LayoutTable {
     rows: Rc<Vec<SelectedRow>>,
     cols: Rc<Vec<&'static ColDef>>,
     style: Rc<RowStyle>,
+    widths: Option<gpui::Entity<MoonDataTableState>>,
 }
 
 impl Render for LayoutTable {
@@ -98,23 +105,32 @@ impl Render for LayoutTable {
                 screener_row(&rows[ix], &prepared, &view, palette, &cols, &style)
             })
             .columns(columns)
+            .when_some(self.widths.as_ref(), |table, state| table.state(state))
             .style(crate::design::table_style(palette)),
         )
     }
 }
 
-/// Open a 900 by 480 fixture window in the light presentation theme.
-pub(super) fn open(cx: &mut TestAppContext, keys: &[&str]) -> VisualTestContext {
+/// Open the smallest supported Screener window, optionally with the narrowest Exchange resize.
+pub(super) fn open(
+    cx: &mut TestAppContext,
+    keys: &[&str],
+    narrow_exchange: bool,
+) -> VisualTestContext {
     cx.update(|cx| {
         MoonTheme::install_config(
             crate::startup::moon_theme_config_for_presentation(UiThemeMode::Light, 1.0),
             cx,
         );
     });
+    assert!(crate::media::exchange_logos::exchange_logo(Brand::Binance).is_some());
     let cols = Rc::new(COLS.iter().filter(|col| keys.contains(&col.0)).collect());
     let prepared = Arc::new(Prepared::new((0..34).map(entry).collect(), "market", false));
     let ranks: Vec<_> = (0..34).map(Some).collect();
-    let selection = prepared.select(&ranks, &CoinQuery::new(""), 0.0, "market", false, true);
+    let mut selection = prepared.select(&ranks, &CoinQuery::new(""), 0.0, "market", false, true);
+    if narrow_exchange {
+        selection.rows.truncate(1);
+    }
     let mut scans = ScanBook::default();
     let run = scans.begin(0, 1);
     assert!(scans.apply(
@@ -129,14 +145,22 @@ pub(super) fn open(cx: &mut TestAppContext, keys: &[&str]) -> VisualTestContext 
         )]
     ));
     let [both, spot_only, futures_only] = short_listed_captions();
-    let window = cx.open_window(size(px(900.0), px(480.0)), move |_, _| LayoutTable {
+    let window = cx.open_window(MIN_WINDOW_SIZE, move |_, cx| LayoutTable {
+        widths: narrow_exchange.then(|| {
+            cx.new(|_| {
+                let mut state = MoonDataTableState::default();
+                state.set_column_width("exchange", MIN_DRAG_WIDTH);
+                state
+            })
+        }),
         prepared,
         rows: Rc::new(selection.rows),
         cols,
         style: Rc::new(RowStyle {
-            logos_ready: false,
+            logos_ready: true,
             logo_px: px(13.0),
             logo_gap: px(5.0),
+            exchange_ellipsis: exchange_ellipsis_width(cx),
             kinds: short_kind_captions(),
             both,
             spot_only,

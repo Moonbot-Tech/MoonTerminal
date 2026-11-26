@@ -11,6 +11,7 @@ screener.core_group_more_many: "另有 %{n} 个"
 screener.footer_cores_one: "%{n} 个内核"
 screener.footer_cores_few: "%{n} 个内核"
 screener.footer_cores_many: "%{n} 个内核"
+screener.empty_query_and_vol: "没有币种匹配“%{query}”（Vol. 至少为 %{vol}）"
 screener.empty_vol_filter: "没有 Vol. 达到 %{vol} 的币种，请清除筛选条件"
 
 screener.window_title: "MoonTerminal — 筛选器"

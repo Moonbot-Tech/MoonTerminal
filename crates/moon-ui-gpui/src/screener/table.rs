@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone, MoonTooltipView};
+use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTheme, MoonTone, MoonTooltipView};
 use rust_i18n::t;
 
 use moon_core::config::{TableSortPreference, WindowLayout};
@@ -339,6 +339,8 @@ pub(super) struct Entry {
 /// not identified yet.
 #[derive(Clone, Default)]
 pub(super) struct EntryVenue {
+    /// Market-data identity, independent of its caption or whether it can be named.
+    pub(super) id: Option<moon_core::feed::ExchangeId>,
     /// The venue caption, such as `Binance Futures`; empty until the core is identified.
     pub(super) label: SharedString,
     /// The brand whose logo stands beside the caption; `None` for a platform this build cannot
@@ -511,6 +513,7 @@ pub(super) struct RowStyle {
     /// Edge of a logo and the gap after it, already in theme pixels.
     pub(super) logo_px: Pixels,
     pub(super) logo_gap: Pixels,
+    pub(super) exchange_ellipsis: Pixels,
     /// Captions of the three market kinds, in [`kind_rank`] order.
     pub(super) kinds: [SharedString; 3],
     pub(super) both: SharedString,
@@ -540,7 +543,18 @@ pub(super) fn short_listed_captions() -> [SharedString; 3] {
     ]
 }
 
-/// Keep the venue logo visible and show the full caption on hover.
+const EXCHANGE_FONT_SIZE: f32 = 10.5;
+
+/// Reserve enough room for the ellipsis at the current table font and scale.
+pub(super) fn exchange_ellipsis_width(cx: &App) -> Pixels {
+    let tokens = MoonTheme::active_tokens(cx);
+    let text = cx.text_system();
+    let font = text.resolve_font(&font(tokens.font_family(true)));
+    text.layout_width(font, px(tokens.font(EXCHANGE_FONT_SIZE)), '…')
+        .ceil()
+}
+
+/// Keep the caption on the first line even when the logo has to wrap out of sight.
 fn exchange_cell(venue: &EntryVenue, style: &RowStyle) -> MoonDataCell {
     let logo = style
         .logos_ready
@@ -548,20 +562,46 @@ fn exchange_cell(venue: &EntryVenue, style: &RowStyle) -> MoonDataCell {
         .flatten()
         .and_then(crate::media::exchange_logos::exchange_logo);
     let (logo_px, logo_gap) = (style.logo_px, style.logo_gap);
+    let minimum_caption = style.exchange_ellipsis;
+    let inset = if logo.is_some() {
+        logo_px + logo_gap
+    } else {
+        px(0.0)
+    };
     MoonDataCell::element(
         div()
             .min_w_0()
             .w_full()
             .h_full()
+            .overflow_hidden()
+            // The caption is the first flex item, so wrapping keeps it and clips the logo.
             .flex()
+            .flex_row_reverse()
+            .flex_wrap()
+            .content_start()
             .items_center()
             .gap(logo_gap)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(minimum_caption)
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .child(div().min_w_0().truncate().child(venue.label.clone())),
+            )
             .when_some(logo, |cell, logo| {
-                cell.child(img(logo).flex_none().w(logo_px).h(logo_px))
-            })
-            .child(div().min_w_0().truncate().child(venue.label.clone())),
+                cell.child(
+                    div()
+                        .debug_selector(|| "screener-exchange-logo".to_string())
+                        .flex_none()
+                        .size(logo_px)
+                        .child(img(logo).size_full()),
+                )
+            }),
     )
-    .tooltip(venue.label.clone())
+    .font_size(EXCHANGE_FONT_SIZE)
+    .overflow_tooltip_with_inset(venue.label.clone(), inset, minimum_caption)
 }
 
 /// Format a leverage summary with a compact suffix for its known margin modes.
@@ -830,6 +870,13 @@ impl MarketTarget {
         }
     }
 
+    /// Limit grouped menu actions to cores represented by the clicked row.
+    pub(super) fn admits_core(&self, core: CoreId) -> bool {
+        self.members
+            .as_ref()
+            .is_none_or(|members| members.contains(&core))
+    }
+
     /// Identify the displayed row for copy, even when a different member owns the chart.
     pub(super) fn copy_identity(&self) -> (CoreId, &str) {
         (self.lead_core, &self.market)
@@ -857,12 +904,7 @@ fn open_screener_coin_menu(
             .iter()
             .map(|session| session.id)
             .filter(|&id| b.core_displayed(preset, id) && panel.source_admits(id, venues))
-            .filter(|id| {
-                target
-                    .members
-                    .as_ref()
-                    .is_none_or(|members| members.contains(id))
-            })
+            .filter(|&id| target.admits_core(id))
             .collect();
         let name = sessions
             .iter()
@@ -918,7 +960,6 @@ fn market_cell(
             .items_center()
             .cursor_pointer()
             .text_color(rgb(MoonTone::Accent.color(p)))
-            .font_weight(FontWeight::MEDIUM)
             .child(div().min_w_0().truncate().child(label.clone()))
             .on_click(move |_, _window, app| {
                 let chart = &row.chart_entry(&prepared.entries).row;
@@ -936,7 +977,8 @@ fn market_cell(
                 },
             ),
     )
-    .tooltip(label)
+    .weight(500.0)
+    .overflow_tooltip(label)
 }
 
 #[cfg(test)]

@@ -27,11 +27,11 @@ use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
 use super::auto_figures::ScanQuery;
-use super::prepared::SelectedRow;
+use super::prepared::{FilterMatches, SelectedRow};
 use super::table::{
     COLS, ColDef, DEFAULT_MIN_VOL, DEFAULT_SORT, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE,
-    column_label, column_title, migrate_layout, moon, moon_alpha, parse_vol,
-    reset_layout_to_default, restore_visible_columns, screener_row, short_kind_captions,
+    column_label, column_title, exchange_ellipsis_width, migrate_layout, moon, moon_alpha,
+    parse_vol, reset_layout_to_default, restore_visible_columns, screener_row, short_kind_captions,
     short_listed_captions,
 };
 
@@ -54,6 +54,9 @@ const LISTED_CHOICES: [Listing; 4] = [
 ];
 
 const SCREENER_HEADER_H: f32 = 32.0;
+
+/// Smallest window accepted by the Screener's native host.
+pub(in crate::screener) const MIN_WINDOW_SIZE: Size<Pixels> = size(px(900.0), px(480.0));
 
 /// Owned counts reused across publications until the corresponding core receives new orders.
 type OrderCounts = Arc<HashMap<String, u32>>;
@@ -131,6 +134,10 @@ pub struct ScreenerView {
     prepare_task: Option<Task<()>>,
     /// Publication identity independent of user controls, which apply to either snapshot.
     prepare_seq: u64,
+    /// Membership being prepared for the current publication and its cancellable UI handoff.
+    scope_prime: Option<(Vec<Option<usize>>, Task<()>)>,
+    /// Which filters had candidates in the last selection, before applying the volume limit.
+    filter_matches: FilterMatches,
     order_counts: OrderCountMemo,
     /// Distinct markets before the coin and volume filters, the footer's "total".
     total: usize,
@@ -364,6 +371,8 @@ impl ScreenerView {
             prepared: Default::default(),
             prepare_task: None,
             prepare_seq: 0,
+            scope_prime: None,
+            filter_matches: FilterMatches::default(),
             order_counts: OrderCountMemo::default(),
             total: 0,
             shown: 0,
@@ -434,7 +443,7 @@ impl ScreenerView {
             .update_fleet_epoch(store.time_offset_epoch());
         for session in b.session.sessions() {
             names.insert(session.id, SharedString::from(session.name.clone()));
-            if let Some(venue) = core_venues.get(&session.id).filter(|v| v.is_nameable()) {
+            if let Some(venue) = core_venues.get(&session.id) {
                 venues.insert(session.id, entry_venue(venue));
             }
             if let Some(data) = store.core(session.id) {
@@ -489,6 +498,7 @@ impl ScreenerView {
                 if this.prepare_seq != seq {
                     return;
                 }
+                this.scope_prime = None;
                 this.prepared = prepared;
                 // The source snapshot is unfiltered: completion always applies the LATEST
                 // source, scope, text, volume and sort, never the controls a job started with.
@@ -542,13 +552,14 @@ impl ScreenerView {
                 && type_admits(type_sel, kind_of(venues.get(core)))
         });
         displayed.retain(|&core, rank| rank.is_some() && self.source_admits(core, venues));
-        let allowed: Vec<_> = self
-            .prepared
-            .cores
-            .iter()
-            .map(|core| displayed.get(core).copied().flatten())
-            .collect();
-        let grouped = allowed.iter().filter(|rank| rank.is_some()).take(2).count() > 1;
+        let allowed = self.prepared.ranks_for(&displayed);
+        let grouped = grouped_scope(&displayed);
+        self.grouped_scope = grouped;
+        if self.prepared.needs_scope_prime(&allowed, grouped) {
+            self.prime_scope(allowed, cx);
+            return displayed;
+        }
+        self.scope_prime = None;
         let selection = self.prepared.select(
             &allowed,
             &coin,
@@ -565,8 +576,38 @@ impl ScreenerView {
         self.total = selection.total;
         self.shown = selection.shown;
         self.cores_shown = selection.cores_shown;
-        self.grouped_scope = grouped;
+        self.filter_matches = selection.filters;
         displayed
+    }
+
+    /// Rebuild the current publication's membership off the UI thread when the scope changes.
+    /// Hide the previous scope's rows until the replacement is ready for navigation.
+    fn prime_scope(&mut self, ranks: Vec<Option<usize>>, cx: &mut Context<Self>) {
+        if self
+            .scope_prime
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending == ranks)
+        {
+            return;
+        }
+        self.rows = Rc::default();
+        self.total = 0;
+        self.shown = 0;
+        self.cores_shown = 0;
+        let prepared = Arc::clone(&self.prepared);
+        let pending = ranks.clone();
+        let job = cx.background_spawn(async move { prepared.prepare_partial_groups(ranks) });
+        self.scope_prime = Some((
+            pending,
+            cx.spawn(async move |this, cx| {
+                let scope = job.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.prepared.install_partial_groups(scope);
+                    this.filter_cached(cx);
+                    cx.notify();
+                });
+            }),
+        ));
     }
 
     /// Apply the header order immediately and refresh its source data for the next publication.
@@ -838,6 +879,7 @@ impl ScreenerView {
             logos_ready: self.exchange_logos_ready,
             logo_px: design::ui_px(cx, 13.0),
             logo_gap: design::ui_px(cx, 5.0),
+            exchange_ellipsis: exchange_ellipsis_width(cx),
             kinds: short_kind_captions(),
             both,
             spot_only,
@@ -864,12 +906,18 @@ impl ScreenerView {
                 self.scope_marker.as_ref(),
                 if self.sessions_total == 0 {
                     t!("screener.empty").to_string()
+                } else if self.scope_prime.is_some() {
+                    t!("common.loading").to_string()
                 } else if let Some(text) = self.scan_empty_text() {
                     text
                 } else if let Some(seconds) = self.listed_wait_seconds() {
                     t!("screener.listed_collecting", n = seconds).to_string()
                 } else if self.has_displayed_rows {
-                    empty_filter_text(&self.dvol_input.read(cx).value())
+                    empty_filter_text(
+                        &self.dvol_input.read(cx).value(),
+                        &self.coin_input.read(cx).value(),
+                        &self.filter_matches,
+                    )
                 } else {
                     t!("screener.empty_no_data").to_string()
                 },
@@ -1297,13 +1345,22 @@ fn footer_counter(shown: usize, total: usize, cores: Option<usize>) -> String {
     }
 }
 
-/// Name a positive volume threshold as typed when the published rows were filtered out.
-fn empty_filter_text(raw_vol: &str) -> String {
+/// Group by the selector's admitted sessions, including cores awaiting their first publication.
+fn grouped_scope(admitted: &HashMap<CoreId, Option<usize>>) -> bool {
+    admitted.len() > 1
+}
+
+/// Explain the empty result using the filters that can account for it.
+fn empty_filter_text(raw_vol: &str, query: &str, matches: &FilterMatches) -> String {
     if parse_vol(raw_vol.trim()) > 0.0 {
-        t!("screener.empty_vol_filter", vol = raw_vol).to_string()
-    } else {
-        t!("screener.empty_filtered").to_string()
+        if matches.without_volume {
+            return t!("screener.empty_vol_filter", vol = raw_vol).to_string();
+        }
+        if !query.trim().is_empty() && !matches.market {
+            return t!("screener.empty_query_and_vol", query = query, vol = raw_vol).to_string();
+        }
     }
+    t!("screener.empty_filtered").to_string()
 }
 
 /// Tick or untick one choice of a list whose empty selection means "all".
@@ -1492,7 +1549,12 @@ fn kind_of(venue: Option<&CoreVenue>) -> Option<MarketKind> {
 /// logo, and its market kind.
 fn entry_venue(venue: &CoreVenue) -> EntryVenue {
     EntryVenue {
-        label: crate::controls::venue_label(venue).into(),
+        id: Some(venue.id),
+        label: if venue.is_nameable() {
+            crate::controls::venue_label(venue).into()
+        } else {
+            SharedString::default()
+        },
         brand: venue.brand(),
         kind: kind_of(Some(venue)),
     }
@@ -1720,7 +1782,7 @@ pub fn open(
             saved,
             crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
         ),
-        Some(size(px(900.0), px(480.0))),
+        Some(MIN_WINDOW_SIZE),
         owner,
     );
     opts.display_id = display_id;

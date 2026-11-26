@@ -99,6 +99,7 @@ fn non_lead_chart_core_keeps_copy_through_grouped_row() {
         entry(1, "XGAMMAUSDT", "XGAMMA"),
     ];
     for member in &mut members {
+        member.venue.id = Some(moon_core::feed::ExchangeId::new(4));
         member.venue.label = "VENUE".into();
     }
     members[2].row.orders = 1;

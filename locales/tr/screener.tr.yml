@@ -11,6 +11,7 @@ screener.core_group_more_many: "%{n} tane daha"
 screener.footer_cores_one: "%{n} çekirdek"
 screener.footer_cores_few: "%{n} çekirdek"
 screener.footer_cores_many: "%{n} çekirdek"
+screener.empty_query_and_vol: "“%{query}” sorgusuyla eşleşen coin yok (Vol. alt sınırı %{vol})"
 screener.empty_vol_filter: "Vol. değeri %{vol} ve üzeri olan coin yok — filtreyi temizle"
 
 screener.window_title: "MoonTerminal — Tarayıcı"

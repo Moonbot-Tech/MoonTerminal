@@ -14,14 +14,15 @@ use super::{
 /// Keep long grouped and singleton values inside their default-width columns in both locales.
 #[gpui::test]
 fn default_view_cells_stay_inside_columns_at_min_width_ru_en(cx: &mut gpui::TestAppContext) {
-    use gpui::{Modifiers, px};
-    use layout_fixture::{LONG_COIN, LONG_VENUE, bounds, draw, inside};
+    use crate::screener::view::MIN_WINDOW_SIZE;
+    use gpui::{Modifiers, point, px};
+    use layout_fixture::{LONG_COIN, LONG_CORE, LONG_VENUE, MIN_DRAG_WIDTH, bounds, draw, inside};
     use std::time::Duration;
 
     for locale in ["ru", "en"] {
         let _locale = crate::test_locale::force(locale);
         let clock = cx.background_executor.clone();
-        let mut visual = layout_fixture::open(cx, super::DEFAULT_COLS);
+        let mut visual = layout_fixture::open(cx, super::DEFAULT_COLS, false);
         draw(&mut visual);
 
         for row in 0..2 {
@@ -39,15 +40,63 @@ fn default_view_cells_stay_inside_columns_at_min_width_ru_en(cx: &mut gpui::Test
                     "{locale} row {row} {key} overlaps its left neighbor"
                 );
                 assert!(
-                    cell.right() <= px(900.5),
+                    cell.right() <= MIN_WINDOW_SIZE.width + px(0.5),
                     "{locale} row {row} {key} lies past the window edge"
                 );
                 previous_right = content.right();
             }
         }
 
-        for (col, full_text) in [(0, LONG_COIN), (1, LONG_VENUE)] {
-            let cell = bounds(&mut visual, format!("moon-table-cell-0-{col}-content"));
+        // Check every default column against its fixture caption. The layout context uses
+        // GPUI's deterministic monospace font, so the advance predicts which values must clip.
+        let glyph_width = cx.update(|app| {
+            let tokens = moon_ui::MoonTheme::active_tokens(app);
+            let text = app.text_system();
+            let font = text.resolve_font(&gpui::font(tokens.font_family(true)));
+            text.layout_width(font, px(tokens.font(10.5)), '0')
+        });
+        let volumes = [1_234_567.0, 98_765.0, 12_345.0]
+            .map(|volume| moon_core::util::fmt::short(volume, moon_core::util::fmt::Form::Label));
+        let age = crate::chartdx::auto_figures_sync::caption::age_text(987_654_321.0);
+        let auto_figures = rust_i18n::t!("screener.af_stale", age = age);
+        for (row, key, full_text, always_overflows) in [
+            (0, "market", LONG_COIN, true),
+            (0, "exchange", LONG_VENUE, true),
+            (1, "core", LONG_CORE, true),
+            (0, "vol24", &volumes[0], false),
+            (0, "hvol", &volumes[1], false),
+            (0, "vol5m", &volumes[2], false),
+            (0, "ask", "0.00000002972", true),
+            (0, "d24h", "25.3%", false),
+            (0, "d1h", "14.3%", false),
+            (0, "d15m", "2.3%", false),
+            (0, "funding", "-0.08%", false),
+            (0, "lev", "5–20 / 20 I/C", false),
+            (0, "orders", "297", false),
+            (0, "pnl", "-638.55$", false),
+            (0, "pos", "32592593", false),
+            (0, "auto_figures", auto_figures.as_ref(), false),
+        ] {
+            let col = super::DEFAULT_COLS
+                .iter()
+                .position(|&column| column == key)
+                .unwrap();
+            let cell = bounds(&mut visual, format!("moon-table-cell-{row}-{col}-content"));
+            let shaped_width = glyph_width * full_text.chars().count() as f32;
+            if !always_overflows && shaped_width.floor() <= cell.size.width {
+                continue;
+            }
+            // Clear the previous tooltip before moving over the next value. Its overlay
+            // can otherwise cover the adjacent row in this small fixture.
+            visual.simulate_mouse_move(
+                point(
+                    MIN_WINDOW_SIZE.width - px(1.0),
+                    MIN_WINDOW_SIZE.height - px(1.0),
+                ),
+                None,
+                Modifiers::none(),
+            );
+            draw(&mut visual);
             visual.simulate_mouse_move(cell.center(), None, Modifiers::none());
             draw(&mut visual);
             clock.advance_clock(Duration::from_millis(900));
@@ -55,10 +104,36 @@ fn default_view_cells_stay_inside_columns_at_min_width_ru_en(cx: &mut gpui::Test
             bounds(&mut visual, format!("moon-table-cell-tooltip:{full_text}"));
         }
 
+        let logo = bounds(&mut visual, "screener-exchange-logo".into());
+        assert!(
+            (0..2).any(|row| inside(
+                logo,
+                bounds(&mut visual, format!("moon-table-cell-{row}-1"))
+            )),
+            "the loaded logo must fit the default Exchange cell"
+        );
+
+        let mut narrow = layout_fixture::open(cx, &["exchange"], true);
+        draw(&mut narrow);
+        let cell = bounds(&mut narrow, "moon-table-cell-0-0".into());
+        assert_eq!(cell.size.width, px(MIN_DRAG_WIDTH));
+        if let Some(logo) = narrow.debug_bounds("screener-exchange-logo") {
+            assert!(
+                logo.top() >= cell.bottom(),
+                "the logo would leave no room for the ellipsis"
+            );
+        }
+        let caption = bounds(&mut narrow, "moon-table-cell-0-0-content".into());
+        narrow.simulate_mouse_move(caption.center(), None, Modifiers::none());
+        draw(&mut narrow);
+        clock.advance_clock(Duration::from_millis(900));
+        draw(&mut narrow);
+        bounds(&mut narrow, format!("moon-table-cell-tooltip:{LONG_VENUE}"));
+
         // These optional columns share the production renderer and must fit when enabled.
         let mut keys = super::DEFAULT_COLS.to_vec();
         keys.extend([super::TYPE_KEY, super::LISTED_KEY, "step"]);
-        let mut visual = layout_fixture::open(cx, &keys);
+        let mut visual = layout_fixture::open(cx, &keys, false);
         draw(&mut visual);
         for key in [super::TYPE_KEY, super::LISTED_KEY, "step"] {
             let col = COLS
@@ -209,8 +284,8 @@ fn venue_columns_sort_by_exchange_kind_and_listing() {
         coin_uc: "".into(),
         venue: EntryVenue {
             label: label.to_string().into(),
-            brand: None,
             kind,
+            ..Default::default()
         },
     };
     let rows = || {
@@ -623,6 +698,7 @@ fn member(core: u64) -> super::Entry {
         market_uc: "XALPHAUSDT".into(),
         coin_uc: "XALPHA".into(),
         venue: super::EntryVenue {
+            id: Some(moon_core::feed::ExchangeId::new(4)),
             label: "VENUE".into(),
             ..Default::default()
         },

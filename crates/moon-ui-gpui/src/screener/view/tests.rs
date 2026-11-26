@@ -137,23 +137,39 @@ fn the_column_migration_records_its_completion() {
     assert!(block.contains("b.layout_dirty = true;"));
 }
 
-/// The menu reset uses the same saved defaults as migration and reapplies them to the live view.
+/// Reset an already migrated layout whose visible columns, sort, widths, and order were edited.
 #[test]
-fn restore_default_view_resets_cols_sort_filter() {
-    let source = include_str!("../view.rs");
-    let restore = source
-        .split_once("fn restore_default_view(")
-        .unwrap()
-        .1
-        .split_once("fn persist_visible_cols(")
-        .unwrap()
-        .0;
-    assert!(restore.contains("reset_layout_to_default(&mut b.layout, &id)"));
-    assert!(restore.contains("self.visible_cols = restore_visible_columns(None)"));
-    assert!(restore.contains("table_persist::reset(&self.table_state, cx)"));
-    assert!(restore.contains("state.column_order.clear()"));
-    assert!(restore.contains("state.set_value(DEFAULT_MIN_VOL, window, cx)"));
-    assert!(restore.contains("self.apply_sort((DEFAULT_SORT.0.to_string(), DEFAULT_SORT.1)"));
+fn restore_default_view_resets_saved_layout() {
+    use super::super::table::DEFAULT_COLS;
+    use moon_core::config::{TableSortPreference, WindowLayout};
+
+    let id = "screener-table:win";
+    let mut layout = WindowLayout::default();
+    super::super::table::migrate_layout(&mut layout, id);
+    layout
+        .table_visible_columns
+        .insert(id.into(), vec!["market".into(), "ask".into()]);
+    layout.table_sorts.insert(
+        id.into(),
+        TableSortPreference {
+            column: "ask".into(),
+            ascending: true,
+        },
+    );
+    layout
+        .table_column_widths
+        .insert(id.into(), [("ask".into(), 150.0)].into());
+    layout
+        .table_column_order
+        .insert(id.into(), vec!["ask".into(), "market".into()]);
+
+    super::reset_layout_to_default(&mut layout, id);
+
+    assert_eq!(layout.table_visible_columns[id], DEFAULT_COLS);
+    let sort = &layout.table_sorts[id];
+    assert_eq!((sort.column.as_str(), !sort.ascending), super::DEFAULT_SORT);
+    assert!(!layout.table_column_widths.contains_key(id));
+    assert!(!layout.table_column_order.contains_key(id));
 }
 use std::collections::HashSet;
 
@@ -681,6 +697,7 @@ fn opened_mark_matches_any_group_member() {
             coin_uc: "XALPHA".into(),
             venue: super::EntryVenue {
                 label: "VENUE".into(),
+                id: Some(moon_core::feed::ExchangeId::new(4)),
                 ..Default::default()
             },
         })
@@ -727,17 +744,95 @@ fn footer_counter_names_cores_on_multi_scope() {
     }
 }
 
-/// Keep the typed threshold and show generic filter help when the threshold is inactive.
+/// A second admitted core still activates grouping before publishing its first row.
+#[test]
+fn all_core_scope_groups_before_the_second_core_publishes() {
+    use super::super::{prepared::Prepared, table::MarketTarget};
+
+    let _locale = crate::test_locale::force("en");
+    let prepared = Prepared::new(vec![filter_entry()], "market", false);
+    let admitted = [(1, Some(0)), (2, Some(1))].into();
+    let grouped = super::grouped_scope(&admitted);
+    let selection = prepared.select(
+        &prepared.ranks_for(&admitted),
+        &super::CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        grouped,
+    );
+
+    assert!(selection.rows[0].group.is_some());
+    assert_eq!(
+        super::footer_counter(
+            selection.shown,
+            selection.total,
+            grouped.then_some(selection.cores_shown)
+        ),
+        "1 / 1 coins · 1 core"
+    );
+    let target = MarketTarget::new(&selection.rows[0], &prepared.entries);
+    assert!(target.admits_core(1));
+    assert!(!target.admits_core(2));
+}
+
+/// A single published market passes ticker filtering but fails the default volume threshold.
+fn filter_entry() -> Entry {
+    Entry {
+        row: ScreenerRow {
+            core: 1,
+            provider: 1,
+            market: "XALPHAUSDT".into(),
+            coin: "XALPHA".into(),
+            vol_24h: 100_000.0,
+            ..Default::default()
+        }
+        .into(),
+        core_name: "CORE_A".into(),
+        market_uc: "XALPHAUSDT".into(),
+        coin_uc: "XALPHA".into(),
+        venue: Default::default(),
+    }
+}
+
+/// Blame volume alone only if dropping the limit would actually show a row.
 #[test]
 fn empty_text_names_active_vol_filter() {
-    use super::empty_filter_text;
-    for (locale, expected) in [
-        ("ru", "Нет монет с Vol. от 1,5M — очистите фильтр"),
-        ("en", "No coins with Vol. from 1,5M — clear the filter"),
+    use super::super::prepared::Prepared;
+    use super::{CoinQuery, empty_filter_text, parse_vol};
+
+    let prepared = Prepared::new(vec![filter_entry()], "market", false);
+    let vol = super::DEFAULT_MIN_VOL;
+    for (locale, combined, volume) in [
+        (
+            "ru",
+            "Нет монет по запросу «XBETA» (Vol. от 1m)",
+            "Нет монет с Vol. от 1m — очистите фильтр",
+        ),
+        (
+            "en",
+            "No coins match “XBETA” (Vol. from 1m)",
+            "No coins with Vol. from 1m — clear the filter",
+        ),
     ] {
         let _locale = crate::test_locale::force(locale);
-        assert_eq!(empty_filter_text("1,5M"), expected);
-        assert_eq!(empty_filter_text("0m"), empty_filter_text(""));
-        assert_eq!(empty_filter_text("garbage"), empty_filter_text(""));
+        for grouped in [false, true] {
+            for (query, expected) in [("XBETA", combined), ("XALPHA", volume)] {
+                let selection = prepared.select(
+                    &[Some(0)],
+                    &CoinQuery::new(query),
+                    parse_vol(vol),
+                    "market",
+                    false,
+                    grouped,
+                );
+                assert!(selection.rows.is_empty());
+                assert_eq!(empty_filter_text(vol, query, &selection.filters), expected);
+                assert_eq!(
+                    empty_filter_text("0m", query, &selection.filters),
+                    empty_filter_text("", query, &selection.filters)
+                );
+            }
+        }
     }
 }

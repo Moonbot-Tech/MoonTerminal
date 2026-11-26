@@ -11,6 +11,7 @@ screener.core_group_more_many: "thêm %{n}"
 screener.footer_cores_one: "%{n} lõi"
 screener.footer_cores_few: "%{n} lõi"
 screener.footer_cores_many: "%{n} lõi"
+screener.empty_query_and_vol: "Không có đồng nào khớp với “%{query}” (Vol. từ %{vol})"
 screener.empty_vol_filter: "Không có coin có Vol. từ %{vol} — hãy xóa bộ lọc"
 
 screener.window_title: "MoonTerminal — Bộ lọc"
