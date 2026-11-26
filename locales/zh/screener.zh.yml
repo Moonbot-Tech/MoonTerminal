@@ -2,6 +2,18 @@
 # Column headers (Vol./ASK/Funding/…) are Moonbot domain tokens and remain untranslated in code.
 _version: 1
 
+screener.core_group_one: "%{n} 个内核"
+screener.core_group_few: "%{n} 个内核"
+screener.core_group_many: "%{n} 个内核"
+screener.core_group_more_one: "另有 %{n} 个"
+screener.core_group_more_few: "另有 %{n} 个"
+screener.core_group_more_many: "另有 %{n} 个"
+screener.footer_cores_one: "%{n} 个内核"
+screener.footer_cores_few: "%{n} 个内核"
+screener.footer_cores_many: "%{n} 个内核"
+screener.empty_query_and_vol: "没有币种匹配“%{query}”（Vol. 至少为 %{vol}）"
+screener.empty_vol_filter: "没有 Vol. 达到 %{vol} 的币种，请清除筛选条件"
+
 screener.window_title: "MoonTerminal — 筛选器"
 # Three different reasons the coin table can be empty, three different sentences. `screener.empty`
 # is the only one that asks for an action, so it is reserved for the only case where that action
@@ -22,10 +34,19 @@ screener.all_cores: "全部内核"
 screener.cores_n: "内核：%{n}"
 screener.columns: "列"
 # The cross-listing column and the list that filters it. The three values are Moonbot's own words for its
-# `ListedType` strategy filter and stay English in every language, like the market kinds.
+# `ListedType` strategy filter and stay English in the filter menu.
 screener.listed_both: "Both"
 screener.listed_spot_only: "Spot Only"
 screener.listed_futures_only: "Futures Only"
+
+# Short localized captions for Type and Listed cells.
+screener.kind_short_spot: "现货"
+screener.kind_short_futures: "合约"
+screener.kind_short_quarterly: "季度"
+screener.listed_short_both: "两者"
+screener.listed_short_spot_only: "现货"
+screener.listed_short_futures_only: "合约"
+screener.default_view: "默认视图"
 # The auto-figures column (docs-internal/AUTO_FIGURES.md 13.4): its filter list and approach box,
 # the Calculate button with its progress (`%{done}` of `%{total}` markets) and tooltips, the words a
 # cell shows, and what an empty table says while the filter has nothing to go by. The column's own

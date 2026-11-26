@@ -2,6 +2,18 @@
 # Column headers (Vol./ASK/Funding/…) are Moonbot domain tokens and remain untranslated in code.
 _version: 1
 
+screener.core_group_one: "%{n} núcleo"
+screener.core_group_few: "%{n} núcleos"
+screener.core_group_many: "%{n} núcleos"
+screener.core_group_more_one: "%{n} más"
+screener.core_group_more_few: "%{n} más"
+screener.core_group_more_many: "%{n} más"
+screener.footer_cores_one: "%{n} núcleo"
+screener.footer_cores_few: "%{n} núcleos"
+screener.footer_cores_many: "%{n} núcleos"
+screener.empty_query_and_vol: "No hay monedas que coincidan con «%{query}» (Vol. desde %{vol})"
+screener.empty_vol_filter: "No hay monedas con Vol. desde %{vol} — borra el filtro"
+
 screener.window_title: "MoonTerminal — Screener"
 # Three different reasons the coin table can be empty, three different sentences. `screener.empty`
 # is the only one that asks for an action, so it is reserved for the only case where that action
@@ -22,10 +34,19 @@ screener.all_cores: "Todos los núcleos"
 screener.cores_n: "Núcleos: %{n}"
 screener.columns: "Columnas"
 # The cross-listing column and the list that filters it. The three values are Moonbot's own words for its
-# `ListedType` strategy filter and stay English in every language, like the market kinds.
+# `ListedType` strategy filter and stay English in the filter menu.
 screener.listed_both: "Both"
 screener.listed_spot_only: "Spot Only"
 screener.listed_futures_only: "Futures Only"
+
+# Short localized captions for Type and Listed cells.
+screener.kind_short_spot: "Cont."
+screener.kind_short_futures: "Futu."
+screener.kind_short_quarterly: "Trim."
+screener.listed_short_both: "Ambos"
+screener.listed_short_spot_only: "Cont."
+screener.listed_short_futures_only: "Futu."
+screener.default_view: "Vista predeterminada"
 # The auto-figures column (docs-internal/AUTO_FIGURES.md 13.4): its filter list and approach box,
 # the Calculate button with its progress (`%{done}` of `%{total}` markets) and tooltips, the words a
 # cell shows, and what an empty table says while the filter has nothing to go by. The column's own

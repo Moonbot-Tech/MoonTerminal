@@ -43,11 +43,11 @@ fn bench_s_screener_keystroke() {
     let ranks: Vec<_> = (0..20).map(Some).collect();
     let query = CoinQuery::new("XA");
     bench::measure("screener_keystroke_warm_filtered_cached_sort", 24, || {
-        let (indices, total, shown) = publication.select(&ranks, &query, 0.0, "vol24", true);
-        assert_eq!(total, 60_000);
-        assert_eq!(shown, 59_980);
-        assert_eq!(indices.len(), shown);
-        (indices, total, shown)
+        let selection = publication.select(&ranks, &query, 0.0, "vol24", true, false);
+        assert_eq!(selection.total, 60_000);
+        assert_eq!(selection.shown, 59_980);
+        assert_eq!(selection.rows.len(), selection.shown);
+        selection
     });
 }
 
@@ -123,45 +123,53 @@ fn controls_resample_market_data_after_immediate_cached_selection() {
     assert!(rebuild.find("self.filter_cached(cx);").unwrap() < rebuild.find("cx.spawn(").unwrap());
 }
 
-/// The column migration runs once: guard first, the stored sets next, then the marker, then an
-/// unconditional dirty mark so the marker reaches disk.
-///
-/// Mutation: drop the marker write, or mark the layout dirty only when a set changed. Either way
-/// the guard never short-circuits on a later open, and a Coin column the user has hidden comes
-/// back every time the window opens. Pinned as a source contract because the block runs inside a
-/// view constructor, which needs a native GPUI window.
+/// The view constructor saves the result of the one-time layout migration.
 #[test]
 fn the_column_migration_records_its_completion() {
     let source = include_str!("../view.rs");
     let block = source
-        .split_once("b.layout.screener_columns_migration.unwrap_or(0)")
-        .expect("the migration must be guarded by its marker")
+        .split_once("if migrate_layout(&mut b.layout, &widths_id) {")
+        .expect("opening the Screener applies the migration")
         .1
-        .split_once("});")
-        .expect("the migration runs in one backend update")
+        .split_once('}')
+        .unwrap()
         .0;
-    let guard = block
-        .find("return;")
-        .expect("an applied migration must not run again");
-    let rewrite = block
-        .find("add_new_columns(keys, applied)")
-        .expect("the stored sets must gain the late columns");
-    let marker = block
-        .find("b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);")
-        .expect("the migration must record its completion");
-    let dirty = block
-        .find("b.layout_dirty = true;")
-        .expect("the marker must be flushed");
-    assert!(guard < rewrite && rewrite < marker && marker < dirty);
-    // Past the last stored set, nothing may open a new block: the marker and the dirty mark sit at
-    // the closure's own level, so neither can end up under a condition on whether a set changed.
-    let last_rewrite = block
-        .rfind("add_new_columns(keys, applied)")
-        .expect("checked above");
-    assert!(
-        !block[last_rewrite..dirty].contains('{'),
-        "the marker and the dirty mark must not depend on whether a set was rewritten"
+    assert!(block.contains("b.layout_dirty = true;"));
+}
+
+/// Reset an already migrated layout whose visible columns, sort, widths, and order were edited.
+#[test]
+fn restore_default_view_resets_saved_layout() {
+    use super::super::table::DEFAULT_COLS;
+    use moon_core::config::{TableSortPreference, WindowLayout};
+
+    let id = "screener-table:win";
+    let mut layout = WindowLayout::default();
+    super::super::table::migrate_layout(&mut layout, id);
+    layout
+        .table_visible_columns
+        .insert(id.into(), vec!["market".into(), "ask".into()]);
+    layout.table_sorts.insert(
+        id.into(),
+        TableSortPreference {
+            column: "ask".into(),
+            ascending: true,
+        },
     );
+    layout
+        .table_column_widths
+        .insert(id.into(), [("ask".into(), 150.0)].into());
+    layout
+        .table_column_order
+        .insert(id.into(), vec!["ask".into(), "market".into()]);
+
+    super::reset_layout_to_default(&mut layout, id);
+
+    assert_eq!(layout.table_visible_columns[id], DEFAULT_COLS);
+    let sort = &layout.table_sorts[id];
+    assert_eq!((sort.column.as_str(), !sort.ascending), super::DEFAULT_SORT);
+    assert!(!layout.table_column_widths.contains_key(id));
+    assert!(!layout.table_column_order.contains_key(id));
 }
 use std::collections::HashSet;
 
@@ -660,9 +668,171 @@ fn the_opened_mark_names_one_core_and_market() {
         venue: Default::default(),
     };
     let mark = (2, "ETHUSDT".to_string());
+    let selected = super::SelectedRow {
+        lead: 0,
+        group: None,
+    };
 
-    assert!(is_opened(Some(&mark), &row(2, "ETHUSDT")));
-    assert!(!is_opened(Some(&mark), &row(1, "ETHUSDT")));
-    assert!(!is_opened(Some(&mark), &row(2, "ETHUSDC")));
-    assert!(!is_opened(None, &row(2, "ETHUSDT")));
+    assert!(is_opened(Some(&mark), &selected, &[row(2, "ETHUSDT")]));
+    assert!(!is_opened(Some(&mark), &selected, &[row(1, "ETHUSDT")]));
+    assert!(!is_opened(Some(&mark), &selected, &[row(2, "ETHUSDC")]));
+    assert!(!is_opened(None, &selected, &[row(2, "ETHUSDT")]));
+}
+
+/// A chart on a visible non-lead member lights the group for that market only.
+#[test]
+fn opened_mark_matches_any_group_member() {
+    use super::super::prepared::Prepared;
+    let entries = (0..3)
+        .map(|core| Entry {
+            row: ScreenerRow {
+                core,
+                provider: core,
+                market: "XALPHAUSDT".into(),
+                ..Default::default()
+            }
+            .into(),
+            core_name: format!("CORE_{core}").into(),
+            market_uc: "XALPHAUSDT".into(),
+            coin_uc: "XALPHA".into(),
+            venue: super::EntryVenue {
+                label: "VENUE".into(),
+                id: Some(moon_core::feed::ExchangeId::new(4)),
+                ..Default::default()
+            },
+        })
+        .collect();
+    let prepared = Prepared::new(entries, "market", false);
+    let selection = prepared.select(
+        &[Some(0), Some(1), None],
+        &super::CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        true,
+    );
+    let row = &selection.rows[0];
+    let opened =
+        |core, market: &str| super::is_opened(Some(&(core, market.into())), row, &prepared.entries);
+    assert!(opened(0, "XALPHAUSDT"));
+    assert!(opened(1, "XALPHAUSDT"));
+    assert!(!opened(2, "XALPHAUSDT"));
+    assert!(!opened(1, "XALPHAUSDC"));
+}
+
+/// Keep the multi-core suffix even when filters leave zero cores represented.
+#[test]
+fn footer_counter_names_cores_on_multi_scope() {
+    for (locale, grouped, empty, single) in [
+        (
+            "ru",
+            "8 / 10 монет · 22 ядра",
+            "0 / 10 монет · 0 ядер",
+            "8 / 10 монет",
+        ),
+        (
+            "en",
+            "8 / 10 coins · 22 cores",
+            "0 / 10 coins · 0 cores",
+            "8 / 10 coins",
+        ),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        assert_eq!(super::footer_counter(8, 10, Some(22)), grouped);
+        assert_eq!(super::footer_counter(0, 10, Some(0)), empty);
+        assert_eq!(super::footer_counter(8, 10, None), single);
+    }
+}
+
+/// A second admitted core still activates grouping before publishing its first row.
+#[test]
+fn all_core_scope_groups_before_the_second_core_publishes() {
+    use super::super::{prepared::Prepared, table::MarketTarget};
+
+    let _locale = crate::test_locale::force("en");
+    let prepared = Prepared::new(vec![filter_entry()], "market", false);
+    let admitted = [(1, Some(0)), (2, Some(1))].into();
+    let grouped = super::grouped_scope(&admitted);
+    let selection = prepared.select(
+        &prepared.ranks_for(&admitted),
+        &super::CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        grouped,
+    );
+
+    assert!(selection.rows[0].group.is_some());
+    assert_eq!(
+        super::footer_counter(
+            selection.shown,
+            selection.total,
+            grouped.then_some(selection.cores_shown)
+        ),
+        "1 / 1 coins · 1 core"
+    );
+    let target = MarketTarget::new(&selection.rows[0], &prepared.entries);
+    assert!(target.admits_core(1));
+    assert!(!target.admits_core(2));
+}
+
+/// A single published market passes ticker filtering but fails the default volume threshold.
+fn filter_entry() -> Entry {
+    Entry {
+        row: ScreenerRow {
+            core: 1,
+            provider: 1,
+            market: "XALPHAUSDT".into(),
+            coin: "XALPHA".into(),
+            vol_24h: 100_000.0,
+            ..Default::default()
+        }
+        .into(),
+        core_name: "CORE_A".into(),
+        market_uc: "XALPHAUSDT".into(),
+        coin_uc: "XALPHA".into(),
+        venue: Default::default(),
+    }
+}
+
+/// Blame volume alone only if dropping the limit would actually show a row.
+#[test]
+fn empty_text_names_active_vol_filter() {
+    use super::super::prepared::Prepared;
+    use super::{CoinQuery, empty_filter_text, parse_vol};
+
+    let prepared = Prepared::new(vec![filter_entry()], "market", false);
+    let vol = super::DEFAULT_MIN_VOL;
+    for (locale, combined, volume) in [
+        (
+            "ru",
+            "Нет монет по запросу «XBETA» (Vol. от 1m)",
+            "Нет монет с Vol. от 1m — очистите фильтр",
+        ),
+        (
+            "en",
+            "No coins match “XBETA” (Vol. from 1m)",
+            "No coins with Vol. from 1m — clear the filter",
+        ),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        for grouped in [false, true] {
+            for (query, expected) in [("XBETA", combined), ("XALPHA", volume)] {
+                let selection = prepared.select(
+                    &[Some(0)],
+                    &CoinQuery::new(query),
+                    parse_vol(vol),
+                    "market",
+                    false,
+                    grouped,
+                );
+                assert!(selection.rows.is_empty());
+                assert_eq!(empty_filter_text(vol, query, &selection.filters), expected);
+                assert_eq!(
+                    empty_filter_text("0m", query, &selection.filters),
+                    empty_filter_text("", query, &selection.filters)
+                );
+            }
+        }
+    }
 }

@@ -21,14 +21,18 @@ use moon_core::session::CoreId;
 use moon_core::venue::{CoreVenue, MarketKind};
 
 use crate::controls::CoreComboHost;
+use crate::display_text::plural_key;
 use crate::panels::data_table_host;
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::{Backend, design};
 
 use super::auto_figures::ScanQuery;
+use super::prepared::{FilterMatches, SelectedRow};
 use super::table::{
-    COLS, ColDef, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE, column_label, column_title, moon,
-    moon_alpha, parse_vol, screener_row,
+    COLS, ColDef, DEFAULT_MIN_VOL, DEFAULT_SORT, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE,
+    column_label, column_title, exchange_caption_metrics, migrate_layout, moon, moon_alpha,
+    parse_vol, reset_layout_to_default, restore_visible_columns, screener_row, short_kind_captions,
+    short_listed_captions,
 };
 
 mod scan;
@@ -51,10 +55,8 @@ const LISTED_CHOICES: [Listing; 4] = [
 
 const SCREENER_HEADER_H: f32 = 32.0;
 
-/// Version of the one-shot migration that adds late columns to stored visible sets; see
-/// [`super::table::add_new_columns`] and `WindowLayout::screener_columns_migration`. The number
-/// itself lives beside the columns it counts.
-const SCREENER_COLUMNS_MIGRATION: u32 = super::table::COLUMNS_MIGRATION;
+/// Smallest window accepted by the Screener's native host.
+pub(in crate::screener) const MIN_WINDOW_SIZE: Size<Pixels> = size(px(900.0), px(480.0));
 
 /// Owned counts reused across publications until the corresponding core receives new orders.
 type OrderCounts = Arc<HashMap<String, u32>>;
@@ -125,19 +127,26 @@ impl crate::controls::CoreComboHost for ScreenerView {
 pub struct ScreenerView {
     pub(super) backend: Entity<Backend>,
     /// Cached rows after the current source, coin, volume, and sort selections are applied.
-    rows: Rc<Vec<usize>>,
+    rows: Rc<Vec<SelectedRow>>,
     /// Source rows and their dense counting identities are published together.
     prepared: std::sync::Arc<super::prepared::Prepared>,
     /// A newer refresh retires the previous publication task.
     prepare_task: Option<Task<()>>,
     /// Publication identity independent of user controls, which apply to either snapshot.
     prepare_seq: u64,
+    /// Membership being prepared for the current publication and its cancellable UI handoff.
+    scope_prime: Option<(Vec<Option<usize>>, Task<()>)>,
+    /// Which filters had candidates in the last selection, before applying the volume limit.
+    filter_matches: FilterMatches,
     order_counts: OrderCountMemo,
-    /// Distinct markets after source grouping but before the coin and volume filters, the footer's
-    /// "total". Markets, not rows: a market has one row per core sharing its exchange.
+    /// Distinct markets before the coin and volume filters, the footer's "total".
     total: usize,
     /// Distinct markets among [`Self::rows`], the footer's "shown" — counted the same way.
     shown: usize,
+    /// Distinct cores represented by the rows after filtering.
+    cores_shown: usize,
+    /// Whether the current publication scope contains multiple cores, even if none match.
+    grouped_scope: bool,
     /// Workspace scope marker over every live session, or `None` when the preset is unresolved.
     /// A resolved full scope still keeps a marker whose facts are empty. Screener is a group-less
     /// singleton with no `EffectiveCoreScope` of its own, so this is built with
@@ -212,7 +221,8 @@ impl ScreenerView {
         cx: &mut Context<Self>,
     ) -> Self {
         let coin_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC"));
-        let dvol_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("500k"));
+        let dvol_input =
+            cx.new(|cx| MoonInputState::new(window, cx).default_value(DEFAULT_MIN_VOL));
         for input in [&coin_input, &dvol_input] {
             cx.subscribe(input, |this: &mut Self, _, ev: &MoonInputEvent, cx| {
                 let _stall = crate::diag::stall::span(
@@ -245,30 +255,16 @@ impl ScreenerView {
         // Screener always runs in a separate window, so its width context is fixed to `:win`.
         let widths_id = crate::persistence::table_persist::ctx_id("screener-table", true);
 
-        // A stored visible set is an explicit list, so a column added later is absent from it and
-        // would stay hidden for everyone who ever arranged their columns. Add it once, and record
-        // that in the same document as the sets, so a column the user then hides stays hidden.
+        // Persist the new view and its migration marker together so later customizations survive.
         backend.update(cx, |b, _| {
-            // Each stored set gains only the columns introduced AFTER the version it records, so
-            // a column offered by an earlier migration and hidden since stays hidden.
-            let applied = b.layout.screener_columns_migration.unwrap_or(0);
-            if applied >= SCREENER_COLUMNS_MIGRATION {
-                return;
+            if migrate_layout(&mut b.layout, &widths_id) {
+                b.layout_dirty = true;
             }
-            if let Some(keys) = b.layout.table_visible_columns.get_mut(&widths_id) {
-                super::table::add_new_columns(keys, applied);
-            }
-            if let Some(keys) = b.layout.screener_columns.as_mut() {
-                super::table::add_new_columns(keys, applied);
-            }
-            b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);
-            // Unconditionally: the marker must reach disk even when no set needed rewriting.
-            b.layout_dirty = true;
         });
 
         // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
         // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
-        // or removed columns; an empty valid set falls back to every current column.
+        // or removed columns; an empty valid set falls back to the curated view.
         //
         // A layout saved before the PnL column was renamed keys it `session`, a key that is now
         // retired; the list, the sort and the widths all bring it current on read (see
@@ -276,21 +272,7 @@ impl ScreenerView {
         let saved_cols = crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
             .or_else(|| backend.read(cx).layout.screener_columns.clone())
             .map(super::table::migrate_legacy_keys);
-        let visible_cols: HashSet<String> = match saved_cols {
-            Some(list) => {
-                let set: HashSet<String> = list
-                    .iter()
-                    .filter(|k| COLS.iter().any(|c| c.0 == k.as_str()))
-                    .cloned()
-                    .collect();
-                if set.is_empty() {
-                    COLS.iter().map(|c| c.0.to_string()).collect()
-                } else {
-                    set
-                }
-            }
-            None => COLS.iter().map(|c| c.0.to_string()).collect(),
-        };
+        let visible_cols = restore_visible_columns(saved_cols);
         let restored_sort = super::table::restore_sort(
             super::table::migrate_legacy_sort(crate::persistence::table_persist::saved_sort(
                 backend.read(cx),
@@ -384,9 +366,13 @@ impl ScreenerView {
         let mut this = Self {
             backend,
             rows: Rc::new(Vec::new()),
+            cores_shown: 0,
+            grouped_scope: false,
             prepared: Default::default(),
             prepare_task: None,
             prepare_seq: 0,
+            scope_prime: None,
+            filter_matches: FilterMatches::default(),
             order_counts: OrderCountMemo::default(),
             total: 0,
             shown: 0,
@@ -442,7 +428,7 @@ impl ScreenerView {
             crate::diag::stall::span(crate::diag::stall::StallKind::Input, "screener:rebuild");
         self.refresh_task = None;
         crate::diag::bump(&crate::diag::SCREENER_REBUILD);
-        self.filter_cached(cx);
+        let visible = self.filter_cached(cx);
         let b = self.backend.read(cx);
         let source = b.session.market_source();
         let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
@@ -457,7 +443,7 @@ impl ScreenerView {
             .update_fleet_epoch(store.time_offset_epoch());
         for session in b.session.sessions() {
             names.insert(session.id, SharedString::from(session.name.clone()));
-            if let Some(venue) = core_venues.get(&session.id).filter(|v| v.is_nameable()) {
+            if let Some(venue) = core_venues.get(&session.id) {
                 venues.insert(session.id, entry_venue(venue));
             }
             if let Some(data) = store.core(session.id) {
@@ -501,6 +487,7 @@ impl ScreenerView {
                     }
                     let mut prepared =
                         super::prepared::Prepared::new(entries, &sort_key, sort_desc);
+                    prepared.prime_partial_groups(&visible);
                     // Read after the rows were signed: the kept book is the one they were signed
                     // with, or a newer one, and either says when the waiting rows settle.
                     prepared.listing_settles_ms = source.listing_settles_ms();
@@ -511,6 +498,7 @@ impl ScreenerView {
                 if this.prepare_seq != seq {
                     return;
                 }
+                this.scope_prime = None;
                 this.prepared = prepared;
                 // The source snapshot is unfiltered: completion always applies the LATEST
                 // source, scope, text, volume and sort, never the controls a job started with.
@@ -520,8 +508,8 @@ impl ScreenerView {
         }));
     }
 
-    /// Filter a prepared publication using the live preset and controls without cloning rows.
-    fn filter_cached(&mut self, cx: &mut Context<Self>) {
+    /// Filter published rows and return the visible core ranks for the next publication.
+    fn filter_cached(&mut self, cx: &mut Context<Self>) -> HashMap<CoreId, Option<usize>> {
         let coin = CoinQuery::new(&self.coin_input.read(cx).value())
             .listed_in(&self.listed_sel)
             .with_scan(self.scan_query(cx));
@@ -531,7 +519,7 @@ impl ScreenerView {
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
         let sessions = b.session.sessions();
         self.sessions_total = sessions.len();
-        let displayed: HashMap<_, _> = sessions
+        let mut displayed: HashMap<_, _> = sessions
             .iter()
             .enumerate()
             .map(|(rank, session)| {
@@ -563,26 +551,63 @@ impl ScreenerView {
             displayed.get(core).copied().flatten().is_some()
                 && type_admits(type_sel, kind_of(venues.get(core)))
         });
-        let allowed: Vec<_> = self
-            .prepared
-            .cores
-            .iter()
-            .map(|core| {
-                displayed
-                    .get(core)
-                    .copied()
-                    .flatten()
-                    .filter(|_| self.source_admits(*core, venues))
-            })
-            .collect();
-        let (rows, total, shown) =
-            self.prepared
-                .select(&allowed, &coin, min_vol, &self.sort_key, self.sort_desc);
-        self.listed_waiting =
-            rows.is_empty() && self.prepared.hides_waiting_rows(&allowed, &coin, min_vol);
-        self.rows = Rc::new(rows);
-        self.total = total;
-        self.shown = shown;
+        displayed.retain(|&core, rank| rank.is_some() && self.source_admits(core, venues));
+        let allowed = self.prepared.ranks_for(&displayed);
+        let grouped = grouped_scope(&displayed);
+        self.grouped_scope = grouped;
+        if self.prepared.needs_scope_prime(&allowed, grouped) {
+            self.prime_scope(allowed, cx);
+            return displayed;
+        }
+        self.scope_prime = None;
+        let selection = self.prepared.select(
+            &allowed,
+            &coin,
+            min_vol,
+            &self.sort_key,
+            self.sort_desc,
+            grouped,
+        );
+        self.listed_waiting = selection.rows.is_empty()
+            && self
+                .prepared
+                .hides_waiting_rows(&allowed, &coin, min_vol, grouped);
+        self.rows = Rc::new(selection.rows);
+        self.total = selection.total;
+        self.shown = selection.shown;
+        self.cores_shown = selection.cores_shown;
+        self.filter_matches = selection.filters;
+        displayed
+    }
+
+    /// Rebuild the current publication's membership off the UI thread when the scope changes.
+    /// Hide the previous scope's rows until the replacement is ready for navigation.
+    fn prime_scope(&mut self, ranks: Vec<Option<usize>>, cx: &mut Context<Self>) {
+        if self
+            .scope_prime
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending == ranks)
+        {
+            return;
+        }
+        self.rows = Rc::default();
+        self.total = 0;
+        self.shown = 0;
+        self.cores_shown = 0;
+        let prepared = Arc::clone(&self.prepared);
+        let pending = ranks.clone();
+        let job = cx.background_spawn(async move { prepared.prepare_partial_groups(ranks) });
+        self.scope_prime = Some((
+            pending,
+            cx.spawn(async move |this, cx| {
+                let scope = job.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.prepared.install_partial_groups(scope);
+                    this.filter_cached(cx);
+                    cx.notify();
+                });
+            }),
+        ));
     }
 
     /// Apply the header order immediately and refresh its source data for the next publication.
@@ -611,12 +636,13 @@ impl ScreenerView {
         // its sort is not stored: the next open would sort by an empty column. The sort stored
         // before it stays, and comes back on reopen.
         if store && self.sort_key != super::auto_figures::AUTO_FIGURES_KEY {
-            let preference = (self.sort_key != "vol24" || !self.sort_desc).then(|| {
-                moon_core::config::TableSortPreference {
-                    column: self.sort_key.clone(),
-                    ascending: !self.sort_desc,
-                }
-            });
+            let preference =
+                ((self.sort_key.as_str(), self.sort_desc) != DEFAULT_SORT).then(|| {
+                    moon_core::config::TableSortPreference {
+                        column: self.sort_key.clone(),
+                        ascending: !self.sort_desc,
+                    }
+                });
             let id = crate::persistence::table_persist::ctx_id("screener-table", true);
             crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
         }
@@ -747,6 +773,26 @@ impl ScreenerView {
         self.resort_if_sort_hidden(cx);
     }
 
+    /// Restore the curated view in both the saved layout and the current window.
+    fn restore_default_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        self.backend.update(cx, |b, _| {
+            reset_layout_to_default(&mut b.layout, &id);
+            b.layout_dirty = true;
+        });
+        self.visible_cols = restore_visible_columns(None);
+        crate::persistence::table_persist::reset(&self.table_state, cx);
+        self.table_state.update(cx, |state, cx| {
+            state.column_order.clear();
+            cx.notify();
+        });
+        self.col_order_cache.clear();
+        self.dvol_input
+            .update(cx, |state, cx| state.set_value(DEFAULT_MIN_VOL, window, cx));
+        // The saved sort was written with the rest of the layout above.
+        self.apply_sort((DEFAULT_SORT.0.to_string(), DEFAULT_SORT.1), false, cx);
+    }
+
     /// Persist visible column keys in canonical `COLS` order.
     fn persist_visible_cols(&self, cx: &mut Context<Self>) {
         let list: Vec<String> = COLS
@@ -762,17 +808,14 @@ impl ScreenerView {
         cx.notify();
     }
 
-    /// Request the row's market on Main for the row's own core, as in an Orders token click.
+    /// Request the row's market on Main for its preferred chart member.
     ///
     /// The request does not activate or raise the owning window.
     fn open_chart(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(e) = self
-            .rows
-            .get(ix)
-            .and_then(|&index| self.prepared.entries.get(index))
-        else {
+        let Some(row) = self.rows.get(ix) else {
             return;
         };
+        let e = row.chart_entry(&self.prepared.entries);
         let core = e.row.core;
         let market = e.row.market.clone();
         self.open_on_main(core, market, cx);
@@ -785,7 +828,7 @@ impl ScreenerView {
     /// raised and the list is not scrolled: the user stays in the Screener where he was.
     ///
     /// Args:
-    ///     core: Core of the clicked row; the chart opens on it.
+    ///     core: Chart destination in the clicked row.
     ///     market: Canonical market name of the clicked row.
     ///     cx: Screener context, notified so the tint moves in the next frame.
     pub(super) fn open_on_main(&mut self, core: CoreId, market: String, cx: &mut Context<Self>) {
@@ -802,12 +845,13 @@ impl ScreenerView {
     /// The coin lists the row menu's copy entries offer, taken from the rows listed now.
     ///
     /// Args:
-    ///     clicked: Core and canonical market of the right-clicked row.
+    ///     clicked: Lead core and canonical market of the right-clicked row.
     ///
     /// Returns:
     ///     Every listed coin, and those from the top through the clicked row.
     pub(super) fn coin_lists(&self, clicked: (CoreId, &str)) -> super::coin_copy::CoinLists {
-        super::coin_copy::coin_lists(&self.prepared.entries, &self.rows, clicked)
+        let leads: Vec<_> = self.rows.iter().map(|row| row.lead).collect();
+        super::coin_copy::coin_lists(&self.prepared.entries, &leads, clicked)
     }
 
     /// Render each virtual row from the same publication that owns its selected index.
@@ -815,7 +859,7 @@ impl ScreenerView {
         let p = MoonPalette::active(cx);
         let rows = self.rows.clone();
         let row_count = rows.len();
-        let view = cx.entity();
+        let view = cx.entity().downgrade();
         let table_rows = rows.clone();
         let prepared = self.prepared.clone();
         let sort_view = cx.entity();
@@ -830,19 +874,18 @@ impl ScreenerView {
         let row_cols = visible.clone();
         // Captions and logo geometry are the same for every row of this build, so they are
         // resolved once here rather than per visible row per frame.
-        let kind_caption = |kind: MarketKind| SharedString::from(t!(kind.label_key()).to_string());
+        let [both, spot_only, futures_only] = short_listed_captions();
+        let (exchange_font_base, exchange_ellipsis) = exchange_caption_metrics(cx);
         let row_style = Rc::new(RowStyle {
             logos_ready: self.exchange_logos_ready,
             logo_px: design::ui_px(cx, 13.0),
             logo_gap: design::ui_px(cx, 5.0),
-            kinds: [
-                kind_caption(MarketKind::Spot),
-                kind_caption(MarketKind::Futures),
-                kind_caption(MarketKind::Quarterly),
-            ],
-            both: t!("screener.listed_both").to_string().into(),
-            spot_only: t!("screener.listed_spot_only").to_string().into(),
-            futures_only: t!("screener.listed_futures_only").to_string().into(),
+            exchange_font_base,
+            exchange_ellipsis,
+            kinds: short_kind_captions(),
+            both,
+            spot_only,
+            futures_only,
             scan_book: self.scan_book.clone(),
             scan_labels: Self::scan_labels(),
             scan_running: self.scan_book.progress().is_some(),
@@ -852,8 +895,8 @@ impl ScreenerView {
         data_table_host(
             "screener-table-host",
             row_count == 0,
-            // Four-way choice, and the order matters: `scope_empty_text` takes precedence over
-            // every fallback, so a hidden-by-preset Screener never reaches a sentence below it. Of
+            // `scope_empty_text` takes precedence over every fallback, so a hidden-by-preset
+            // Screener never reaches a sentence below it. Of
             // the genuine reasons, only "no session at all" asks for an action — a core hidden by
             // the preset, or connected with no book yet, must not tell the user to go connect
             // something that is already connected. And when rows WERE published and the controls
@@ -865,12 +908,18 @@ impl ScreenerView {
                 self.scope_marker.as_ref(),
                 if self.sessions_total == 0 {
                     t!("screener.empty").to_string()
+                } else if self.scope_prime.is_some() {
+                    t!("common.loading").to_string()
                 } else if let Some(text) = self.scan_empty_text() {
                     text
                 } else if let Some(seconds) = self.listed_wait_seconds() {
                     t!("screener.listed_collecting", n = seconds).to_string()
                 } else if self.has_displayed_rows {
-                    t!("screener.empty_filtered").to_string()
+                    empty_filter_text(
+                        &self.dvol_input.read(cx).value(),
+                        &self.coin_input.read(cx).value(),
+                        &self.filter_matches,
+                    )
                 } else {
                     t!("screener.empty_no_data").to_string()
                 },
@@ -884,9 +933,9 @@ impl ScreenerView {
                 .on_key_down(cx.listener(Self::scroll_by_key))
                 .child(
                     MoonDataTable::new("screener-table", row_count, move |ix, _window, _app| {
-                        let entry = &prepared.entries[table_rows[ix]];
-                        screener_row(entry, &view, p, &row_cols, &row_style)
-                            .selected(is_opened(opened_mark.as_ref(), entry))
+                        let row = &table_rows[ix];
+                        screener_row(row, &prepared, &view, p, &row_cols, &row_style)
+                            .selected(is_opened(opened_mark.as_ref(), row, &prepared.entries))
                     })
                     .track_scroll(&self.rows_scroll)
                     .columns(
@@ -1078,6 +1127,13 @@ impl ScreenerView {
             .trigger_width(design::glyph_btn_w(cx))
             .fit_menu_width(170.0, 560.0)
             .close_on_select(false);
+        let default_view = view.clone();
+        menu = menu.item(
+            MoonMenuItem::with_key("col-default", t!("screener.default_view").to_string())
+                .on_click(move |_, window, app| {
+                    default_view.update(app, |t, cx| t.restore_default_view(window, cx));
+                }),
+        );
         // The All item enables every column or, when already checked, leaves only the first.
         let all_on = COLS.iter().all(|c| self.visible_cols.contains(c.0));
         let all_view = view.clone();
@@ -1123,7 +1179,11 @@ impl ScreenerView {
         // Frozen render idiom (`workspace::scope_marker`): head is the existing formatted count
         // and never clips; the marker's facts trail it, clipping at their right edge when the
         // window narrows, exactly as a dock footer's fixed height requires.
-        let count_head = format!("{} / {} {}", self.shown, self.total, t!("screener.coins"));
+        let count_head = footer_counter(
+            self.shown,
+            self.total,
+            self.grouped_scope.then_some(self.cores_shown),
+        );
         let footer = scope_marker::scope_footer(count_head, self.scope_marker.as_ref());
         let footer_tip = scope_marker::scope_footer_tooltip(&footer, self.scope_marker.as_ref());
         let has_tail = !footer.tail.is_empty();
@@ -1248,19 +1308,61 @@ fn type_admits(selected: &HashSet<Option<MarketKind>>, kind: Option<MarketKind>)
     selected.is_empty() || selected.contains(&kind)
 }
 
-/// Whether `entry` is the row the opened-row mark names (#1424).
-///
-/// Matched by core and market, never by line: the same market is one row per core, and the list
-/// is re-sorted about once a second, so either shortcut would tint a coin the user never opened.
+/// Match the market and any visible member so a regrouped row keeps its opened mark.
 ///
 /// Args:
 ///     mark: Core and canonical market of the last coin opened from this window, if any.
-///     entry: The listed row being drawn.
+///     row: The listed row being drawn.
+///     entries: The publication referenced by the row's lead and members.
 ///
 /// Returns:
-///     `true` only for the row of that core and market.
-pub(super) fn is_opened(mark: Option<&(CoreId, String)>, entry: &Entry) -> bool {
-    mark.is_some_and(|(core, market)| entry.row.core == *core && entry.row.market == *market)
+///     `true` when the row includes the chart core for the marked market.
+pub(super) fn is_opened(
+    mark: Option<&(CoreId, String)>,
+    row: &SelectedRow,
+    entries: &[Entry],
+) -> bool {
+    let lead = &entries[row.lead].row;
+    mark.is_some_and(|(core, market)| {
+        lead.market == *market
+            && (lead.core == *core
+                || row.group.as_ref().is_some_and(|group| {
+                    group
+                        .members
+                        .iter()
+                        .any(|&index| entries[index].row.core == *core)
+                }))
+    })
+}
+
+/// Format the market count, adding the number of represented cores in a multi-core scope.
+fn footer_counter(shown: usize, total: usize, cores: Option<usize>) -> String {
+    let count = format!("{shown} / {total} {}", t!("screener.coins"));
+    if let Some(n) = cores {
+        let key = plural_key("screener.footer_cores", n as u64);
+        let cores = t!(key.as_str(), n = n);
+        format!("{count} · {cores}")
+    } else {
+        count
+    }
+}
+
+/// Group by the selector's admitted sessions, including cores awaiting their first publication.
+fn grouped_scope(admitted: &HashMap<CoreId, Option<usize>>) -> bool {
+    admitted.len() > 1
+}
+
+/// Explain the empty result using the filters that can account for it.
+fn empty_filter_text(raw_vol: &str, query: &str, matches: &FilterMatches) -> String {
+    if parse_vol(raw_vol.trim()) > 0.0 {
+        if matches.without_volume {
+            return t!("screener.empty_vol_filter", vol = raw_vol).to_string();
+        }
+        if !query.trim().is_empty() && !matches.market {
+            return t!("screener.empty_query_and_vol", query = query, vol = raw_vol).to_string();
+        }
+    }
+    t!("screener.empty_filtered").to_string()
 }
 
 /// Tick or untick one choice of a list whose empty selection means "all".
@@ -1449,7 +1551,12 @@ fn kind_of(venue: Option<&CoreVenue>) -> Option<MarketKind> {
 /// logo, and its market kind.
 fn entry_venue(venue: &CoreVenue) -> EntryVenue {
     EntryVenue {
-        label: crate::controls::venue_label(venue).into(),
+        id: Some(venue.id),
+        label: if venue.is_nameable() {
+            crate::controls::venue_label(venue).into()
+        } else {
+            SharedString::default()
+        },
         brand: venue.brand(),
         kind: kind_of(Some(venue)),
     }
@@ -1677,7 +1784,7 @@ pub fn open(
             saved,
             crate::window::windowing::reachable_window_bounds(bounds, display_id, None, cx),
         ),
-        Some(size(px(900.0), px(480.0))),
+        Some(MIN_WINDOW_SIZE),
         owner,
     );
     opts.display_id = display_id;

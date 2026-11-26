@@ -1,100 +1,265 @@
-//! Regression tests for restoring Screener header sorting.
+//! Regression tests for Screener columns, sorting, and grouped presentation.
+
+mod layout_fixture;
 
 use std::collections::{HashMap, HashSet};
 
 use moon_core::config::TableSortPreference;
 
 use super::{
-    COLS, add_new_columns, column_title, migrate_legacy_keys, migrate_legacy_sort,
-    migrate_legacy_widths, restore_sort,
+    COLS, column_title, migrate_legacy_keys, migrate_legacy_sort, migrate_legacy_widths,
+    restore_sort,
 };
 
-/// A stored visible set gains the columns it predates, once, and nothing else changes.
-///
-/// Mutation: skip the migration. Everyone who ever arranged their Screener columns holds an
-/// explicit list without `coin`, and the new column never appears for them. Mutation the other
-/// way: fill an empty set, and "no stored choice" becomes a one-column table.
-#[test]
-fn a_stored_column_set_gains_the_late_column() {
-    let mut arranged = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut arranged, 0);
-    assert_eq!(
-        arranged,
-        [
-            "market",
-            "vol24",
-            "coin",
-            "exchange",
-            "type",
-            "listed",
-            "auto_figures"
-        ]
-    );
+/// Keep long grouped and singleton values inside their default-width columns in both locales.
+#[gpui::test]
+fn default_view_cells_stay_inside_columns_at_min_width_ru_en(cx: &mut gpui::TestAppContext) {
+    use crate::screener::view::MIN_WINDOW_SIZE;
+    use gpui::{Modifiers, point, px};
+    use layout_fixture::{LONG_COIN, LONG_CORE, LONG_VENUE, MIN_DRAG_WIDTH, bounds, draw, inside};
+    use std::time::Duration;
 
-    // Already carrying them — a set written after the columns existed — stays as it is.
-    add_new_columns(&mut arranged, 0);
-    assert_eq!(
-        arranged,
-        [
-            "market",
-            "vol24",
-            "coin",
-            "exchange",
-            "type",
-            "listed",
-            "auto_figures"
-        ]
-    );
+    for locale in ["ru", "en"] {
+        let _locale = crate::test_locale::force(locale);
+        let clock = cx.background_executor.clone();
+        let mut visual = layout_fixture::open(cx, super::DEFAULT_COLS, false);
+        draw(&mut visual);
 
-    let mut empty: Vec<String> = Vec::new();
-    add_new_columns(&mut empty, 0);
-    assert!(empty.is_empty());
-}
+        for row in 0..2 {
+            let mut previous_right = px(0.0);
+            for (col, key) in super::DEFAULT_COLS.iter().enumerate() {
+                let selector = format!("moon-table-cell-{row}-{col}");
+                let cell = bounds(&mut visual, selector.clone());
+                let content = bounds(&mut visual, format!("{selector}-content"));
+                assert!(
+                    inside(content, cell),
+                    "{locale} row {row} {key}: {content:?} outside {cell:?}"
+                );
+                assert!(
+                    previous_right <= content.left() + px(0.5),
+                    "{locale} row {row} {key} overlaps its left neighbor"
+                );
+                assert!(
+                    cell.right() <= MIN_WINDOW_SIZE.width + px(0.5),
+                    "{locale} row {row} {key} lies past the window edge"
+                );
+                previous_right = content.right();
+            }
+        }
 
-/// A later migration adds ITS columns and leaves an earlier one's alone.
-///
-/// Mutation: add every late column whenever the version moves. A user whose layout had already
-/// been offered `coin` and who hid it gets it back the day three unrelated columns arrive — the
-/// defect the per-column version exists for, found before it shipped (2026-11-16).
-#[test]
-fn a_later_migration_does_not_put_back_an_earlier_column_the_user_hid() {
-    let mut coin_hidden = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut coin_hidden, 1);
-    assert_eq!(
-        coin_hidden,
-        [
-            "market",
-            "vol24",
-            "exchange",
-            "type",
-            "listed",
-            "auto_figures"
-        ]
-    );
+        // Check every default column against its fixture caption. The layout context uses
+        // GPUI's deterministic monospace font, so the advance predicts which values must clip.
+        let glyph_width = cx.update(|app| {
+            let tokens = moon_ui::MoonTheme::active_tokens(app);
+            let text = app.text_system();
+            let font = text.resolve_font(&gpui::font(tokens.font_family(true)));
+            text.layout_width(font, px(tokens.font(10.5)), '0')
+        });
+        let volumes = [1_234_567.0, 98_765.0, 12_345.0]
+            .map(|volume| moon_core::util::fmt::short(volume, moon_core::util::fmt::Form::Label));
+        let age = crate::chartdx::auto_figures_sync::caption::age_text(987_654_321.0);
+        let auto_figures = rust_i18n::t!("screener.af_stale", age = age);
+        for (row, key, full_text, always_overflows) in [
+            (0, "market", LONG_COIN, true),
+            (0, "exchange", LONG_VENUE, true),
+            (1, "core", LONG_CORE, true),
+            (0, "vol24", &volumes[0], false),
+            (0, "hvol", &volumes[1], false),
+            (0, "vol5m", &volumes[2], false),
+            (0, "ask", "0.00000002972", true),
+            (0, "d24h", "25.3%", false),
+            (0, "d1h", "14.3%", false),
+            (0, "d15m", "2.3%", false),
+            (0, "funding", "-0.08%", false),
+            (0, "lev", "5–20 / 20 I/C", false),
+            (0, "orders", "297", false),
+            (0, "pnl", "-638.55$", false),
+            (0, "pos", "32592593", false),
+            (0, "auto_figures", auto_figures.as_ref(), false),
+        ] {
+            let col = super::DEFAULT_COLS
+                .iter()
+                .position(|&column| column == key)
+                .unwrap();
+            let cell = bounds(&mut visual, format!("moon-table-cell-{row}-{col}-content"));
+            let shaped_width = glyph_width * full_text.chars().count() as f32;
+            if !always_overflows && shaped_width.floor() <= cell.size.width {
+                continue;
+            }
+            // Clear the previous tooltip before moving over the next value. Its overlay
+            // can otherwise cover the adjacent row in this small fixture.
+            visual.simulate_mouse_move(
+                point(
+                    MIN_WINDOW_SIZE.width - px(1.0),
+                    MIN_WINDOW_SIZE.height - px(1.0),
+                ),
+                None,
+                Modifiers::none(),
+            );
+            draw(&mut visual);
+            visual.simulate_mouse_move(cell.center(), None, Modifiers::none());
+            draw(&mut visual);
+            clock.advance_clock(Duration::from_millis(900));
+            draw(&mut visual);
+            bounds(&mut visual, format!("moon-table-cell-tooltip:{full_text}"));
+        }
 
-    let mut up_to_date = vec!["market".to_string()];
-    add_new_columns(&mut up_to_date, super::COLUMNS_MIGRATION);
-    assert_eq!(up_to_date, ["market"]);
-}
+        let logo = bounds(&mut visual, "screener-exchange-logo".into());
+        assert!(
+            (0..2).any(|row| inside(
+                logo,
+                bounds(&mut visual, format!("moon-table-cell-{row}-1"))
+            )),
+            "the loaded logo must fit the default Exchange cell"
+        );
 
-/// Every late column is a real column, and the newest of them is what the layout is migrated to.
-///
-/// Mutation: add a column under a version above `COLUMNS_MIGRATION`, or bump the constant with no
-/// column behind it. In the first case the guard in the view returns before the column is ever
-/// offered; in the second every layout is rewritten for nothing.
-#[test]
-fn the_late_columns_exist_and_end_at_the_current_migration() {
-    for (_, key) in super::COLS_ADDED_LATE {
-        assert!(COLS.iter().any(|column| column.0 == *key), "{key}");
+        let mut narrow = layout_fixture::open(cx, &["exchange"], true);
+        draw(&mut narrow);
+        let cell = bounds(&mut narrow, "moon-table-cell-0-0".into());
+        assert_eq!(cell.size.width, px(MIN_DRAG_WIDTH));
+        if let Some(logo) = narrow.debug_bounds("screener-exchange-logo") {
+            assert!(
+                logo.top() >= cell.bottom(),
+                "the logo would leave no room for the ellipsis"
+            );
+        }
+        let caption = bounds(&mut narrow, "moon-table-cell-0-0-content".into());
+        narrow.simulate_mouse_move(caption.center(), None, Modifiers::none());
+        draw(&mut narrow);
+        clock.advance_clock(Duration::from_millis(900));
+        draw(&mut narrow);
+        bounds(&mut narrow, format!("moon-table-cell-tooltip:{LONG_VENUE}"));
+
+        // These optional columns share the production renderer and must fit when enabled.
+        let mut keys = super::DEFAULT_COLS.to_vec();
+        keys.extend([super::TYPE_KEY, super::LISTED_KEY, "step"]);
+        let mut visual = layout_fixture::open(cx, &keys, false);
+        draw(&mut visual);
+        for key in [super::TYPE_KEY, super::LISTED_KEY, "step"] {
+            let col = COLS
+                .iter()
+                .filter(|col| keys.contains(&col.0))
+                .position(|col| col.0 == key)
+                .expect("optional column");
+            let selector = format!("moon-table-cell-0-{col}");
+            let cell = bounds(&mut visual, selector.clone());
+            let content = bounds(&mut visual, format!("{selector}-content"));
+            assert!(
+                inside(content, cell),
+                "{locale} {key}: {content:?} outside {cell:?}"
+            );
+        }
     }
-    let newest = super::COLS_ADDED_LATE.iter().map(|(version, _)| *version);
-    assert_eq!(newest.max(), Some(super::COLUMNS_MIGRATION));
-    // Oldest first, so a set gains them in the order they were introduced.
-    assert!(
-        super::COLS_ADDED_LATE
-            .windows(2)
-            .all(|pair| pair[0].0 <= pair[1].0)
+}
+
+/// The default order must match the rendered schema and contain the agreed 16 columns.
+#[test]
+fn default_view_is_sixteen_columns_in_order() {
+    let expected = [
+        "market",
+        "exchange",
+        "core",
+        "vol24",
+        "hvol",
+        "vol5m",
+        "ask",
+        "d24h",
+        "d1h",
+        "d15m",
+        "funding",
+        "lev",
+        "orders",
+        "pnl",
+        "pos",
+        "auto_figures",
+    ];
+    assert_eq!(super::DEFAULT_COLS, expected);
+    let rendered: Vec<_> = COLS
+        .iter()
+        .map(|column| column.0)
+        .filter(|key| super::DEFAULT_COLS.contains(key))
+        .collect();
+    assert_eq!(rendered, expected);
+}
+
+/// Missing and stale saved column sets open with the same columns and Vol. descending.
+#[test]
+fn fresh_layout_gets_default_cols_and_vol_desc() {
+    for saved in [None, Some(vec![]), Some(vec!["retired-column".into()])] {
+        let visible = super::restore_visible_columns(saved);
+        assert_eq!(
+            visible,
+            super::DEFAULT_COLS
+                .iter()
+                .map(|&key| key.to_string())
+                .collect()
+        );
+        assert_eq!(restore_sort(None, &visible), ("vol24".into(), true));
+    }
+}
+
+/// Install version four once, including on a fresh layout so the marker gets flushed.
+#[test]
+fn reset_runs_once_and_marker_blocks_second_run() {
+    let mut layout = moon_core::config::WindowLayout::default();
+    assert!(super::migrate_layout(&mut layout, "screener-table:win"));
+    assert_eq!(layout.screener_columns_migration, Some(4));
+    assert!(!super::migrate_layout(&mut layout, "screener-table:win"));
+}
+
+/// A column the user hides after reset must stay hidden on reopen.
+#[test]
+fn user_choice_after_reset_survives_reopen() {
+    let id = "screener-table:win";
+    let mut layout = moon_core::config::WindowLayout::default();
+    super::migrate_layout(&mut layout, id);
+    layout
+        .table_visible_columns
+        .get_mut(id)
+        .unwrap()
+        .retain(|column| column != "auto_figures");
+    assert!(!super::migrate_layout(&mut layout, id));
+    let visible = super::restore_visible_columns(layout.table_visible_columns.get(id).cloned());
+    assert_eq!(visible.len(), 15);
+    assert!(!visible.contains("auto_figures"));
+}
+
+/// Replace the previous full-column layout, including its custom widths and dragged order.
+#[test]
+fn reset_replaces_29_column_market_desc_layout() {
+    let id = "screener-table:win";
+    let mut layout = moon_core::config::WindowLayout::default();
+    let previous: Vec<_> = COLS.iter().map(|column| column.0.to_string()).collect();
+    assert_eq!(previous.len(), 29);
+    layout.table_visible_columns.insert(id.into(), previous);
+    layout.screener_columns = Some(vec!["market".into()]);
+    layout.screener_columns_migration = Some(3);
+    layout.table_sorts.insert(
+        id.into(),
+        TableSortPreference {
+            column: "market".into(),
+            ascending: false,
+        },
     );
+    layout
+        .table_column_widths
+        .insert(id.into(), HashMap::from([("market".into(), 140.0)]));
+    layout
+        .table_column_order
+        .insert(id.into(), vec!["market".into(), "ask".into()]);
+    assert!(super::migrate_layout(&mut layout, id));
+    assert_eq!(layout.table_visible_columns[id], super::DEFAULT_COLS);
+    assert!(layout.screener_columns.is_none());
+    assert_eq!(layout.table_sorts[id].column, "vol24");
+    assert!(!layout.table_sorts[id].ascending);
+    assert!(!layout.table_column_widths.contains_key(id));
+    assert!(!layout.table_column_order.contains_key(id));
+}
+
+/// The initial volume text must activate a one-million-dollar volume floor.
+#[test]
+fn default_min_vol_parses_to_one_million() {
+    assert_eq!(super::parse_vol(super::DEFAULT_MIN_VOL), 1_000_000.0);
 }
 
 /// The three venue columns order rows by what they print, not by the float fallback.
@@ -119,8 +284,8 @@ fn venue_columns_sort_by_exchange_kind_and_listing() {
         coin_uc: "".into(),
         venue: EntryVenue {
             label: label.to_string().into(),
-            brand: None,
             kind,
+            ..Default::default()
         },
     };
     let rows = || {
@@ -425,23 +590,27 @@ pub(in crate::screener) fn sort_entries(entries: &mut [super::Entry], key: &str,
     }
 }
 
-/// The auto-figures column ships ON for everyone: a layout with no stored set shows every `COLS`
-/// key, and a set stored before the column existed gains it once, as every late column does. A
-/// layout already migrated past it — whoever has since hidden the column — is left alone.
-///
-/// Mutation: drop the column from `COLS` (a fresh layout never shows it), drop it from
-/// `COLS_ADDED_LATE` (everyone who ever arranged their columns never sees it), or file it under an
-/// old version (a layout already offered the location columns never gets it).
+/// Type and Listed use their short cell captions in both English and Russian.
 #[test]
-fn the_auto_figures_column_ships_on_for_a_stored_set_once() {
-    use super::super::auto_figures::AUTO_FIGURES_KEY;
-    assert!(COLS.iter().any(|column| column.0 == AUTO_FIGURES_KEY));
-    let mut arranged = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut arranged, 2);
-    assert_eq!(arranged, ["market", "vol24", "auto_figures"]);
-    let mut hidden_since = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut hidden_since, super::COLUMNS_MIGRATION);
-    assert_eq!(hidden_since, ["market", "vol24"]);
+fn type_and_listed_cells_use_short_captions_ru_en() {
+    for (locale, kinds, listed) in [
+        ("en", ["Spot", "Fut", "Quart"], ["Both", "Spot", "Fut"]),
+        ("ru", ["Spot", "Fut", "Quart"], ["Обе", "Спот", "Фьюч"]),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        assert_eq!(
+            super::short_kind_captions()
+                .each_ref()
+                .map(|label| label.as_ref()),
+            kinds
+        );
+        assert_eq!(
+            super::short_listed_captions()
+                .each_ref()
+                .map(|label| label.as_ref()),
+            listed
+        );
+    }
 }
 
 /// Hiding the auto-figures column while the table is sorted by it goes back to the sort STORED
@@ -477,4 +646,120 @@ fn hiding_the_auto_figures_sort_restores_the_stored_one() {
         super::sort_after_hiding("d1h", false, stored, &without_d1h),
         (("vol24".to_string(), true), true)
     );
+}
+
+/// Keep Russian count inflection and English plurality while showing a singleton's name.
+#[test]
+fn core_count_plural_forms_ru_en() {
+    let name = gpui::SharedString::from("CORE_A");
+    for (locale, expected) in [
+        (
+            "ru",
+            [
+                "CORE_A",
+                "2 ядра",
+                "5 ядер",
+                "11 ядер",
+                "21 ядро",
+                "22 ядра",
+            ],
+        ),
+        (
+            "en",
+            [
+                "CORE_A", "2 cores", "5 cores", "11 cores", "21 cores", "22 cores",
+            ],
+        ),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        for (n, expected) in [1, 2, 5, 11, 21, 22].into_iter().zip(expected) {
+            assert_eq!(super::core_label(&name, n).as_ref(), expected);
+        }
+    }
+}
+
+/// Create a venue market with a distinct name, leverage and PnL on each core.
+fn member(core: u64) -> super::Entry {
+    super::Entry {
+        row: moon_core::market::ScreenerRow {
+            core,
+            provider: core,
+            market: "XALPHAUSDT".into(),
+            coin: "XALPHA".into(),
+            leverage_x: core as i32 + 1,
+            max_leverage: 20,
+            isolated: Some(true),
+            core_pnl: -(core as f64 + 0.5),
+            orders: u32::from(core == 1),
+            ..Default::default()
+        }
+        .into(),
+        core_name: format!("CORE_{core}").into(),
+        market_uc: "XALPHAUSDT".into(),
+        coin_uc: "XALPHA".into(),
+        venue: super::EntryVenue {
+            id: Some(moon_core::feed::ExchangeId::new(4)),
+            label: "VENUE".into(),
+            ..Default::default()
+        },
+    }
+}
+
+/// Show eight member accounts in order and a localized remainder for longer lists.
+#[test]
+fn core_tooltip_caps_at_eight_plus_more() {
+    let entries: Vec<_> = (0..10).map(member).collect();
+    let members: Vec<_> = (0..entries.len()).collect();
+    for (locale, more) in [("en", "+2 more"), ("ru", "ещё 2")] {
+        let _locale = crate::test_locale::force(locale);
+        let text = super::core_tooltip(&entries, &members);
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines.len(), 9);
+        assert_eq!(lines[0], "CORE_0 · 1 / 20 I · -0.50$");
+        assert_eq!(lines[7], "CORE_7 · 8 / 20 I · -7.50$");
+        assert_eq!(lines[8], more);
+        assert_eq!(
+            super::core_tooltip(&entries, &members[..8]).lines().count(),
+            8
+        );
+    }
+}
+
+/// Use the same compact leverage style for single accounts and grouped summaries.
+#[test]
+fn leverage_prints_short_mode_letters() {
+    use super::{LevSummary, Mode, lev_text};
+    let row = member(9).row;
+    assert_eq!(
+        lev_text(super::aggregate([super::account(&row)]).lev),
+        "10 / 20 I"
+    );
+    assert_eq!(
+        lev_text(LevSummary::Same {
+            x: 10,
+            max: 10,
+            mode: Mode::C
+        }),
+        "10 / 10 C"
+    );
+    for (lo, hi, max, mode, text) in [
+        (3, 5, 5, Mode::I, "3–5 / 5 I"),
+        (5, 20, 20, Mode::Mixed, "5–20 / 20 I/C"),
+    ] {
+        assert_eq!(lev_text(LevSummary::Range { lo, hi, max, mode }), text);
+    }
+    assert_eq!(lev_text(LevSummary::Max(20)), "20");
+    assert_eq!(lev_text(LevSummary::None), "—");
+}
+
+/// Market clicks must follow the active member even when another member leads the group.
+#[test]
+fn market_cell_click_target_resolves_to_chart_core() {
+    let prepared = super::Prepared::new(vec![member(0), member(1)], "market", false);
+    let coin = super::super::view::CoinQuery::new("");
+    let selection = prepared.select(&[Some(0), Some(1)], &coin, 0.0, "market", false, true);
+    let target = super::MarketTarget::new(&selection.rows[0], &prepared.entries);
+    assert_eq!(target.core, 1);
+    assert_eq!(target.copy_identity(), (0, "XALPHAUSDT"));
+    assert_eq!(target.members.as_deref(), Some(&[0, 1][..]));
 }

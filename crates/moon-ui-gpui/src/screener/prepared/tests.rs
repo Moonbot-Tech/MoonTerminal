@@ -3,6 +3,61 @@
 use super::*;
 use moon_core::market::ScreenerRow;
 
+/// Measure cold and repeated selections with 4,000 markets repeated over 60 venue members.
+#[test]
+#[ignore = "scale probe: run by hand with --ignored --nocapture"]
+fn grouped_select_4000x60_probe() {
+    use std::{hint::black_box, time::Instant};
+
+    const MARKETS: usize = 4_000;
+    const CORES: usize = 60;
+    const REPEATS: u32 = 20;
+    let mut rows = entries(CORES as u64, MARKETS);
+    for entry in &mut rows {
+        entry.venue.id = Some(ExchangeId::new(4));
+    }
+    let prepared = Prepared::new(rows, "vol24", true);
+    let full: Vec<_> = (0..CORES).map(Some).collect();
+    let partial: Vec<_> = (0..CORES)
+        .map(|rank| (rank % 2 == 0).then_some(rank / 2))
+        .collect();
+    let coin = crate::screener::view::CoinQuery::new("");
+    for (scope, ranks, visible) in [("full", &full, CORES), ("partial", &partial, CORES / 2)] {
+        for grouped in [false, true] {
+            if grouped && scope == "partial" {
+                let start = Instant::now();
+                prepared.install_partial_groups(prepared.prepare_partial_groups(ranks.to_vec()));
+                let prime_ms = start.elapsed().as_secs_f64() * 1_000.0;
+                println!("[probe] partial-scope background prime_ms={prime_ms:.3}");
+            }
+            let select = || prepared.select(ranks, &coin, 0.0, "vol24", true, grouped);
+            let start = Instant::now();
+            let first = black_box(select());
+            let first_ms = start.elapsed().as_secs_f64() * 1_000.0;
+            // Each provider has two consecutive members. Both scopes retain every provider.
+            let market_count = if grouped {
+                MARKETS
+            } else {
+                MARKETS * (CORES / 2)
+            };
+            assert_eq!(first.shown, market_count);
+            assert_eq!(first.cores_shown, visible);
+            assert_eq!(
+                first.rows.len(),
+                if grouped { MARKETS } else { MARKETS * visible }
+            );
+            let start = Instant::now();
+            for _ in 0..REPEATS {
+                black_box(select());
+            }
+            let repeat_ms = start.elapsed().as_secs_f64() * 1_000.0 / f64::from(REPEATS);
+            println!(
+                "[probe] screener markets={MARKETS} cores={CORES} scope={scope} grouped={grouped} first_ms={first_ms:.3} repeat_mean_ms={repeat_ms:.3}"
+            );
+        }
+    }
+}
+
 /// Independent rows repeat markets across member cores and across two providers.
 fn entries(cores: u64, markets: usize) -> Vec<Entry> {
     (0..cores)
@@ -30,6 +85,27 @@ fn entries(cores: u64, markets: usize) -> Vec<Entry> {
             })
         })
         .collect()
+}
+
+/// Adapt the old parity assertions to the explicit ungrouped selection path.
+fn select_ungrouped(
+    prepared: &Prepared,
+    ranks: &[Option<usize>],
+    query: &crate::screener::view::CoinQuery,
+    volume: f64,
+    key: &str,
+    desc: bool,
+) -> (Vec<usize>, usize, usize) {
+    let selection = prepared.select(ranks, query, volume, key, desc, false);
+    let indices = selection
+        .rows
+        .into_iter()
+        .map(|row| {
+            assert!(row.group.is_none());
+            row.lead
+        })
+        .collect();
+    (indices, selection.total, selection.shown)
 }
 
 /// Source membership, provider counts, filter semantics and every sort match the owned pipeline.
@@ -64,7 +140,7 @@ fn selection_matches_owned_rows_for_all_controls_and_columns() {
                         .map(|&core| allowed[core as usize].then_some(core as usize))
                         .collect();
                     let (indices, actual_total, actual_shown) =
-                        prepared.select(&ranks, query, volume, key, desc);
+                        select_ungrouped(&prepared, &ranks, query, volume, key, desc);
                     assert_eq!((actual_total, actual_shown), (total, shown));
                     let identity = |entry: &Entry| (entry.row.core, entry.row.market.clone());
                     assert_eq!(
@@ -88,7 +164,8 @@ fn latest_controls_apply_to_both_publications() {
     let replacement = Prepared::new(entries(4, 6), "market", false);
     let allowed = [None, Some(1), None, None];
     for data in [&old, &replacement] {
-        let (indices, _, shown) = data.select(
+        let (indices, _, shown) = select_ungrouped(
+            data,
             &allowed,
             &crate::screener::view::CoinQuery::new("ALPHA1"),
             0.0,
@@ -118,7 +195,8 @@ fn keystrokes_match_the_full_filter_and_sort_in_both_directions() {
         "X", "XA", "XALPHA", "XALPHA1", "XALPHA10", "XALPHA1", "XA", "",
     ] {
         let query = CoinQuery::new(input);
-        let (selected, total, shown) = prepared.select(&ranks, &query, 0.0, "vol24", true);
+        let (selected, total, shown) =
+            select_ungrouped(&prepared, &ranks, &query, 0.0, "vol24", true);
         let (expected, old_total, old_shown) =
             filter_and_sort(entries(4, 20), &query, 0.0, "vol24", true);
         let key = |entry: &Entry| (entry.row.core, entry.row.market.clone());
@@ -153,7 +231,8 @@ fn hidden_first_member_does_not_reorder_visible_group_ties() {
             _ => Some(2),
         })
         .collect();
-    let (order, _, _) = prepared.select(
+    let (order, _, _) = select_ungrouped(
+        &prepared,
         &ranks,
         &crate::screener::view::CoinQuery::new(""),
         0.0,
@@ -190,7 +269,8 @@ fn the_listed_list_keeps_only_the_ticked_answers() {
     }
     let prepared = Prepared::new(rows, "market", false);
     let markets = |query: crate::screener::view::CoinQuery| {
-        let (indices, total, shown) = prepared.select(&[Some(0)], &query, 0.0, "market", false);
+        let (indices, total, shown) =
+            select_ungrouped(&prepared, &[Some(0)], &query, 0.0, "market", false);
         let names: Vec<_> = indices
             .iter()
             .map(|&index| prepared.entries[index].row.market.clone())
@@ -239,6 +319,7 @@ fn scale_probe_prepared_selection() {
                 0.0,
                 "vol24",
                 true,
+                false,
             ));
         }
         println!(
@@ -270,7 +351,7 @@ fn a_waiting_row_goes_with_the_no_answer_tick() {
     let ticked = |answers: &[Listing]| {
         let selected: HashSet<Listing> = answers.iter().copied().collect();
         let query = crate::screener::view::CoinQuery::new("").listed_in(&selected);
-        let (indices, _, _) = prepared.select(&[Some(0)], &query, 0.0, "market", false);
+        let (indices, _, _) = select_ungrouped(&prepared, &[Some(0)], &query, 0.0, "market", false);
         indices
             .iter()
             .map(|&index| prepared.entries[index].row.market.clone())
@@ -308,22 +389,360 @@ fn only_the_listed_list_hiding_a_waiting_row_counts_as_a_wait() {
     };
     let both_cores = [Some(0), Some(1)];
     // Narrowed to an answer the waiting rows may yet get: a wait.
-    assert!(prepared.hides_waiting_rows(&both_cores, &query("", &[Listing::FuturesOnly]), 0.0));
+    assert!(prepared.hides_waiting_rows(
+        &both_cores,
+        &query("", &[Listing::FuturesOnly]),
+        0.0,
+        false
+    ));
     // The ticks admit waiting rows: nothing is hidden by them.
-    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[Listing::Unknown]), 0.0));
-    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[]), 0.0));
+    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[Listing::Unknown]), 0.0, false));
+    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[]), 0.0, false));
     // The Market box already drops them.
     assert!(!prepared.hides_waiting_rows(
         &both_cores,
         &query("NOSUCHCOIN", &[Listing::FuturesOnly]),
-        0.0
+        0.0,
+        false,
     ));
     // So does the Vol. minimum.
-    assert!(!prepared.hides_waiting_rows(&both_cores, &query("", &[Listing::FuturesOnly]), 1.0e12));
+    assert!(!prepared.hides_waiting_rows(
+        &both_cores,
+        &query("", &[Listing::FuturesOnly]),
+        1.0e12,
+        false
+    ));
     // The waiting core is not on screen.
     assert!(!prepared.hides_waiting_rows(
         &[None, Some(0)],
         &query("", &[Listing::FuturesOnly]),
-        0.0
+        0.0,
+        false,
     ));
+}
+
+/// Give each fixture core its own provider while keeping the display venue independently set.
+fn set_venue(entry: &mut Entry, label: &'static str) {
+    std::sync::Arc::make_mut(&mut entry.row.market_data).provider = entry.row.core;
+    entry.venue.label = label.into();
+    entry.venue.id = Some(ExchangeId::new(4));
+}
+
+/// A grouped market's hidden Listed answer can only come from its visible lead.
+#[test]
+fn pending_non_lead_does_not_make_empty_state_collecting() {
+    let mut rows = entries(3, 2);
+    for entry in &mut rows {
+        set_venue(entry, "VENUE");
+        std::sync::Arc::make_mut(&mut entry.row.market_data).listing = if entry.row.core == 0 {
+            Listing::Both
+        } else {
+            Listing::Pending
+        };
+    }
+    let prepared = Prepared::new(rows, "market", false);
+    let coin = super::super::view::CoinQuery::new("").listed_in(&[Listing::FuturesOnly].into());
+    let ranks = [Some(0), Some(1), Some(2)];
+    assert!(
+        prepared
+            .select(&ranks, &coin, 0.0, "market", false, true)
+            .rows
+            .is_empty()
+    );
+    assert!(!prepared.hides_waiting_rows(&ranks, &coin, 0.0, true));
+    assert!(prepared.hides_waiting_rows(&[None, Some(1), Some(2)], &coin, 0.0, true));
+}
+
+/// The all-core scope separates venues while preserving one row for each canonical market.
+#[test]
+fn all_cores_scope_gives_one_row_per_venue_market() {
+    let mut rows = entries(3, 2);
+    for row in &mut rows {
+        // Sharing a human caption must not merge distinct venue IDs.
+        row.venue.label = "SAME CAPTION".into();
+        row.venue.id = Some(ExchangeId::with_dex(
+            4,
+            if row.row.core < 2 { "DEX_A" } else { "DEX_B" },
+        ));
+    }
+    let prepared = Prepared::new(rows, "market", false);
+    let selection = prepared.select(
+        &[Some(0), Some(1), Some(2)],
+        &crate::screener::view::CoinQuery::new("ALPHA1"),
+        0.0,
+        "market",
+        false,
+        true,
+    );
+    assert_eq!(
+        (selection.total, selection.shown, selection.cores_shown),
+        (4, 2, 3)
+    );
+    assert_eq!(
+        selection.rows[0].group.as_ref().unwrap().members.as_ref(),
+        [1, 3]
+    );
+    assert_eq!(
+        selection.rows[1].group.as_ref().unwrap().members.as_ref(),
+        [5]
+    );
+}
+
+/// Picking one core keeps that core's original entries, including their own account facts.
+#[test]
+fn single_core_scope_keeps_per_core_rows() {
+    let prepared = Prepared::new(entries(2, 2), "market", false);
+    let selection = prepared.select(
+        &[None, Some(1)],
+        &crate::screener::view::CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        false,
+    );
+    assert_eq!(
+        (selection.total, selection.shown, selection.cores_shown),
+        (2, 2, 1)
+    );
+    assert_eq!(
+        selection
+            .rows
+            .iter()
+            .map(|row| row.lead)
+            .collect::<Vec<_>>(),
+        [2, 3]
+    );
+    assert!(selection.rows.iter().all(|row| row.group.is_none()));
+    assert_eq!(prepared.entries[selection.rows[0].lead].row.core_pnl, 1.0);
+}
+
+/// Separate providers of one named venue still produce one row per market.
+#[test]
+fn per_core_mode_separate_providers_still_group_by_venue() {
+    let mut rows = entries(2, 1);
+    for row in &mut rows {
+        set_venue(
+            row,
+            if row.row.core == 0 {
+                "CAPTION_A"
+            } else {
+                "CAPTION_B"
+            },
+        );
+    }
+    let prepared = Prepared::new(rows, "market", false);
+    let selection = prepared.select(
+        &[Some(0), Some(1)],
+        &crate::screener::view::CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        true,
+    );
+    assert_eq!(
+        (selection.total, selection.shown, selection.cores_shown),
+        (1, 1, 2)
+    );
+    let group = selection.rows[0].group.as_ref().unwrap();
+    assert_eq!(group.members.as_ref(), [0, 1]);
+    assert_eq!(group.chart_core, 1);
+}
+
+/// A hidden lead cannot supply volume, account totals, or a chart for the visible subset.
+#[test]
+fn partial_core_visibility_reaggregates_subset() {
+    let mut rows = entries(3, 1);
+    for row in &mut rows {
+        set_venue(row, "VENUE_A");
+        std::sync::Arc::make_mut(&mut row.row.market_data).vol_24h = 100.0 * row.row.core as f64;
+        row.row.core_pnl = if row.row.core == 0 { -100.0 } else { 5.0 };
+    }
+    rows[1].row.orders = 0;
+    let prepared = Prepared::new(rows, "pnl", true);
+    let query = crate::screener::view::CoinQuery::new("");
+    let ranks = [None, Some(2), Some(1)];
+    let selection = prepared.select(&ranks, &query, 50.0, "pnl", true, true);
+    assert_eq!(
+        (selection.total, selection.shown, selection.cores_shown),
+        (1, 1, 2)
+    );
+    let row = &selection.rows[0];
+    assert_eq!(row.lead, 1);
+    let group = row.group.as_ref().unwrap();
+    assert_eq!(group.members.as_ref(), [1, 2]);
+    assert_eq!(group.agg.pnl, 10.0);
+    assert_eq!(group.agg.orders, 2);
+    assert_eq!(group.chart_core, 2);
+    let filtered = prepared.select(&ranks, &query, 150.0, "pnl", true, true);
+    assert_eq!(
+        (filtered.total, filtered.shown, filtered.cores_shown),
+        (1, 0, 0)
+    );
+}
+
+/// Market and volume edits must reuse the already aggregated partial membership.
+#[test]
+fn partial_scope_reuses_group_views_across_queries() {
+    use super::super::view::CoinQuery;
+
+    let mut rows = entries(3, 2);
+    for row in &mut rows {
+        set_venue(row, "VENUE_A");
+    }
+    let prepared = Prepared::new(rows, "vol24", true);
+    let ranks = [None, Some(1), Some(2)];
+    prepared.prime_partial_groups(&HashMap::from([(1, Some(1)), (2, Some(2))]));
+    let primed_members = {
+        let cache = prepared.partial_groups.lock().unwrap();
+        let scope = cache.as_ref().unwrap();
+        let slot = prepared.group_of[3] as usize;
+        Arc::clone(&scope.groups[slot].as_ref().unwrap().members)
+    };
+    let first = prepared.select(&ranks, &CoinQuery::new(""), 0.0, "vol24", true, true);
+    let second = prepared.select(&ranks, &CoinQuery::new("XALPHA1"), 1.0, "vol24", true, true);
+    assert_eq!((second.total, second.shown), (2, 1));
+    let row = &second.rows[0];
+    let prior = first
+        .rows
+        .iter()
+        .find(|first| first.lead == row.lead)
+        .unwrap();
+    let members = &row.group.as_ref().unwrap().members;
+    assert_eq!(members.as_ref(), [3, 5]);
+    assert!(Arc::ptr_eq(&primed_members, members));
+    assert!(Arc::ptr_eq(&prior.group.as_ref().unwrap().members, members));
+
+    let changed = prepared.select(
+        &[Some(0), None, Some(2)],
+        &CoinQuery::new("XALPHA1"),
+        1.0,
+        "vol24",
+        true,
+        true,
+    );
+    assert_eq!(
+        changed.rows[0].group.as_ref().unwrap().members.as_ref(),
+        [1, 5]
+    );
+}
+
+/// An unanswered aggregate stays last, even behind a negative or zero session result.
+#[test]
+fn grouped_session_sort_keeps_absence_last_in_both_directions() {
+    use super::super::view::CoinQuery;
+
+    let mut rows = entries(2, 3);
+    rows[0].row.session = None;
+    rows[3].row.session = None;
+    rows[1].row.session = Some(-4.0);
+    rows[4].row.session = Some(1.0);
+    rows[2].row.session = Some(0.0);
+    rows[5].row.session = None;
+    let prepared = Prepared::new(rows, "session_profit", true);
+    for (descending, expected) in [(false, [1, 2, 0]), (true, [2, 1, 0])] {
+        let selection = prepared.select(
+            &[Some(0), Some(1)],
+            &CoinQuery::new(""),
+            0.0,
+            "session_profit",
+            descending,
+            true,
+        );
+        let leads: Vec<_> = selection.rows.iter().map(|row| row.lead).collect();
+        assert_eq!(leads, expected);
+    }
+}
+
+/// Every grouped publication sort must agree with an on-demand sort of the same leads.
+#[test]
+fn cached_group_order_matches_uncached_order_for_every_key_and_direction() {
+    use super::super::{table::COLS, view::CoinQuery};
+
+    let rows = || {
+        let mut rows = entries(4, 3);
+        rows[0].row.session = Some(-3.0);
+        rows[2].row.session = Some(0.0);
+        rows[5].row.session = Some(5.0);
+        rows[6].row.pos_size = 4.0;
+        rows[8].row.leverage_x = 10;
+        rows[10].row.core_pnl = -10.0;
+        rows
+    };
+    let query = CoinQuery::new("");
+    let ranks = [Some(0), Some(1), Some(2), Some(3)];
+    for &(key, ..) in COLS {
+        for desc in [false, true] {
+            let prepared = Prepared::new(rows(), key, desc);
+            let mut uncached: Vec<_> = prepared
+                .market_groups
+                .iter()
+                .map(|group| group.members[0])
+                .collect();
+            if key == AUTO_FIGURES_KEY {
+                assert_eq!(prepared.sorted_groups, uncached);
+                query.sort_by_scan(&prepared.entries, &mut uncached, desc);
+            } else {
+                sort_group_leads(&prepared.entries, &mut uncached, key, desc, |lead| {
+                    &prepared.market_groups[prepared.group_of[lead] as usize]
+                });
+                assert_eq!(prepared.sorted_groups, uncached, "{key}, descending={desc}");
+            }
+            let selected = prepared.select(&ranks, &query, 0.0, key, desc, true);
+            let selected: Vec<_> = selected.rows.iter().map(|row| row.lead).collect();
+            assert_eq!(selected, uncached, "{key}, descending={desc}");
+        }
+    }
+}
+
+/// The aggregate can reverse the leads' PnL order in both cached and immediate sorts.
+#[test]
+fn grouped_sort_by_pnl_uses_sum() {
+    let mut rows = entries(2, 2);
+    for (row, pnl) in rows.iter_mut().zip([9.0, 2.0, -20.0, 3.0]) {
+        row.row.core_pnl = pnl;
+    }
+    let prepared = Prepared::new(rows, "pnl", true);
+    let leads = |desc| {
+        prepared
+            .select(
+                &[Some(0), Some(1)],
+                &crate::screener::view::CoinQuery::new(""),
+                0.0,
+                "pnl",
+                desc,
+                true,
+            )
+            .rows
+            .into_iter()
+            .map(|row| row.lead)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(leads(true), [1, 0]);
+    assert_eq!(leads(false), [0, 1]);
+}
+
+/// A missing label falls back to provider identity rather than merging unknown venues.
+#[test]
+fn unidentified_venue_never_merges_across_providers() {
+    let prepared = Prepared::new(entries(3, 1), "market", false);
+    let selection = prepared.select(
+        &[Some(0), Some(1), Some(2)],
+        &crate::screener::view::CoinQuery::new(""),
+        0.0,
+        "market",
+        false,
+        true,
+    );
+    assert_eq!(
+        (selection.total, selection.shown, selection.cores_shown),
+        (2, 2, 3)
+    );
+    assert_eq!(
+        selection.rows[0].group.as_ref().unwrap().members.as_ref(),
+        [0, 1]
+    );
+    assert_eq!(
+        selection.rows[1].group.as_ref().unwrap().members.as_ref(),
+        [2]
+    );
 }
