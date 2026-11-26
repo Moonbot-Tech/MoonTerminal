@@ -123,45 +123,37 @@ fn controls_resample_market_data_after_immediate_cached_selection() {
     assert!(rebuild.find("self.filter_cached(cx);").unwrap() < rebuild.find("cx.spawn(").unwrap());
 }
 
-/// The column migration runs once: guard first, the stored sets next, then the marker, then an
-/// unconditional dirty mark so the marker reaches disk.
-///
-/// Mutation: drop the marker write, or mark the layout dirty only when a set changed. Either way
-/// the guard never short-circuits on a later open, and a Coin column the user has hidden comes
-/// back every time the window opens. Pinned as a source contract because the block runs inside a
-/// view constructor, which needs a native GPUI window.
+/// The view constructor saves the result of the one-time layout migration.
 #[test]
 fn the_column_migration_records_its_completion() {
     let source = include_str!("../view.rs");
     let block = source
-        .split_once("b.layout.screener_columns_migration.unwrap_or(0)")
-        .expect("the migration must be guarded by its marker")
+        .split_once("if migrate_layout(&mut b.layout, &widths_id) {")
+        .expect("opening the Screener applies the migration")
         .1
-        .split_once("});")
-        .expect("the migration runs in one backend update")
+        .split_once('}')
+        .unwrap()
         .0;
-    let guard = block
-        .find("return;")
-        .expect("an applied migration must not run again");
-    let rewrite = block
-        .find("add_new_columns(keys, applied)")
-        .expect("the stored sets must gain the late columns");
-    let marker = block
-        .find("b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);")
-        .expect("the migration must record its completion");
-    let dirty = block
-        .find("b.layout_dirty = true;")
-        .expect("the marker must be flushed");
-    assert!(guard < rewrite && rewrite < marker && marker < dirty);
-    // Past the last stored set, nothing may open a new block: the marker and the dirty mark sit at
-    // the closure's own level, so neither can end up under a condition on whether a set changed.
-    let last_rewrite = block
-        .rfind("add_new_columns(keys, applied)")
-        .expect("checked above");
-    assert!(
-        !block[last_rewrite..dirty].contains('{'),
-        "the marker and the dirty mark must not depend on whether a set was rewritten"
-    );
+    assert!(block.contains("b.layout_dirty = true;"));
+}
+
+/// The menu reset uses the same saved defaults as migration and reapplies them to the live view.
+#[test]
+fn restore_default_view_resets_cols_sort_filter() {
+    let source = include_str!("../view.rs");
+    let restore = source
+        .split_once("fn restore_default_view(")
+        .unwrap()
+        .1
+        .split_once("fn persist_visible_cols(")
+        .unwrap()
+        .0;
+    assert!(restore.contains("reset_layout_to_default(&mut b.layout, &id)"));
+    assert!(restore.contains("self.visible_cols = restore_visible_columns(None)"));
+    assert!(restore.contains("table_persist::reset(&self.table_state, cx)"));
+    assert!(restore.contains("state.column_order.clear()"));
+    assert!(restore.contains("state.set_value(DEFAULT_MIN_VOL, window, cx)"));
+    assert!(restore.contains("self.apply_sort((DEFAULT_SORT.0.to_string(), DEFAULT_SORT.1)"));
 }
 use std::collections::HashSet;
 

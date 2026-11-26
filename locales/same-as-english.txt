@@ -263,6 +263,10 @@ report.side.short: tr pt vi
 report.totals: es pt
 report.totals_n: es pt
 report.traded_volume: pt
+screener.kind_short_futures: ru
+screener.kind_short_quarterly: ru
+screener.kind_short_spot: ru tr
+screener.listed_short_spot_only: tr
 screener.window_title: es pt
 security.bits: es pt
 settings.nav.group.common: es

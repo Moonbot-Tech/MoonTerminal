@@ -517,6 +517,120 @@ fn partial_core_visibility_reaggregates_subset() {
     );
 }
 
+/// Market and volume edits must reuse the already aggregated partial membership.
+#[test]
+fn partial_scope_reuses_group_views_across_queries() {
+    use super::super::view::CoinQuery;
+
+    let mut rows = entries(3, 2);
+    for row in &mut rows {
+        set_venue(row, "VENUE_A");
+    }
+    let prepared = Prepared::new(rows, "vol24", true);
+    let ranks = [None, Some(1), Some(2)];
+    prepared.prime_partial_groups(&HashMap::from([(1, Some(1)), (2, Some(2))]));
+    let primed_members = {
+        let cache = prepared.partial_groups.lock().unwrap();
+        let scope = cache.as_ref().unwrap();
+        let slot = prepared.group_of[3] as usize;
+        Arc::clone(&scope.groups[slot].as_ref().unwrap().members)
+    };
+    let first = prepared.select(&ranks, &CoinQuery::new(""), 0.0, "vol24", true, true);
+    let second = prepared.select(&ranks, &CoinQuery::new("XALPHA1"), 1.0, "vol24", true, true);
+    assert_eq!((second.total, second.shown), (2, 1));
+    let row = &second.rows[0];
+    let prior = first
+        .rows
+        .iter()
+        .find(|first| first.lead == row.lead)
+        .unwrap();
+    let members = &row.group.as_ref().unwrap().members;
+    assert_eq!(members.as_ref(), [3, 5]);
+    assert!(Arc::ptr_eq(&primed_members, members));
+    assert!(Arc::ptr_eq(&prior.group.as_ref().unwrap().members, members));
+
+    let changed = prepared.select(
+        &[Some(0), None, Some(2)],
+        &CoinQuery::new("XALPHA1"),
+        1.0,
+        "vol24",
+        true,
+        true,
+    );
+    assert_eq!(
+        changed.rows[0].group.as_ref().unwrap().members.as_ref(),
+        [1, 5]
+    );
+}
+
+/// An unanswered aggregate stays last, even behind a negative or zero session result.
+#[test]
+fn grouped_session_sort_keeps_absence_last_in_both_directions() {
+    use super::super::view::CoinQuery;
+
+    let mut rows = entries(2, 3);
+    rows[0].row.session = None;
+    rows[3].row.session = None;
+    rows[1].row.session = Some(-4.0);
+    rows[4].row.session = Some(1.0);
+    rows[2].row.session = Some(0.0);
+    rows[5].row.session = None;
+    let prepared = Prepared::new(rows, "session_profit", true);
+    for (descending, expected) in [(false, [1, 2, 0]), (true, [2, 1, 0])] {
+        let selection = prepared.select(
+            &[Some(0), Some(1)],
+            &CoinQuery::new(""),
+            0.0,
+            "session_profit",
+            descending,
+            true,
+        );
+        let leads: Vec<_> = selection.rows.iter().map(|row| row.lead).collect();
+        assert_eq!(leads, expected);
+    }
+}
+
+/// Every grouped publication sort must agree with an on-demand sort of the same leads.
+#[test]
+fn cached_group_order_matches_uncached_order_for_every_key_and_direction() {
+    use super::super::{table::COLS, view::CoinQuery};
+
+    let rows = || {
+        let mut rows = entries(4, 3);
+        rows[0].row.session = Some(-3.0);
+        rows[2].row.session = Some(0.0);
+        rows[5].row.session = Some(5.0);
+        rows[6].row.pos_size = 4.0;
+        rows[8].row.leverage_x = 10;
+        rows[10].row.core_pnl = -10.0;
+        rows
+    };
+    let query = CoinQuery::new("");
+    let ranks = [Some(0), Some(1), Some(2), Some(3)];
+    for &(key, ..) in COLS {
+        for desc in [false, true] {
+            let prepared = Prepared::new(rows(), key, desc);
+            let mut uncached: Vec<_> = prepared
+                .market_groups
+                .iter()
+                .map(|group| group.members[0])
+                .collect();
+            if key == AUTO_FIGURES_KEY {
+                assert_eq!(prepared.sorted_groups, uncached);
+                query.sort_by_scan(&prepared.entries, &mut uncached, desc);
+            } else {
+                sort_group_leads(&prepared.entries, &mut uncached, key, desc, |lead| {
+                    &prepared.market_groups[prepared.group_of[lead] as usize]
+                });
+                assert_eq!(prepared.sorted_groups, uncached, "{key}, descending={desc}");
+            }
+            let selected = prepared.select(&ranks, &query, 0.0, key, desc, true);
+            let selected: Vec<_> = selected.rows.iter().map(|row| row.lead).collect();
+            assert_eq!(selected, uncached, "{key}, descending={desc}");
+        }
+    }
+}
+
 /// The aggregate can reverse the leads' PnL order in both cached and immediate sorts.
 #[test]
 fn grouped_sort_by_pnl_uses_sum() {

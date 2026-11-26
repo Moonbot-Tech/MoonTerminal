@@ -7,7 +7,7 @@ use moon_core::market::SharedScreenerRow;
 use moon_core::market::listing::Listing;
 use moon_core::session::CoreId;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// A coherent source publication, including dense identities for cheap footer counts.
 #[derive(Default)]
@@ -25,11 +25,44 @@ pub(super) struct Prepared {
     market_groups: Vec<GroupView>,
     group_of: Vec<u32>,
     sorted_groups: Vec<usize>,
+    partial_groups: Mutex<Option<PartialGroups>>,
     /// Whether some row's Listed answer is still on its way (`Listing::Pending`).
     pub listing_pending: bool,
     /// When the last of those answers is expected, in Unix milliseconds; set by the publication
     /// that built this, from the listing book it signed the rows with.
     pub listing_settles_ms: Option<i64>,
+}
+
+/// The latest partial core scope and its most recently requested publication sort.
+struct PartialGroups {
+    ranks: Vec<Option<usize>>,
+    groups: Vec<Option<GroupView>>,
+    sort: Option<(String, bool)>,
+    sorted_leads: Vec<usize>,
+}
+
+impl PartialGroups {
+    /// Reuse the same group views across sort changes and filter edits.
+    fn sort(&mut self, prepared: &Prepared, key: &str, desc: bool) {
+        if self.sort.as_ref().map(|(key, desc)| (key.as_str(), *desc)) == Some((key, desc)) {
+            return;
+        }
+        self.sorted_leads.clear();
+        self.sorted_leads
+            .extend(self.groups.iter().flatten().map(|group| group.members[0]));
+        sort_group_leads(
+            &prepared.entries,
+            &mut self.sorted_leads,
+            key,
+            desc,
+            |lead| {
+                self.groups[prepared.group_of[lead] as usize]
+                    .as_ref()
+                    .expect("lead belongs to a visible group")
+            },
+        );
+        self.sort = Some((key.to_string(), desc));
+    }
 }
 
 /// Fields used by selection, kept together to avoid chasing market data in sorted order.
@@ -194,6 +227,7 @@ impl Prepared {
             market_groups,
             group_of,
             sorted_groups,
+            partial_groups: Mutex::default(),
             listing_pending,
             listing_settles_ms: None,
         }
@@ -284,13 +318,7 @@ impl Prepared {
         let mut shown = vec![false; self.markets];
         let mut cores_shown = vec![false; self.cores.len()];
         let mut indices = Vec::with_capacity(self.entries.len());
-        let text_matches: Vec<_> = self
-            .search_rows
-            .iter()
-            .map(|&index| {
-                coin.is_empty() || super::view::matches_coin_filter(&self.entries[index], coin)
-            })
-            .collect();
+        let text_matches = self.text_matches(coin);
         let volume_active = min_vol > 0.0;
         let mut admit = |index: usize| {
             let row = &self.slots[index];
@@ -334,7 +362,71 @@ impl Prepared {
         }
     }
 
-    /// Filter venue markets on their first visible member, reusing totals for fully visible groups.
+    /// Match each distinct search identity once per query, even if many cores publish it.
+    fn text_matches(&self, coin: &super::view::CoinQuery) -> Vec<bool> {
+        self.search_rows
+            .iter()
+            .map(|&index| {
+                coin.is_empty() || super::view::matches_coin_filter(&self.entries[index], coin)
+            })
+            .collect()
+    }
+
+    /// Prepare the current partial scope off-thread with the next market publication.
+    pub fn prime_partial_groups(&self, visible: &HashMap<CoreId, Option<usize>>) {
+        let ranks: Vec<_> = self
+            .cores
+            .iter()
+            .map(|core| visible.get(core).copied().flatten())
+            .collect();
+        let count = ranks.iter().flatten().count();
+        if (2..self.cores.len()).contains(&count) {
+            let mut cache = self.partial_group_cache(&ranks);
+            if self.sort_key != AUTO_FIGURES_KEY {
+                cache.as_mut().expect("partial groups cached").sort(
+                    self,
+                    &self.sort_key,
+                    self.sort_desc,
+                );
+            }
+        }
+    }
+
+    /// Cache visible groups for the current core scope, bounded to one scope per publication.
+    fn partial_group_cache(
+        &self,
+        ranks: &[Option<usize>],
+    ) -> std::sync::MutexGuard<'_, Option<PartialGroups>> {
+        let mut cache = self.partial_groups.lock().expect("partial group cache");
+        if cache.as_ref().is_none_or(|scope| scope.ranks != ranks) {
+            let visible = |index: usize| ranks[self.slots[index].core].is_some();
+            let groups = self
+                .market_groups
+                .iter()
+                .map(|full| {
+                    if full.members.iter().copied().all(visible) {
+                        return Some(full.clone());
+                    }
+                    let members: Vec<_> = full
+                        .members
+                        .iter()
+                        .copied()
+                        .filter(|&index| visible(index))
+                        .collect();
+                    (!members.is_empty()).then(|| GroupView::new(&self.entries, members.into()))
+                })
+                .collect();
+            *cache = Some(PartialGroups {
+                ranks: ranks.to_vec(),
+                groups,
+                sort: None,
+                sorted_leads: Vec::new(),
+            });
+        }
+        cache
+    }
+
+    /// Filter venue markets on their first visible member and reuse scope totals and stable sorts.
     fn select_grouped(
         &self,
         ranks: &[Option<usize>],
@@ -345,82 +437,92 @@ impl Prepared {
     ) -> Selection {
         let allowed = ranks.iter().filter(|rank| rank.is_some()).count();
         let all_visible = allowed == self.cores.len();
-        let cached_sort = all_visible
-            && key == self.sort_key
-            && desc == self.sort_desc
-            && key != AUTO_FIGURES_KEY;
-        let mut total = 0;
+        let scan_sort = key == AUTO_FIGURES_KEY;
+        let cached_sort = !scan_sort && key == self.sort_key && desc == self.sort_desc;
+        let mut partial_cache = (!all_visible).then(|| self.partial_group_cache(ranks));
+        if !scan_sort && let Some(cache) = partial_cache.as_mut() {
+            cache
+                .as_mut()
+                .expect("partial groups cached")
+                .sort(self, key, desc);
+        }
+        let scope = partial_cache
+            .as_ref()
+            .map(|cache| cache.as_ref().expect("partial groups cached"));
+        let unsorted_leads;
+        let (leads, already_sorted) = match scope {
+            Some(scope) if !scan_sort => (scope.sorted_leads.as_slice(), true),
+            Some(scope) => {
+                unsorted_leads = scope
+                    .groups
+                    .iter()
+                    .flatten()
+                    .map(|group| group.members[0])
+                    .collect::<Vec<_>>();
+                (unsorted_leads.as_slice(), false)
+            }
+            None if cached_sort => (self.sorted_groups.as_slice(), true),
+            None => {
+                unsorted_leads = self
+                    .market_groups
+                    .iter()
+                    .map(|group| group.members[0])
+                    .collect();
+                (unsorted_leads.as_slice(), false)
+            }
+        };
+        let group_for = |lead: usize| {
+            let slot = self.group_of[lead] as usize;
+            match scope {
+                Some(scope) => scope.groups[slot]
+                    .as_ref()
+                    .expect("lead belongs to a visible group"),
+                None => &self.market_groups[slot],
+            }
+        };
+        let text_matches = self.text_matches(coin);
+        let volume_active = min_vol > 0.0;
         let mut cores_shown = vec![false; self.cores.len()];
         let mut core_count = 0;
-        let mut leads = Vec::with_capacity(self.market_groups.len());
-        let mut selected = vec![None; self.market_groups.len()];
-        let visible = |index: usize| ranks[self.slots[index].core].is_some();
-        let mut admit = |slot: usize| {
-            let full = &self.market_groups[slot];
-            let lead = if all_visible {
-                Some(full.members[0])
-            } else {
-                full.visible_lead(visible)
-            };
-            let Some(lead) = lead else { return };
-            total += 1;
-            let entry = &self.entries[lead];
-            if !coin.admits_listing(entry.row.listing)
-                || !passes_text_and_volume(entry, coin, min_vol)
-            {
-                return;
-            }
-            let group = if all_visible || full.members.iter().copied().all(visible) {
-                full.clone()
-            } else {
-                let members = full
-                    .members
-                    .iter()
-                    .copied()
-                    .filter(|&index| visible(index))
-                    .collect();
-                GroupView::new(&self.entries, members)
-            };
-            if core_count < allowed {
-                for &index in group.members.iter() {
-                    let shown = &mut cores_shown[self.slots[index].core];
-                    if !*shown {
-                        *shown = true;
-                        core_count += 1;
+        let mut filtered: Vec<_> = leads
+            .iter()
+            .copied()
+            .filter(|&lead| {
+                let row = &self.slots[lead];
+                text_matches[row.search]
+                    && (!volume_active || row.volume >= min_vol)
+                    && coin.admits_listing(row.listing)
+                    && coin.admits_scan(&self.entries[lead])
+            })
+            .collect();
+        if scan_sort {
+            coin.sort_by_scan(&self.entries, &mut filtered, desc);
+        } else if !already_sorted {
+            sort_group_leads(&self.entries, &mut filtered, key, desc, group_for);
+        }
+        let rows = filtered
+            .into_iter()
+            .map(|lead| {
+                let group = group_for(lead);
+                if core_count < allowed {
+                    for &index in group.members.iter() {
+                        let shown = &mut cores_shown[self.slots[index].core];
+                        if !*shown {
+                            *shown = true;
+                            core_count += 1;
+                        }
                     }
                 }
-            }
-            leads.push(lead);
-            selected[slot] = Some(group);
-        };
-        if cached_sort {
-            for &lead in &self.sorted_groups {
-                admit(self.group_of[lead] as usize);
-            }
-        } else {
-            for slot in 0..self.market_groups.len() {
-                admit(slot);
-            }
-            if key == AUTO_FIGURES_KEY {
-                coin.sort_by_scan(&self.entries, &mut leads, desc);
-            } else {
-                sort_group_leads(&self.entries, &mut leads, key, desc, |lead| {
-                    selected[self.group_of[lead] as usize]
-                        .as_ref()
-                        .expect("selected group")
-                });
-            }
-        }
-        Selection {
-            shown: leads.len(),
-            rows: leads
-                .into_iter()
-                .map(|lead| SelectedRow {
+                SelectedRow {
                     lead,
-                    group: selected[self.group_of[lead] as usize].take(),
-                })
-                .collect(),
-            total,
+                    group: Some(group.clone()),
+                }
+            })
+            .collect::<Vec<_>>();
+        Selection {
+            shown: rows.len(),
+            rows,
+            total: leads.len(),
             cores_shown: core_count,
         }
     }
@@ -458,16 +560,29 @@ fn sort_group_leads<'a>(
     desc: bool,
     group: impl Fn(usize) -> &'a GroupView,
 ) {
-    let compare: fn(&GroupView, &GroupView) -> std::cmp::Ordering = match key {
+    use std::cmp::Ordering;
+
+    if key == "session_profit" {
+        leads.sort_by(
+            |&a, &b| match (group(a).agg.session, group(b).agg.session) {
+                (Some(a), Some(b)) => {
+                    if desc {
+                        b.total_cmp(&a)
+                    } else {
+                        a.total_cmp(&b)
+                    }
+                }
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            },
+        );
+        return;
+    }
+    let compare: fn(&GroupView, &GroupView) -> Ordering = match key {
         "core" => |a, b| a.members.len().cmp(&b.members.len()),
         "orders" => |a, b| a.agg.orders.cmp(&b.agg.orders),
         "pnl" => |a, b| a.agg.pnl.total_cmp(&b.agg.pnl),
-        "session_profit" => |a, b| {
-            a.agg
-                .session
-                .unwrap_or(0.0)
-                .total_cmp(&b.agg.session.unwrap_or(0.0))
-        },
         "pos" => |a, b| a.agg.pos.total_cmp(&b.agg.pos),
         "lev" => |a, b| leverage_order(a.agg.lev).cmp(&leverage_order(b.agg.lev)),
         _ => return sort_indices(entries, leads, key, desc),

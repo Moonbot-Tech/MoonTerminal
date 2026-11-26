@@ -29,8 +29,10 @@ use crate::{Backend, design};
 use super::auto_figures::ScanQuery;
 use super::prepared::SelectedRow;
 use super::table::{
-    COLS, ColDef, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE, column_label, column_title, moon,
-    moon_alpha, parse_vol, screener_row,
+    COLS, ColDef, DEFAULT_MIN_VOL, DEFAULT_SORT, Entry, EntryVenue, RowStyle, UNKNOWN_CHOICE,
+    column_label, column_title, migrate_layout, moon, moon_alpha, parse_vol,
+    reset_layout_to_default, restore_visible_columns, screener_row, short_kind_captions,
+    short_listed_captions,
 };
 
 mod scan;
@@ -52,11 +54,6 @@ const LISTED_CHOICES: [Listing; 4] = [
 ];
 
 const SCREENER_HEADER_H: f32 = 32.0;
-
-/// Version of the one-shot migration that adds late columns to stored visible sets; see
-/// [`super::table::add_new_columns`] and `WindowLayout::screener_columns_migration`. The number
-/// itself lives beside the columns it counts.
-const SCREENER_COLUMNS_MIGRATION: u32 = super::table::COLUMNS_MIGRATION;
 
 /// Owned counts reused across publications until the corresponding core receives new orders.
 type OrderCounts = Arc<HashMap<String, u32>>;
@@ -217,7 +214,8 @@ impl ScreenerView {
         cx: &mut Context<Self>,
     ) -> Self {
         let coin_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("BTC"));
-        let dvol_input = cx.new(|cx| MoonInputState::new(window, cx).placeholder("500k"));
+        let dvol_input =
+            cx.new(|cx| MoonInputState::new(window, cx).default_value(DEFAULT_MIN_VOL));
         for input in [&coin_input, &dvol_input] {
             cx.subscribe(input, |this: &mut Self, _, ev: &MoonInputEvent, cx| {
                 let _stall = crate::diag::stall::span(
@@ -250,30 +248,16 @@ impl ScreenerView {
         // Screener always runs in a separate window, so its width context is fixed to `:win`.
         let widths_id = crate::persistence::table_persist::ctx_id("screener-table", true);
 
-        // A stored visible set is an explicit list, so a column added later is absent from it and
-        // would stay hidden for everyone who ever arranged their columns. Add it once, and record
-        // that in the same document as the sets, so a column the user then hides stays hidden.
+        // Persist the new view and its migration marker together so later customizations survive.
         backend.update(cx, |b, _| {
-            // Each stored set gains only the columns introduced AFTER the version it records, so
-            // a column offered by an earlier migration and hidden since stays hidden.
-            let applied = b.layout.screener_columns_migration.unwrap_or(0);
-            if applied >= SCREENER_COLUMNS_MIGRATION {
-                return;
+            if migrate_layout(&mut b.layout, &widths_id) {
+                b.layout_dirty = true;
             }
-            if let Some(keys) = b.layout.table_visible_columns.get_mut(&widths_id) {
-                super::table::add_new_columns(keys, applied);
-            }
-            if let Some(keys) = b.layout.screener_columns.as_mut() {
-                super::table::add_new_columns(keys, applied);
-            }
-            b.layout.screener_columns_migration = Some(SCREENER_COLUMNS_MIGRATION);
-            // Unconditionally: the marker must reach disk even when no set needed rewriting.
-            b.layout_dirty = true;
         });
 
         // Prefer the shared per-context `table_visible_columns` entry for `screener-table:win`.
         // When absent, migrate from legacy `screener_columns`. Ignore unknown keys left by renamed
-        // or removed columns; an empty valid set falls back to every current column.
+        // or removed columns; an empty valid set falls back to the curated view.
         //
         // A layout saved before the PnL column was renamed keys it `session`, a key that is now
         // retired; the list, the sort and the widths all bring it current on read (see
@@ -281,21 +265,7 @@ impl ScreenerView {
         let saved_cols = crate::persistence::table_persist::visible(backend.read(cx), &widths_id)
             .or_else(|| backend.read(cx).layout.screener_columns.clone())
             .map(super::table::migrate_legacy_keys);
-        let visible_cols: HashSet<String> = match saved_cols {
-            Some(list) => {
-                let set: HashSet<String> = list
-                    .iter()
-                    .filter(|k| COLS.iter().any(|c| c.0 == k.as_str()))
-                    .cloned()
-                    .collect();
-                if set.is_empty() {
-                    COLS.iter().map(|c| c.0.to_string()).collect()
-                } else {
-                    set
-                }
-            }
-            None => COLS.iter().map(|c| c.0.to_string()).collect(),
-        };
+        let visible_cols = restore_visible_columns(saved_cols);
         let restored_sort = super::table::restore_sort(
             super::table::migrate_legacy_sort(crate::persistence::table_persist::saved_sort(
                 backend.read(cx),
@@ -449,7 +419,7 @@ impl ScreenerView {
             crate::diag::stall::span(crate::diag::stall::StallKind::Input, "screener:rebuild");
         self.refresh_task = None;
         crate::diag::bump(&crate::diag::SCREENER_REBUILD);
-        self.filter_cached(cx);
+        let visible = self.filter_cached(cx);
         let b = self.backend.read(cx);
         let source = b.session.market_source();
         let mut groups: Vec<(CoreId, Vec<CoreId>)> = Vec::new();
@@ -508,6 +478,7 @@ impl ScreenerView {
                     }
                     let mut prepared =
                         super::prepared::Prepared::new(entries, &sort_key, sort_desc);
+                    prepared.prime_partial_groups(&visible);
                     // Read after the rows were signed: the kept book is the one they were signed
                     // with, or a newer one, and either says when the waiting rows settle.
                     prepared.listing_settles_ms = source.listing_settles_ms();
@@ -527,8 +498,8 @@ impl ScreenerView {
         }));
     }
 
-    /// Filter a prepared publication using the live preset and controls without cloning rows.
-    fn filter_cached(&mut self, cx: &mut Context<Self>) {
+    /// Filter published rows and return the visible core ranks for the next publication.
+    fn filter_cached(&mut self, cx: &mut Context<Self>) -> HashMap<CoreId, Option<usize>> {
         let coin = CoinQuery::new(&self.coin_input.read(cx).value())
             .listed_in(&self.listed_sel)
             .with_scan(self.scan_query(cx));
@@ -538,7 +509,7 @@ impl ScreenerView {
         let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
         let sessions = b.session.sessions();
         self.sessions_total = sessions.len();
-        let displayed: HashMap<_, _> = sessions
+        let mut displayed: HashMap<_, _> = sessions
             .iter()
             .enumerate()
             .map(|(rank, session)| {
@@ -570,17 +541,12 @@ impl ScreenerView {
             displayed.get(core).copied().flatten().is_some()
                 && type_admits(type_sel, kind_of(venues.get(core)))
         });
+        displayed.retain(|&core, rank| rank.is_some() && self.source_admits(core, venues));
         let allowed: Vec<_> = self
             .prepared
             .cores
             .iter()
-            .map(|core| {
-                displayed
-                    .get(core)
-                    .copied()
-                    .flatten()
-                    .filter(|_| self.source_admits(*core, venues))
-            })
+            .map(|core| displayed.get(core).copied().flatten())
             .collect();
         let grouped = allowed.iter().filter(|rank| rank.is_some()).take(2).count() > 1;
         let selection = self.prepared.select(
@@ -600,6 +566,7 @@ impl ScreenerView {
         self.shown = selection.shown;
         self.cores_shown = selection.cores_shown;
         self.grouped_scope = grouped;
+        displayed
     }
 
     /// Apply the header order immediately and refresh its source data for the next publication.
@@ -628,12 +595,13 @@ impl ScreenerView {
         // its sort is not stored: the next open would sort by an empty column. The sort stored
         // before it stays, and comes back on reopen.
         if store && self.sort_key != super::auto_figures::AUTO_FIGURES_KEY {
-            let preference = (self.sort_key != "vol24" || !self.sort_desc).then(|| {
-                moon_core::config::TableSortPreference {
-                    column: self.sort_key.clone(),
-                    ascending: !self.sort_desc,
-                }
-            });
+            let preference =
+                ((self.sort_key.as_str(), self.sort_desc) != DEFAULT_SORT).then(|| {
+                    moon_core::config::TableSortPreference {
+                        column: self.sort_key.clone(),
+                        ascending: !self.sort_desc,
+                    }
+                });
             let id = crate::persistence::table_persist::ctx_id("screener-table", true);
             crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
         }
@@ -764,6 +732,26 @@ impl ScreenerView {
         self.resort_if_sort_hidden(cx);
     }
 
+    /// Restore the curated view in both the saved layout and the current window.
+    fn restore_default_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = crate::persistence::table_persist::ctx_id("screener-table", true);
+        self.backend.update(cx, |b, _| {
+            reset_layout_to_default(&mut b.layout, &id);
+            b.layout_dirty = true;
+        });
+        self.visible_cols = restore_visible_columns(None);
+        crate::persistence::table_persist::reset(&self.table_state, cx);
+        self.table_state.update(cx, |state, cx| {
+            state.column_order.clear();
+            cx.notify();
+        });
+        self.col_order_cache.clear();
+        self.dvol_input
+            .update(cx, |state, cx| state.set_value(DEFAULT_MIN_VOL, window, cx));
+        // The saved sort was written with the rest of the layout above.
+        self.apply_sort((DEFAULT_SORT.0.to_string(), DEFAULT_SORT.1), false, cx);
+    }
+
     /// Persist visible column keys in canonical `COLS` order.
     fn persist_visible_cols(&self, cx: &mut Context<Self>) {
         let list: Vec<String> = COLS
@@ -845,19 +833,15 @@ impl ScreenerView {
         let row_cols = visible.clone();
         // Captions and logo geometry are the same for every row of this build, so they are
         // resolved once here rather than per visible row per frame.
-        let kind_caption = |kind: MarketKind| SharedString::from(t!(kind.label_key()).to_string());
+        let [both, spot_only, futures_only] = short_listed_captions();
         let row_style = Rc::new(RowStyle {
             logos_ready: self.exchange_logos_ready,
             logo_px: design::ui_px(cx, 13.0),
             logo_gap: design::ui_px(cx, 5.0),
-            kinds: [
-                kind_caption(MarketKind::Spot),
-                kind_caption(MarketKind::Futures),
-                kind_caption(MarketKind::Quarterly),
-            ],
-            both: t!("screener.listed_both").to_string().into(),
-            spot_only: t!("screener.listed_spot_only").to_string().into(),
-            futures_only: t!("screener.listed_futures_only").to_string().into(),
+            kinds: short_kind_captions(),
+            both,
+            spot_only,
+            futures_only,
             scan_book: self.scan_book.clone(),
             scan_labels: Self::scan_labels(),
             scan_running: self.scan_book.progress().is_some(),
@@ -1093,6 +1077,13 @@ impl ScreenerView {
             .trigger_width(design::glyph_btn_w(cx))
             .fit_menu_width(170.0, 560.0)
             .close_on_select(false);
+        let default_view = view.clone();
+        menu = menu.item(
+            MoonMenuItem::with_key("col-default", t!("screener.default_view").to_string())
+                .on_click(move |_, window, app| {
+                    default_view.update(app, |t, cx| t.restore_default_view(window, cx));
+                }),
+        );
         // The All item enables every column or, when already checked, leaves only the first.
         let all_on = COLS.iter().all(|c| self.visible_cols.contains(c.0));
         let all_view = view.clone();

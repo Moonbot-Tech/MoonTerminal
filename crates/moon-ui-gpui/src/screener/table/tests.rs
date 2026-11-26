@@ -5,96 +5,118 @@ use std::collections::{HashMap, HashSet};
 use moon_core::config::TableSortPreference;
 
 use super::{
-    COLS, add_new_columns, column_title, migrate_legacy_keys, migrate_legacy_sort,
-    migrate_legacy_widths, restore_sort,
+    COLS, column_title, migrate_legacy_keys, migrate_legacy_sort, migrate_legacy_widths,
+    restore_sort,
 };
 
-/// A stored visible set gains the columns it predates, once, and nothing else changes.
-///
-/// Mutation: skip the migration. Everyone who ever arranged their Screener columns holds an
-/// explicit list without `coin`, and the new column never appears for them. Mutation the other
-/// way: fill an empty set, and "no stored choice" becomes a one-column table.
+/// The default order must match the rendered schema and contain the agreed 16 columns.
 #[test]
-fn a_stored_column_set_gains_the_late_column() {
-    let mut arranged = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut arranged, 0);
-    assert_eq!(
-        arranged,
-        [
-            "market",
-            "vol24",
-            "coin",
-            "exchange",
-            "type",
-            "listed",
-            "auto_figures"
-        ]
-    );
-
-    // Already carrying them — a set written after the columns existed — stays as it is.
-    add_new_columns(&mut arranged, 0);
-    assert_eq!(
-        arranged,
-        [
-            "market",
-            "vol24",
-            "coin",
-            "exchange",
-            "type",
-            "listed",
-            "auto_figures"
-        ]
-    );
-
-    let mut empty: Vec<String> = Vec::new();
-    add_new_columns(&mut empty, 0);
-    assert!(empty.is_empty());
+fn default_view_is_sixteen_columns_in_order() {
+    let expected = [
+        "market",
+        "exchange",
+        "core",
+        "vol24",
+        "hvol",
+        "vol5m",
+        "ask",
+        "d24h",
+        "d1h",
+        "d15m",
+        "funding",
+        "lev",
+        "orders",
+        "pnl",
+        "pos",
+        "auto_figures",
+    ];
+    assert_eq!(super::DEFAULT_COLS, expected);
+    let rendered: Vec<_> = COLS
+        .iter()
+        .map(|column| column.0)
+        .filter(|key| super::DEFAULT_COLS.contains(key))
+        .collect();
+    assert_eq!(rendered, expected);
 }
 
-/// A later migration adds ITS columns and leaves an earlier one's alone.
-///
-/// Mutation: add every late column whenever the version moves. A user whose layout had already
-/// been offered `coin` and who hid it gets it back the day three unrelated columns arrive — the
-/// defect the per-column version exists for, found before it shipped (2026-11-16).
+/// Missing and stale saved column sets open with the same columns and Vol. descending.
 #[test]
-fn a_later_migration_does_not_put_back_an_earlier_column_the_user_hid() {
-    let mut coin_hidden = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut coin_hidden, 1);
-    assert_eq!(
-        coin_hidden,
-        [
-            "market",
-            "vol24",
-            "exchange",
-            "type",
-            "listed",
-            "auto_figures"
-        ]
-    );
-
-    let mut up_to_date = vec!["market".to_string()];
-    add_new_columns(&mut up_to_date, super::COLUMNS_MIGRATION);
-    assert_eq!(up_to_date, ["market"]);
-}
-
-/// Every late column is a real column, and the newest of them is what the layout is migrated to.
-///
-/// Mutation: add a column under a version above `COLUMNS_MIGRATION`, or bump the constant with no
-/// column behind it. In the first case the guard in the view returns before the column is ever
-/// offered; in the second every layout is rewritten for nothing.
-#[test]
-fn the_late_columns_exist_and_end_at_the_current_migration() {
-    for (_, key) in super::COLS_ADDED_LATE {
-        assert!(COLS.iter().any(|column| column.0 == *key), "{key}");
+fn fresh_layout_gets_default_cols_and_vol_desc() {
+    for saved in [None, Some(vec![]), Some(vec!["retired-column".into()])] {
+        let visible = super::restore_visible_columns(saved);
+        assert_eq!(
+            visible,
+            super::DEFAULT_COLS
+                .iter()
+                .map(|&key| key.to_string())
+                .collect()
+        );
+        assert_eq!(restore_sort(None, &visible), ("vol24".into(), true));
     }
-    let newest = super::COLS_ADDED_LATE.iter().map(|(version, _)| *version);
-    assert_eq!(newest.max(), Some(super::COLUMNS_MIGRATION));
-    // Oldest first, so a set gains them in the order they were introduced.
-    assert!(
-        super::COLS_ADDED_LATE
-            .windows(2)
-            .all(|pair| pair[0].0 <= pair[1].0)
+}
+
+/// Install version four once, including on a fresh layout so the marker gets flushed.
+#[test]
+fn reset_runs_once_and_marker_blocks_second_run() {
+    let mut layout = moon_core::config::WindowLayout::default();
+    assert!(super::migrate_layout(&mut layout, "screener-table:win"));
+    assert_eq!(layout.screener_columns_migration, Some(4));
+    assert!(!super::migrate_layout(&mut layout, "screener-table:win"));
+}
+
+/// A column the user hides after reset must stay hidden on reopen.
+#[test]
+fn user_choice_after_reset_survives_reopen() {
+    let id = "screener-table:win";
+    let mut layout = moon_core::config::WindowLayout::default();
+    super::migrate_layout(&mut layout, id);
+    layout
+        .table_visible_columns
+        .get_mut(id)
+        .unwrap()
+        .retain(|column| column != "auto_figures");
+    assert!(!super::migrate_layout(&mut layout, id));
+    let visible = super::restore_visible_columns(layout.table_visible_columns.get(id).cloned());
+    assert_eq!(visible.len(), 15);
+    assert!(!visible.contains("auto_figures"));
+}
+
+/// Replace the previous full-column layout, including its custom widths and dragged order.
+#[test]
+fn reset_replaces_29_column_market_desc_layout() {
+    let id = "screener-table:win";
+    let mut layout = moon_core::config::WindowLayout::default();
+    let previous: Vec<_> = COLS.iter().map(|column| column.0.to_string()).collect();
+    assert_eq!(previous.len(), 29);
+    layout.table_visible_columns.insert(id.into(), previous);
+    layout.screener_columns = Some(vec!["market".into()]);
+    layout.screener_columns_migration = Some(3);
+    layout.table_sorts.insert(
+        id.into(),
+        TableSortPreference {
+            column: "market".into(),
+            ascending: false,
+        },
     );
+    layout
+        .table_column_widths
+        .insert(id.into(), HashMap::from([("market".into(), 140.0)]));
+    layout
+        .table_column_order
+        .insert(id.into(), vec!["market".into(), "ask".into()]);
+    assert!(super::migrate_layout(&mut layout, id));
+    assert_eq!(layout.table_visible_columns[id], super::DEFAULT_COLS);
+    assert!(layout.screener_columns.is_none());
+    assert_eq!(layout.table_sorts[id].column, "vol24");
+    assert!(!layout.table_sorts[id].ascending);
+    assert!(!layout.table_column_widths.contains_key(id));
+    assert!(!layout.table_column_order.contains_key(id));
+}
+
+/// The initial volume text must activate a one-million-dollar volume floor.
+#[test]
+fn default_min_vol_parses_to_one_million() {
+    assert_eq!(super::parse_vol(super::DEFAULT_MIN_VOL), 1_000_000.0);
 }
 
 /// The three venue columns order rows by what they print, not by the float fallback.
@@ -425,23 +447,27 @@ pub(in crate::screener) fn sort_entries(entries: &mut [super::Entry], key: &str,
     }
 }
 
-/// The auto-figures column ships ON for everyone: a layout with no stored set shows every `COLS`
-/// key, and a set stored before the column existed gains it once, as every late column does. A
-/// layout already migrated past it — whoever has since hidden the column — is left alone.
-///
-/// Mutation: drop the column from `COLS` (a fresh layout never shows it), drop it from
-/// `COLS_ADDED_LATE` (everyone who ever arranged their columns never sees it), or file it under an
-/// old version (a layout already offered the location columns never gets it).
+/// Type and Listed use their short cell captions in both English and Russian.
 #[test]
-fn the_auto_figures_column_ships_on_for_a_stored_set_once() {
-    use super::super::auto_figures::AUTO_FIGURES_KEY;
-    assert!(COLS.iter().any(|column| column.0 == AUTO_FIGURES_KEY));
-    let mut arranged = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut arranged, 2);
-    assert_eq!(arranged, ["market", "vol24", "auto_figures"]);
-    let mut hidden_since = vec!["market".to_string(), "vol24".to_string()];
-    add_new_columns(&mut hidden_since, super::COLUMNS_MIGRATION);
-    assert_eq!(hidden_since, ["market", "vol24"]);
+fn type_and_listed_cells_use_short_captions_ru_en() {
+    for (locale, kinds, listed) in [
+        ("en", ["Spot", "Fut", "Quart"], ["Both", "Spot", "Fut"]),
+        ("ru", ["Spot", "Fut", "Quart"], ["Обе", "Спот", "Фьюч"]),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        assert_eq!(
+            super::short_kind_captions()
+                .each_ref()
+                .map(|label| label.as_ref()),
+            kinds
+        );
+        assert_eq!(
+            super::short_listed_captions()
+                .each_ref()
+                .map(|label| label.as_ref()),
+            listed
+        );
+    }
 }
 
 /// Hiding the auto-figures column while the table is sorted by it goes back to the sort STORED

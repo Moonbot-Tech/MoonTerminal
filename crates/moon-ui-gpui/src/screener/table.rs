@@ -8,6 +8,7 @@ use gpui::*;
 use moon_ui::{MoonDataCell, MoonDataRow, MoonPalette, MoonTone, MoonTooltipView};
 use rust_i18n::t;
 
+use moon_core::config::{TableSortPreference, WindowLayout};
 use moon_core::market::SharedScreenerRow;
 use moon_core::session::CoreId;
 use moon_core::util::fmt::{self, DeltaSign};
@@ -33,12 +34,12 @@ pub(super) const COLS: &[ColDef] = &[
     // that reads `1kBONK` on one exchange and `1000BONK` on another. Sorting by it lines one coin
     // up across every exchange. Not a Moonbot column — Moonbot shows one exchange at a time.
     (COIN_KEY, "Coin", 70.0, false),
-    ("core", "Core", 76.0, false),
     // Three columns about WHERE the row is, none of them Moonbot's — Moonbot shows one exchange,
     // so it has nothing to say here. `exchange` is the venue caption every core list uses, `type`
     // the market kind of that venue, and `listed` whether the coin trades on both kinds of this
     // exchange or on this one alone, in the words of Moonbot's `ListedType` strategy filter.
     (EXCHANGE_KEY, "Exchange", 124.0, false),
+    ("core", "Core", 76.0, false),
     (TYPE_KEY, "Type", 64.0, false),
     (LISTED_KEY, "Listed", 92.0, false),
     ("vol24", "Vol.", 66.0, true),
@@ -72,6 +73,32 @@ pub(super) const COLS: &[ColDef] = &[
     // entry in the column menu are translated (`column_label`); the title here is the fallback.
     (AUTO_FIGURES_KEY, "Auto figures", 150.0, false),
 ];
+
+/// Visible columns in the default view, in source order.
+pub(super) const DEFAULT_COLS: &[&str] = &[
+    "market",
+    EXCHANGE_KEY,
+    "core",
+    "vol24",
+    "hvol",
+    "vol5m",
+    "ask",
+    "d24h",
+    "d1h",
+    "d15m",
+    "funding",
+    "lev",
+    "orders",
+    "pnl",
+    "pos",
+    AUTO_FIGURES_KEY,
+];
+
+/// Default sort as (key, descending).
+pub(super) const DEFAULT_SORT: (&str, bool) = ("vol24", true);
+
+/// Initial text in the session-only volume filter.
+pub(super) const DEFAULT_MIN_VOL: &str = "1m";
 
 /// The header and column-menu caption of a column: the untranslated Moonbot label of `COLS`, or
 /// the translated name of a column of the terminal's own.
@@ -187,50 +214,48 @@ pub(super) const UNKNOWN_CHOICE: &str = "?";
 /// turns into an answer within the minute.
 const PENDING_MARK: &str = "…";
 
-/// Columns added after users could already hold a stored visible set, each with the migration
-/// version that introduced it, oldest first.
-///
-/// The version is what lets a later migration add ITS columns without re-adding an earlier one:
-/// a layout already at version 1 has had its chance at `coin`, and a user who hid it since must
-/// not get it back because three more columns arrived.
-const COLS_ADDED_LATE: &[(u32, &str)] = &[
-    (1, COIN_KEY),
-    (2, EXCHANGE_KEY),
-    (2, TYPE_KEY),
-    (2, LISTED_KEY),
-    // A display feature ships ON (CONTRIBUTING § UI): a stored set that predates the column is a
-    // set with the value ABSENT, not one where the user turned it off, so it is offered once like
-    // every late column — and a user who hides it afterwards keeps it hidden.
-    (3, AUTO_FIGURES_KEY),
-];
+/// The migration version that installs the curated Screener view.
+pub(super) const COLUMNS_MIGRATION: u32 = 4;
 
-/// The migration version a layout is at once every late column has been offered to it.
-pub(super) const COLUMNS_MIGRATION: u32 = 3;
+/// Replace the saved view for this table and release widths and order to the column schema.
+pub(super) fn reset_layout_to_default(layout: &mut WindowLayout, id: &str) {
+    layout.table_visible_columns.insert(
+        id.to_string(),
+        DEFAULT_COLS.iter().map(|&key| key.to_string()).collect(),
+    );
+    layout.screener_columns = None;
+    layout.table_sorts.insert(
+        id.to_string(),
+        TableSortPreference {
+            column: DEFAULT_SORT.0.to_string(),
+            ascending: !DEFAULT_SORT.1,
+        },
+    );
+    layout.table_column_widths.remove(id);
+    layout.table_column_order.remove(id);
+}
 
-/// Add the columns a stored visible set predates.
-///
-/// A stored set is an explicit list, so a column introduced later is simply missing from it and
-/// would stay hidden for everyone who ever arranged their columns — the users most likely to want
-/// it. The caller runs this once per layout version and records that it did
-/// (`WindowLayout::screener_columns_migration`): run on every open, it would put back a column the
-/// user has since hidden.
-///
-/// Args:
-///     keys: One stored visible set, in any order.
-///     applied: The migration version the layout already records; zero for never migrated.
-///
-/// Returns:
-///     Nothing; `keys` gains the columns introduced after `applied`. An empty set is left alone:
-///     it is not a choice a user can make, and filling it would turn "all columns" into "only the
-///     new ones".
-pub(super) fn add_new_columns(keys: &mut Vec<String>, applied: u32) {
-    if keys.is_empty() {
-        return;
+/// Reset a pre-curated layout once and report whether the caller must save the marker.
+pub(super) fn migrate_layout(layout: &mut WindowLayout, id: &str) -> bool {
+    if layout.screener_columns_migration.unwrap_or(0) >= COLUMNS_MIGRATION {
+        return false;
     }
-    for (version, column) in COLS_ADDED_LATE {
-        if *version > applied && !keys.iter().any(|key| key == column) {
-            keys.push((*column).to_string());
-        }
+    reset_layout_to_default(layout, id);
+    layout.screener_columns_migration = Some(COLUMNS_MIGRATION);
+    true
+}
+
+/// Recover the visible set from saved keys, using the curated view if none remain valid.
+pub(super) fn restore_visible_columns(saved: Option<Vec<String>>) -> HashSet<String> {
+    let keys: HashSet<_> = saved
+        .into_iter()
+        .flatten()
+        .filter(|key| COLS.iter().any(|column| column.0 == key))
+        .collect();
+    if keys.is_empty() {
+        DEFAULT_COLS.iter().map(|&key| key.to_string()).collect()
+    } else {
+        keys
     }
 }
 
@@ -282,14 +307,14 @@ pub(super) fn restore_sort(
         })
         .map(|preference| (preference.column, !preference.ascending))
         .unwrap_or_else(|| {
-            let key = if visible.contains("vol24") {
-                "vol24"
+            let key = if visible.contains(DEFAULT_SORT.0) {
+                DEFAULT_SORT.0
             } else {
                 COLS.iter()
                     .find(|column| visible.contains(column.0))
-                    .map_or("vol24", |column| column.0)
+                    .map_or(DEFAULT_SORT.0, |column| column.0)
             };
-            (key.to_string(), true)
+            (key.to_string(), DEFAULT_SORT.1)
         })
 }
 
@@ -495,6 +520,24 @@ pub(super) struct RowStyle {
     pub(super) scan_book: std::rc::Rc<ScanBook>,
     pub(super) scan_labels: ScanLabels,
     pub(super) scan_running: bool,
+}
+
+/// Localized Type cell captions in the same order as `kind_rank`.
+pub(super) fn short_kind_captions() -> [SharedString; 3] {
+    [
+        t!("screener.kind_short_spot").to_string().into(),
+        t!("screener.kind_short_futures").to_string().into(),
+        t!("screener.kind_short_quarterly").to_string().into(),
+    ]
+}
+
+/// Localized Listed cell captions for Both, Spot Only, and Futures Only.
+pub(super) fn short_listed_captions() -> [SharedString; 3] {
+    [
+        t!("screener.listed_short_both").to_string().into(),
+        t!("screener.listed_short_spot_only").to_string().into(),
+        t!("screener.listed_short_futures_only").to_string().into(),
+    ]
 }
 
 /// The venue caption with its brand logo, clipped rather than wrapped in a narrow column.
