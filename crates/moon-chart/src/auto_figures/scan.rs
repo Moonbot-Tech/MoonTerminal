@@ -55,7 +55,7 @@ use moon_core::market::kline_cache::KIND_5M_MS;
 use super::confluence::{PlacedLine, confluence};
 use super::events::{EventSet, bars_read, line_events};
 use super::history::history_full;
-use super::twins::{TwinRow, select_rows};
+use super::twins::{RowPick, TwinRow, select_rows};
 use super::{DetectCtx, Found, bar_ok, detect, price_of, resample_5m, take, with_ring_rows};
 
 /// The timeframe a `TfSource::Auto` row is scanned on.
@@ -426,6 +426,47 @@ pub fn scan_market(
         .or(cached_price);
     runs.clear();
     kept.clear();
+    let (scanned, short) = run_rows(rows, m5, now_ms, last_price, price_tick, bars, runs);
+    let picks = pick_rows(rows, runs, last_price, now_ms);
+    keep_lines(rows, runs, &picks, last_price, now_ms, events, kept);
+    mark_confluence(kept, placed, near);
+    let (best, nearest) = best_and_nearest(kept);
+    out.best = best;
+    out.nearest = nearest;
+    out.lines = u32::try_from(kept.len()).unwrap_or(u32::MAX);
+    out.rows_scanned = scanned;
+    out.rows_short = short;
+    out.short_history = scanned == 0 && short > 0;
+    out.last_price = last_price;
+    out.cache_lag_ms = m5.last().and_then(|b| {
+        let lag = now_ms - (b.t_open_ms + KIND_5M_MS as f64);
+        (lag > STALE_CACHE_MS as f64).then_some(lag as i64)
+    });
+}
+
+/// Run every row's detector over its closed bars, into `runs`; returns `(scanned, short)`.
+///
+/// A row with fewer than [`history_full`] of its `bars_needed` closed bars counts as short and
+/// does not run. A row with enough history counts as scanned; it runs its detector only when the
+/// market has a `last_price` — without one nothing can be placed, so no row produces a run.
+///
+/// Args:
+///     rows: The scan's rows.
+///     m5: The base's valid closed 5-minute rows ([`closed_5m`]).
+///     now_ms: The reference time, Unix ms.
+///     last_price: The price lines are placed against, when the market has one.
+///     price_tick: The market's exchange tick, when known.
+///     bars: Scratch for one row's closed bars.
+///     runs: Empty on entry; one [`RowRun`] appended per row that ran, in row order.
+fn run_rows(
+    rows: &[ScanRow],
+    m5: &[ChartCandle],
+    now_ms: f64,
+    last_price: Option<f64>,
+    price_tick: Option<f64>,
+    bars: &mut Vec<ChartCandle>,
+    runs: &mut Vec<RowRun>,
+) -> (u32, u32) {
     let (mut scanned, mut short) = (0u32, 0u32);
     for (at, row) in rows.iter().enumerate() {
         let needed = row.params.bars_needed(row.tf);
@@ -457,12 +498,28 @@ pub fn scan_market(
             recent: tail(bars, events_tail).to_vec(),
         });
     }
+    (scanned, short)
+}
 
-    // Each row's own `take`, then one formation two rows both keep is one line, as on the chart: the
-    // twin under the less precise name is neither counted, nor a confluence partner, nor a
-    // candidate for the best event — so the column never names an event of a line the chart does
-    // not draw — and its row takes its next line in the slot it leaves.
-    let picks = match last_price {
+/// Each run's kept lines: the row's own `take`, then the cross-row twin pass; one pick per run.
+///
+/// One formation two rows both keep is one line, as on the chart: the twin under the less
+/// precise name is neither counted, nor a confluence partner, nor a candidate for the best event —
+/// so the column never names an event of a line the chart does not draw — and its row takes its
+/// next line in the slot it leaves. No `last_price` → no picks.
+///
+/// Args:
+///     rows: The scan's rows.
+///     runs: The detector runs of [`run_rows`].
+///     last_price: The price `take` keeps lines against.
+///     now_ms: The reference time, Unix ms.
+fn pick_rows(
+    rows: &[ScanRow],
+    runs: &[RowRun],
+    last_price: Option<f64>,
+    now_ms: f64,
+) -> Vec<RowPick> {
+    match last_price {
         Some(price) => {
             let twin_rows: Vec<TwinRow<'_>> = runs
                 .iter()
@@ -478,9 +535,29 @@ pub fn scan_market(
             })
         }
         None => Vec::new(),
-    };
+    }
+}
 
-    for (run, pick) in runs.iter().zip(&picks) {
+/// Place every picked line against the last price and mark its events from its row's closed bars.
+///
+/// Args:
+///     rows: The scan's rows.
+///     runs: The detector runs of [`run_rows`].
+///     picks: The picks of [`pick_rows`], one per run.
+///     last_price: The price lines are placed against.
+///     now_ms: The reference time, Unix ms.
+///     events: Scratch for one line's `line_events` output.
+///     kept: Empty on entry; one [`Kept`] appended per placed line, in run and pick order.
+fn keep_lines(
+    rows: &[ScanRow],
+    runs: &[RowRun],
+    picks: &[RowPick],
+    last_price: Option<f64>,
+    now_ms: f64,
+    events: &mut Vec<EventSet>,
+    kept: &mut Vec<Kept>,
+) {
+    for (run, pick) in runs.iter().zip(picks) {
         let row = &rows[run.row];
         let Some(price) = last_price else {
             continue;
@@ -516,7 +593,15 @@ pub fn scan_market(
             });
         }
     }
+}
 
+/// Run the confluence pass over every kept line and add `Confluence` where its marks ask for it.
+///
+/// Args:
+///     kept: The kept lines; a line in confluence whose marks mark it gains the event.
+///     placed: Scratch for the lines as the confluence pass reads them.
+///     near: Scratch for the confluence pass's answer.
+fn mark_confluence(kept: &mut [Kept], placed: &mut Vec<PlacedLine>, near: &mut Vec<bool>) {
     placed.clear();
     placed.extend(kept.iter().map(|k| PlacedLine {
         row: k.line.row_ix,
@@ -530,7 +615,14 @@ pub fn scan_market(
             k.events.insert(AutoEvent::Confluence);
         }
     }
+}
 
+/// The best event over the kept lines and the nearest kept line — [`ScanResult::best`] and
+/// [`ScanResult::nearest`], by the order their docs give.
+///
+/// Args:
+///     kept: The kept lines, with their final events.
+fn best_and_nearest(kept: &[Kept]) -> (Option<ScanHit>, Option<ScanLine>) {
     let nearer = |a: &ScanLine, b: &ScanLine| {
         a.distance_pct
             .abs()
@@ -558,17 +650,7 @@ pub fn scan_market(
             }
         }
     }
-    out.best = best;
-    out.nearest = nearest;
-    out.lines = u32::try_from(kept.len()).unwrap_or(u32::MAX);
-    out.rows_scanned = scanned;
-    out.rows_short = short;
-    out.short_history = scanned == 0 && short > 0;
-    out.last_price = last_price;
-    out.cache_lag_ms = m5.last().and_then(|b| {
-        let lag = now_ms - (b.t_open_ms + KIND_5M_MS as f64);
-        (lag > STALE_CACHE_MS as f64).then_some(lag as i64)
-    });
+    (best, nearest)
 }
 
 /// The valid 5-minute rows of `base` (the market's base, [`with_ring_rows`]: real candles, and
