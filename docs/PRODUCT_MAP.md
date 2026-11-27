@@ -153,7 +153,10 @@ exactly with the visible parameters; SYNC mode across several cores; Moonbot
 gestures and hotkeys (split, sells-to-zone, shift orders by %, bulk move to
 click price, HotKey figure switcher); Panic Sell; hedge checkbox; per-coin
 exchange limits (money minimum, order and leverage ceiling); the manual
-strategy is owned by the core (MS/Hook popups, Moonbot's stop rule).
+strategy is owned by the core (MS/Hook popups, Moonbot's stop rule). With a MoonBot 7.73 core:
+Force cancel of a stuck order from the order menu (N2), Cancel entries on exchange in the core
+settings popup (N1), and the chart shows the core's correction of a manual entry price that hit
+an exchange limit (N2); older cores show the controls disabled with the version they need.
 
 **Report**: a full local replica of every core's report DB (checkpoint +
 live-row map + catch-up frontier, survives drops and restarts mid-download; the
@@ -207,13 +210,17 @@ login the menu offers to add one; when the server's status reports a failed exch
 core's card shows a banner with Retry.
 
 **Other**: Screener (deltas in Moonbot ranges, the coin menu on a row's market, a multi-core
-selector with exchange rows and saved core groups, a Coin column that names one coin the same way
+selector with exchange rows and saved core groups — with more than one core selected, one row
+per market per exchange, its Core cell naming how many of the selected cores it covers, each
+one's leverage and PnL on hover, orders, position and PnL summed and leverage shown as a range
+when the cores differ —, a Coin column that names one coin the same way
 on every exchange and is searched by the Market box, Exchange and Type columns, and a Listed
-column — `Both`, `Spot Only`, `Futures Only` or `?` — saying whether the coin trades on both
+column — `Both`, `Spot`, `Fut` or `?` in the cell, Moonbot's `Both`, `Spot Only`,
+`Futures Only` in its filter — saying whether the coin trades on both
 market kinds of that exchange, read from the arbitrage stream and the catalogs of connected
 cores, with `…` for the first minute after a core connects, while the answer is still on its
 way; the footer holds a multi-select list for Type and one for Listed, both for the session
-only), the news panel
+only; Default view in the column menu restores the shipped columns, sort and Vol. filter), the news panel
 (per-core feed, tag filters, jump to a coin), Log (core lines, addresses
 redacted; for a core on a Linux server the terminal can enter, its whole trading log for a
 chosen day pulled into the file list beside the live copy, which holds only the hours the terminal
