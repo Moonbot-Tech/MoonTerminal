@@ -99,6 +99,9 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("capabilities") {
         println!("core_endpoint_override=yes");
         println!("mcp_https=yes");
+        // `[mcp] tunnel_id` and an `[mcp]` without `public_url`: an older binary refuses both
+        // (`deny_unknown_fields`, a required `public_url`) and would not start at all.
+        println!("mcp_tunnel=yes");
         // The bot languages this binary parses. A terminal writes `[telegram] language` only
         // from this list: a code this binary does not know fails the whole config
         // (`cores::telegram`), so a newer terminal's language must not reach an older station.
@@ -220,15 +223,16 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut groups = groups_of(&cfg);
-    let mut mcp = mcp_config
-        .as_ref()
-        .and_then(|config| match mcp::Mcp::start(config) {
-            Ok(service) => Some(service),
-            Err(e) => {
-                log::error!("MCP not started: {e:#}");
-                None
-            }
-        });
+    let mut mcp =
+        mcp_config
+            .as_ref()
+            .and_then(|config| match mcp::Mcp::start(config, cores::tunnel_key) {
+                Ok(service) => Some(service),
+                Err(e) => {
+                    log::error!("MCP not started: {e:#}");
+                    None
+                }
+            });
     // The load `status` reports is kept from the start, whether or not anyone asks.
     let mut host = host::HostWatch::start(process_started, data_root.clone());
     let mut last_diag = Instant::now();
@@ -264,7 +268,7 @@ fn main() -> anyhow::Result<()> {
                     auto_update.set(reloaded.auto_update);
                     if reloaded.mcp != mcp_config {
                         log::warn!(
-                            "[mcp] changed: restart the station to apply its listener and feed profile"
+                            "[mcp] changed: restart the station to apply its listener, OpenAI tunnel and feed profile"
                         );
                     }
                     if !same_bot(reloaded.telegram.as_ref(), telegram.as_ref()) {

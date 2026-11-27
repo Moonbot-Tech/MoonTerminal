@@ -17,6 +17,8 @@ DROPIN_DIR=/etc/systemd/system/moon-station.service.d
 DROPIN=$DROPIN_DIR/credentials.conf
 # The bot token's credential, beside the cores' keys.
 TOKEN=telegram-token
+# The OpenAI tunnel key's credential: the station polls OpenAI with it for ChatGPT's requests.
+TUNNEL_KEY=openai-tunnel-key
 # The bot's pairing (chats, owner, access): the station's own state, in its data root.
 PAIRING=/var/lib/moon-station/telegram.json
 MCP_AUTH=/var/lib/moon-station/mcp-auth.json
@@ -87,7 +89,7 @@ valid_uid() {
 write_dropin() {
     tmp=$(mktemp)
     echo "[Service]" >"$tmp"
-    for f in "$CREDS"/core-*.cred "$CREDS/$TOKEN.cred"; do
+    for f in "$CREDS"/core-*.cred "$CREDS/$TOKEN.cred" "$CREDS/$TUNNEL_KEY.cred"; do
         [ -e "$f" ] || continue
         echo "LoadCredentialEncrypted=$(basename "$f" .cred):$f" >>"$tmp"
     done
@@ -148,6 +150,22 @@ cmd_drop_token() {
     rm -f "$CREDS/$TOKEN.cred"
     write_dropin
     echo "dropped=$TOKEN"
+}
+
+# put-tunnel-key; stdin: the OpenAI tunnel key. Encrypted straight from stdin, like the bot token,
+# and never read back: the terminal has no use for it once the station holds it.
+cmd_put_tunnel_key() {
+    tmp="$CREDS/.$TUNNEL_KEY.new"
+    systemd-creds encrypt --name="$TUNNEL_KEY" - "$tmp"
+    mv -f "$tmp" "$CREDS/$TUNNEL_KEY.cred"
+    write_dropin
+    echo "cred=$TUNNEL_KEY"
+}
+
+cmd_drop_tunnel_key() {
+    rm -f "$CREDS/$TUNNEL_KEY.cred"
+    write_dropin
+    echo "dropped=$TUNNEL_KEY"
 }
 
 # get-config: station.toml as it is, so a change to one section keeps the others. It carries no
@@ -394,9 +412,12 @@ cmd_status() {
     echo "remove_station=yes"
     echo "removal_guard=yes"
     echo "bot_settings_merge=yes"
+    # put-tunnel-key / drop-tunnel-key, and the tunnel key among the unit's credentials.
+    echo "tunnel_key_store=yes"
     # Config-field support belongs to the installed binary, not this independently upgraded helper.
     core_endpoint_override=no
     mcp_https=no
+    mcp_tunnel=no
     # The bot languages the installed binary parses; "none" for one that predates the list.
     languages=none
     if [ -x "$BIN" ] && capabilities=$("$BIN" capabilities 2>/dev/null); then
@@ -411,9 +432,13 @@ cmd_status() {
         if printf '%s\n' "$capabilities" | grep -qx 'mcp_https=yes'; then
             mcp_https=yes
         fi
+        if printf '%s\n' "$capabilities" | grep -qx 'mcp_tunnel=yes'; then
+            mcp_tunnel=yes
+        fi
     fi
     echo "core_endpoint_override=$core_endpoint_override"
     echo "mcp_https=$mcp_https"
+    echo "mcp_tunnel=$mcp_tunnel"
     echo "languages=$languages"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
@@ -534,6 +559,7 @@ cmd_remove_station() {
     : >"$REMOVED"
     rm -f "$CREDS"/core-*.cred "$CREDS"/.core-*.new \
         "$CREDS/$TOKEN.cred" "$CREDS/.$TOKEN.new" \
+        "$CREDS/$TUNNEL_KEY.cred" "$CREDS/.$TUNNEL_KEY.new" \
         "$PAIRING" "$PAIRING.new" "$PAIRING.tmp" "$CONF" "$CONF.new" "$UPDATE_REQUEST" \
         "$MCP_AUTH" "$MCP_AUTH.tmp"
     write_dropin
@@ -571,6 +597,16 @@ drop-token)
     lock_wait
     require_station
     cmd_drop_token
+    ;;
+put-tunnel-key)
+    lock_wait
+    require_station
+    cmd_put_tunnel_key
+    ;;
+drop-tunnel-key)
+    lock_wait
+    require_station
+    cmd_drop_tunnel_key
     ;;
 get-token) cmd_get_token ;;
 get-pairing) cmd_get_pairing ;;

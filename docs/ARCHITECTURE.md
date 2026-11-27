@@ -1162,6 +1162,20 @@ The setup uses the prepared server's public IP or existing DNS name, automatic s
 certificates and TCP 443. It refuses an occupied port and checks trusted HTTPS discovery from
 the Terminal before enabling authorization. No DNS-registration service is required.
 
+ChatGPT does not connect to a server addressed by IP (#1433), so it comes in another way:
+`[mcp] tunnel_id` runs the station's own OpenAI Secure MCP Tunnel client (`mcp/tunnel.rs`). The
+station long-polls OpenAI's control plane with the tunnel key (systemd credential
+`openai-tunnel-key`, written by `moon-remote` with the ID from the Terminal's ChatGPT box) and
+answers each command through the same MCP service in-process: no inbound port, certificate or
+DNS name. `public_url` and `tunnel_id` are independent; either or both may be set, and only the
+public endpoint is a token audience, so adding or removing the tunnel revokes no client. Who is
+calling comes from `X-Openai-Subject`, the pseudonymous ChatGPT account ID OpenAI's tunnel
+service sets on tool calls. An unpaired account may list tools and read the clip player, which
+ChatGPT's connector setup requires; any tool call answers with an owner code instead of running.
+The owner enters that code in the approval box exactly like a browser's consent code, and
+the grant is then bound to that account's subject until revoked; the tunnel protocol carries no
+OAuth, and a tunnel grant can never be refreshed or exchanged.
+
 OAuth registration is public; approval is not. The browser's code must be entered in the
 Terminal's Station AI-access page through the existing pinned SSH/control-socket channel.
 The owner selects explicit core IDs and, per core, read/strategies/trading/settings scopes: read is

@@ -54,6 +54,17 @@
 //! language = "ru"          # ru | en | es | uk | tr | pt | vi | zh; en when absent
 //! ```
 //!
+//! `[mcp]` runs the AI access service (`crate::mcp`): `public_url` for clients that open an HTTPS
+//! address (set up by `moon-remote` with Caddy), `tunnel_id` for ChatGPT through the station's own
+//! OpenAI Secure MCP Tunnel client, whose key is the systemd credential `openai-tunnel-key`. Either
+//! or both.
+//!
+//! ```toml
+//! [mcp]
+//! public_url = "https://203.0.113.7"              # optional
+//! tunnel_id = "tunnel_0123456789abcdef0123456789abcdef" # optional
+//! ```
+//!
 //! A `key =` line is refused rather than ignored: a key in a plain file is exactly what this
 //! layout exists to prevent.
 //!
@@ -75,6 +86,14 @@ use zeroize::Zeroizing;
 
 /// The credential holding the bot token.
 const TOKEN_CREDENTIAL: &str = "telegram-token";
+/// The credential holding the OpenAI tunnel key (`[mcp] tunnel_id`).
+pub(crate) const TUNNEL_KEY_CREDENTIAL: &str = "openai-tunnel-key";
+
+/// The OpenAI tunnel key, as systemd placed it for this run.
+pub(crate) fn tunnel_key() -> anyhow::Result<Secret> {
+    let creds = std::env::var_os("CREDENTIALS_DIRECTORY").map(std::path::PathBuf::from);
+    credential(creds.as_deref(), TUNNEL_KEY_CREDENTIAL)
+}
 
 /// `station.toml`.
 #[derive(Deserialize)]
@@ -160,7 +179,8 @@ impl Telegram {
 
 /// What the station runs with: the cores, the tape window and the bot.
 pub struct Station {
-    /// Independent HTTPS/MCP endpoint; its owner permissions live in the private auth store.
+    /// Independent AI access: the public HTTPS endpoint, the OpenAI tunnel for ChatGPT, or both;
+    /// its owner permissions live in the private auth store.
     pub mcp: Option<crate::mcp::Config>,
     /// Persisted allocation floor, raised from all configured identities.
     pub core_uid_high_water: u64,

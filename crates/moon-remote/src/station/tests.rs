@@ -868,12 +868,28 @@ bot_return=yes
     ));
 }
 
+/// A helper from before the tunnel key cannot store it: it is replaced before the ChatGPT setup
+/// writes one, and a helper that reads the binary's tunnel capability is current either way.
+#[test]
+fn a_helper_without_the_tunnel_key_store_is_replaced() {
+    let base = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\nbot_settings_merge=yes\ncore_endpoint_override=yes\nlanguages=en,ru\n";
+    assert!(!helper_is_current(base));
+    assert!(!helper_is_current(&format!("{base}tunnel_key_store=yes\n")));
+    for capability in ["yes", "no"] {
+        assert!(helper_is_current(&format!(
+            "{base}tunnel_key_store=yes\nmcp_tunnel={capability}\n"
+        )));
+    }
+}
+
 /// The helper's status really prints the marker the terminal looks for.
 #[test]
 fn the_helper_prints_its_marker() {
     assert!(crate::script::HELPER.contains("echo \"bot_return=yes\""));
     assert!(crate::script::HELPER.contains("echo \"remove_station=yes\""));
     assert!(crate::script::HELPER.contains("echo \"removal_guard=yes\""));
+    assert!(crate::script::HELPER.contains("echo \"tunnel_key_store=yes\""));
+    assert!(crate::script::HELPER.contains("echo \"mcp_tunnel=$mcp_tunnel\""));
 }
 
 /// A changed window rewrites only `[tape]` — the cores and the bot stay as the server has them —
@@ -1132,7 +1148,9 @@ bot_return=yes
 remove_station=yes
 removal_guard=yes
 bot_settings_merge=yes
+tunnel_key_store=yes
 core_endpoint_override=no
+mcp_tunnel=no
 languages=none
 "
     ));
@@ -1143,7 +1161,9 @@ bot_return=yes
 remove_station=yes
 removal_guard=yes
 bot_settings_merge=yes
+tunnel_key_store=yes
 core_endpoint_override=no
+mcp_tunnel=no
 "
     ));
     assert!(!helper_is_current(
@@ -1157,7 +1177,7 @@ remove_station=no
 /// Treating capability=no as a stale helper would reinstall it on every old-station refresh.
 #[test]
 fn helper_capability_reading_is_current_for_both_binary_generations() {
-    let base = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\nbot_settings_merge=yes\nlanguages=none\n";
+    let base = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\nbot_settings_merge=yes\ntunnel_key_store=yes\nmcp_tunnel=no\nlanguages=none\n";
     for capability in ["yes", "no"] {
         assert!(helper_is_current(&format!(
             "{base}core_endpoint_override={capability}\n"

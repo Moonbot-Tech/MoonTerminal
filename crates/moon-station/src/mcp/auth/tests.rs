@@ -694,3 +694,154 @@ fn registrations_cannot_introduce_insecure_or_fragment_redirects() {
         .is_ok()
     );
 }
+
+/// A ChatGPT account the tunnel met: the subject OpenAI's tunnel service names it by.
+const SUBJECT: &str = "v1/exampleSubjectOfAChatGptAccount0123456789";
+
+/// The whole pairing: an unpaired account gets one code until it is used, the owner's approval of
+/// that code grants exactly the ticked cores to that account, and nobody else's subject.
+#[test]
+fn a_chatgpt_account_is_paired_by_the_code_its_chat_showed() {
+    let mut f = Fixture::new();
+    assert!(f.0.tunnel_caller(SUBJECT, 1000).is_none());
+    let code = f.0.tunnel_pairing(SUBJECT, 1000).unwrap();
+    assert_eq!(
+        f.0.tunnel_pairing(SUBJECT, 1001).unwrap(),
+        code,
+        "one code per waiting account"
+    );
+    let state = f.0.status();
+    assert_eq!(state.pending.len(), 1);
+    assert_eq!(state.pending[0].client_name, "ChatGPT");
+    assert!(state.pending[0].redirect_uri.is_empty());
+    let state =
+        f.0.admin(
+            AdminRequest::Approve {
+                code: code.to_ascii_lowercase(),
+                access: read_only(&[11]),
+            },
+            &[11, 22],
+            1002,
+        )
+        .unwrap();
+    assert!(state.pending.is_empty());
+    assert_eq!(state.grants.len(), 1);
+    let who = f.0.tunnel_caller(SUBJECT, 1003).expect("paired");
+    assert!(f.0.check(&who, Scope::Read, &[11], 1003).is_ok());
+    assert!(f.0.check(&who, Scope::Read, &[22], 1003).is_err());
+    assert!(f.0.check(&who, Scope::Trading, &[11], 1003).is_err());
+    assert!(f.0.tunnel_caller("v1/someone-else", 1003).is_none());
+    // A tunnel grant outlives any OAuth access-token lifetime: it ends only when revoked.
+    assert!(f.0.tunnel_caller(SUBJECT, 1003 + REFRESH_MS * 12).is_some());
+}
+
+/// Revoking the account's grant, or turning access off, cuts it off at once and forgets codes.
+#[test]
+fn revoking_or_turning_off_ends_a_paired_chatgpt_account() {
+    let mut f = Fixture::new();
+    let code = f.0.tunnel_pairing(SUBJECT, 1000).unwrap();
+    let state =
+        f.0.admin(
+            AdminRequest::Approve {
+                code,
+                access: read_only(&[11]),
+            },
+            &[11, 22],
+            1001,
+        )
+        .unwrap();
+    let who = f.0.tunnel_caller(SUBJECT, 1002).unwrap();
+    f.0.admin(
+        AdminRequest::Revoke {
+            grant_id: state.grants[0].id.clone(),
+        },
+        &[11, 22],
+        1003,
+    )
+    .unwrap();
+    assert!(f.0.tunnel_caller(SUBJECT, 1004).is_none());
+    assert!(f.0.check(&who, Scope::Read, &[11], 1004).is_err());
+    f.0.tunnel_pairing(SUBJECT, 1005).unwrap();
+    f.0.admin(AdminRequest::SetEnabled { enabled: false }, &[11, 22], 1006)
+        .unwrap();
+    assert!(f.0.status().pending.is_empty());
+    assert!(f.0.tunnel_pairing(SUBJECT, 1007).is_err());
+}
+
+/// Deny drops the waiting account's code; the pairings held at once are bounded, and an expired
+/// code is gone rather than approvable.
+#[test]
+fn tunnel_pairings_can_be_denied_are_bounded_and_expire() {
+    let mut f = Fixture::new();
+    let code = f.0.tunnel_pairing(SUBJECT, 1000).unwrap();
+    let request_id = f.0.status().pending[0].request_id.clone();
+    f.0.admin(AdminRequest::Deny { request_id }, &[11, 22], 1001)
+        .unwrap();
+    assert!(
+        f.0.admin(
+            AdminRequest::Approve {
+                code,
+                access: read_only(&[11]),
+            },
+            &[11, 22],
+            1002,
+        )
+        .is_err()
+    );
+    for n in 0..TUNNEL_PENDING_MAX {
+        f.0.tunnel_pairing(&format!("v1/account-{n}"), 1003)
+            .unwrap();
+    }
+    assert!(f.0.tunnel_pairing("v1/one-too-many", 1003).is_err());
+    let late = CONSENT_MS + 1003;
+    assert!(f.0.tunnel_pairing("v1/one-too-many", late).is_ok());
+    assert_eq!(f.0.status().pending.len(), 1, "the expired ones are gone");
+}
+
+/// No text an HTTPS caller sends as a bearer reaches a paired ChatGPT account: not its subject,
+/// not the subject with the prefix an earlier key used, not the stored key itself. The subject is
+/// no secret: every tunnel server the account talks to sees it.
+#[test]
+fn no_bearer_reaches_a_paired_chatgpt_account() {
+    let mut f = Fixture::new();
+    let code = f.0.tunnel_pairing(SUBJECT, 1000).unwrap();
+    f.0.admin(
+        AdminRequest::Approve {
+            code,
+            access: read_only(&[11]),
+        },
+        &[11, 22],
+        1001,
+    )
+    .unwrap();
+    for raw in [
+        SUBJECT.to_owned(),
+        format!("openai-subject:{SUBJECT}"),
+        subject_key(SUBJECT),
+    ] {
+        assert!(f.0.bearer(&raw, 1002).is_err(), "{raw}");
+    }
+    assert!(f.0.tunnel_caller(SUBJECT, 1002).is_some());
+}
+
+/// Setting up or moving the public address revokes OAuth clients, whose tokens name that
+/// audience, but keeps the ChatGPT accounts paired through the tunnel.
+#[test]
+fn moving_the_public_address_keeps_tunnel_grants() {
+    let mut f = Fixture::new();
+    let code = f.0.tunnel_pairing(SUBJECT, 1000).unwrap();
+    f.0.admin(
+        AdminRequest::Approve {
+            code,
+            access: read_only(&[11]),
+        },
+        &[11, 22],
+        1001,
+    )
+    .unwrap();
+    f.0.bind_resource("https://station.example/mcp").unwrap();
+    assert!(f.0.tunnel_caller(SUBJECT, 1002).is_some());
+    assert_eq!(f.0.status().grants.len(), 1);
+    f.0.bind_resource("https://elsewhere.example/mcp").unwrap();
+    assert!(f.0.tunnel_caller(SUBJECT, 1003).is_some());
+}

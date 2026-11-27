@@ -243,8 +243,13 @@ reports download again), one instance per install folder, FireTest
 (`chart-smoke`) — the built-in chart bench.
 
 **AI access (Station)**: Settings → Station → AI access sets up trusted HTTPS on the server and
-gives the address to paste into Claude as an MCP connector (ChatGPT is not supported: it refuses
-to connect to a server by IP address, and the station is reached by IP); the owner approves each
+gives the address to paste into Claude as an MCP connector. ChatGPT does not connect to a server by
+IP address, so it has its own ChatGPT box: the owner creates a tunnel and a key with the Tunnels
+permission in OpenAI Platform, pastes both there and presses Connect ChatGPT; the station then
+reaches OpenAI through its built-in tunnel client with no open port, and the box shows whether the
+tunnel is online or why not. In ChatGPT the owner adds a custom MCP server with Connection: Tunnel
+and no authentication; the first tool call shows a code in the chat, which the owner enters on this
+page like any other. The owner approves each
 client with the code from its authorization page and grants access per core — read on every
 selected core, strategies, trading and settings on the cores ticked; a client's permissions change
 from its card, access is revoked per client or all at once, and the change log records every

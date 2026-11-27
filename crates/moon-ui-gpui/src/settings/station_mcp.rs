@@ -4,8 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use moon_core::config::Secret;
 use moon_core::station_api::mcp::{
-    AdminRequest, AdminState, CoreAccess, CoreInfo, GrantInfo, Scope,
+    AdminRequest, AdminState, CoreAccess, CoreInfo, GrantInfo, Scope, TUNNEL_KEY_MISSING,
+    TUNNEL_KEY_REJECTED, TUNNEL_NOT_FOUND, TUNNEL_UNREACHABLE, TunnelState, valid_tunnel_id,
 };
 use moon_ui::{
     MoonAlert, MoonButton, MoonCheckbox, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState,
@@ -80,6 +82,10 @@ pub(super) struct McpEd {
     /// The client being edited, until its change is applied or cancelled. A client gone since simply
     /// stops being found, and the table shows the new connection.
     edit: Option<AccessEdit>,
+    /// The OpenAI tunnel ID for connecting ChatGPT, as copied from OpenAI Platform.
+    tunnel_id: Entity<MoonInputState>,
+    /// The OpenAI key for that tunnel; masked, and cleared once sent.
+    tunnel_key: Entity<MoonInputState>,
 }
 
 impl McpEd {
@@ -103,16 +109,23 @@ impl McpEd {
     /// Keep input changes reactive without performing network work during rendering.
     pub(super) fn new(window: &mut Window, cx: &mut Context<SettingsView>) -> Self {
         let code = cx.new(|cx| MoonInputState::new(window, cx));
-        cx.subscribe(&code, |_, _, event: &MoonInputEvent, cx| {
-            if matches!(event, MoonInputEvent::Change) {
-                cx.notify();
-            }
-        })
-        .detach();
+        let tunnel_id = cx.new(|cx| MoonInputState::new(window, cx));
+        let tunnel_key = cx.new(|cx| MoonInputState::new(window, cx).masked(true));
+        tunnel_key.update(cx, |state, cx| state.set_masked(true, window, cx));
+        for input in [&code, &tunnel_id, &tunnel_key] {
+            cx.subscribe(input, |_, _, event: &MoonInputEvent, cx| {
+                if matches!(event, MoonInputEvent::Change) {
+                    cx.notify();
+                }
+            })
+            .detach();
+        }
         Self {
             code,
             access: BTreeMap::new(),
             edit: None,
+            tunnel_id,
+            tunnel_key,
         }
     }
 
@@ -130,6 +143,20 @@ impl McpEd {
             (Some(edit), true) => &mut edit.access,
             _ => &mut self.access,
         }
+    }
+}
+
+/// The tunnel's link to OpenAI in the owner's words. A problem code a newer station sends and this
+/// terminal does not know is shown as it came, rather than hidden.
+fn tunnel_status(tunnel: &TunnelState) -> String {
+    match tunnel.problem.as_deref() {
+        None if tunnel.online => t!("station_mcp.tunnel_online").to_string(),
+        None => t!("station_mcp.tunnel_connecting").to_string(),
+        Some(TUNNEL_KEY_REJECTED) => t!("station_mcp.tunnel_key_rejected").to_string(),
+        Some(TUNNEL_NOT_FOUND) => t!("station_mcp.tunnel_not_found").to_string(),
+        Some(TUNNEL_UNREACHABLE) => t!("station_mcp.tunnel_unreachable").to_string(),
+        Some(TUNNEL_KEY_MISSING) => t!("station_mcp.tunnel_key_missing").to_string(),
+        Some(other) => other.to_owned(),
     }
 }
 
@@ -539,6 +566,99 @@ impl SettingsView {
         }
     }
 
+    /// ChatGPT's way in: the steps and the form while the station has no tunnel; the tunnel, its
+    /// link to OpenAI and what to do in ChatGPT once it has one.
+    ///
+    /// Args:
+    ///     state: The station's last MCP status, if read.
+    ///     busy: Whether a station job runs, which every button waits for.
+    fn mcp_tunnel_box(
+        &self,
+        state: Option<&AdminState>,
+        busy: bool,
+        cx: &Context<Self>,
+    ) -> MoonGroupBox {
+        let mut tunnel_box = MoonGroupBox::new("mcp-tunnel")
+            .padding(14.0)
+            .gap(10.0)
+            .child(group_title(t!("station_mcp.tunnel_title").to_string(), cx));
+        if let Some(tunnel) = state.and_then(|state| state.tunnel.as_ref()) {
+            return tunnel_box
+                .child(div().child(tunnel.tunnel_id.clone()))
+                .child(div().child(tunnel_status(tunnel)))
+                .child(div().child(t!("station_mcp.tunnel_next").to_string()))
+                .child(
+                    MoonButton::new("mcp-tunnel-off")
+                        .label(t!("station_mcp.tunnel_disconnect").to_string())
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(target) = known_target() {
+                                this.backend.update(cx, |backend, cx| {
+                                    backend.station_start(Job::McpTunnelOff { target }, false, cx)
+                                });
+                            }
+                        })),
+                );
+        }
+        let tunnel_id = self.mcp.tunnel_id.read(cx).value().trim().to_owned();
+        let key_given = !self.mcp.tunnel_key.read(cx).value().trim().is_empty();
+        let id_ok = valid_tunnel_id(&tunnel_id);
+        tunnel_box = tunnel_box
+            .child(div().child(t!("station_mcp.tunnel_steps").to_string()))
+            .child(
+                MoonInput::new("mcp-tunnel-id")
+                    .state(&self.mcp.tunnel_id)
+                    .placeholder(t!("station_mcp.tunnel_id").to_string())
+                    .size(design::INPUT_SIZE)
+                    .mono(true),
+            );
+        if !tunnel_id.is_empty() && !id_ok {
+            let muted = rgba_from(MoonPalette::active(cx).text_muted, 1.0);
+            tunnel_box = tunnel_box.child(
+                div()
+                    .text_color(muted)
+                    .child(t!("station_mcp.tunnel_id_invalid").to_string()),
+            );
+        }
+        tunnel_box
+            .child(
+                MoonInput::new("mcp-tunnel-key")
+                    .state(&self.mcp.tunnel_key)
+                    .placeholder(t!("station_mcp.tunnel_key").to_string())
+                    .size(design::INPUT_SIZE)
+                    .mono(true)
+                    .mask_toggle(),
+            )
+            .child(
+                MoonButton::new("mcp-tunnel-connect")
+                    .label(t!("station_mcp.tunnel_connect").to_string())
+                    .disabled(busy || !id_ok || !key_given)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let tunnel_id = this.mcp.tunnel_id.read(cx).value().trim().to_owned();
+                        let key = Secret::new(this.mcp.tunnel_key.read(cx).value().trim());
+                        let Some(target) = known_target() else {
+                            return;
+                        };
+                        this.backend.update(cx, |backend, cx| {
+                            backend.station_start(
+                                Job::McpTunnel {
+                                    target,
+                                    tunnel_id,
+                                    key,
+                                },
+                                false,
+                                cx,
+                            )
+                        });
+                        // The key is on its way to the station; the field keeps no copy.
+                        this.mcp
+                            .tunnel_key
+                            .update(cx, |state, cx| state.set_value("", window, cx));
+                        cx.notify();
+                    })),
+            )
+    }
+
     /// Display cached authorization state; buttons, never layout, initiate remote operations.
     pub(super) fn st_mcp_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
         let station = &self.backend.read(cx).station;
@@ -578,7 +698,15 @@ impl SettingsView {
                         )
                         .child(div().child(t!("station_mcp.paste_where").to_string()))
                         .child(div().child(t!("station_mcp.path_claude").to_string()))
-                        .child(div().child(t!("station_mcp.path_chatgpt").to_string()))
+                        .child(div().child(t!("station_mcp.path_chatgpt").to_string()));
+                } else if state.tunnel.is_none() {
+                    connection =
+                        connection.child(div().child(t!("station_mcp.unconfigured").to_string()));
+                }
+                // The switch governs both ways in, so a station reached only through the tunnel
+                // has it too.
+                if state.endpoint.is_some() || state.tunnel.is_some() {
+                    connection = connection
                         .child(
                             MoonCheckbox::new("mcp-enabled")
                                 .checked(state.enabled)
@@ -592,9 +720,6 @@ impl SettingsView {
                                 })),
                         )
                         .child(div().child(t!("station_mcp.disable_hint").to_string()));
-                } else {
-                    connection =
-                        connection.child(div().child(t!("station_mcp.unconfigured").to_string()));
                 }
             } else if busy {
                 connection = connection.child(div().child(t!("station_mcp.loading").to_string()));
@@ -613,7 +738,9 @@ impl SettingsView {
                         })),
                 )
                 .child(div().child(t!("station_mcp.setup_hint").to_string()));
-            body = body.child(connection);
+            body =
+                body.child(connection)
+                    .child(self.mcp_tunnel_box(station.mcp.as_ref(), busy, cx));
         }
         // Above the long table, where a refused change is seen beside the form that caused it.
         if let Some(Err(error)) = &station.outcome {
@@ -655,7 +782,10 @@ impl SettingsView {
                         consent =
                             consent
                                 .child(div().child(pending.client_name.clone()))
-                                .child(div().child(pending.redirect_uri.clone()))
+                                // A ChatGPT account met through the tunnel has no redirect.
+                                .when(!pending.redirect_uri.is_empty(), |consent| {
+                                    consent.child(div().child(pending.redirect_uri.clone()))
+                                })
                                 .child(
                                     div().child(
                                         pending
