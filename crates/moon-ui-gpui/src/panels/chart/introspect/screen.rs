@@ -33,6 +33,8 @@ impl ChartPanel {
             return Vec::new();
         }
         let origin = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+        let to_window =
+            |(x, y): (f32, f32)| point(px(origin.0 + x / scale), px(origin.1 + y / scale));
         let mut out = Vec::new();
         for pane in 0..self.chart.pane_count() {
             let Some(map) = self.pane_map(pane) else {
@@ -49,8 +51,18 @@ impl ChartPanel {
                     let points: Vec<Point<Pixels>> =
                         sample_line(&line.shape, line.side, line.span, &map, SCREEN_LINE_SAMPLES)
                             .into_iter()
-                            .map(|(x, y)| point(px(origin.0 + x / scale), px(origin.1 + y / scale)))
+                            .map(to_window)
                             .collect();
+                    let slope: Vec<Point<Pixels>> = sample_squeeze_slope(
+                        &line.shape,
+                        line.extend,
+                        line.ref_ms,
+                        &map,
+                        SCREEN_LINE_SAMPLES,
+                    )
+                    .into_iter()
+                    .map(to_window)
+                    .collect();
                     (!points.is_empty()).then(|| ScreenAutoLine {
                         pane,
                         row_ix: line.key.row_ix,
@@ -58,6 +70,7 @@ impl ChartPanel {
                         shape: shape_name(&line.shape),
                         caption: line.text.clone(),
                         points,
+                        slope,
                         first_ms: line.first_ms,
                         touches: line.touches,
                         plot_left_ms,
@@ -92,6 +105,10 @@ pub(crate) struct ScreenAutoLine {
     pub caption: Option<std::sync::Arc<str>>,
     /// Points along the drawn, visible part, window-relative content pixels, left to right.
     pub points: Vec<Point<Pixels>>,
+    /// A squeeze's sloped half, sampled like [`Self::points`] (whose points are its level), so a
+    /// film can point the viewer at the line pressing into the level; empty for every other shape
+    /// and for a sloped half off the plot.
+    pub slope: Vec<Point<Pixels>>,
     /// The line's first anchor, Unix ms (`Found::first_ms`): its earliest touch for the shapes
     /// built from touches (levels, sloped lines, squeezes, formations); the period's first bar for
     /// a period extreme or a volume profile; `0.0` for a round price.
@@ -156,6 +173,95 @@ fn sample_line(
             }
             let y = map.y_of_price(shape.side_price_at(t, side)?);
             (y.is_finite() && y >= plot.y && y <= plot.y + plot.h).then_some((x, y))
+        })
+        .collect()
+}
+
+/// Sample the sloped half of a squeeze over the stretch it is drawn: from its first touch to where
+/// it meets the level or to the run's reference time `ref_ms`, whichever comes first, never short
+/// of its last touch; under `BetweenTouches`, to its last touch — the rule of
+/// `moon_chart::auto_figures::draw::capped_end`, fed the same `extend` and `ref_ms` the line was
+/// drawn with (`AutoLineRec`).
+///
+/// Both ends are sampled exactly, not on the plot's grid: a film marks the apex with a ring at the
+/// last point and shades the zone up to it, and a grid step is up to a 23rd of the plot short.
+/// The ends are clipped to the plot's left and right edges; a point above or below the plot is
+/// dropped, as [`sample_line`] drops it, so a half starting off the plot vertically begins at
+/// the first grid column inside it.
+///
+/// Args:
+///     shape: The line's geometry; anything but a squeeze yields nothing.
+///     extend: The row's `extend`.
+///     ref_ms: The run's reference time, Unix ms.
+///     map: The pane's projection.
+///     samples: Grid columns across the plot between the two ends, as for [`sample_line`].
+///
+/// Returns:
+///     The kept points in panel-local device pixels, left to right.
+fn sample_squeeze_slope(
+    shape: &moon_chart::auto_figures::FoundShape,
+    extend: moon_core::config::auto_figures::Extend,
+    ref_ms: f64,
+    map: &super::super::geom::PaneMap,
+    samples: usize,
+) -> Vec<(f32, f32)> {
+    use moon_chart::auto_figures::{FoundShape, line_price_at};
+    use moon_core::config::auto_figures::Extend;
+    use moon_core::figures::Proj;
+    let FoundShape::Squeeze {
+        level,
+        t0_ms,
+        p0,
+        t1_ms,
+        p1,
+        ..
+    } = *shape
+    else {
+        return Vec::new();
+    };
+    // The chart draws no squeeze whose level or touches are not finite and positive
+    // (`draw::append_shapes`), so the probe reports no slope for one either.
+    let drawable = |v: f64| v.is_finite() && v > 0.0;
+    if !(t0_ms.is_finite() && t1_ms.is_finite() && t1_ms > t0_ms)
+        || !(drawable(level) && drawable(p0) && drawable(p1))
+        || samples < 2
+    {
+        return Vec::new();
+    }
+    let end = match extend {
+        Extend::BetweenTouches => t1_ms,
+        Extend::RightEdge | Extend::BothEdges => {
+            let now = if ref_ms.is_finite() {
+                ref_ms.max(t1_ms)
+            } else {
+                t1_ms
+            };
+            // Where the line meets the level; a flat line gives ±inf (NaN when it lies on the
+            // level), which is no apex.
+            let apex = t0_ms + (level - p0) / (p1 - p0) * (t1_ms - t0_ms);
+            if apex.is_finite() && apex > t0_ms {
+                now.min(apex)
+            } else {
+                now
+            }
+        }
+    };
+    let plot = map.plot;
+    let from = t0_ms.max(map.time_at_x(plot.x));
+    let to = end.min(map.time_at_x(plot.x + plot.w));
+    if !(to > from) {
+        return Vec::new();
+    }
+    let step = plot.w / (samples - 1) as f32;
+    let grid = (0..samples)
+        .map(|i| map.time_at_x(plot.x + step * i as f32))
+        .filter(|&t| t > from && t < to);
+    std::iter::once(from)
+        .chain(grid)
+        .chain(std::iter::once(to))
+        .filter_map(|t| {
+            let y = map.y_of_price(line_price_at(t0_ms, p0, t1_ms, p1, t)?);
+            (y.is_finite() && y >= plot.y && y <= plot.y + plot.h).then_some((map.x_of_time(t), y))
         })
         .collect()
 }
