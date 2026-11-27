@@ -1,4 +1,5 @@
-//! Local OAuth authorization store. The private control socket is the only consent authority.
+//! Local authorization store: OAuth clients, and ChatGPT accounts paired through the OpenAI
+//! tunnel. The private control socket is the only consent authority for both.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
@@ -17,6 +18,38 @@ use url::Url;
 const ACCESS_MS: i64 = 10 * 60 * 1000;
 const REFRESH_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 const CONSENT_MS: i64 = 10 * 60 * 1000;
+
+/// The client binding of a grant made for a ChatGPT account met through the tunnel. Registered
+/// OAuth client IDs are 43 random base64url characters, so no registration can take this one, and
+/// neither code exchange nor refresh can ever reach a tunnel grant.
+const TUNNEL_CLIENT: &str = "openai-tunnel";
+/// The name a tunnel pairing and its grant carry on the owner's page.
+const TUNNEL_CLIENT_NAME: &str = "ChatGPT";
+/// Unanswered tunnel pairings held at once, so accounts that found the tunnel ID cannot grow it.
+const TUNNEL_PENDING_MAX: usize = 8;
+/// What a tunnel pairing asks for: everything, as the owner's ticks then decide what is granted.
+const TUNNEL_SCOPES: [Scope; 4] = [
+    Scope::Read,
+    Scope::Strategies,
+    Scope::Trading,
+    Scope::Settings,
+];
+
+/// The token key of a paired ChatGPT account, in a key space no bearer hash can reach.
+fn subject_key(subject: &str) -> String {
+    // A ':' never appears in `hash` output (base64url), so no bearer the HTTPS listener hashes —
+    // whatever text it is — can land on this key. Hashing a prefixed subject instead would not do:
+    // a caller who knows the subject could send exactly that text as a bearer.
+    format!("subject:{}", hash(subject))
+}
+
+/// A ten-character owner code. Hex avoids ambiguous characters when the owner copies it into the
+/// terminal.
+fn owner_code() -> Result<String> {
+    let mut bytes = [0u8; 5];
+    getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("OS random: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02X}")).collect())
+}
 
 /// Cryptographically random opaque identifier; raw credentials never appear in stored tokens.
 pub(super) fn random() -> Result<String> {
@@ -147,6 +180,13 @@ struct Pending {
     approved: Option<(String, String)>,
 }
 
+/// A ChatGPT account the tunnel delivered a tool call from, waiting for the owner to enter the
+/// code the chat showed. In memory only, like a browser consent: a restart asks again.
+struct TunnelPending {
+    info: PendingConsent,
+    owner_code: String,
+}
+
 /// A single-use code is only redeemable by the client and PKCE verifier that began the flow.
 struct Code {
     grant: String,
@@ -178,18 +218,26 @@ pub(super) struct Auth {
     path: PathBuf,
     pending: BTreeMap<String, Pending>,
     codes: BTreeMap<String, Code>,
+    /// Tunnel pairings by the account's [`subject_key`].
+    tunnel_pending: BTreeMap<String, TunnelPending>,
 }
 
 impl Auth {
-    /// Moving the public endpoint changes the token audience and requires fresh owner consent.
+    /// Moving the public endpoint changes the token audience: OAuth clients need fresh owner
+    /// consent, while ChatGPT accounts paired through the tunnel keep their grants.
     pub fn bind_resource(&mut self, resource: &str) -> Result<()> {
         if self.disk.resource == resource {
             return Ok(());
         }
         let mut next = self.disk.clone();
         next.resource = resource.into();
-        next.grants.clear();
-        next.tokens.clear();
+        // Tunnel grants are bound to a ChatGPT account, not to this audience: setting up or moving
+        // the public address must not cut ChatGPT off.
+        next.grants
+            .retain(|_, grant| grant.client_id == TUNNEL_CLIENT);
+        let kept = &next.grants;
+        next.tokens
+            .retain(|_, token| kept.contains_key(&token.grant));
         self.save(next)?;
         self.pending.clear();
         self.codes.clear();
@@ -209,6 +257,7 @@ impl Auth {
             path,
             pending: BTreeMap::new(),
             codes: BTreeMap::new(),
+            tunnel_pending: BTreeMap::new(),
         })
     }
 
@@ -226,6 +275,7 @@ impl Auth {
     /// Remove expired ephemeral state and credentials; retain registered clients with live grants.
     fn prune(&mut self, at: i64) {
         self.pending.retain(|_, p| p.info.expires_ms > at);
+        self.tunnel_pending.retain(|_, p| p.info.expires_ms > at);
         self.codes.retain(|_, c| c.expires_ms > at);
         self.disk.tokens.retain(|_, t| t.expires_ms > at);
         let grants = &self.disk.grants;
@@ -333,10 +383,7 @@ impl Auth {
         ensure!(state.len() <= 2048, "state is too large");
         ensure!(!scopes.is_empty(), "at least one scope is required");
         let id = random()?;
-        // Hex avoids ambiguous characters when the owner copies the code into the terminal.
-        let mut bytes = [0u8; 5];
-        getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("OS random: {e}"))?;
-        let owner_code = bytes.iter().map(|b| format!("{b:02X}")).collect::<String>();
+        let owner_code = owner_code()?;
         self.pending.insert(
             id.clone(),
             Pending {
@@ -532,6 +579,103 @@ impl Auth {
         })
     }
 
+    /// The grant a ChatGPT account met through the tunnel was paired with, as the identity later
+    /// checks revalidate; `None` while it is unpaired or access is off.
+    ///
+    /// Args:
+    ///     subject: The account's `X-Openai-Subject`, as OpenAI's tunnel service set it.
+    ///     at: Now, UTC milliseconds.
+    pub fn tunnel_caller(&mut self, subject: &str, at: i64) -> Option<Principal> {
+        let key = subject_key(subject);
+        let token = self.disk.tokens.get(&key)?;
+        if !self.disk.enabled || token.expires_ms <= at {
+            return None;
+        }
+        let grant_id = token.grant.clone();
+        // Contact time stays in memory until the next durable transition, as for a bearer.
+        self.disk.grants.get_mut(&grant_id)?.info.last_access_ms = Some(at);
+        Some(Principal {
+            token_hash: key,
+            grant_id,
+        })
+    }
+
+    /// The code that pairs an unpaired ChatGPT account: the one already waiting for it, or a new
+    /// one. The chat shows it; the owner enters it in the terminal like a browser consent code.
+    ///
+    /// Args:
+    ///     subject: The account's `X-Openai-Subject`.
+    ///     at: Now, UTC milliseconds.
+    ///
+    /// Returns:
+    ///     The owner code, valid for the consent window.
+    pub fn tunnel_pairing(&mut self, subject: &str, at: i64) -> Result<String> {
+        self.prune(at);
+        ensure!(self.disk.enabled, "AI access is turned off on this station");
+        let key = subject_key(subject);
+        if let Some(waiting) = self.tunnel_pending.get(&key) {
+            return Ok(waiting.owner_code.clone());
+        }
+        ensure!(
+            self.tunnel_pending.len() < TUNNEL_PENDING_MAX,
+            "too many ChatGPT connections are waiting for approval; retry later"
+        );
+        let owner_code = owner_code()?;
+        self.tunnel_pending.insert(
+            key,
+            TunnelPending {
+                info: PendingConsent {
+                    request_id: random()?,
+                    client_name: TUNNEL_CLIENT_NAME.into(),
+                    redirect_uri: String::new(),
+                    scopes: TUNNEL_SCOPES.to_vec(),
+                    expires_ms: at + CONSENT_MS,
+                },
+                owner_code: owner_code.clone(),
+            },
+        );
+        Ok(owner_code)
+    }
+
+    /// Grant a waiting ChatGPT account the owner's choice: a grant no OAuth flow can reach, and a
+    /// token keyed by the account's subject that lasts until the grant is revoked.
+    fn approve_tunnel(&mut self, key: &str, access: Vec<CoreAccess>, at: i64) -> Result<()> {
+        let pending = self
+            .tunnel_pending
+            .get(key)
+            .context("unknown or already used consent code")?;
+        ensure!(
+            !self.disk.tokens.contains_key(key),
+            "this ChatGPT account is already connected"
+        );
+        let grant_id = random()?;
+        let grant = Grant {
+            client_id: TUNNEL_CLIENT.into(),
+            refresh_key: random()?,
+            refresh_hash: None,
+            info: GrantInfo {
+                id: grant_id.clone(),
+                client_name: pending.info.client_name.clone(),
+                access,
+                created_ms: at,
+                last_access_ms: None,
+                requested: Some(pending.info.scopes.clone()),
+            },
+        };
+        let mut next = self.disk.clone();
+        next.grants.insert(grant_id.clone(), grant);
+        next.tokens.insert(
+            key.to_owned(),
+            Token {
+                grant: grant_id,
+                expires_ms: i64::MAX,
+            },
+        );
+        self.save(next)?;
+        self.tunnel_pending.remove(key);
+        Ok(())
+    }
+
     /// Recheck identity, permission and exact core scope at the point where work executes. The
     /// permission must hold on every named core; with none named, on at least one, which is how
     /// the calls that only establish who is asking use it.
@@ -604,10 +748,13 @@ impl Auth {
                 if !enabled {
                     self.pending.clear();
                     self.codes.clear();
+                    self.tunnel_pending.clear();
                 }
             }
             AdminRequest::Deny { request_id } => {
                 self.pending.remove(&request_id);
+                self.tunnel_pending
+                    .retain(|_, waiting| waiting.info.request_id != request_id);
             }
             AdminRequest::Revoke { grant_id } => self.revoke(&grant_id)?,
             AdminRequest::SetAccess {
@@ -664,6 +811,16 @@ impl Auth {
                 );
                 let access = normalized_access(access, known_cores)?;
                 let normalized = code.trim().to_ascii_uppercase();
+                // A code the chat showed pairs a ChatGPT account; any other is a browser's.
+                if let Some(key) = self
+                    .tunnel_pending
+                    .iter()
+                    .find(|(_, waiting)| waiting.owner_code == normalized)
+                    .map(|(key, _)| key.clone())
+                {
+                    self.approve_tunnel(&key, access, at)?;
+                    return Ok(self.status());
+                }
                 let (id, pending) = self
                     .pending
                     .iter()
@@ -720,6 +877,7 @@ impl Auth {
                 .values()
                 .filter(|p| p.approved.is_none())
                 .map(|p| p.info.clone())
+                .chain(self.tunnel_pending.values().map(|p| p.info.clone()))
                 .collect(),
             grants: self.disk.grants.values().map(|g| g.info.clone()).collect(),
             audit: self

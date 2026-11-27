@@ -1,9 +1,15 @@
-//! One-button HTTPS setup over the existing pinned SSH administrator connection.
+//! One-button AI access setup over the existing pinned SSH administrator connection: trusted
+//! HTTPS for clients that open an address, and the OpenAI tunnel for ChatGPT.
 
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
-use moon_core::station_api::mcp::{AdminRequest, AdminState};
+use moon_core::config::Secret;
+use moon_core::station_api::mcp::{
+    AdminRequest, AdminState, TUNNEL_KEY_MISSING, TUNNEL_KEY_REJECTED, TUNNEL_NOT_FOUND,
+    valid_tunnel_id,
+};
+use moon_core::station_api::{Answer, Request};
 
 use super::{admin_conn, api, current_helper_status, edit_config};
 use crate::script::{self, STEP_TIMEOUT};
@@ -82,9 +88,14 @@ fn public_origin(host: &str) -> Result<(String, String)> {
 }
 
 /// Preserve all unrelated station configuration and refuse to silently move an established audience.
+/// A section that holds only the ChatGPT tunnel gains the public origin beside it.
 fn with_mcp(current: Option<&str>, origin: &str) -> Result<Option<String>> {
     let mut table: toml::Table = toml::from_str(current.context("station.toml is missing")?)?;
-    if let Some(section) = table.get("mcp") {
+    if let Some(section) = table.get_mut("mcp").and_then(toml::Value::as_table_mut) {
+        if section.get("public_url").is_none() {
+            section.insert("public_url".into(), toml::Value::String(origin.into()));
+            return Ok(Some(toml::to_string_pretty(&table)?));
+        }
         ensure!(
             section.get("public_url").and_then(toml::Value::as_str) == Some(origin)
                 && section
@@ -104,6 +115,137 @@ fn with_mcp(current: Option<&str>, origin: &str) -> Result<Option<String>> {
         )])),
     );
     Ok(Some(toml::to_string_pretty(&table)?))
+}
+
+/// `station.toml` with `[mcp] tunnel_id` set, everything else kept: a public origin beside it
+/// stays, so Claude's address and its clients survive adding ChatGPT. `None` when it already holds
+/// this tunnel.
+fn with_tunnel(current: Option<&str>, tunnel_id: &str) -> Result<Option<String>> {
+    let mut table: toml::Table = toml::from_str(current.context("station.toml is missing")?)?;
+    let section = table
+        .entry("mcp")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .context("[mcp] in station.toml is not a table")?;
+    if section.get("tunnel_id").and_then(toml::Value::as_str) == Some(tunnel_id) {
+        return Ok(None);
+    }
+    section.insert("tunnel_id".into(), toml::Value::String(tunnel_id.into()));
+    Ok(Some(toml::to_string_pretty(&table)?))
+}
+
+/// `station.toml` without the tunnel: `tunnel_id` leaves `[mcp]`, and the section goes with it
+/// when no public origin is left in it. `None` when there was no tunnel.
+fn without_tunnel(current: Option<&str>) -> Result<Option<String>> {
+    let mut table: toml::Table = toml::from_str(current.context("station.toml is missing")?)?;
+    let Some(section) = table.get_mut("mcp").and_then(toml::Value::as_table_mut) else {
+        return Ok(None);
+    };
+    if section.remove("tunnel_id").is_none() {
+        return Ok(None);
+    }
+    if section.get("public_url").is_none() {
+        table.remove("mcp");
+    }
+    Ok(Some(toml::to_string_pretty(&table)?))
+}
+
+/// How long the ChatGPT setup waits for the restarted station's tunnel to reach OpenAI.
+const TUNNEL_WAIT: Duration = Duration::from_secs(60);
+
+/// Connect ChatGPT: the tunnel key goes into the station's encrypted credentials, the tunnel ID
+/// into `[mcp]`, and the station restarts with its own tunnel client, which needs no inbound port.
+/// Returns once the tunnel reached OpenAI or OpenAI refused it, so the owner sees which.
+///
+/// Args:
+///     target: The station's administrator destination.
+///     tunnel_id: The tunnel from OpenAI Platform → Tunnels.
+///     key: An OpenAI API key with the Tunnels permission; never read back.
+pub fn tunnel_setup(target: &Target, tunnel_id: &str, key: &Secret) -> Result<AdminState> {
+    let tunnel_id = tunnel_id.trim();
+    ensure!(
+        valid_tunnel_id(tunnel_id),
+        "this is not an OpenAI tunnel ID (tunnel_ and 32 letters or digits)"
+    );
+    let key = key.expose().trim();
+    ensure!(
+        !key.is_empty() && key.len() <= 1024 && key.bytes().all(|b| b.is_ascii_graphic()),
+        "this does not look like an OpenAI API key"
+    );
+    let conn = admin_conn(target)?;
+    let status = current_helper_status(&conn)?;
+    ensure!(
+        script::value(&status, "mcp_tunnel") == Some("yes"),
+        "update the station before connecting ChatGPT"
+    );
+    script::checked(conn.run(
+        &script::helper("put-tunnel-key", &[]),
+        key.as_bytes(),
+        STEP_TIMEOUT,
+    )?)
+    .context("store the OpenAI key on the station")?;
+    edit_config(&conn, true, |current| with_tunnel(current, tunnel_id))?;
+    // Restart whether or not the file changed: a new key reaches the station only at a start.
+    script::checked(conn.run(&script::helper("restart", &[]), &[], STEP_TIMEOUT)?)?;
+    let state = wait_for_tunnel(&conn)?;
+    if state.enabled {
+        return Ok(state);
+    }
+    match api::call(
+        &conn,
+        &Request::Mcp(AdminRequest::SetEnabled { enabled: true }),
+    )? {
+        Answer::Mcp(state) => Ok(state),
+        other => anyhow::bail!("the station answered MCP administration with {other:?}"),
+    }
+}
+
+/// The restarted station's MCP status once its tunnel reached OpenAI or OpenAI refused it; the
+/// last status read when neither happened in time.
+fn wait_for_tunnel(conn: &super::AdminConn) -> Result<AdminState> {
+    let deadline = Instant::now() + TUNNEL_WAIT;
+    let mut last = None;
+    loop {
+        // While it starts the station answers nothing; that is waited out, not reported.
+        if let Ok(Answer::Mcp(state)) = api::call(conn, &Request::Mcp(AdminRequest::Status)) {
+            let settled = state.tunnel.as_ref().is_some_and(|tunnel| {
+                tunnel.online
+                    || matches!(
+                        tunnel.problem.as_deref(),
+                        Some(TUNNEL_KEY_REJECTED | TUNNEL_NOT_FOUND | TUNNEL_KEY_MISSING)
+                    )
+            });
+            if settled {
+                return Ok(state);
+            }
+            last = Some(state);
+        }
+        if Instant::now() >= deadline {
+            return last.context("the station did not come back after the restart");
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// Disconnect ChatGPT: the tunnel leaves `[mcp]`, its key leaves the station, and the station
+/// restarts without it. ChatGPT accounts paired through it keep their grants until revoked, so
+/// reconnecting the same tunnel needs no new codes.
+pub fn tunnel_remove(target: &Target) -> Result<AdminState> {
+    let conn = admin_conn(target)?;
+    current_helper_status(&conn)?;
+    edit_config(&conn, true, without_tunnel)?;
+    script::checked(conn.run(&script::helper("drop-tunnel-key", &[]), &[], STEP_TIMEOUT)?)?;
+    script::checked(conn.run(&script::helper("restart", &[]), &[], STEP_TIMEOUT)?)?;
+    let deadline = Instant::now() + TUNNEL_WAIT;
+    loop {
+        match api::call(&conn, &Request::Mcp(AdminRequest::Status)) {
+            Ok(Answer::Mcp(state)) => return Ok(state),
+            _ if Instant::now() >= deadline => {
+                anyhow::bail!("the station did not come back after the restart")
+            }
+            _ => std::thread::sleep(Duration::from_secs(2)),
+        }
+    }
 }
 
 /// Install the trusted certificate manager, restart the station with its account feed, then probe

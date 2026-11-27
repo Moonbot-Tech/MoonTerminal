@@ -735,10 +735,12 @@ fn helper_is_current(status: &str) -> bool {
         && script::value(status, "remove_station") == Some("yes")
         && script::value(status, "removal_guard") == Some("yes")
         && script::value(status, "bot_settings_merge") == Some("yes")
+        && script::value(status, "tunnel_key_store") == Some("yes")
         && matches!(
             script::value(status, "core_endpoint_override"),
             Some("yes" | "no")
         )
+        && matches!(script::value(status, "mcp_tunnel"), Some("yes" | "no"))
         && script::value(status, "languages").is_some()
 }
 

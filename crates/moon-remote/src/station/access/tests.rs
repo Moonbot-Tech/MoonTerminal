@@ -55,7 +55,7 @@ fixture=$(mktemp -d)
 test -d "$fixture"
 trap 'rm -r -- "$fixture"' EXIT
 mkdir -p "$fixture/etc/creds" "$fixture/data" "$fixture/opt" "$fixture/admin"
-for file in etc/creds/core-1.cred etc/creds/core-9.cred etc/creds/.core-3.new etc/creds/telegram-token.cred etc/creds/.telegram-token.new etc/station.toml etc/station.toml.new data/telegram.json data/telegram.json.new data/telegram.json.tmp data/update.request data/mcp-auth.json data/mcp-auth.json.tmp; do
+for file in etc/creds/core-1.cred etc/creds/core-9.cred etc/creds/.core-3.new etc/creds/telegram-token.cred etc/creds/.telegram-token.new etc/creds/openai-tunnel-key.cred etc/creds/.openai-tunnel-key.new etc/station.toml etc/station.toml.new data/telegram.json data/telegram.json.new data/telegram.json.tmp data/update.request data/mcp-auth.json data/mcp-auth.json.tmp; do
     printf 'synthetic credential' >"$fixture/$file"
 done
 printf 'administrator key' >"$fixture/admin/authorized_keys"
@@ -87,6 +87,8 @@ test ! -e "$fixture/etc/creds/core-9.cred"
 test ! -e "$fixture/etc/creds/.core-3.new"
 test ! -e "$fixture/etc/creds/telegram-token.cred"
 test ! -e "$fixture/etc/creds/.telegram-token.new"
+test ! -e "$fixture/etc/creds/openai-tunnel-key.cred"
+test ! -e "$fixture/etc/creds/.openai-tunnel-key.new"
 test ! -e "$fixture/etc/station.toml"
 test ! -e "$fixture/etc/station.toml.new"
 test ! -e "$fixture/data/telegram.json"

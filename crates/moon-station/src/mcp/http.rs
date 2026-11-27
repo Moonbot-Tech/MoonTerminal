@@ -1,4 +1,5 @@
-//! Loopback HTTP: OAuth discovery, browser consent and the official MCP transport behind Caddy.
+//! Loopback HTTP: OAuth discovery, browser consent and the official MCP transport behind Caddy;
+//! and the same MCP transport for the OpenAI tunnel, called in-process.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -23,6 +24,30 @@ use super::{Shared, auth, tools};
 /// OAuth vocabulary, deliberately identical to the private owner permission selectors.
 const SCOPES: [&str; 4] = ["read", "strategies", "trading", "settings"];
 const COOKIE: &str = "__Host-moonstation-consent";
+
+/// The Host the tunnel's in-process MCP requests carry. Not a resolvable name: those requests
+/// never touch a socket, and the HTTPS listener's own service accepts only its public host.
+pub(super) const TUNNEL_HOST: &str = "openai-tunnel";
+
+/// The MCP service the tunnel answers ChatGPT with: the same tools and settings as the HTTPS
+/// listener's, called directly rather than over a socket.
+pub(super) type TunnelService = StreamableHttpService<tools::Server, NeverSessionManager>;
+
+/// Build the tunnel's MCP service. It skips the bearer middleware on purpose: the tunnel attaches
+/// the caller itself, a paired account's principal or a [`super::TunnelGuest`], before each call.
+pub(super) fn tunnel_service(shared: Arc<Shared>, stop: CancellationToken) -> TunnelService {
+    let config = StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true)
+        .with_allowed_hosts([TUNNEL_HOST])
+        .with_max_request_body_bytes(64 * 1024)
+        .with_cancellation_token(stop);
+    StreamableHttpService::new(
+        move || Ok(tools::Server(shared.clone())),
+        Arc::new(NeverSessionManager::default()),
+        config,
+    )
+}
 
 /// Build one bounded router; only the MCP endpoint accepts bearer tokens as bot authority.
 pub(super) fn router(shared: Arc<Shared>, stop: CancellationToken) -> Router {

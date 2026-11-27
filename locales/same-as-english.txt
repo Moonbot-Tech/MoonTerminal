@@ -394,6 +394,8 @@ assets.wallet.kind.bybit_funding: ru es uk tr pt vi zh
 station_mcp.action.panic_sell: ru es uk tr pt vi zh
 # The menu path in Claude's own interface, spelled as that interface shows it.
 station_mcp.path_claude: ru es uk tr pt vi zh
+# The ChatGPT box's title is the product's name.
+station_mcp.tunnel_title: ru es uk tr pt vi zh
 # Core commands: protocol/API labels, units, and the native cognates Exchange (es) and Port (tr).
 core_cmds.addr.ip: ru es uk tr pt vi zh
 core_cmds.addr.port: tr

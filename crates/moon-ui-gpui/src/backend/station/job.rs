@@ -74,6 +74,15 @@ pub(crate) enum CoreStart {
 pub(crate) enum Job {
     /// Configure trusted HTTPS and MCP from the already authenticated Station destination.
     McpSetup { target: Target },
+    /// Connect ChatGPT through the station's own OpenAI tunnel client: the key into the station's
+    /// encrypted credentials, the tunnel ID into `[mcp]`, a restart.
+    McpTunnel {
+        target: Target,
+        tunnel_id: String,
+        key: moon_core::config::Secret,
+    },
+    /// Disconnect ChatGPT: the tunnel and its key leave the station.
+    McpTunnelOff { target: Target },
     /// Independent AI permissions; no Telegram token or bot state is read or changed.
     Mcp {
         target: Target,
@@ -248,6 +257,8 @@ impl JobButton {
     pub(crate) fn of(job: &Job, has_token: bool) -> Self {
         match job {
             Job::McpSetup { .. } => Self::Key("station_mcp.setup"),
+            Job::McpTunnel { .. } => Self::Key("station_mcp.tunnel_connect"),
+            Job::McpTunnelOff { .. } => Self::Key("station_mcp.tunnel_disconnect"),
             Job::Mcp { .. } => Self::Key("station_mcp.refresh"),
             Job::AddressProbe { .. } => Self::Key("telegram.server.address_probe"),
             Job::AddressChange { .. } => Self::Key("telegram.server.address_confirm"),
@@ -453,6 +464,26 @@ fn run(
     match job {
         Job::McpSetup { target } => {
             mcp(station::mcp::setup(&target)?);
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
+                bot_off: false,
+            })
+        }
+        Job::McpTunnel {
+            target,
+            tunnel_id,
+            key,
+        } => {
+            mcp(station::mcp::tunnel_setup(&target, &tunnel_id, &key)?);
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
+                bot_off: false,
+            })
+        }
+        Job::McpTunnelOff { target } => {
+            mcp(station::mcp::tunnel_remove(&target)?);
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,

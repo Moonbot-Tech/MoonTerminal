@@ -59,6 +59,8 @@ pub enum AdminRequest {
 pub struct AdminState {
     pub configured: bool,
     pub enabled: bool,
+    /// The public HTTPS address an AI app is given (Claude and the like); `None` on a station
+    /// reached only through the OpenAI tunnel.
     pub endpoint: Option<String>,
     pub cores: Vec<CoreInfo>,
     pub pending: Vec<PendingConsent>,
@@ -66,7 +68,61 @@ pub struct AdminState {
     pub audit: Vec<AuditEntry>,
     pub knowledge_revision: Option<String>,
     pub knowledge_checked_ms: Option<i64>,
+    /// The OpenAI tunnel ChatGPT reaches the station through, when `[mcp]` names one. Absent from
+    /// a station that predates the tunnel, which therefore reads as one without it; an older
+    /// terminal ignores the field.
+    #[serde(default)]
+    /// Boxed: the status reply rides in [`super::Reply`], whose variants stay close in size.
+    pub tunnel: Option<Box<TunnelState>>,
 }
+
+/// The station's own OpenAI Secure MCP Tunnel client, as the owner's page shows it.
+///
+/// A plain struct with a problem *code* rather than an enum of states: a future station may add a
+/// code, and an enum variant an older terminal does not know would fail the whole status reply.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TunnelState {
+    /// The tunnel's ID from OpenAI Platform; not a secret.
+    pub tunnel_id: String,
+    /// Whether the last poll reached OpenAI and was accepted.
+    pub online: bool,
+    /// Why it is not online: [`TUNNEL_KEY_REJECTED`], [`TUNNEL_NOT_FOUND`],
+    /// [`TUNNEL_UNREACHABLE`] or [`TUNNEL_KEY_MISSING`]; `None` while online or still connecting. Unknown codes are shown
+    /// as they are.
+    pub problem: Option<String>,
+    /// When OpenAI last answered a poll, UTC milliseconds.
+    pub last_contact_ms: Option<i64>,
+}
+
+/// Whether `id` has the shape of an OpenAI tunnel ID: `tunnel_` and 32 lowercase letters or
+/// digits, optionally after a four-character namespace and `_` (openai/tunnel-client
+/// `docs/protocol.md`). The station puts it into a URL path on OpenAI's API, so nothing else is let
+/// through, on either side.
+pub fn valid_tunnel_id(id: &str) -> bool {
+    let plain = |part: &str| {
+        part.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    };
+    let Some(rest) = id.strip_prefix("tunnel_") else {
+        return false;
+    };
+    if rest.len() == 32 && plain(rest) {
+        return true;
+    }
+    rest.split_once('_').is_some_and(|(namespace, tail)| {
+        namespace.len() == 4 && plain(namespace) && tail.len() == 32 && plain(tail)
+    })
+}
+
+/// OpenAI refused the tunnel key (401/403): it is wrong, revoked or lacks the Tunnels permission.
+pub const TUNNEL_KEY_REJECTED: &str = "key_rejected";
+/// OpenAI knows no tunnel with this ID for this key (404).
+pub const TUNNEL_NOT_FOUND: &str = "tunnel_not_found";
+/// OpenAI could not be reached or answered with a server error; the station keeps retrying.
+pub const TUNNEL_UNREACHABLE: &str = "unreachable";
+/// The station has no readable tunnel key (credential `openai-tunnel-key`), so it does not poll;
+/// its HTTPS listener, if any, still runs.
+pub const TUNNEL_KEY_MISSING: &str = "key_missing";
 
 /// Configured core choices for owner consent, independent of the Telegram bot.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,6 +136,8 @@ pub struct CoreInfo {
 pub struct PendingConsent {
     pub request_id: String,
     pub client_name: String,
+    /// The OAuth client's redirect; empty for a ChatGPT account met through the tunnel, which has
+    /// none and shows its code in the chat instead.
     pub redirect_uri: String,
     pub scopes: Vec<Scope>,
     pub expires_ms: i64,
