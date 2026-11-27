@@ -174,42 +174,104 @@ pub(super) fn append_row_scope(
     } else {
         historical_offset_groups(f)
     };
+    // `None` leaves both buffers exactly as they were found: nothing has been bound yet.
+    let Some(mut parts) = group_predicates(&groups, f, cols, now) else {
+        return;
+    };
+    if f.rows == RowScope::OpenIfCurrent {
+        append_open_if_current(sql, &parts, cols);
+        return;
+    }
+    if let Some((from, to)) = coarse_range(&parts) {
+        append_coarse_range(sql, params, &mut parts, from, to);
+        return;
+    }
+    append_group_branches(sql, params, &mut parts);
+}
+
+/// One offset group's shifted period window, ready to follow its closed test.
+struct ShiftedWindow {
+    /// The window's ` AND ...` terms, bound and inline.
+    text: String,
+    /// Values bound by `text`, in the order they appear in it.
+    bounds: Vec<Box<dyn rusqlite::types::ToSql>>,
+    /// Lower bound after the offset shift; `None` for an unbounded period.
+    shifted_from: Option<i64>,
+    /// Upper bound after the offset shift; `None` for an unbounded period.
+    shifted_to: Option<i64>,
+}
+
+/// Build one offset group's period window on its cores' local close-date axis.
+///
+/// The bounds are true-UTC instants and the column is core-local, so the group's offset is added
+/// to the BOUND. Converting the column instead would be the same arithmetic and would cost the
+/// index. Raw segment bounds select the same offset as `ReportAxis::to_utc`.
+///
+/// Args:
+///     group: The offset group the window is for.
+///     f: Complete Report filter.
+///
+/// Returns:
+///     The window text, its bound values and the shifted bounds.
+fn shifted_window(group: &ScopeGroup, f: &ReportFilter) -> ShiftedWindow {
+    let mut window = ShiftedWindow {
+        text: String::new(),
+        bounds: Vec::new(),
+        shifted_from: None,
+        shifted_to: None,
+    };
+    if let Some(from) = f.date_from {
+        let shifted = crate::db::ReportAxis::shift_bound(from, group.offset_secs);
+        window.text.push_str(&format!(" AND {CLOSEDATE} >= ?"));
+        window.bounds.push(Box::new(shifted));
+        window.shifted_from = Some(shifted);
+    }
+    if let Some(to) = f.date_to {
+        let shifted = crate::db::ReportAxis::shift_bound(to, group.offset_secs);
+        window.text.push_str(&format!(" AND {CLOSEDATE} <= ?"));
+        window.bounds.push(Box::new(shifted));
+        window.shifted_to = Some(shifted);
+    }
+    if let Some(bound) = group.local_from {
+        window
+            .text
+            .push_str(&format!(" AND {CLOSEDATE} >= {bound}"));
+    }
+    if let Some(bound) = group.local_to {
+        window.text.push_str(&format!(" AND {CLOSEDATE} < {bound}"));
+    }
+    window
+}
+
+/// Resolve every offset group into the predicate part it contributes.
+///
+/// Args:
+///     groups: Offset groups of this read, in emission order.
+///     f: Complete Report filter.
+///     cols: Columns available on this source.
+///     now: The one instant this predicate tests "still reaches the present" against.
+///
+/// Returns:
+///     The contributing parts in group order, or `None` when the source cannot express the
+///     requested scope and no predicate at all must be emitted.
+fn group_predicates(
+    groups: &[ScopeGroup],
+    f: &ReportFilter,
+    cols: &std::collections::HashSet<String>,
+    now: i64,
+) -> Option<Vec<GroupPredicate>> {
     let mut parts: Vec<GroupPredicate> = Vec::new();
-    for group in &groups {
+    for group in groups {
         let Some(guard) = group_guard(&group.cores, f) else {
             continue;
         };
-        // The bounds are true-UTC instants and the column is core-local, so the group's offset is
-        // added to the BOUND. Converting the column instead would be the same arithmetic and would
-        // cost the index. Raw segment bounds select the same offset as `ReportAxis::to_utc`.
-        let mut window = String::new();
-        let mut bounds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let mut shifted_from: Option<i64> = None;
-        let mut shifted_to: Option<i64> = None;
-        if let Some(from) = f.date_from {
-            let shifted = crate::db::ReportAxis::shift_bound(from, group.offset_secs);
-            window.push_str(&format!(" AND {CLOSEDATE} >= ?"));
-            bounds.push(Box::new(shifted));
-            shifted_from = Some(shifted);
-        }
-        if let Some(to) = f.date_to {
-            let shifted = crate::db::ReportAxis::shift_bound(to, group.offset_secs);
-            window.push_str(&format!(" AND {CLOSEDATE} <= ?"));
-            bounds.push(Box::new(shifted));
-            shifted_to = Some(shifted);
-        }
-        if let Some(bound) = group.local_from {
-            window.push_str(&format!(" AND {CLOSEDATE} >= {bound}"));
-        }
-        if let Some(bound) = group.local_to {
-            window.push_str(&format!(" AND {CLOSEDATE} < {bound}"));
-        }
+        let window = shifted_window(group, f);
         let current =
             open_rows_for_bound(f.date_to, now, group.offset_secs) == RowScope::ClosedAndOpen;
         if f.rows == RowScope::OpenIfCurrent {
             // A group whose window has already ended contributes NO open rows, so it contributes
             // no branch at all. Dropping the branch rather than emitting a false one is what lets
-            // the empty case below fail closed.
+            // the empty case fail closed.
             if !current {
                 continue;
             }
@@ -237,106 +299,140 @@ pub(super) fn append_row_scope(
         };
         match resolved {
             RowScope::Closed => match closed_row_predicate(cols) {
-                Some(closed) => {
-                    part.closed = Some(format!("{closed}{window}"));
-                    part.bounds = bounds;
-                    part.shifted_from = shifted_from;
-                    part.shifted_to = shifted_to;
-                }
+                Some(closed) => part.close_over(&closed, window),
                 None => part.closed = Some("1=0".to_string()),
             },
             RowScope::ClosedAndOpen => {
                 match (closed_row_predicate(cols), open_row_predicate(cols)) {
                     (Some(closed), Some(open)) => {
-                        part.closed = Some(format!("{closed}{window}"));
-                        part.bounds = bounds;
-                        part.shifted_from = shifted_from;
-                        part.shifted_to = shifted_to;
+                        part.close_over(&closed, window);
                         part.open = Some(open);
                     }
                     // Without the column there is no row state to test and no window to apply.
                     // Emitting nothing is what an unset filter always did and is what keeps a
-                    // pre-schema replica showing its rows. Nothing has been bound yet, so this
-                    // leaves both buffers exactly as it found them.
-                    _ => return,
+                    // pre-schema replica showing its rows.
+                    _ => return None,
                 }
             }
-            // Every other variant was handled before this match: `Open` and `OpenIfCurrent`
-            // returned or continued above, and `ClosedAndOpenIfCurrent` resolved into one of the
-            // two arms here.
-            RowScope::Open | RowScope::OpenIfCurrent | RowScope::ClosedAndOpenIfCurrent => return,
+            // Every other variant was handled before this match: `Open` returned before the
+            // groups were built, `OpenIfCurrent` continued above, and `ClosedAndOpenIfCurrent`
+            // resolved into one of the two arms here.
+            RowScope::Open | RowScope::OpenIfCurrent | RowScope::ClosedAndOpenIfCurrent => {
+                return None;
+            }
         }
         parts.push(part);
     }
-    if f.rows == RowScope::OpenIfCurrent {
-        // Every group carries the same open test and no bounds, so it is hoisted out of the
-        // disjunction: `A AND g1 OR A AND g2` is `A AND (g1 OR g2)`, and only a top-level `A`
-        // matches `idx_rep_open`'s WHERE. It is the plain `open_row_predicate` text, never passed
-        // through `close_test_off_index`: a partial index is matched structurally.
-        if parts.is_empty() {
-            sql.push_str(" AND 1=0");
-            return;
-        }
-        let open = open_row_predicate(cols).unwrap_or_else(|| "1=0".to_string());
-        let guards = parts
+    Some(parts)
+}
+
+/// Emit an `OpenIfCurrent` scope: the open test once, ANDed with the current groups' guards.
+///
+/// Every group carries the same open test and no bounds, so it is hoisted out of the
+/// disjunction: `A AND g1 OR A AND g2` is `A AND (g1 OR g2)`, and only a top-level `A` matches
+/// `idx_rep_open`'s WHERE. It is the plain `open_row_predicate` text, never passed through
+/// `close_test_off_index`: a partial index is matched structurally.
+///
+/// Args:
+///     sql: Predicate buffer being built.
+///     parts: The groups whose window still reaches the present.
+///     cols: Columns available on this source.
+fn append_open_if_current(
+    sql: &mut String,
+    parts: &[GroupPredicate],
+    cols: &std::collections::HashSet<String>,
+) {
+    if parts.is_empty() {
+        sql.push_str(" AND 1=0");
+        return;
+    }
+    let open = open_row_predicate(cols).unwrap_or_else(|| "1=0".to_string());
+    let guards = parts
+        .iter()
+        .map(|p| format!("({}1=1)", p.guard))
+        .collect::<Vec<_>>();
+    if guards.len() == 1 {
+        sql.push_str(&format!(" AND {open} AND {}", guards[0]));
+    } else {
+        sql.push_str(&format!(" AND {open} AND ({})", guards.join(" OR ")));
+    }
+}
+
+/// Emit the closed branches under one shared coarse `closedate` range, open branches beside it.
+///
+/// Inside the disjunction the column is spelled `+r."closedate"`: same value, same type, and
+/// every comparison on it sits behind the `typeof` test, so no row changes sides. What changes
+/// is the plan. Each branch carries the same `closedate > 0` from the closed test, SQLite folds
+/// the identical terms into one derived `closedate > 0`, and then picks THAT as the index's lower
+/// bound instead of the coarse `>= ?` -- every statement walked the whole replica's history up to
+/// the window's end (18 ms for an empty day on 606k rows, 30 days of the Mini App month = 0.7 s).
+/// The unary plus keeps the branch terms off the index, so the coarse range is the only bound
+/// left to choose.
+///
+/// Args:
+///     sql: Predicate buffer being built.
+///     params: Ordered bound values being built.
+///     parts: Every contributing group; their bounds are moved into `params`.
+///     from: Coarse range's lower bound.
+///     to: Coarse range's upper bound.
+fn append_coarse_range(
+    sql: &mut String,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    parts: &mut [GroupPredicate],
+    from: i64,
+    to: i64,
+) {
+    let closed = bounded_or_terms(
+        parts
             .iter()
-            .map(|p| format!("({}1=1)", p.guard))
-            .collect::<Vec<_>>();
-        if guards.len() == 1 {
-            sql.push_str(&format!(" AND {open} AND {}", guards[0]));
-        } else {
-            sql.push_str(&format!(" AND {open} AND ({})", guards.join(" OR ")));
-        }
-        return;
+            .filter_map(|p| {
+                p.closed
+                    .as_ref()
+                    .map(|c| format!("{}{}", p.guard, c.replace(CLOSEDATE, UNINDEXED_CLOSEDATE)))
+            })
+            .collect(),
+    )
+    .join(") OR (");
+    let open = bounded_or_terms(
+        parts
+            .iter()
+            .filter_map(|p| p.open.as_ref().map(|o| format!("{}{o}", p.guard)))
+            .collect(),
+    )
+    .join(") OR (");
+    // The range is bound FIRST because it is emitted first, and the per-group bounds follow
+    // in group order exactly as they did before this shape existed.
+    params.push(Box::new(from));
+    params.push(Box::new(to));
+    for part in parts.iter_mut() {
+        params.append(&mut part.bounds);
     }
-    if let Some((from, to)) = coarse_range(&parts) {
-        // Inside the disjunction the column is spelled `+r."closedate"`: same value, same type,
-        // and every comparison on it sits behind the `typeof` test, so no row changes sides. What
-        // changes is the plan. Each branch carries the same `closedate > 0` from the closed test,
-        // SQLite folds the identical terms into one derived `closedate > 0`, and then picks THAT
-        // as the index's lower bound instead of the coarse `>= ?` below -- every statement walked
-        // the whole replica's history up to the window's end (18 ms for an empty day on 606k
-        // rows, 30 days of the Mini App month = 0.7 s). The unary plus keeps the branch terms off
-        // the index, so the coarse range is the only bound left to choose.
-        let closed = bounded_or_terms(
-            parts
-                .iter()
-                .filter_map(|p| {
-                    p.closed.as_ref().map(|c| {
-                        format!("{}{}", p.guard, c.replace(CLOSEDATE, UNINDEXED_CLOSEDATE))
-                    })
-                })
-                .collect(),
-        )
-        .join(") OR (");
-        let open = bounded_or_terms(
-            parts
-                .iter()
-                .filter_map(|p| p.open.as_ref().map(|o| format!("{}{o}", p.guard)))
-                .collect(),
-        )
-        .join(") OR (");
-        // The range is bound FIRST because it is emitted first, and the per-group bounds follow
-        // in group order exactly as they did before this shape existed.
-        params.push(Box::new(from));
-        params.push(Box::new(to));
-        for part in parts.iter_mut() {
-            params.append(&mut part.bounds);
-        }
-        let closed_side = format!("{CLOSEDATE} >= ? AND {CLOSEDATE} <= ? AND (({closed}))");
-        if open.is_empty() {
-            sql.push_str(&format!(" AND ({closed_side})"));
-        } else {
-            sql.push_str(&format!(" AND (({closed_side}) OR (({open})))"));
-        }
-        return;
+    let closed_side = format!("{CLOSEDATE} >= ? AND {CLOSEDATE} <= ? AND (({closed}))");
+    if open.is_empty() {
+        sql.push_str(&format!(" AND ({closed_side})"));
+    } else {
+        sql.push_str(&format!(" AND (({closed_side}) OR (({open})))"));
     }
+}
+
+/// Emit every group as its own self-contained branch, the shape when no coarse range applies.
+///
+/// Args:
+///     sql: Predicate buffer being built.
+///     params: Ordered bound values being built.
+///     parts: Every contributing group; their bounds are moved into `params`.
+fn append_group_branches(
+    sql: &mut String,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    parts: &mut [GroupPredicate],
+) {
     let branches = bounded_or_terms(parts.iter().map(GroupPredicate::branch).collect());
     for part in parts.iter_mut() {
         params.append(&mut part.bounds);
     }
     match branches.len() {
-        // `OpenIfCurrent` returned above, so zero branches here means no predicate to apply.
+        // `OpenIfCurrent` is emitted by its own path, so zero branches here means no predicate
+        // to apply.
         0 => {}
         1 => sql.push_str(&format!(" AND {}", branches[0])),
         // A one-sided or unbounded window with two or more groups: the branches keep their own
@@ -484,6 +580,18 @@ struct GroupPredicate {
 }
 
 impl GroupPredicate {
+    /// Set the closed side to `closed` restricted to `window`, taking the window's bound values.
+    ///
+    /// Args:
+    ///     closed: The source's closed-row test.
+    ///     window: This group's shifted period window.
+    fn close_over(&mut self, closed: &str, window: ShiftedWindow) {
+        self.closed = Some(format!("{closed}{}", window.text));
+        self.bounds = window.bounds;
+        self.shifted_from = window.shifted_from;
+        self.shifted_to = window.shifted_to;
+    }
+
     /// Compose this group as ONE self-contained branch, the shape used whenever the coarse range
     /// does not apply.
     ///
