@@ -596,10 +596,7 @@ impl Shell {
             ticker_input,
             // The opener cleared this window with the palette's `shell` just before building
             // the Shell (`windowing::configure_shell_clear_color`).
-            ground: crate::design::FacetGround::new(
-                moon_ui::MoonPalette::active(cx).shell,
-                crate::design::is_facet(cx),
-            ),
+            ground: crate::design::FacetGround::new(moon_ui::MoonPalette::active(cx).shell),
         };
         // Every Shell is constructed from its saved/default Classic dock first. Persisted Auto then
         // captures that local named layout and applies the process-wide topology before first frame.

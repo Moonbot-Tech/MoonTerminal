@@ -319,22 +319,17 @@ pub fn panel_rule(cx: &App, p: MoonPalette, flat: impl IntoElement) -> AnyElemen
     }
 }
 
-/// The clear colour of a window whose root paints no fill, kept on the active theme while the
-/// Facet skin is active.
+/// The clear colour of a window whose root paints no fill, kept on the active theme.
 ///
-/// Such a window shows its clear colour wherever the scene paints nothing, and that colour is
-/// set once, when the window opens. Under the Flat skin every chrome surface fills itself, so a
-/// theme switched while the window is open leaves the old colour only in the gaps it always
-/// showed in. Under Facet the rail, the chart tab strip and the gaps between chart tiles are
-/// unfilled on purpose, and the same stale colour would stand there as whole bands of the
-/// previous theme. The window's host therefore calls [`Self::sync`] from its render.
-///
-/// Leaving Facet installs the selected Flat palette, including when the window opened in Facet.
-/// Flat-to-Flat changes retain the previous window behaviour.
+/// Such a window shows its clear colour wherever the scene paints nothing, and its opener sets
+/// that colour once, when the window opens. The price and time gutters of a chart lie outside the
+/// chart's own draw, so under every skin they show the clear colour; under Facet the rail, the
+/// chart tab strip and the gaps between chart tiles are unfilled on purpose as well. A theme
+/// switched while the window is open would leave those areas on the previous theme's ground (a
+/// Dark band under Light's black axis digits). The window's host therefore calls [`Self::sync`]
+/// from its render, and every palette change, Flat or Facet, hands the window the new ground.
 #[derive(Clone, Copy, Debug)]
 pub struct FacetGround {
-    /// Whether the previous render used the unfilled Facet chrome.
-    was_facet: bool,
     /// The colour last handed to the window.
     applied: u32,
 }
@@ -344,30 +339,23 @@ impl FacetGround {
     ///
     /// Args:
     ///     opened: The clear colour the window's opener installed, as `0xRRGGBB`.
-    pub fn new(opened: u32, facet: bool) -> Self {
-        Self {
-            was_facet: facet,
-            applied: opened,
-        }
+    pub fn new(opened: u32) -> Self {
+        Self { applied: opened }
     }
 
     /// Resolve the colour the window should clear with.
     ///
     /// Args:
-    ///     facet: Whether the Facet skin is active.
     ///     ground: The active palette's entry for this window's ground, as `0xRRGGBB`.
     ///
     /// Returns:
-    ///     A changed ground on Facet entry, update or exit; no change for Flat-only transitions.
-    pub(super) fn update(&mut self, facet: bool, ground: u32) -> Option<u32> {
-        let update = (facet || self.was_facet) && self.applied != ground;
-        self.was_facet = facet;
-        if update {
-            self.applied = ground;
-            Some(ground)
-        } else {
-            None
+    ///     The new ground when it differs from the one last handed to the window, else `None`.
+    pub(super) fn update(&mut self, ground: u32) -> Option<u32> {
+        if self.applied == ground {
+            return None;
         }
+        self.applied = ground;
+        Some(ground)
     }
 
     /// Hand the window its clear colour when the one it holds is not the one it should hold.
@@ -378,9 +366,10 @@ impl FacetGround {
     ///     ground: The active palette's entry for this window's ground, as `0xRRGGBB`: `shell`
     ///         for a group window, `chart_bg` for a chart window.
     ///     window: The window to update.
-    ///     cx: Application context holding the theme global.
-    pub fn sync(&mut self, ground: u32, window: &Window, cx: &App) {
-        if let Some(wanted) = self.update(is_facet(cx), ground) {
+    ///     _cx: Application context; the ground no longer depends on the skin, and the
+    ///         `theme_contract` pins the hosts' call with it.
+    pub fn sync(&mut self, ground: u32, window: &Window, _cx: &App) {
+        if let Some(wanted) = self.update(ground) {
             window.set_clear_color(Some(rgb(wanted)));
         }
     }

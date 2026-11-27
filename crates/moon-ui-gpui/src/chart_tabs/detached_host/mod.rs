@@ -450,10 +450,7 @@ impl DetachedChartHost {
             taskbar_mode,
             // The opener cleared this window with the palette's chart background just before
             // building the host (`windowing::configure_chart_clear_color`).
-            ground: crate::design::FacetGround::new(
-                moon_ui::MoonPalette::active(cx).chart_bg,
-                crate::design::is_facet(cx),
-            ),
+            ground: crate::design::FacetGround::new(moon_ui::MoonPalette::active(cx).chart_bg),
         }
     }
 
