@@ -69,8 +69,8 @@ impl Render for DetachedChartHost {
             }
         }
         let p = MoonPalette::active(cx);
-        // Facet skin: the title bar is a top-lit band closed by a fading rule, and the gaps
-        // between chart tiles are unfilled, so the window's clear colour has to follow the theme.
+        // The chart's price and time gutters (and, under Facet, the top-lit title bar and the gaps
+        // between chart tiles) are unfilled, so the window's clear colour has to follow the theme.
         let facet = design::is_facet(cx);
         self.ground.sync(p.chart_bg, window, cx);
         // Scale belongs to this panel per tab and is edited directly on it.

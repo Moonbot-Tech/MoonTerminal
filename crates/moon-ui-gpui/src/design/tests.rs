@@ -688,17 +688,28 @@ fn facet_lit_layers_the_ink_over_an_opaque_base() {
 }
 
 /// Returning the opening ground on Facet exit leaves an Obsidian-started window on its old colour.
-/// Unrelated Flat-only transitions must keep their existing behaviour.
+/// Flat-only transitions follow the palette too, since the chart gutters show the clear colour.
 #[test]
-fn facet_ground_follows_the_palette_under_facet_only() {
+fn facet_ground_follows_every_palette_change() {
     let (opened, obsidian) = (0xF4F4F4, MoonPalette::OBSIDIAN.shell);
-    let mut ground = super::FacetGround::new(opened, false);
-    assert_eq!(ground.update(false, 0x202020), None);
-    assert_eq!(ground.update(true, obsidian), Some(obsidian));
-    assert_eq!(ground.update(true, obsidian), None);
-    assert_eq!(ground.update(false, opened), Some(opened));
-    assert_eq!(ground.update(false, 0x202020), None);
-    let mut ground = super::FacetGround::new(obsidian, true);
-    assert_eq!(ground.update(false, opened), Some(opened));
-    assert_eq!(ground.update(false, opened), None);
+    let mut ground = super::FacetGround::new(opened);
+    assert_eq!(ground.update(0x202020), Some(0x202020));
+    assert_eq!(ground.update(obsidian), Some(obsidian));
+    assert_eq!(ground.update(obsidian), None);
+    assert_eq!(ground.update(opened), Some(opened));
+    assert_eq!(ground.update(0x202020), Some(0x202020));
+    let mut ground = super::FacetGround::new(obsidian);
+    assert_eq!(ground.update(opened), Some(opened));
+    assert_eq!(ground.update(opened), None);
+}
+
+/// A Flat-to-Flat switch on an open window leaves the price and time gutters, which only the
+/// clear colour paints, on the previous theme's ground (#1491).
+#[test]
+fn facet_ground_follows_a_flat_to_flat_theme_switch() {
+    // The Dark theme's shell, the band the report's frame showed.
+    let (dark, light) = (0x131416, MoonPalette::LIGHT.shell);
+    assert_ne!(dark, light, "the oracle assumes two grounds");
+    let mut ground = super::FacetGround::new(dark);
+    assert_eq!(ground.update(light), Some(light));
 }
