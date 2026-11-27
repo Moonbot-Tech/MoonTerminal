@@ -76,6 +76,13 @@ pub(crate) struct AutoLineRec {
     /// with the private overlay alone (`panels::chart::introspect`), so the field is too.
     #[cfg(uidoc)]
     pub first_ms: f64,
+    /// The run's reference time and the row's `extend` the line was drawn with
+    /// (`draw::append_shapes`): where a squeeze's sloped half ends, which the filming probe
+    /// re-derives to mark that half on a video. Probe-only, like [`Self::first_ms`].
+    #[cfg(uidoc)]
+    pub ref_ms: f64,
+    #[cfg(uidoc)]
+    pub extend: moon_core::config::auto_figures::Extend,
     /// What the caption's and the hover card's age count from (`Found::born_ms`): for a squeeze
     /// its level's first touch, where the level is drawn from.
     pub born_ms: f64,
@@ -304,6 +311,10 @@ pub(crate) fn append_auto_geometry(
                 tf,
                 #[cfg(uidoc)]
                 first_ms: found.first_ms,
+                #[cfg(uidoc)]
+                ref_ms: row.ref_ms,
+                #[cfg(uidoc)]
+                extend: row.style.extend,
                 born_ms: found.born_ms(),
                 events: kept.events,
                 color: rgb_u32(rgb),
