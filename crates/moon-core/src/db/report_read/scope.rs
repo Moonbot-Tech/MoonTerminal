@@ -779,3 +779,6 @@ pub(super) fn build_where(
     }
     (sql, params)
 }
+
+#[cfg(test)]
+mod tests;
