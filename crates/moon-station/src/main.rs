@@ -160,7 +160,11 @@ fn main() -> anyhow::Result<()> {
     let profile = station.profile(tg::control_shown(&data_root));
     let mcp_config = station.mcp.clone();
     let telegram = station.telegram;
-    let auto_update = auto_update::AutoUpdate::start(station.auto_update, data_root.clone());
+    let auto_update = auto_update::AutoUpdate::start(
+        station.auto_update,
+        station.terminal_version,
+        data_root.clone(),
+    );
     let mut skipped_cores = station.skipped_cores;
     let mut listed = station.listed;
     let mut core_uid_high_water = station.core_uid_high_water;
@@ -266,6 +270,7 @@ fn main() -> anyhow::Result<()> {
                     skipped_cores = reloaded.skipped_cores;
                     listed = reloaded.listed;
                     auto_update.set(reloaded.auto_update);
+                    auto_update.set_terminal(reloaded.terminal_version);
                     if reloaded.mcp != mcp_config {
                         log::warn!(
                             "[mcp] changed: restart the station to apply its listener, OpenAI tunnel and feed profile"
@@ -481,6 +486,10 @@ impl StationNow<'_> {
             host: Some(Box::new(self.host.host())),
             last_update: release::last_update(self.data_root),
             auto_update: Some(self.auto_update.on()),
+            terminal: Some(Box::new(moon_core::station_api::TerminalHold {
+                version: self.auto_update.terminal_version().map(|v| v.to_string()),
+                waits_for: self.auto_update.waits_for().map(|v| v.to_string()),
+            })),
             cores: Some(self.listed.to_vec()),
             core_uid_high_water: Some(self.core_uid_high_water),
             prices_pull: true,
@@ -500,9 +509,9 @@ fn answer(
     const NO_BOT: &str = "the station runs no bot";
     let answer = match request {
         Request::Mcp(_) => Err("MCP administration is answered by its independent service".into()),
-        Request::Status => Ok(Answer::Status(
+        Request::Status => Ok(Answer::Status(Box::new(
             station.status(bot.map(|bot| bot.status(cfg))),
-        )),
+        ))),
         Request::PairIssue => match bot {
             None => Err(NO_BOT.to_owned()),
             Some(bot) => bot

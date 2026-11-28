@@ -223,6 +223,15 @@ impl StatusFacts {
             sections.push(tape_section(tape));
         }
         let mut notes = Vec::new();
+        if let Some(version) = status.terminal.as_ref().and_then(|t| t.waits_for.as_ref()) {
+            notes.push(
+                t!(
+                    "telegram.station.update_waits_for_terminal",
+                    version = version
+                )
+                .to_string(),
+            );
+        }
         match &status.host {
             Some(host) => host_sections(host, &mut sections, &mut notes),
             None => notes.push(t!("telegram.station.no_host").to_string()),

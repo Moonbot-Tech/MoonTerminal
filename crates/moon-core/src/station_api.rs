@@ -157,7 +157,7 @@ impl From<Result<Answer, String>> for Reply {
 #[serde(rename_all = "snake_case")]
 pub enum Answer {
     Mcp(mcp::AdminState),
-    Status(Status),
+    Status(Box<Status>),
     Pairing(PairingCode),
     Access(Access),
     Tape(Tape),
@@ -430,6 +430,19 @@ pub fn key_fingerprint(key: &str) -> String {
         .collect()
 }
 
+/// The terminal side of the station's automatic update (`[terminal] version`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHold {
+    /// The newest terminal release that reported: the automatic update never installs a release
+    /// past it. `None` when no terminal reported one; the station then updates freely.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// The release the automatic update holds back until a terminal of that version reports;
+    /// `None` when nothing waits.
+    #[serde(default)]
+    pub waits_for: Option<String>,
+}
+
 /// The station now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
@@ -460,6 +473,11 @@ pub struct Status {
     /// misreads the other.
     #[serde(default)]
     pub auto_update: Option<bool>,
+    /// How the station's automatic update waits for the terminal. `None` from a station older
+    /// than it — an added field with a default, so neither end of version 2 misreads the other.
+    /// Boxed: every reply would otherwise carry its size.
+    #[serde(default)]
+    pub terminal: Option<Box<TerminalHold>>,
     /// The cores of `station.toml`, loaded or skipped. `None` from a station older than the
     /// listing — an added field with a default, so neither end of version 2 misreads the other.
     #[serde(default)]

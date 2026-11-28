@@ -146,7 +146,7 @@ fn requests_carry_the_documented_command_names() {
 /// A status with a bot survives the round trip whole: the client reads what the station meant.
 #[test]
 fn a_status_reads_back_whole() {
-    let reply = Reply::Ok(Answer::Status(Status {
+    let reply = Reply::Ok(Answer::Status(Box::new(Status {
         station_version: "0.1.0".into(),
         cores_ready: 26,
         cores_total: 27,
@@ -193,6 +193,10 @@ fn a_status_reads_back_whole() {
         })),
         last_update: Some("2026-09-30T14:02Z health=ok".into()),
         auto_update: Some(false),
+        terminal: Some(Box::new(TerminalHold {
+            version: Some("v0.70.0".into()),
+            waits_for: Some("v0.71.0".into()),
+        })),
         core_uid_high_water: Some(12),
         prices_pull: false,
         strategies_sync: false,
@@ -203,7 +207,7 @@ fn a_status_reads_back_whole() {
             address: Some("198.51.100.42:4321".into()),
             key_fp: Some("9f2c0123456789ab".into()),
         }]),
-    }));
+    })));
     let text = serde_json::to_string(&reply).unwrap();
     assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
     // A station older than the window answers without it.
@@ -219,6 +223,7 @@ fn a_status_reads_back_whole() {
         old.auto_update, None,
         "a station older than the switch reads as unknown, not as on or off"
     );
+    assert_eq!(old.terminal, None);
     let refused: Reply = serde_json::from_str(r#"{"err":"no bot on this station"}"#).unwrap();
     assert_eq!(refused, Reply::Err("no bot on this station".into()));
 }

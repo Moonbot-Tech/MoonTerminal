@@ -1218,6 +1218,47 @@ fn the_auto_update_switch_is_written_once_and_kept_by_a_cores_push() {
     assert_eq!(merged["update"]["auto"].as_bool(), Some(false));
 }
 
+/// The terminal's version lands in its own section beside everything else, only ever rises (the
+/// newest of several terminals wins), and a file that already says it is left alone.
+#[test]
+fn terminal_version_rises_and_keeps_the_other_sections() {
+    let v = |tag: &str| moon_core::update::ReleaseVersion::parse(tag).unwrap();
+    let bare = "[[core]]\nuid = 3\nname = \"A\"\n\n[update]\nauto = false\n";
+    let first = with_terminal_version(bare, v("v0.69.2"))
+        .unwrap()
+        .expect("recorded");
+    let parsed: toml::Value = toml::from_str(&first).unwrap();
+    assert_eq!(parsed["terminal"]["version"].as_str(), Some("v0.69.2"));
+    assert_eq!(parsed["update"]["auto"].as_bool(), Some(false));
+    assert_eq!(parsed["core"][0]["uid"].as_integer(), Some(3));
+    assert!(
+        parsed["update"].get("terminal").is_none(),
+        "never an [update] key: an older station refuses unknown ones"
+    );
+    assert_eq!(with_terminal_version(&first, v("v0.69.2")).unwrap(), None);
+    assert_eq!(
+        with_terminal_version(&first, v("v0.68.0")).unwrap(),
+        None,
+        "an older terminal never lowers a newer one's version"
+    );
+    let newer: toml::Value = toml::from_str(
+        &with_terminal_version(&first, v("v0.70.0"))
+            .unwrap()
+            .expect("raised"),
+    )
+    .unwrap();
+    assert_eq!(newer["terminal"]["version"].as_str(), Some("v0.70.0"));
+    let junk = "[terminal]\nversion = \"dev\"\nother = 1\n";
+    let fixed: toml::Value = toml::from_str(
+        &with_terminal_version(junk, v("v0.69.2"))
+            .unwrap()
+            .expect("replaced"),
+    )
+    .unwrap();
+    assert_eq!(fixed["terminal"]["version"].as_str(), Some("v0.69.2"));
+    assert_eq!(fixed["terminal"]["other"].as_integer(), Some(1));
+}
+
 /// A station that reports no switches after they were sent never will: waiting out the deadline
 /// only delays the "update the station" error.
 #[test]

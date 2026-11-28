@@ -536,6 +536,10 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     let update_recovered = startup_update
         .as_ref()
         .is_some_and(crate::update::StartupUpdate::recovered);
+    // The first start of a newly installed release: the station is asked to follow it at once.
+    if startup_update.is_some() && !update_recovered {
+        crate::backend::station::mark_terminal_just_updated();
+    }
     if let Some(fixture) = fixture {
         // Announced HERE, not in `prepare`: that runs before `applog::install`, so its line would
         // go nowhere.

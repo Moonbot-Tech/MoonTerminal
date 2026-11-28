@@ -16,7 +16,7 @@ const NOW: u64 = 1_800_000_000;
 #[test]
 fn a_newer_release_is_requested() {
     assert_eq!(
-        decide(true, Some(v(0, 30, 0)), Some(v(0, 31, 0)), None, NOW),
+        decide(true, Some(v(0, 30, 0)), Some(v(0, 31, 0)), None, None, NOW),
         Decision::Update(v(0, 31, 0))
     );
 }
@@ -26,15 +26,15 @@ fn a_newer_release_is_requested() {
 #[test]
 fn an_equal_or_older_release_is_not_requested() {
     assert_eq!(
-        decide(true, Some(v(0, 31, 0)), Some(v(0, 31, 0)), None, NOW),
+        decide(true, Some(v(0, 31, 0)), Some(v(0, 31, 0)), None, None, NOW),
         Decision::Current
     );
     assert_eq!(
-        decide(true, Some(v(0, 31, 0)), Some(v(0, 30, 2)), None, NOW),
+        decide(true, Some(v(0, 31, 0)), Some(v(0, 30, 2)), None, None, NOW),
         Decision::Current
     );
     assert_eq!(
-        decide(true, Some(v(0, 31, 0)), None, None, NOW),
+        decide(true, Some(v(0, 31, 0)), None, None, None, NOW),
         Decision::Current
     );
 }
@@ -42,11 +42,11 @@ fn an_equal_or_older_release_is_not_requested() {
 #[test]
 fn the_switch_off_or_a_dev_build_never_updates() {
     assert_eq!(
-        decide(false, Some(v(0, 30, 0)), Some(v(0, 31, 0)), None, NOW),
+        decide(false, Some(v(0, 30, 0)), Some(v(0, 31, 0)), None, None, NOW),
         Decision::Off
     );
     assert_eq!(
-        decide(true, None, Some(v(0, 31, 0)), None, NOW),
+        decide(true, None, Some(v(0, 31, 0)), None, None, NOW),
         Decision::Unversioned
     );
 }
@@ -62,7 +62,14 @@ fn a_tried_version_waits_a_day() {
         at_s: NOW - 86_399,
     };
     assert_eq!(
-        decide(true, Some(v(0, 30, 0)), Some(v(0, 31, 0)), Some(tried), NOW),
+        decide(
+            true,
+            Some(v(0, 30, 0)),
+            Some(v(0, 31, 0)),
+            None,
+            Some(tried),
+            NOW
+        ),
         Decision::Tried(v(0, 31, 0))
     );
     let day_old = Attempt {
@@ -74,6 +81,7 @@ fn a_tried_version_waits_a_day() {
             true,
             Some(v(0, 30, 0)),
             Some(v(0, 31, 0)),
+            None,
             Some(day_old),
             NOW
         ),
@@ -81,7 +89,14 @@ fn a_tried_version_waits_a_day() {
     );
     // A still newer release is not held back by the attempt at an older one.
     assert_eq!(
-        decide(true, Some(v(0, 30, 0)), Some(v(0, 32, 0)), Some(tried), NOW),
+        decide(
+            true,
+            Some(v(0, 30, 0)),
+            Some(v(0, 32, 0)),
+            None,
+            Some(tried),
+            NOW
+        ),
         Decision::Update(v(0, 32, 0))
     );
 }
@@ -107,4 +122,40 @@ fn the_next_look_is_on_the_clocks_mark() {
     assert_eq!(until_next_slot(every * 10).as_secs(), every);
     assert_eq!(until_next_slot(every * 10 + 1).as_secs(), every - 1);
     assert_eq!(until_next_slot(every * 11 - 1).as_secs(), 1);
+}
+
+/// The station waits for the terminal: a release up to the newest reported terminal installs,
+/// one past it waits with its version named.
+#[test]
+fn a_release_past_the_terminal_waits_for_it() {
+    let own = Some(v(0, 30, 0));
+    let latest = Some(v(0, 31, 0));
+    assert_eq!(
+        decide(true, own, latest, Some(v(0, 31, 0)), None, NOW),
+        Decision::Update(v(0, 31, 0)),
+        "a terminal of the release itself lets it in"
+    );
+    assert_eq!(
+        decide(true, own, latest, Some(v(0, 32, 0)), None, NOW),
+        Decision::Update(v(0, 31, 0)),
+        "a newer terminal lets it in"
+    );
+    assert_eq!(
+        decide(true, own, latest, Some(v(0, 30, 5)), None, NOW),
+        Decision::WaitsForTerminal(v(0, 31, 0))
+    );
+    assert_eq!(
+        decide(true, own, latest, None, None, NOW),
+        Decision::Update(v(0, 31, 0)),
+        "a station no terminal reported to updates freely"
+    );
+    // The ceiling changes nothing for a station already current or switched off.
+    assert_eq!(
+        decide(true, latest, latest, Some(v(0, 1, 0)), None, NOW),
+        Decision::Current
+    );
+    assert_eq!(
+        decide(false, own, latest, Some(v(0, 1, 0)), None, NOW),
+        Decision::Off
+    );
 }

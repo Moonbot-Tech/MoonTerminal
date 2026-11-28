@@ -171,6 +171,14 @@ pub(crate) enum Job {
     MiniApp { target: Target, on: bool },
     /// Make the terminal's header-clock zone the one the station's reports are cut in, live.
     Zone { target: Target, zone: String },
+    /// Tell the station this terminal's release, so its automatic update waits for it.
+    TerminalVersion {
+        target: Target,
+        version: moon_core::update::ReleaseVersion,
+        /// The terminal has just updated itself to `version` and the station runs an older
+        /// release: also file the station's update request, as "Update the service" does.
+        request_update: bool,
+    },
     /// Send saved core groups through the existing station translation and protocol.
     Groups {
         target: Target,
@@ -293,6 +301,7 @@ impl JobButton {
             Job::Access { .. } => Self::Key("telegram.pair_reset"),
             Job::MiniApp { .. } => Self::Key("telegram.server.mini_app"),
             Job::Zone { .. } => Self::Background,
+            Job::TerminalVersion { .. } => Self::Background,
             Job::Groups { .. } => Self::Key("telegram.server.groups_send"),
             Job::Status { .. } => Self::Key("telegram.server.status"),
             Job::Logs { .. } => Self::Key("telegram.server.logs"),
@@ -845,6 +854,24 @@ fn run(
             Ok(Done::Ok {
                 transferred: false,
                 bot: bot::bot_state(&target).ok(),
+                bot_off: false,
+            })
+        }
+        Job::TerminalVersion {
+            target,
+            version,
+            request_update,
+        } => {
+            station::push_terminal_version(&target, version)?;
+            // A request that fails is only logged: the station's automatic look catches it later.
+            if request_update && let Err(e) = station::update_from_release(&target, say) {
+                log::warn!(
+                    "station: the update after the terminal's own to {version} failed: {e:#}"
+                );
+            }
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
                 bot_off: false,
             })
         }

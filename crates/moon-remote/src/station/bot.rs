@@ -274,7 +274,7 @@ pub fn bot_state(target: &Target) -> anyhow::Result<BotState> {
     }
     state.tape = station.tape;
     state.bot = station.bot.clone();
-    state.station = Some(Box::new(station));
+    state.station = Some(station);
     Ok(state)
 }
 

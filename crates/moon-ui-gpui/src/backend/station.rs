@@ -109,6 +109,8 @@ enum Kind {
     Zone,
     /// Automatic group writes preserve the user's outcome and latch each payload attempt.
     Groups,
+    /// This terminal's release written to the station once per contact, like a zone push.
+    TerminalVersion,
     /// A startup read that resolves durable bot ownership.
     Recovery,
     /// A moved core's new address sent: its result goes to that core's move, not to the
@@ -196,6 +198,9 @@ pub(crate) struct StationJobs {
     zone_pushed: Option<String>,
     /// First-contact reconciliation is performed once per configured destination.
     window_reconciled: bool,
+    /// This terminal's release was sent to the station: once per configured destination, whatever
+    /// came of it, so a station that cannot take it is not asked at every read.
+    terminal_version_sent: bool,
     /// Payload and job epoch of the most recent automatic window attempt.
     window_attempt: Option<(TapeWindow, u64)>,
     /// Initial write plus at most one retry caused by its verification reads.
@@ -229,7 +234,12 @@ impl Kind {
     fn is_background(self) -> bool {
         matches!(
             self,
-            Self::Quiet | Self::Tail | Self::Window | Self::Zone | Self::Groups
+            Self::Quiet
+                | Self::Tail
+                | Self::Window
+                | Self::Zone
+                | Self::Groups
+                | Self::TerminalVersion
         )
     }
 }
@@ -292,7 +302,7 @@ impl StationJobs {
         self.running = false;
         if !matches!(
             self.kind,
-            Kind::Window | Kind::Zone | Kind::Tail | Kind::Groups
+            Kind::Window | Kind::Zone | Kind::Tail | Kind::Groups | Kind::TerminalVersion
         ) && !self.window_verification
         {
             self.window_attempts = 0;
@@ -572,6 +582,7 @@ impl StationJobs {
         st.pending_refresh = false;
         st.zone_pushed = None;
         st.window_reconciled = false;
+        st.terminal_version_sent = false;
         st.window_attempt = None;
         st.window_attempts = 0;
         st.window_failure = None;
@@ -1008,6 +1019,7 @@ impl Backend {
             | Kind::Window
             | Kind::Zone
             | Kind::Groups
+            | Kind::TerminalVersion
             | Kind::Recovery
             | Kind::CoreMove => {}
         }
@@ -1106,6 +1118,51 @@ impl Backend {
             self.station_zone_sync(cx);
         }
         self.station_groups_sync(cx);
+        self.station_terminal_version_sync(cx);
+    }
+
+    /// Tell the station this terminal's release once its status was read and reports an older
+    /// one or none, so the station's automatic update waits for this terminal and an updated
+    /// terminal lets the matching release in — on every start, without a button. Nothing from a
+    /// development build without a release baseline, and nothing to a station that predates the
+    /// automatic update (it reports no switch, so it never updates by itself).
+    fn station_terminal_version_sync(&mut self, cx: &mut Context<Self>) {
+        if self.station.running || self.station.terminal_version_sent {
+            return;
+        }
+        let Some(own) = crate::update::terminal_release() else {
+            return;
+        };
+        let Some(status) = self
+            .station
+            .bot
+            .as_ref()
+            .and_then(|bot| bot.station.as_ref())
+        else {
+            return;
+        };
+        let request_update = station_update_due(
+            TERMINAL_JUST_UPDATED.load(std::sync::atomic::Ordering::Relaxed),
+            status,
+            own,
+        );
+        if !request_update && !terminal_version_due(status, own) {
+            return;
+        }
+        let Some(target) = known_target() else {
+            return;
+        };
+        self.station.terminal_version_sent = true;
+        self.station_begin(
+            job::Job::TerminalVersion {
+                target,
+                version: own,
+                request_update,
+            },
+            false,
+            Kind::TerminalVersion,
+            cx,
+        );
     }
 
     /// Apply one job event; `true` once the job has ended.
@@ -1183,7 +1240,7 @@ impl Backend {
             }
             return true;
         }
-        if kind == Kind::Zone || kind == Kind::Groups {
+        if kind == Kind::Zone || kind == Kind::Groups || kind == Kind::TerminalVersion {
             // Background writes refresh bot state and identities without replacing user outcomes.
             match done {
                 job::Done::Ok { bot, .. } | job::Done::Installed { bot, .. } => {
@@ -1499,6 +1556,48 @@ fn forget_bot(telegram: &mut moon_core::config::TelegramConfig) {
 /// another zone — after a failed push, a rollback, or a terminal that set its own.
 fn zone_push_due(access: Option<&moon_core::station_api::Access>, wanted: &str) -> bool {
     access.is_some_and(|access| access.bot.is_some() && access.zone.as_deref() != Some(wanted))
+}
+
+/// Set once at startup on the first start after the terminal updated itself (its updater's
+/// resume receipt, not a recovery): the station is then asked to follow at once.
+static TERMINAL_JUST_UPDATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Record that this process is the first start of a release the terminal just installed.
+pub(crate) fn mark_terminal_just_updated() {
+    TERMINAL_JUST_UPDATED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the terminal, `just_updated` to `own`, files the station's update request now rather
+/// than leaving it to the station's next automatic look: only for a station whose reported
+/// release is older than `own` — never a downgrade, never a guess at an unreadable version.
+fn station_update_due(
+    just_updated: bool,
+    status: &moon_core::station_api::Status,
+    own: moon_core::update::ReleaseVersion,
+) -> bool {
+    just_updated
+        && status
+            .station_version
+            .split_whitespace()
+            .next()
+            .and_then(moon_core::update::ReleaseVersion::parse)
+            .is_some_and(|station| station < own)
+}
+
+/// Whether the station needs this terminal's release `own`: it updates itself (it reports the
+/// switch at all) and reports an older terminal release or none.
+fn terminal_version_due(
+    status: &moon_core::station_api::Status,
+    own: moon_core::update::ReleaseVersion,
+) -> bool {
+    status.auto_update.is_some()
+        && status
+            .terminal
+            .as_ref()
+            .and_then(|terminal| terminal.version.as_deref())
+            .and_then(moon_core::update::ReleaseVersion::parse)
+            .is_none_or(|reported| reported < own)
 }
 
 /// Preserve both saved local bots and unsaved Settings tokens; never merge their chats.
