@@ -719,7 +719,7 @@ impl StrategyValues<'_> {
 }
 
 /// Parse a strategy number: `1.5`, `1,5`, `1.5%`.
-fn parse_num(s: &str) -> Option<f64> {
+pub(super) fn parse_num(s: &str) -> Option<f64> {
     s.trim()
         .trim_end_matches('%')
         .replace(',', ".")
