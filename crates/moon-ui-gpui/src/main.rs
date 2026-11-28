@@ -35,6 +35,7 @@ mod diagnostics;
 mod display_text;
 mod figstyle;
 mod firetest;
+mod gpu_cli;
 mod hotkeys;
 mod load_state;
 mod media;
@@ -789,6 +790,11 @@ fn main() -> anyhow::Result<()> {
     #[cfg(uidoc)]
     if uidoc::run_offline_tools(std::env::args()) {
         return Ok(());
+    }
+    // `--help`, `--list-gpus` and a malformed GPU option answer here, before the updater, a
+    // setting, a database or a window: they must work on a machine where none of that would.
+    if let Some(code) = gpu_cli::handle_early() {
+        std::process::exit(code);
     }
     match update::dispatch_process_mode()? {
         update::ProcessDispatch::Run(receipt) => startup::run(receipt),
