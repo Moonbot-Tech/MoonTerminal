@@ -44,7 +44,7 @@
 use std::collections::HashMap;
 
 use super::exit::UnmodelledRule;
-use super::params::ParamSection;
+use super::params::{ParamSection, parse_num};
 use crate::feed::SchemaSection;
 use crate::feed::strategy_deps::{FieldDeps, Values, as_bool};
 
@@ -417,7 +417,7 @@ fn also_holds(
     let num = |key: &str, fallback: f64| {
         values
             .get(key)
-            .and_then(|v| number(v))
+            .and_then(|v| parse_num(v))
             .or_else(|| defaults.get(&key.to_ascii_lowercase()).copied())
             .unwrap_or(fallback)
     };
@@ -440,20 +440,10 @@ pub(super) fn same_value(a: &str, b: &str) -> bool {
     if let (Some(x), Some(y)) = (as_bool(a), as_bool(b)) {
         return x == y;
     }
-    if let (Some(x), Some(y)) = (number(a), number(b)) {
+    if let (Some(x), Some(y)) = (parse_num(a), parse_num(b)) {
         return (x - y).abs() < 1e-9;
     }
     a.trim().eq_ignore_ascii_case(b.trim())
-}
-
-/// A strategy number: `1.5`, `1,5`, `1.5%`.
-fn number(s: &str) -> Option<f64> {
-    s.trim()
-        .trim_end_matches('%')
-        .replace(',', ".")
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite())
 }
 
 #[cfg(test)]
