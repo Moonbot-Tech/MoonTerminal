@@ -42,11 +42,18 @@ use super::config::DiagCfg;
 /// the only sign it ran and what it filed. [`STRATEGY_SYNC_TARGET`] is the sixth, for the same
 /// reason: a pass that goes through says nothing else, and without its line a finished one reads as
 /// a hung one.
+///
+/// `gpui_wgpu` is MoonUI's renderer for Linux (`moon-gpui-wgpu`, `[lib] name = "gpui_wgpu"`, which
+/// `moon_gpui` does not reach). Its `info` lines are written when a window's renderer is built or
+/// recovered, never per frame: the adapters found, the GPU chosen with its id and the reason, the
+/// present mode and its source, the environment variables overriding them. They are the startup
+/// lines a Linux user is asked to send when the display misbehaves.
 pub const DEFAULT_BASE_FILTER: &str = "warn,moonterminal::panels::chart=info,\
     moonterminal::analytics::tuner::ticks=info,moon_tg=info,\
     moonterminal::backend::core_move=info,\
     moonterminal::backend::station::prices_pull=info,\
-    moonterminal::backend::station::strategies_sync=info,moon_gpui=info,moon_core=info";
+    moonterminal::backend::station::strategies_sync=info,moon_gpui=info,gpui_wgpu=info,\
+    moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
 const BALANCES_TARGET: &str = "moon_core::feed::live";

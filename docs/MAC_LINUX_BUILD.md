@@ -236,9 +236,9 @@ Debian 12, or anything more recent.
      gnome-keyring libsecret-tools
    ```
 
-   `mesa-vulkan-drivers` is the Vulkan driver for Intel and AMD graphics; a machine on the
-   proprietary NVIDIA driver already has its own. A desktop install usually carries most of this
-   list already.
+   `mesa-vulkan-drivers` is the Vulkan driver for Intel and AMD graphics; the proprietary NVIDIA
+   driver brings its own as a separate package — see [GPU and Vulkan driver](#gpu-and-vulkan-driver).
+   A desktop install usually carries most of this list already.
 3. Make it executable — a browser download is not — and start it from a terminal inside the
    graphical session:
 
@@ -253,6 +253,57 @@ The terminal updates itself in place, as on Windows: when a newer release is pub
 header button appears, the download is verified against the release's SHA-256, and the
 executable is replaced with a rollback if the new one does not start. Keep the file in a
 directory you can write to — the update works beside it, in `.moonterminal-update/`.
+
+### GPU and Vulkan driver
+
+MoonTerminal draws through **Vulkan**, and only through it. A desktop where other programs
+draw fine proves nothing: they use OpenGL, which works without a Vulkan driver. What MoonTerminal
+needs is the Vulkan loader plus the Vulkan driver (ICD) of the GPU it should render on:
+
+| GPU | Ubuntu / Debian |
+|---|---|
+| AMD, Intel | `libvulkan1 mesa-vulkan-drivers` |
+| NVIDIA, proprietary driver | `libvulkan1` and the driver's Vulkan part: on Ubuntu `libnvidia-gl-<version>` (installed with `nvidia-driver-<version>`), on Debian `nvidia-vulkan-icd` |
+
+The drivers installed are the files in `/usr/share/vulkan/icd.d/` (`radeon_icd.*.json`,
+`intel_icd.*.json`, `nvidia_icd.json`); a GPU with no file there cannot be used.
+
+**Normal launch** needs no options: MoonTerminal picks the GPU the display server runs on, and
+on X11 presents frames with FIFO (each frame waits for the monitor's refresh; mailbox on
+Wayland). When the choice is wrong — several GPUs, a monitor on another card's output, stalls or
+a black window — choose by hand, for one launch:
+
+```bash
+./MoonTerminal-linux-x86_64 --list-gpus                      # the GPUs and their IDs; opens no window
+./MoonTerminal-linux-x86_64 --gpu pci-0000:01:00.0           # render with this GPU
+./MoonTerminal-linux-x86_64 --present-mode mailbox           # fifo | mailbox | immediate
+./MoonTerminal-linux-x86_64 --gpu pci-0000:01:00.0 --present-mode fifo
+```
+
+The ID is the GPU's PCI address as the Vulkan driver reports it (`pci-0000:01:00.0`), so it does
+not change when devices are listed in another order; a software device has `cpu-llvmpipe`, and a
+card served by two drivers gets the driver appended. A GPU that is not found or cannot draw to
+the window, a mode its surface lacks, or a mode `MESA_VK_WSI_PRESENT_MODE` would replace, ends
+the launch with the choices listed and exit code 2 — MoonTerminal never swaps in another one.
+Once it runs, the same failure (the GPU coming back from a suspend, a later window) fails that
+window or retries the recovery instead of closing the terminal. Close a running MoonTerminal
+before launching with options: they are not applied to it, and the launch exits with code 2.
+`--help` lists them all.
+
+Environment variables can change the list or the mode behind the terminal's back:
+`MESA_VK_WSI_PRESENT_MODE`, `MESA_VK_DEVICE_SELECT`, `DRI_PRIME`, `VK_ICD_FILENAMES` /
+`VK_DRIVER_FILES`, `VK_LOADER_DRIVERS_SELECT`, `__NV_PRIME_RENDER_OFFLOAD`. `--list-gpus` and
+the startup log name the ones that are set; prefer the options above to them.
+
+**For a support request**, send these lines of the log of the launch that misbehaved:
+
+```bash
+grep -hE "GPU in use|Found [0-9]+ GPU|  - .*\[|Adapter .* failed|Skipping software|ZED_DEVICE_ID|present mode|GPU environment overrides|GPU option|GPU recovery|X11 resize" \
+  ~/.config/com.moonbot.moonterminal/logs/*_app.log | tail -n 40
+```
+
+`vulkaninfo --summary` and `vkcube` (package `vulkan-tools`) help tell a driver problem from a
+MoonTerminal one; MoonTerminal itself does not need them.
 
 ### Build from source
 

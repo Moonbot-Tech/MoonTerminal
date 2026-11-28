@@ -556,6 +556,14 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     } else {
         match instance::acquire()? {
             instance::Acquire::Primary(guard) => Some(guard),
+            // GPU options cannot reach a renderer that already runs. `acquire` has already
+            // brought the running window forward; the options are not applied to it, and this
+            // launch says so and fails with the same code as every other refused GPU option.
+            instance::Acquire::AlreadyRunning if crate::gpu_cli::args().explicit() => {
+                log::warn!("{}", crate::gpu_cli::ALREADY_RUNNING);
+                eprintln!("moonterminal: {}", crate::gpu_cli::ALREADY_RUNNING);
+                std::process::exit(2);
+            }
             instance::Acquire::AlreadyRunning => {
                 log::info!("MoonTerminal is already running for this install; activating it");
                 return Ok(());
@@ -925,6 +933,8 @@ pub(crate) fn run(startup_update: Option<crate::update::StartupUpdate>) -> anyho
     // Use one time origin for sessions and chart views, equivalent to epoch_ms in egui.
     let epoch = crate::chartdx::now_unix_ms();
 
+    // Before the platform opens a window: the renderer reads the GPU options when it builds one.
+    crate::gpu_cli::install();
     // Register MoonUI's embedded SVG icons as the AssetSource; otherwise `IconName::*` values
     // (such as the `cleanable` clear icon, CircleX) cannot find their SVGs and render empty.
     let app = gpui_platform::application().with_assets(moon_ui::MoonAssets);
