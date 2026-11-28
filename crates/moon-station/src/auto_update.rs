@@ -9,6 +9,11 @@
 //! Only a build of a release tag itself updates itself: a build of a later commit carries the tag
 //! as its baseline too ([`crate::release::exact_release`]), and a release must not replace it.
 //!
+//! The station waits for the terminal: a release newer than the newest terminal that reported to
+//! it (`[terminal] version`) is held back, so the station never outgrows the terminal that drives
+//! it. Once that terminal is updated and reports again, the next look installs the release. A
+//! station no terminal reported to updates freely. The button updates are never held.
+//!
 //! One automatic attempt per newer version per day: the attempt is kept in the data root
 //! ([`ATTEMPT_FILE`]), so an update that failed and restarted the old binary does not file the
 //! same request again right after the start.
@@ -16,6 +21,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use moon_core::update::{
@@ -53,6 +59,9 @@ pub enum Decision {
     Current,
     /// This version was asked for less than a day ago; its verdict is `Status.last_update`.
     Tried(ReleaseVersion),
+    /// This version is out, but newer than the newest terminal that reported: it waits until
+    /// a terminal of that version reports.
+    WaitsForTerminal(ReleaseVersion),
     /// File the update request for this version.
     Update(ReleaseVersion),
 }
@@ -64,16 +73,19 @@ pub enum Decision {
 ///     own: This station's release version; `None` for a build that is not a release tag's own.
 ///     latest: The newest release that carries this station's binary for its architecture;
 ///         `None` when there is none.
+///     terminal: The newest terminal release that reported (`[terminal] version`); `None` holds
+///         nothing back.
 ///     last: The last automatic attempt, if any.
 ///     now_s: Unix seconds now.
 ///
 /// Returns:
-///     The decision; [`Decision::Update`] only for a release strictly newer than `own` that was
-///     not asked for within the last day.
+///     The decision; [`Decision::Update`] only for a release strictly newer than `own`, not
+///     newer than `terminal`, that was not asked for within the last day.
 pub fn decide(
     auto: bool,
     own: Option<ReleaseVersion>,
     latest: Option<ReleaseVersion>,
+    terminal: Option<ReleaseVersion>,
     last: Option<Attempt>,
     now_s: u64,
 ) -> Decision {
@@ -86,6 +98,9 @@ pub fn decide(
     let Some(latest) = latest.filter(|latest| *latest > own) else {
         return Decision::Current;
     };
+    if terminal.is_some_and(|terminal| latest > terminal) {
+        return Decision::WaitsForTerminal(latest);
+    }
     match last {
         Some(last) if last.version == latest && now_s.saturating_sub(last.at_s) < RETRY_AFTER_S => {
             Decision::Tried(latest)
@@ -102,18 +117,31 @@ fn parse_attempt(text: &str) -> Option<Attempt> {
     Some(Attempt { version, at_s })
 }
 
+/// The terminal side of a look: the ceiling the main loop sets from `station.toml`, and the
+/// release the last look held back under it.
+#[derive(Default)]
+struct Terminal {
+    version: Option<ReleaseVersion>,
+    waits_for: Option<ReleaseVersion>,
+}
+
 /// The switch the main loop flips on a reload and the status reports.
 #[derive(Clone)]
 pub struct AutoUpdate {
     on: Arc<AtomicBool>,
+    terminal: Arc<Mutex<Terminal>>,
 }
 
 impl AutoUpdate {
-    /// Start the looking thread with the switch at `on`. A thread that cannot start is logged:
-    /// the station runs on and updates by the button.
-    pub fn start(on: bool, data_root: PathBuf) -> Self {
+    /// Start the looking thread with the switch at `on` and the terminal ceiling at `terminal`.
+    /// A thread that cannot start is logged: the station runs on and updates by the button.
+    pub fn start(on: bool, terminal: Option<ReleaseVersion>, data_root: PathBuf) -> Self {
         let auto = Self {
             on: Arc::new(AtomicBool::new(on)),
+            terminal: Arc::new(Mutex::new(Terminal {
+                version: terminal,
+                waits_for: None,
+            })),
         };
         let switch = auto.clone();
         if let Err(e) = std::thread::Builder::new()
@@ -137,6 +165,36 @@ impl AutoUpdate {
         }
     }
 
+    /// The terminal's state, readable after a panicked writer: it holds only plain values.
+    fn terminal(&self) -> std::sync::MutexGuard<'_, Terminal> {
+        self.terminal.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Set the terminal ceiling from a re-read `station.toml`; logged when it changes. The next
+    /// look applies it.
+    pub fn set_terminal(&self, version: Option<ReleaseVersion>) {
+        let mut terminal = self.terminal();
+        if terminal.version != version {
+            match version {
+                Some(version) => log::info!("auto-update: the terminal reported {version}"),
+                None => log::info!("auto-update: no terminal version; updates are not held"),
+            }
+            terminal.version = version;
+            // A hold under the old ceiling no longer stands; the next look says what does.
+            terminal.waits_for = None;
+        }
+    }
+
+    /// The newest terminal release that reported, for the status.
+    pub fn terminal_version(&self) -> Option<ReleaseVersion> {
+        self.terminal().version
+    }
+
+    /// The release the last look held back for the terminal, for the status.
+    pub fn waits_for(&self) -> Option<ReleaseVersion> {
+        self.terminal().waits_for
+    }
+
     /// The looking loop: never returns. Each decision is logged once, until it changes.
     fn run(&self, data_root: &Path) {
         let mut discovery: Option<ReleaseDiscovery> = None;
@@ -144,6 +202,12 @@ impl AutoUpdate {
         std::thread::sleep(FIRST_LOOK + jitter(FIRST_JITTER));
         loop {
             let decision = self.look(data_root, &mut discovery);
+            if let Some(decision) = decision {
+                self.terminal().waits_for = match decision {
+                    Decision::WaitsForTerminal(version) => Some(version),
+                    _ => None,
+                };
+            }
             if decision.is_some() && decision != logged {
                 if let Some(decision) = decision {
                     log_decision(decision);
@@ -163,8 +227,9 @@ impl AutoUpdate {
         let last = std::fs::read_to_string(data_root.join(ATTEMPT_FILE))
             .ok()
             .and_then(|text| parse_attempt(&text));
+        let terminal = self.terminal_version();
         if !self.on() || own.is_none() {
-            return Some(decide(self.on(), own, None, last, now_s));
+            return Some(decide(self.on(), own, None, terminal, last, now_s));
         }
         let Some(asset) = station_asset_name() else {
             log::warn!(
@@ -185,7 +250,7 @@ impl AutoUpdate {
                 return None;
             }
         };
-        let decision = decide(self.on(), own, latest, last, now_s);
+        let decision = decide(self.on(), own, latest, terminal, last, now_s);
         if let Decision::Update(version) = decision {
             // Recorded first: an attempt that cannot be recorded is not made, or a failed update
             // would be requested again at every start.
@@ -218,6 +283,9 @@ fn log_decision(decision: Decision) {
         Decision::Current => log::info!("auto-update: no newer release"),
         Decision::Tried(version) => log::info!(
             "auto-update: {version} was requested less than a day ago; see the last update's verdict"
+        ),
+        Decision::WaitsForTerminal(version) => log::info!(
+            "auto-update: {version} is out; it waits for a terminal of that version to report"
         ),
         Decision::Update(version) => log::info!("auto-update: {version} is out, update requested"),
     }

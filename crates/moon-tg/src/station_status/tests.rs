@@ -62,6 +62,7 @@ fn status(host: Option<Host>) -> Status {
         host: host.map(Box::new),
         last_update: None,
         auto_update: None,
+        terminal: None,
         core_uid_high_water: None,
         prices_pull: false,
         strategies_sync: false,
@@ -733,4 +734,35 @@ fn compact_health_diagnostics_are_kept_and_escaped() {
         );
         assert!(!html.contains("bot \u{2713}"));
     }
+}
+
+/// A held-back automatic update says in one plain line which terminal version it waits for.
+#[test]
+fn a_held_update_names_the_terminal_it_waits_for() {
+    let _locale = crate::test_locale::force("en");
+    let mut held = status(Some(host(Vec::new())));
+    held.terminal = Some(Box::new(moon_core::station_api::TerminalHold {
+        version: Some("v0.70.0".into()),
+        waits_for: Some("v0.71.0".into()),
+    }));
+    let facts = StatusFacts::of(&held);
+    assert_eq!(
+        facts.notes,
+        ["The update to v0.71.0 waits for the terminal to be updated to v0.71.0"]
+    );
+    assert!(
+        station_status_text(&held)
+            .lines()
+            .any(|line| line.contains("waits for the terminal")),
+        "the plain status shows it too"
+    );
+    assert!(
+        chat::html(&held, &ReleaseCheck::Current).contains("waits for the terminal"),
+        "the chat's Status reply shows it"
+    );
+    assert!(
+        StatusFacts::of(&status(Some(host(Vec::new()))))
+            .notes
+            .is_empty()
+    );
 }

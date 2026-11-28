@@ -132,7 +132,7 @@ impl Pull {
     /// The station's status, for what it can do and the cores it has.
     pub fn status(&self) -> anyhow::Result<Status> {
         match call(&self.conn, &Request::Status)? {
-            Answer::Status(status) => Ok(status),
+            Answer::Status(status) => Ok(*status),
             other => anyhow::bail!("the station answered {other:?} to a status request"),
         }
     }

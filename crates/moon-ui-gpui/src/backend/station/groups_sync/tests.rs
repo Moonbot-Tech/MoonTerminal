@@ -160,6 +160,7 @@ fn groups_sync_deferral_waits_for_a_fresh_listing_despite_retained_core_cache() 
         tape_catchup: None,
         last_update: None,
         auto_update: None,
+        terminal: None,
     };
     let mut bot = BotState {
         has_token: false,

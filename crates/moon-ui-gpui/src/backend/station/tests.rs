@@ -452,6 +452,7 @@ fn tape_min_tail_job_changes_only_the_supported_floor() {
             host: None,
             last_update: None,
             auto_update: None,
+            terminal: None,
             cores: None,
             core_uid_high_water: None,
             prices_pull: false,
@@ -908,6 +909,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
         tape_catchup: None,
         last_update: None,
         auto_update: None,
+        terminal: None,
     }));
     jobs.observe_bot(bot.clone());
     assert_eq!(jobs.cores_seen, Some(Some(Vec::new())));
@@ -930,6 +932,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
         tape_catchup: None,
         last_update: None,
         auto_update: None,
+        terminal: None,
     }));
     jobs.observe_bot(bot);
     assert_eq!(jobs.cores_seen, Some(None));
@@ -1095,6 +1098,7 @@ fn synthetic_station_answer() -> job::Done {
             tape_catchup: None,
             last_update: None,
             auto_update: None,
+            terminal: None,
         })),
     };
     job::Done::Ok {
@@ -1194,4 +1198,106 @@ fn the_tape_status_is_reread_hourly_and_a_failed_attempt_waits_too() {
     assert!(super::tape_status_due(0, None, None));
     assert!(!super::tape_status_due(asked + HOUR - 1, None, Some(asked)));
     assert!(super::tape_status_due(asked + HOUR, None, Some(asked)));
+}
+
+/// The terminal's release goes to a station that updates itself and knows an older terminal or
+/// none; a station holding this release or a newer one, or one without the switch, is left alone.
+#[test]
+fn terminal_version_is_due_only_where_it_raises_the_station_ceiling() {
+    let v = |tag: &str| moon_core::update::ReleaseVersion::parse(tag).unwrap();
+    let status = |auto: Option<bool>, terminal: Option<&str>| moon_core::station_api::Status {
+        station_version: "v0.69.0".into(),
+        core_uid_high_water: None,
+        prices_pull: false,
+        strategies_sync: false,
+        cores_total: 0,
+        cores_ready: 0,
+        cores: None,
+        bot: None,
+        tape: None,
+        host: None,
+        tape_catchup: None,
+        last_update: None,
+        auto_update: auto,
+        terminal: Some(Box::new(moon_core::station_api::TerminalHold {
+            version: terminal.map(Into::into),
+            waits_for: None,
+        })),
+    };
+    let own = v("v0.69.2");
+    assert!(super::terminal_version_due(&status(Some(true), None), own));
+    assert!(super::terminal_version_due(
+        &status(Some(false), Some("v0.69.1")),
+        own
+    ));
+    assert!(super::terminal_version_due(
+        &status(Some(true), Some("junk")),
+        own
+    ));
+    assert!(!super::terminal_version_due(
+        &status(Some(true), Some("v0.69.2")),
+        own
+    ));
+    assert!(
+        !super::terminal_version_due(&status(Some(true), Some("v0.70.0")), own),
+        "a newer terminal's version stays"
+    );
+    assert!(
+        !super::terminal_version_due(&status(None, None), own),
+        "a station older than the automatic update never updates by itself"
+    );
+}
+
+/// Just updated, the terminal asks an older station to follow at once; a station on this release
+/// or a newer one, an unreadable version, or a terminal that did not just update asks nothing.
+#[test]
+fn a_just_updated_terminal_requests_the_station_update_only_upwards() {
+    let v = |tag: &str| moon_core::update::ReleaseVersion::parse(tag).unwrap();
+    let status = |version: &str| moon_core::station_api::Status {
+        station_version: version.into(),
+        core_uid_high_water: None,
+        prices_pull: false,
+        strategies_sync: false,
+        cores_total: 0,
+        cores_ready: 0,
+        cores: None,
+        bot: None,
+        tape: None,
+        host: None,
+        tape_catchup: None,
+        last_update: None,
+        auto_update: Some(true),
+        terminal: None,
+    };
+    let own = v("v0.70.0");
+    assert!(super::station_update_due(
+        true,
+        &status("v0.69.2 (abc1234)"),
+        own
+    ));
+    assert!(!super::station_update_due(
+        false,
+        &status("v0.69.2 (abc1234)"),
+        own
+    ));
+    assert!(!super::station_update_due(
+        true,
+        &status("v0.70.0 (abc1234)"),
+        own
+    ));
+    assert!(
+        !super::station_update_due(true, &status("v0.71.0 (abc1234)"), own),
+        "never a downgrade"
+    );
+    assert!(!super::station_update_due(
+        true,
+        &status("dev (abc1234)"),
+        own
+    ));
+    let mut off = status("v0.69.2 (abc1234)");
+    off.auto_update = Some(false);
+    assert!(
+        !super::station_update_due(true, &off, own),
+        "a station switched to button-only updates is not updated behind the user's back"
+    );
 }

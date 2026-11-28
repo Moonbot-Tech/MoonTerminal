@@ -37,6 +37,17 @@
 //! auto = false
 //! ```
 //!
+//! `[terminal]` is the newest terminal release that drives this station, written by the terminal
+//! itself (`moon_remote::station::push_terminal_version`); the automatic update never installs a
+//! release past it. Absent — a station set up by an older terminal — the station updates freely.
+//! Its own section, not a key of `[update]`: an older station refuses unknown `[update]` keys
+//! but ignores an unknown section.
+//!
+//! ```toml
+//! [terminal]
+//! version = "v0.69.2"
+//! ```
+//!
 //! `[telegram]` runs the bot, its token the systemd credential `telegram-token` (written by
 //! `moon-remote telegram`). `mini_app` also opens the Mini App — and with it switches the station
 //! to its account profile (`feed::station::Profile::Account`): orders, balances, strategies and
@@ -81,6 +92,7 @@ use chrono_tz::Tz;
 use moon_core::config::{AppConfig, FeedFlags, Language, Secret, ServerConfig, TransportVersion};
 use moon_core::feed::station::Profile;
 use moon_core::station_api::{ListedCore, core_address, key_fingerprint};
+use moon_core::update::ReleaseVersion;
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
@@ -109,6 +121,29 @@ struct StationFile {
     mcp: Option<crate::mcp::Config>,
     #[serde(default)]
     update: UpdateSection,
+    #[serde(default)]
+    terminal: TerminalSection,
+}
+
+/// `[terminal]`: the newest terminal release that reported to this station (`auto_update.rs`).
+/// Unknown keys are tolerated, so a later terminal can add one without stranding this station.
+#[derive(Default, Deserialize)]
+struct TerminalSection {
+    /// A release tag; anything else reads as absent (logged), never as a failed file.
+    version: Option<toml::Value>,
+}
+
+impl TerminalSection {
+    /// The recorded release, `None` when absent or not a release tag.
+    fn release(&self) -> Option<ReleaseVersion> {
+        let value = self.version.as_ref()?;
+        let text = value.as_str().unwrap_or_default();
+        let version = ReleaseVersion::parse(text);
+        if version.is_none() {
+            log::warn!("[terminal] version {value} is not a release tag; updates are not held");
+        }
+        version
+    }
 }
 
 /// `[update]`: whether the station updates itself from the release (`auto_update.rs`).
@@ -191,6 +226,9 @@ pub struct Station {
     pub telegram: Option<Telegram>,
     /// `[update] auto`: the station updates itself from the release.
     pub auto_update: bool,
+    /// `[terminal] version`: the newest terminal release that reported; the automatic update
+    /// never installs a release past it. `None` updates freely.
+    pub terminal_version: Option<ReleaseVersion>,
     /// Active cores skipped because their credentials are unavailable, for status reporting.
     pub skipped_cores: Vec<String>,
 }
@@ -388,6 +426,7 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         tape: file.tape,
         telegram,
         auto_update: file.update.auto.unwrap_or(true),
+        terminal_version: file.terminal.release(),
         skipped_cores,
     };
     // What `station.toml` alone asks for; the station's start adds the bot's menu (`profile`).
@@ -474,6 +513,7 @@ fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
         tape: Tape::default(),
         telegram: None,
         auto_update: true,
+        terminal_version: None,
         skipped_cores: Vec::new(),
     })
 }
@@ -500,6 +540,7 @@ fn terminal_config_with(text: &str) -> anyhow::Result<Option<Station>> {
     station.tape = file.tape;
     station.mcp = file.mcp;
     station.auto_update = file.update.auto.unwrap_or(true);
+    station.terminal_version = file.terminal.release();
     // The same floor a normal start applies: the file's, the terminal's uids, the report history.
     station.core_uid_high_water =
         observed_high_water(station.core_uid_high_water.max(file.core_uid_high_water));

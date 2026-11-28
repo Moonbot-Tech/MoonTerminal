@@ -76,6 +76,15 @@ pub(super) fn html(status: &Status, release: &ReleaseCheck) -> String {
             ))),
         ),
     }
+    if let Some(version) = status.terminal.as_ref().and_then(|t| t.waits_for.as_ref()) {
+        paragraph(
+            &mut html,
+            &escape(&t!(
+                "telegram.station.update_waits_for_terminal",
+                version = version
+            )),
+        );
+    }
     match &status.host {
         Some(host) => readings(host, &mut html),
         None => paragraph(&mut html, &escape(&t!("telegram.station.no_host"))),

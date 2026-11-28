@@ -438,3 +438,35 @@ fn update_auto_is_on_unless_the_file_turns_it_off() {
         "a switch that is not a boolean is refused, not guessed"
     );
 }
+
+/// The terminal's version is its own section: absent or not a tag holds nothing back, and an
+/// unknown key beside it (a later terminal's) never fails the file.
+#[test]
+fn terminal_version_reads_its_own_section() {
+    let dir = creds("terminal-version", &[(3, "k1")]);
+    let core = "[[core]]\nuid = 3\nname = \"BinF1\"\n";
+    let parse = |extra: &str| {
+        from_station_file(&format!("{core}{extra}"), Some(&dir))
+            .expect("parses")
+            .terminal_version
+    };
+    assert_eq!(
+        parse(""),
+        None,
+        "a station set up by an older terminal updates freely"
+    );
+    assert_eq!(
+        parse("[terminal]\nversion = \"v0.69.2\"\n"),
+        ReleaseVersion::parse("v0.69.2")
+    );
+    assert_eq!(parse("[terminal]\nversion = \"dev\"\n"), None);
+    assert_eq!(
+        parse("[terminal]\nversion = 7\n"),
+        None,
+        "a version that is not text holds nothing back and never fails the file"
+    );
+    assert_eq!(
+        parse("[terminal]\nversion = \"v0.70.0\"\nlater = 1\n"),
+        ReleaseVersion::parse("v0.70.0")
+    );
+}

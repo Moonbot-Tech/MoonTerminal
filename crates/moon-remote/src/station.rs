@@ -655,6 +655,66 @@ pub fn push_auto_update(
     }
 }
 
+/// `current` with `[terminal] version` raised to `version`, or `None` when it already names
+/// `version` or a newer release — the other sections and keys as they were. Several terminals on
+/// one station leave the newest of them: an older one never lowers what a newer one wrote. A
+/// recorded value that is not a release tag is replaced.
+///
+/// Its own section, not an `[update]` key: an older station refuses unknown `[update]` keys and
+/// would stop loading its file, while it ignores an unknown section.
+///
+/// Args:
+///     current: The server's `station.toml`.
+///     version: This terminal's release.
+pub fn with_terminal_version(
+    current: &str,
+    version: moon_core::update::ReleaseVersion,
+) -> anyhow::Result<Option<String>> {
+    let mut file: toml::Table = toml::from_str(current).context("the server's station.toml")?;
+    let section = file
+        .entry("terminal")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[terminal] in station.toml is not a table"))?;
+    let recorded = section
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .and_then(moon_core::update::ReleaseVersion::parse);
+    if recorded.is_some_and(|recorded| recorded >= version) {
+        return Ok(None);
+    }
+    section.insert(
+        "version".to_owned(),
+        toml::Value::String(version.to_string()),
+    );
+    Ok(Some(toml::to_string_pretty(&file)?))
+}
+
+/// Tell the station which terminal release drives it: `[terminal] version` in its
+/// `station.toml` raised to `version`, then a reload (SIGHUP) of a running station — its
+/// automatic update never installs a release past the newest terminal that reported, so an
+/// updated terminal lets the matching release in at the station's next look. A station already
+/// holding this version or a newer one is not touched; a server without `station.toml` yet gets
+/// nothing, there is no station to hold back. Whether the file was written.
+pub fn push_terminal_version(
+    target: &Target,
+    version: moon_core::update::ReleaseVersion,
+) -> anyhow::Result<bool> {
+    let conn = admin_conn(target)?;
+    let status = current_helper_status(&conn)?;
+    if script::value(&status, "config") != Some("yes") {
+        return Ok(false);
+    }
+    let wrote = edit_config(&conn, true, |current| match current {
+        Some(current) => with_terminal_version(current, version),
+        None => Ok(None),
+    })?;
+    if wrote && script::value(&status, "active") == Some("active") {
+        script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
+    }
+    Ok(wrote)
+}
+
 /// `on` or `off`, for a progress diagnostic.
 fn on_off(on: bool) -> &'static str {
     if on { "on" } else { "off" }
