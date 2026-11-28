@@ -130,16 +130,17 @@ struct StationFile {
 #[derive(Default, Deserialize)]
 struct TerminalSection {
     /// A release tag; anything else reads as absent (logged), never as a failed file.
-    version: Option<String>,
+    version: Option<toml::Value>,
 }
 
 impl TerminalSection {
     /// The recorded release, `None` when absent or not a release tag.
     fn release(&self) -> Option<ReleaseVersion> {
-        let text = self.version.as_deref()?;
+        let value = self.version.as_ref()?;
+        let text = value.as_str().unwrap_or_default();
         let version = ReleaseVersion::parse(text);
         if version.is_none() {
-            log::warn!("[terminal] version {text:?} is not a release tag; updates are not held");
+            log::warn!("[terminal] version {value} is not a release tag; updates are not held");
         }
         version
     }

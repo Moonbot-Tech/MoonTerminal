@@ -461,6 +461,11 @@ fn terminal_version_reads_its_own_section() {
     );
     assert_eq!(parse("[terminal]\nversion = \"dev\"\n"), None);
     assert_eq!(
+        parse("[terminal]\nversion = 7\n"),
+        None,
+        "a version that is not text holds nothing back and never fails the file"
+    );
+    assert_eq!(
         parse("[terminal]\nversion = \"v0.70.0\"\nlater = 1\n"),
         ReleaseVersion::parse("v0.70.0")
     );
