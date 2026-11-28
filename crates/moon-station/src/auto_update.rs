@@ -180,6 +180,8 @@ impl AutoUpdate {
                 None => log::info!("auto-update: no terminal version; updates are not held"),
             }
             terminal.version = version;
+            // A hold under the old ceiling no longer stands; the next look says what does.
+            terminal.waits_for = None;
         }
     }
 

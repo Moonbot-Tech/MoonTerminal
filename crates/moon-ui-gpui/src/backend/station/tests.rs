@@ -1294,4 +1294,10 @@ fn a_just_updated_terminal_requests_the_station_update_only_upwards() {
         &status("dev (abc1234)"),
         own
     ));
+    let mut off = status("v0.69.2 (abc1234)");
+    off.auto_update = Some(false);
+    assert!(
+        !super::station_update_due(true, &off, own),
+        "a station switched to button-only updates is not updated behind the user's back"
+    );
 }

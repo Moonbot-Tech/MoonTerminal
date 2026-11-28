@@ -1569,14 +1569,16 @@ pub(crate) fn mark_terminal_just_updated() {
 }
 
 /// Whether the terminal, `just_updated` to `own`, files the station's update request now rather
-/// than leaving it to the station's next automatic look: only for a station whose reported
-/// release is older than `own` — never a downgrade, never a guess at an unreadable version.
+/// than leaving it to the station's next automatic look: only for a station that updates itself
+/// (its `[update] auto` switch is on) and whose reported release is older than `own` — never a
+/// downgrade, never a guess at an unreadable version, never past the user's switch.
 fn station_update_due(
     just_updated: bool,
     status: &moon_core::station_api::Status,
     own: moon_core::update::ReleaseVersion,
 ) -> bool {
     just_updated
+        && status.auto_update == Some(true)
         && status
             .station_version
             .split_whitespace()

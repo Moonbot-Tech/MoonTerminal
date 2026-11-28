@@ -757,6 +757,10 @@ fn a_held_update_names_the_terminal_it_waits_for() {
         "the plain status shows it too"
     );
     assert!(
+        chat::html(&held, &ReleaseCheck::Current).contains("waits for the terminal"),
+        "the chat's Status reply shows it"
+    );
+    assert!(
         StatusFacts::of(&status(Some(host(Vec::new()))))
             .notes
             .is_empty()
